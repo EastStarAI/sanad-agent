@@ -297,15 +297,18 @@ class RouteThinkingControl {
     return 'Default';
   }
 
-  static String _normalizeModelId(String modelId, String providerInstanceId) {
-    var normalized = modelId.trim().toLowerCase();
-    final providerPrefix = '${providerInstanceId.trim().toLowerCase()}/';
-    if (normalized.startsWith(providerPrefix)) {
-      normalized = normalized.substring(providerPrefix.length);
-    }
-    if (normalized.contains('/')) {
-      normalized = normalized.split('/').last;
+  static String normalizeModelId(String modelId, [String? providerInstanceId]) {
+    var normalized = modelId.trim();
+    if (providerInstanceId != null) {
+      final provider = providerInstanceId.trim();
+      final providerPrefix = '$provider/';
+      if (provider.isNotEmpty && normalized.startsWith(providerPrefix)) {
+        normalized = normalized.substring(providerPrefix.length);
+      }
     }
     return normalized;
   }
+
+  static String _normalizeModelId(String modelId, String providerInstanceId) =>
+      normalizeModelId(modelId, providerInstanceId);
 }

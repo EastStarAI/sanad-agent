@@ -25,10 +25,7 @@ void main() {
           isDefault: true,
           cacheStatus: 'fetched',
           models: [
-            ModelCacheModelDto(
-              id: 'o3',
-              thinkingControl: supportedDescriptor,
-            ),
+            ModelCacheModelDto(id: 'o3', thinkingControl: supportedDescriptor),
           ],
         ),
       ],
@@ -78,9 +75,7 @@ void main() {
     test('prefers route-bound session descriptor over model cache', () {
       const sessionDescriptor = ThinkingControlDescriptorDto(
         status: ThinkingCapabilityStatus.supported,
-        options: [
-          ThinkingControlOptionDto(id: 'medium', label: 'Medium'),
-        ],
+        options: [ThinkingControlOptionDto(id: 'medium', label: 'Medium')],
       );
 
       final descriptor = RouteThinkingControl.resolveDescriptor(
@@ -100,9 +95,7 @@ void main() {
     test('ignores stale session descriptor when route revision mismatches', () {
       const staleSessionDescriptor = ThinkingControlDescriptorDto(
         status: ThinkingCapabilityStatus.supported,
-        options: [
-          ThinkingControlOptionDto(id: 'max', label: 'Max'),
-        ],
+        options: [ThinkingControlOptionDto(id: 'max', label: 'Max')],
       );
 
       final descriptor = RouteThinkingControl.resolveDescriptor(
@@ -124,9 +117,7 @@ void main() {
       () {
         const sessionDescriptor = ThinkingControlDescriptorDto(
           status: ThinkingCapabilityStatus.supported,
-          options: [
-            ThinkingControlOptionDto(id: 'low', label: 'Low'),
-          ],
+          options: [ThinkingControlOptionDto(id: 'low', label: 'Low')],
         );
 
         final descriptor = RouteThinkingControl.resolveDescriptor(
@@ -208,21 +199,24 @@ void main() {
       );
     });
 
-    test('shows fetchFailure state when hasFetchError is true without descriptor', () {
-      const capabilities = Capability(
-        supportsThinkingModeChange: true,
-        thinkingModeSource: ThinkingModeSource.model,
-      );
+    test(
+      'shows fetchFailure state when hasFetchError is true without descriptor',
+      () {
+        const capabilities = Capability(
+          supportsThinkingModeChange: true,
+          thinkingModeSource: ThinkingModeSource.model,
+        );
 
-      expect(
-        RouteThinkingControl.selectorState(
-          capabilities: capabilities,
-          descriptor: null,
-          hasFetchError: true,
-        ),
-        RouteThinkingSelectorState.fetchFailure,
-      );
-    });
+        expect(
+          RouteThinkingControl.selectorState(
+            capabilities: capabilities,
+            descriptor: null,
+            hasFetchError: true,
+          ),
+          RouteThinkingSelectorState.fetchFailure,
+        );
+      },
+    );
 
     test('shows providerManaged state for status unknown descriptors', () {
       const capabilities = Capability(
@@ -242,24 +236,27 @@ void main() {
       );
     });
 
-    test('shows providerManaged state for status supported with empty options', () {
-      const capabilities = Capability(
-        supportsThinkingModeChange: true,
-        thinkingModeSource: ThinkingModeSource.model,
-      );
-      const descriptor = ThinkingControlDescriptorDto(
-        status: ThinkingCapabilityStatus.supported,
-        options: [],
-      );
+    test(
+      'shows providerManaged state for status supported with empty options',
+      () {
+        const capabilities = Capability(
+          supportsThinkingModeChange: true,
+          thinkingModeSource: ThinkingModeSource.model,
+        );
+        const descriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          options: [],
+        );
 
-      expect(
-        RouteThinkingControl.selectorState(
-          capabilities: capabilities,
-          descriptor: descriptor,
-        ),
-        RouteThinkingSelectorState.providerManaged,
-      );
-    });
+        expect(
+          RouteThinkingControl.selectorState(
+            capabilities: capabilities,
+            descriptor: descriptor,
+          ),
+          RouteThinkingSelectorState.providerManaged,
+        );
+      },
+    );
 
     test('retains selectable state when descriptor is cached even if isLoading is true', () {
       const capabilities = Capability(
@@ -281,99 +278,84 @@ void main() {
       );
     });
 
-    test(
-      'ignores session descriptor when input route differs from session binding',
-      () {
-        const sessionDescriptor = ThinkingControlDescriptorDto(
-          status: ThinkingCapabilityStatus.supported,
-          options: [
-            ThinkingControlOptionDto(id: 'max', label: 'Max'),
-          ],
-        );
+    test('ignores session descriptor when input route differs from session binding', () {
+      const sessionDescriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        options: [ThinkingControlOptionDto(id: 'max', label: 'Max')],
+      );
 
-        final descriptor = RouteThinkingControl.resolveDescriptor(
-          snapshot: snapshot,
-          providerInstanceId: 'provider-1',
-          modelId: 'gpt-5',
-          sessionDescriptor: sessionDescriptor,
-          sessionRouteRevision: 4,
-          activeRouteRevision: 4,
-          sessionProviderId: 'provider-1',
-          sessionModelId: 'o3',
-        );
+      final descriptor = RouteThinkingControl.resolveDescriptor(
+        snapshot: snapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'gpt-5',
+        sessionDescriptor: sessionDescriptor,
+        sessionRouteRevision: 4,
+        activeRouteRevision: 4,
+        sessionProviderId: 'provider-1',
+        sessionModelId: 'o3',
+      );
 
-        expect(descriptor, isNull);
-      },
-    );
+      expect(descriptor, isNull);
+    });
 
-    test(
-      'falls back to snapshot after route switch when revision matches new model',
-      () {
-        const staleSessionDescriptor = ThinkingControlDescriptorDto(
-          status: ThinkingCapabilityStatus.supported,
-          options: [
-            ThinkingControlOptionDto(id: 'max', label: 'Max'),
-          ],
-        );
-        const switchedSnapshot = ModelCacheSnapshotDto(
-          instances: [
-            ModelCacheInstanceDto(
-              id: 'provider-1',
-              displayName: 'OpenAI',
-              status: 'ready',
-              isDefault: true,
-              cacheStatus: 'fetched',
-              models: [
-                ModelCacheModelDto(
-                  id: 'gpt-5',
-                  thinkingControl: ThinkingControlDescriptorDto(
-                    status: ThinkingCapabilityStatus.supported,
-                    options: [
-                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
-                    ],
-                  ),
+    test('falls back to snapshot after route switch when revision matches new model', () {
+      const staleSessionDescriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        options: [ThinkingControlOptionDto(id: 'max', label: 'Max')],
+      );
+      const switchedSnapshot = ModelCacheSnapshotDto(
+        instances: [
+          ModelCacheInstanceDto(
+            id: 'provider-1',
+            displayName: 'OpenAI',
+            status: 'ready',
+            isDefault: true,
+            cacheStatus: 'fetched',
+            models: [
+              ModelCacheModelDto(
+                id: 'gpt-5',
+                thinkingControl: ThinkingControlDescriptorDto(
+                  status: ThinkingCapabilityStatus.supported,
+                  options: [ThinkingControlOptionDto(id: 'low', label: 'Low')],
                 ),
-              ],
-            ),
-          ],
-          recent: [],
-        );
+              ),
+            ],
+          ),
+        ],
+        recent: [],
+      );
 
-        final descriptor = RouteThinkingControl.resolveDescriptor(
-          snapshot: switchedSnapshot,
-          providerInstanceId: 'provider-1',
-          modelId: 'gpt-5',
-          sessionDescriptor: staleSessionDescriptor,
-          sessionRouteRevision: 2,
-          activeRouteRevision: 2,
-          sessionProviderId: 'provider-1',
-          sessionModelId: 'o3',
-        );
+      final descriptor = RouteThinkingControl.resolveDescriptor(
+        snapshot: switchedSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'gpt-5',
+        sessionDescriptor: staleSessionDescriptor,
+        sessionRouteRevision: 2,
+        activeRouteRevision: 2,
+        sessionProviderId: 'provider-1',
+        sessionModelId: 'o3',
+      );
 
-        expect(descriptor?.options.map((option) => option.id), ['low']);
-      },
-    );
+      expect(descriptor?.options.map((option) => option.id), ['low']);
+    });
   });
 
   group('Session thinking correction', () {
-    test(
-      'clears corrected thinking mode when correction payload omits replacement',
-      () {
-        final session = Session.fromJson({
-          'id': 'session-1',
-          'title': 'Test',
-          'created_at': '2026-01-01T00:00:00Z',
-          'updated_at': '2026-01-01T00:00:00Z',
-          'thinking_correction': {
-            'reason': 'thinking_option_unavailable_for_route',
-            'previous_selection_id': 'max',
-            'corrected_at': '2026-01-01T00:00:00Z',
-          },
-        });
+    test('clears corrected thinking mode when correction payload omits replacement', () {
+      final session = Session.fromJson({
+        'id': 'session-1',
+        'title': 'Test',
+        'created_at': '2026-01-01T00:00:00Z',
+        'updated_at': '2026-01-01T00:00:00Z',
+        'thinking_correction': {
+          'reason': 'thinking_option_unavailable_for_route',
+          'previous_selection_id': 'max',
+          'corrected_at': '2026-01-01T00:00:00Z',
+        },
+      });
 
-        expect(session.thinkingMode, isNull);
-      },
-    );
+      expect(session.thinkingMode, isNull);
+    });
 
     test('keeps replacement thinking mode after correction payload', () {
       final session = Session.fromJson({
@@ -400,7 +382,11 @@ void main() {
       defaultOptionId: 'medium',
       options: [
         ThinkingControlOptionDto(id: 'low', label: 'Low'),
-        ThinkingControlOptionDto(id: 'medium', label: 'Medium', isProviderDefault: true),
+        ThinkingControlOptionDto(
+          id: 'medium',
+          label: 'Medium',
+          isProviderDefault: true,
+        ),
         ThinkingControlOptionDto(id: 'high', label: 'High'),
       ],
     );
@@ -433,7 +419,11 @@ void main() {
         kind: ThinkingControlKind.effort,
         options: [
           ThinkingControlOptionDto(id: 'low', label: 'Low'),
-          ThinkingControlOptionDto(id: 'medium', label: 'Medium', isProviderDefault: true),
+          ThinkingControlOptionDto(
+            id: 'medium',
+            label: 'Medium',
+            isProviderDefault: true,
+          ),
           ThinkingControlOptionDto(id: 'high', label: 'High'),
         ],
       );
@@ -499,7 +489,11 @@ void main() {
       defaultOptionId: 'medium',
       options: [
         ThinkingControlOptionDto(id: 'low', label: 'Low'),
-        ThinkingControlOptionDto(id: 'medium', label: 'Medium', isProviderDefault: true),
+        ThinkingControlOptionDto(
+          id: 'medium',
+          label: 'Medium',
+          isProviderDefault: true,
+        ),
         ThinkingControlOptionDto(id: 'high', label: 'High'),
       ],
     );
@@ -532,7 +526,11 @@ void main() {
         kind: ThinkingControlKind.effort,
         options: [
           ThinkingControlOptionDto(id: 'low', label: 'Low'),
-          ThinkingControlOptionDto(id: 'high', label: 'High', isProviderDefault: true),
+          ThinkingControlOptionDto(
+            id: 'high',
+            label: 'High',
+            isProviderDefault: true,
+          ),
         ],
       );
 
@@ -546,26 +544,29 @@ void main() {
       );
     });
 
-    test('returns null when defaultOptionId and isProviderDefault are omitted', () {
-      const descriptorNoDefault = ThinkingControlDescriptorDto(
-        status: ThinkingCapabilityStatus.supported,
-        kind: ThinkingControlKind.effort,
-        options: [
-          ThinkingControlOptionDto(id: 'low', label: 'Low'),
-          ThinkingControlOptionDto(id: 'medium', label: 'Medium'),
-          ThinkingControlOptionDto(id: 'high', label: 'High'),
-        ],
-      );
+    test(
+      'returns null when defaultOptionId and isProviderDefault are omitted',
+      () {
+        const descriptorNoDefault = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          kind: ThinkingControlKind.effort,
+          options: [
+            ThinkingControlOptionDto(id: 'low', label: 'Low'),
+            ThinkingControlOptionDto(id: 'medium', label: 'Medium'),
+            ThinkingControlOptionDto(id: 'high', label: 'High'),
+          ],
+        );
 
-      expect(
-        RouteThinkingControl.effectiveSelectionId(
-          descriptor: descriptorNoDefault,
-          selectionId: null,
-          legacyModes: const [],
-        ),
-        isNull,
-      );
-    });
+        expect(
+          RouteThinkingControl.effectiveSelectionId(
+            descriptor: descriptorNoDefault,
+            selectionId: null,
+            legacyModes: const [],
+          ),
+          isNull,
+        );
+      },
+    );
 
     test('resolves balanced for legacy modes when descriptor is null', () {
       expect(
@@ -641,6 +642,254 @@ void main() {
         ),
         isFalse,
       );
+    });
+  });
+
+  group('RouteThinkingControl exact model identity', () {
+    const descriptorA = ThinkingControlDescriptorDto(
+      status: ThinkingCapabilityStatus.supported,
+      kind: ThinkingControlKind.effort,
+      options: [ThinkingControlOptionDto(id: 'low', label: 'Low')],
+    );
+
+    const descriptorB = ThinkingControlDescriptorDto(
+      status: ThinkingCapabilityStatus.supported,
+      kind: ThinkingControlKind.tokenBudget,
+      options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
+    );
+
+    const multiModelSnapshot = ModelCacheSnapshotDto(
+      instances: [
+        ModelCacheInstanceDto(
+          id: 'provider-1',
+          displayName: 'Provider 1',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: [
+            ModelCacheModelDto(
+              id: 'VendorA/model',
+              thinkingControl: descriptorA,
+            ),
+            ModelCacheModelDto(
+              id: 'VendorB/model',
+              thinkingControl: descriptorB,
+            ),
+            ModelCacheModelDto(id: 'CaseModel', thinkingControl: descriptorA),
+            ModelCacheModelDto(id: 'casemodel', thinkingControl: descriptorB),
+            ModelCacheModelDto(
+              id: 'model:standard',
+              thinkingControl: descriptorA,
+            ),
+            ModelCacheModelDto(
+              id: 'model:reasoning',
+              thinkingControl: descriptorB,
+            ),
+            ModelCacheModelDto(
+              id: 'Meta-Llama-3.1-70B~Instruct',
+              thinkingControl: descriptorA,
+            ),
+          ],
+        ),
+      ],
+      recent: [],
+    );
+
+    test(
+      'proves two namespaced IDs within one provider never share a descriptor',
+      () {
+        final vendorA = RouteThinkingControl.resolveDescriptor(
+          snapshot: multiModelSnapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'VendorA/model',
+        );
+        final vendorB = RouteThinkingControl.resolveDescriptor(
+          snapshot: multiModelSnapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'VendorB/model',
+        );
+
+        expect(vendorA?.options.map((o) => o.id), ['low']);
+        expect(vendorB?.options.map((o) => o.id), ['high']);
+        expect(vendorA, isNot(same(vendorB)));
+      },
+    );
+
+    test('proves case-distinct custom IDs within one provider never share a descriptor', () {
+      final upperCase = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'CaseModel',
+      );
+      final lowerCase = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'casemodel',
+      );
+
+      expect(upperCase?.options.map((o) => o.id), ['low']);
+      expect(lowerCase?.options.map((o) => o.id), ['high']);
+      expect(upperCase, isNot(same(lowerCase)));
+    });
+
+    test('resolves distinct descriptors for models with colons, tildes, and variant markers', () {
+      final standard = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'model:standard',
+      );
+      final reasoning = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'model:reasoning',
+      );
+      final tildeModel = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'Meta-Llama-3.1-70B~Instruct',
+      );
+      final lowerTildeMismatch = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'meta-llama-3.1-70b~instruct',
+      );
+
+      expect(standard?.options.map((o) => o.id), ['low']);
+      expect(reasoning?.options.map((o) => o.id), ['high']);
+      expect(tildeModel?.options.map((o) => o.id), ['low']);
+      expect(lowerTildeMismatch, isNull);
+    });
+
+    test('proves session-versus-active mismatches across namespaces never share session descriptor', () {
+      final result = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'VendorB/model',
+        sessionDescriptor: descriptorA,
+        sessionRouteRevision: 1,
+        activeRouteRevision: 1,
+        sessionProviderId: 'provider-1',
+        sessionModelId: 'VendorA/model',
+      );
+
+      // Must not reuse sessionDescriptor (descriptorA with 'low'); must resolve VendorB/model from snapshot ('high').
+      expect(result?.options.map((o) => o.id), ['high']);
+      expect(result, isNot(descriptorA));
+    });
+
+    test('proves session-versus-active mismatches across case never share session descriptor', () {
+      final result = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'casemodel',
+        sessionDescriptor: descriptorA,
+        sessionRouteRevision: 1,
+        activeRouteRevision: 1,
+        sessionProviderId: 'provider-1',
+        sessionModelId: 'CaseModel',
+      );
+
+      // Must not reuse sessionDescriptor (descriptorA with 'low'); must resolve casemodel from snapshot ('high').
+      expect(result?.options.map((o) => o.id), ['high']);
+      expect(result, isNot(descriptorA));
+    });
+
+    test('proves session-versus-active mismatches with variant markers never share session descriptor', () {
+      final result = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'model:reasoning',
+        sessionDescriptor: descriptorA,
+        sessionRouteRevision: 1,
+        activeRouteRevision: 1,
+        sessionProviderId: 'provider-1',
+        sessionModelId: 'model:standard',
+      );
+
+      // Must not reuse sessionDescriptor (descriptorA with 'low'); must resolve model:reasoning from snapshot ('high').
+      expect(result?.options.map((o) => o.id), ['high']);
+      expect(result, isNot(descriptorA));
+    });
+
+    test(
+      'correct exact matches with namespaced and case-distinct IDs still work',
+      () {
+        final namespacedMatch = RouteThinkingControl.resolveDescriptor(
+          snapshot: null,
+          providerInstanceId: 'provider-1',
+          modelId: 'VendorA/model',
+          sessionDescriptor: descriptorA,
+          sessionRouteRevision: 2,
+          activeRouteRevision: 2,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'VendorA/model',
+        );
+        expect(namespacedMatch, equals(descriptorA));
+
+        final caseMatch = RouteThinkingControl.resolveDescriptor(
+          snapshot: null,
+          providerInstanceId: 'provider-1',
+          modelId: 'CaseModel',
+          sessionDescriptor: descriptorA,
+          sessionRouteRevision: 2,
+          activeRouteRevision: 2,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'CaseModel',
+        );
+        expect(caseMatch, equals(descriptorA));
+      },
+    );
+
+    test('strips known transport-owned provider-instance prefix with exact boundaries', () {
+      final prefixedActiveRoute = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'provider-1/VendorA/model',
+      );
+      expect(prefixedActiveRoute?.options.map((o) => o.id), ['low']);
+
+      final prefixedSessionMatch = RouteThinkingControl.resolveDescriptor(
+        snapshot: null,
+        providerInstanceId: 'provider-1',
+        modelId: 'VendorA/model',
+        sessionDescriptor: descriptorA,
+        sessionRouteRevision: 5,
+        activeRouteRevision: 5,
+        sessionProviderId: 'provider-1',
+        sessionModelId: 'provider-1/VendorA/model',
+      );
+      expect(prefixedSessionMatch, equals(descriptorA));
+    });
+
+    test('negative boundary tests: does not strip non-matching or arbitrary prefixes', () {
+      // Different provider prefix should NOT be stripped from the model ID
+      final wrongProviderPrefix = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'provider-2/VendorA/model',
+      );
+      expect(wrongProviderPrefix, isNull);
+
+      // Partial boundary (e.g. 'provider-1-extra/' vs 'provider-1/') must not be stripped
+      final partialBoundary = RouteThinkingControl.resolveDescriptor(
+        snapshot: multiModelSnapshot,
+        providerInstanceId: 'provider-1',
+        modelId: 'provider-1-extra/VendorA/model',
+      );
+      expect(partialBoundary, isNull);
+
+      // Session matching with wrong provider prefix in modelId must not match
+      final mismatchedPrefixedSession = RouteThinkingControl.resolveDescriptor(
+        snapshot: null,
+        providerInstanceId: 'provider-1',
+        modelId: 'VendorA/model',
+        sessionDescriptor: descriptorA,
+        sessionRouteRevision: 5,
+        activeRouteRevision: 5,
+        sessionProviderId: 'provider-1',
+        sessionModelId: 'provider-2/VendorA/model',
+      );
+      expect(mismatchedPrefixedSession, isNull);
     });
   });
 }

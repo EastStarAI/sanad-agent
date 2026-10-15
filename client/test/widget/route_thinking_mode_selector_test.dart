@@ -20,8 +20,10 @@ import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
 class _FakeProviderSetupClient extends Fake implements ProviderSetupClient {
   Completer<ModelCacheSnapshotDto>? pendingSnapshotCompleter;
-  ModelCacheSnapshotDto snapshotResult =
-      const ModelCacheSnapshotDto(instances: [], recent: []);
+  ModelCacheSnapshotDto snapshotResult = const ModelCacheSnapshotDto(
+    instances: [],
+    recent: [],
+  );
   bool shouldThrow = false;
   int callCount = 0;
 
@@ -62,7 +64,7 @@ class _TestConversationInputCubit extends Cubit<ConversationInputState>
 
 class _TestSessionCubit extends Cubit<SessionState> implements SessionCubit {
   _TestSessionCubit([Session? initialSession])
-      : super(SessionState(selectedSession: initialSession));
+    : super(SessionState(selectedSession: initialSession));
 
   void setSession(Session? session) {
     emit(state.copyWith(selectedSession: session));
@@ -146,79 +148,31 @@ void main() {
     return MaterialApp(home: child);
   }
 
-  testWidgets(
-    'renders Loading... chip without cache while awaiting snapshot',
-    (tester) async {
-      fakeClient.pendingSnapshotCompleter =
-          Completer<ModelCacheSnapshotDto>();
+  testWidgets('renders Loading... chip without cache while awaiting snapshot', (
+    tester,
+  ) async {
+    fakeClient.pendingSnapshotCompleter = Completer<ModelCacheSnapshotDto>();
 
-      final inputSlice = createInputSlice(
-        nextMessageProviderId: 'provider-1',
-        nextMessageModel: 'model-a',
-      );
+    final inputSlice = createInputSlice(
+      nextMessageProviderId: 'provider-1',
+      nextMessageModel: 'model-a',
+    );
 
-      await tester.pumpWidget(createWidget(inputSlice: inputSlice));
-      await tester.pump();
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice));
+    await tester.pump();
 
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsOneWidget);
-      expect(find.text('Loading...'), findsOneWidget);
-      expect(find.byKey(const Key('route_thinking_mode_unavailable')), findsNothing);
+    expect(
+      find.byKey(const Key('route_thinking_mode_loading')),
+      findsOneWidget,
+    );
+    expect(find.text('Loading...'), findsOneWidget);
+    expect(
+      find.byKey(const Key('route_thinking_mode_unavailable')),
+      findsNothing,
+    );
 
-      fakeClient.pendingSnapshotCompleter!.complete(
-        const ModelCacheSnapshotDto(
-          instances: [
-            ModelCacheInstanceDto(
-              id: 'provider-1',
-              displayName: 'P1',
-              status: 'ready',
-              isDefault: true,
-              cacheStatus: 'fetched',
-              models: [
-                ModelCacheModelDto(
-                  id: 'model-a',
-                  thinkingControl: ThinkingControlDescriptorDto(
-                    status: ThinkingCapabilityStatus.supported,
-                    defaultOptionId: 'low',
-                    options: [
-                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
-                      ThinkingControlOptionDto(id: 'high', label: 'High'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ],
-          recent: [],
-        ),
-      );
-
-      await tester.pumpAndSettle();
-
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsNothing);
-      expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
-      expect(find.text('Low'), findsOneWidget);
-    },
-  );
-
-  testWidgets(
-    'renders Retry chip on fetch failure and retries on tap',
-    (tester) async {
-      fakeClient.shouldThrow = true;
-
-      final inputSlice = createInputSlice(
-        nextMessageProviderId: 'provider-1',
-        nextMessageModel: 'model-a',
-      );
-
-      await tester.pumpWidget(createWidget(inputSlice: inputSlice));
-      await tester.pumpAndSettle();
-
-      expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsOneWidget);
-      expect(find.text('Retry'), findsOneWidget);
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsNothing);
-
-      fakeClient.shouldThrow = false;
-      fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+    fakeClient.pendingSnapshotCompleter!.complete(
+      const ModelCacheSnapshotDto(
         instances: [
           ModelCacheInstanceDto(
             id: 'provider-1',
@@ -231,7 +185,9 @@ void main() {
                 id: 'model-a',
                 thinkingControl: ThinkingControlDescriptorDto(
                   status: ThinkingCapabilityStatus.supported,
+                  defaultOptionId: 'low',
                   options: [
+                    ThinkingControlOptionDto(id: 'low', label: 'Low'),
                     ThinkingControlOptionDto(id: 'high', label: 'High'),
                   ],
                 ),
@@ -240,16 +196,77 @@ void main() {
           ),
         ],
         recent: [],
-      );
+      ),
+    );
 
-      await tester.tap(find.byKey(const Key('route_thinking_mode_fetch_failure')));
-      await tester.pumpAndSettle();
+    await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsNothing);
-      expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
-      expect(find.text('High'), findsOneWidget);
-    },
-  );
+    expect(find.byKey(const Key('route_thinking_mode_loading')), findsNothing);
+    expect(
+      find.byKey(const Key('route_thinking_mode_selector_button')),
+      findsOneWidget,
+    );
+    expect(find.text('Low'), findsOneWidget);
+  });
+
+  testWidgets('renders Retry chip on fetch failure and retries on tap', (
+    tester,
+  ) async {
+    fakeClient.shouldThrow = true;
+
+    final inputSlice = createInputSlice(
+      nextMessageProviderId: 'provider-1',
+      nextMessageModel: 'model-a',
+    );
+
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('route_thinking_mode_fetch_failure')),
+      findsOneWidget,
+    );
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.byKey(const Key('route_thinking_mode_loading')), findsNothing);
+
+    fakeClient.shouldThrow = false;
+    fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+      instances: [
+        ModelCacheInstanceDto(
+          id: 'provider-1',
+          displayName: 'P1',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: [
+            ModelCacheModelDto(
+              id: 'model-a',
+              thinkingControl: ThinkingControlDescriptorDto(
+                status: ThinkingCapabilityStatus.supported,
+                options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
+              ),
+            ),
+          ],
+        ),
+      ],
+      recent: [],
+    );
+
+    await tester.tap(
+      find.byKey(const Key('route_thinking_mode_fetch_failure')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('route_thinking_mode_fetch_failure')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('route_thinking_mode_selector_button')),
+      findsOneWidget,
+    );
+    expect(find.text('High'), findsOneWidget);
+  });
 
   testWidgets(
     'renders Default chip for providerManaged models without Off label',
@@ -283,7 +300,10 @@ void main() {
       await tester.pumpWidget(createWidget(inputSlice: inputSlice));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('route_thinking_mode_provider_managed')), findsOneWidget);
+      expect(
+        find.byKey(const Key('route_thinking_mode_provider_managed')),
+        findsOneWidget,
+      );
       expect(find.text('Default'), findsOneWidget);
       expect(find.text('Off'), findsNothing);
       expect(find.text('Unavailable'), findsNothing);
@@ -340,7 +360,10 @@ void main() {
       await tester.pumpWidget(createWidget(inputSlice: inputSlice1));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+      expect(
+        find.byKey(const Key('route_thinking_mode_selector_button')),
+        findsOneWidget,
+      );
       expect(find.text('High Effort'), findsOneWidget);
 
       final inputSlice2 = createInputSlice(
@@ -352,7 +375,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('High Effort'), findsNothing);
-      expect(find.byKey(const Key('route_thinking_mode_provider_managed')), findsOneWidget);
+      expect(
+        find.byKey(const Key('route_thinking_mode_provider_managed')),
+        findsOneWidget,
+      );
       expect(find.text('Default'), findsOneWidget);
     },
   );
@@ -412,7 +438,10 @@ void main() {
       await tester.pump();
 
       expect(find.text('Route A Low'), findsNothing);
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsOneWidget);
+      expect(
+        find.byKey(const Key('route_thinking_mode_loading')),
+        findsOneWidget,
+      );
 
       completer2.complete(
         const ModelCacheSnapshotDto(
@@ -429,7 +458,10 @@ void main() {
                   thinkingControl: ThinkingControlDescriptorDto(
                     status: ThinkingCapabilityStatus.supported,
                     options: [
-                      ThinkingControlOptionDto(id: 'high', label: 'Route B High'),
+                      ThinkingControlOptionDto(
+                        id: 'high',
+                        label: 'Route B High',
+                      ),
                     ],
                   ),
                 ),
@@ -464,7 +496,10 @@ void main() {
                 thinkingControl: ThinkingControlDescriptorDto(
                   status: ThinkingCapabilityStatus.supported,
                   options: [
-                    ThinkingControlOptionDto(id: 'medium', label: 'Medium Effort'),
+                    ThinkingControlOptionDto(
+                      id: 'medium',
+                      label: 'Medium Effort',
+                    ),
                   ],
                 ),
               ),
@@ -498,15 +533,74 @@ void main() {
       await tester.pump();
 
       // Because Route 1 is already in _snapshot cache, it should NEVER flicker to loading
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsNothing);
+      expect(
+        find.byKey(const Key('route_thinking_mode_loading')),
+        findsNothing,
+      );
       expect(find.text('Medium Effort'), findsOneWidget);
     },
   );
 
-  testWidgets(
-    'device switch invalidates borrowed snapshot across agents',
-    (tester) async {
-      fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+  testWidgets('device switch invalidates borrowed snapshot across agents', (
+    tester,
+  ) async {
+    fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+      instances: [
+        ModelCacheInstanceDto(
+          id: 'provider-1',
+          displayName: 'P1',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: [
+            ModelCacheModelDto(
+              id: 'shared-model',
+              thinkingControl: ThinkingControlDescriptorDto(
+                status: ThinkingCapabilityStatus.supported,
+                options: [
+                  ThinkingControlOptionDto(id: 'high', label: 'Agent 1 High'),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+      recent: [],
+    );
+
+    final agent1 = DeviceConfig(id: 'agent-1', name: 'Agent 1');
+    final inputSlice = createInputSlice(
+      nextMessageProviderId: 'provider-1',
+      nextMessageModel: 'shared-model',
+    );
+
+    await tester.pumpWidget(
+      createWidget(inputSlice: inputSlice, activeAgent: agent1),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Agent 1 High'), findsOneWidget);
+
+    // Now prepare a pending completer for agent 2
+    final completerAgent2 = Completer<ModelCacheSnapshotDto>();
+    fakeClient.pendingSnapshotCompleter = completerAgent2;
+
+    final agent2 = DeviceConfig(id: 'agent-2', name: 'Agent 2');
+    await tester.pumpWidget(
+      createWidget(inputSlice: inputSlice, activeAgent: agent2),
+    );
+    await tester.pump();
+
+    // Snapshot from agent 1 must NOT be borrowed: it must show Loading...
+    expect(find.text('Agent 1 High'), findsNothing);
+    expect(
+      find.byKey(const Key('route_thinking_mode_loading')),
+      findsOneWidget,
+    );
+
+    // Complete agent 2 with different options
+    completerAgent2.complete(
+      const ModelCacheSnapshotDto(
         instances: [
           ModelCacheInstanceDto(
             id: 'provider-1',
@@ -520,7 +614,7 @@ void main() {
                 thinkingControl: ThinkingControlDescriptorDto(
                   status: ThinkingCapabilityStatus.supported,
                   options: [
-                    ThinkingControlOptionDto(id: 'high', label: 'Agent 1 High'),
+                    ThinkingControlOptionDto(id: 'low', label: 'Agent 2 Low'),
                   ],
                 ),
               ),
@@ -528,68 +622,12 @@ void main() {
           ),
         ],
         recent: [],
-      );
+      ),
+    );
 
-      final agent1 = DeviceConfig(id: 'agent-1', name: 'Agent 1');
-      final inputSlice = createInputSlice(
-        nextMessageProviderId: 'provider-1',
-        nextMessageModel: 'shared-model',
-      );
-
-      await tester.pumpWidget(createWidget(
-        inputSlice: inputSlice,
-        activeAgent: agent1,
-      ));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Agent 1 High'), findsOneWidget);
-
-      // Now prepare a pending completer for agent 2
-      final completerAgent2 = Completer<ModelCacheSnapshotDto>();
-      fakeClient.pendingSnapshotCompleter = completerAgent2;
-
-      final agent2 = DeviceConfig(id: 'agent-2', name: 'Agent 2');
-      await tester.pumpWidget(createWidget(
-        inputSlice: inputSlice,
-        activeAgent: agent2,
-      ));
-      await tester.pump();
-
-      // Snapshot from agent 1 must NOT be borrowed: it must show Loading...
-      expect(find.text('Agent 1 High'), findsNothing);
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsOneWidget);
-
-      // Complete agent 2 with different options
-      completerAgent2.complete(
-        const ModelCacheSnapshotDto(
-          instances: [
-            ModelCacheInstanceDto(
-              id: 'provider-1',
-              displayName: 'P1',
-              status: 'ready',
-              isDefault: true,
-              cacheStatus: 'fetched',
-              models: [
-                ModelCacheModelDto(
-                  id: 'shared-model',
-                  thinkingControl: ThinkingControlDescriptorDto(
-                    status: ThinkingCapabilityStatus.supported,
-                    options: [
-                      ThinkingControlOptionDto(id: 'low', label: 'Agent 2 Low'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ],
-          recent: [],
-        ),
-      );
-
-      await tester.pumpAndSettle();
-      expect(find.text('Agent 2 Low'), findsOneWidget);
-    },
-  );
+    await tester.pumpAndSettle();
+    expect(find.text('Agent 2 Low'), findsOneWidget);
+  });
 
   testWidgets(
     'A -> B -> A route switching reuses cached descriptors without loading flicker',
@@ -651,7 +689,10 @@ void main() {
       await tester.pump();
 
       // No flicker to loading! Route A Low is displayed immediately
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsNothing);
+      expect(
+        find.byKey(const Key('route_thinking_mode_loading')),
+        findsNothing,
+      );
       expect(find.text('Route A Low'), findsOneWidget);
     },
   );
@@ -671,7 +712,10 @@ void main() {
       await tester.pump();
 
       // Initial load: shows Loading...
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsOneWidget);
+      expect(
+        find.byKey(const Key('route_thinking_mode_loading')),
+        findsOneWidget,
+      );
       expect(find.text('Loading...'), findsOneWidget);
 
       // Resolve snapshot with unknown status
@@ -701,8 +745,14 @@ void main() {
       await tester.pumpAndSettle();
 
       // Authoritative unknown: shows Default, NOT Loading...
-      expect(find.byKey(const Key('route_thinking_mode_loading')), findsNothing);
-      expect(find.byKey(const Key('route_thinking_mode_provider_managed')), findsOneWidget);
+      expect(
+        find.byKey(const Key('route_thinking_mode_loading')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('route_thinking_mode_provider_managed')),
+        findsOneWidget,
+      );
       expect(find.text('Default'), findsOneWidget);
     },
   );
@@ -744,9 +794,7 @@ void main() {
                 id: 'model-b',
                 thinkingControl: ThinkingControlDescriptorDto(
                   status: ThinkingCapabilityStatus.supported,
-                  options: [
-                    ThinkingControlOptionDto(id: 'low', label: 'Low'),
-                  ],
+                  options: [ThinkingControlOptionDto(id: 'low', label: 'Low')],
                 ),
               ),
             ],
@@ -761,11 +809,13 @@ void main() {
         nextMessageThinkingMode: 'high',
       );
 
-      await tester.pumpWidget(createWidget(
-        inputSlice: sliceA,
-        inputCubit: inputCubit,
-        sessionCubit: sessionCubit,
-      ));
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: sliceA,
+          inputCubit: inputCubit,
+          sessionCubit: sessionCubit,
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(inputCubit.selectCount, 0);
@@ -780,11 +830,13 @@ void main() {
         nextMessageThinkingMode: 'high', // 'high' is invalid for model-b
       );
 
-      await tester.pumpWidget(createWidget(
-        inputSlice: sliceB,
-        inputCubit: inputCubit,
-        sessionCubit: sessionCubit,
-      ));
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: sliceB,
+          inputCubit: inputCubit,
+          sessionCubit: sessionCubit,
+        ),
+      );
       await tester.pump();
 
       // Switch session to session-2 while fetch is in-flight
@@ -805,6 +857,66 @@ void main() {
 
       // Session 2 has 'low' which is valid for model-b; its selection is not reset
       expect(inputCubit.selectedThinkingMode, isNot(equals('invalid')));
+    },
+  );
+
+  testWidgets(
+    'does not conflate namespaced or case-distinct model descriptors within same provider',
+    (tester) async {
+      fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+        instances: [
+          ModelCacheInstanceDto(
+            id: 'provider-1',
+            displayName: 'Provider 1',
+            status: 'ready',
+            isDefault: true,
+            cacheStatus: 'fetched',
+            models: [
+              ModelCacheModelDto(
+                id: 'VendorA/model',
+                thinkingControl: ThinkingControlDescriptorDto(
+                  status: ThinkingCapabilityStatus.supported,
+                  defaultOptionId: 'low',
+                  options: [ThinkingControlOptionDto(id: 'low', label: 'Low')],
+                ),
+              ),
+              ModelCacheModelDto(
+                id: 'VendorB/model',
+                thinkingControl: ThinkingControlDescriptorDto(
+                  status: ThinkingCapabilityStatus.supported,
+                  defaultOptionId: 'high',
+                  options: [
+                    ThinkingControlOptionDto(id: 'high', label: 'High'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+        recent: [],
+      );
+
+      final sliceA = createInputSlice(
+        nextMessageProviderId: 'provider-1',
+        nextMessageModel: 'VendorA/model',
+      );
+
+      await tester.pumpWidget(createWidget(inputSlice: sliceA));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Low'), findsOneWidget);
+      expect(find.text('High'), findsNothing);
+
+      final sliceB = createInputSlice(
+        nextMessageProviderId: 'provider-1',
+        nextMessageModel: 'VendorB/model',
+      );
+
+      await tester.pumpWidget(createWidget(inputSlice: sliceB));
+      await tester.pumpAndSettle();
+
+      expect(find.text('High'), findsOneWidget);
+      expect(find.text('Low'), findsNothing);
     },
   );
 }

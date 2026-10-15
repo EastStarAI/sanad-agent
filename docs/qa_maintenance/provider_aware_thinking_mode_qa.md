@@ -32,8 +32,10 @@ routes, and never silently ignore an explicit unsupported selection.
 | OpenCode Go unknown model with `supports_reasoning_output=true` | Control remains unavailable; reasoning output alone does not invent selectable effort |
 | Explicit empty `thinking_mode` session preference | Client transmits the present empty field; daemon clears persistence and emits `thinking_mode: null` |
 | Client `thinking_mode_source=model` | Composer uses model/`thinking_control` options only; empty list does not fall back to `balanced` |
+| Client exact model descriptor identity | Resolves thinking descriptors using exact model ID; preserves catalog namespaces (`VendorA/model` vs `VendorB/model`), case (`CaseModel` vs `casemodel`), and variant markers (`~`, `:`); strips only transport-owned provider-instance prefixes (`provider-1/`) with exact boundaries |
 | Client unsupported descriptor | Thinking chip hidden |
-| Client unknown descriptor | Chip disabled with `Unavailable` |
+| Client initial descriptor load | Shows `Loading...` until the authoritative snapshot arrives |
+| Client authoritative unknown descriptor | Shows `Default` / provider-managed behavior; does not invent selectable controls or display a false `Unavailable` state |
 | Route revision mismatch | Stale session descriptor ignored |
 | Model/provider switch invalidating selection | Preference cleared + correction event |
 | Daemon restart with queued turn | Revalidates persisted selection before provider call |
@@ -44,4 +46,5 @@ routes, and never silently ignore an explicit unsupported selection.
 - `agent/test/engine/thinking_selection_agent_runner_test.dart`
 - `agent/e2e_test/thinking_mode_gate_i_e2e_test.dart` (`--concurrency=1`)
 - `client/test/unit/conversations/route_thinking_control_test.dart`
+- `client/test/widget/route_thinking_mode_selector_test.dart`
 - `client/test/unit/bloc/conversation_input_cubit_test.dart` (model-scoped defaults/clear)

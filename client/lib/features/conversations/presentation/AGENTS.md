@@ -22,6 +22,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
   `null`) and do not invent `balanced`. Legacy device-list agents may still
   initialize and persist `balanced`. Preserve any non-empty returning-user
   value after route revalidation.
+- Model identity in thinking descriptor resolution and route matching preserves exact casing, catalog namespaces, and variant markers; only transport-owned provider instance prefixes with exact boundaries are normalized.
 - A partial provider/model preference is not a valid route. Authoritative readiness may complete or replace a partial pair, while a complete saved pair remains user intent.
 - Do not eagerly hydrate history for a session created locally for its first outgoing turn.
 - Block normal message dispatch before session creation when either the provider instance or model selection is absent.
