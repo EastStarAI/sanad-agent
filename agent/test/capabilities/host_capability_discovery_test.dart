@@ -6,6 +6,7 @@ import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/tools/system/host_capability_discovery_tool.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:test/test.dart';
@@ -87,6 +88,7 @@ void main() {
     late Directory tempWsDir;
 
     setUp(() async {
+      await SanadHomeBootstrap.prepareAll();
       WorkspacePolicyStore.clearMemoryCache();
       tempWsDir = await Directory.systemTemp.createTemp('sanad_catalog_ws_test_');
       wsService = _FakeWorkspaceRuntimeService();
