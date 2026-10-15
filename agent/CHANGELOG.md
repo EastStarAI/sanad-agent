@@ -1,3 +1,7 @@
+## 1.0.17
+
+- No Agent runtime changes; aligned the shared release version with the Client account-deletion patch (#204).
+
 ## 1.0.16
 
 - Preserved interactive user-input waits across managed daemon stop (#196).
