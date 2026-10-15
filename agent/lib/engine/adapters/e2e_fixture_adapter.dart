@@ -8,6 +8,7 @@ import '../../capabilities/models/tool_schema.dart';
 import '../../core/models/tool_execution_result.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/message.dart';
+import '../../core/models/user_attachment.dart';
 import '../../core/models/tool_call.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'llm_adapter.dart';
@@ -70,8 +71,9 @@ class E2eFixtureAdapter
 
   Future<AgentResponse> _response(
     List<Message> history,
-    List<ToolSchema>? tools,
-  ) async {
+    List<ToolSchema>? tools, {
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
     String? latestUserContent;
     for (final message in history) {
       if (message.role == MessageRole.user) {
@@ -249,10 +251,14 @@ class E2eFixtureAdapter
     }
 
     String? attachmentProjection;
+    UserAttachment? targetAttachment;
     for (final message in history) {
       if (message.role == MessageRole.user &&
           (message.content ?? '').contains(attachmentImagePrompt)) {
         attachmentProjection = message.content;
+        if (message.attachments.isNotEmpty) {
+          targetAttachment = message.attachments.first;
+        }
       }
     }
     final hasViewImageTool =
@@ -267,10 +273,21 @@ class E2eFixtureAdapter
       }
       if (toolResult == null) {
         final projection = attachmentProjection;
-        final path = RegExp(
+        var path = RegExp(
           r'^- .+ \(image\): (.+)$',
           multiLine: true,
         ).firstMatch(projection)?.group(1);
+        if (path == null &&
+            targetAttachment != null &&
+            options.attachmentStore != null &&
+            options.sessionId != null) {
+          try {
+            path = await options.attachmentStore!.resolvePath(
+              sessionId: options.sessionId!,
+              attachmentId: targetAttachment.id,
+            );
+          } catch (_) {}
+        }
         final projectionIsSafe =
             path != null &&
             path.isNotEmpty &&
@@ -628,7 +645,7 @@ class E2eFixtureAdapter
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
     await _waitForDelayedFixture(history, options);
-    return _response(history, tools);
+    return _response(history, tools, options: options);
   }
 
   @override
@@ -663,7 +680,7 @@ class E2eFixtureAdapter
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async* {
     await _waitForDelayedFixture(history, options);
-    yield await _response(history, tools);
+    yield await _response(history, tools, options: options);
   }
 
   @override

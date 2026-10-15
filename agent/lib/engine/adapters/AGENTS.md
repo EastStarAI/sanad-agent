@@ -49,4 +49,4 @@ This contract applies to `agent/lib/engine/adapters/`.
 - Preserve trusted long-duration resets; quota-style throttling without a trusted reset remains blocked for manual recovery.
 - Transparent network retry is allowed only before the first provider event and permits at most two automatic retries.
 - Any reasoning, metadata, content, tool, or state event closes the transparent-retry window.
-- Deterministic E2E adapter selection requires explicit E2E mode and isolated mutable state, and still traverses runner, persistence, and canonical delivery.
+- Deterministic E2E adapter selection requires explicit E2E mode and isolated mutable state, and still traverses runner, persistence, and canonical delivery. Image fixtures declare model capability through isolated configuration, resolve attachment references only through the supplied session-scoped store, and derive pixel answers only from completed typed tool results.

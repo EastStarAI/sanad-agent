@@ -371,6 +371,11 @@ final class _ViewImageHarness {
     await File('${workspace.path}/AGENTS.md').writeAsString(
       'Workspace owned by the daemon-backed view_image E2E fixture.',
     );
+    await File('${sanadHome.path}/config.yaml').writeAsString('''
+model_capabilities:
+  ${E2eFixtureAdapter.modelId}:
+    supports_image_input: true
+''');
     final port = await _reserveFreePort();
     final pauseFile = pauseAfterResult
         ? File('${sanadStateHome.path}/view-image-result-ready')
