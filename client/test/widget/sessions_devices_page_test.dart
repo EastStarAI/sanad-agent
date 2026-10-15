@@ -46,6 +46,13 @@ class _FakeAccountRepository implements AccountLifecycleRepository {
   }
 
   @override
+  Future<AccountDeleteResult> deleteAccount() async {
+    return const AccountDeleteResult(
+      requestId: 'request-1',
+    );
+  }
+
+  @override
   Future<void> dispose() async {
     await changesController.close();
     await readinessController.close();
