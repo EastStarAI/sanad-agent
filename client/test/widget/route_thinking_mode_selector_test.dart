@@ -1928,4 +1928,154 @@ void main() {
       },
     );
   });
+
+  group('RouteThinkingModeSelector OpenCode Go exact V4.1 controls', () {
+    // Exact agent-emitted descriptor for DeepSeek V4.1 Flash on OpenCode Go:
+    // Chat `thinking.type: enabled/disabled` plus finite
+    // `reasoning_effort: low/high/max`, enabled by default at default `high`
+    // (https://api-docs.deepseek.com/guides/thinking_mode). `minimal`/`medium`/
+    // `xhigh`/`ultra` are documented request remaps, never distinct tiers.
+    const v41Descriptor = ThinkingControlDescriptorDto(
+      status: ThinkingCapabilityStatus.supported,
+      kind: ThinkingControlKind.effort,
+      options: [
+        ThinkingControlOptionDto(
+          id: 'off',
+          label: 'Off',
+          isOff: true,
+        ),
+        ThinkingControlOptionDto(id: 'low', label: 'Low'),
+        ThinkingControlOptionDto(
+          id: 'high',
+          label: 'High',
+          isProviderDefault: true,
+        ),
+        ThinkingControlOptionDto(id: 'max', label: 'Max'),
+      ],
+      defaultOptionId: 'high',
+      capabilityRevision: 'rev-v41',
+      source: 'profile',
+    );
+
+    testWidgets(
+      'shows the exact V4.1 selector with real finite tiers and grounded default',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'inst-v41-go',
+              displayName: 'OpenCode Go',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'deepseek-v4.1-flash',
+                  name: 'DeepSeek V4.1 Flash',
+                  supportsReasoningOutput: true,
+                  thinkingControl: v41Descriptor,
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final inputSlice = createInputSlice(
+          nextMessageProviderId: 'inst-v41-go',
+          nextMessageModel: 'deepseek-v4.1-flash',
+        );
+
+        await tester.pumpWidget(createWidget(inputSlice: inputSlice));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('route_thinking_mode_hidden')),
+          findsNothing,
+          reason: 'the exact V4.1 regression must not hide the selector',
+        );
+        expect(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('chip_High')),
+          findsOneWidget,
+          reason: 'the grounded model default is High, not a fabricated Default',
+        );
+
+        await tester.tap(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+        );
+        await tester.pumpAndSettle();
+
+        for (final optionId in ['off', 'low', 'high', 'max']) {
+          expect(
+            find.byKey(Key('thinking_mode_option_$optionId')),
+            findsOneWidget,
+            reason: '$optionId must be a visible real V4.1 tier',
+          );
+        }
+        for (final remappedAlias in ['minimal', 'medium', 'xhigh', 'ultra']) {
+          expect(
+            find.byKey(Key('thinking_mode_option_$remappedAlias')),
+            findsNothing,
+            reason: '$remappedAlias is a request remap, not a visible tier',
+          );
+        }
+        expect(
+          find.byKey(const Key('thinking_mode_check_high')),
+          findsOneWidget,
+          reason: 'the grounded default tier must be the checked entry',
+        );
+      },
+    );
+
+    testWidgets(
+      'keeps the selector hidden for the pre-fix unsupported V4.1 descriptor',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'inst-v41-go',
+              displayName: 'OpenCode Go',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'deepseek-v4.1-flash-x',
+                  name: 'DeepSeek V4.1 Flash X',
+                  supportsReasoningOutput: true,
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.unsupported,
+                    capabilityRevision: 'rev-near-id',
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final inputSlice = createInputSlice(
+          nextMessageProviderId: 'inst-v41-go',
+          nextMessageModel: 'deepseek-v4.1-flash-x',
+        );
+
+        await tester.pumpWidget(createWidget(inputSlice: inputSlice));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('route_thinking_mode_hidden')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+          findsNothing,
+          reason: 'an unevidenced near-ID must not gain thinking controls',
+        );
+      },
+    );
+  });
 }

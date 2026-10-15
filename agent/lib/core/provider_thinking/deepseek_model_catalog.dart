@@ -22,6 +22,11 @@ class DeepSeekModelCatalog {
     'deepseek-v4',
     'deepseek-v4-pro',
     'deepseek-v4-flash',
+    // Exact OpenCode Go / DeepSeek API id for V4.1-Flash. Grounded in
+    // https://www.deepseek.com/en/news/deepseek-v4-1-flash/ (V4.1-Flash is live
+    // on the DeepSeek API; OpenCode is an official partner) and
+    // https://opencode.ai/docs/go/ (Go lists `DeepSeek V4.1 Flash`).
+    'deepseek-v4.1-flash',
     'deepseek-flash',
   };
 

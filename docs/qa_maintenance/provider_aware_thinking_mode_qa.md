@@ -37,6 +37,9 @@ routes, and never silently ignore an explicit unsupported selection.
 | Compatible route with exact evidenced Kimi model | Model-owned finite Kimi controls; fixed models unsupported; aggregator retains its route-owned envelope |
 | Every registry/factory kind | Automatic evidenced/unknown/unsupported expectations plus finite declaration, actual-mode and default-omission checks; no claim that registry coverage proves every upstream model |
 | OpenCode Go recognized reasoning family | Selector uses the OpenAI Chat effort descriptor and supported ordered tiers |
+| OpenCode Go exact DeepSeek V4.1 Flash (`deepseek-v4.1-flash`) | Exact model-owned DeepSeek facts override the Go generic effort policy: selector visible with `Off`/`Low`/`High`/`Max` and default `High`; `off` sends disabled thinking with no effort, `low`/`high`/`max` send enabled thinking plus that exact `reasoning_effort`; an empty/null selection sends neither field; the wire keeps the exact model id |
+| DeepSeek documented effort remaps | `minimal`/`medium`/`xhigh`/`ultra` are never visible tiers and are rejected as selections (`optionUnavailable`) instead of being relabelled |
+| DeepSeek V4.1 near-IDs (`deepseek-v4.1-flash-x`, `deepseek-v4.1-flash-thinking`, `deepseek-v41-flash`, `deepseek-v4-1-flash`, `deepseek-v4.1`, casing variants) | Remain unevidenced: Go keeps its generic result, the chip stays hidden, and a selection is rejected before HTTP; no family/prefix/substring rule may promote them |
 | OpenCode Go unknown model with `supports_reasoning_output=true` | Control remains unavailable; reasoning output alone does not invent selectable effort |
 | Explicit empty `thinking_mode` session preference | Client transmits the present empty field; daemon clears persistence and emits `thinking_mode: null` |
 | Client `thinking_mode_source=model` | Composer uses model/`thinking_control` options only; empty list does not fall back to `balanced` |
@@ -55,10 +58,12 @@ routes, and never silently ignore an explicit unsupported selection.
 ## Automated anchors
 
 - `agent/test/core/provider_thinking/`
+- `agent/test/core/provider_thinking/opencode_go_deepseek_v41_thinking_regression_test.dart` (exact V4.1 Flash policy/descriptor, production Go Chat mock-HTTP default/Off/effort wire, near-ID negatives)
 - `agent/test/engine/thinking_selection_agent_runner_test.dart`
 - `agent/e2e_test/thinking_mode_gate_i_e2e_test.dart` (`--concurrency=1`)
 - `client/test/unit/conversations/route_thinking_control_test.dart` (exact model identity, freshness arbitration, route binding)
-- `client/test/widget/route_thinking_mode_selector_test.dart` (exact identity, refresh lifecycle, invalidation repair, restoration)
+- `client/test/unit/conversations/opencode_go_deepseek_v41_thinking_selector_test.dart` (exact V4.1 descriptor visibility, grounded default label, near-ID hidden negative)
+- `client/test/widget/route_thinking_mode_selector_test.dart` (exact identity, refresh lifecycle, invalidation repair, restoration, exact V4.1 visible tiers)
 - `client/test/unit/provider_setup/provider_setup_client_impl_test.dart` (event stream projection)
 - `client/test/unit/provider_setup/model_cache_snapshot_dto_test.dart` (event parsing)
 - `client/test/unit/bloc/conversation_input_cubit_test.dart` (model-scoped defaults/clear)
