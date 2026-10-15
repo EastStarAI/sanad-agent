@@ -18,7 +18,7 @@ Do not introduce convenience code that weakens these boundaries.
 - The agent is authoritative for execution, delivery classification, queue/steer/stop recovery, provider readiness, tools, MCP, skills, workspace runtime data, and agent-owned settings.
 - Client state is a typed projection of authoritative runtime/cache events; widgets and cubits must not create competing runtime stores or infer daemon outcomes from presentation flags.
 - Presentation never calls `SanadSocketService`, parses transport envelopes, reads agent-owned files, or selects local/cloud transport directly.
-- Account lifecycle list/revoke uses one application-scoped repository over the authenticated Cloud Socket; Portal HTTP owns OAuth/refresh/logout but no lifecycle inventory routes. Observation is consumer-lazy: opening Sessions & Devices fetches, a closed page never fetches on auth/reconnect, and an open disconnected page retains a stale snapshot until one coalesced reconnect refetch.
+- Account lifecycle list/revoke/delete uses one application-scoped repository over the authenticated Cloud Socket; Portal HTTP owns OAuth/refresh/logout but no lifecycle routes. Profile Page owns the confirmed account-deletion action; deletion permanently removes cloud account data while strictly preserving local Agent files and conversation history. Observation is consumer-lazy: opening Sessions & Devices fetches, a closed page never fetches on auth/reconnect, and an open disconnected page retains a stale snapshot until one coalesced reconnect refetch.
 - Device-targeted work carries explicit device identity through repositories/clients and the shared connection coordinator.
 
 ### Render and Request Independence

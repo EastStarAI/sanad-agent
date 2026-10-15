@@ -220,12 +220,13 @@ jobs:
           printf '%s' "$APPLE_KEY_BASE64" | base64 -D > "$RUNNER_TEMP/AuthKey.p8"
           chmod 600 "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/AuthKey.p8"
           security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security default-keychain -s "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" \
             -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: \
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$keychain_password" "$keychain"
           identity="$(security find-identity -v -p codesigning "$keychain" |
             sed -n 's/.*"\(Developer ID Application: NanoSoft LY LLC ([^"]*)\)".*/\1/p' |
@@ -427,13 +428,16 @@ jobs:
             "$RUNNER_TEMP/sparkle-private-key" \
             "$RUNNER_TEMP/AuthKey.p8"
           security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security default-keychain -s "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" \
             -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: \
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$keychain_password" "$keychain"
+          echo "KEYCHAIN_PATH=$keychain" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$keychain_password" >> "$GITHUB_ENV"
       - name: Build signed and notarized DMG
         working-directory: client
         env:
@@ -446,6 +450,8 @@ jobs:
           fvm flutter pub get
           fvm flutter precache --macos
           (cd macos && pod install)
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" || true
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH" || true
           release/macos/release_macos.sh
           mkdir -p ../dist
           source_prefix="build/sanad-client-${{ needs.validate.outputs.version }}-macos-universal.dmg"
@@ -546,12 +552,13 @@ jobs:
           printf '%s' "$PROFILE_BASE64" | base64 -D > "$RUNNER_TEMP/sanad.mobileprovision"
           chmod 600 "$RUNNER_TEMP/distribution.p12" "$RUNNER_TEMP/sanad.mobileprovision"
           security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security default-keychain -s "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/distribution.p12" -k "$keychain" \
             -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: \
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$keychain_password" "$keychain"
           uuid="$(security cms -D -i "$RUNNER_TEMP/sanad.mobileprovision" | \
             plutil -extract UUID raw -o - -)"
