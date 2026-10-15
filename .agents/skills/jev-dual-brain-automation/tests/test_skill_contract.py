@@ -13,7 +13,6 @@ class SkillContractTest(unittest.TestCase):
         cls.skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         cls.workflow = (SCRIPTS / "workflow_engine.py").read_text(encoding="utf-8")
         cls.browser = (SCRIPTS / "dual_brain_browser.py").read_text(encoding="utf-8")
-        cls.sanad = (SCRIPTS / "dual_brain_sanad_ui.py").read_text(encoding="utf-8")
 
     def test_skill_declares_software_owned_workflow(self):
         for phrase in (
@@ -27,16 +26,16 @@ class SkillContractTest(unittest.TestCase):
         ):
             self.assertIn(phrase.lower(), self.skill.lower())
 
-    def test_skill_documents_stable_message_evidence(self):
-        self.assertIn("user_message_body:<eventId>", self.skill)
-        self.assertIn("assistant_message_body:<eventId>", self.skill)
-        self.assertIn("Do not use clipboard as the primary", self.skill)
+    def test_skill_routes_sanad_details_to_client_tester(self):
+        self.assertIn("Sanad Client Tester", self.skill)
+        self.assertIn("references/jev-conversation-automation.md", self.skill)
+        self.assertFalse((SCRIPTS / "dual_brain_sanad_ui.py").exists())
+        self.assertFalse((SCRIPTS / "sanad_conversation_workflow.py").exists())
 
-    def test_adapters_do_not_own_autonomous_goal_loops(self):
-        for adapter in (self.browser, self.sanad):
-            self.assertNotIn("def execute_goal", adapter)
-            self.assertNotIn("JevClient", adapter)
-            self.assertNotIn("time.sleep", adapter)
+    def test_browser_adapter_does_not_own_autonomous_goal_loops(self):
+        self.assertNotIn("def execute_goal", self.browser)
+        self.assertNotIn("JevClient", self.browser)
+        self.assertNotIn("time.sleep", self.browser)
 
     def test_workflow_contains_required_fail_closed_controls(self):
         for symbol in (

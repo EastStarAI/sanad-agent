@@ -4,6 +4,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
@@ -41,6 +42,12 @@ class FakeConversationRepository implements ConversationRepository {
   final Map<String, Map<String, SessionRouteSnapshot>> _routesByAgentId = {};
   final Map<String, StreamController<Map<String, SessionRouteSnapshot>>> _routeControllers = {};
   final StreamController<StopDraftRecovery> _stopRecoveriesController = StreamController.broadcast();
+  int acknowledgeStopRecoveryCalls = 0;
+  final List<Map<String, String?>> acknowledgedStopRecoveries = [];
+
+  void emitStopRecovery(StopDraftRecovery recovery) {
+    _stopRecoveriesController.add(recovery);
+  }
 
   final List<String> activatedSessionIds = [];
   final List<String> loadedHistorySessionIds = [];
@@ -68,6 +75,12 @@ class FakeConversationRepository implements ConversationRepository {
   final List<Map<String, String?>> updatedSessionPreferences = [];
   final List<Map<String, Object?>> createdSessionRequests = [];
   final List<DeviceWorkspace> workspaces = [];
+  Future<SessionSearchPage> Function(
+    DeviceConfig agent,
+    String query,
+    String? cursor,
+  )?
+  searchSessionsHandler;
   final List<Map<String, String?>> createdWorkspaces = [];
   final List<String> removedWorkspaceIds = [];
   final List<Map<String, String?>> slashCommandSearchRequests = [];
@@ -344,7 +357,15 @@ class FakeConversationRepository implements ConversationRepository {
     required String stopRequestId,
     String? claimantId,
     String? recoveryOwnerToken,
-  }) async {}
+  }) async {
+    acknowledgeStopRecoveryCalls++;
+    acknowledgedStopRecoveries.add({
+      'sessionId': sessionId,
+      'stopRequestId': stopRequestId,
+      'claimantId': claimantId,
+      'recoveryOwnerToken': recoveryOwnerToken,
+    });
+  }
 
   @override
   Future<TurnReplayResult> replayTurn(
@@ -454,6 +475,20 @@ class FakeConversationRepository implements ConversationRepository {
       'model': model,
       'thinking_mode': thinkingMode,
     });
+  }
+
+  @override
+  Future<SessionSearchPage> searchSessions(
+    DeviceConfig agent, {
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) async {
+    final handler = searchSessionsHandler;
+    if (handler == null) {
+      return const SessionSearchPage(hits: [], hasMore: false);
+    }
+    return handler(agent, query, cursor);
   }
 
   @override

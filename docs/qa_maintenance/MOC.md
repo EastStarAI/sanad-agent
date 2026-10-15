@@ -18,6 +18,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Test Suite Performance and Ownership QA](test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
 - [Agent Turn Startup Performance QA](agent_turn_startup_performance_qa.md): Metadata-only admission, atomic root-message append, revision-validated history reuse, and Windows long-session latency coverage.
 - [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
+- [Jev Sanad UI Automation](jev_sanad_ui_automation.md): Safety boundary and verification matrix for the Client Tester-owned conversation runner with narrow Jev verification.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.
@@ -32,6 +33,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Account Sessions and Devices QA](account_sessions_devices_qa.md): Account Client-session and Agent inventory presentation, hardware/account identity boundaries, cancellation, revocation, compact layout, and restart coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
+- [Provider-Aware Thinking Mode QA](provider_aware_thinking_mode_qa.md): Model-scoped thinking controls, fail-closed unknown routes, payload parity, and composer selector states (Task 43).
 - [OpenRouter App Attribution QA](openrouter_app_attribution_qa.md): Exact app-attribution headers, sync/stream propagation, bearer-auth preservation, and provider-isolation coverage.
 - [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect and steer-drop confirmation, root-turn identity, navigation cancellation, and current route selection.
 - [Conversation Fork QA](conversation_fork_qa.md): Coverage for materialized fork, lineage, parent/child independence, and delete behavior.

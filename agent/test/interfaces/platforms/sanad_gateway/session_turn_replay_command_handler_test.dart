@@ -859,6 +859,7 @@ class _RecordingOrchestrator extends SessionRunOrchestrator {
     bool forceEmitStopped = false,
     String? stopRequestId,
     String? recoveryOwnerToken,
+    bool preserveInteractiveWait = false,
   }) async {
     stopCount++;
     if (!stopStarted.isCompleted) {

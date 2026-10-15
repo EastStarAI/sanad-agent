@@ -62,6 +62,8 @@ class AgentToCanonical {
         if (response.toolCallId != null) 'tool_call_id': response.toolCallId,
         if (response.contextUsage != null)
           'context_usage': response.contextUsage,
+        if (response.message.metadata?['started_at'] != null)
+          'started_at': response.message.metadata!['started_at'],
       };
     } else if (response.isToolResult) {
       type = 'tool_result';

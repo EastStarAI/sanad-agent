@@ -14,6 +14,19 @@ import 'run_cancellation_scope.dart';
 import 'tool_output_guard.dart';
 import 'tool_terminal_record.dart';
 
+typedef ToolEventCallback =
+    Future<void> Function({
+      required String toolName,
+      String? input,
+      String? output,
+      required bool isError,
+      required bool isStart,
+      String? toolRunId,
+      DateTime? startedAt,
+      DateTime? terminalAt,
+      int? runtimeMs,
+    });
+
 /// Executes tool-call batches (sequential or parallel), persists per-tool
 /// completion checkpoints, and replays completed/interrupted tools safely on
 /// resume — all without owning the conversation history.
@@ -58,15 +71,7 @@ class ToolExecutionCoordinator {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
     RunCancellationScope? cancellationScope,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
   }) async {
     if (!_canPublishToolEvents(cancellationScope)) return;
     final repo = getIt.isRegistered<PersistedRuntimeStateRepository>()
@@ -130,8 +135,7 @@ class ToolExecutionCoordinator {
       // causal step is supplied (runner invoked outside the model loop) or the
       // record is a legacy untagged durable result, fall back to durable
       // id-based reuse to preserve recovery semantics.
-      final reusable =
-          currentModelStepId == null
+      final reusable = currentModelStepId == null
           ? completedResults.containsKey(toolCall.id)
           : checkpointCoordinator.isCompletedResultForCausalToolCall(
               freshMeta,
@@ -180,6 +184,8 @@ class ToolExecutionCoordinator {
       );
     }
 
+    final toolTiming =
+        <String, ({DateTime startedAt, DateTime terminalAt, int runtimeMs})>{};
     if (toolCallsToRun.isNotEmpty) {
       final executedResults = parallel
           ? await _executeParallel(
@@ -188,6 +194,7 @@ class ToolExecutionCoordinator {
               ctx: ctx,
               cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
+              toolTiming: toolTiming,
             )
           : await _executeSequential(
               toolCallsToRun,
@@ -195,6 +202,7 @@ class ToolExecutionCoordinator {
               ctx: ctx,
               cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
+              toolTiming: toolTiming,
             );
       finalResults.addAll(executedResults);
     }
@@ -237,7 +245,15 @@ class ToolExecutionCoordinator {
             _lockedCancelledResult(toolCall.id) != null ||
             (outputRecord is Map && outputRecord['is_error'] == true) ||
             _resultIndicatesError(result);
-        await callbacks.addToolMessage(toolCall, result, isError: isError);
+        final timing = toolTiming[toolCall.id];
+        await callbacks.addToolMessage(
+          toolCall,
+          result,
+          isError: isError,
+          startedAt: timing?.startedAt,
+          terminalAt: timing?.terminalAt,
+          runtimeMs: timing?.runtimeMs,
+        );
       }
     }
     if (!_canPublishToolEvents(cancellationScope)) return;
@@ -317,15 +333,9 @@ class ToolExecutionCoordinator {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
     RunCancellationScope? cancellationScope,
-    required Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
+    Map<String, ({DateTime startedAt, DateTime terminalAt, int runtimeMs})>?
+    toolTiming,
   }) async {
     final results = <String, String>{};
     for (final toolCall in toolCallsToRun) {
@@ -334,6 +344,7 @@ class ToolExecutionCoordinator {
       _logger.info(
         '🛠️ [Agent] Requesting tool call: ${toolCall.name} (arguments: $argumentsString)',
       );
+      final startedAt = DateTime.now().toUtc();
       if (onToolEvent != null) {
         await _maybeEmitToolEvent(
           cancellationScope,
@@ -343,6 +354,7 @@ class ToolExecutionCoordinator {
             isError: false,
             isStart: true,
             toolRunId: toolCall.id,
+            startedAt: startedAt,
           ),
         );
       }
@@ -364,6 +376,14 @@ class ToolExecutionCoordinator {
         onToolEvent: onToolEvent,
         emitStartEvent: false,
         appendToHistory: false,
+        startedAtOverride: startedAt,
+      );
+      final terminalAt = DateTime.now().toUtc();
+      final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
+      toolTiming?[toolCall.id] = (
+        startedAt: startedAt,
+        terminalAt: terminalAt,
+        runtimeMs: runtimeMs,
       );
       var result = execution.result;
       if (!_canPublishToolEvents(cancellationScope)) return results;
@@ -383,6 +403,15 @@ class ToolExecutionCoordinator {
         if (!_canPublishToolEvents(cancellationScope)) return results;
         result = resolution.output;
         isError = resolution.isError;
+        final deferredTerminalAt = DateTime.now().toUtc();
+        final deferredRuntimeMs = deferredTerminalAt
+            .difference(startedAt)
+            .inMilliseconds;
+        toolTiming?[toolCall.id] = (
+          startedAt: startedAt,
+          terminalAt: deferredTerminalAt,
+          runtimeMs: deferredRuntimeMs,
+        );
         if (onToolEvent != null) {
           await _maybeEmitToolEvent(
             cancellationScope,
@@ -392,6 +421,9 @@ class ToolExecutionCoordinator {
               isError: isError,
               isStart: false,
               toolRunId: toolCall.id,
+              startedAt: startedAt,
+              terminalAt: deferredTerminalAt,
+              runtimeMs: deferredRuntimeMs,
             ),
           );
         }
@@ -422,19 +454,17 @@ class ToolExecutionCoordinator {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
     RunCancellationScope? cancellationScope,
-    required Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
+    Map<String, ({DateTime startedAt, DateTime terminalAt, int runtimeMs})>?
+    toolTiming,
   }) async {
     _logger.info(
       '⚡ Executing ${toolCallsToRun.length} tool calls concurrently: ${toolCallsToRun.map((tc) => tc.name).join(', ')}',
     );
+
+    final startedAtByTool = <String, DateTime>{
+      for (final tc in toolCallsToRun) tc.id: DateTime.now().toUtc(),
+    };
 
     if (onToolEvent != null) {
       await Future.wait(
@@ -447,6 +477,7 @@ class ToolExecutionCoordinator {
               isError: false,
               isStart: true,
               toolRunId: toolCall.id,
+              startedAt: startedAtByTool[toolCall.id],
             ),
           );
         }),
@@ -471,9 +502,18 @@ class ToolExecutionCoordinator {
         _logger.info(
           '🛠️ [Agent] Concurrent request: ${toolCall.name} (arguments: ${toolCall.arguments})',
         );
+        final startedAt =
+            startedAtByTool[toolCall.id] ?? DateTime.now().toUtc();
         final tool = registry.getTool(toolCall.name);
         if (tool == null) {
           final result = 'Error: Tool ${toolCall.name} not found';
+          final terminalAt = DateTime.now().toUtc();
+          final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
+          toolTiming?[toolCall.id] = (
+            startedAt: startedAt,
+            terminalAt: terminalAt,
+            runtimeMs: runtimeMs,
+          );
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
@@ -505,6 +545,13 @@ class ToolExecutionCoordinator {
           );
           final isError = _resultIndicatesError(isolatedResult);
           final result = ToolOutputGuard.guardResult(isolatedResult);
+          final terminalAt = DateTime.now().toUtc();
+          final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
+          toolTiming?[toolCall.id] = (
+            startedAt: startedAt,
+            terminalAt: terminalAt,
+            runtimeMs: runtimeMs,
+          );
           if (!_canPublishToolEvents(cancellationScope)) return;
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
@@ -522,8 +569,15 @@ class ToolExecutionCoordinator {
             currentlyExecutingToolCallIds: remainingExecuting.toList(),
           );
         } catch (e) {
-          if (!_canPublishToolEvents(cancellationScope)) return;
           final result = 'Error executing tool: $e';
+          final terminalAt = DateTime.now().toUtc();
+          final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
+          toolTiming?[toolCall.id] = (
+            startedAt: startedAt,
+            terminalAt: terminalAt,
+            runtimeMs: runtimeMs,
+          );
+          if (!_canPublishToolEvents(cancellationScope)) return;
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
@@ -566,6 +620,7 @@ class ToolExecutionCoordinator {
       final isError =
           (outputRecord is Map && outputRecord['is_error'] == true) ||
           _resultIndicatesError(result);
+      final timing = toolTiming?[toolCall.id];
       if (onToolEvent != null) {
         await _maybeEmitToolEvent(
           cancellationScope,
@@ -575,6 +630,9 @@ class ToolExecutionCoordinator {
             isError: isError,
             isStart: false,
             toolRunId: toolCall.id,
+            startedAt: timing?.startedAt,
+            terminalAt: timing?.terminalAt,
+            runtimeMs: timing?.runtimeMs,
           ),
         );
       }
@@ -598,15 +656,7 @@ class ToolExecutionCoordinator {
     ToolCall toolCall, {
     required ToolExecutionCallbacks callbacks,
     RunCancellationScope? cancellationScope,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     bool emitStartEvent = true,
     String? forcedOutput,
     bool forcedIsError = false,
@@ -628,21 +678,15 @@ class ToolExecutionCoordinator {
     ToolCall toolCall, {
     required ToolExecutionCallbacks callbacks,
     RunCancellationScope? cancellationScope,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     bool emitStartEvent = true,
     String? forcedOutput,
     bool forcedIsError = false,
     required bool appendToHistory,
+    DateTime? startedAtOverride,
   }) async {
     final argumentsString = jsonEncode(toolCall.arguments);
+    final startedAt = startedAtOverride ?? DateTime.now().toUtc();
     if (emitStartEvent && onToolEvent != null) {
       await _maybeEmitToolEvent(
         cancellationScope,
@@ -652,6 +696,7 @@ class ToolExecutionCoordinator {
           isError: false,
           isStart: true,
           toolRunId: toolCall.id,
+          startedAt: startedAt,
         ),
       );
     }
@@ -691,6 +736,8 @@ class ToolExecutionCoordinator {
     }
     isError = isError || _resultIndicatesError(result);
     result = ToolOutputGuard.guardResult(result);
+    final terminalAt = DateTime.now().toUtc();
+    final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
     if (!_canPublishToolEvents(cancellationScope)) {
       return (result: result, isError: isError);
     }
@@ -711,12 +758,22 @@ class ToolExecutionCoordinator {
           isError: isError,
           isStart: false,
           toolRunId: toolCall.id,
+          startedAt: startedAt,
+          terminalAt: terminalAt,
+          runtimeMs: runtimeMs,
         ),
       );
     }
 
     if (appendToHistory) {
-      await callbacks.addToolMessage(toolCall, result, isError: isError);
+      await callbacks.addToolMessage(
+        toolCall,
+        result,
+        isError: isError,
+        startedAt: startedAt,
+        terminalAt: terminalAt,
+        runtimeMs: runtimeMs,
+      );
     }
     return (result: result, isError: isError);
   }
@@ -743,6 +800,9 @@ abstract class ToolExecutionCallbacks {
     ToolCall toolCall,
     String result, {
     required bool isError,
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
   });
 
   /// Returns true if a tool message with [toolCallId] already exists in

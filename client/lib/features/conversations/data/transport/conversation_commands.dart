@@ -1,6 +1,7 @@
 import 'package:logging/logging.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
@@ -387,8 +388,9 @@ class ConversationCommands {
     final nextModel = model?.trim();
     final nextThinkingMode = thinkingMode?.trim();
     final nextProviderId = providerId?.trim();
+    final hasThinkingModeUpdate = thinkingMode != null;
     if ((nextModel == null || nextModel.isEmpty) &&
-        (nextThinkingMode == null || nextThinkingMode.isEmpty) &&
+        !hasThinkingModeUpdate &&
         (nextProviderId == null || nextProviderId.isEmpty)) {
       return;
     }
@@ -400,8 +402,8 @@ class ConversationCommands {
         'request_id': requestId,
         'session_id': sessionId,
         if (nextModel != null && nextModel.isNotEmpty) 'model': nextModel,
-        if (nextProviderId != null && nextProviderId.isNotEmpty) 'provider_id': nextProviderId,
-        if (nextThinkingMode != null && nextThinkingMode.isNotEmpty) 'thinking_mode': nextThinkingMode,
+        if (nextProviderId != null && nextProviderId.isNotEmpty) 'provider_instance_id': nextProviderId,
+        if (hasThinkingModeUpdate) 'thinking_mode': nextThinkingMode ?? '',
       },
       requestId: requestId,
     );
@@ -447,6 +449,55 @@ class ConversationCommands {
 
     _logger.severe('❌ [ConversationCommands] Failed to get sessions');
     throw StateError('Failed to get sessions from gateway');
+  }
+
+  Future<SessionSearchPage> searchSessions({
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) async {
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'search_sessions',
+      payload: {
+        'request_id': requestId,
+        'query': query,
+        'limit': limit,
+        if (cursor != null) 'cursor': cursor,
+      },
+      requestId: requestId,
+    );
+    if (result == null) {
+      throw const SessionSearchException(
+        'gateway_unavailable',
+        'Conversation search is unavailable.',
+      );
+    }
+    final payload = Map<String, dynamic>.from(
+      result['payload'] as Map? ?? result,
+    );
+    final error = payload['error'];
+    if (error is Map) {
+      throw SessionSearchException(
+        error['code']?.toString() ?? 'session_search_failed',
+        error['message']?.toString() ?? 'Conversation search failed.',
+      );
+    }
+    final deviceId = result['device_id']?.toString();
+    final hits = (payload['results'] as List? ?? const []).map((raw) {
+      final hit = Map<String, dynamic>.from(raw as Map);
+      final session = Map<String, dynamic>.from(hit['session'] as Map);
+      if (deviceId != null && session['device_id'] == null) {
+        session['device_id'] = deviceId;
+      }
+      hit['session'] = session;
+      return SessionSearchHit.fromJson(hit);
+    }).toList();
+    return SessionSearchPage(
+      hits: hits,
+      nextCursor: payload['next_cursor']?.toString(),
+      hasMore: payload['has_more'] == true,
+    );
   }
 
   Future<List<DeviceWorkspace>> getWorkspaces() async {

@@ -332,7 +332,10 @@ class DaemonRestartCoordinator {
       _sessionOrchestrator?.cancelControlledRestartDrain();
       _restartInProgress = false;
     }
-    await _sessionOrchestrator?.requestStopAll();
+    // Sessions parked on ask_user/permission survive the managed stop with
+    // their durable checkpoint intact; startup recovery restores the exact
+    // wait instead of recording an unknown tool outcome.
+    await _sessionOrchestrator?.requestStopAll(preserveInteractiveWaits: true);
     await Future<void>.delayed(acknowledgementDelay);
     _logger.info('Exiting daemon permanently...');
     _exitDaemon(123);

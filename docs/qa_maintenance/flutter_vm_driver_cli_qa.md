@@ -20,6 +20,7 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Element query | Matches key, tooltip, type suffix, and free-text query deterministically |
 | Rich text extraction | `Text.rich`, `RichText`, and `SelectableText.rich` expose their rendered plain text rather than an empty `Text.data` value |
 | Message body identity | User and assistant Markdown each render exactly one event-scoped `*_message_body:<eventId>` key |
+| Batch message-body evidence | `message_bodies` returns only event-scoped user/assistant bodies, at most the latest 50, with total count and explicit truncation metadata |
 | Markdown consolidation | Multi-block Markdown text is joined in display order on the keyed message-body row without duplicate descendant rows |
 | Analyzer and formatter | All changed Client and script sources pass |
 
@@ -60,6 +61,7 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Wait for presence/absence | Returns success only for the requested terminal condition |
 | Screenshot | Produces a non-empty PNG outside tracked source artifacts |
 | Batch JSON mode | Emits exactly one parseable JSON result and a nonzero status when any step fails |
+| Same-connection response evidence | A send/wait/`message_bodies` batch captures the target conversation before closing its shared Driver connection, avoiding a follow-up navigation race |
 
 ## Platform Matrix
 

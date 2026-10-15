@@ -17,7 +17,7 @@ class _SwitchableRuntimeController {
     required SanadDevComponentTarget interactiveComponent,
   }) : _agent = agent,
        _client = client,
-       _agentEnvironment = Map.unmodifiable(agentEnvironment),
+       _agentEnvironment = Map<String, String>.from(agentEnvironment),
        _agentArguments = List.unmodifiable(agentArguments),
        _clientArguments = List.unmodifiable(clientArguments),
        _clientEnvironment = Map.unmodifiable(clientEnvironment),
@@ -42,7 +42,7 @@ class _SwitchableRuntimeController {
   final List<Process> _additionalClients = [];
   final Map<int, Process> _clientProcessesByVmPort = {};
   final Map<int, ComponentProcessJournal> _clientJournalsByVmPort = {};
-  final Map<String, String> _agentEnvironment;
+  Map<String, String> _agentEnvironment;
   final List<String> _agentArguments;
   final List<String> _clientArguments;
   final Map<String, String> _clientEnvironment;
@@ -557,12 +557,15 @@ class _SwitchableRuntimeController {
   Future<void> _performSwitch(RuntimeSwitchRequest request) =>
       _SwitchTransactionRunner(this).performSwitch(request);
 
-  Future<void> _startAgent(String directory) async {
+  Future<void> _startAgent(
+    String directory, {
+    Map<String, String>? environment,
+  }) async {
     final process = await Process.start(
       'fvm',
       _agentArguments,
       workingDirectory: directory,
-      environment: _agentEnvironment,
+      environment: environment ?? _agentEnvironment,
       runInShell: Platform.isWindows,
     );
     _agent = process;

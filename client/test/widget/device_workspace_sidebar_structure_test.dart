@@ -372,6 +372,26 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
+  testWidgets('search action matches New Session and appears above it', (tester) async {
+    await pumpSidebar(tester);
+
+    final search = find.byKey(const Key('conversation_search_button'));
+    final newSession = find.byKey(const Key('sidebar_new_session_btn'));
+    expect(search, findsOneWidget);
+    expect(newSession, findsOneWidget);
+    expect(tester.getTopLeft(search).dy, lessThan(tester.getTopLeft(newSession).dy));
+    expect(tester.getSize(search), tester.getSize(newSession));
+
+    final searchMaterial = tester.widget<Material>(search);
+    final newSessionMaterial = tester.widget<Material>(newSession);
+    expect(searchMaterial.color, newSessionMaterial.color);
+    expect(searchMaterial.borderRadius, newSessionMaterial.borderRadius);
+    expect(
+      tester.widget<Text>(find.text('Search conversations')).style,
+      tester.widget<Text>(find.text('New Session')).style,
+    );
+  });
+
   testWidgets('top New Session routes intent without creating a daemon session', (tester) async {
     final router = GoRouter(
       initialLocation: '/',
@@ -418,7 +438,7 @@ void main() {
     await pumpSidebar(tester, router: router);
     expect(conversationRepository.createdSessionRequests.length, 0);
     expect(conversationRepository.beginNewSessionCalls, 0);
-    final plusButton = find.byKey(const Key('sidebar_new_conversation_btn'));
+    final plusButton = find.byKey(const Key('sidebar_new_conversation_btn:ws-1'));
     expect(plusButton, findsOneWidget);
     await tester.tap(plusButton);
     await tester.pump();
@@ -510,7 +530,7 @@ void main() {
     await tester.pump();
 
     expect(tester.getSize(find.byKey(const Key('sidebar_create_workspace_btn'))).height, greaterThanOrEqualTo(44));
-    expect(tester.getSize(find.byKey(const Key('sidebar_new_conversation_btn'))).height, greaterThanOrEqualTo(44));
+    expect(tester.getSize(find.byKey(const Key('sidebar_new_conversation_btn:ws-1'))).height, greaterThanOrEqualTo(44));
   });
 
   testWidgets('offline stale banner keeps cached sessions visible with retry affordance', (tester) async {
