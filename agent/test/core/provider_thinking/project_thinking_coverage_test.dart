@@ -44,6 +44,62 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'reviewer regression: exact GLM hybrid defaults and shared native wire semantics',
+    () {
+      for (final modelId in ['glm-4.5', 'glm-4.5-air']) {
+        expect(
+          ZaiModelCatalog.thinkingKindForModel(modelId),
+          ZaiRouteThinkingKind.toggleOnly,
+        );
+        expect(ZaiModelCatalog.optionIdsForModel(modelId), ['off', 'on']);
+        expect(ZaiModelCatalog.defaultOptionIdForModel(modelId), isNull);
+        expect(
+          ZaiModelCatalog.allowsSelectionId(
+            modelId: modelId,
+            selectionId: 'medium',
+          ),
+          isFalse,
+        );
+      }
+      expect(
+        ZaiModelCatalog.thinkingKindForModel('GLM-4.5-Air'),
+        ZaiRouteThinkingKind.unknown,
+      );
+      expect(ZaiModelCatalog.optionIdsForModel('glm-5.3'), [
+        'low',
+        'high',
+        'max',
+      ]);
+      expect(ZaiModelCatalog.defaultOptionIdForModel('glm-5.3'), 'max');
+      for (final apply in [
+        DeepSeekThinkingWireCodec.applyChatCompletions,
+        ZaiThinkingWireCodec.applyChatCompletions,
+      ]) {
+        final body = <String, dynamic>{};
+        apply(body, const OpenAiEffortDirective('high'));
+        expect(body, {
+          'thinking': {'type': 'enabled'},
+          'reasoning_effort': 'high',
+        });
+        apply(body, const ThinkingToggleDirective(enabled: false));
+        expect(body, {
+          'thinking': {'type': 'disabled'},
+        });
+        final omitted = <String, dynamic>{};
+        apply(omitted, const UseProviderDefault());
+        expect(omitted, isEmpty);
+      }
+      final kimiBody = <String, dynamic>{
+        'thinking': {'type': 'enabled'},
+      };
+      ToggleEffortThinkingWireCodec.applyChatCompletions(
+        kimiBody,
+        const OpenAiEffortDirective('high'),
+      );
+      expect(kimiBody, {'reasoning_effort': 'high'});
+    },
+  );
   group('Project-wide Registry-Derived Thinking Coverage', () {
     late Directory tempHome;
     late AgentStateDatabase state;

@@ -24,7 +24,8 @@ routes, and never silently ignore an explicit unsupported selection.
 | Anthropic manual vs adaptive model | Manual emits `budget_tokens`; adaptive emits `thinking.type=adaptive` + effort; never both |
 | Gemini budget vs level | Nested `thinking_config` uses budget or level only |
 | Exact DeepSeek effort model | Enabled thinking plus documented effort; Off disables without effort; fixed reasoners expose no adjustable control and unresolved models stay `unknown` |
-| Aggregator OpenRouter upstream | Delegates descriptor/directive to upstream family policy |
+| Aggregator OpenRouter upstream | Delegates exact model facts while keeping the aggregator `reasoning` envelope |
+| GLM hybrid versus forced effort | GLM-4.5/Air permit On/Off with provider-managed hybrid default; GLM-5.3 permits low/high/max with default max and rejects Off; Kimi XOR wire remains unchanged |
 | Ollama missing probe versus valid negative probe | Missing/malformed evidence is `unknown`; a valid capability list lacking `thinking` is `unsupported`; no name-based options |
 | Ollama Boolean declaration | Exactly declared On/Off choices and member Boolean default; sync/stream `think` remains Boolean; omitted Default emits no `think` |
 | Ollama level declaration | Exactly declared native string choices/default; a native string `off` stays a string, not Boolean `false` |

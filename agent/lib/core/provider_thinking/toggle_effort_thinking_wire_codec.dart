@@ -8,11 +8,16 @@ class ToggleEffortThinkingWireCodec {
 
   static void applyChatCompletions(
     Map<String, dynamic> body,
-    NativeThinkingDirective? directive,
-  ) {
+    NativeThinkingDirective? directive, {
+    bool enableThinkingWithEffort = false,
+  }) {
     switch (directive) {
       case OpenAiEffortDirective(:final effort):
-        body.remove('thinking');
+        if (enableThinkingWithEffort) {
+          body['thinking'] = const {'type': 'enabled'};
+        } else {
+          body.remove('thinking');
+        }
         body['reasoning_effort'] = effort;
       case ThinkingToggleDirective(enabled: false):
         body.remove('reasoning_effort');
