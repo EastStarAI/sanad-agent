@@ -1,3 +1,8 @@
+---
+title: "Sanad Delegate CLI Relay Specification"
+description: "Machine contract for the native `sanad run` relay: argument/workspace security boundaries, versioned result and event artifacts, exit codes, and supervisor lifecycle with event-first intervention."
+---
+
 # Sanad Delegate CLI Relay Specification
 
 ## 1. Overview

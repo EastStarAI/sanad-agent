@@ -1,3 +1,8 @@
+---
+title: "Windows-first Performance QA"
+description: "Before/after metrics, request-count and rendering regressions, test-cost budgets, and final interactive acceptance."
+---
+
 # Windows-first Agent and Client Performance QA
 
 ## Scope and evidence status

@@ -58,6 +58,8 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./scripts/sanad_dev/lib/src/runtime/AGENTS.md): Rules governing ./scripts/sanad_dev/lib/src/runtime.
 - [AGENTS](./shared/auth_lock/AGENTS.md): Rules governing ./shared/auth_lock.
 - [AGENTS](./shared/client_identity/AGENTS.md): Rules governing privacy-safe Client display references shared by Agent and Client.
+- [AGENTS](./shared/public_service_endpoints/AGENTS.md): Rules governing ./shared/public_service_endpoints.
+- [AGENTS](./shared/windows_path/AGENTS.md): Rules governing ./shared/windows_path.
 
 ## Functional Features & Architecture Guides
 
@@ -65,6 +67,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Capability Runtime Architecture](docs/agent_engine/capability_runtime.md): Architecture of tool specifications, runtime catalog assembly, permissions, MCP, workspace/web services, skills, and platform tools.
 - [Codex Responses Runtime Design](docs/agent_engine/codex_responses_runtime_design.md): تصميم codec وحالة الاستمرارية والبث والاستكمال لمحول Codex Responses في Sanad.
 - [LLM Adapter Runtime Contract](docs/agent_engine/llm_adapter_runtime_contract.md): عقد خيارات طلب النموذج، reasoning القابل للعرض، وحالة المزود اللازمة للاستكمال.
+- [Sanad Delegate CLI Relay Specification](docs/agent_engine/sanad_delegate_relay.md): Machine contract for the native `sanad run` relay: argument/workspace security boundaries, versioned result and event artifacts, exit codes, and supervisor lifecycle with event-first intervention.
 - [خارطة العمليات والأتمتة والنشر](docs/operations/MOC.md): فهرس وخارطة وثائق مسارات الأتمتة n8n، إعدادات الحاويات Docker، ومخططات النشر والتشغيل.
 - [Brand Asset Generation and Platform Handoff](docs/operations/brand_asset_handoff.md): Canonical Sanad identity sources, generated platform assets, review-ready community deliverables, and live-surface ownership.
 - [Code Signing Policy](docs/operations/code_signing_policy.md): Public artifact trust, protected signing, role separation, verification, and revocation policy for Sanad releases.
@@ -87,6 +90,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Agent Turn Startup Performance QA](docs/qa_maintenance/agent_turn_startup_performance_qa.md): Regression matrix for metadata-only admission, atomic root-message append, revision-validated history reuse, and Windows long-session latency.
 - [Bundled Product Skills QA](docs/qa_maintenance/bundled_product_skills_qa.md): Regression matrix for deterministic one-file skill embedding, SANAD_HOME installation, update, removal, customization safety, startup performance, and release artifacts.
 - [Clarifying Question RTL QA](docs/qa_maintenance/clarifying_question_rtl_qa.md): Verification matrix for Arabic directionality and platform-aware multiline behavior in clarifying questions.
+- [CLI Session Observability & Safe Intervention QA Matrix](docs/qa_maintenance/cli_session_observability_intervention_qa.md): QA validation matrix for daemon-backed CLI session observability, authoritative inspection, explicit question answering, ordinary tool permission decisions, cross-session safety, and scoped session termination.
 - [Community Governance QA](docs/qa_maintenance/community_governance_qa.md): Static and live verification matrix for labels, templates, contribution skills, protected CI, Discord routing, and public-repository governance.
 - [Conversation Cache and Draft Recovery QA](docs/qa_maintenance/conversation_cache_recovery_qa.md): QA scenarios for persistent conversation snapshots, draft acceptance, pagination recovery, cleanup, and lifecycle flush behavior.
 - [Conversation Tool Groups and Compact Window QA](docs/qa_maintenance/conversation_tool_groups_and_compact_window_qa.md): Regression matrix for completed-tool grouping, nested and timeline follow, active-history completion, ask-user presentation, and desktop compact sizing.
@@ -124,6 +128,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Session Title Generation QA](docs/qa_maintenance/session_title_generation_qa.md): Regression coverage for first-exchange background title generation, stale-result rejection, and client synchronization.
 - [Task 31 Authoritative Session State QA Matrix](docs/qa_maintenance/task31_authoritative_session_state_matrix.md): Regression coverage for durable execution snapshots, per-session attention isolation, reconnect recovery, and authoritative route failover UX.
 - [Task 36 Authoritative Steer, Queue, and Stop Recovery QA Matrix](docs/qa_maintenance/task36_authoritative_steer_queue_stop_recovery_matrix.md): Regression coverage for daemon-owned delivery classification, pending-steer cancellation, queue mutations, lossless Stop draft recovery, and first-writer restart claims.
+- [Remaining Hard-Coded UI Strings (Task 95)](docs/qa_maintenance/task95-remaining-ui-strings.md): Living inventory of remaining hard-coded English UI literals in Client presentation and screens after Task 95, grouped by file with counts, as the canonical incremental-localization checklist.
 - [Agent State Database Maintenance QA](docs/qa_maintenance/agent_state_database_maintenance_qa.md): Run/skip/fail matrix for startup orphan cleanup, 14-day terminal work-item prune, and thresholded VACUUM of state.db.
 - [Test Suite Performance and Ownership QA](docs/qa_maintenance/test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
 - [View Image Tool QA](docs/qa_maintenance/view_image_tool_qa.md): Regression matrix for typed results, user attachments, View Image conversation media, local/remote security, recovery, and pruning.

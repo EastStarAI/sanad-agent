@@ -1,3 +1,8 @@
+---
+title: "Test Suite Performance and Ownership QA"
+description: "Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites."
+---
+
 # Test Suite Performance and Ownership QA
 
 ## Purpose

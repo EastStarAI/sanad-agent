@@ -1,3 +1,8 @@
+---
+title: "Provider Composer Catalog Freshness QA"
+description: "Snapshot-generation authority, stale-response/clear-device races, composer label refresh and approval-gated live acceptance."
+---
+
 # Provider composer catalog freshness
 
 ## Automated acceptance

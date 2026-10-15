@@ -1,3 +1,8 @@
+---
+title: "Sanad CLI Architecture"
+description: "Attached and in-process transports, runtime ownership, automation output, cancellation, and test-isolation contracts."
+---
+
 # Sanad CLI Architecture & Gateway Runtime Contract
 
 ## 1. Overview
