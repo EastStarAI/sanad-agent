@@ -45,6 +45,47 @@ class CanonicalTimelineReconciler {
       return false;
     }
 
+    if (left.kind == EventKind.informational && right.kind == EventKind.informational) {
+      final leftEventId = left.eventId ?? left.metadata?['event_id']?.toString();
+      final rightEventId = right.eventId ?? right.metadata?['event_id']?.toString();
+      if (leftEventId != null && rightEventId != null && leftEventId == rightEventId) {
+        return true;
+      }
+      if (leftEventId != null && leftEventId == right.id) {
+        return true;
+      }
+      if (rightEventId != null && rightEventId == left.id) {
+        return true;
+      }
+      final leftRevision = left.metadata?['route_revision'];
+      final rightRevision = right.metadata?['route_revision'];
+      if (leftRevision != null && rightRevision != null && leftRevision == rightRevision) {
+        return true;
+      }
+      final leftFork = left.metadata?['informational_kind'] == 'session_fork';
+      final rightFork = right.metadata?['informational_kind'] == 'session_fork';
+      if (leftFork && rightFork) {
+        return true;
+      }
+      final leftCompaction = left.metadata?['compaction_event'] == true;
+      final rightCompaction = right.metadata?['compaction_event'] == true;
+      if (leftCompaction && rightCompaction) {
+        final leftCompactionId = left.metadata?['compaction_id'];
+        final rightCompactionId = right.metadata?['compaction_id'];
+        final leftStatus = left.metadata?['compaction_status'];
+        final rightStatus = right.metadata?['compaction_status'];
+        if (leftCompactionId != null &&
+            rightCompactionId != null &&
+            leftCompactionId == rightCompactionId &&
+            leftStatus != null &&
+            rightStatus != null &&
+            leftStatus == rightStatus) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     if (left.kind == right.kind) {
       final leftModelStepId = left.modelStepId;
       final rightModelStepId = right.modelStepId;

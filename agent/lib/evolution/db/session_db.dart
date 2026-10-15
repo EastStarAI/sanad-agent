@@ -725,6 +725,15 @@ class SessionDB {
     }
   }
 
+  /// Returns whether any persisted message in the session has the given request id.
+  bool hasMessageWithRequestId(String sessionId, String requestId) {
+    final result = _db.select(
+      'SELECT id FROM messages WHERE session_id = ? AND request_id = ? LIMIT 1',
+      [sessionId, requestId],
+    );
+    return result.isNotEmpty;
+  }
+
   /// Appends one root-user message without reading or rewriting prior rows.
   /// A repeated non-empty request id returns the existing active row.
   RootUserMessageCommit appendRootUserMessage(

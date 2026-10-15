@@ -550,12 +550,14 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   void _prepareInitialSessionPosition() {
-    final opensAtForkMarker =
-        _timelineItems.isNotEmpty &&
-        _timelineItems.last.events.any(
-          (event) => event.metadata?['informational_kind'] == 'session_fork',
-        );
-    _openAtTail = widget.followLatestOnOpen || opensAtForkMarker;
+    final forkMarkerIndex = _timelineItems.indexWhere(
+      (item) => item.events.any(
+        (event) => event.metadata?['informational_kind'] == 'session_fork',
+      ),
+    );
+    final isTrailingFork =
+        forkMarkerIndex >= 0 && forkMarkerIndex == _timelineItems.length - 1;
+    _openAtTail = widget.followLatestOnOpen || isTrailingFork;
     _openingTailAnchorPixels = null;
     _hasResolvedOpeningTailAlignment = true;
     _autoFollowEligible = false;
@@ -588,6 +590,10 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         transientIndex < 0 ? _timelineItems.length - 1 : transientIndex,
       );
       if (replacementIndex != null) {
+        if (forkMarkerIndex >= 0 && replacementIndex <= forkMarkerIndex) {
+          _openAnchorIndex = forkMarkerIndex;
+          return;
+        }
         _openAnchorIndex = replacementIndex;
         return;
       }
@@ -598,7 +604,15 @@ class _BrainActivityViewState extends State<BrainActivityView> {
             (item) => item.containsEventId(savedAnchorEventId),
           );
     if (restoredIndex >= 0) {
+      if (forkMarkerIndex >= 0 && restoredIndex < forkMarkerIndex) {
+        _openAnchorIndex = forkMarkerIndex;
+        return;
+      }
       _openAnchorIndex = restoredIndex;
+      return;
+    }
+    if (forkMarkerIndex >= 0) {
+      _openAnchorIndex = forkMarkerIndex;
       return;
     }
     final userMessageIndex = _lastUserTimelineItemIndex();

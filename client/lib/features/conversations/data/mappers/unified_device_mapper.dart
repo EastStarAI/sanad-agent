@@ -493,14 +493,15 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           text: text.isNotEmpty ? text : snapshot.informationalText,
           timestamp: snapshot.updatedAt ?? timestamp,
           sessionId: snapshot.sessionId,
+          eventId: eventId ?? snapshot.eventId,
           model: snapshot.model,
           provider: snapshot.providerInstanceId,
           metadata: {
             ...?metadata,
             'informational': true,
-            'event_id': snapshot.eventId,
+            'event_id': snapshot.eventId ?? eventId,
             'route_revision': snapshot.routeRevision,
-            'source': 'auto_failover',
+            'source': snapshot.source.wireValue,
           },
         );
 
