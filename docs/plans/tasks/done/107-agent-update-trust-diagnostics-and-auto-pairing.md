@@ -2,7 +2,7 @@
 id: 107
 title: Agent Update Trust Diagnostics and Client Auto-Pairing
 status: in_progress
-gate: G5
+gate: G5-R
 created: 2026-10-13
 branch: fix/107-agent-update-trust-diagnostics-and-auto-pairing
 ---
@@ -90,7 +90,54 @@ Additionally, address the client-agent version pairing gap on desktop: fix the b
   - [x] Retry after prior failure.
 - [x] Verify Ubuntu acceptance scenario: agent v1.0.15 + unregistered service auto-updates, registers service, and starts on "Run Sanad Locally".
 
+### G5-R — Reopened Hardening: Running-Daemon Scenarios & Real Linux Verification
+
+Reopened after PR #211 review to close four verification gaps. All items below
+must be backed by executable evidence, not manual reasoning.
+
+- [ ] **R1 — Fix Scenario 3 test (running old agent, real update execution):**
+  The current Scenario 3 only exercises a running daemon that already matches the
+  target version. Replace/extend it so a daemon that is **actually running v1.0.15**
+  faces a **newer Target Version** (v1.0.17), and the test asserts the update is
+  **actually executed** (a gateway `POST /update` carrying `target_version=1.0.17`
+  is observed) and the lifecycle ends `ready` after the daemon reports 1.0.17.
+  Requires injecting the gateway HTTP client into `StandaloneDaemonController`
+  (same pattern as the existing `processRunner`/`healthProvider` seams).
+- [ ] **R2 — Fix unregistered-service `upToDate` short-circuit:**
+  When the daemon is running and its version already equals `targetVersion`,
+  `updateDaemon()` returns `upToDate` immediately **without checking service
+  registration**. If the binary is at the required version but the background
+  service is not registered (e.g. daemon started manually from a terminal), the
+  client must register the service instead of reporting `upToDate`, so auto-start
+  survives reboot. Registration failure must surface `serviceRegistrationFailed`.
+- [ ] **R3 — Regression coverage for PR #198 service-registration boundaries:**
+  Executable proof that the fixes from PR #198 (Task 105) cannot regress:
+  - [ ] Linux service registration arguments remain exactly `service install
+    --user-scope` (user-scoped systemd unit); no code path passes system-scope
+    arguments.
+  - [ ] No registration path spawns `sudo`, `loginctl enable-linger`, `systemctl`
+    (system), or falls back to a system/OpenRC service; sanitized diagnostics must
+    not leak privilege-escalation instructions.
+  - [ ] The existing agent-side user-scope suite keeps passing unchanged.
+- [ ] **R4 — Real Linux verification (not unit tests only):**
+  On the available Ubuntu host, with the real published `sanad-agent-1.0.15-linux-x64`
+  binary and the real release manifest download path:
+  - [ ] Stopped v1.0.15 + unregistered service → auto-update to the current target
+    version, real service registration, real daemon start, zero manual terminal
+    commands.
+  - [ ] Running v1.0.15 daemon + newer target → the update is actually executed
+    and health reports the target version afterwards.
+  - [ ] Running daemon at target version + unregistered service → service is
+    registered (R2) without restarting the healthy daemon.
+  - [ ] Every scenario asserts no `sudo`, no `linger` modification, no system
+    service (PR #198 boundaries hold on a real host).
+  - [ ] Ubuntu 26 note: if an Ubuntu 26 host is required for any part and is not
+    available, that part is explicitly declared **not covered** and the gate is
+    not considered fully verified.
+
 ## Acceptance Criteria
+
+### Original criteria (G0–G5)
 
 - [x] Given a macOS artifact with invalid code signature or wrong publisher, when `verifyReleaseArtifactTrustDetailed` runs, it returns a failed `PlatformTrustResult` containing the failed stage and sanitized output without user paths.
 - [x] Given `sanad update` hitting a platform trust failure, the CLI output includes sanitized diagnostic stage information and official installer recovery guidance.
@@ -101,6 +148,41 @@ Additionally, address the client-agent version pairing gap on desktop: fix the b
 - [x] Given an update failure (network or verification), the previous agent is preserved and retry is fully supported.
 - [x] All code passes `fvm dart analyze` and `fvm flutter analyze` with zero errors.
 
+### G5-R criteria (verifiable, each with a precise assessment method)
+
+- [ ] **AC-R1 (Scenario 3 fix):** Given a daemon whose health endpoint reports
+  v1.0.15 while running, when `updateDaemon(targetVersion: '1.0.17')` executes,
+  then exactly one gateway `POST /update` with `target_version=1.0.17` is observed
+  and the result is `ready` once health reports 1.0.17.
+  *Assessment:* unit test with an injected recording gateway client passes;
+  asserting both the recorded request and the final lifecycle status.
+- [ ] **AC-R2 (unregistered service at target version):** Given a running daemon
+  already at `targetVersion` with no registered background service, when
+  `updateDaemon()` executes, then `service install --user-scope` is invoked
+  (recorded by the fake process runner), the healthy daemon is not restarted, and
+  the result stays successful (`upToDate`). Given registration failure, the result
+  is `serviceRegistrationFailed`.
+  *Assessment:* two unit tests — success path and registration-failure path.
+- [ ] **AC-R3 (PR #198 regression):** Given any client registration flow on Linux,
+  the spawned arguments are exactly `['service', 'install', '--user-scope']`;
+  given registration stderr containing `sudo`/`loginctl`/`systemctl` hints, the
+  diagnostic is sanitized to the safe generic message; the agent-side user-scope
+  suite passes unchanged.
+  *Assessment:* client unit tests asserting exact argument lists, sanitizer
+  outputs, and absence of privilege-escalation strings; `fvm dart test` on the
+  agent service suite exits 0.
+- [ ] **AC-R4 (real Linux verification):** On the available Ubuntu host, using the
+  real published v1.0.15 linux binary and the real manifest download path, the
+  three real scenarios (AC-R1, AC-R2, and stopped-daemon auto-update) each end
+  with: on-disk binary reporting the target version via real `--version`, a real
+  systemd user unit file created under `~/.config/systemd/user/`, the daemon
+  healthy on its gateway with the target version, and zero `sudo`/`linger`/system
+  service usage (verified from host state before/after).
+  *Assessment:* recorded command transcripts + before/after host state attached
+  to the PR as evidence. **Ubuntu 26 is not available on this host (Ubuntu 22.04;
+  CI provides ubuntu-24.04) — any Ubuntu-26-specific behavior is declared not
+  covered and AC-R4 is not claimed fully verified on that dimension.**
+
 ## Definition of Done
 
 - [x] Implementation of G5 completed in `client/`.
@@ -110,5 +192,9 @@ Additionally, address the client-agent version pairing gap on desktop: fix the b
 - [x] PR #211 updated and CI checks verified.
 
 ## Current Status
-- Gate: G5 (Completed)
+- Gate: G5-R (Reopened — R1–R4 in progress)
 - Target PR: #211
+- Note: G0–G5 remain complete; G5-R hardens running-daemon scenarios and adds
+  real Linux verification. Ubuntu 26 is unavailable on the development host
+  (Ubuntu 22.04; CI ubuntu-24.04), so Ubuntu-26-specific coverage is explicitly
+  declared not covered until a matching host is available.
