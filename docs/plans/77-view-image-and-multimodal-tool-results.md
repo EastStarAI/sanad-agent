@@ -3,7 +3,7 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77I5 — native Ollama image acceptance, grounded thinking controls/defaults and final PR delivery"
+current_gate: "77I5 — Ollama images user-accepted; grounded thinking controls/defaults and final PR delivery remain"
 remaining_estimate: "Final acceptance remains open; current gates and evidence are owned by 77I5, not inferred from an earlier provider success"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
@@ -182,7 +182,7 @@ detail = low | auto | high | original
 - [ ] زر `+` في يسار composer بجوار Permission Mode يفتح File Picker؛ paste/drop/picker تستخدم pipeline واحدة.
 - [ ] أي ملف فوق 5 MiB أو الرسالة فوق 4 ملفات/20 MiB ترفض قبل قبول turn، محليًا وعن بُعد.
 - [x] user bubble وEdit يعرضان attachments بالترتيب، وEdit لا يعيد رفع المرفقات الموجودة.
-- [ ] النموذج لا يستقبل attachment bytes تلقائيًا؛ يرى النص ومسارات agent-owned ويقرر الأدوات.
+- [x] الصور المعتمدة تصل كبكسلات عبر البروتوكول الفعلي بعد التحقق وإثبات دعم النموذج؛ المرفقات غير الصورية تحتفظ بمرجع نصي آمن، وunknown/unsupported لا تسمح بإرسال فاقد للبكسلات. القبول الحالي مملوك لـ77I5.
 - [ ] remote client path لا يعبر إلى تاريخ الوكيل أو النموذج، والرسالة تنتظر staging ACK.
 - [ ] حدث `View Image` يعرض thumbnail قابلة للضغط محليًا وعن بُعد دون base64/path عام.
 - [ ] restart يستخدم snapshot المحفوظة مرة واحدة حتى لو تغير المصدر أو حذف.
