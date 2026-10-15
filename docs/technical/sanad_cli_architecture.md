@@ -254,3 +254,32 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
 - **Counts** (`message_count` + `summary`): total rows plus bounded `user_messages`, `final_answers`, `tool_calls`, `tool_results`, `reasoning_rows`, and `thought_rows` counts derived from the message history without copying any content.
 
 The complete conversation/history is **never** embedded by default. It is exposed only through the explicit `--include-messages` opt-in flag, which adds the full `messages` payload. The plain-text (non-`--json`) branch already renders a bounded human summary and, when history exists, reminds the operator that full history requires `--include-messages`.
+
+---
+
+## 10. Remote CLI Relay Architecture & Execution Seam (Plan 102)
+
+The Sanad CLI architecture provides a remote execution seam so that `sanad-client` can target any online Agent without shell execution or command reimplementation.
+
+### 10.1. Reusable Execution Seam
+- Incoming `device.cli.execute` commands supply an argument vector `argv` and optional `stdin`.
+- `RemoteCliCommandHandler` constructs `SanadCommandRunner` with injected `stdoutSink`, `stderrSink`, `stdinReader`, and `workspaceService`.
+- Ordinary local CLI behavior remains unchanged: when invoked from a terminal shell, standard `stdout`, `stderr`, and `stdin` are used as defaults.
+- Correlated stream events (`device.cli.stdout`, `device.cli.stderr`, `device.cli.event`) and a terminal `device.cli.result` envelope are published via the local or cloud gateway.
+- Full protocol specification, schemas, and safety boundaries are documented in [Remote CLI Relay Protocol](remote_cli_relay_protocol.md).
+
+### 10.2. Relay Boundaries per Command Family
+
+- Read and control commands (`devices`, `ws list`, `session show|answer|stop`,
+  `run`) execute through the remote runner and return ordered output plus one
+  terminal result.
+- `login` stays host-local by design: the remote runner has no interactive login
+  handler, so a forwarded `login` returns exit code 0 with no relayed output.
+  Hosts that need device authorization run `sanad login` locally in the target
+  Sanad Home.
+- File-backed caller input (`--brief-file`) is read by `sanad-client` and
+  transported as request content; the remote process never opens the caller path
+  and never evaluates a shell string.
+- Interrupting the caller (`SIGINT`) forwards `device.cli.cancel`; the remote
+  runner terminates the active command, the caller exits with code 130, and the
+  remote session run is cancelled.

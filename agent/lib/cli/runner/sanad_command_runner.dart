@@ -5,6 +5,7 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 
 import 'commands.dart';
+import '../artifacts/run_artifacts.dart';
 import '../client/cli_turn_client.dart';
 import '../client/local_gateway_cli_client.dart';
 import '../oneshot/oneshot_runner.dart';
@@ -15,6 +16,8 @@ import '../workspace/workspace_cli_service.dart';
 class SanadCommandRunner extends CommandRunner<int> {
   final StringSink stdoutSink;
   final StringSink stderrSink;
+  final void Function(RunLifecycleEvent event)? eventSink;
+  final Stream<ProcessSignal>? signalStream;
 
   SanadCommandRunner({
     StringSink? stdoutSink,
@@ -32,6 +35,8 @@ class SanadCommandRunner extends CommandRunner<int> {
     CliTurnClient? client,
     WorkspaceCliService? workspaceService,
     ReplLineReader? lineReader,
+    this.eventSink,
+    this.signalStream,
   }) : stdoutSink = stdoutSink ?? stdout,
        stderrSink = stderrSink ?? stderr,
        super(
@@ -124,6 +129,7 @@ class SanadCommandRunner extends CommandRunner<int> {
       ..addOption('home', help: 'Path to custom Sanad home directory')
       ..addOption(
         'gateway-url',
+        aliases: const ['url'],
         help: 'Override Local Gateway WebSocket endpoint URL',
       )
       ..addFlag(
@@ -174,6 +180,8 @@ class SanadCommandRunner extends CommandRunner<int> {
         stdinReader: stdinReader,
         clientFactory: clientFactory,
         clientOverride: client,
+        signalStream: signalStream,
+        eventSink: eventSink,
       ),
     );
     addCommand(

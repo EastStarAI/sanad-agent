@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 
 import '../../../capabilities/runtime/workspace_path_resolver.dart';
+import '../../artifacts/run_artifacts.dart';
 import '../../client/cli_turn_client.dart';
 import '../../oneshot/oneshot_runner.dart';
 import '../sanad_command.dart';
@@ -14,6 +15,8 @@ class RunCommand extends SanadCommand {
   final StdinReader? stdinReader;
   final ClientFactory? clientFactory;
   final CliTurnClient? clientOverride;
+  final Stream<ProcessSignal>? signalStream;
+  final void Function(RunLifecycleEvent event)? eventSink;
 
   RunCommand({
     super.customAction,
@@ -21,6 +24,8 @@ class RunCommand extends SanadCommand {
     this.stdinReader,
     this.clientFactory,
     this.clientOverride,
+    this.signalStream,
+    this.eventSink,
   }) {
     addCommonOptions(argParser);
     argParser
@@ -172,9 +177,11 @@ class RunCommand extends SanadCommand {
       stdoutSink: stdoutSink,
       stderrSink: stderrSink,
       client: clientOverride,
+      signalStream: signalStream,
       outDir: outDir?.trim(),
       streamEvents: streamEvents,
       executionRoot: normalizedExecutionRoot,
+      eventSink: eventSink,
     );
   }
 

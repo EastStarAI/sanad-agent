@@ -9,6 +9,7 @@ import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
 import 'package:sanad_client/core/theme/app_themes.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/widgets/device_login_challenge_overlay.dart';
+import 'package:sanad_client/features/client_cli/presentation/widgets/client_cli_approval_overlay.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_capabilities_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_capabilities_state.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
@@ -117,9 +118,11 @@ class _AppShellState extends State<AppShell> {
                 textScaler: TextScaler.linear(appearance.fontSizeScale.factor),
               ),
               child: DeviceLoginChallengeOverlay(
-                child: ResponsiveWindowWrapper(
-                  child: AppBackgroundWrapper(
-                    child: child ?? const SizedBox(),
+                child: ClientCliApprovalOverlay(
+                  child: ResponsiveWindowWrapper(
+                    child: AppBackgroundWrapper(
+                      child: child ?? const SizedBox(),
+                    ),
                   ),
                 ),
               ),

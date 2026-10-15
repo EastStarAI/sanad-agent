@@ -322,6 +322,17 @@ class ServerSanadGatewayPlatform extends BasePlatform
         return;
       }
 
+      if (command == CanonicalEventTypes.deviceCliExecute ||
+          command == CanonicalEventTypes.deviceCliCancel) {
+        await handleIncomingCommand(
+          envelope: envelope,
+          runtimeBridge: getIt<PlatformRuntimeBridge>(),
+          onResponse: (responseEnvelope) =>
+              _emitAgentEvent(responseEnvelope, clientTag: clientTag),
+        );
+        return;
+      }
+
       final bridge = getIt<PlatformRuntimeBridge>();
       bridge.registerSessionClient(
         sessionId,

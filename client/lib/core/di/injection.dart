@@ -1,6 +1,7 @@
 import 'package:get_it/get_it.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:universal_io/io.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
@@ -49,6 +50,13 @@ import 'package:sanad_client/features/devices/data/device_preferences_repository
 import 'package:sanad_client/features/devices/presentation/state/device_command_handler.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/data/device_command_client.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_approval_coordinator.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_home_resolver.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_ownership.dart';
+import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
+import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
+import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
 
 final getIt = GetIt.instance;
@@ -152,6 +160,16 @@ Future<void> configureDependencies({
   );
   await startupTrace?.call('hardware-id-ready');
 
+  if (!getIt.isRegistered<String>(instanceName: 'appVersion')) {
+    // Single runtime source for the Client release version. The last-resort
+    // fallback only applies when the platform package metadata is unavailable.
+    var appVersion = '1.0.0';
+    try {
+      appVersion = (await PackageInfo.fromPlatform()).version.split('+').first;
+    } catch (_) {}
+    getIt.registerSingleton<String>(appVersion, instanceName: 'appVersion');
+  }
+
   if (!getIt.isRegistered<SanadSocketService>(
     instanceName: 'cloudSocketService',
   )) {
@@ -206,12 +224,6 @@ Future<void> configureDependencies({
   }
 
   if (!getIt.isRegistered<DeviceConnectionCoordinator>()) {
-    String appVersion = '1.0.0';
-    try {
-      final packageInfo = await PackageInfo.fromPlatform();
-      appVersion = packageInfo.version.split('+').first;
-    } catch (_) {}
-
     getIt.registerLazySingleton<DeviceConnectionCoordinator>(
       () => DeviceConnectionCoordinator(
         cloudSocketService: getIt<SanadSocketService>(
@@ -222,7 +234,7 @@ Future<void> configureDependencies({
         ),
         currentDeviceId: getIt<String>(instanceName: 'hardwareId'),
         daemonController: getIt<LocalDaemonController>(),
-        expectedVersion: appVersion,
+        expectedVersion: getIt<String>(instanceName: 'appVersion'),
       ),
       dispose: (coordinator) => coordinator.dispose(),
     );
@@ -302,7 +314,12 @@ Future<void> configureDependencies({
   }
 
   if (!getIt.isRegistered<IDeviceRepository>()) {
-    getIt.registerFactory<IDeviceRepository>(
+    // One inventory owner: every consumer (device cubit, conversation default
+    // device, and the Client CLI host) must read the same initialized
+    // DeviceManager. A factory would hand the Client CLI host an uninitialized
+    // repository whose agent list is always empty, silently disabling remote
+    // device discovery for `sanad-client`.
+    getIt.registerLazySingleton<IDeviceRepository>(
       () => DeviceRepositoryImpl(
         getIt<SanadSocketService>(instanceName: 'cloudSocketService'),
         getIt<DeviceConnectionCoordinator>(),
@@ -410,6 +427,109 @@ Future<void> configureDependencies({
         hardwareId: getIt<String>(instanceName: 'hardwareId'),
       ),
       dispose: (state) => state.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliApprovalCoordinator>()) {
+    getIt.registerLazySingleton<ClientCliApprovalCoordinator>(
+      () => ClientCliApprovalCoordinator(),
+      dispose: (coordinator) => coordinator.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliOwnership>()) {
+    getIt.registerLazySingleton<ClientCliOwnership>(
+      () => const ClientCliOwnership(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliHost>()) {
+    final home = const ClientCliHomeResolver().resolveSanadHome(
+      explicitHome: AppConfig.sanadHome.isNotEmpty ? AppConfig.sanadHome : null,
+    );
+    getIt.registerLazySingleton<ClientCliHost>(
+      () => ClientCliHost(
+        connectionCoordinator: getIt<DeviceConnectionCoordinator>(),
+        deviceRepository: getIt<IDeviceRepository>(),
+        ownership: getIt<ClientCliOwnership>(),
+        approvalCoordinator: getIt<ClientCliApprovalCoordinator>(),
+        sanadHome: home,
+        clientVersion: getIt<String>(instanceName: 'appVersion'),
+      ),
+      dispose: (host) => host.stop(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliCubit>()) {
+    getIt.registerLazySingleton<ClientCliCubit>(
+      () => ClientCliCubit(
+        host: getIt<ClientCliHost>(),
+        prefs: getIt<SharedPreferences>(),
+      ),
+      dispose: (cubit) => cubit.close(),
+    );
+  }
+
+  if (!getIt.isRegistered<DesktopWindowManagerAdapter>()) {
+    getIt.registerLazySingleton<DesktopWindowManagerAdapter>(
+      () => const DefaultDesktopWindowManagerAdapter(),
+    );
+  }
+
+  if (!getIt.isRegistered<DesktopLifecycleManager>()) {
+    getIt.registerLazySingleton<DesktopLifecycleManager>(
+      () => DesktopLifecycleManager(
+        windowAdapter: getIt<DesktopWindowManagerAdapter>(),
+        onDisposeTray: () async {
+          if (getIt.isRegistered<AppTrayService>()) {
+            await getIt<AppTrayService>().destroy();
+          }
+        },
+        onStopCliHost: () async {
+          if (getIt.isRegistered<ClientCliHost>()) {
+            await getIt<ClientCliHost>().stop();
+          }
+        },
+        onFlushCache: () async {
+          if (getIt.isRegistered<ConversationCachePersistor>()) {
+            await getIt<ConversationCachePersistor>().flush();
+          }
+        },
+        onDisposeAppState: () {
+          if (getIt.isRegistered<AppState>()) {
+            getIt<AppState>().dispose();
+          }
+          if (getIt.isRegistered<SanadSocketService>(instanceName: 'cloudSocketService')) {
+            getIt<SanadSocketService>(instanceName: 'cloudSocketService').dispose();
+          }
+          if (getIt.isRegistered<SanadSocketService>(instanceName: 'localSocketService')) {
+            getIt<SanadSocketService>(instanceName: 'localSocketService').dispose();
+          }
+          if (getIt.isRegistered<DeviceConnectionCoordinator>()) {
+            getIt<DeviceConnectionCoordinator>().dispose();
+          }
+        },
+        onExitProcess: () => exit(0),
+      ),
+    );
+  }
+
+  if (!getIt.isRegistered<TrayManagerAdapter>()) {
+    getIt.registerLazySingleton<TrayManagerAdapter>(
+      () => NativeTrayManagerAdapter(),
+    );
+  }
+
+  if (!getIt.isRegistered<AppTrayService>()) {
+    getIt.registerLazySingleton<AppTrayService>(
+      () => AppTrayService(
+        adapter: getIt<TrayManagerAdapter>(),
+        conversationCacheStore: getIt<ConversationCacheStore>(),
+        clientCliCubit: getIt<ClientCliCubit>(),
+        daemonController: getIt<LocalDaemonController>(),
+        lifecycleManager: getIt<DesktopLifecycleManager>(),
+      ),
+      dispose: (service) => service.destroy(),
     );
   }
 }
