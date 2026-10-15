@@ -46,7 +46,7 @@ void main() {
 
       final record = SecretRecord(
         instanceId: 'inst-1',
-        apiKey: 'sk-test-secret-12345678',
+        apiKey: 'test-mock-key-12345678',
         authMethod: ProviderAuthMethod.apiKey,
       );
 
@@ -56,12 +56,12 @@ void main() {
       final storedRaw = await vault.read(AgentSecretNamespaces.providerKey('inst-1'));
       expect(storedRaw, isNotNull);
       final decoded = jsonDecode(storedRaw!) as Map<String, dynamic>;
-      expect(decoded['api_key'], equals('sk-test-secret-12345678'));
+      expect(decoded['api_key'], equals('test-mock-key-12345678'));
 
       // Verify read returns from memory cache / vault
       final retrieved = store.read('inst-1');
       expect(retrieved, isNotNull);
-      expect(retrieved!.apiKey, equals('sk-test-secret-12345678'));
+      expect(retrieved!.apiKey, equals('test-mock-key-12345678'));
 
       // Verify remove deletes from vault
       await store.remove('inst-1');
