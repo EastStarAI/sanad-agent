@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:sanad_agent/capabilities/permissions/child_process_security_contract.dart';
 import 'package:sanad_agent/capabilities/permissions/process_environment_policy.dart';
+import 'package:sanad_agent/core/auth/agent_secret_namespaces.dart';
 import 'package:test/test.dart';
+
+import '../support/memory_agent_secret_store.dart';
 
 void main() {
   group('ProcessEnvironmentPolicy', () {
@@ -171,6 +176,63 @@ void main() {
         'SANAD_AUTH_TOKEN',
       ]));
       expect(rejectedKeys, isNot(contains('SAFE_CUSTOM_VAR')));
+    });
+
+    test('injects custom vault secrets safely and rejects protected keys', () {
+      final inherited = {
+        'PATH': '/usr/bin:/bin',
+        'USER': 'testdeveloper',
+      };
+
+      final customSecrets = {
+        'POSTGRES_PASSWORD': 'super-secret-password-123',
+        'CUSTOM_API_KEY': 'custom-key-xyz',
+        'PATH': '/malicious/path',
+        'LD_PRELOAD': '/malicious/lib.so',
+      };
+
+      final result = policy.buildChildEnvironment(
+        purpose: ChildProcessPurpose.directDeveloper,
+        inheritedEnvironment: inherited,
+        customSecrets: customSecrets,
+      );
+
+      expect(result['POSTGRES_PASSWORD'], 'super-secret-password-123');
+      expect(result['CUSTOM_API_KEY'], 'custom-key-xyz');
+      expect(result['PATH'], '/usr/bin:/bin');
+      expect(result.containsKey('LD_PRELOAD'), isFalse);
+    });
+
+    test('resolveVaultSecrets retrieves matching custom vault secrets from store', () async {
+      final store = MemoryAgentSecretStore();
+      final index = [
+        'custom:postgres:password',
+        'custom:postgres:user',
+        'custom:other_service:api_token',
+        'provider:openai:api_key',
+      ];
+      await store.write(AgentSecretNamespaces.customIndexKey, jsonEncode(index));
+      await store.write(AgentSecretNamespaces.customKey('postgres:password'), 'pg_pass_123');
+      await store.write(AgentSecretNamespaces.customKey('postgres:user'), 'pg_user_root');
+      await store.write(AgentSecretNamespaces.customKey('other_service:api_token'), 'token_abc');
+      await store.write('provider:openai:api_key', 'should_not_leak');
+
+      // 1. Resolve secrets for targetVault: 'custom:postgres'
+      final pgSecrets = await policy.resolveVaultSecrets(
+        store: store,
+        targetVault: 'custom:postgres',
+      );
+      expect(pgSecrets['password'], equals('pg_pass_123'));
+      expect(pgSecrets['user'], equals('pg_user_root'));
+      expect(pgSecrets.containsKey('api_token'), isFalse);
+      expect(pgSecrets.containsKey('api_key'), isFalse);
+
+      // 2. Resolve all custom secrets without targetVault filter
+      final allCustom = await policy.resolveVaultSecrets(store: store);
+      expect(allCustom['password'], equals('pg_pass_123'));
+      expect(allCustom['user'], equals('pg_user_root'));
+      expect(allCustom['api_token'], equals('token_abc'));
+      expect(allCustom.containsKey('api_key'), isFalse);
     });
   });
 }

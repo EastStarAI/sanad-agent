@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
@@ -37,6 +38,10 @@ class PendingPermissionEntry {
       toolName == 'system_ask_user' ||
       (payload['questions'] is List &&
           (payload['questions'] as List).isNotEmpty);
+
+  bool get isSecretRequest =>
+      toolName == 'system_request_secret' ||
+      payload['tool_name'] == 'system_request_secret';
 }
 
 class PermissionDecisionOutcome {
@@ -353,6 +358,52 @@ class PlatformRuntimeBridge {
     return null;
   }
 
+  PermissionDecisionOutcome? _validateSecretDecision(
+    Map<String, dynamic> payload,
+  ) {
+    final isSkipped = payload['skipped'] == true ||
+        payload['status'] == 'skipped' ||
+        payload['allowed'] == false ||
+        payload['decision'] == 'deny';
+    if (isSkipped) {
+      return null;
+    }
+
+    final hasAllowed = payload.containsKey('allowed')
+        ? payload['allowed'] == true
+        : (payload.containsKey('decision')
+            ? payload['decision'] == 'allow'
+            : payload.containsKey('approved')
+                ? payload['approved'] == true
+                : false);
+
+    if (!hasAllowed) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'invalid_decision',
+        errorCode: 'INVALID_DECISION',
+        errorMessage: 'Secret request requires an allow or skip decision.',
+      );
+    }
+
+    final hasValues =
+        (payload['values'] is Map && (payload['values'] as Map).isNotEmpty) ||
+        (payload['credentials'] is Map &&
+            (payload['credentials'] as Map).isNotEmpty) ||
+        (payload['answer'] != null &&
+            payload['answer'].toString().trim().isNotEmpty);
+
+    if (!hasValues) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'wrong_kind',
+        errorCode: 'MISSING_SECRET_PAYLOAD',
+        errorMessage:
+            'Secret request was allowed but contains no credential values.',
+      );
+    }
+
+    return null;
+  }
+
   /// Processes an incoming permission or clarification decision with strict
   /// identity and kind validation. Stale, duplicate, cross-session, or wrong-kind
   /// responses fail closed without consuming the pending request.
@@ -394,9 +445,11 @@ class PlatformRuntimeBridge {
       }
 
       // 2. Kind and consistency validation
-      final kindFailure = pending.isUserQuestion
-          ? _validateClarificationDecision(event.payload)
-          : _validateToolDecision(event.payload);
+      final kindFailure = pending.isSecretRequest
+          ? _validateSecretDecision(event.payload)
+          : (pending.isUserQuestion
+              ? _validateClarificationDecision(event.payload)
+              : _validateToolDecision(event.payload));
       if (kindFailure != null) {
         _logger.warning(
           'Validation failed for request $requestId: ${kindFailure.errorMessage}',
@@ -488,10 +541,13 @@ class PlatformRuntimeBridge {
         );
       }
 
+      final isSecret = checkpoint.toolName == 'system_request_secret';
       final isAskUser = checkpoint.toolName == 'system_ask_user';
-      final kindFailure = isAskUser
-          ? _validateClarificationDecision(event.payload)
-          : _validateToolDecision(event.payload);
+      final kindFailure = isSecret
+          ? _validateSecretDecision(event.payload)
+          : (isAskUser
+              ? _validateClarificationDecision(event.payload)
+              : _validateToolDecision(event.payload));
       if (kindFailure != null) {
         return kindFailure;
       }
@@ -630,9 +686,35 @@ class PlatformRuntimeBridge {
     Map<String, dynamic> decision, {
     required String sessionId,
   }) {
+    final sanitizedDecision = Map<String, dynamic>.from(decision);
+    if (sanitizedDecision['values'] is Map) {
+      sanitizedDecision['values'] = {
+        for (final k in (sanitizedDecision['values'] as Map).keys)
+          k: '[REDACTED]',
+      };
+    }
+    if (sanitizedDecision['credentials'] is Map) {
+      sanitizedDecision['credentials'] = {
+        for (final k in (sanitizedDecision['credentials'] as Map).keys)
+          k: '[REDACTED]',
+      };
+    }
+    if (sanitizedDecision.containsKey('answer')) {
+      final ansStr = sanitizedDecision['answer']?.toString();
+      if (ansStr != null && ansStr.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(ansStr);
+          if (decoded is Map) {
+            sanitizedDecision['answer'] = jsonEncode({
+              for (final k in decoded.keys) k: '[REDACTED]',
+            });
+          }
+        } catch (_) {}
+      }
+    }
     _resolvedPermissionRequests[requestId] = ResolvedPermissionRecord(
       sessionId: sessionId,
-      decision: Map.unmodifiable(decision),
+      decision: Map.unmodifiable(sanitizedDecision),
     );
     while (_resolvedPermissionRequests.length > _resolvedPermissionRetention) {
       _resolvedPermissionRequests.remove(

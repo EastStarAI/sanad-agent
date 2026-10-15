@@ -8,7 +8,10 @@ import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/shell_execute_tool.dart';
+import 'package:sanad_agent/core/auth/agent_secret_namespaces.dart';
 import 'package:test/test.dart';
+
+import '../support/memory_agent_secret_store.dart';
 
 void main() {
   group('Task 83g: Direct and Protected Execution Backends', () {
@@ -187,6 +190,28 @@ void main() {
       expect(response['backend'], equals('protected'));
       expect(response['status'], equals('unavailable'));
       expect(response['error'], contains('Host fallback is prohibited'));
+    });
+
+    test('DirectExecutionBackend injects custom vault secrets into child environment safely', () async {
+      final store = MemoryAgentSecretStore();
+      await store.write(AgentSecretNamespaces.customIndexKey, jsonEncode(['custom:default:TEST_VAULT_TOKEN']));
+      await store.write(AgentSecretNamespaces.customKey('default:TEST_VAULT_TOKEN'), 'secret-token-abc-999');
+
+      final backend = DirectExecutionBackend(secretStore: store);
+      final stopwatch = Stopwatch()..start();
+
+      final echoCmd = Platform.isWindows ? 'echo %TEST_VAULT_TOKEN%' : 'echo \$TEST_VAULT_TOKEN';
+      final resultJson = await backend.executeCommand(
+        command: echoCmd,
+        workingDir: tempDir.path,
+        timeoutMs: 5000,
+        stopwatch: stopwatch,
+      );
+
+      final result = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(result['isError'], isNull);
+      expect(result['output'], contains('secret-token-abc-999'));
+      expect(result['backend'], equals('direct'));
     });
   });
 }

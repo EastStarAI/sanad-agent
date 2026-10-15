@@ -58,6 +58,31 @@ trusted to emit valid UTF-8: malformed byte sequences are replaced during
 bounded decoding rather than escaping the tool future and terminating the
 Agent daemon.
 
+### Interactive Secret Acquisition and Zero-Leak Vault Tools
+
+Plan 84 introduces interactive secret acquisition (`system_request_secret`) and
+zero-leak vault discovery (`system_list_secrets`):
+
+- **Interactive Acquisition (`system_request_secret`):** Suspends the agent turn
+  to present an interactive `SecretRequestCard` in the desktop client. Supports
+  multi-field input specifications with masked password fields (`obscureText`),
+  visibility toggling, and skip/save decisions.
+- **Zero-Leak Envelopes:** User credentials submitted through the permission bridge
+  are directly stored into `AgentSecretStore` under the unified `custom:*`
+  namespace (`custom:<group>:<key>`). Raw secret values are NEVER returned in the
+  tool response, conversation transcripts, or logging sinks; the tool returns only
+  a non-sensitive metadata envelope (`status: "stored"`, `keys_stored`, `target_vault`).
+- **Secret Discovery (`system_list_secrets`):** Allows agents to discover
+  available secrets and their provenance (`source: "vault"`, `has_value: true`)
+  without exposing secret values in model context.
+- **Safe Process Environment Injection:** Child process execution (`DirectExecutionBackend`
+  via `ProcessEnvironmentPolicy`) retrieves custom vault secrets and injects them
+  directly into child process environments at spawn time without interpolating
+  passwords into command strings or execution logs.
+- **Optional Workspace `.env` Sync:** When explicitly requested, credentials can be
+  written atomically to a workspace-local `.env` file with restrictive `0600`
+  permissions.
+
 ## Tool Output Budgets
 
 The engine tool-execution boundary applies a provider-neutral output guard after

@@ -532,6 +532,14 @@ class ToolPresentationHelper {
       }
     }
 
+    // 7b. Check secret reason (for system_request_secret)
+    if (cleanName.contains('request_secret')) {
+      final reason = mapInput['reason']?.toString();
+      if (reason != null && reason.isNotEmpty) {
+        return reason.length > 30 ? '${reason.substring(0, 27)}...' : reason;
+      }
+    }
+
     // 8. Check memory
     if (cleanName == 'memory') {
       final action = mapInput['action']?.toString();
@@ -610,6 +618,8 @@ class ToolPresentationHelper {
     if (name == 'web_search') return 'Search Web';
     if (name == 'web_fetch') return 'Fetch';
     if (name == 'system_ask_user') return 'Ask';
+    if (name == 'system_request_secret') return 'Request Secret';
+    if (name == 'system_list_secrets') return 'List Secrets';
     if (name == 'tool_search') return 'Search Capabilities';
     if (name == 'skill_load') return 'Skill Load';
     if (name == 'memory') return 'Memory';

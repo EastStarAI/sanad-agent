@@ -125,3 +125,27 @@ on-disk agent-state constructor detects the Dart test runner and fails before
 filesystem access unless the test has explicitly selected a temporary home or
 state home. Tests that do not need persistence inject an in-memory database;
 tests that exercise persistence use an explicit temporary path.
+
+## Interactive Secret Acquisition and Custom Vault Isolation
+
+User secrets collected interactively through `system_request_secret` adhere to
+strict zero-leak and data minimization boundaries:
+
+1. **Unified Storage Without New Stores:** Custom credentials are saved directly
+   into the unified `AgentSecretStore` under the `custom:*` namespace prefix
+   (`custom:<group>:<key>`). No auxiliary databases or unencrypted storage files
+   are introduced.
+2. **Zero Plaintext Visibility:** Plaintext secret values are never reflected in
+   LLM prompt history, response envelopes, client event streams, or daemon log sinks.
+   The tool response envelope contains only metadata (`status: "stored"`,
+   `keys_stored`, `target_vault`).
+3. **Bridge Redaction:** The runtime permission bridge validates submissions and
+   explicitly redacts all credential fields to `[REDACTED]` before committing
+   resolved decisions to durable audit retention records.
+4. **Environment-Only Process Injection:** Execution backends
+   (`DirectExecutionBackend`) resolve secrets directly from `AgentSecretStore`
+   and inject them into child process environments via `ProcessEnvironmentPolicy`
+   without embedding raw secret values in command arguments or terminal outputs.
+5. **Secure Local File Synchronization:** If explicitly requested by the user,
+   workspace-local environment updates are committed atomically and restricted
+   to POSIX `0600` permissions.

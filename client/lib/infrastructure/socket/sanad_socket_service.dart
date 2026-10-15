@@ -62,6 +62,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   final _accountLifecycleRevokeController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get accountLifecycleRevokeResults => _accountLifecycleRevokeController.stream;
 
+  final _accountLifecycleDeleteController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get accountLifecycleDeleteResults => _accountLifecycleDeleteController.stream;
+
   final _accountLifecycleChangedController = StreamController<void>.broadcast();
   Stream<void> get accountLifecycleChanges => _accountLifecycleChangedController.stream;
 
@@ -298,6 +301,12 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       final payload = _asMap(data);
       if (!_isDisposed && payload != null) {
         _accountLifecycleRevokeController.add(payload);
+      }
+    });
+    _socket!.on('account_lifecycle_delete_result', (data) {
+      final payload = _asMap(data);
+      if (!_isDisposed && payload != null) {
+        _accountLifecycleDeleteController.add(payload);
       }
     });
     _socket!.on('account_lifecycle_changed', (_) {
@@ -738,6 +747,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     unawaited(_eventsController.close());
     unawaited(_accountLifecycleResponseController.close());
     unawaited(_accountLifecycleRevokeController.close());
+    unawaited(_accountLifecycleDeleteController.close());
     unawaited(_accountLifecycleChangedController.close());
     _eventRouter.dispose();
     unawaited(_authSuccessController.close());
@@ -916,6 +926,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       'account_lifecycle_changed',
       'revoke_account_principal',
       'account_lifecycle_revoke_result',
+      'delete_account',
+      'account_lifecycle_delete_result',
     }.contains(event)) {
       return {
         if (payload['version'] is num) 'version': payload['version'],

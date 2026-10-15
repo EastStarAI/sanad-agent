@@ -33,6 +33,18 @@ class DeviceSuspendedRequest {
     if (json.containsKey('question')) {
       toolInputMap['question'] = json['question'];
     }
+    if (json.containsKey('fields')) {
+      toolInputMap['fields'] = json['fields'];
+    }
+    if (json.containsKey('reason')) {
+      toolInputMap['reason'] = json['reason'];
+    }
+    if (json.containsKey('target_vault')) {
+      toolInputMap['target_vault'] = json['target_vault'];
+    }
+    if (json.containsKey('write_to_workspace_env')) {
+      toolInputMap['write_to_workspace_env'] = json['write_to_workspace_env'];
+    }
     return DeviceSuspendedRequest(
       requestId: json['request_id']?.toString() ?? '',
       sessionId: json['session_id']?.toString() ?? '',
@@ -81,6 +93,33 @@ class DeviceSuspendedRequest {
     }
     return const [];
   }
+
+  List<Map<String, dynamic>> get secretFields {
+    final raw = toolInput['fields'] ?? tool['fields'] ?? toJson()['fields'];
+    if (raw is List) {
+      return List<Map<String, dynamic>>.from(
+        raw.map((f) => Map<String, dynamic>.from(f as Map)),
+      );
+    }
+    return const [];
+  }
+
+  String get secretReason =>
+      toolInput['reason']?.toString() ??
+      tool['reason']?.toString() ??
+      toJson()['reason']?.toString() ??
+      '';
+
+  String get targetVault =>
+      toolInput['target_vault']?.toString() ??
+      tool['target_vault']?.toString() ??
+      toJson()['target_vault']?.toString() ??
+      'custom:default';
+
+  String? get writeToWorkspaceEnv =>
+      toolInput['write_to_workspace_env']?.toString() ??
+      tool['write_to_workspace_env']?.toString() ??
+      toJson()['write_to_workspace_env']?.toString();
 
   String get scopeLabel {
     switch (scope) {

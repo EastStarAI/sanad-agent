@@ -104,7 +104,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   void _initExpansionState() {
-    if (widget.event.toolName == 'system_ask_user') {
+    if (widget.event.toolName == 'system_ask_user' || widget.event.toolName == 'system_request_secret') {
       _isExpanded = true;
     } else if (widget.isExpanded != null) {
       _isExpanded = widget.isExpanded!;
@@ -121,7 +121,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   @override
   void didUpdateWidget(covariant EventTile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.event.toolName == 'system_ask_user') {
+    if (widget.event.toolName == 'system_ask_user' || widget.event.toolName == 'system_request_secret') {
       _setExpanded(true, notifyParent: false, rebuild: false);
       return;
     }
@@ -460,7 +460,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildCollapsibleEvent(BuildContext context) {
-    if (widget.event.toolName == 'system_ask_user') {
+    if (widget.event.toolName == 'system_ask_user' || widget.event.toolName == 'system_request_secret') {
       return _buildEventBody();
     }
 
@@ -617,12 +617,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildEventBody() {
-    final isAskUserRunning = widget.event.toolName == 'system_ask_user' && widget.event.status == EventStatus.running;
+    final isInteractiveRunning = (widget.event.toolName == 'system_ask_user' || widget.event.toolName == 'system_request_secret') && widget.event.status == EventStatus.running;
     final hasContent =
         (widget.event.text.trim().isNotEmpty ||
             widget.event.kind == EventKind.toolCall ||
             widget.event.kind == EventKind.plan) &&
-        !isAskUserRunning;
+        !isInteractiveRunning;
 
     if (!hasContent) return const SizedBox.shrink();
 
@@ -670,7 +670,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         ),
       );
     }
-    if (widget.event.status == EventStatus.running && widget.event.toolName != 'system_ask_user') {
+    if (widget.event.status == EventStatus.running && widget.event.toolName != 'system_ask_user' && widget.event.toolName != 'system_request_secret') {
       return Padding(
         padding: const EdgeInsets.all(2),
         child: SizedBox(

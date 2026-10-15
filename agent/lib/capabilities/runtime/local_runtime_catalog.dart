@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/permissions/execution_mode.dart';
@@ -17,6 +19,8 @@ import 'package:sanad_agent/capabilities/tools/system/shell_execute_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/screenshot_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/mouse_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/keyboard_tool.dart';
+import 'package:sanad_agent/core/auth/agent_secret_namespaces.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store_contract.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
@@ -41,6 +45,7 @@ class LocalRuntimeCatalog {
     PlatformRuntimeBridge? platformRuntimeBridge,
     WorkspacePathResolver? pathResolver,
     WorkspacePolicyStore? workspacePolicyStore,
+    AgentSecretStore? secretStore,
   }) : _workspaceRuntimeService = workspaceRuntimeService,
        _webSearchService = webSearchService ?? WebSearchService(),
        _webFetchService = webFetchService ?? WebFetchService(),
@@ -50,7 +55,8 @@ class LocalRuntimeCatalog {
            platformRuntimeBridge ?? PlatformRuntimeBridge(),
        _pathResolver = pathResolver ?? const WorkspacePathResolver(),
        _workspacePolicyStore =
-           workspacePolicyStore ?? const WorkspacePolicyStore();
+           workspacePolicyStore ?? const WorkspacePolicyStore(),
+       _secretStore = secretStore;
 
   final LocalWorkspaceRuntimeService _workspaceRuntimeService;
   final WorkspacePathResolver _pathResolver;
@@ -60,6 +66,7 @@ class LocalRuntimeCatalog {
   final PermissionManager _permissionManager;
   final PlatformRuntimeBridge _platformRuntimeBridge;
   final WorkspacePolicyStore _workspacePolicyStore;
+  final AgentSecretStore? _secretStore;
 
   Future<List<BaseTool>> buildTools({
     required ToolsRegistry registry,
@@ -73,6 +80,8 @@ class LocalRuntimeCatalog {
       _buildWebFetchTool(),
       _buildSkillLoadTool(workspacePath),
       _buildAskUserTool(),
+      _buildRequestSecretTool(),
+      _buildListSecretsTool(),
     ];
 
     if (workspacePath != null && workspacePath.isNotEmpty) {
@@ -866,6 +875,367 @@ class LocalRuntimeCatalog {
         } finally {
           await checkpointStore.deleteByRequestId(requestId);
         }
+      },
+    );
+  }
+
+  BaseTool _buildRequestSecretTool() {
+    return CallbackTool(
+      toolSpec: const LocalToolSpec(
+        name: 'system_request_secret',
+        displayName: 'Request Secret Credentials',
+        description:
+            'Request confidential credentials, API keys, or passwords from the user via a secure interactive modal. Values entered by the user are stored directly into the private agent vault and are NEVER exposed to the model context, conversation transcript, or tool outputs.',
+        inputSchema: {
+          'type': 'object',
+          'properties': {
+            'fields': {
+              'type': 'array',
+              'description':
+                  'The list of credential input fields required from the user.',
+              'minItems': 1,
+              'maxItems': 10,
+              'items': {
+                'type': 'object',
+                'properties': {
+                  'id': {
+                    'type': 'string',
+                    'description':
+                        "Identifier key for the secret (e.g. 'api_key', 'db_password', 'auth_token').",
+                  },
+                  'label': {
+                    'type': 'string',
+                    'description': 'User-facing label for the input field.',
+                  },
+                  'description': {
+                    'type': 'string',
+                    'description':
+                        'Brief guidance on how or where the user can obtain this credential.',
+                  },
+                  'is_secret': {
+                    'type': 'boolean',
+                    'description':
+                        'Whether the input value should be obscured like a password field. Defaults to true.',
+                  },
+                  'required': {
+                    'type': 'boolean',
+                    'description':
+                        'Whether this field is mandatory for the operation. Defaults to true.',
+                  },
+                  'default_value': {
+                    'type': 'string',
+                    'description':
+                        'Optional default value (e.g. non-secret username).',
+                  },
+                },
+                'required': ['id', 'label'],
+                'additionalProperties': false,
+              },
+            },
+            'reason': {
+              'type': 'string',
+              'description':
+                  'Explanation displayed to the user explaining why these credentials are required.',
+            },
+            'target_vault': {
+              'type': 'string',
+              'description':
+                  "Optional custom vault namespace or group identifier (e.g. 'custom:postgres_creds'). If omitted, defaults to 'custom:default'.",
+            },
+            'write_to_workspace_env': {
+              'type': 'string',
+              'description':
+                  "Optional workspace-relative file path (e.g. '.env') to also persist credentials.",
+            },
+          },
+          'required': ['fields', 'reason'],
+          'additionalProperties': false,
+        },
+        source: {'type': 'builtin_local', 'id': 'sanad-agent.system'},
+        category: 'system',
+        workspaceRequired: false,
+        approval: {'mode': 'default', 'sensitive': false},
+        execution: {'target': 'local_runtime', 'timeout_ms': 3600000},
+        serverName: 'system',
+      ),
+      onExecute: (args, {context}) async {
+        final toolContext =
+            context ??
+            ToolContext(
+              sessionId: 'default',
+              toolCallId: 'secret-call-${DateTime.now().millisecondsSinceEpoch}',
+            );
+        final requestId = DateTime.now().millisecondsSinceEpoch.toString();
+        final toolCallId = toolContext.toolCallId ?? 'secret-call-$requestId';
+
+        final rawFields = args['fields'];
+        final List<Map<String, dynamic>> fieldsList = [];
+
+        if (rawFields is List) {
+          for (final f in rawFields) {
+            if (f is Map) {
+              fieldsList.add({
+                'id': f['id']?.toString() ?? '',
+                'label': f['label']?.toString() ?? '',
+                'description': f['description']?.toString() ?? '',
+                'is_secret': f['is_secret'] as bool? ?? true,
+                'required': f['required'] as bool? ?? true,
+                if (f['default_value'] != null)
+                  'default_value': f['default_value'].toString(),
+              });
+            }
+          }
+        }
+
+        final reason = args['reason']?.toString() ?? 'Credentials requested by agent';
+        final targetVaultRaw = args['target_vault']?.toString() ?? 'custom:default';
+        final targetVault = AgentSecretNamespaces.customKey(targetVaultRaw);
+        final writeToWorkspaceEnv = args['write_to_workspace_env']?.toString();
+
+        final permissionPayload = <String, dynamic>{
+          'request_id': requestId,
+          'tool_name': 'system_request_secret',
+          'session_id': toolContext.sessionId,
+          'tool_call_id': toolCallId,
+          'fields': fieldsList,
+          'reason': reason,
+          'target_vault': targetVault,
+          'write_to_workspace_env': writeToWorkspaceEnv,
+          'workspace_id': toolContext.metadata['workspace_id'],
+        };
+
+        final checkpointStore = getIt.isRegistered<SuspendedCheckpointStore>()
+            ? getIt<SuspendedCheckpointStore>()
+            : null;
+        if (checkpointStore != null) {
+          await checkpointStore.save(
+            SuspendedCheckpoint(
+              checkpointId: 'secret-$requestId',
+              sessionId: toolContext.sessionId,
+              requestId: requestId,
+              toolCallId: toolCallId,
+              toolName: 'system_request_secret',
+              status: 'awaiting_permission',
+              toolArguments: Map<String, dynamic>.from(args),
+              permissionPayload: permissionPayload,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          );
+        }
+
+        try {
+          final decision = await _platformRuntimeBridge.requestToolPermission(
+            sessionId: toolContext.sessionId,
+            payload: permissionPayload,
+            timeout: const Duration(hours: 24),
+          );
+
+          final isSkipped = decision['skipped'] == true ||
+              decision['approved'] == false ||
+              decision['allowed'] == false ||
+              decision['decision'] == 'deny' ||
+              decision['status'] == 'skipped';
+
+          if (isSkipped) {
+            return jsonEncode({
+              'status': 'skipped',
+              'skipped': true,
+              'reason': decision['reason']?.toString() ??
+                  decision['comment']?.toString() ??
+                  'User skipped credential entry.',
+            });
+          }
+
+          Map<String, dynamic> values = {};
+          if (decision['values'] is Map) {
+            values = Map<String, dynamic>.from(decision['values'] as Map);
+          } else if (decision['credentials'] is Map) {
+            values = Map<String, dynamic>.from(decision['credentials'] as Map);
+          } else if (decision['answer'] != null) {
+            final rawAns = decision['answer'];
+            if (rawAns is Map) {
+              values = Map<String, dynamic>.from(rawAns);
+            } else if (rawAns is String && rawAns.trim().isNotEmpty) {
+              try {
+                final decoded = jsonDecode(rawAns);
+                if (decoded is Map) {
+                  values = Map<String, dynamic>.from(decoded);
+                }
+              } catch (_) {}
+            }
+          }
+
+          final store = _secretStore ??
+              (getIt.isRegistered<AgentSecretStore>()
+                  ? getIt<AgentSecretStore>()
+                  : null);
+
+          final List<String> storedKeys = [];
+
+          if (store != null) {
+            List<String> activeIndex = [];
+            try {
+              final rawIndex = await store.read(AgentSecretNamespaces.customIndexKey);
+              if (rawIndex != null && rawIndex.isNotEmpty) {
+                final decoded = jsonDecode(rawIndex);
+                if (decoded is List) {
+                  activeIndex = List<String>.from(decoded.map((e) => e.toString()));
+                }
+              }
+            } catch (_) {}
+
+            for (final entry in values.entries) {
+              final secretKey = '$targetVault:${entry.key}';
+              final formattedKey = AgentSecretNamespaces.customKey(secretKey);
+              await store.write(formattedKey, entry.value.toString());
+              storedKeys.add(entry.key.toString());
+              if (!activeIndex.contains(formattedKey)) {
+                activeIndex.add(formattedKey);
+              }
+            }
+
+            try {
+              await store.write(
+                AgentSecretNamespaces.customIndexKey,
+                jsonEncode(activeIndex),
+              );
+            } catch (_) {}
+          } else {
+            storedKeys.addAll(values.keys.map((k) => k.toString()));
+          }
+
+          // Optional workspace environment file persistence with 0600 permissions
+          if (writeToWorkspaceEnv != null && writeToWorkspaceEnv.trim().isNotEmpty) {
+            final wsPath = toolContext.metadata['workspace_path']?.toString() ??
+                toolContext.metadata['workspace']?['path']?.toString();
+            if (wsPath != null && wsPath.isNotEmpty) {
+              final targetPath = p.normalize(p.join(wsPath, writeToWorkspaceEnv.trim()));
+              if (p.isWithin(p.normalize(wsPath), targetPath) || targetPath == p.normalize(wsPath)) {
+                final envFile = File(targetPath);
+                final lines = <String>[];
+                if (await envFile.exists()) {
+                  final existingContent = await envFile.readAsString();
+                  lines.addAll(existingContent.split('\n'));
+                }
+                for (final entry in values.entries) {
+                  final key = entry.key;
+                  final val = entry.value.toString();
+                  final idx = lines.indexWhere((l) => l.trimLeft().startsWith('$key='));
+                  if (idx != -1) {
+                    lines[idx] = '$key=$val';
+                  } else {
+                    lines.add('$key=$val');
+                  }
+                }
+                final tmpFile = File('${envFile.path}.tmp.${DateTime.now().millisecondsSinceEpoch}');
+                await tmpFile.writeAsString(lines.join('\n'));
+                if (!Platform.isWindows) {
+                  try {
+                    await Process.run('chmod', ['0600', tmpFile.path]);
+                  } catch (_) {}
+                }
+                await tmpFile.rename(envFile.path);
+              }
+            }
+          }
+
+          // ZERO-LEAK ENVELOPE: Never return the secret values!
+          return jsonEncode({
+            'status': 'stored',
+            'skipped': false,
+            'target_vault': targetVault,
+            'keys_stored': storedKeys,
+          });
+        } finally {
+          if (checkpointStore != null) {
+            await checkpointStore.deleteByRequestId(requestId);
+          }
+        }
+      },
+    );
+  }
+
+  BaseTool _buildListSecretsTool() {
+    return CallbackTool(
+      toolSpec: const LocalToolSpec(
+        name: 'system_list_secrets',
+        displayName: 'List Available Secrets Metadata',
+        description:
+            'List existing secrets and credentials available in the agent vault. Returns only metadata (key names, namespaces, presence status) and NEVER exposes plaintext secret values.',
+        inputSchema: {
+          'type': 'object',
+          'properties': {
+            'namespace_filter': {
+              'type': 'string',
+              'description':
+                  "Optional filter for namespace ('custom', 'providers', 'mcp', or 'all'). Defaults to 'custom'.",
+            },
+          },
+          'additionalProperties': false,
+        },
+        source: {'type': 'builtin_local', 'id': 'sanad-agent.system'},
+        category: 'system',
+        workspaceRequired: false,
+        approval: {'mode': 'default', 'sensitive': false},
+        execution: {'target': 'local_runtime', 'timeout_ms': 60000},
+        serverName: 'system',
+      ),
+      onExecute: (args, {context}) async {
+        final filter =
+            (args['namespace_filter']?.toString().toLowerCase().trim() ?? 'custom');
+
+        final store = _secretStore ??
+            (getIt.isRegistered<AgentSecretStore>()
+                ? getIt<AgentSecretStore>()
+                : null);
+
+        if (store == null) {
+          return jsonEncode({
+            'status': 'success',
+            'secrets': <Map<String, dynamic>>[],
+          });
+        }
+
+        final List<Map<String, dynamic>> results = [];
+
+        Future<void> collectFromIndex(String indexKey, String namespace) async {
+          try {
+            final raw = await store.read(indexKey);
+            if (raw != null && raw.isNotEmpty) {
+              final decoded = jsonDecode(raw);
+              if (decoded is List) {
+                for (final item in decoded) {
+                  final k = item.toString();
+                  final val = await store.read(k);
+                  results.add({
+                    'key': k,
+                    'namespace': namespace,
+                    'has_value': val != null && val.isNotEmpty,
+                    'source': 'vault',
+                  });
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (filter == 'custom' || filter == 'all') {
+          await collectFromIndex(AgentSecretNamespaces.customIndexKey, 'custom');
+        }
+        if (filter == 'providers' || filter == 'all') {
+          await collectFromIndex(AgentSecretNamespaces.providerIndexKey, 'providers');
+        }
+        if (filter == 'mcp' || filter == 'all') {
+          await collectFromIndex(AgentSecretNamespaces.mcpIndexKey, 'mcp');
+        }
+
+        return jsonEncode({
+          'status': 'success',
+          'filter': filter,
+          'count': results.length,
+          'secrets': results,
+        });
       },
     );
   }

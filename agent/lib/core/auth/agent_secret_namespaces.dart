@@ -13,9 +13,13 @@ abstract final class AgentSecretNamespaces {
   /// Namespace prefix for Model Context Protocol (MCP) server secrets.
   static const String mcpPrefix = 'mcp:';
 
+  /// Namespace prefix for user-provided custom secrets and credentials (Plan 84).
+  static const String customPrefix = 'custom:';
+
   /// Well-known index keys used to track active keys in each namespace.
   static const String providerIndexKey = 'providers:index';
   static const String mcpIndexKey = 'mcp:index';
+  static const String customIndexKey = 'custom:index';
 
   /// Formats an auth key within the auth namespace.
   static String authKey(String key) => '$authPrefix$key';
@@ -26,6 +30,10 @@ abstract final class AgentSecretNamespaces {
   /// Formats an MCP secret reference within the MCP namespace.
   static String mcpKey(String reference) => '$mcpPrefix$reference';
 
+  /// Formats a custom secret key within the custom namespace.
+  static String customKey(String key) =>
+      key.startsWith(customPrefix) ? key : '$customPrefix$key';
+
   /// Returns true if [key] belongs to the auth namespace.
   static bool isAuthKey(String key) => key.startsWith(authPrefix);
 
@@ -34,4 +42,7 @@ abstract final class AgentSecretNamespaces {
 
   /// Returns true if [key] belongs to the MCP namespace.
   static bool isMcpKey(String key) => key.startsWith(mcpPrefix);
+
+  /// Returns true if [key] belongs to the custom namespace.
+  static bool isCustomKey(String key) => key.startsWith(customPrefix);
 }
