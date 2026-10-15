@@ -37,6 +37,7 @@ This contract applies to `agent/lib/engine/adapters/`.
 ## Model Discovery
 - Provider/template aliases stay aligned with registry identities.
 - Selectable thinking controls/defaults require exact model-owned evidence; family names, output-reasoning flags, and speculative future variants never authorize them.
+- A local native model-list probe may enrich a compatible route only from a single exact model-identity match, may advertise only values declared by that endpoint that also have an evidenced wire equivalent for the route's actual protocol, and must leave discovery untouched when the probe fails or its evidence is malformed or ambiguous; native-only values and unmappable defaults stay unadvertised. Repeated aliases of one native entry count once; distinct matching entries remain ambiguous. Native discovery reuses the configured discovery authentication and never replaces an existing compatibility-endpoint declaration.
 - Provider model discovery and core model options reuse one provider-owned service.
 - Codex model discovery uses the shared versioned service, hidden-entry filtering, priority ordering, and curated forward-compatible aliases.
 - Dynamic model ids normalize transport-only prefixes before reaching provider-neutral layers.

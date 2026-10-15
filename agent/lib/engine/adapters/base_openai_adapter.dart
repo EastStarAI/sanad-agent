@@ -68,6 +68,10 @@ class BaseOpenAIAdapter implements LLMAdapter {
     baseUrlOverride ?? config.baseUrlFor(profile),
   );
   String get _apiKey => apiKeyOverride ?? config.apiKeyFor(profile);
+  Map<String, String> get _modelDiscoveryHeaders => {
+    if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
+    ...profile.defaultHeaders,
+  };
 
   // Public accessors for subclasses (Strategy Pattern)
   String get baseUrl => _baseUrl;
@@ -98,13 +102,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     }
     for (final url in candidates) {
       try {
-        final response = await _get(
-          url,
-          headers: {
-            if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
-            ...profile.defaultHeaders,
-          },
-        );
+        final response = await _get(url, headers: _modelDiscoveryHeaders);
         if (response.statusCode != 200) {
           _lastModelsException = LlmHttpException.fromResponse(
             response,
@@ -180,10 +178,14 @@ class BaseOpenAIAdapter implements LLMAdapter {
           );
         }
         if (options.isNotEmpty) {
+          var resolvedOptions = options;
+          if (profile.name == 'lm-studio') {
+            resolvedOptions = await _withLmStudioNativeReasoning(options);
+          }
           _availableModelsSource = 'live';
           _lastModelsException = null;
           if (profile.fallbackModels.isNotEmpty) {
-            options.sort((a, b) {
+            resolvedOptions.sort((a, b) {
               var aId = a.value;
               var bId = b.value;
 
@@ -203,7 +205,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
               return 0;
             });
           }
-          return options;
+          return resolvedOptions;
         }
       } catch (e) {
         _logger.warning('Failed to fetch standard models from $url: $e');
@@ -364,7 +366,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     // 1. LM Studio local probe (reference-style)
     if (profile.name == 'lm-studio') {
       try {
-        final cleanBase = baseUrl.replaceAll('/v1', '').replaceAll('/v1/', '');
+        final cleanBase = _lmStudioNativeBase;
         final url = Uri.parse('$cleanBase/api/v1/models');
         final response = await _get(url, timeout: const Duration(seconds: 2));
         if (response.statusCode == 200) {
@@ -436,6 +438,175 @@ class BaseOpenAIAdapter implements LLMAdapter {
     if (metadataLimit != null) return metadataLimit;
 
     return ModelMetadata.unknownContextLimit;
+  }
+
+  /// Verbatim native LM Studio reasoning declaration observed from
+  /// `GET /api/v1/models`. Kept as raw endpoint evidence, separate from the
+  /// derived declaration below and from any enriched descriptor.
+  static const lmStudioReasoningEvidenceKey = 'lm_studio_reasoning';
+
+  /// Documented native LM Studio public reasoning values for
+  /// `capabilities.reasoning.allowed_options` / `capabilities.reasoning.default`
+  /// (`https://lmstudio.ai/docs/developer/rest/list`).
+  static const _lmStudioNativeReasoningValues = <String>{
+    'off',
+    'on',
+    'low',
+    'medium',
+    'high',
+  };
+
+  /// Native values with a documented OpenAI-compatible Chat `reasoning_effort`
+  /// equivalent. Every advertised option keeps its exact native value, so
+  /// `low`/`medium`/`high` reach the wire unchanged.
+  static const _lmStudioChatEffortValues = <String>['low', 'medium', 'high'];
+
+  /// Native LM Studio REST base URL. The native API is served from the server
+  /// root while the OpenAI-compatible API lives under `/v1`.
+  String get _lmStudioNativeBase =>
+      _baseUrl.replaceAll('/v1', '').replaceAll('/v1/', '');
+
+  /// Enriches discovered LM Studio models with the finite reasoning declaration
+  /// served by the native `GET /api/v1/models` endpoint.
+  ///
+  /// Model identity is matched exactly: a native `key` or one of its
+  /// `loaded_instances[].id` identifiers must equal the discovered
+  /// compatibility id, and exactly one native entry may claim it. Absent,
+  /// failing, malformed or ambiguous evidence leaves the compatibility
+  /// discovery result untouched; no support is fabricated, no protocol is
+  /// switched and no unrelated metadata is reset.
+  Future<List<ModelOption>> _withLmStudioNativeReasoning(
+    List<ModelOption> options,
+  ) async {
+    if (options.isEmpty) return options;
+    try {
+      final nativeModels = await _fetchLmStudioNativeModels();
+      if (nativeModels == null || nativeModels.isEmpty) return options;
+
+      // Count distinct native entries, not aliases within the same entry.
+      final candidatesById = <String, Set<Map<String, Object?>>>{};
+      for (final model in nativeModels) {
+        final key = model['key'];
+        if (key is! String || key.isEmpty) continue;
+        candidatesById
+            .putIfAbsent(key, () => Set<Map<String, Object?>>.identity())
+            .add(model);
+
+        final instances = model['loaded_instances'];
+        if (instances is! List) continue;
+        for (final instance in instances) {
+          if (instance is! Map) continue;
+          final instanceId = instance['id'];
+          if (instanceId is! String || instanceId.isEmpty) continue;
+          candidatesById
+              .putIfAbsent(
+                instanceId,
+                () => Set<Map<String, Object?>>.identity(),
+              )
+              .add(model);
+        }
+      }
+
+      return options.map((option) {
+        // Native enrichment cannot replace the compatibility endpoint's own
+        // declaration (including a malformed one owned by that authority).
+        if (option.modelMetadata.containsKey('thinking_control')) return option;
+        final candidates = candidatesById[option.value];
+        if (candidates == null || candidates.length != 1) return option;
+
+        final capabilities = candidates.single['capabilities'];
+        final reasoning = capabilities is Map
+            ? capabilities['reasoning']
+            : null;
+        final declaration = _parseNativeReasoningDeclaration(reasoning);
+        if (declaration == null) return option;
+
+        final declaredControl = _declaredThinkingControlFromNative(declaration);
+        return option.copyWith(
+          modelMetadata: {
+            ...option.modelMetadata,
+            lmStudioReasoningEvidenceKey: reasoning,
+            'thinking_control': ?declaredControl,
+          },
+        );
+      }).toList();
+    } catch (e) {
+      _logger.warning(
+        'Failed to enrich LM Studio native reasoning metadata: $e',
+      );
+      return options;
+    }
+  }
+
+  Future<List<Map<String, Object?>>?> _fetchLmStudioNativeModels() async {
+    final response = await _get(
+      Uri.parse('$_lmStudioNativeBase/api/v1/models'),
+      headers: _modelDiscoveryHeaders,
+      timeout: const Duration(seconds: 2),
+    );
+    if (response.statusCode != 200) return null;
+    final data = jsonDecode(response.body);
+    if (data is! Map) return null;
+    final models = data['models'];
+    if (models is! List) return null;
+
+    final parsed = <Map<String, Object?>>[];
+    for (final model in models) {
+      final modelMap = _asStringMap(model);
+      if (modelMap != null) parsed.add(modelMap);
+    }
+    return parsed;
+  }
+
+  /// Strictly validates a native LM Studio `capabilities.reasoning` object.
+  ///
+  /// Returns `null` for absent, malformed, empty or non-finite declarations,
+  /// including a value outside the documented native vocabulary or a default
+  /// that is not one of the declared values. No default is ever inferred.
+  static ({Set<String> allowed, String defaultOption})?
+  _parseNativeReasoningDeclaration(Object? raw) {
+    if (raw is! Map) return null;
+
+    final allowedRaw = raw['allowed_options'];
+    if (allowedRaw is! List || allowedRaw.isEmpty) return null;
+    final allowed = <String>{};
+    for (final entry in allowedRaw) {
+      if (entry is! String) return null;
+      final value = entry.trim();
+      if (!_lmStudioNativeReasoningValues.contains(value)) return null;
+      allowed.add(value);
+    }
+
+    final defaultRaw = raw['default'];
+    if (defaultRaw is! String) return null;
+    final defaultOption = defaultRaw.trim();
+    if (!allowed.contains(defaultOption)) return null;
+
+    return (allowed: allowed, defaultOption: defaultOption);
+  }
+
+  /// Maps a validated native declaration onto the documented compatibility Chat
+  /// wire, or `null` when no declared value has an evidenced wire equivalent.
+  ///
+  /// Native-only values (`on`/`off`) are never mapped to another value, and an
+  /// unmappable native default stays unrepresentable so a real provider default
+  /// remains plain omission instead of an invented selectable level.
+  static Map<String, Object?>? _declaredThinkingControlFromNative(
+    ({Set<String> allowed, String defaultOption}) declaration,
+  ) {
+    final options = <String, dynamic>{
+      for (final value in _lmStudioChatEffortValues)
+        if (declaration.allowed.contains(value)) value: value,
+    };
+    if (options.isEmpty) return null;
+
+    return {
+      'status': 'supported',
+      'wire': 'openai_chat_effort',
+      'options': options,
+      if (options.containsKey(declaration.defaultOption))
+        'default_option': declaration.defaultOption,
+    };
   }
 
   String _resolveModel(String? override) {
