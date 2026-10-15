@@ -73,6 +73,7 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
         }
       });
       trayIcon.setVisible(true);
+      _logger.info('System tray icon initialized');
     } catch (e, st) {
       _logger.warning('Failed to initialize native tray icon', e, st);
     }
@@ -332,8 +333,9 @@ class AppTrayService {
     } finally {
       _isAgentActionInProgress = false;
       _refreshDebounceTimer?.cancel();
-      await refreshMenu(force: true);
-    }
+    await refreshMenu(force: true);
+    _logger.info('System tray menu ready with ${_lastMenuItems?.length ?? 0} entries');
+  }
   }
 
   Future<void> handleToggleClientCli() async {

@@ -65,7 +65,7 @@ void main() {
       expect(windowAdapter.focusCalls, equals(1));
     });
 
-    test('handleWindowClose on macOS/Windows hides window without quitting or disposing', () async {
+    test('handleWindowClose hides window without quitting or disposing', () async {
       bool trayDisposed = false;
       bool cliStopped = false;
 
@@ -75,7 +75,7 @@ void main() {
         onStopCliHost: () async => cliStopped = true,
       );
 
-      await manager.handleWindowClose(isLinux: false);
+      await manager.handleWindowClose();
 
       expect(windowAdapter.hideCalls, equals(1));
       expect(windowAdapter.destroyCalls, equals(0));
@@ -84,23 +84,19 @@ void main() {
       expect(cliStopped, isFalse);
     });
 
-    test('handleWindowClose on Linux performs explicit quit', () async {
-      bool trayDisposed = false;
-      bool exitCalled = false;
-
+    test('handleWindowClose during shutdown never hides the window', () async {
       final manager = DesktopLifecycleManager(
         windowAdapter: windowAdapter,
-        onDisposeTray: () async => trayDisposed = true,
-        onExitProcess: () => exitCalled = true,
+        onExitProcess: () {},
       );
 
-      await manager.handleWindowClose(isLinux: true);
+      await manager.quit();
+      final hidesBefore = windowAdapter.hideCalls;
 
+      await manager.handleWindowClose();
+
+      expect(windowAdapter.hideCalls, equals(hidesBefore));
       expect(manager.isQuitting, isTrue);
-      expect(trayDisposed, isTrue);
-      expect(windowAdapter.preventClose, isFalse);
-      expect(windowAdapter.destroyCalls, equals(1));
-      expect(exitCalled, isTrue);
     });
 
     test('quit executes all cleanup steps in deterministic order', () async {

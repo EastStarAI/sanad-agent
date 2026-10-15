@@ -77,10 +77,13 @@ class DesktopLifecycleManager with WidgetsBindingObserver {
     await _windowAdapter.focus();
   }
 
-  Future<void> handleWindowClose({bool isLinux = false}) async {
-    if (isLinux) {
-      _logger.info('Linux window close requested: performing explicit quit');
-      await quit();
+  /// Background desktop operation is uniform across macOS, Windows, and Linux:
+  /// closing the window hides it and keeps sockets, the Agent, and the Client CLI
+  /// endpoint alive until the user picks `Quit`.
+  Future<void> handleWindowClose() async {
+    if (_isQuitting) {
+      // An explicit quit already released the close guard and destroys the
+      // window itself; never hide while shutting down.
       return;
     }
     _logger.info('Desktop window close intercepted: hiding window without disposing state or sockets');

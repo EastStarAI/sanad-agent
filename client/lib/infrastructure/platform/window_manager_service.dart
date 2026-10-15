@@ -253,9 +253,7 @@ class WindowManagerService with WindowListener {
       await windowManager.show();
       await windowManager.focus();
 
-      if (!AppPlatform.isLinux) {
-        await windowManager.setPreventClose(true);
-      }
+      await windowManager.setPreventClose(true);
 
       if (isMaximized) {
         await windowManager.maximize();
@@ -448,10 +446,8 @@ class WindowManagerService with WindowListener {
       await _onCloseRequested!();
       return;
     }
-    if (AppPlatform.isLinux) {
-      await windowManager.destroy();
-      return;
-    }
+    // Background operation is the default on every desktop platform: hiding keeps
+    // the Agent and the Client CLI endpoint available until an explicit quit.
     await hide();
   }
 }
