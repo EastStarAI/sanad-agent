@@ -45,11 +45,40 @@ Both bootstrap and Agent update reject a latest manifest whose version differs
 from that target before downloading an artifact. An older Agent may move only
 to the exact target. A newer Agent is never downgraded automatically.
 
+On Desktop startup, the Client bootstrap coordinator automatically verifies that
+the local running daemon matches the client version. If an older running daemon is
+detected, `checkAndStartLocalDaemon` triggers `updateDaemon(targetVersion: expectedVersion)`
+automatically so the local agent is upgraded to the exact client version without
+requiring manual intervention in Settings. If the daemon is newer or cannot be updated
+due to offline conditions, the client safely falls back to connecting to the running daemon.
+
 A successful lifecycle result means authenticated health reports the target
 version and the local WebSocket reaches ready. Download, staging, replacement,
 or restart request alone are not success. Typed failures distinguish network,
 manifest, target, trust, checksum, replacement/rollback, service registration,
 start, health, version, authentication, and socket stages.
+
+When platform trust verification fails, `PlatformTrustResult` identifies the exact
+failure stage (`manifest_metadata`, `codesign_publisher_requirement`, `authenticode_signature`)
+and provides bounded, sanitized diagnostics. Personal paths (`/Users/<user>`,
+`/home/<user>`, `C:\Users\<user>`) and file locations are stripped to prevent leaking
+private environment details in logs or error dialogs.
+
+### Legacy Agent Upgrade Boundary & Recovery Path
+
+Legacy macOS Agents (v1.0.0 through v1.0.4) contained a runtime `=notarized` ticket check
+that can nondeterministically fail on standalone CLI executables when attempting self-update
+to modern releases. (PR #105 replaced this with an Apple-anchored Developer ID requirement:
+`Developer ID Application: NanoSoft LY LLC (UC2824B99G)`).
+
+When a legacy agent fails self-update with platform trust rejection, the supported
+and discoverable recovery path is the official POSIX installer:
+```bash
+curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh
+bash install.sh --no-login
+```
+Running the installer replaces the binary and restarts the background service, briefly
+interrupting active client connections while retaining existing authentication.
 
 ## First install and retry
 

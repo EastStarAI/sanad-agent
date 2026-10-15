@@ -35,11 +35,15 @@ class _ReadyDaemonController implements LocalDaemonController {
   Future<bool> startDaemon() async => true;
   @override
   Future<bool> stopDaemon() async => true;
+  String? updatedTargetVersion;
   @override
   Future<AgentLifecycleResult> updateDaemon({
     required String targetVersion,
     void Function(double progress)? onProgress,
-  }) async => const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
+  }) async {
+    updatedTargetVersion = targetVersion;
+    return const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
+  }
 }
 
 void main() {
@@ -250,6 +254,28 @@ void main() {
     );
 
     expect(coordinator.expectedVersion, '2.0.0');
+
+    coordinator.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+  });
+
+  test('checkAndStartLocalDaemon auto-pairs by passing expectedVersion to updateDaemon', () async {
+    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final localSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final daemon = _ReadyDaemonController();
+    final coordinator = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'device-1',
+      daemonController: daemon,
+      expectedVersion: '1.2.3',
+    );
+
+    final success = await coordinator.checkAndStartLocalDaemon();
+
+    expect(success, isTrue);
+    expect(daemon.updatedTargetVersion, '1.2.3');
 
     coordinator.dispose();
     cloudSocket.dispose();

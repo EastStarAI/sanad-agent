@@ -33,12 +33,14 @@ class VerifiedAgentBootstrapInstaller {
     String? operatingSystem,
     String? architecture,
     PlatformArtifactVerifier? platformVerifier,
+    PlatformArtifactDetailedVerifier? detailedPlatformVerifier,
     Uri? artifactMirrorUri,
   }) : _client = client ?? http.Client(),
        manifestUri = manifestUri ?? Uri.parse(AppConfig.releaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
        architecture = architecture ?? _architecture(),
-       _platformVerifier = platformVerifier ?? verifyPlatformCodeSignature,
+       _platformVerifier = platformVerifier,
+       _detailedPlatformVerifier = detailedPlatformVerifier,
        _artifactMirrorUri =
            artifactMirrorUri ??
            (AppConfig.releaseArtifactMirrorUrl.trim().isEmpty ? null : Uri.parse(AppConfig.releaseArtifactMirrorUrl));
@@ -48,7 +50,8 @@ class VerifiedAgentBootstrapInstaller {
   final String operatingSystem;
   final String architecture;
   final http.Client _client;
-  final PlatformArtifactVerifier _platformVerifier;
+  final PlatformArtifactVerifier? _platformVerifier;
+  final PlatformArtifactDetailedVerifier? _detailedPlatformVerifier;
   final Uri? _artifactMirrorUri;
 
   Future<AgentBootstrapResult> install({
@@ -124,12 +127,17 @@ class VerifiedAgentBootstrapInstaller {
       if (downloaded != artifact.size || await sha256OfFile(staged) != artifact.sha256) {
         return const AgentBootstrapResult(AgentBootstrapStatus.checksumFailed);
       }
-      if (!await verifyReleaseArtifactTrust(
+      final trustResult = await verifyReleaseArtifactTrustDetailed(
         staged,
         artifact: artifact,
+        detailedVerifier: _detailedPlatformVerifier,
         platformVerifier: _platformVerifier,
-      )) {
-        return const AgentBootstrapResult(AgentBootstrapStatus.trustFailed);
+      );
+      if (!trustResult.isTrusted) {
+        return AgentBootstrapResult(
+          AgentBootstrapStatus.trustFailed,
+          message: 'Downloaded agent failed platform trust policy (${trustResult.summary}).',
+        );
       }
 
       final backup = File('$targetPath.rollback');

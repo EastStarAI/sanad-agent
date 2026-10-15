@@ -173,8 +173,9 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
     if (!AppPlatform.isDesktop) return false;
     if (_localGatewayStatus() == LocalGatewayStatus.connected) return true;
 
+    final autoPaired = await _connectionCoordinator.checkAndStartLocalDaemon();
     final canUseLocalGateway =
-        await _isLocalDaemonRunningWithTimeout() || await _connectionCoordinator.checkAndStartLocalDaemon();
+        autoPaired || await _isLocalDaemonRunningWithTimeout();
     if (!canUseLocalGateway) {
       await refresh(probeLocalService: true);
       return false;
