@@ -64,8 +64,13 @@ done < <(
     done
 )
 
+KEYCHAIN_FLAGS=()
+if [ -n "${KEYCHAIN_PATH:-}" ]; then
+  KEYCHAIN_FLAGS=(--keychain "$KEYCHAIN_PATH")
+fi
+
 while IFS= read -r nested; do
-  codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$nested"
+  codesign --force --sign "$SIGNING_IDENTITY" "${KEYCHAIN_FLAGS[@]}" --options runtime --timestamp "$nested"
 done < <(
   find "$APP_PATH/Contents/Frameworks" -type f -print0 |
     while IFS= read -r -d '' candidate; do
@@ -74,7 +79,7 @@ done < <(
     awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-
 )
 while IFS= read -r nested; do
-  codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$nested"
+  codesign --force --sign "$SIGNING_IDENTITY" "${KEYCHAIN_FLAGS[@]}" --options runtime --timestamp "$nested"
 done < <(
   find "$APP_PATH/Contents/Frameworks" -type d \
     \( -name '*.framework' -o -name '*.app' -o -name '*.xpc' \) -print |
@@ -82,6 +87,7 @@ done < <(
 )
 
 codesign --force --sign "$SIGNING_IDENTITY" \
+  "${KEYCHAIN_FLAGS[@]}" \
   --entitlements "$ENTITLEMENTS_PATH" \
   --options runtime \
   --timestamp \

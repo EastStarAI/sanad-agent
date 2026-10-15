@@ -704,6 +704,34 @@ class FlutterVmController {
           );
           break;
 
+        case 'message_bodies':
+          final elements = await snapshot(onlyWithKeys: true);
+          final messageBodies = elements
+              .where(
+                (element) =>
+                    element.key?.startsWith('user_message_body:') == true ||
+                    element.key?.startsWith('assistant_message_body:') == true,
+              )
+              .toList();
+          const maxMessageBodies = 50;
+          final bounded = messageBodies.length > maxMessageBodies
+              ? messageBodies.sublist(messageBodies.length - maxMessageBodies)
+              : messageBodies;
+          results.add(
+            DriverActionResult(
+              success: true,
+              action: 'message_bodies',
+              message: 'Captured ${bounded.length} message bodies',
+              data: {
+                'count': messageBodies.length,
+                'elements': bounded.map((element) => element.toJson()).toList(),
+                'truncated': messageBodies.length > bounded.length,
+              },
+              duration: Duration.zero,
+            ),
+          );
+          break;
+
         default:
           results.add(
             DriverActionResult(

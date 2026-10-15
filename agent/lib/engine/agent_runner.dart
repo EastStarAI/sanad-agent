@@ -28,6 +28,10 @@ import '../core/provider_runtime/runtime_failure_reason.dart';
 import '../core/provider_runtime/runtime_notice.dart';
 import '../core/provider_runtime/runtime_recovery_exception.dart';
 import '../core/provider_runtime/runtime_recovery_service.dart';
+import '../core/provider_thinking/thinking_route_session_sync.dart';
+import '../core/provider_thinking/thinking_route_preference.dart';
+import '../core/provider_thinking/thinking_route_preference_store.dart';
+import '../core/provider_thinking/thinking_selection_resolver.dart';
 import '../core/secrets_redactor.dart';
 import 'agent_context_assembler.dart';
 import 'llm_request_dumper.dart';
@@ -671,15 +675,7 @@ class AgentRunner {
   Future<void> executeToolCalls(
     List<ToolCall> toolCalls, {
     required bool parallel,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
   }) => _toolExecutionCoordinator.executeToolCalls(
     toolCalls,
     parallel: parallel,
@@ -768,13 +764,58 @@ class AgentRunner {
   }
 
   LLMRequestOptions _requestOptionsForTurn(String? providerInstanceId) {
+    final routing = _turnRoute.resolveTurnRouting();
+    final resolution = _resolveThinkingSelection(
+      providerInstanceId: providerInstanceId ?? routing.providerId,
+      modelId: routing.model ?? _turnRoute.effectiveModel,
+    );
     return LLMRequestOptions(
       sessionId: sessionId,
       requestId: _turnRoute.turnRequestId,
       providerInstanceId: providerInstanceId,
-      thinkingMode: _turnRoute.effectiveThinkingMode,
+      thinkingMode: resolution?.selectionId ?? _turnRoute.effectiveThinkingMode,
+      thinkingDirective: resolution?.directive,
       cancellationScope: _cancellationScope,
     );
+  }
+
+  ThinkingSelectionResolution? _resolveThinkingSelection({
+    required String? providerInstanceId,
+    required String? modelId,
+  }) {
+    final selectionId = _turnRoute.effectiveThinkingMode?.trim();
+    if (selectionId == null || selectionId.isEmpty) {
+      return null;
+    }
+    if (!getIt.isRegistered<ThinkingSelectionResolver>()) {
+      return null;
+    }
+    final normalizedProvider = providerInstanceId?.trim();
+    final normalizedModel = modelId?.trim();
+    if (normalizedProvider == null ||
+        normalizedProvider.isEmpty ||
+        normalizedModel == null ||
+        normalizedModel.isEmpty) {
+      return null;
+    }
+
+    final resolution = getIt<ThinkingSelectionResolver>().resolve(
+      providerInstanceId: normalizedProvider,
+      modelId: normalizedModel,
+      selectionId: selectionId,
+    );
+    if (getIt.isRegistered<ThinkingRoutePreferenceStore>()) {
+      getIt<ThinkingRoutePreferenceStore>().savePreference(
+        sessionId: sessionId,
+        preference: ThinkingRoutePreference(
+          selectionId: resolution.selectionId,
+          providerInstanceId: normalizedProvider,
+          modelId: normalizedModel,
+          capabilityRevision: resolution.descriptor.capabilityRevision,
+        ),
+      );
+    }
+    return resolution;
   }
 
   void steer(String text) {
@@ -1240,6 +1281,15 @@ class AgentRunner {
           // Isolated runner tests may omit the production persistence graph.
           sessionManager.updateSessionProviderId(sessionId, candidate.id);
         }
+        if (getIt.isRegistered<ThinkingRouteSessionSync>()) {
+          final revalidated = getIt<ThinkingRouteSessionSync>()
+              .revalidateAndApplySession(
+                sessionId: sessionId,
+                providerInstanceId: candidate.id,
+                modelId: modelId!,
+              );
+          _turnRoute.updateTurnThinkingMode(revalidated.selectionId);
+        }
         _turnRoute.rewriteQueuedProvider(candidate.id);
         recovery.emitResuming(
           sessionId: sessionId,
@@ -1525,15 +1575,7 @@ class AgentRunner {
     String? model,
     String? thinkingMode,
     DateTime? receivedAt,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -1593,15 +1635,7 @@ class AgentRunner {
     String? providerId,
     String? model,
     String? thinkingMode,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -1659,15 +1693,7 @@ class AgentRunner {
 
   Stream<String> _streamNextResponse({
     String? runtimeSystemPrompt,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     bool preserveModelStepId = false,
     ResponseContinuationCoordinator? continuation,
@@ -1976,15 +2002,7 @@ class AgentRunner {
     String? runtimeSystemPrompt,
     String? forcedOutput,
     bool forcedIsError = false,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
   }) async* {
@@ -2574,6 +2592,9 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
     ToolCall toolCall,
     String result, {
     required bool isError,
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
   }) async {
     final toolMessage = Message(
       role: MessageRole.tool,
@@ -2586,6 +2607,9 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
         if (_runner.currentModelStepId != null)
           'model_step_id': _runner.currentModelStepId,
         'is_error': isError,
+        'started_at': ?startedAt?.toIso8601String(),
+        'terminal_at': ?terminalAt?.toIso8601String(),
+        'runtime_ms': ?runtimeMs,
       },
     );
     _runner.history.add(toolMessage);

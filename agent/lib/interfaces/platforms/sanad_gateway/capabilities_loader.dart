@@ -24,7 +24,8 @@ Future<AgentCapabilities> loadSanadCapabilities({
 
   return AgentCapabilities(
     displayName: 'Sanad Agent',
-    thinkingModes: const ['fast', 'balanced', 'deep'],
+    thinkingModes: const [],
+    thinkingModeSource: 'model',
     modelSelectionScope: 'message',
     thinkingModeScope: 'message',
     appearance: appearance,

@@ -16,7 +16,11 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Draft workspace, provider, model, thinking, and text restore together per device. Permission remains workspace-policy-owned and must not be mutated by restore.
 - Existing-session selection must replace or explicitly clear all context fields before presentation swaps. An identity-only restored-session placeholder is not authoritative context and must preserve the persisted provider/model route until a complete route or authoritative route revision arrives.
 - `thinkingMode` is the Dart/domain name and `thinking_mode` is the wire/cache key; do not add aliases.
-- For a new device with no saved thinking preference, initialize and persist `balanced`; preserve any non-empty returning-user value.
+- For a new device with no saved thinking preference: when
+  `thinking_mode_source` is `model`, leave thinking unset (provider default /
+  `null`) and do not invent `balanced`. Legacy device-list agents may still
+  initialize and persist `balanced`. Preserve any non-empty returning-user
+  value after route revalidation.
 - A partial provider/model preference is not a valid route. Authoritative readiness may complete or replace a partial pair, while a complete saved pair remains user intent.
 - Do not eagerly hydrate history for a session created locally for its first outgoing turn.
 - Block normal message dispatch before session creation when either the provider instance or model selection is absent.
@@ -72,6 +76,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 ## Device Switch and Sidebar
 - Missing workspaces remain visible with historical sessions; disable new workspace conversation intent and route hover-only workspace settings actions with explicit device and workspace ids.
 - `SessionSidebarCubit` is a pure projection of `ConversationCacheRepository.snapshotStream`; it owns no cache maps, cursors, or drafts.
+- `SessionSearchCubit` owns only transient debounced search state, generations, and search cursors. Search results never mutate or masquerade as the sidebar cache, and anchored result intent must enter the existing atomic history-swap path.
 - Device selection comes from `DeviceCubit`; session/workspace data comes from the conversation cache repository.
 - Project cached workspace mutations into the composer selector immediately. Opening a popup must never be required to refresh state, and a newly created workspace must be present on the selector's first opening.
 - Invalidate a selected session from another device before restoring the new active device's last destination.

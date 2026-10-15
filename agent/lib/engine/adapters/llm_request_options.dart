@@ -1,3 +1,5 @@
+import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
+
 import '../runtime/run_cancellation_scope.dart';
 import 'provider_watchdog_config.dart';
 
@@ -11,6 +13,7 @@ class LLMRequestOptions {
   final String? requestId;
   final String? providerInstanceId;
   final String? thinkingMode;
+  final NativeThinkingDirective? thinkingDirective;
   final Duration? timeout;
   final int? maxOutputTokens;
   final RunCancellationScope? cancellationScope;
@@ -21,6 +24,7 @@ class LLMRequestOptions {
     this.requestId,
     this.providerInstanceId,
     this.thinkingMode,
+    this.thinkingDirective,
     this.timeout,
     this.maxOutputTokens,
     this.cancellationScope,

@@ -5,6 +5,7 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_exception.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
@@ -329,6 +330,9 @@ class SessionTurnExecutor {
                     required bool isError,
                     required bool isStart,
                     String? toolRunId,
+                    DateTime? startedAt,
+                    DateTime? terminalAt,
+                    int? runtimeMs,
                   }) async {
                     await _emitToolEvent(
                       owner: owner,
@@ -340,6 +344,9 @@ class SessionTurnExecutor {
                       isError: isError,
                       isStart: isStart,
                       toolRunId: toolRunId,
+                      startedAt: startedAt,
+                      terminalAt: terminalAt,
+                      runtimeMs: runtimeMs,
                       onResetFullContent: () => fullContent = '',
                     );
                   },
@@ -378,6 +385,9 @@ class SessionTurnExecutor {
                     required bool isError,
                     required bool isStart,
                     String? toolRunId,
+                    DateTime? startedAt,
+                    DateTime? terminalAt,
+                    int? runtimeMs,
                   }) async {
                     await _emitToolEvent(
                       owner: owner,
@@ -389,6 +399,9 @@ class SessionTurnExecutor {
                       isError: isError,
                       isStart: isStart,
                       toolRunId: toolRunId,
+                      startedAt: startedAt,
+                      terminalAt: terminalAt,
+                      runtimeMs: runtimeMs,
                       onResetFullContent: () => fullContent = '',
                     );
                   },
@@ -616,6 +629,28 @@ class SessionTurnExecutor {
           activeRun.workItemId,
         );
       }
+    } on ThinkingSelectionException catch (e) {
+      if (activeRun == null || !ownsRun(activeRun)) {
+        return;
+      }
+      sessionManager.clearInFlightSnapshot(event.sessionId);
+      emitResponse(
+        GatewayResponse(
+          sessionId: event.sessionId,
+          platformId: event.platformId,
+          message: Message(
+            role: MessageRole.assistant,
+            content: e.message,
+            metadata: {
+              'error_code': e.code,
+              'thinking_selection_error': true,
+            },
+          ),
+          isComplete: true,
+          runId: activeRun.runId,
+          modelStepId: agentRunner.currentModelStepId,
+        ),
+      );
     } catch (e, stack) {
       if (activeRun == null || activeRun.stopRequested || !ownsRun(activeRun)) {
         return;
@@ -743,6 +778,9 @@ class SessionTurnExecutor {
     required bool isError,
     required bool isStart,
     String? toolRunId,
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
     required void Function() onResetFullContent,
   }) async {
     if (!ownsRun(owner) || !owner.cancellationScope.isPublicationOpen) {
@@ -760,7 +798,13 @@ class SessionTurnExecutor {
         GatewayResponse(
           sessionId: event.sessionId,
           platformId: event.platformId,
-          message: Message(role: MessageRole.tool, content: input),
+          message: Message(
+            role: MessageRole.tool,
+            content: input,
+            metadata: {
+              if (startedAt != null) 'started_at': startedAt.toIso8601String(),
+            },
+          ),
           isComplete: false,
           runId: owner.runId,
           turnId: owner.turnId,
@@ -778,7 +822,15 @@ class SessionTurnExecutor {
       GatewayResponse(
         sessionId: event.sessionId,
         platformId: event.platformId,
-        message: Message(role: MessageRole.tool, content: output),
+        message: Message(
+          role: MessageRole.tool,
+          content: output,
+          metadata: {
+            'started_at': ?startedAt?.toIso8601String(),
+            'terminal_at': ?terminalAt?.toIso8601String(),
+            'runtime_ms': ?runtimeMs,
+          },
+        ),
         isComplete: false,
         runId: owner.runId,
         turnId: owner.turnId,

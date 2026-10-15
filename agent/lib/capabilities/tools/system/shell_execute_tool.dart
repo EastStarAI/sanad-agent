@@ -36,19 +36,22 @@ class ShellExecuteTool extends SpecBackedTool {
   LocalToolSpec get toolSpec => const LocalToolSpec(
     name: 'shell_execute',
     displayName: 'Shell Execute',
-    description: 'Execute a shell command. Starts inside the active workspace; do not "cd" to it.',
+    description:
+        'Execute a shell command. Starts inside the active workspace; do not "cd" to it.',
     inputSchema: {
       'type': 'object',
       'properties': {
         'command': {'type': 'string'},
         'cwd': {
           'type': 'string',
-          'description': 'Optional subdirectory relative to workspace root. Do not use for root.',
+          'description':
+              'Optional subdirectory relative to workspace root. Do not use for root.',
         },
         'timeout_ms': {'type': 'integer'},
         'description': {
           'type': 'string',
-          'description': 'A concise sentence of no more than seven words that explains to the user, in their own language, the purpose or goal of executing this command.',
+          'description':
+              'A concise sentence of no more than seven words that explains to the user, in their own language, the purpose or goal of executing this command.',
         },
       },
       'required': ['command', 'description'],
@@ -136,6 +139,8 @@ class ShellExecuteTool extends SpecBackedTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    final stopwatch = Stopwatch()..start();
+
     if (_permissionManager != null && context != null) {
       await _permissionManager.ensureAuthorized(
         tool: toolSpec,
@@ -157,15 +162,17 @@ class ShellExecuteTool extends SpecBackedTool {
       if (subDir.isAbsolute) {
         workingDir = subDir.resolveSymbolicLinksSync();
       } else {
-        workingDir = Directory('$workspacePath/$targetSubPath')
-            .resolveSymbolicLinksSync();
+        workingDir = Directory(
+          '$workspacePath/$targetSubPath',
+        ).resolveSymbolicLinksSync();
       }
     } else {
       workingDir = Directory(workspacePath).resolveSymbolicLinksSync();
     }
 
-    final resolvedWorkspaceRoot = Directory(workspacePath)
-        .resolveSymbolicLinksSync();
+    final resolvedWorkspaceRoot = Directory(
+      workspacePath,
+    ).resolveSymbolicLinksSync();
     if (!workingDir.startsWith(resolvedWorkspaceRoot)) {
       throw FileSystemException(
         'Security violation: Target path is outside the workspace root.',
@@ -229,8 +236,9 @@ class ShellExecuteTool extends SpecBackedTool {
       String? terminalReason,
     }) async {
       final payload = <String, dynamic>{
-        'isError': isError,
+        if (isError) 'isError': true,
         'output': output,
+        'duration_ms': stopwatch.elapsedMilliseconds,
         'cleanup_outcome': ?cleanup?.outcome.name,
         'terminal_reason': ?terminalReason,
       };
@@ -402,8 +410,10 @@ class ShellExecuteTool extends SpecBackedTool {
   ) async {
     if (stdoutFuture == null || stderrFuture == null) return '';
     try {
-      final results = await Future.wait([stdoutFuture, stderrFuture])
-          .timeout(const Duration(seconds: 2));
+      final results = await Future.wait([
+        stdoutFuture,
+        stderrFuture,
+      ]).timeout(const Duration(seconds: 2));
       final stdout = _renderBoundedOutput(results[0]);
       final stderr = _renderBoundedOutput(results[1]);
       if (stderr.isEmpty) return stdout;
@@ -429,7 +439,8 @@ class ShellExecuteTool extends SpecBackedTool {
     ),
     RunCancellationReason.shutdown => (
       reason: 'agent_interrupted',
-      message: 'The command was interrupted because the agent stopped. Its final outcome is unknown.',
+      message:
+          'The command was interrupted because the agent stopped. Its final outcome is unknown.',
     ),
     RunCancellationReason.superseded => (
       reason: 'superseded',
@@ -437,7 +448,8 @@ class ShellExecuteTool extends SpecBackedTool {
     ),
     null => (
       reason: 'agent_interrupted',
-      message: 'The command was interrupted because the agent stopped unexpectedly. Its final outcome is unknown.',
+      message:
+          'The command was interrupted because the agent stopped unexpectedly. Its final outcome is unknown.',
     ),
   };
 

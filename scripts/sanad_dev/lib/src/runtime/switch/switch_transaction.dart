@@ -111,6 +111,9 @@ class _SwitchTransactionRunner {
 
     final previousAgentDirectory = _controller._agentDirectory;
     final previousWorkspaceHash = _controller._currentWorkspaceHash;
+    final previousAgentEnvironment = Map<String, String>.from(
+      _controller._agentEnvironment,
+    );
     _controller._launcherRecord = _controller._launcherRecord.copyWith(
       status: 'switching',
     );
@@ -192,6 +195,14 @@ class _SwitchTransactionRunner {
         )
         .toList();
 
+    final targetAgentEnvironment = buildSwitchedAgentEnvironment(
+      currentEnvironment: previousAgentEnvironment,
+      targetWorkspaceHash: request.targetWorkspaceHash,
+      targetWorktreeName: request.targetWorktreeName,
+      targetBranch: request.targetBranch,
+      targetIsLinkedWorktree: request.targetIsLinkedWorktree,
+    );
+
     try {
       if (!await waitForClientResourcesUnavailable(
         clientPidsByVmPort: {
@@ -203,7 +214,10 @@ class _SwitchTransactionRunner {
           'Previous Client identity remained active after termination.',
         );
       }
-      await _controller._startAgent(targetAgentDirectory);
+      await _controller._startAgent(
+        targetAgentDirectory,
+        environment: targetAgentEnvironment,
+      );
       final agentHealthy = await _controller._waitForAgentHash(
         request.targetWorkspaceHash,
         timeout: const Duration(seconds: 30),
@@ -226,6 +240,7 @@ class _SwitchTransactionRunner {
       _controller._agentDirectory = targetAgentDirectory;
       _controller._clientDirectory = targetClientDirectory;
       _controller._currentWorkspaceHash = request.targetWorkspaceHash;
+      _controller._agentEnvironment = targetAgentEnvironment;
       final managedClientPids = await _managedClientPids(
         targetClients,
         workspaceHash: request.targetWorkspaceHash,
@@ -259,6 +274,7 @@ class _SwitchTransactionRunner {
       await _controller._cancelAgentOutput();
       var restored = await _restorePreviousGroup(
         agentDirectory: previousAgentDirectory,
+        agentEnvironment: previousAgentEnvironment,
         clients: previousClients,
         workspaceHash: previousWorkspaceHash,
       );
@@ -274,6 +290,7 @@ class _SwitchTransactionRunner {
         }
       }
       if (restored) {
+        _controller._agentEnvironment = previousAgentEnvironment;
         _controller._launcherRecord = _controller._launcherRecord.copyWith(
           workspaceHash: previousWorkspaceHash,
           sourceRoot: Directory(previousAgentDirectory).parent.path,
@@ -300,11 +317,15 @@ class _SwitchTransactionRunner {
 
   Future<bool> _restorePreviousGroup({
     required String agentDirectory,
+    required Map<String, String> agentEnvironment,
     required List<_RuntimeClientLaunch> clients,
     required String workspaceHash,
   }) async {
     try {
-      await _controller._startAgent(agentDirectory);
+      await _controller._startAgent(
+        agentDirectory,
+        environment: agentEnvironment,
+      );
       if (!await _controller._waitForAgentHash(
         workspaceHash,
         timeout: const Duration(seconds: 30),

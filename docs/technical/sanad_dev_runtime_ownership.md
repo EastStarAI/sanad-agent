@@ -145,8 +145,13 @@ This conflict check is read-only, including in dry-run. A cross-owned client is 
 `switch --runtime current` requires the complete live launcher lease and embeds
 its launcher id and nonce in the versioned handoff transaction. The launcher
 retains that identity, Home, Agent port, preferences namespace, devices, and VM
-ports while replacing source roots and workspace markers. The CLI reports that
-a runtime already uses the target only when the Agent workspace hash and every
+ports while replacing source roots and workspace markers. The target Agent is
+spawned with the target workspace hash, worktree name, and branch already in its
+environment before health readiness is evaluated. The transaction keeps an exact
+snapshot of the previous Agent environment and uses that snapshot for rollback,
+so failed target startup cannot leak target markers into the restored source.
+The CLI reports that a runtime already uses the target only when the Agent
+workspace hash and every
 managed Client source path agree with that target; partial agreement is an
 inconsistent managed source and fails closed with a diagnostic. A manifest with an
 unsupported version or invalid shape remains fail-closed and is not mutated by

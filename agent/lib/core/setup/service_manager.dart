@@ -49,6 +49,7 @@ class ServiceManager {
 
   static Future<ServiceOperationResult> install({
     ServiceHealthExpectation? healthExpectation,
+    bool userScope = false,
   }) async {
     final sanadHome = getSanadHome();
     await SanadHomeBootstrap.identity().ensureDirectoryPath('logs');
@@ -57,6 +58,7 @@ class ServiceManager {
       final result = await _linux(
         invocation,
         healthExpectation: healthExpectation,
+        userScope: userScope,
       ).install();
       if (result.success) await CliPathManager.ensureOnPath();
       return result;
@@ -335,6 +337,7 @@ class ServiceManager {
   static LinuxServiceManager _linux(
     _DaemonInvocation invocation, {
     ServiceHealthExpectation? healthExpectation,
+    bool userScope = false,
   }) => LinuxServiceManager(
     serviceName: serviceName,
     executable: invocation.executable,
@@ -342,6 +345,7 @@ class ServiceManager {
     sanadHome: getSanadHome(),
     loginHome: getHomeDirectory(),
     environment: Platform.environment,
+    userScope: userScope,
     runner: (executable, arguments, environment) async {
       final result = await Process.run(
         executable,

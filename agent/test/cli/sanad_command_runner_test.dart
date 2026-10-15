@@ -523,5 +523,24 @@ void main() {
         expect(chatHandled, isFalse);
       },
     );
+
+    test(
+      'service install parses and forwards --user-scope to service handler',
+      () async {
+        List<String>? capturedArgs;
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          onService: (args) {
+            capturedArgs = args;
+            return 0;
+          },
+        );
+
+        final result = await runner.run(['service', 'install', '--user-scope']);
+        expect(result, 0);
+        expect(capturedArgs, ['install', '--user-scope']);
+      },
+    );
   });
 }

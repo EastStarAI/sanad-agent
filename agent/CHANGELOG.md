@@ -1,3 +1,12 @@
+## 1.0.16
+
+- Preserved interactive user-input waits across managed daemon stop (#196).
+- Added provider-aware thinking mode and route controls in the agent engine (#194).
+- Resolved local model context limits and compaction safety (#193).
+- Tracked tool execution timing and exposed duration_ms in shell_execute (#192).
+- Self-healed stale runtimes and enforced deterministic process identity (#191).
+- Enforced result data fidelity and semantic terminal validation (#190).
+
 ## 1.0.15
 
 - Prevented redundant capabilities fetching and restored sidebar hover trigger (#186).

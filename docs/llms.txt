@@ -74,7 +74,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Install and Use Sanad Agent](docs/operations/user_guide.md): Install the Sanad client and agent, connect local or remote devices, configure providers, manage the service, and update Sanad.
 - [خارطة متطلبات المنتج والأعمال](docs/product/MOC.md): فهرس وخارطة وثائق متطلبات المنتج، تجربة المستخدم، والأعمال الاستراتيجية للمشروع.
 - [Sanad Client Interface](docs/product/client_interface.md): Current user experience for devices, workspaces, conversations, attachments, View Image media, providers, permissions, and active agent interactions.
-- [Conversation Navigation UX Spec](docs/product/conversation_navigation_ux_spec.md): UX specifications for conversation navigation destinations, history, deletion, and restart recovery.
+- [Conversation Navigation UX Spec](docs/product/conversation_navigation_ux_spec.md): UX specifications for device-scoped conversation search, anchored result opening, navigation destinations, history, deletion, and restart recovery.
 - [Sanad Agent Features](docs/product/features.md): A user-facing guide to Sanad Agent's local, remote, provider, workspace, tool, and interaction capabilities.
 - [Message Edit and Retry UX](docs/product/message_edit_retry_ux.md): Specification for inline edit, attachment restoration, and retry of the latest root user turn without deleting original history.
 - [Conversation Fork UX](docs/product/conversation_fork_ux.md): Specification for forking a conversation from a durable final answer into an independent child session.
@@ -97,6 +97,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Desktop Authentication Exchange QA](docs/qa_maintenance/desktop_authentication_exchange_qa.md): Regression matrix for credential-free client-daemon authentication reconciliation.
 - [External Workspace File Access QA](docs/qa_maintenance/external_workspace_file_access_qa.md): Regression matrix for canonical external-path classification, permission scopes, full-access bypass, and sanitized approval payloads.
 - [Flutter VM Driver CLI QA Matrix](docs/qa_maintenance/flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
+- [Jev Sanad UI Automation](docs/qa_maintenance/jev_sanad_ui_automation.md): Safety boundary and verification matrix for the Client Tester-owned conversation runner with narrow Jev verification.
 - [Device Name Editing QA](docs/qa_maintenance/device_name_editing_qa.md): QA scenarios and test matrices for verifying device renaming.
 - [Device Workspace Sidebar QA](docs/qa_maintenance/device_workspace_sidebar_qa.md): Focused QA coverage for the Plan 32c device-scoped sidebar, including pagination, cache-first rendering, responsive layout, accessibility, and live ordering.
 - [Live Context Usage Indicator QA](docs/qa_maintenance/live_context_usage_indicator_qa.md): Regression matrix for latest provider usage, cached-input visibility, tool-loop updates, and history restoration.
@@ -114,6 +115,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Plan 50 Cancellation Regression Matrix](docs/qa_maintenance/plan50_cancellation_regression_matrix.md): Verified cancellation, cleanup, delivery-order, and restart-hydration regression coverage for Plan 50.
 - [OpenRouter App Attribution QA](docs/qa_maintenance/openrouter_app_attribution_qa.md): Regression matrix for exact attribution headers, sync/stream forwarding, authentication preservation, and provider isolation.
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
+- [Provider-Aware Thinking Mode QA](docs/qa_maintenance/provider_aware_thinking_mode_qa.md): Focused matrix for model-scoped thinking controls, fail-closed unknown routes, sync/stream payload parity, and composer selector states.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
 - [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, and rollback.
 - [Remote Device Control QA](docs/qa_maintenance/remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management.
@@ -140,7 +142,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Background Terminal Task Runtime](docs/technical/background_terminal_task_runtime.md): العقد التقني للمهام الطرفية الخلفية المملوكة، والنقل الذري من الجولة، والـPTY والمخرجات، والإيقاظ، والتفاعل الآمن، والتعافي.
 - [Bound Client and Agent Authentication](docs/technical/client_authentication.md): PKCE-bound Flutter login and P-256-bound Headless Agent authorization through Sanad Portal.
 - [Client Conversation Cache Schema](docs/technical/client_conversation_cache_schema.md): Ownership, persistence schema, pagination rules, draft correlation, and stable consumer APIs for the Flutter conversation cache.
-- [Client Conversation Navigation Runtime](docs/technical/client_conversation_navigation.md): Technical design for device-scoped sidebar projection, atomic history swaps, deletion fallback, and route synchronization.
+- [Client Conversation Navigation Runtime](docs/technical/client_conversation_navigation.md): Technical design for authoritative conversation search, stale-safe pagination, anchored atomic history swaps, sidebar projection, deletion fallback, and route synchronization.
 - [Client Local Daemon Control](docs/technical/client_local_daemon_control.md): Architecture for source and standalone daemon lifecycle control from the Flutter desktop client.
 - [بروتوكولات الاتصال ونظام نقل الأحداث](docs/technical/communication_protocols.md): توثيق بروتوكول Socket.IO ونقل الأحداث والمهام وطلبات التعليق (Suspension) مع العميل.
 - [مواصفات نظام التصميم والمكونات المرئية للمشاريع](docs/technical/design_system.md): توثيق شامل للألوان، الخطوط، الهيكل البنائي والواجهات التفاعلية المشتركة لمشاريع Sanad (التطبيق الرئيسي، صفحة الهبوط، ولوحة التحكم).

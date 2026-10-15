@@ -10,6 +10,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
@@ -469,6 +470,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     bool forceEmitStopped = false,
     String? stopRequestId,
     String? recoveryOwnerToken,
+    bool preserveInteractiveWait = false,
   }) {
     final existing = _stopRequests[sessionId];
     if (existing != null) {
@@ -479,6 +481,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       forceEmitStopped: forceEmitStopped,
       stopRequestId: stopRequestId,
       recoveryOwnerToken: recoveryOwnerToken,
+      preserveInteractiveWait: preserveInteractiveWait,
     );
     _stopRequests[sessionId] = future;
     void clearCompletedStop() {
@@ -501,7 +504,11 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     required bool forceEmitStopped,
     required String? stopRequestId,
     required String? recoveryOwnerToken,
+    required bool preserveInteractiveWait,
   }) async {
+    if (preserveInteractiveWait && await _tryPreserveInteractiveWait(sessionId)) {
+      return;
+    }
     final activeRun = _turnExecutor.getActiveRun(sessionId);
     final stoppedRunId = activeRun?.runId;
     final stoppedTurnId = activeRun?.turnId;
@@ -718,6 +725,64 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     }
   }
 
+  /// Preserves a session whose only unfinished work is awaiting user input
+  /// (`system_ask_user` or a tool-permission decision) across a managed
+  /// daemon shutdown. Startup recovery restores this exact wait instead of
+  /// recording an unknown tool outcome, matching power-cut recovery.
+  ///
+  /// The condition mirrors [SessionRecoveryRestorer]'s interactive-wait
+  /// detection: the active work item is `running`/`waiting`,
+  /// `currently_executing_tools` is non-empty, and every id is owned by a
+  /// suspended checkpoint for this session whose status is not
+  /// `executing_tool` (an approved decision may already have started its
+  /// side effect and keeps the existing interrupted-tool recovery).
+  ///
+  /// The live run is deliberately NOT cancelled: the awaiting tool owns the
+  /// durable checkpoint and its cancellation path may delete it (the
+  /// `system_ask_user` `finally` block). The exiting process abandons the
+  /// in-memory wait while durable state stays truthful.
+  Future<bool> _tryPreserveInteractiveWait(String sessionId) async {
+    final store = persistedState;
+    if (store == null) return false;
+    final activeItem = store.findActiveWorkItem(sessionId);
+    if (activeItem == null ||
+        (activeItem.state != SessionWorkState.running &&
+            activeItem.state != SessionWorkState.waiting)) {
+      return false;
+    }
+    final executingTools = List<String>.from(
+      activeItem.continuationMetadata['currently_executing_tools'] as List? ??
+          const [],
+    );
+    if (executingTools.isEmpty) return false;
+    final unresolvedToolCallIds = <String>{};
+    for (final checkpoint in await _listRecoverableSuspensions()) {
+      if (checkpoint.sessionId == sessionId &&
+          checkpoint.status != 'executing_tool') {
+        unresolvedToolCallIds.add(checkpoint.toolCallId);
+      }
+    }
+    if (!executingTools.every(unresolvedToolCallIds.contains)) {
+      return false;
+    }
+
+    _logger.info(
+      'Preserving interactive user-input wait for session $sessionId across '
+      'daemon stop; startup recovery will restore the pending decision.',
+    );
+    if (activeItem.state == SessionWorkState.running) {
+      store.transitionWorkItemState(
+        workItemId: activeItem.workItemId,
+        fromState: SessionWorkState.running,
+        toState: SessionWorkState.waiting,
+      );
+    }
+    _turnExecutor.removeActiveRun(sessionId);
+    _busySessions.remove(sessionId);
+    _suspendedEvents.remove(sessionId);
+    return true;
+  }
+
   /// Cancels provider streams that exhausted the controlled-restart timeout
   /// without terminally stopping or replaying their durable work.
   Future<void> interruptProviderRequestsForRestart(
@@ -790,7 +855,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   }
 
   /// Stops all daemon-owned work before a controlled restart.
-  Future<void> requestStopAll() async {
+  ///
+  /// When [preserveInteractiveWaits] is true, sessions whose only unfinished
+  /// work is awaiting user input (`system_ask_user`/permission) are left
+  /// durable and untouched so startup recovery restores the pending decision
+  /// instead of recording an unknown tool outcome.
+  Future<void> requestStopAll({bool preserveInteractiveWaits = false}) async {
     final sessionIds = <String>{
       ..._busySessions,
       ..._suspendedEvents.keys,
@@ -799,7 +869,11 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     };
     await Future.wait(
       sessionIds.map(
-        (sessionId) => requestStop(sessionId, forceEmitStopped: true),
+        (sessionId) => requestStop(
+          sessionId,
+          forceEmitStopped: true,
+          preserveInteractiveWait: preserveInteractiveWaits,
+        ),
       ),
     );
   }
@@ -1510,7 +1584,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       event,
       fallback: existingSession?.workspaceId,
     );
-    final turnRequest = _buildTurnRequest(
+    var turnRequest = _buildTurnRequest(
       event,
       requestedWorkspaceId: requestedWorkspaceId,
     );
@@ -1574,6 +1648,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     } else if (payloadModel != null && payloadModel.isNotEmpty) {
       final provider =
           turnRequest.effectiveProviderInstanceId ?? existingSession.providerId;
+      final priorModel = existingSession.model;
       if (provider != null &&
           provider.isNotEmpty &&
           getIt.isRegistered<SessionRouteMutationCoordinator>()) {
@@ -1588,6 +1663,24 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         );
       } else {
         sessionManager.updateSessionModel(event.sessionId, payloadModel);
+      }
+
+      if (provider != null &&
+          provider.isNotEmpty &&
+          getIt.isRegistered<ThinkingRouteSessionSync>() &&
+          (priorModel != payloadModel ||
+              provider != existingSession.providerId)) {
+        final corrected = getIt<ThinkingRouteSessionSync>()
+            .revalidateAndApplySession(
+              sessionId: event.sessionId,
+              providerInstanceId: provider,
+              modelId: payloadModel,
+              selectionId:
+                  turnRequest.thinkingMode ?? existingSession.thinkingMode,
+            );
+        turnRequest = turnRequest.copyWith(
+          thinkingMode: corrected.selectionId,
+        );
       }
     }
 
