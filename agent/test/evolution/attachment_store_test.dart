@@ -149,7 +149,16 @@ void main() {
           );
       expect(providerProjection.single.content, startsWith('inspect this\n\n'));
       expect(providerProjection.single.content, contains(path));
-      expect(providerProjection.single.content, contains('Use view_image'));
+      expect(
+        providerProjection.single.content,
+        contains(
+          'image inspection is not supported by the current model route',
+        ),
+      );
+      expect(
+        providerProjection.single.content,
+        isNot(contains('Use view_image')),
+      );
       expect(providerProjection.single.attachments, isEmpty);
       expect(
         providerProjection.single.toJson().toString(),
@@ -428,6 +437,123 @@ void main() {
       isEmpty,
     );
   });
+
+  test(
+    'resolveAdmissionPaths accepts attached rows when owned by active message with matching admission requestId',
+    () async {
+      final upload = await store.create(fileName: 'replay-test.png');
+      await store.write(upload, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      final committed = await store.commit(
+        upload,
+        sessionId: 'session-a',
+        admissionId: 'req-replay-1',
+      );
+
+      // Simulate commitSoftRewindAdmission: row status updated to attached with message_id,
+      // and active message inserted with matching request_id.
+      state.db.execute(
+        '''
+        INSERT INTO messages (session_id, message_id, request_id, history_status, data)
+        VALUES ('session-a', 'msg-replay-1', 'req-replay-1', 'active', '{"role":"user","content":"replay"}')
+        ''',
+      );
+      state.db.execute(
+        '''
+        UPDATE user_attachments
+        SET message_id = 'msg-replay-1', status = 'attached'
+        WHERE attachment_id = ?
+        ''',
+        [committed.id],
+      );
+
+      final loaded = store.loadAdmission(
+        sessionId: 'session-a',
+        admissionId: 'req-replay-1',
+        attachmentIds: [committed.id],
+      );
+      expect(loaded, hasLength(1));
+      expect(loaded.single.id, committed.id);
+
+      final paths = await store.resolveAdmissionPaths(
+        sessionId: 'session-a',
+        admissionId: 'req-replay-1',
+        attachmentIds: [committed.id],
+      );
+      expect(paths, hasLength(1));
+      expect(File(paths.single).existsSync(), isTrue);
+
+      // Negative: fails closed if message is superseded
+      state.db.execute(
+        "UPDATE messages SET history_status = 'superseded' WHERE message_id = 'msg-replay-1'",
+      );
+      expect(
+        () => store.resolveAdmissionPaths(
+          sessionId: 'session-a',
+          admissionId: 'req-replay-1',
+          attachmentIds: [committed.id],
+        ),
+        throwsA(
+          isA<AttachmentStoreException>().having(
+            (e) => e.code,
+            'code',
+            AttachmentStoreErrorCode.ownershipMismatch,
+          ),
+        ),
+      );
+
+      // Negative: fails closed on mismatched session_id
+      state.db.execute(
+        "UPDATE messages SET history_status = 'active' WHERE message_id = 'msg-replay-1'",
+      );
+      expect(
+        () => store.resolveAdmissionPaths(
+          sessionId: 'session-b',
+          admissionId: 'req-replay-1',
+          attachmentIds: [committed.id],
+        ),
+        throwsA(
+          isA<AttachmentStoreException>().having(
+            (e) => e.code,
+            'code',
+            AttachmentStoreErrorCode.ownershipMismatch,
+          ),
+        ),
+      );
+
+      // Negative: fails closed on mismatched admission_id
+      expect(
+        () => store.resolveAdmissionPaths(
+          sessionId: 'session-a',
+          admissionId: 'req-wrong-id',
+          attachmentIds: [committed.id],
+        ),
+        throwsA(
+          isA<AttachmentStoreException>().having(
+            (e) => e.code,
+            'code',
+            AttachmentStoreErrorCode.ownershipMismatch,
+          ),
+        ),
+      );
+
+      // Negative: fails closed when file is deleted on disk
+      await File(paths.single).delete();
+      expect(
+        () => store.resolveAdmissionPaths(
+          sessionId: 'session-a',
+          admissionId: 'req-replay-1',
+          attachmentIds: [committed.id],
+        ),
+        throwsA(
+          isA<AttachmentStoreException>().having(
+            (e) => e.code,
+            'code',
+            AttachmentStoreErrorCode.unavailable,
+          ),
+        ),
+      );
+    },
+  );
 
   test(
     'safe-name logic is separator-neutral for Windows, macOS, and Linux',

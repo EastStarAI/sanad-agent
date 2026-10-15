@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:test/test.dart';
 
 import 'package:sanad_agent/core/config.dart';
@@ -8,12 +11,14 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
+import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 
@@ -555,6 +560,101 @@ void main() {
           cachedModel.thinkingControl!.status,
           ThinkingCapabilityStatus.unknown,
         );
+      },
+    );
+
+    test(
+      'manual refresh forces catalog reload and updates subsequent admission while prior frozen turn remains immutable',
+      () async {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'inst-catalog',
+            templateId: 'openai',
+            displayName: 'OpenAI Relay',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        runtime.adapterOverride = MockLLMAdapter(() async {
+          return [
+            ModelOption(value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5'),
+          ];
+        });
+
+        int catalogHttpCalls = 0;
+        bool catalogImageSupport = false;
+
+        final tempDir = Directory.systemTemp.createTempSync('mdev-refresh-test-');
+        final modelsDev = ModelsDevService(
+          cacheFilePathOverride: '${tempDir.path}/models_dev_cache.json',
+          client: MockClient((request) async {
+            catalogHttpCalls++;
+            return http.Response(
+              jsonEncode({
+                'anthropic': {
+                  'api': 'https://api.anthropic.com',
+                  'models': {
+                    'claude-haiku-4.5': {
+                      'modalities': {
+                        'input': catalogImageSupport ? ['text', 'image'] : ['text'],
+                      },
+                    },
+                  },
+                },
+              }),
+              200,
+            );
+          }),
+        );
+
+        final serviceWithCatalog = ProviderModelCacheService(
+          repo,
+          runtime,
+          buildDefaultThinkingCapabilityAssembler(),
+          config: config,
+          modelsDevService: modelsDev,
+        );
+
+        final resolver = RouteCapabilityResolver(
+          instances: repo,
+          config: config,
+          modelsDevService: modelsDev,
+        );
+
+        // 1. Initial hydration: image is false
+        await modelsDev.ensureLoaded();
+        expect(catalogHttpCalls, 1);
+
+        // 2. Turn 1 admission: freezes profile as unsupported
+        final turn1Profile = resolver.resolveSync(
+          providerInstanceId: 'inst-catalog',
+          modelId: 'claude-haiku-4.5',
+        );
+        expect(turn1Profile.imageSupport, RouteImageSupport.unsupported);
+        expect(catalogHttpCalls, 1, reason: 'Zero HTTP during Turn 1 admission');
+
+        // 3. Fake catalog changes to true
+        catalogImageSupport = true;
+
+        // 4. Explicit manual refresh is called
+        await serviceWithCatalog.refresh('inst-catalog', manual: true);
+        expect(catalogHttpCalls, 2, reason: 'Manual refresh forced catalog reload');
+
+        // 5. Next admission (Turn 2) resolves supported
+        final turn2Profile = resolver.resolveSync(
+          providerInstanceId: 'inst-catalog',
+          modelId: 'claude-haiku-4.5',
+        );
+        expect(turn2Profile.imageSupport, RouteImageSupport.supported);
+        expect(catalogHttpCalls, 2, reason: 'Zero HTTP during Turn 2 admission');
+
+        // 6. Prior frozen Turn 1 profile remains immutable
+        expect(turn1Profile.imageSupport, RouteImageSupport.unsupported);
       },
     );
   });

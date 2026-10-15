@@ -1,4 +1,5 @@
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 
 import '../models/tool_schema.dart';
@@ -45,6 +46,7 @@ class ToolContext {
   final int? generation;
   final RunCancellationScope? cancellationScope;
   final void Function(Map<String, dynamic> progress)? onExecutionProgress;
+  final RouteImageSupport imageSupport;
 
   ToolContext({
     required this.sessionId,
@@ -54,6 +56,7 @@ class ToolContext {
     this.generation,
     this.cancellationScope,
     this.onExecutionProgress,
+    this.imageSupport = RouteImageSupport.unknown,
   });
 
   bool get isCancellationRequested =>

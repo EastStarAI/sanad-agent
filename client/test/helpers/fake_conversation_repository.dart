@@ -22,7 +22,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_fork_r
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
-class FakeConversationRepository implements ConversationRepository, AttachmentSendRepository {
+class FakeConversationRepository implements ConversationRepository, AttachmentSendRepository, AttachmentReplayRepository {
   bool transportReady = true;
   final Map<String, List<Session>> _sessionsByAgentId = {};
   final Map<String, List<CanonicalEvent>> _messagesByAgentId = {};
@@ -108,6 +108,7 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
   );
   final List<TurnReplayResult> replayResults = [];
   final List<Map<String, Object?>> replayRequests = [];
+  Object? replayWithAttachmentsException;
   SessionForkResult forkResult = const SessionForkResult(outcome: 'accepted');
   final List<Map<String, String>> forkRequests = [];
 
@@ -429,6 +430,48 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
       'confirmed_replay_unsafe': confirmedReplayUnsafe,
       'confirmed_drop_steers': confirmedDropSteers,
     });
+    return replayResults.isEmpty ? replayResult : replayResults.removeAt(0);
+  }
+
+  final List<Map<String, dynamic>> replayWithAttachmentRequests = [];
+
+  @override
+  Future<TurnReplayResult> replayTurnWithAttachments(
+    DeviceConfig agent, {
+    required String sessionId,
+    required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    required int expectedHistoryRevision,
+    required TurnReplayAction action,
+    required String message,
+    required List<Map<String, dynamic>> attachmentEdits,
+    String? providerInstanceId,
+    String? modelId,
+    String? thinkingMode,
+    bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
+  }) async {
+    replayWithAttachmentRequests.add({
+      'session_id': sessionId,
+      'target_request_id': targetRequestId,
+      'target_message_id': targetMessageId,
+      'target_turn_id': targetTurnId,
+      'expected_history_revision': expectedHistoryRevision,
+      'action': action,
+      'message': message,
+      'attachment_edits': attachmentEdits,
+      'provider_instance_id': providerInstanceId,
+      'model_id': modelId,
+      'thinking_mode': thinkingMode,
+      'confirmed_replay_unsafe': confirmedReplayUnsafe,
+      'confirmed_drop_steers': confirmedDropSteers,
+    });
+    if (replayWithAttachmentsException != null) {
+      final error = replayWithAttachmentsException!;
+      replayWithAttachmentsException = null;
+      throw error;
+    }
     return replayResults.isEmpty ? replayResult : replayResults.removeAt(0);
   }
 

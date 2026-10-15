@@ -328,6 +328,17 @@ final class AttachmentStore {
         '''
         SELECT * FROM user_attachments
         WHERE attachment_id = ? AND session_id = ? AND admission_id = ?
+          AND (
+            status = 'staged' OR (
+              status = 'attached' AND EXISTS (
+                SELECT 1 FROM messages
+                WHERE session_id = user_attachments.session_id
+                  AND message_id = user_attachments.message_id
+                  AND request_id = user_attachments.admission_id
+                  AND history_status = 'active'
+              )
+            )
+          )
         ''',
         [attachmentId, sessionId, admissionId],
       );
@@ -364,7 +375,17 @@ final class AttachmentStore {
         '''
         SELECT relative_path FROM user_attachments
         WHERE attachment_id = ? AND session_id = ? AND admission_id = ?
-          AND status = 'staged'
+          AND (
+            status = 'staged' OR (
+              status = 'attached' AND EXISTS (
+                SELECT 1 FROM messages
+                WHERE session_id = user_attachments.session_id
+                  AND message_id = user_attachments.message_id
+                  AND request_id = user_attachments.admission_id
+                  AND history_status = 'active'
+              )
+            )
+          )
         ''',
         [attachmentId, sessionId, admissionId],
       );

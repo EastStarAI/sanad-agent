@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
@@ -22,6 +24,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
@@ -1698,6 +1701,388 @@ void main() {
         expect(toolResult['terminal_at'], '2026-07-02T10:00:10.550Z');
         expect(toolResult['runtime_ms'], 5450);
         expect(toolResult['created_at'], '2026-07-02T10:00:10.550Z');
+      },
+    );
+
+    test(
+      'get_session_history resolves view_image name and preview when oversized >1MiB result is split onto separate page',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-view-image-oversized';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'claude-haiku-4.5',
+            createdAt: DateTime.parse('2026-07-02T10:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-02T10:05:00Z'),
+          ),
+        );
+
+        // >1 MiB canonical base64 payload to exceed defaultSessionHistoryPageBytes (1024 * 1024)
+        final oversizedBytes = Uint8List(1024 * 1024 + 256);
+        final oversizedBase64 = base64.encode(oversizedBytes);
+
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(
+            role: MessageRole.user,
+            content: 'Analyze this photo',
+            metadata: {'turn_id': 'turn-lg'},
+          ),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'call_view_img_large',
+                name: 'view_image',
+                arguments: {'path': 'fixtures/photo.png'},
+              ),
+            ],
+            metadata: {'turn_id': 'turn-lg'},
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'call_view_img_large',
+            content: 'Image loaded (1200×800, image/png, 1048832 bytes)',
+            toolResult: ToolExecutionResult(
+              schemaVersion: 1,
+              blocks: [
+                ToolImageBlock(
+                  dataBase64: oversizedBase64,
+                  mimeType: 'image/png',
+                  width: 1200,
+                  height: 800,
+                  detail: ToolImageDetail.high,
+                ),
+                ToolTextBlock(
+                  text: 'Image loaded (1200×800, image/png, 1048832 bytes)',
+                ),
+              ],
+            ),
+            metadata: {
+              'tool_call_id': 'call_view_img_large',
+              'run_id': 'run-lg',
+              'model_step_id': 'step-lg',
+              'turn_id': 'turn-lg',
+              'started_at': '2026-07-02T10:00:01.000Z',
+              'terminal_at': '2026-07-02T10:00:02.500Z',
+              'runtime_ms': 1500,
+              'is_error': false,
+            },
+          ),
+          Message(
+            role: MessageRole.assistant,
+            content: 'Finished image analysis.',
+          ),
+        ]);
+
+        // Verify page budget split: defaultSessionHistoryPageBytes (1MB) splits the 4 messages across pages
+        final page = sessionManager.getPersistedMessagePage(sessionId);
+        expect(page.hasMore, isTrue);
+        // Page contains at most the latest messages, excluding the assistant tool call
+        expect(
+          page.messages.any(
+            (pm) =>
+                pm.message.role == MessageRole.assistant &&
+                pm.message.toolCalls?.any(
+                      (c) => c.id == 'call_view_img_large',
+                    ) ==
+                    true,
+          ),
+          isFalse,
+        );
+
+        // Request tail page (which receives only final assistant due to 1MB page budget)
+        Map<String, dynamic>? tailEnvelope;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-view-img-oversized-tail',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => tailEnvelope = envelope);
+
+        final tailCursor = tailEnvelope!['payload']['next_cursor'] as String?;
+        expect(tailCursor, isNotNull);
+
+        // Fetch older page containing the oversized tool result on its own page
+        Map<String, dynamic>? toolPageEnvelope;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-view-img-oversized-tool',
+            'session_id': sessionId,
+            'cursor': tailCursor,
+          },
+        }, (envelope) async => toolPageEnvelope = envelope);
+
+        expect(toolPageEnvelope, isNotNull);
+        final messages = (toolPageEnvelope!['payload']['messages'] as List)
+            .cast<Map<String, dynamic>>();
+
+        final toolResult = messages.firstWhere(
+          (m) => m['type'] == 'tool_result',
+        );
+
+        // Resolved exact call name from persisted history despite being on separate page
+        expect(toolResult['tool'], 'view_image');
+        expect(toolResult['tool_call_id'], 'call_view_img_large');
+        expect(toolResult['run_id'], 'run-lg');
+        expect(toolResult['model_step_id'], 'step-lg');
+
+        // Media preview projection preserved without putting raw image bytes on public wire
+        expect(toolResult['media'], isNotNull);
+        final media = toolResult['media'] as Map<String, dynamic>;
+        expect(media['width'], 1200);
+        expect(media['height'], 800);
+        expect(media['mime_type'], 'image/png');
+        expect(media['name'], 'view-image.png');
+        expect(media['availability'], 'available');
+        expect(media.containsKey('bytes'), isFalse);
+        expect(media.containsKey('data_base64'), isFalse);
+      },
+    );
+
+    test(
+      'get_session_history resolves outside-page tool context with limit: 1 and cursor pagination',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-view-image-limit1';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'claude-haiku-4.5',
+            createdAt: DateTime.parse('2026-07-02T10:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-02T10:05:00Z'),
+          ),
+        );
+
+        final testImageBase64 = base64.encode(Uint8List(512));
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(
+            role: MessageRole.user,
+            content: 'Inspect picture',
+            metadata: {'turn_id': 'turn-paged'},
+          ),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'call_view_img_paged',
+                name: 'view_image',
+                arguments: {'path': 'photo.jpg'},
+              ),
+            ],
+            metadata: {'turn_id': 'turn-paged'},
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'call_view_img_paged',
+            content: 'Image loaded (640×480, image/jpeg, 512 bytes)',
+            toolResult: ToolExecutionResult(
+              schemaVersion: 1,
+              blocks: [
+                ToolImageBlock(
+                  dataBase64: testImageBase64,
+                  mimeType: 'image/jpeg',
+                  width: 640,
+                  height: 480,
+                  detail: ToolImageDetail.high,
+                ),
+                ToolTextBlock(
+                  text: 'Image loaded (640×480, image/jpeg, 512 bytes)',
+                ),
+              ],
+            ),
+            metadata: {
+              'tool_call_id': 'call_view_img_paged',
+              'run_id': 'run-paged',
+              'model_step_id': 'step-paged',
+              'turn_id': 'turn-paged',
+            },
+          ),
+          Message(role: MessageRole.assistant, content: 'Done analysis.'),
+        ]);
+
+        // Tail page with limit: 1 returns only the final assistant
+        Map<String, dynamic>? tailEnvelope;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-paged-tail',
+            'session_id': sessionId,
+            'limit': 1,
+          },
+        }, (envelope) async => tailEnvelope = envelope);
+
+        final tailCursor = tailEnvelope!['payload']['next_cursor'] as String?;
+        expect(tailCursor, isNotNull);
+
+        // Fetch older page with limit: 1 (returns ONLY the tool result row)
+        Map<String, dynamic>? olderEnvelope;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-paged-older',
+            'session_id': sessionId,
+            'limit': 1,
+            'cursor': tailCursor,
+          },
+        }, (envelope) async => olderEnvelope = envelope);
+
+        final olderMessages = (olderEnvelope!['payload']['messages'] as List)
+            .cast<Map<String, dynamic>>();
+        expect(olderMessages.length, 1);
+        final toolResult = olderMessages.single;
+        expect(toolResult['type'], 'tool_result');
+        expect(toolResult['tool'], 'view_image');
+        expect(toolResult['tool_call_id'], 'call_view_img_paged');
+        expect(toolResult['media']['mime_type'], 'image/jpeg');
+        expect(toolResult['media']['name'], 'view-image.jpg');
+        expect(toolResult['media']['width'], 640);
+        expect(toolResult['media']['height'], 480);
+      },
+    );
+
+    test(
+      'get_session_history preserves multi-call batching and enforces session isolation',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionA = 'session-multi-iso-a';
+        const sessionB = 'session-multi-iso-b';
+
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionA,
+            model: 'm-a',
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionB,
+            model: 'm-b',
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final imageBase64 = base64.encode(Uint8List(256));
+        // Session A: assistant made TWO tool calls: call-a-img and call-a-cmd
+        sessionManager.saveSessionHistory(sessionA, [
+          Message(
+            role: MessageRole.user,
+            content: 'Do both',
+            metadata: {'turn_id': 'turn-a'},
+          ),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'call-a-img',
+                name: 'view_image',
+                arguments: {'path': 'a.png'},
+              ),
+              ToolCall(
+                id: 'call-a-cmd',
+                name: 'run_command',
+                arguments: {'cmd': 'ls'},
+              ),
+            ],
+            metadata: {'turn_id': 'turn-a'},
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'call-a-img',
+            content: 'Image loaded (300×200, image/png, 256 bytes)',
+            toolResult: ToolExecutionResult(
+              schemaVersion: 1,
+              blocks: [
+                ToolImageBlock(
+                  dataBase64: imageBase64,
+                  mimeType: 'image/png',
+                  width: 300,
+                  height: 200,
+                  detail: ToolImageDetail.auto,
+                ),
+                ToolTextBlock(
+                  text: 'Image loaded (300×200, image/png, 256 bytes)',
+                ),
+              ],
+            ),
+            metadata: {'tool_call_id': 'call-a-img', 'turn_id': 'turn-a'},
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'call-a-cmd',
+            content: 'file1.txt\nfile2.txt',
+            metadata: {'tool_call_id': 'call-a-cmd', 'turn_id': 'turn-a'},
+          ),
+        ]);
+
+        // Session B: assistant made a tool call with same command name
+        sessionManager.saveSessionHistory(sessionB, [
+          Message(
+            role: MessageRole.user,
+            content: 'Run cmd in B',
+            metadata: {'turn_id': 'turn-b'},
+          ),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'call-b-cmd',
+                name: 'run_command',
+                arguments: {'cmd': 'pwd'},
+              ),
+            ],
+            metadata: {'turn_id': 'turn-b'},
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'call-b-cmd',
+            content: '/tmp',
+            metadata: {'tool_call_id': 'call-b-cmd', 'turn_id': 'turn-b'},
+          ),
+        ]);
+
+        // Query session A with limit 2 (fetching tool results)
+        Map<String, dynamic>? envA;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {'session_id': sessionA, 'limit': 2},
+        }, (env) async => envA = env);
+
+        final msgsA = (envA!['payload']['messages'] as List)
+            .cast<Map<String, dynamic>>();
+        final imgResult = msgsA.firstWhere(
+          (m) => m['tool_call_id'] == 'call-a-img',
+        );
+        final cmdResult = msgsA.firstWhere(
+          (m) => m['tool_call_id'] == 'call-a-cmd',
+        );
+
+        // Multi-call pairing: call-a-img matches view_image, call-a-cmd matches run_command
+        expect(imgResult['tool'], 'view_image');
+        expect(imgResult['media'], isNotNull);
+        expect(cmdResult['tool'], 'run_command');
+        expect(cmdResult['media'], isNull);
+
+        // Query session B: must resolve run_command and never pair with Session A's view_image
+        Map<String, dynamic>? envB;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {'session_id': sessionB, 'limit': 1},
+        }, (env) async => envB = env);
+
+        final msgsB = (envB!['payload']['messages'] as List)
+            .cast<Map<String, dynamic>>();
+        final bCmdResult = msgsB.single;
+        expect(bCmdResult['tool'], 'run_command');
+        expect(bCmdResult['media'], isNull);
       },
     );
 

@@ -10,6 +10,7 @@ This contract applies to `agent/lib/engine/runtime/`.
 
 ## Tool Execution
 - `ToolExecutionCoordinator` executes batches, records per-tool completion, and delegates checkpoint persistence.
+- `ToolExecutionCallbacks.currentImageSupport()` provides the turn's frozen `RouteImageSupport` capability tri-state, passed through to `ToolContext.imageSupport` for early tool-level capability gating.
 - Parallelize only compatible independent tools.
 - Interactive tools, shell execution, and overlapping file paths force sequential execution.
 - Persist completion checkpoint after each tool needed for restart safety.

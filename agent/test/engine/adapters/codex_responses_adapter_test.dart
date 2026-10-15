@@ -16,6 +16,7 @@ import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_codec.dart';
 import 'package:sanad_agent/engine/adapters/codex_models_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/engine/adapters/e2e_fixture_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
@@ -158,7 +159,6 @@ void main() {
             );
           }),
         );
-        late Map<String, dynamic> syncBody;
         final syncAdapter = BaseOpenAIAdapter(
           config,
           const ProviderProfile(name: 'openai', apiMode: 'chat'),
@@ -166,7 +166,6 @@ void main() {
           apiKeyOverride: 'test',
           defaultModelOverride: 'test-model',
           client: MockClient((request) async {
-            syncBody = _map(jsonDecode(request.body));
             return http.Response(
               jsonEncode({
                 'choices': [
@@ -180,7 +179,6 @@ void main() {
             );
           }),
         );
-        late Map<String, dynamic> streamBody;
         final streamAdapter = BaseOpenAIAdapter(
           config,
           const ProviderProfile(name: 'custom', apiMode: 'chat'),
@@ -188,7 +186,6 @@ void main() {
           apiKeyOverride: 'test',
           defaultModelOverride: 'test-model',
           client: MockClient.streaming((request, _) async {
-            streamBody = _map(jsonDecode((request as http.Request).body));
             return http.StreamedResponse(
               Stream.value(
                 utf8.encode(
@@ -208,26 +205,26 @@ void main() {
           }),
         );
 
-        await richAdapter.generateResponse(history);
-        await syncAdapter.generateResponse(history);
-        await streamAdapter.generateStream(history).toList();
-
+        const supportedOptions = LLMRequestOptions(
+          routeCapabilityProfile: RouteCapabilityProfile(
+            providerInstanceId: 'openai-codex',
+            modelId: 'gpt-5.4',
+            imageSupport: RouteImageSupport.supported,
+            evidenceSource: 'test_fixture',
+          ),
+        );
+        await richAdapter.generateResponse(history, options: supportedOptions);
         expect((richBody['input'] as List).last['output'], isA<List>());
-        const fallback =
-            'visible summary\n[Image omitted: active provider does not accept image tool results.]';
-        for (final body in [syncBody, streamBody]) {
-          final toolMessage = (body['messages'] as List).last as Map;
-          expect(toolMessage['role'], 'tool');
-          expect(toolMessage['tool_call_id'], 'call_route');
-          expect(toolMessage['content'], fallback);
-          expect(toolMessage['content'], isNot(contains('cGl4ZWxz')));
-          expect(
-            imageToolResultOmissionMarker
-                .allMatches(toolMessage['content'] as String)
-                .length,
-            1,
-          );
-        }
+
+        // Non-image routes halt actionably without sending HTTP request (77i5 contract)
+        expect(
+          () => syncAdapter.generateResponse(history),
+          throwsA(isA<UnsupportedError>()),
+        );
+        expect(
+          () => streamAdapter.generateStream(history).toList(),
+          throwsA(isA<UnsupportedError>()),
+        );
         expect(
           jsonEncode(history.map((message) => message.toJson()).toList()),
           canonicalBefore,
@@ -1202,8 +1199,16 @@ void main() {
           ),
         ];
 
-        await adapter.generateResponse(history);
-        await adapter.generateStream(history).toList();
+        const supportedOptions = LLMRequestOptions(
+          routeCapabilityProfile: RouteCapabilityProfile(
+            providerInstanceId: 'openai-codex',
+            modelId: 'gpt-5.4',
+            imageSupport: RouteImageSupport.supported,
+            evidenceSource: 'test_fixture',
+          ),
+        );
+        await adapter.generateResponse(history, options: supportedOptions);
+        await adapter.generateStream(history, options: supportedOptions).toList();
 
         expect(bodies, hasLength(2));
         for (final body in bodies) {

@@ -17,6 +17,9 @@ class ToggleEffortThinkingWireCodec {
       case ThinkingToggleDirective(enabled: false):
         body.remove('reasoning_effort');
         body['thinking'] = const {'type': 'disabled'};
+      case ThinkingToggleDirective(enabled: true):
+        body.remove('reasoning_effort');
+        body['thinking'] = const {'type': 'enabled'};
       case UseProviderDefault():
       case null:
         break;

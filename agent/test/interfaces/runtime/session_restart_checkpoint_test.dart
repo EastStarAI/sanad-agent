@@ -449,7 +449,7 @@ void main() {
   });
 }
 
-class _ToolCallbacks implements ToolExecutionCallbacks {
+class _ToolCallbacks extends ToolExecutionCallbacks {
   final Map<String, String> results = {};
 
   @override

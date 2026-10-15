@@ -89,9 +89,12 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 
 ## Latest-Root-Turn Replay
 - Replay targets the latest active `root_turn` by `message_id`, `turn_id`, `request_id`, and `expected_history_revision`.
+- Messages with empty text content remain replay-eligible if attachments are present.
 - Soft rewind and replacement-user acceptance commit atomically; the CAS
   transaction revalidates the target as the latest active root. History is
   never truncated, and rewind without a durable replacement is not admitted.
+  Admitted replacement attachments atomically update `user_attachments` to
+  the new message ownership, retaining superseded attachments on superseded rows.
 - Steer is not a replay boundary, including pending, delivered, and
   embedded steers. Dispatch waits for an authoritative `idle` snapshot
   after scoped stop. Missing snapshot state is not dispatch authority.

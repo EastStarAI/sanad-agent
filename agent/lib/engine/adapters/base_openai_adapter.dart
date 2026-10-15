@@ -12,11 +12,17 @@ import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/provider_thinking/aggregator_thinking_wire_codec.dart';
 import '../../core/provider_thinking/google_thinking_wire_codec.dart';
-import '../../core/provider_thinking/openai_thinking_wire_codec.dart';
+import '../../core/provider_thinking/native_thinking_directive.dart';
 import '../../core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
+import '../../core/provider_thinking/thinking_route_policy.dart';
 import '../../core/models/model_metadata.dart';
+import '../../core/di.dart';
+import '../../core/provider_runtime/provider_instance.dart';
+import '../../core/provider_runtime/provider_protocol_constants.dart';
+import '../../core/provider_runtime/provider_instance_repository.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
+import '../../core/provider_runtime/route_capability_resolver.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'models_dev_service.dart';
@@ -33,11 +39,13 @@ class BaseOpenAIAdapter implements LLMAdapter {
   final Config config;
   final ProviderProfile profile;
   final http.Client? client;
+  final http.Client Function()? requestClientFactory;
   final ModelsDevService? modelsDevService;
   final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
   final String? apiKeyOverride;
   final String? defaultModelOverride;
+  final String? providerInstanceId;
   String _availableModelsSource = 'fallback';
   Object? _lastModelsException;
 
@@ -45,11 +53,13 @@ class BaseOpenAIAdapter implements LLMAdapter {
     this.config,
     this.profile, {
     this.client,
+    this.requestClientFactory,
     this.modelsDevService,
     this.modelContextLimitLookup,
     this.baseUrlOverride,
     this.apiKeyOverride,
     this.defaultModelOverride,
+    this.providerInstanceId,
   });
 
   String get _baseUrl => ProviderEndpointResolver.normalizeBaseUrl(
@@ -159,6 +169,11 @@ class BaseOpenAIAdapter implements LLMAdapter {
               provider: profile.name,
               contextWindow: contextLimit,
               supportsReasoning: supportsReasoning,
+              modelMetadata: item is Map
+                  ? Map<String, Object?>.from(
+                      item.map((key, value) => MapEntry(key.toString(), value)),
+                    )
+                  : const {},
             ),
           );
         }
@@ -455,6 +470,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
+      requestClientFactory: requestClientFactory ?? options.requestClientFactory,
     );
     late http.Response response;
     try {
@@ -535,6 +551,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
+      requestClientFactory: requestClientFactory ?? options.requestClientFactory,
     );
     final request = http.Request('POST', url);
     request.headers.addAll(_requestHeaders(options));
@@ -889,20 +906,66 @@ class BaseOpenAIAdapter implements LLMAdapter {
     List<ToolSchema>? tools,
     bool stream = false,
   }) async {
-    final supportsImages =
-        ToolResultWireCodec.hasImages(history) &&
-        (profile.apiMode == 'chat_completions' || profile.apiMode == 'chat') &&
-        modelsDevService != null &&
-        await modelsDevService!.supportsImageInput(
-          profile.name,
-          resolvedModel,
-          baseUrl: _baseUrl,
+    final hasImages = ToolResultWireCodec.hasImages(history);
+    bool supportsImages = false;
+    if (hasImages) {
+      final instanceId = options.providerInstanceId ?? providerInstanceId;
+      final overrideSnapshot =
+          options.routeCapabilityProfile?.rawOverride ??
+          options.routeCapabilitySnapshot;
+      final profileSnapshot =
+          options.routeCapabilityProfile ??
+          (overrideSnapshot != null
+              ? RouteCapabilityProfile(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  imageSupport: overrideSnapshot.supportsImageInput == true
+                      ? RouteImageSupport.supported
+                      : (overrideSnapshot.supportsImageInput == false
+                            ? RouteImageSupport.unsupported
+                            : RouteImageSupport.unknown),
+                  evidenceSource: 'snapshot',
+                  rawOverride: overrideSnapshot,
+                )
+              : RouteCapabilityResolver(
+                  instances: getIt.isRegistered<ProviderInstanceRepository>()
+                      ? getIt<ProviderInstanceRepository>()
+                      : null,
+                  config: config,
+                  modelsDevService: modelsDevService,
+                ).resolveSync(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  baseUrl: _baseUrl,
+                ));
+
+      if (profileSnapshot.imageSupport == RouteImageSupport.unsupported) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unsupported,
+        );
+      } else if (profileSnapshot.imageSupport == RouteImageSupport.unknown) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unknown,
+        );
+      }
+      supportsImages = true;
+    }
+    final verifiedAttachments =
+        await ToolResultWireCodec.loadVerifiedUserAttachments(
+          history,
+          attachmentStore: options.attachmentStore,
         );
     final body = <String, dynamic>{
       'model': resolvedModel,
       'messages': ToolResultWireCodec.chatMessages(
         history,
-        messageToWire: (message) => _messageToWire(message, options),
+        messageToWire: (message) => _messageToWire(
+          message,
+          options,
+          verifiedAttachments: verifiedAttachments,
+        ),
         supportsImageInput: supportsImages,
       ),
       if (stream) 'stream': true,
@@ -911,27 +974,26 @@ class BaseOpenAIAdapter implements LLMAdapter {
         'max_completion_tokens': options.maxOutputTokens,
     };
 
-    switch (profile.effectiveThinkingPolicyId) {
-      case 'aggregator_upstream':
-        AggregatorThinkingWireCodec.applyReasoning(
-          body,
-          options.thinkingDirective,
-        );
-      case 'google_thinking':
-        GoogleThinkingWireCodec.applyThinkingConfig(
-          body,
-          options.thinkingDirective,
-        );
-      case 'deepseek_thinking':
-        ToggleEffortThinkingWireCodec.applyChatCompletions(
-          body,
-          options.thinkingDirective,
-        );
-      default:
-        OpenAiThinkingWireCodec.applyChatCompletionsReasoning(
-          body,
-          options.thinkingDirective,
-        );
+    final directive = options.thinkingDirective;
+    if (directive != null && directive is! UseProviderDefault) {
+      final routeInstance = _toRouteInstance(
+        overrideInstanceId: options.providerInstanceId,
+      );
+      final effectivePolicyId = ThinkingRoutePolicy.policyIdFor(
+        routeInstance,
+        modelId: resolvedModel,
+      );
+
+      if (directive is GoogleBudgetDirective ||
+          directive is GoogleLevelDirective) {
+        GoogleThinkingWireCodec.applyThinkingConfig(body, directive);
+      } else if (effectivePolicyId == 'aggregator_upstream') {
+        AggregatorThinkingWireCodec.applyReasoning(body, directive);
+      } else if (effectivePolicyId == 'google_thinking') {
+        GoogleThinkingWireCodec.applyThinkingConfig(body, directive);
+      } else {
+        ToggleEffortThinkingWireCodec.applyChatCompletions(body, directive);
+      }
     }
 
     if (tools != null && tools.isNotEmpty) {
@@ -951,15 +1013,59 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return body;
   }
 
+  ProviderInstance _toRouteInstance({String? overrideInstanceId}) {
+    final effectiveId = overrideInstanceId ?? providerInstanceId;
+    if (effectiveId != null && getIt.isRegistered<ProviderInstanceRepository>()) {
+      final found = getIt<ProviderInstanceRepository>().findById(effectiveId);
+      if (found != null) return found;
+    }
+    return ProviderInstance(
+      id: effectiveId ?? profile.name,
+      templateId: profile.name,
+      displayName: profile.displayName,
+      protocol: profile.protocol ?? ProviderProtocol.openaiCompatible,
+      authMethod: profile.authMethods.isNotEmpty
+          ? profile.authMethods.first
+          : ProviderAuthMethod.apiKey,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+  }
+
   Map<String, dynamic> _messageToWire(
     Message message,
-    LLMRequestOptions options,
-  ) {
+    LLMRequestOptions options, {
+    Map<String, String>? verifiedAttachments,
+  }) {
+    dynamic content = message.role == MessageRole.tool
+        ? textOnlyToolResultContent(message)
+        : message.content ?? '';
+    if (message.role == MessageRole.user && message.attachments.isNotEmpty) {
+      final parts = <Map<String, dynamic>>[];
+      if (message.content != null && message.content!.isNotEmpty) {
+        parts.add({'type': 'text', 'text': message.content!});
+      }
+      for (final att in message.attachments) {
+        final b64 =
+            verifiedAttachments?[att.id] ??
+            ToolResultWireCodec.userAttachmentBase64(
+              att,
+              preloadedBase64: verifiedAttachments,
+            );
+        if (b64 != null) {
+          parts.add({
+            'type': 'image_url',
+            'image_url': {'url': 'data:${att.mimeType};base64,$b64'},
+          });
+        }
+      }
+      if (parts.isNotEmpty) {
+        content = parts;
+      }
+    }
     final data = <String, dynamic>{
       'role': _roleToString(message.role),
-      'content': message.role == MessageRole.tool
-          ? textOnlyToolResultContent(message)
-          : message.content ?? '',
+      'content': content,
     };
     if (message.toolCalls != null) {
       data['tool_calls'] = message.toolCalls!

@@ -665,18 +665,32 @@ class SessionTurnExecutor {
           toState: SessionWorkState.blocked,
         );
       }
-      if (isResume && getIt.isRegistered<RuntimeRecoveryService>()) {
-        getIt<RuntimeRecoveryService>().reportFailure(
-          sessionId: event.sessionId,
-          reason: RuntimeFailureReason.unknown,
-          requestId: turnRequest.requestId,
-          providerInstanceId: turnRequest.effectiveProviderInstanceId,
-          title: 'Resume checkpoint is not safe to continue',
-          message:
-              'The daemon could not validate the saved resume checkpoint. Execution was blocked to avoid replaying an unsafe partial turn.',
-          forceBlocked: true,
-          runId: activeRun.runId,
-        );
+      if (getIt.isRegistered<RuntimeRecoveryService>()) {
+        if (isResume) {
+          getIt<RuntimeRecoveryService>().reportFailure(
+            sessionId: event.sessionId,
+            reason: RuntimeFailureReason.unknown,
+            requestId: turnRequest.requestId,
+            providerInstanceId: turnRequest.effectiveProviderInstanceId,
+            title: 'Resume checkpoint is not safe to continue',
+            message:
+                'The daemon could not validate the saved resume checkpoint. Execution was blocked to avoid replaying an unsafe partial turn.',
+            forceBlocked: true,
+            runId: activeRun.runId,
+          );
+        } else if (activeRun.workItemId != null) {
+          getIt<RuntimeRecoveryService>().reportFailure(
+            sessionId: event.sessionId,
+            reason: RuntimeFailureReason.unknown,
+            requestId: turnRequest.requestId,
+            providerInstanceId: turnRequest.effectiveProviderInstanceId,
+            title: 'Execution could not start',
+            message:
+                'The request could not be started safely. Execution was blocked so you can retry, edit, or stop.',
+            forceBlocked: true,
+            runId: activeRun.runId,
+          );
+        }
       }
       final redactedError = _secretsRedactor.redact(e.toString());
       _logger.severe('Error handling event: $redactedError', e, stack);

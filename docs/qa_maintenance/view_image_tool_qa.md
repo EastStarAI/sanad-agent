@@ -123,13 +123,30 @@ Automated model/policy ownership: `agent/test/core/models/user_attachment_test.d
 | Remote route | Compatible hosted capability returns media only to the authorized requester. |
 | Wrong user/device/session or expired identity | No bytes returned. |
 | Pruned/expired media | Stable row shows `Image no longer available`. |
+| Typed tool failure (`execution_failed`, unsupported/unknown route) | Explanation visible directly in the card body with error styling; header extracts file basename (e.g. `View Image: sample.png`); zero image blocks and unrelated final answer do not hide error. |
+| Ordinary file/decode/permission errors | Failure reason honestly visible without inventing network/contact-error banners. |
+| History hydration parity | Reopened session displays identical error presentation and title suffix as live stream. |
 | Event/cache JSON | Contains metadata and opaque `media_id`; no base64, private path, or public URL. |
 
-## Daemon-backed proof
+## Client Typed Tool Failure Presentation and Hydration Parity
 
-Use isolated `SANAD_HOME` and `SANAD_STATE_HOME` directories with the deterministic `E2eFixtureAdapter`; never use a live provider or the primary user database. Admit through the authenticated private command, require its ACK before `think`, and prove the provider receives only text plus the Agent-owned path projection. The fixture must choose `view_image` before any bytes reach it and answer `PIXELS_MAGENTA` only after decoding the tool-result pixels. Public frame captures must contain neither base64 nor source/private paths. `agent/e2e_test/view_image_tool_e2e_test.dart` is the local daemon-backed owner and runs with `--concurrency=1`; the policy/store suites own 5 MiB and 4/20 MiB boundaries, restart orphan cleanup, exact ownership, unavailable references, and session deletion. Conversation widget/replay suites own thumbnail/Lightbox/history/Edit without re-upload. Unit, widget, and codec suites otherwise remain parallel.
-
-The hosted-process owner is `client/e2e_test/hosted_attachment_relay_e2e_test.dart`, backed by the isolated Agent fixture in `agent/test/fixtures/hosted_attachment_relay_fixture.dart`. It must run alone with `--concurrency=1` and prove Client upload/chunking, terminal Agent ACK before `think`, Agent-local model path, successful `view_image`, reverse media reconstruction, and binary/private-filename absence from canonical commands. Private hosted-relay tests remain the authority for authenticated wrong-user/device/session/hardware, exact-requester delivery, TTL/rate/concurrency, idempotency, and disconnect route cleanup; public Agent/Client tests own sequence/hash/limit/cancel and consumer behavior.
+### Implementation Symbols and Boundaries
+- `UnifiedDeviceMapper`:
+  - `mapLiveEvent` and `mapHistory` map `tool_result` events into `CanonicalEvent`.
+  - Extracts typed text blocks (`toolResult['blocks']` where `type == 'text'`) or compatibility `output`/`content`.
+  - Extracts `isError` from `event['isError']`, `toolResult?['isError']`, `errorCode`, or explicit error status.
+  - Populates `CanonicalEvent.text` and `tool['output']` with the extracted explanation string.
+- `ConversationState._merge`:
+  - Preserves `text: incoming.text.isNotEmpty ? incoming.text : existing.text` on `EventKind.toolCall` merge so failure explanations are not dropped when reconciling tool calls and results.
+- `ToolPresentationHelper`:
+  - `getToolDetailSuffix`: recognizes `view_image` and extracts the target filename from `mapInput['path']` or `mapOutput['path']`, avoiding blank suffix headers.
+  - `buildTitleWidget`: renders `View Image: <filename>` with error icon when status is `error`.
+- `EventTile`:
+  - `_buildToolContent`: when `toolName == 'view_image'`:
+    - When `status == EventStatus.running`, preserves executing indicator without any failure banner.
+    - When `widget.event.isError` is true (explicit error status, error kind, or typed `isError`/`errorCode`), renders dedicated `_buildViewImageError` card with safe displayText/text blocks (never stringified raw maps or base64).
+    - When non-error and media is present, renders `_ViewImageToolTile` thumbnail and lightbox.
+    - When non-error and media is missing/unhydrated, renders honest neutral `_UnavailableViewImage` (`Image unavailable`) without error banner or false unsupported claims.
 
 ## Security checklist
 
@@ -142,7 +159,13 @@ The hosted-process owner is `client/e2e_test/hosted_attachment_relay_e2e_test.da
 - [ ] Worker timeout terminates isolated processing and leaves no artifact.
 - [ ] Stale run cannot append a result to a newer owner.
 - [ ] Text fallback cannot start a provider retry loop.
-- [ ] User attachment bytes never enter the provider request before an explicit tool call.
+- [ ] Supported routes receive only explicitly admitted, store-verified user image pixels or validated typed tool images through the actual mode's codec; unsupported/unknown image routes halt before lossy dispatch. The path-only deterministic fixture still requires an explicit `view_image` call before receiving pixels.
 - [ ] Client-local remote paths never become agent/model paths.
 - [ ] Attachment and media access is isolated by user, device, and session.
 - [ ] Partial transfers, expired media, and session deletion leave no unauthorized durable artifact.
+- [ ] Typed tool failures display truthful actionable explanations without leaking private paths, credentials, or provider internal UUIDs.
+
+
+Use isolated `SANAD_HOME` and `SANAD_STATE_HOME` directories with the deterministic `E2eFixtureAdapter`; never use a live provider or the primary user database. Admit through the authenticated private command, require its ACK before `think`, and prove the provider receives only text plus the Agent-owned path projection. The fixture must choose `view_image` before any bytes reach it and answer `PIXELS_MAGENTA` only after decoding the tool-result pixels. Public frame captures must contain neither base64 nor source/private paths. `agent/e2e_test/view_image_tool_e2e_test.dart` is the local daemon-backed owner and runs with `--concurrency=1`; the policy/store suites own 5 MiB and 4/20 MiB boundaries, restart orphan cleanup, exact ownership, unavailable references, and session deletion. Conversation widget/replay suites own thumbnail/Lightbox/history/Edit without re-upload. Unit, widget, and codec suites otherwise remain parallel.
+
+The hosted-process owner is `client/e2e_test/hosted_attachment_relay_e2e_test.dart`, backed by the isolated Agent fixture in `agent/test/fixtures/hosted_attachment_relay_fixture.dart`. It must run alone with `--concurrency=1` and prove Client upload/chunking, terminal Agent ACK before `think`, Agent-local model path, successful `view_image`, reverse media reconstruction, and binary/private-filename absence from canonical commands. Private hosted-relay tests remain the authority for authenticated wrong-user/device/session/hardware, exact-requester delivery, TTL/rate/concurrency, idempotency, and disconnect route cleanup; public Agent/Client tests own sequence/hash/limit/cancel and consumer behavior.

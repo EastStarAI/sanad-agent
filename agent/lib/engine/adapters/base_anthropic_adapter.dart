@@ -10,12 +10,16 @@ import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/models/model_metadata.dart';
+import '../../core/di.dart';
+import '../../core/provider_runtime/provider_instance_repository.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
+import '../../core/provider_runtime/route_capability_resolver.dart';
 import 'provider_profile.dart';
 import 'llm_http_exception.dart';
 import '../../core/provider_thinking/anthropic_thinking_wire_codec.dart';
 import 'llm_request_options.dart';
+import 'models_dev_service.dart';
 import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
@@ -28,6 +32,7 @@ class BaseAnthropicAdapter
   final _logger = Logger('BaseAnthropicAdapter');
   final Config config;
   final ProviderProfile profile;
+  final String? providerInstanceId;
   final http.Client? client;
   final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
@@ -39,6 +44,7 @@ class BaseAnthropicAdapter
   BaseAnthropicAdapter(
     this.config,
     this.profile, {
+    this.providerInstanceId,
     this.client,
     this.modelContextLimitLookup,
     this.baseUrlOverride,
@@ -140,8 +146,9 @@ class BaseAnthropicAdapter
 
         _lastModelsException = null;
         return data
+            .whereType<Map>()
             .map((entry) {
-              final rawId = (entry as Map)['id']?.toString() ?? '';
+              final rawId = entry['id']?.toString() ?? '';
               final normalized = ProviderModelId.normalize(
                 templateId: profile.name,
                 protocol: profile.effectiveProtocol,
@@ -154,6 +161,9 @@ class BaseAnthropicAdapter
                 contextWindow:
                     ModelMetadata.getLimitForModel(normalized) ?? 200000,
                 supportsReasoning: false,
+                modelMetadata: Map<String, Object?>.from(
+                  entry.map((k, v) => MapEntry(k.toString(), v)),
+                ),
               );
             })
             .where((model) => model.value.isNotEmpty)
@@ -260,7 +270,7 @@ class BaseAnthropicAdapter
     );
     final resolvedModel = _resolveModel(modelOverride);
 
-    final body = _buildRequestBody(
+    final body = await _buildRequestBody(
       history,
       resolvedModel: resolvedModel,
       tools: tools,
@@ -372,7 +382,7 @@ class BaseAnthropicAdapter
     );
     final resolvedModel = _resolveModel(modelOverride);
 
-    final body = _buildRequestBody(
+    final body = await _buildRequestBody(
       history,
       resolvedModel: resolvedModel,
       tools: tools,
@@ -655,8 +665,9 @@ class BaseAnthropicAdapter
               if (reasoningBuffer.isNotEmpty)
                 'reasoning': reasoningBuffer.toString(),
               if (completedToolCalls.isNotEmpty)
-                'tool_calls':
-                    completedToolCalls.map((tc) => tc.toJson()).toList(),
+                'tool_calls': completedToolCalls
+                    .map((tc) => tc.toJson())
+                    .toList(),
             },
             'finish_reason': effectiveFinishReason.name,
             'usage': ?finalUsage,
@@ -677,15 +688,18 @@ class BaseAnthropicAdapter
                 if (reasoningBuffer.isNotEmpty)
                   'reasoning': reasoningBuffer.toString(),
                 if (completedToolCalls.isNotEmpty)
-                  'tool_calls':
-                      completedToolCalls.map((tc) => tc.toJson()).toList(),
+                  'tool_calls': completedToolCalls
+                      .map((tc) => tc.toJson())
+                      .toList(),
                 if (partialToolCalls.isNotEmpty)
                   'partial_tool_calls': partialToolCalls.values
-                      .map((p) => {
-                            if (p.id != null) 'id': p.id,
-                            if (p.name != null) 'name': p.name,
-                            'arguments': p.argumentsBuffer.toString(),
-                          })
+                      .map(
+                        (p) => {
+                          if (p.id != null) 'id': p.id,
+                          if (p.name != null) 'name': p.name,
+                          'arguments': p.argumentsBuffer.toString(),
+                        },
+                      )
                       .toList(),
               },
             'error': e.toString(),
@@ -712,7 +726,10 @@ class BaseAnthropicAdapter
   ///    tool-uses are stripped to avoid 400 errors from Bedrock/Claude.
   /// 3. Messages are forced to alternate user/assistant. Adjacent
   ///    same-role messages are merged.
-  List<Map<String, dynamic>> _buildAnthropicMessages(List<Message> history) {
+  List<Map<String, dynamic>> _buildAnthropicMessages(
+    List<Message> history, {
+    Map<String, String>? verifiedAttachments,
+  }) {
     final nonSystem = history
         .where((m) => m.role != MessageRole.system)
         .toList();
@@ -760,7 +777,34 @@ class BaseAnthropicAdapter
               : contentList,
         });
       } else {
-        wireMessages.add({'role': 'user', 'content': m.content ?? ''});
+        final List<dynamic> userParts = [];
+        if (m.attachments.isNotEmpty) {
+          if (m.content != null && m.content!.isNotEmpty) {
+            userParts.add({'type': 'text', 'text': m.content!});
+          }
+          for (final att in m.attachments) {
+            final b64 =
+                verifiedAttachments?[att.id] ??
+                ToolResultWireCodec.userAttachmentBase64(
+                  att,
+                  preloadedBase64: verifiedAttachments,
+                );
+            if (b64 != null) {
+              userParts.add({
+                'type': 'image',
+                'source': {
+                  'type': 'base64',
+                  'media_type': att.mimeType,
+                  'data': b64,
+                },
+              });
+            }
+          }
+        }
+        wireMessages.add({
+          'role': 'user',
+          'content': userParts.isNotEmpty ? userParts : (m.content ?? ''),
+        });
       }
     }
 
@@ -857,13 +901,66 @@ class BaseAnthropicAdapter
     return {'role': a['role'], 'content': mergedContent};
   }
 
-  Map<String, dynamic> _buildRequestBody(
+  Future<Map<String, dynamic>> _buildRequestBody(
     List<Message> history, {
     required String resolvedModel,
     required LLMRequestOptions options,
     List<ToolSchema>? tools,
     bool stream = false,
-  }) {
+  }) async {
+    final hasImages = ToolResultWireCodec.hasImages(history);
+    if (hasImages) {
+      final instanceId = options.providerInstanceId ?? providerInstanceId;
+      final overrideSnapshot =
+          options.routeCapabilityProfile?.rawOverride ??
+          options.routeCapabilitySnapshot;
+      final profileSnapshot =
+          options.routeCapabilityProfile ??
+          (overrideSnapshot != null
+              ? RouteCapabilityProfile(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  imageSupport: overrideSnapshot.supportsImageInput == true
+                      ? RouteImageSupport.supported
+                      : (overrideSnapshot.supportsImageInput == false
+                            ? RouteImageSupport.unsupported
+                            : RouteImageSupport.unknown),
+                  evidenceSource: 'snapshot',
+                  rawOverride: overrideSnapshot,
+                )
+              : RouteCapabilityResolver(
+                  instances: getIt.isRegistered<ProviderInstanceRepository>()
+                      ? getIt<ProviderInstanceRepository>()
+                      : null,
+                  config: config,
+                  modelsDevService: getIt.isRegistered<ModelsDevService>()
+                      ? getIt<ModelsDevService>()
+                      : null,
+                ).resolveSync(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  baseUrl: _baseUrl,
+                ));
+
+      if (profileSnapshot.imageSupport == RouteImageSupport.unsupported) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unsupported,
+        );
+      } else if (profileSnapshot.imageSupport == RouteImageSupport.unknown) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unknown,
+        );
+      }
+    }
+
+    final verifiedAttachments =
+        await ToolResultWireCodec.loadVerifiedUserAttachments(
+          history,
+          attachmentStore: options.attachmentStore,
+        );
+
     // Extract system messages.
     String? systemPrompt;
     final systemMessages = history.where((m) => m.role == MessageRole.system);
@@ -871,7 +968,10 @@ class BaseAnthropicAdapter
       systemPrompt = systemMessages.map((m) => m.content ?? '').join('\n');
     }
 
-    final formattedMessages = _buildAnthropicMessages(history);
+    final formattedMessages = _buildAnthropicMessages(
+      history,
+      verifiedAttachments: verifiedAttachments,
+    );
 
     final body = <String, dynamic>{
       'model': resolvedModel,

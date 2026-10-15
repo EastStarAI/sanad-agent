@@ -58,7 +58,7 @@ class _CountingMockTool extends BaseTool {
   }
 }
 
-class _TestToolCallbacks implements ToolExecutionCallbacks {
+class _TestToolCallbacks extends ToolExecutionCallbacks {
   final Map<String, String> results = {};
   final List<String> receivedOutputs = [];
   int historySaveCount = 0;

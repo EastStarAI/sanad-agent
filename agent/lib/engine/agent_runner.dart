@@ -61,6 +61,9 @@ import '../engine/compaction/compaction.dart';
 import 'context/context.dart';
 import 'runtime/compaction_coordinator.dart';
 import 'runtime/turn_route_state.dart';
+import '../core/provider_runtime/provider_instance_repository.dart';
+import '../core/provider_runtime/route_capability_resolver.dart';
+import 'adapters/models_dev_service.dart';
 
 /// Legacy re-exports so existing imports of the steer constants from
 /// `agent_runner.dart` continue to work without touching call sites.
@@ -98,6 +101,7 @@ class AgentRunner {
   final SessionManager sessionManager;
   final PluginManager pluginManager;
   final DeferredToolResultResolver? _deferredToolResultResolver;
+  final AttachmentStore? _attachmentStore;
   late final FileMemoryStore memoryStore;
   late final String sessionId;
 
@@ -231,6 +235,59 @@ class AgentRunner {
   /// Exact adapter/provider/model route that completed the latest LLM request
   /// in the current authoritative turn.
   LLMRouteSnapshot? get lastSuccessfulLlmRoute => _lastSuccessfulLlmRoute;
+
+  RouteCapabilityProfile? _turnCapabilityProfile;
+
+  @visibleForTesting
+  RouteCapabilityProfile? get debugTurnCapabilityProfile =>
+      _turnCapabilityProfile;
+
+  RouteCapabilityResolver get _capabilityResolver =>
+      getIt.isRegistered<RouteCapabilityResolver>()
+      ? getIt<RouteCapabilityResolver>()
+      : RouteCapabilityResolver(
+          instances: getIt.isRegistered<ProviderInstanceRepository>()
+              ? getIt<ProviderInstanceRepository>()
+              : null,
+          config: getIt.isRegistered<Config>() ? getIt<Config>() : null,
+          modelsDevService: getIt.isRegistered<ModelsDevService>()
+              ? getIt<ModelsDevService>()
+              : null,
+          thinkingResolver: getIt.isRegistered<ThinkingSelectionResolver>()
+              ? getIt<ThinkingSelectionResolver>()
+              : null,
+        );
+
+  Future<void> _admitTurnCapabilityProfile() async {
+    final routing = _turnRoute.resolveTurnRouting();
+    final pId = routing.providerId;
+    final mId = routing.model ?? _turnRoute.effectiveModel;
+    if (pId != null && mId != null) {
+      _turnCapabilityProfile = await _capabilityResolver.resolve(
+        providerInstanceId: pId,
+        modelId: mId,
+        thinkingMode: _turnRoute.effectiveThinkingMode,
+      );
+      if (_turnCapabilityProfile?.thinkingSelectionId != null &&
+          getIt.isRegistered<ThinkingRoutePreferenceStore>()) {
+        getIt<ThinkingRoutePreferenceStore>().savePreference(
+          sessionId: sessionId,
+          preference: ThinkingRoutePreference(
+            selectionId: _turnCapabilityProfile!.thinkingSelectionId!,
+            providerInstanceId: pId.trim(),
+            modelId: mId.trim(),
+            capabilityRevision:
+                _turnCapabilityProfile!
+                    .thinkingDescriptor
+                    ?.capabilityRevision ??
+                'unknown',
+          ),
+        );
+      }
+    } else {
+      _turnCapabilityProfile = null;
+    }
+  }
 
   @visibleForTesting
   void debugSetConfirmedInputUsageBaseline(
@@ -496,8 +553,10 @@ class AgentRunner {
     PluginManager? pluginManager,
     String? existingSessionId,
     DeferredToolResultResolver? deferredToolResultResolver,
+    AttachmentStore? attachmentStore,
   }) : pluginManager = pluginManager ?? PluginManager(),
-       _deferredToolResultResolver = deferredToolResultResolver {
+       _deferredToolResultResolver = deferredToolResultResolver,
+       _attachmentStore = attachmentStore {
     if (existingSessionId != null) {
       final session = sessionManager.getSession(existingSessionId);
       if (session != null) {
@@ -667,6 +726,12 @@ class AgentRunner {
         }
       }
     }
+    if (index != -1 &&
+        attachments.isNotEmpty &&
+        history[index].attachments.isEmpty) {
+      history[index] = history[index].copyWith(attachments: attachments);
+      sessionManager.saveSessionHistory(sessionId, history);
+    }
     if (index < 0 || index >= history.length) {
       throw StateError(
         'Committed user message is missing from session history.',
@@ -781,6 +846,7 @@ class AgentRunner {
       thinkingMode: thinkingMode,
       requestId: effectiveRequestId,
     );
+    await _admitTurnCapabilityProfile();
     try {
       _turnRoute.applyTurnSwitchIfNeeded();
       await commitUserMessage(
@@ -829,61 +895,54 @@ class AgentRunner {
   /// (Plan 30 Phase H P1: route override during waiting).
   void updateTurnRoute({String? providerId, String? modelId}) {
     _turnRoute.updateTurnRoute(providerId: providerId, modelId: modelId);
+    final routing = _turnRoute.resolveTurnRouting();
+    final pId = routing.providerId;
+    final mId = routing.model ?? _turnRoute.effectiveModel;
+    if (pId != null && mId != null) {
+      _turnCapabilityProfile = _capabilityResolver.resolveSync(
+        providerInstanceId: pId,
+        modelId: mId,
+        thinkingMode: _turnRoute.effectiveThinkingMode,
+      );
+    } else {
+      _turnCapabilityProfile = null;
+    }
   }
 
   LLMRequestOptions _requestOptionsForTurn(String? providerInstanceId) {
     final routing = _turnRoute.resolveTurnRouting();
-    final resolution = _resolveThinkingSelection(
-      providerInstanceId: providerInstanceId ?? routing.providerId,
-      modelId: routing.model ?? _turnRoute.effectiveModel,
-    );
+    final pId = providerInstanceId ?? routing.providerId;
+    final mId = routing.model ?? _turnRoute.effectiveModel;
+
+    final profile =
+        _turnCapabilityProfile ??
+        (pId != null && mId != null
+            ? _capabilityResolver.resolveSync(
+                providerInstanceId: pId,
+                modelId: mId,
+                thinkingMode: _turnRoute.effectiveThinkingMode,
+              )
+            : null);
+
+    final thinkingMode = profile != null
+        ? profile.thinkingSelectionId
+        : _turnRoute.effectiveThinkingMode;
+
     return LLMRequestOptions(
       sessionId: sessionId,
       requestId: _turnRoute.turnRequestId,
       providerInstanceId: providerInstanceId,
-      thinkingMode: resolution?.selectionId ?? _turnRoute.effectiveThinkingMode,
-      thinkingDirective: resolution?.directive,
+      thinkingMode: thinkingMode,
+      thinkingDirective: profile?.thinkingDirective,
       cancellationScope: _cancellationScope,
+      routeCapabilitySnapshot: profile?.rawOverride,
+      routeCapabilityProfile: profile,
+      attachmentStore:
+          _attachmentStore ??
+          (getIt.isRegistered<AttachmentStore>()
+              ? getIt<AttachmentStore>()
+              : null),
     );
-  }
-
-  ThinkingSelectionResolution? _resolveThinkingSelection({
-    required String? providerInstanceId,
-    required String? modelId,
-  }) {
-    final selectionId = _turnRoute.effectiveThinkingMode?.trim();
-    if (selectionId == null || selectionId.isEmpty) {
-      return null;
-    }
-    if (!getIt.isRegistered<ThinkingSelectionResolver>()) {
-      return null;
-    }
-    final normalizedProvider = providerInstanceId?.trim();
-    final normalizedModel = modelId?.trim();
-    if (normalizedProvider == null ||
-        normalizedProvider.isEmpty ||
-        normalizedModel == null ||
-        normalizedModel.isEmpty) {
-      return null;
-    }
-
-    final resolution = getIt<ThinkingSelectionResolver>().resolve(
-      providerInstanceId: normalizedProvider,
-      modelId: normalizedModel,
-      selectionId: selectionId,
-    );
-    if (getIt.isRegistered<ThinkingRoutePreferenceStore>()) {
-      getIt<ThinkingRoutePreferenceStore>().savePreference(
-        sessionId: sessionId,
-        preference: ThinkingRoutePreference(
-          selectionId: resolution.selectionId,
-          providerInstanceId: normalizedProvider,
-          modelId: normalizedModel,
-          capabilityRevision: resolution.descriptor.capabilityRevision,
-        ),
-      );
-    }
-    return resolution;
   }
 
   void steer(String text) {
@@ -1206,6 +1265,23 @@ class AgentRunner {
         providerInstanceId == null ||
         providerInstanceId.isEmpty) {
       return false;
+    }
+    if (error is LocalImageCapabilityException) {
+      const reason = RuntimeFailureReason.invalidRequest;
+      final displayName = recovery.providerDisplayName(providerInstanceId);
+      recovery.reportFailure(
+        sessionId: sessionId,
+        reason: reason,
+        title: 'Image input not supported',
+        message: error.userMessage,
+        providerInstanceId: providerInstanceId,
+        providerDisplayName: displayName,
+        requestId: _turnRoute.turnRequestId,
+        retryAfter: null,
+        forceBlocked: true,
+        runId: _authoritativeRunId,
+      );
+      throw RuntimeRecoveryRequired(sessionId, reason);
     }
     final httpFailure = _asHttpFailure(error);
     final httpRetryAfter = httpFailure?.retryAfter;
@@ -1660,6 +1736,7 @@ class AgentRunner {
       thinkingMode: thinkingMode,
       requestId: effectiveRequestId,
     );
+    await _admitTurnCapabilityProfile();
     _turnRoute.applyTurnSwitchIfNeeded();
     final durableRoot = await commitUserMessage(
       userContent,
@@ -1722,6 +1799,7 @@ class AgentRunner {
       thinkingMode: thinkingMode,
       requestId: effectiveRequestId,
     );
+    await _admitTurnCapabilityProfile();
     _turnRoute.applyTurnSwitchIfNeeded();
 
     final scrubber = StreamingScrubber();
@@ -2349,6 +2427,7 @@ class AgentRunner {
     required AttachmentStore store,
     required String sessionId,
     required List<Message> messages,
+    bool supportsImageInput = false,
   }) async {
     final projected = <Message>[];
     for (final message in messages) {
@@ -2356,12 +2435,31 @@ class AgentRunner {
         projected.add(message);
         continue;
       }
+      final remainingAttachments = <UserAttachment>[];
+      final textProjectedAttachments = <UserAttachment>[];
+      for (final attachment in message.attachments) {
+        final isImage =
+            attachment.kind == UserAttachmentKind.image ||
+            attachment.mimeType.toLowerCase().startsWith('image/');
+        if (supportsImageInput && isImage) {
+          remainingAttachments.add(attachment);
+        } else {
+          textProjectedAttachments.add(attachment);
+        }
+      }
+
+      if (textProjectedAttachments.isEmpty) {
+        projected.add(message.copyWith(attachments: remainingAttachments));
+        continue;
+      }
+
       final lines = <String>[
-        message.content ?? '',
+        if (message.content != null && message.content!.isNotEmpty)
+          message.content!,
         '',
         'Agent-local attachments (inspect only with the appropriate tool):',
       ];
-      for (final attachment in message.attachments) {
+      for (final attachment in textProjectedAttachments) {
         try {
           final path = await store.resolvePath(
             sessionId: sessionId,
@@ -2376,11 +2474,25 @@ class AgentRunner {
           );
         }
       }
-      lines.add(
-        'Use view_image for images and the scoped read/list tools for files; do not infer file contents from names.',
+      final hasProjectedImages = textProjectedAttachments.any(
+        (a) =>
+            a.kind == UserAttachmentKind.image ||
+            a.mimeType.toLowerCase().startsWith('image/'),
       );
+      if (hasProjectedImages) {
+        lines.add(
+          'Use the scoped read/list tools for files; image inspection is not supported by the current model route; do not infer file contents from names.',
+        );
+      } else {
+        lines.add(
+          'Use the scoped read/list tools for files; do not infer file contents from names.',
+        );
+      }
       projected.add(
-        message.copyWith(content: lines.join('\n'), attachments: const []),
+        message.copyWith(
+          content: lines.join('\n').trim(),
+          attachments: remainingAttachments,
+        ),
       );
     }
     return projected;
@@ -2402,11 +2514,19 @@ class AgentRunner {
       );
       effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
     }
-    if (!getIt.isRegistered<AttachmentStore>()) return effectiveHistory;
+    final store =
+        _attachmentStore ??
+        (getIt.isRegistered<AttachmentStore>()
+            ? getIt<AttachmentStore>()
+            : null);
+    if (store == null) return effectiveHistory;
+    final supportsImageInput =
+        _turnCapabilityProfile?.imageSupport == RouteImageSupport.supported;
     return projectUserAttachmentsForProvider(
-      store: getIt<AttachmentStore>(),
+      store: store,
       sessionId: sessionId,
       messages: effectiveHistory,
+      supportsImageInput: supportsImageInput,
     );
   }
 
@@ -2777,6 +2897,10 @@ class _RunnerToolCallbacks
       _RunnerSteerCallbacks(_runner),
     );
   }
+
+  @override
+  RouteImageSupport currentImageSupport() =>
+      _runner._turnCapabilityProfile?.imageSupport ?? RouteImageSupport.unknown;
 }
 
 /// Bridges [SteerCoordinator] history access back to the runner so the

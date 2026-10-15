@@ -68,7 +68,6 @@ class OpenAiReasoningModels {
         normalized.contains('deepseek-r') ||
         normalized.contains('deepseek-v') ||
         normalized.contains('deepseek-flash') ||
-        normalized.contains('kimi') ||
         normalized.contains('glm') ||
         normalized.contains('qwen') ||
         normalized.contains('minimax') ||

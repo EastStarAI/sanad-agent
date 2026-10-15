@@ -24,6 +24,7 @@ import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dar
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/engine/llm_request_dumper.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 
 class MockConfig extends Config {
   @override
@@ -1992,8 +1993,17 @@ void main() {
           }),
         );
 
-        await syncAdapter.generateResponse(history);
-        await streamAdapter.generateStream(history).toList();
+        const testOptions = LLMRequestOptions(
+          routeCapabilityProfile: RouteCapabilityProfile(
+            providerInstanceId: 'test-anthropic',
+            modelId: 'test-model',
+            imageSupport: RouteImageSupport.supported,
+            evidenceSource: 'test_fixture',
+          ),
+        );
+
+        await syncAdapter.generateResponse(history, options: testOptions);
+        await streamAdapter.generateStream(history, options: testOptions).toList();
 
         for (final body in [syncBody, streamBody]) {
           final messages = body['messages'] as List;

@@ -64,10 +64,12 @@ final class ViewImageMediaProjection {
         toolNames[call.id] = call.name;
       }
       if (message.role != MessageRole.tool) continue;
+      final callId =
+          message.toolCallId ?? message.metadata?['tool_call_id']?.toString();
       final projection = project(
         sessionId: sessionId,
-        toolName: toolNames[message.toolCallId],
-        toolCallId: message.toolCallId,
+        toolName: callId != null ? toolNames[callId] : null,
+        toolCallId: callId,
         result: message.toolResult,
       );
       if (projection?.mediaId == mediaId) return projection;

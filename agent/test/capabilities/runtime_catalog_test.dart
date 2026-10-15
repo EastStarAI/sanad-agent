@@ -13,6 +13,8 @@ import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
@@ -275,7 +277,13 @@ Use the review skill.''');
       expect(spec.workspaceRequired, isFalse);
       expect(spec.source['type'], 'builtin_attachment');
       expect(tool.restartReplaySafe, isTrue);
-      final result = await tool.executeResult({'path': attachment.path});
+      final result = await tool.executeResult(
+        {'path': attachment.path},
+        context: ToolContext(
+          sessionId: 'thread-attachment-image-scope',
+          imageSupport: RouteImageSupport.supported,
+        ),
+      );
       expect(result.isError, isFalse);
       expect(result.blocks.length, 2);
       expect(fakePlatformBridge.permissionRequestCount, 0);
@@ -520,6 +528,10 @@ Use the review skill.''');
 
         final imageResult = await registry.getTool('view_image')!.executeResult(
           {'path': externalImage.path},
+          context: ToolContext(
+            sessionId: 'thread-external',
+            imageSupport: RouteImageSupport.supported,
+          ),
         );
         expect(imageResult.isError, isFalse);
         expect(imageResult.blocks.length, 2);
@@ -606,9 +618,13 @@ Use the review skill.''');
       });
 
       expect(result, contains('allowed'));
-      final imageResult = await registry.getTool('view_image')!.executeResult({
-        'path': externalImage.path,
-      });
+      final imageResult = await registry.getTool('view_image')!.executeResult(
+        {'path': externalImage.path},
+        context: ToolContext(
+          sessionId: 'thread-full-access',
+          imageSupport: RouteImageSupport.supported,
+        ),
+      );
       expect(imageResult.isError, isFalse);
       expect(fakePlatformBridge.permissionRequestCount, equals(0));
     });
@@ -641,9 +657,13 @@ Use the review skill.''');
 
       final deniedImage = File('${tempDir.path}/denied.png')
         ..writeAsBytesSync(img.encodePng(img.Image(width: 1, height: 1)));
-      final imageResult = await registry.getTool('view_image')!.executeResult({
-        'path': deniedImage.path,
-      });
+      final imageResult = await registry.getTool('view_image')!.executeResult(
+        {'path': deniedImage.path},
+        context: ToolContext(
+          sessionId: 'thread-denied',
+          imageSupport: RouteImageSupport.supported,
+        ),
+      );
       expect(imageResult.isError, isTrue);
       expect(imageResult.errorCode?.name, 'permissionDenied');
       expect(fakePlatformBridge.permissionRequestCount, equals(2));

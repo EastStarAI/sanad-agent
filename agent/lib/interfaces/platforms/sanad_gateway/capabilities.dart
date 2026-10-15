@@ -63,16 +63,26 @@ class ModelOption {
   };
 
   factory ModelOption.fromJson(Map<String, dynamic> json) {
+    final value = json['value']?.toString() ?? json['id']?.toString() ?? '';
+    final label = json['label']?.toString() ?? (value.isNotEmpty ? value : 'Unknown Model');
+    final Map<String, Object?> metadata;
+    if (json.containsKey('model_metadata')) {
+      metadata = _modelMetadataFromJson(json['model_metadata']);
+    } else {
+      metadata = _modelMetadataFromJson(json);
+      metadata.remove('thinking_control');
+      metadata.remove('model_metadata');
+    }
     return ModelOption(
-      value: json['value'] as String,
-      label: json['label'] as String,
+      value: value,
+      label: label,
       provider: json['provider'] as String?,
       contextWindow: json['context_window'] as int?,
       supportsReasoning:
           json['supports_reasoning_output'] as bool? ??
           json['supports_reasoning'] as bool? ??
           false,
-      modelMetadata: _modelMetadataFromJson(json['model_metadata']),
+      modelMetadata: metadata,
       thinkingControl: _thinkingControlFromJson(json['thinking_control']),
     );
   }

@@ -55,6 +55,7 @@ class CodexResponsesCodec {
     required LLMRequestOptions options,
     List<ToolSchema>? tools,
     bool stream = false,
+    Map<String, String>? preloadedAttachments,
   }) {
     if (model.trim().isEmpty) {
       throw const FormatException(
@@ -67,7 +68,10 @@ class CodexResponsesCodec {
         .map((message) => message.content?.trim() ?? '')
         .where((content) => content.isNotEmpty)
         .join('\n\n');
-    final input = _historyToInput(history);
+    final input = _historyToInput(
+      history,
+      preloadedAttachments: preloadedAttachments,
+    );
     final reasoning = <String, dynamic>{};
     OpenAiThinkingWireCodec.applyResponsesReasoning(
       reasoning,
@@ -341,7 +345,10 @@ class CodexResponsesCodec {
     );
   }
 
-  List<Map<String, dynamic>> _historyToInput(List<Message> history) {
+  List<Map<String, dynamic>> _historyToInput(
+    List<Message> history, {
+    Map<String, String>? preloadedAttachments,
+  }) {
     final input = <Map<String, dynamic>>[];
     final seenReasoningIds = <String>{};
     for (final message in history) {
@@ -362,12 +369,24 @@ class CodexResponsesCodec {
       }
 
       if (message.role == MessageRole.user) {
-        input.add({
-          'role': 'user',
-          'content': [
-            {'type': 'input_text', 'text': message.content ?? ''},
-          ],
-        });
+        final content = <Map<String, dynamic>>[
+          {'type': 'input_text', 'text': message.content ?? ''},
+        ];
+        for (final att in message.attachments) {
+          final b64 =
+              preloadedAttachments?[att.id] ??
+              ToolResultWireCodec.userAttachmentBase64(
+                att,
+                preloadedBase64: preloadedAttachments,
+              );
+          if (b64 != null) {
+            content.add({
+              'type': 'input_image',
+              'image_url': 'data:${att.mimeType};base64,$b64',
+            });
+          }
+        }
+        input.add({'role': 'user', 'content': content});
         continue;
       }
 

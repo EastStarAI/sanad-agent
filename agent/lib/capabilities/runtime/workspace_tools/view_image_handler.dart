@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 
 import '../../../core/models/tool_execution_result.dart';
+import '../../../core/provider_runtime/route_capability_resolver.dart';
 import '../../image/image_policy.dart';
 import '../../image/image_worker.dart';
 import '../../tools/base_tool.dart';
@@ -56,6 +57,20 @@ class ViewImageHandler {
       return _failure(
         ToolResultErrorCode.invalidInput,
         'Image detail must be low, auto, high, or original.',
+      );
+    }
+
+    final imageSupport = context?.imageSupport ?? RouteImageSupport.unknown;
+    if (imageSupport == RouteImageSupport.unsupported) {
+      return _failure(
+        ToolResultErrorCode.executionFailed,
+        'Image inspection is not supported because the active model route does not support image input.',
+      );
+    }
+    if (imageSupport == RouteImageSupport.unknown) {
+      return _failure(
+        ToolResultErrorCode.executionFailed,
+        'Image inspection is unavailable because image input capability is unknown for the active model route. Specify supports_image_input in config.yaml under model_capabilities.',
       );
     }
 

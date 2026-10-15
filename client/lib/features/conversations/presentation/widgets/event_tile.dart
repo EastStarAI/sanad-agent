@@ -756,12 +756,21 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     final toolName = widget.event.toolName ?? '';
     final category = ToolPresentationHelper.cleanToolTitle(toolName);
     final media = widget.event.viewImageMedia;
-    if (toolName == 'view_image' && media != null) {
-      return _ViewImageToolTile(
-        media: media,
-        sessionId: widget.event.sessionId ?? '',
-        loader: widget.viewImageMediaLoader,
-      );
+    if (toolName == 'view_image') {
+      if (widget.event.status == EventStatus.running) {
+        return _buildViewImageRunning(context);
+      }
+      if (widget.event.isError) {
+        return _buildViewImageError(context);
+      }
+      if (media != null) {
+        return _ViewImageToolTile(
+          media: media,
+          sessionId: widget.event.sessionId ?? '',
+          loader: widget.viewImageMediaLoader,
+        );
+      }
+      return const _UnavailableViewImage();
     }
 
     // A terminal result can arrive before its matching tool-use input during
@@ -832,6 +841,109 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       return Theme.of(context).colorScheme.error;
     }
     return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7);
+  }
+
+  Widget _buildViewImageRunning(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: AppProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            'Executing tool...',
+            style: GoogleFonts.roboto(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildViewImageError(BuildContext context) {
+    final errorColor = Theme.of(context).colorScheme.error;
+    final message = _safeViewImageErrorMessage(widget.event);
+
+    return Container(
+      key: const Key('view_image_error'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: errorColor.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.error_outline_rounded, size: 16, color: errorColor),
+              const SizedBox(width: 8),
+              Text(
+                'Image Inspection Failed',
+                style: GoogleFonts.outfit(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: errorColor,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            message,
+            key: const Key('view_image_error_message'),
+            style: GoogleFonts.firaCode(
+              fontSize: 11,
+              color: errorColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _safeViewImageErrorMessage(CanonicalEvent event) {
+    if (event.text.trim().isNotEmpty) {
+      final trimmed = event.text.trim();
+      if (!_looksLikePayload(trimmed)) {
+        return trimmed;
+      }
+    }
+    final toolResult = event.tool?['toolResult'];
+    if (toolResult is Map && toolResult['blocks'] is List) {
+      final blocks = toolResult['blocks'] as List;
+      final textParts = <String>[];
+      for (final b in blocks) {
+        if (b is Map && b['type'] == 'text' && b['text'] != null) {
+          final t = b['text'].toString().trim();
+          if (t.isNotEmpty && !_looksLikePayload(t)) textParts.add(t);
+        }
+      }
+      if (textParts.isNotEmpty) return textParts.join('\n');
+    }
+    final output = event.toolOutput;
+    if (output is String && output.trim().isNotEmpty) {
+      final trimmed = output.trim();
+      if (!_looksLikePayload(trimmed)) {
+        return trimmed;
+      }
+    }
+    return 'Image inspection failed.';
+  }
+
+  bool _looksLikePayload(String text) {
+    return text.startsWith('{') ||
+        text.startsWith('[') ||
+        text.startsWith('data:image') ||
+        text.startsWith('base64');
   }
 }
 

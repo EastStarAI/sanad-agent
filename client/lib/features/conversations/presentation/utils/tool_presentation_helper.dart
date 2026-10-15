@@ -448,8 +448,12 @@ class ToolPresentationHelper {
 
     final cleanName = rawName.startsWith('mcp__filesystem__') ? rawName.replaceFirst('mcp__filesystem__', '') : rawName;
 
-    // 1. Check path (for read, write, edit, replace, patch) - return basename only
-    if (cleanName.contains('file') || cleanName == 'patch' || cleanName.contains('content')) {
+    // 1. Check path (for read, write, edit, replace, patch, view_image) - return basename only
+    if (cleanName.contains('file') ||
+        cleanName == 'patch' ||
+        cleanName.contains('content') ||
+        cleanName == 'view_image' ||
+        cleanName.contains('view_image')) {
       final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
       if (path != null) {
         return path.toString().split(RegExp(r'[\\/]')).last;

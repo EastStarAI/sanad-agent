@@ -52,6 +52,7 @@ class SocketConversationCommandGateway implements ConversationCommandGateway {
   @override
   Stream<Map<String, dynamic>> get events => _controller.eventRouter.forDevices({
     _config.id,
+    if (_config.hardwareId case final hardwareId?) hardwareId,
     if (_config.cloudDeviceId case final cloudDeviceId?) cloudDeviceId,
   });
 

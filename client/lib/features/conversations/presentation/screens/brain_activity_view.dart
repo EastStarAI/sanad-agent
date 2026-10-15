@@ -42,6 +42,8 @@ import '../widgets/sidebar/sidebar_composition.dart';
 /// • The first user message is top-anchored; later user messages are revealed
 ///   only by the minimum direct offset needed above the composer.
 class BrainActivityView extends StatefulWidget {
+  static ValueChanged<String>? debugOnReplayError;
+
   final Stream<List<CanonicalEvent>>? messagesStream;
   final List<CanonicalEvent> initialMessages;
   final void Function(String, {MessageDeliveryIntent intent}) onSendMessage;
@@ -1134,51 +1136,66 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     var confirmedDropSteers = false;
     var retriedAfterRevisionMismatch = false;
     late TurnReplayResult result;
-    while (true) {
-      result = await messagesCubit.replayTurn(
-        targetRequestId: requestId,
-        targetMessageId: event.messageId,
-        targetTurnId: event.turnId,
-        action: action,
-        message: message,
-        attachmentEdits: attachmentEdits,
-        confirmedReplayUnsafe: confirmedUnsafe,
-        confirmedDropSteers: confirmedDropSteers,
-      );
-      if (!mounted) return;
-      if (result.outcome == 'history_revision_mismatch' &&
-          !retriedAfterRevisionMismatch &&
-          result.historyRevision != null) {
-        retriedAfterRevisionMismatch = true;
-        continue;
-      }
-      final needsUnsafeConfirmation = result.requiresConfirmation && !confirmedUnsafe;
-      final needsSteerDropConfirmation =
-          (result.requiresSteerDropConfirmation || result.containsSteers) && !confirmedDropSteers;
-      if (needsUnsafeConfirmation || needsSteerDropConfirmation) {
-        final confirmed = await _confirmReplay(
+    try {
+      while (true) {
+        result = await messagesCubit.replayTurn(
+          targetRequestId: requestId,
+          targetMessageId: event.messageId,
+          targetTurnId: event.turnId,
           action: action,
-          safety: result.safety,
-          confirmsUnsafe: needsUnsafeConfirmation,
-          confirmsSteerDrop: needsSteerDropConfirmation,
+          message: message,
+          attachmentEdits: attachmentEdits,
+          confirmedReplayUnsafe: confirmedUnsafe,
+          confirmedDropSteers: confirmedDropSteers,
         );
         if (!mounted) return;
-        if (!confirmed) {
-          setState(() => _replayPendingEventId = null);
-          return;
+        if (result.outcome == 'history_revision_mismatch' &&
+            !retriedAfterRevisionMismatch &&
+            result.historyRevision != null) {
+          retriedAfterRevisionMismatch = true;
+          continue;
         }
-        confirmedUnsafe = confirmedUnsafe || needsUnsafeConfirmation;
-        confirmedDropSteers = confirmedDropSteers || needsSteerDropConfirmation;
-        continue;
+        final needsUnsafeConfirmation = result.requiresConfirmation && !confirmedUnsafe;
+        final needsSteerDropConfirmation =
+            (result.requiresSteerDropConfirmation || result.containsSteers) && !confirmedDropSteers;
+        if (needsUnsafeConfirmation || needsSteerDropConfirmation) {
+          final confirmed = await _confirmReplay(
+            action: action,
+            safety: result.safety,
+            confirmsUnsafe: needsUnsafeConfirmation,
+            confirmsSteerDrop: needsSteerDropConfirmation,
+          );
+          if (!mounted) return;
+          if (!confirmed) {
+            return;
+          }
+          confirmedUnsafe = confirmedUnsafe || needsUnsafeConfirmation;
+          confirmedDropSteers = confirmedDropSteers || needsSteerDropConfirmation;
+          continue;
+        }
+        break;
       }
-      break;
+      if (result.isAccepted) {
+        _cancelInlineEdit(notify: false);
+      } else {
+        final error = _turnReplayError(result.outcome);
+        BrainActivityView.debugOnReplayError?.call(error);
+        ToastUtils.showError(context, error);
+      }
+    } catch (_) {
+      if (mounted) {
+        const error = 'Replay outcome could not be confirmed. Check conversation history before retrying.';
+        BrainActivityView.debugOnReplayError?.call(error);
+        ToastUtils.showError(
+          context,
+          error,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _replayPendingEventId = null);
+      }
     }
-    if (result.isAccepted) {
-      _cancelInlineEdit(notify: false);
-    } else {
-      ToastUtils.showError(context, _turnReplayError(result.outcome));
-    }
-    setState(() => _replayPendingEventId = null);
   }
 
   Future<void> _forkSession(CanonicalEvent event) async {
@@ -1234,6 +1251,13 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     'target_precedes_compaction' => 'Messages before context compaction cannot be edited or retried.',
     'identity_incomplete' => 'This message does not have a reliable turn boundary.',
     'steer_reinjection_confirmation_required' => 'Retrying this turn will not send its steering messages again.',
+    'ownership_mismatch' => 'Attachment ownership could not be verified for replay.',
+    'attachments_unsupported' => 'Attachment replay is not supported on this connection.',
+    'missing_session' => 'No active conversation found for replay.',
+    'disconnected' => 'Disconnected from agent. Reconnect and check conversation history before retrying.',
+    'invalid_response' => 'Replay outcome could not be confirmed. Check conversation history before retrying.',
+    'timeout' => 'Replay request timed out. Check conversation history before retrying.',
+    'unconfirmed' => 'Replay outcome could not be confirmed. Check conversation history before retrying.',
     _ => 'Sanad could not edit or retry this message.',
   };
 
@@ -1529,7 +1553,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         onSubmitEdit: canReplay
             ? () async {
                 final text = _editController?.text.trim() ?? '';
-                if (text.isEmpty) return;
+                if (text.isEmpty && _editAttachments.isEmpty) return;
                 if (_editAttachments.any(
                   (attachment) => attachment.status == InlineEditAttachmentStatus.failed,
                 )) {

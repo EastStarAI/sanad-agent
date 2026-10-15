@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_state.dart';
+import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 
 void main() {
   // ──────────────────────────────────────────────────────────────────────────
@@ -428,6 +429,80 @@ void main() {
       expect(second!.id, 'tool_call-2');
       expect(first.id, isNot(second.id));
     });
+
+    test('raw live tool_result preserves typed error view_image text, status, isError, and errorCode', () {
+      final liveEvent = mapper.mapLiveEvent(
+        agentEvent('tool_result', {
+          'tool': 'view_image',
+          'tool_call_id': 'call_live_err_1',
+          'status': 'error',
+          'isError': true,
+          'output': 'Image inspection is not supported because the active model route does not support image input.',
+          'toolResult': {
+            'schemaVersion': 1,
+            'isError': true,
+            'errorCode': 'execution_failed',
+            'blocks': [
+              {
+                'type': 'text',
+                'text': 'Image inspection is not supported because the active model route does not support image input.',
+              }
+            ],
+          },
+        }),
+      );
+
+      expect(liveEvent, isNotNull);
+      expect(liveEvent!.kind, EventKind.toolCall);
+      expect(liveEvent.status, EventStatus.error);
+      expect(liveEvent.isError, isTrue);
+      expect(
+        liveEvent.text,
+        'Image inspection is not supported because the active model route does not support image input.',
+      );
+      expect(liveEvent.tool?['errorCode'], 'execution_failed');
+      expect(liveEvent.tool?['isError'], isTrue);
+      expect(liveEvent.viewImageMedia, isNull);
+    });
+
+    test('raw live tool_result preserves successful view_image with media unaffected and empty text', () {
+      final liveEvent = mapper.mapLiveEvent(
+        agentEvent('tool_result', {
+          'tool': 'view_image',
+          'tool_call_id': 'call_live_ok_1',
+          'status': 'done',
+          'media': {
+            'media_id': 'med_12345678901234567890',
+            'name': 'view-image.png',
+            'mime_type': 'image/png',
+            'width': 640,
+            'height': 480,
+            'availability': 'available',
+          },
+          'toolResult': {
+            'schemaVersion': 1,
+            'isError': false,
+            'blocks': [
+              {
+                'type': 'image',
+                'mimeType': 'image/png',
+                'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+              }
+            ],
+          },
+        }),
+      );
+
+      expect(liveEvent, isNotNull);
+      expect(liveEvent!.kind, EventKind.toolCall);
+      expect(liveEvent.status, EventStatus.done);
+      expect(liveEvent.isError, isFalse);
+      expect(liveEvent.text, isEmpty);
+      expect(liveEvent.viewImageMedia, isNotNull);
+      expect(liveEvent.viewImageMedia!.mediaId, 'med_12345678901234567890');
+      expect(liveEvent.viewImageMedia!.width, 640);
+      expect(liveEvent.viewImageMedia!.height, 480);
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -600,6 +675,73 @@ void main() {
       expect(events.single.toolName, 'execute_terminal_command');
       expect(events.single.toolInput, {'command': 'uname -a'});
       expect(events.single.toolOutput, 'Darwin ...');
+    });
+
+    test('raw production canonical history rows preserve error text, status, isError, errorCode, and media', () {
+      final history = [
+        {
+          'id': 'hist_err_1',
+          'type': 'tool_result',
+          'tool': 'view_image',
+          'tool_call_id': 'call_hist_err',
+          'status': 'error',
+          'isError': true,
+          'errorCode': 'execution_failed',
+          'content': 'Image inspection is not supported because the active model route does not support image input.',
+          'metadata': {
+            'toolResult': {
+              'schemaVersion': 1,
+              'isError': true,
+              'errorCode': 'execution_failed',
+              'blocks': [
+                {
+                  'type': 'text',
+                  'text': 'Image inspection is not supported because the active model route does not support image input.',
+                }
+              ],
+            },
+          },
+        },
+        {
+          'id': 'hist_ok_1',
+          'type': 'tool_result',
+          'tool': 'view_image',
+          'tool_call_id': 'call_hist_ok',
+          'status': 'done',
+          'isError': false,
+          'media': {
+            'media_id': 'med_09876543210987654321',
+            'name': 'view-image.png',
+            'mime_type': 'image/png',
+            'width': 1024,
+            'height': 768,
+            'availability': 'available',
+          },
+        },
+      ];
+
+      final events = mapper.mapHistory(history);
+
+      expect(events.length, 2);
+      final errEvent = events[0];
+      expect(errEvent.kind, EventKind.toolCall);
+      expect(errEvent.status, EventStatus.error);
+      expect(errEvent.isError, isTrue);
+      expect(
+        errEvent.text,
+        'Image inspection is not supported because the active model route does not support image input.',
+      );
+      expect(errEvent.tool?['errorCode'], 'execution_failed');
+
+      final okEvent = events[1];
+      expect(okEvent.kind, EventKind.toolCall);
+      expect(okEvent.status, EventStatus.done);
+      expect(okEvent.isError, isFalse);
+      expect(okEvent.text, isEmpty);
+      expect(okEvent.viewImageMedia, isNotNull);
+      expect(okEvent.viewImageMedia!.mediaId, 'med_09876543210987654321');
+      expect(okEvent.viewImageMedia!.width, 1024);
+      expect(okEvent.viewImageMedia!.height, 768);
     });
   });
 
@@ -1018,6 +1160,96 @@ void main() {
       expect(state.events.first.toolName, 'calculator');
       expect(state.events.first.toolInput, {'expression': '2+2'});
       expect(state.events.first.toolOutput, '4');
+    });
+
+    test('tool_use and tool_result merge preserves error status and typed text', () {
+      final toolUseEvent = CanonicalEvent(
+        id: 'tool_call_err_1',
+        kind: EventKind.toolCall,
+        status: EventStatus.running,
+        tool: {
+          'name': 'view_image',
+          'input': {'path': 'image.png'},
+        },
+        timestamp: DateTime.now(),
+        toolCallId: 'call_err_1',
+      );
+      final toolResultEvent = CanonicalEvent(
+        id: 'tool_call_err_1',
+        kind: EventKind.toolCall,
+        status: EventStatus.error,
+        text: 'Image inspection is not supported because the active model route does not support image input.',
+        tool: {
+          'output': 'Image inspection is not supported because the active model route does not support image input.',
+          'errorCode': 'execution_failed',
+        },
+        timestamp: DateTime.now(),
+        toolCallId: 'call_err_1',
+      );
+
+      state.apply(toolUseEvent);
+      state.apply(toolResultEvent);
+
+      expect(state.events.length, 1);
+      final merged = state.events.first;
+      expect(merged.status, EventStatus.error);
+      expect(merged.toolName, 'view_image');
+      expect(merged.toolInput, {'path': 'image.png'});
+      expect(merged.text, 'Image inspection is not supported because the active model route does not support image input.');
+      expect(merged.toolOutput, 'Image inspection is not supported because the active model route does not support image input.');
+    });
+
+    test('raw live tool_use and tool_result merge produces single event with no duplicate and preserves error details', () {
+      final use = mapper.mapLiveEvent(
+        agentEvent('tool_use', {
+          'tool': 'view_image',
+          'tool_call_id': 'call_merge_dedup_1',
+          'input': {'path': 'architecture.png'},
+          'status': 'running',
+        }),
+      )!;
+
+      state.apply(use);
+      expect(state.events.length, 1);
+      expect(state.events.first.status, EventStatus.running);
+      expect(state.events.first.isError, isFalse);
+
+      final result = mapper.mapLiveEvent(
+        agentEvent('tool_result', {
+          'tool': 'view_image',
+          'tool_call_id': 'call_merge_dedup_1',
+          'status': 'error',
+          'isError': true,
+          'output': 'Image inspection is not supported because the active model route does not support image input.',
+          'toolResult': {
+            'schemaVersion': 1,
+            'isError': true,
+            'errorCode': 'execution_failed',
+            'blocks': [
+              {
+                'type': 'text',
+                'text': 'Image inspection is not supported because the active model route does not support image input.',
+              }
+            ],
+          },
+        }),
+      )!;
+
+      state.apply(result);
+
+      // Verify no duplicate row
+      expect(state.events.length, 1);
+      final merged = state.events.first;
+      expect(merged.status, EventStatus.error);
+      expect(merged.isError, isTrue);
+      expect(merged.toolName, 'view_image');
+      expect(merged.toolInput, {'path': 'architecture.png'});
+      expect(
+        merged.text,
+        'Image inspection is not supported because the active model route does not support image input.',
+      );
+      expect(merged.tool?['errorCode'], 'execution_failed');
+      expect(merged.tool?['isError'], isTrue);
     });
 
     test('cancelled terminal rejects older and unversioned late results', () {

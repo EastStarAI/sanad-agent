@@ -6,6 +6,7 @@ import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
@@ -35,6 +36,8 @@ class ProviderSetupFlow extends StatefulWidget {
   final ProviderSetupClient? client;
   final bool globalAutoFailoverEnabled;
   final VerificationPageLauncher? verificationLauncher;
+  final ProviderSetupCubit? cubit;
+  final ProviderUsageCubit? usageCubit;
 
   const ProviderSetupFlow({
     super.key,
@@ -45,6 +48,8 @@ class ProviderSetupFlow extends StatefulWidget {
     this.client,
     this.globalAutoFailoverEnabled = true,
     this.verificationLauncher,
+    this.cubit,
+    this.usageCubit,
   });
 
   @override
@@ -66,34 +71,56 @@ class _ProviderSetupFlowState extends State<ProviderSetupFlow> {
   }
 
   void _initializeControllers() {
-    _cubit = ProviderSetupCubit(
-      client: _client,
-      agent: widget.device,
-      showReadyState: widget.showReadyState,
-    );
-    _ownsUsageCubit = widget.client != null;
-    _usageCubit = _ownsUsageCubit
-        ? ProviderUsageCubit(
-            client: _client,
-            localDeviceId: widget.device?.id ?? getIt<String>(instanceName: 'hardwareId'),
-          )
-        : getIt<ProviderUsageCubit>();
+    _cubit = widget.cubit ??
+        ProviderSetupCubit(
+          client: _client,
+          agent: widget.device,
+          showReadyState: widget.showReadyState,
+        );
+    _ownsUsageCubit = widget.usageCubit == null && widget.client != null;
+    _usageCubit = widget.usageCubit ??
+        (_ownsUsageCubit
+            ? ProviderUsageCubit(
+                client: _client,
+                localDeviceId: widget.device?.id ?? getIt<String>(instanceName: 'hardwareId'),
+              )
+            : getIt<ProviderUsageCubit>());
 
-    // Whenever the configured instances change, refresh the daemon's usage
-    // support map and fetch usage in parallel for supported instances. This is
-    // non-blocking: the instances list renders first and usage fills in
-    // afterwards (Task 55 §3.5).
+    int lastSyncedGeneration = 0;
+
+    void syncInstances(List<ProviderInstanceDto> instances) {
+      final displayNames = {
+        for (final i in instances)
+          if (i.id.trim().isNotEmpty && i.displayName.trim().isNotEmpty)
+            i.id.trim(): i.displayName.trim(),
+      };
+      _usageCubit.updateProviderDisplayNames(
+        agent: widget.device,
+        displayNames: displayNames,
+      );
+      unawaited(
+        _usageCubit.onInstancesLoaded(
+          agent: widget.device,
+          instanceIds: instances.map((i) => i.id).toList(),
+        ),
+      );
+    }
+
+    if (_cubit.state.snapshotGeneration > 0) {
+      lastSyncedGeneration = _cubit.state.snapshotGeneration;
+      syncInstances(_cubit.state.instances);
+    }
+
+    // Publish only from authoritative snapshot generation boundaries produced
+    // by successful cubit loads or instance mutations (snapshotGeneration > 0).
+    // UI navigation (e.g. backToPicker, backToInstances), auth cancellation,
+    // and error clearing never advance snapshotGeneration and therefore never
+    // publish uninitialized default empty instance lists or wipe valid shared catalogs.
     _instanceIdsSub = _cubit.stream
-        .map((s) => s.instances.map((i) => i.id).toList())
-        .distinct((a, b) => _listEquals(a, b))
-        .skip(1)
-        .listen((ids) {
-          unawaited(
-            _usageCubit.onInstancesLoaded(
-              agent: widget.device,
-              instanceIds: ids,
-            ),
-          );
+        .where((s) => s.snapshotGeneration > 0 && s.snapshotGeneration != lastSyncedGeneration)
+        .listen((s) {
+          lastSyncedGeneration = s.snapshotGeneration;
+          syncInstances(s.instances);
         });
 
     if (widget.autoLoad) {
@@ -121,17 +148,14 @@ class _ProviderSetupFlowState extends State<ProviderSetupFlow> {
   void _disposeControllers() {
     unawaited(_instanceIdsSub?.cancel());
     _instanceIdsSub = null;
-    unawaited(_cubit.close());
+    if (widget.cubit == null) {
+      unawaited(_cubit.close());
+    }
     if (_ownsUsageCubit) {
       unawaited(_usageCubit.close());
     }
   }
 
-  bool _listEquals(List<String> a, List<String> b) {
-    final asET = a.join('|');
-    final bsET = b.join('|');
-    return asET == bsET;
-  }
 
   void _notifyReady(ProviderSetupState state) {
     final readiness = state.readiness;

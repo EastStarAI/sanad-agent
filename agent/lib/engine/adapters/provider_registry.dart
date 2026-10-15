@@ -50,6 +50,7 @@ class ProviderRegistry {
       envBaseUrlName: 'KIMI_API_BASE',
       authType: 'api_key',
       apiMode: 'chat_completions',
+      thinkingPolicyId: 'kimi_thinking',
       aliases: ['moonshot'],
       fallbackModels: ['moonshot-v1-8k', 'moonshot-v1-32k'],
       docsUrl: 'https://platform.moonshot.cn/console/api-keys',

@@ -135,6 +135,15 @@ All responses carry `request_id`. Instance mutations broadcast
 | `model.recent.list` | `model.recent.recent_result` | Returns last 5 selections with current display names, using the same normalized instance-local model ids as `model.snapshot`. |
 | `model.recent.record` | `model.recent.recent_recorded` | Records a model selection (upsert, moves to top). |
 
+### Client Provider Catalog Freshness & Composer Synchronization
+
+Composer components (`_ModelChip`, `ConversationBottomActions`) display the active model along with its provider's friendly name (e.g., `Custom Provider | llama-3`). The client manages provider display names centrally in `ProviderUsageCubit`:
+- **Shared Per-Device Resource**: Display-name catalogs are keyed strictly per device (`_catalogRevisions[deviceId]`), preventing cross-device leakage and decoupling catalog invalidation from per-instance usage/support request generations (`_deviceRevisions`).
+- **Immediate Mutation Sync**: When provider instances are created, renamed, or deleted within `ProviderSetupFlow`, the flow publishes updated names directly to `ProviderUsageCubit.updateProviderDisplayNames` strictly from authoritative snapshot generation boundaries (`snapshotGeneration > 0`) emitted by successful cubit loads or mutations. The composer reflects the updated name immediately without requiring an application restart.
+- **Publication Boundary Safety**: UI navigation (e.g. `backToPicker`, `backToInstances`), error clearing, auth cancellations, and load errors never advance `snapshotGeneration` and never publish or wipe the existing catalog. Cached names are preserved across failures and transitions; only authoritative successful removal of an instance clears its display name.
+- **Race Condition Guard**: A monotonic per-device catalog revision counter bails out any delayed, in-flight pre-mutation responses from reinstalling stale display names. Generation authority persists across device clears to eliminate ABA races where pre-clear requests match generation 0, and authoritative mutation snapshots (including empty removals) neutralize in-flight loads.
+- **Unrelated Resource Isolation**: Updating or invalidating the display-name catalog never aborts or drops in-flight usage/support fetches, ensuring seamless UI operations. Quiescent identical name updates with no in-flight fetch are strict no-ops.
+
 ### Task 55 — Provider account usage limits (Gates A–C)
 
 Provider account limits are instance-scoped account data, separate from both
@@ -209,11 +218,57 @@ Aggregator templates such as OpenRouter use `aggregator_upstream` thinking polic
 
 Gemini templates use `google_thinking`: budget models map to `extra_body.google.thinking_config.thinking_budget`, level models map to `thinking_level`, and the adapter never mixes those shapes with top-level `reasoning_effort`.
 
-DeepSeek templates use `deepseek_thinking`: only fixed chat fixtures advertise toggle/effort controls; unresolved models stay `unknown`, reasoner models stay `unsupported`, and the wire codec keeps toggle off and effort mutually exclusive.
+DeepSeek templates use `deepseek_thinking`: grounded in official documentation ([api-docs.deepseek.com/guides/thinking_mode](https://api-docs.deepseek.com/guides/thinking_mode)), `deepseek-chat` supports thinking toggle (`on`/`off`), distinguishing toggle from fine-grained effort tiers; `deepseek-reasoner` has intrinsic reasoning and evaluates to `unsupported` for runtime adjustment.
+
+Kimi Moonshot templates use `kimi_thinking`: grounded in official documentation ([platform.kimi.ai/docs/guide/use-thinking-models](https://platform.kimi.ai/docs/guide/use-thinking-models)), `kimi-k3` exposes `reasoning_effort` (`low`, `high`, `max` with default `max`, no `off`), `kimi-k2.6` exposes thinking toggle (`on`/`off`), `kimi-k2.7-code` is always-on (unsupported for runtime toggle), and legacy `moonshot-v1` models evaluate to `unsupported`. The wire codec emits `reasoning_effort` for effort directives and `thinking: {'type': 'enabled'/'disabled'}` for toggle directives via `ToggleEffortThinkingWireCodec`.
 
 OpenCode Go explicitly opts into the OpenAI Chat effort policy, but selectable controls remain limited to recognized reasoning model families; `supports_reasoning_output` alone never proves control support. OpenAI-family effort descriptors expose `medium` as the display default while a null/cleared persisted selection still means provider default by wire omission. General recognized models expose `low | medium | high | xhigh`; models with verified maximum effort support additionally expose `max`, while `o1` remains limited to `medium | high`.
 
 `update_session_preferences` may update provider/model and `thinking_mode` together or update thinking alone. New clients send the canonical `provider_instance_id`; the daemon also accepts legacy `provider_id` input for compatibility but does not require both. Presence of `thinking_mode` is significant: a non-empty value persists the normalized selection, while an empty or null value clears it and the resulting session event includes `thinking_mode: null`. Omitting the key leaves the stored thinking selection unchanged.
+
+### Provider Thinking Controls Coverage Matrix (16 Shipped Templates)
+
+The following table documents project-wide thinking-level capability and wire control propagation across all 16 shipped provider-instance templates in `ProviderRegistry.profiles`. Shipped thinking policies are resolved strictly by template registration (`effectiveThinkingPolicyId`) and finite model catalogs; routes without verified wire evidence fail closed to `unknown` (omitting wire parameters and falling back to provider defaults) rather than guessing vendor parameters.
+
+#### 1. Shipped Policies with Verified Model Catalogs (9 Templates)
+
+| Template Name | Display Name | Protocol | API Mode | Shipped Policy Id | Shipped Policy Class | Finite Model Declarations & Scope | Thinking Control Kind | Wire Serialization Codec | Automated Test Status |
+|---|---|---|---|---|---|---|---|---|---|
+| `openai-codex` | ChatGPT Plus Subscription | `openai_compatible` | `codex_responses` | `codex_responses_effort` | `CodexResponsesEffortThinkingPolicy` | Inferred from API mode; recognized OpenAI reasoning models (`o1`, `gpt-5.1-codex-mini`, `gpt-5.2-codex`) | `effort` (`low`, `medium`, `high`, `xhigh`, `max`) | Responses wire body: `reasoning: {'effort': effort, 'summary': 'auto'}` | Covered (`project_thinking_coverage_test.dart`) |
+| `kimi` | Kimi Moonshot | `openai_compatible` | `chat_completions` | `kimi_thinking` | `KimiThinkingPolicy` | Explicit template opt-in; official Kimi API ([platform.kimi.ai/docs/guide/use-thinking-models](https://platform.kimi.ai/docs/guide/use-thinking-models)): `kimi-k3` supports top-level Chat `reasoning_effort` (`low`, `high`, `max`; default `max`, no `off`); `kimi-k2.6` supports thinking toggle (`on`/`off`); `kimi-k2.7-code` and `kimi-k2.7-code-highspeed` are always-on thinking (unsupported for runtime adjustment); legacy `moonshot-v1` models resolve `unsupported` | `effort` (`kimi-k3`) or `toggle` (`kimi-k2.6`) | Chat Completions wire body: `reasoning_effort: effort` (`kimi-k3`) or `thinking: {'type': 'enabled'/'disabled'}` (`kimi-k2.6`) via `ToggleEffortThinkingWireCodec` | Covered (`project_thinking_coverage_test.dart`) |
+| `anthropic` | Anthropic Claude | `anthropic_compatible` | `anthropic_messages` | `anthropic_thinking` | `AnthropicThinkingPolicy` | Inferred from API mode; `AnthropicModelCatalog` finite models (`claude-3-7-sonnet` budget; `claude-opus-4-7` adaptive). Non-thinking models (`claude-3-haiku`, `claude-2.1`) resolve `unsupported`. (Note: baseline inclusion of Claude 3.5 in manual patterns is an ungrounded baseline artifact) | `tokenBudget` or `adaptive` (`low`, `medium`, `high`, `max`, `off`) | Messages wire body: `thinking: {'type': 'enabled', 'budget_tokens': N}` or `{'type': 'adaptive'}` + `output_config: {'effort': effort}` | Covered (`project_thinking_coverage_test.dart`) |
+| `openai` | OpenAI | `openai_compatible` | `chat_completions` | `openai_chat_effort` | `OpenAiChatEffortThinkingPolicy` | Explicit template opt-in; `OpenAiReasoningModels` (`o1`, `o3-mini`, `o4`). Non-reasoning (`gpt-4o`, `gpt-4o-mini`) resolve `unsupported` | `effort` (`low`, `medium`, `high`, `xhigh`, `max`) | Chat Completions wire body: `reasoning_effort: effort` | Covered (`project_thinking_coverage_test.dart`) |
+| `openrouter` | OpenRouter | `openai_compatible` | `chat_completions` | `aggregator_upstream` | `AggregatorUpstreamThinkingPolicy` | Explicit template opt-in; upstream vendor prefix (`anthropic/...`, `openai/...`, `deepseek/...`). Unsupported prefix resolves `unsupported` | Upstream-dependent (`effort` or `toggle`) | Chat Completions wire body: `reasoning: {'enabled': true, 'effort': effort}` | Covered (`project_thinking_coverage_test.dart`) |
+| `gemini` | Google Gemini | `openai_compatible` | `chat_completions` | `google_thinking` | `GoogleThinkingPolicy` | Explicit template opt-in; `GoogleModelCatalog`: `gemini-2.5-flash` (budget), `gemini-3-pro-preview` (level). `gemini-1.5` models resolve `unsupported` | `tokenBudget` (`off`, `low`, `medium`, `high`) or `level` (`minimal`, `low`, `medium`, `high`) | Chat Completions wire body: `extra_body.google.thinking_config: {'thinking_budget': N}` or `{'thinking_level': level}` | Covered (`project_thinking_coverage_test.dart`) |
+| `deepseek` | DeepSeek | `openai_compatible` | `chat_completions` | `deepseek_thinking` | `DeepSeekThinkingPolicy` | Explicit template opt-in; `DeepSeekModelCatalog`: `deepseek-chat` (toggle on/off). Reasoner models (`deepseek-reasoner`) have intrinsic reasoning and resolve `unsupported` for runtime toggle | `toggle` (`on`, `off`) | Chat Completions wire body: `thinking: {'type': 'enabled'/'disabled'}` | Covered (`project_thinking_coverage_test.dart`) |
+| `opencode-go` | OpenCode Go | `openai_compatible` | `chat_completions` | `openai_chat_effort` | `OpenAiChatEffortThinkingPolicy` | Explicit template opt-in; recognized coding reasoning families (`kimi-k2.7-code`, `deepseek-v4-flash`, `glm-5.2`). Non-reasoning models resolve `unsupported` | `effort` (`low`, `medium`, `high`, `xhigh`) | Chat Completions wire body: `reasoning_effort: effort` | Covered (`project_thinking_coverage_test.dart`) |
+| `ollama` | Ollama (Local) | `openai_compatible` | `ollama` | `ollama_live` | `OllamaLiveThinkingPolicy` | Inferred from API mode; dynamically probed `/api/show` modelfile parameters via `OllamaThinkingProbe` | Dynamic `effort`, `level`, or `toggle` based on live probe | Ollama native options or wire toggle | Covered (`ollama_thinking_probe_test.dart`) |
+
+#### 2. Open Evidence Gaps (7 Shipped Templates Fail Closed to Unknown)
+
+The remaining 7 templates in `ProviderRegistry.profiles` currently lack registered Sanad policies or verified wire parameters in the agent daemon. They strictly evaluate to `ThinkingCapabilityStatus.unknown`, presenting in the UI as provider default and omitting thinking parameters on the wire. This fail-closed posture reflects Sanad's current integration boundary rather than upstream platform incapability: upstream platforms (such as Z.AI's thinking mode documentation at [docs.z.ai/guides/capabilities/thinking-mode](https://docs.z.ai/guides/capabilities/thinking-mode) or xAI's Grok reasoning models) may document thinking parameters, but Sanad requires verified typed policies and finite model catalogs before advertising interactive controls on the wire.
+
+| Template Name | Display Name | Protocol | API Mode | Effective Policy Id | Effective Policy Class | Reason for Open Evidence Gap / Wire Behavior | Automated Test Status |
+|---|---|---|---|---|---|---|---|
+| `nvidia` | NVIDIA NIM | `openai_compatible` | `chat_completions` | `unknown` | `UnknownThinkingPolicy` | NIM hosts heterogeneous models from multiple upstream vendors; no uniform thinking wire parameter exists across NIM endpoints without per-model declaration. Fails closed to `unknown` in Sanad. | Covered (`project_thinking_coverage_test.dart`) |
+| `xai` | xAI Grok | `openai_compatible` | `chat_completions` | `unknown` | `UnknownThinkingPolicy` | Upstream xAI API documents reasoning on Grok 3 / Grok 3 Mini models; in Sanad, xAI thinking controls remain an unintegrated template (Sanad integration gap) pending a verified wire policy. Fails closed to `unknown`. | Covered (`project_thinking_coverage_test.dart`) |
+| `zai` | Z.AI | `openai_compatible` | `chat_completions` | `unknown` | `UnknownThinkingPolicy` | Upstream Z.AI / BigModel API documents thinking mode on GLM-4.7 and GLM-5 series ([docs.z.ai/guides/capabilities/thinking-mode](https://docs.z.ai/guides/capabilities/thinking-mode)), distinguishing disable-capable models from forced-thinking models. In Sanad, Z.AI remains an unintegrated template (Sanad integration gap) with no registered thinking policy. Fails closed to `unknown`. | Covered (`project_thinking_coverage_test.dart`) |
+| `zai-coding` | Z.AI Coding Plan | `openai_compatible` | `chat_completions` | `unknown` | `UnknownThinkingPolicy` | Same as `zai` (Sanad integration gap). Fails closed to `unknown`. | Covered (`project_thinking_coverage_test.dart`) |
+| `lm-studio` | LM Studio (Local) | `openai_compatible` | `chat_completions` | `unknown` | `UnknownThinkingPolicy` | Local GGUF models and LM Studio OpenAI-compatible endpoints handle reasoning via runtime samplers, templates, or streaming tokens depending on server version; Sanad does not currently register a specialized policy or probe for LM Studio. Fails closed to `unknown`. | Covered (`project_thinking_coverage_test.dart`) |
+| `llama-cpp` | llama.cpp (Local) | `openai_compatible` | `chat_completions` | `unknown` | `UnknownThinkingPolicy` | Local llama.cpp server uses sampling parameters; Sanad does not register a specialized policy or probe for llama.cpp. Fails closed to `unknown`. | Covered (`project_thinking_coverage_test.dart`) |
+| `custom` | Custom Provider | Dynamic | Dynamic | `unknown` | `UnknownThinkingPolicy` | User-configured generic endpoint. Fails closed to `unknown` unless Tier 1 config override or Tier 2 endpoint declaration is supplied. | Covered (`project_thinking_coverage_test.dart`, `thinking_selection_resolver_test.dart`) |
+
+#### 3. Thinking Control Propagation Hierarchy Across Assembler, Route Policy, and Resolver
+
+1. **Tier 1 (Configuration Override):** Explicit `model_capabilities.<model>.thinking_control` in `config.yaml` takes highest precedence when wire-compatible (`ThinkingRoutePolicy.isWireCompatible`).
+2. **Tier 2 (Declared Endpoint Metadata):** Endpoint discovery metadata `model_metadata['thinking_control']` (from live discovery) is applied if wire-compatible with the route's protocol and API mode.
+3. **Tier 3 (Trusted Exact Native Mapping & Model-Only Resolution):**
+   - Templates with an explicit registered policy (`effectiveThinkingPolicyId != 'unknown'`) map directly to their policy via `ThinkingRoutePolicy.policyIdFor(instance, modelId: model.value)`.
+   - For custom instances or templates without a dedicated thinking policy (such as `nvidia` or `custom` where `effectiveThinkingPolicyId == 'unknown'`), exact evidenced model knowledge resolves when the route's API mode is compatible (`chat_completions`). Evidenced Kimi models (`kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, etc.) resolve directly via `KimiThinkingPolicy` independently of instance ID, template, or baseURL, persisting across instance rename and recreation.
+   - Mode-incompatible routes (such as `anthropic_messages` or `codex_responses`) strictly reject and fail closed to `unknown` or `unsupported`, ensuring that Chat completions reasoning fields are never transmitted on incompatible wires.
+   - Exact case and namespace preservation: Only exact evidenced model identifiers (`kimi-k3`, `moonshotai/kimi-k3`, `kimi-k2.6`, etc.) match; negative variations (`KIMI-K3`, `unknown-vendor/kimi-k3`, `kimi-k3-custom`, `unknown/moonshot-v1-8k`, `kimi-k2.5`, `moonshot-v1-fake`) cannot gain copied control declarations and fail closed to `unknown`.
+   - Lean consolidation: Finite model knowledge is consolidated directly into `KimiThinkingPolicy` rather than maintaining a separate standalone catalog file or inventory service. Route isolation and cache revision boundaries prevent cross-route contamination.
+4. **Tier 4 (Fail-Closed Unknown):** Unconfigured templates, unsupported models, or custom routes without Tier 1/2 declarations evaluate to `ThinkingCapabilityStatus.unknown`. The UI renders `Default`, user selection is rejected, and thinking keys are omitted on the wire.
 
 ### Provisional setup ownership (Task 57)
 
@@ -607,3 +662,119 @@ A bounded retry on the current provider follows the same durable ownership bound
 `provider.usage.reset` requires `request_id`, `provider_instance_id`, and a daemon-owned `idempotency_key`. The response event is `provider.usage.reset_result` with one of `reset`, `confirmation_required`, `nothing_to_reset`, `no_credit`, `already_redeemed`, `auth_required`, `unsupported`, or `failed`.
 
 The daemon always performs a fresh usage preflight. If no window is exhausted, it returns a short-lived `confirmation_token` bound to the exact account and preflight snapshot. A subsequent confirmation uses a new transport `request_id`, reuses the logical operation's `idempotency_key`, and includes that token. Changed or expired snapshots require confirmation again. Concurrent or replayed requests for the same instance-scoped key share the same daemon operation, and the client retains that key across ambiguous failures so a retry cannot create a second mutation. Successful, already-processed, and nothing-to-reset outcomes trigger a provider refresh; `refresh_failed: true` distinguishes a completed mutation from reconciliation failure. Credentials and raw provider responses never cross the protocol.
+
+## Exact-Route Model Capabilities & Thinking Controls (Plan 77 / Task 77i5)
+
+Intrinsic capability declarations and catalog lookup are keyed by exact model identity, not provider UUID, template, or endpoint. The daemon freezes their resolved result into an exact-route execution snapshot; route identity and revisions isolate endpoint metadata and Client selections, while the actual protocol/API mode owns serialization.
+
+### 1. Precedence Order
+Capability resolution for each field proceeds in strict priority:
+1. **Explicit Home Configuration Override** (`config.yaml` under `model_capabilities`, keyed directly by exact model identity).
+2. **Authoritative Endpoint Metadata** (e.g. from `/models` when supported by the provider, bound to config/credential revisions).
+3. **Curated Catalog Data** (`models.dev` universal model knowledge, resolving across custom endpoints and official routes).
+4. **Unknown** (fails closed for images; renders `Default` provider-managed for thinking).
+
+### 2. Configuration Schema (`SANAD_HOME/config.yaml`)
+Custom capability overrides are declared in `config.yaml` using exact model identity keys directly under `model_capabilities` (case-sensitive, preserving colons in URN-style IDs). Provider instance IDs are excluded from capability keys so a single declaration applies across multiple providers, custom/native routes, renames, and deletions/re-creations. Unlanded nested provider schemas (`model_capabilities.<provider-id>.<model-id>`) are rejected at parse time with an actionable `FormatException`.
+
+```yaml
+model_capabilities:
+  "<exact-model-id>":
+    supports_image_input: true
+    thinking_control:
+      status: supported # supported | unsupported | unknown
+      wire: openai_chat_effort # openai_chat_effort | codex_responses_effort | anthropic_adaptive | anthropic_budget
+      options:
+        low: low
+        medium: medium
+        high: high
+```
+
+Rules:
+- `supports_image_input`: Boolean. Absence/null means unconfigured.
+- `thinking_control.status`: `supported`, `unsupported`, or `unknown`.
+- `wire`: Typed wire protocol, checked for wire compatibility against provider protocol and `apiMode`:
+  - `openai_chat_effort`: Compatible with `openai_compatible` protocol and `chat_completions`/`chat` API mode.
+  - `codex_responses_effort`: Compatible with `openai_compatible` protocol and `codex_responses` API mode.
+  - `anthropic_adaptive` / `anthropic_budget`: Strictly requires `anthropic_compatible` protocol and `anthropic_messages` API mode.
+  - Wire incompatibility fails closed: the descriptor is downgraded to unsupported/unknown.
+- Option validation and wire mappings:
+  - Allowed effort vocabulary: `none`, `low`, `medium`, `high`, `xhigh`.
+  - Misleading mappings (e.g., mapping `low` to `high` or `off` to `high`) are rejected at configuration parse time.
+  - `anthropic_adaptive`: Allowed efforts are `none`, `off`, `low`, `medium`, `high`, `max`. Disabling values (`none`, `off`, `false`) map to `ThinkingToggleDirective(enabled: false)` which serializes on the wire as `body['thinking'] = {'type': 'disabled'}` and never emits `type: adaptive + effort: off`. Active tiers map to `AnthropicAdaptiveDirective(effort)` emitting `thinking: {type: adaptive}` and `output_config: {effort: <tier>}`.
+  - `toggle_effort`: Accepts boolean or `true`/`false`/`on`/`off` strings. Disabling values map to `ThinkingToggleDirective(enabled: false)` which serializes as `body['thinking'] = {'type': 'disabled'}` in OpenAI-compatible chat bodies. Fake-Off (naming an option `off` or `none` while mapping to `true`/`on`) and fake-On (naming an option `on` while mapping to `false`/`off`) are strictly rejected.
+  - `google_thinking`: Accepts non-negative integer budgets or level strings (`none`, `off`, `low`, `medium`, `high`). Disabling values (`0`, `none`, `off`) map to `GoogleLevelDirective('off')` which serializes as `extra_body.google.thinking_config.thinking_level = 'off'`. Active budgets map to `GoogleBudgetDirective(budget)` emitting `thinking_budget`. Fake-Off (mapping `off`/`none` to active budget/level) is strictly rejected.
+  - `anthropic_budget`: Disabling options (`off`, `none`) are prohibited by contract; budget values must be integers >= 1024.
+  - Active wire rejection: Any option named `off` or `none` is rejected at parse time if the wire remains active.
+  - Provider default: Omitted selection (or unconfigured default) resolves to `UseProviderDefault()`, completely omitting thinking keys from wire payloads.
+  - `isOff` is set true only for explicit disable levels (`none`, `off`, `false`, `0`). Explicit options are never marked `isProviderDefault: true`.
+
+### 2.1 Declared Endpoint Thinking Controls & Cache Isolation
+Endpoints that discover model capabilities dynamically may provide raw `thinking_control` metadata within `model_metadata`:
+- **Canonical Parse Validation:** Declared endpoint controls must parse through canonical `ThinkingControlOverride.tryParse` / `parse`. Invented budgets (e.g., `int.tryParse ?? 1024`), guessed effort tiers, or guessed toggles are strictly rejected.
+- **Option Value Fidelity:** Declared option mappings are honored without modification: opaque option IDs map directly to declared wire values, and budget options map to exact declared integer values.
+- **Wire Codec Serialization:** HTTP request serializers map opaque option IDs to declared wire values, selected budgets to exact integer `budget_tokens`, and `off` or provider default selections to explicit wire disable directives or complete wire absence.
+- **DTO Cache & Metadata Isolation:** Top-level enriched DTO descriptors (`ModelOption.thinkingControl`) are strictly isolated from raw endpoint metadata (`ModelOption.modelMetadata`). Cache round-trips (`toJson`/`fromJson`) maintain structural stability without recursive nesting. When a configuration override is removed, the route immediately falls back to the raw declared original or `unknown` without requiring a cache refetch.
+
+### 2.2 Exact Route & Endpoint Capability Binding
+- **Universal Model Catalog Resolution (`ModelsDevService`):** Curated model knowledge in `ModelsDevService` acts as intrinsic model intelligence. Known canonical models and explicit grounded aliases (e.g. `claude-haiku-4.5`) resolve image support across custom endpoints, proxies, and official routes without requiring provider UUID matching, template membership, or official base URL equality. Genuinely unknown models on names-only custom endpoints or conflicting vendor entries fail closed to `unknown` unless explicitly declared via `model_capabilities` in `config.yaml`.
+- **Grounded Exact Aliases & Consensus:** `ModelsDevService.groundedModelAliases` maintains strictly same-generation aliases only (e.g., `claude-haiku-4.5`, `claude-haiku-4-5`, `claude-haiku-4-5-20251001`); cross-generation fallbacks and speculative names are prohibited. When exact selected model ID is present in a vendor entry, it is authoritative; when missing, contradictory candidate aliases within any reporting vendor fail closed (`null`) and propagate across all vendor aggregation so another publisher cannot erase ambiguity, while missing metadata in another vendor does not veto unambiguous known facts.
+- **Startup Catalog Hydration:** Catalog hydration (`ModelsDevService.ensureLoaded()`) is wired into the daemon and standalone CLI startup lifecycles prior to turn admission. Turn admission resolves capabilities synchronously with zero HTTP calls.
+- **Forced Catalog Reload on Manual Refresh:** Explicit provider model refresh (`ProviderModelCacheService.refresh(manual: true)`) threads `forceRefresh: true` into `ModelsDevService.ensureLoaded()`, forcing a fresh catalog reload, while normal background/startup refreshes respect the cache TTL.
+- **Mode-Owned Wire Serialization & Wire Model Preservation:** The active API mode and provider protocol govern wire translation; model identity never implies wire format. A Claude model routed via an OpenAI-compatible endpoint serializes as OpenAI Chat completions, never Anthropic Messages. Wire requests sent to endpoints preserve the exact relay selected model ID (e.g., `claude-haiku-4.5`), never rewriting the wire body model to catalog aliases.
+- **Zero Hot-Path Network:** Request payload serialization and measurement execute synchronously against the admitted `RouteCapabilityProfile` or in-memory cached capabilities. Asynchronous catalog lookups during body assembly are strictly prohibited.
+- **Exact Model Identity:** Route lookup uses `ProviderModelId.normalize` preserving case and symbols (e.g., `~`) without lowercasing custom model IDs or stripping identifiers.
+
+### 2.3 Exact Evidenced Model Thinking Policy & Wire Authority
+- **Model-Only Knowledge Precedence:** For compatible API modes (`chat_completions`), exact evidenced model knowledge (such as `KimiThinkingPolicy.isEvidencedModel`) takes precedence over generic provider-template thinking policies. The same exact model (e.g., `kimi-k3`) routed across dedicated (`kimi`), custom (`custom`), NVIDIA NIM (`nvidia`), OpenAI (`openai`), OpenCode Go (`opencode-go`), Google Gemini (`gemini`), or OpenRouter (`openrouter`) endpoints resolves strictly to its evidenced policy (`kimi_thinking` with effort `low, high, max`; default `max`). It never receives generic template effort tiers (`low, medium, high, xhigh`) or invented toggle states.
+- **Toggle & Unsupported Precedence:** `kimi-k2.6` resolves strictly to its documented toggle (`on, off`; default `on`). Documented always-on models where runtime adjustment is rejected upstream (`kimi-k2.7-code`, `kimi-k2.7-code-highspeed`) and legacy models (`moonshot-v1-*`) resolve strictly to `unsupported`.
+- **Bare ID Grounding & Negative Namespace Rejection:** Official Kimi documentation establishes bare model IDs (`kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`, `moonshot-v1-8k`, `moonshot-v1-32k`, `moonshot-v1-128k`). Ungrounded vendor-prefixed namespaces (e.g. `moonshotai/...`), casing variations (`KIMI-K3`), or custom extensions (`kimi-k3-custom`) are not accepted as intrinsic Kimi models and fail closed to `unknown` on custom/unconfigured routes.
+- **HTTP Body Wire Authority (`BaseOpenAIAdapter`):** In `BaseOpenAIAdapter` request payload assembly, the effective thinking policy resolved for the active route and model governs wire serialization. Exact model directives are mapped via their mode-owned wire authority (`ToggleEffortThinkingWireCodec.applyChatCompletions` for Chat/Kimi/OpenAI). This ensures exact models on `gemini` routes are not silently ignored by `GoogleThinkingWireCodec` and models on `openrouter` routes are not mangled by aggregator maps. Clean default omission (`UseProviderDefault`) omits thinking fields entirely from the HTTP body. Invalid selections (e.g. `medium`, `xhigh`, `off` for `kimi-k3`, or `high`, `medium` for `kimi-k2.6`) are rejected before HTTP dispatch with `ThinkingSelectionErrorCode.optionUnavailable`.
+
+### 3. Image Capabilities: Actual Pixels or Honest Failure
+For supported routes, user attachments and tool image results reach the LLM wire request as actual base64 image data:
+- OpenAI Chat: Attached user images as `image_url` parts (`data:<mime>;base64,<data>`); tool image results projected as detached user context following contiguous result batches.
+- Codex Responses: User image attachments and tool results mapped to `input_image` items with data URLs.
+- Anthropic Messages: User image attachments and tool results mapped to `image` content blocks with base64 source.
+
+**Recoverable Tool Capability Check:**
+`ToolExecutionCallbacks.currentImageSupport()` reads the active turn's frozen admission, and the coordinator copies only its `supported | unsupported | unknown` value into each request-owned `ToolContext`. No provider identity or mutable configuration lookup is needed by the image handler. Missing context/capability remains `unknown`.
+
+`ViewImageHandler.executeResult` checks this capability before resolving/reading/processing the file. Supported execution retains verified image blocks. Unsupported and unknown return distinct actionable text-only error results with no image blocks. The normal paired tool result reaches the next model continuation, allowing an honest explanation without poisoning history or creating a provider/contact failure. Non-visual user-attachment projection retains source attachments but no longer instructs unsupported/unknown models to inspect pixels with `view_image`.
+
+**Fail-Closed Adapter Preflight:**
+If adapter-facing history still contains image payloads (including previously persisted tool images) on an unsupported or unresolved route, Chat, Responses, and Anthropic adapters throw the typed local `LocalImageCapabilityException` before HTTP:
+- **Unsupported:** `The selected model "<model>" does not support image input.`
+- **Unknown:** `Image input capability is unknown for model "<model>". Specify supports_image_input in config.yaml under model_capabilities.`
+
+The Runner handles this specific local exception as an actionable blocked invalid request without automatic failover, provider UUID exposure, a misleading contact-failure description, or a `Provider response` prefix. Unrelated `UnsupportedError` and actual HTTP/network/provider errors retain their existing classification. Canonical pixel history is not rewritten or silently stripped; genuinely pixel-bearing unsupported dispatch remains blocked. This adapter rule is distinct from intentional non-visual user-attachment projection and recoverable text-only tool errors.
+
+**Verified Attachment Storage & Integrity:**
+User attachments are strictly validated by `AttachmentStore.readVerifiedAttachment` prior to payload serialization:
+- Binds private store references within the jail root (`${SANAD_STATE_HOME}/attachments`).
+- Validates attachment lifecycle status (`available`).
+- Confirms actual file size and SHA-256 digest match stored database metadata.
+- Validates magic bytes for image payloads:
+  - PNG: `0x89 0x50 0x4E 0x47`
+  - JPEG: `0xFF 0xD8 0xFF`
+  - GIF: `0x47 0x49 0x46 0x38`
+  - WEBP: `RIFF....WEBP`
+- Missing, corrupted, unavailable, or tampered images halt actionably before HTTP with `StateError` or `FormatException`. Synchronous file reads, CWD fallbacks, and global `getSanadHome()` paths are strictly prohibited.
+
+**Turn Admission & Capability Snapshot Freezing:**
+- The capability profile (`RouteCapabilityProfile`) is authoritatively resolved and frozen at turn admission (`AgentRunner.sendMessage`, `streamMessage`, `resumeStream`).
+- The admitted profile remains immutable across all turn iterations, tool calls, measurements, and mid-turn `config.yaml` reloads.
+- Mid-flight route overrides (`AgentRunner.updateTurnRoute`) explicitly re-resolve and update the profile for the target route before the next retry iteration.
+
+### 4. Client Thinking Control Lifecycle
+- **Transient Loading State:** When route metadata is being fetched, the selector renders a distinct `Loading...` chip (`route_thinking_mode_loading`), never premature `Unavailable`.
+- **Authoritative Unknown:** An authoritative `unknown` status resolves to a `Default` chip (`route_thinking_mode_provider_managed`) representing provider-managed thinking.
+- **Cache Reuse Without Flicker:** When returning to a previously loaded route on the same provider instance and agent, the cached descriptor is displayed immediately without flicker.
+- **Route & Device Isolation:** Identical model IDs across different provider instances or different agents are strictly isolated; snapshots are invalidated on device/agent change.
+- **Superseded Requests & Race Protection:** In-flight snapshot responses for superseded route selections are dropped. Revalidation captures session ID and ensures no silent selection reset occurs on superseded sessions.
+
+### 5. Attachment Replay Admission & Early Turn Blocked Notification
+- **Replay Admission Query:** During replay edit or retry turns, `commitSoftRewindAdmission` commits the replacement root user message inside a transaction and associates retained attachments with `status = 'attached'`. `AttachmentStore.resolveAdmissionPaths` and `loadAdmission` permit attachments with `status = 'staged' OR (status = 'attached' AND EXISTS (SELECT 1 FROM messages WHERE session_id = user_attachments.session_id AND message_id = user_attachments.message_id AND request_id = user_attachments.admission_id AND history_status = 'active'))`. The queued turn executor (`LocalRuntimeCatalog.buildTools`) reliably resolves disk paths for retained attachments while cross-request, cross-session, superseded, or corrupted attachments remain fail-closed.
+- **Early Failure Notice Reporting:** When an early error occurs before or during turn preparation (e.g. tool resolution, catalog build, or model adapter initialization), `SessionTurnExecutor.runTurn` catches the exception, transitions the active work item to `SessionWorkState.blocked`, and invokes `RuntimeRecoveryService.reportFailure(..., forceBlocked: true)`. An actionable runtime notice is recorded in `session_runtime_notices` and broadcast to all connected clients via `session.runtime_notice`, preventing client 90-second timeouts or UI hangs and enabling immediate user retry or route correction.
+- **Replay Execution Pipeline & Transport Isolation:** Replay turn execution exercises the full queued `SessionTurnExecutor` -> `AgentRunner` -> provider serialization adapter pipeline (`BaseOpenAIAdapter` / `BaseAnthropicAdapter`). `ProviderRequestTransport` enforces clear ownership boundaries: scoped requests create per-request owned HTTP clients closed upon request completion or cancellation (`_ownsClient = true`). For isolated test environments, `requestClientFactory` injects fresh request-owned clients per call. Unscoped operations (such as model catalog discovery) reuse `adapterSharedClient` unowned (`_ownsClient = false`), preserving shared client instances without accidental closure.
+- **Client Replay Error Guidance & Lost-ACK Reconciliation:** On the client side, inline replay turn dispatches wrap execution in bounded exception handling (`try / catch / finally`). The client distinguishes confirmed rejections from unconfirmed transport drops (`disconnected`, `invalid_response`, `timeout`, `unconfirmed`). When delivery outcome cannot be confirmed, the UI surfaces honest unconfirmed-outcome guidance (`"Replay outcome could not be confirmed. Check conversation history before retrying."` or `"Disconnected from agent. Reconnect and check conversation history before retrying."`) rather than generic failure messages encouraging blind resend. Editor text and attachments are preserved with zero automatic resend, allowing manual user retry after checking history. In the event of a dropped transport acknowledgement where the backend accepted the turn, reconciliation occurs authoritatively through backend history updates and revision advancement, dismissing the superseded inline editor without duplicate client commits. Test coverage validates this presentation and state reconciliation seam at the cubit/repository boundary; daemon transaction rollback and socket reconnection remain governed at the gateway integration boundary.

@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:dotenv/dotenv.dart';
 import 'package:yaml/yaml.dart';
 import '../engine/adapters/provider_profile.dart';
 import '../engine/adapters/provider_registry.dart';
 import 'constants.dart';
+import 'provider_thinking/thinking_control_models.dart';
 
 class Config {
   static const String _defaultGatewayUrl = 'https://api.sanad.eaststarai.com';
@@ -13,7 +16,7 @@ class Config {
 
   DotEnv _env;
   final Map<String, String> _environment;
-  late final ModelAwareRuntimePolicy _modelAwarePolicy;
+  late ModelAwareRuntimePolicy _modelAwarePolicy;
 
   /// Paths of the env files actually loaded, in load order. Tracked so that
   /// [_ensureFreshEnv] can re-stat them and reload when any changes on disk.
@@ -25,13 +28,16 @@ class Config {
   DateTime? _envMtime;
   int _envSize = 0;
 
-  Config({Map<String, String>? environment})
-    : _environment = environment ?? Platform.environment,
-      _env = DotEnv() {
+  Config({
+    Map<String, String>? environment,
+    ModelAwareRuntimePolicy? modelAwarePolicy,
+  })  : _environment = environment ?? Platform.environment,
+        _env = DotEnv() {
     _loadEnvFiles();
-    _modelAwarePolicy = ModelAwareRuntimePolicy.load(
-      File('${getSanadHome()}/config.yaml'),
-    );
+    _modelAwarePolicy = modelAwarePolicy ??
+        ModelAwareRuntimePolicy.load(
+          File('${getSanadHome()}/config.yaml'),
+        );
   }
 
   /// Loads (or reloads) the env files from the path resolved by [getEnvPath]
@@ -271,6 +277,16 @@ class Config {
   CompactionPolicy compactionPolicyForModel(String modelId) =>
       _modelAwarePolicy.compaction.forModel(_normalizeModelId(modelId));
 
+  ModelAwareRuntimePolicy get modelAwarePolicy => _modelAwarePolicy;
+
+  ModelAwareRuntimePolicy reloadModelAwarePolicy() {
+    final candidate = ModelAwareRuntimePolicy.load(
+      File('${getSanadHome()}/config.yaml'),
+    );
+    _modelAwarePolicy = candidate;
+    return _modelAwarePolicy;
+  }
+
   static String _normalizeModelId(String modelId) =>
       modelId.trim().toLowerCase();
 
@@ -410,6 +426,367 @@ class ModelAwareCompactionPolicy extends CompactionPolicy {
   }
 }
 
+class ThinkingControlOverride {
+  final ThinkingCapabilityStatus status;
+  final String? wire;
+  final Map<String, dynamic> options;
+  final String? defaultOption;
+
+  const ThinkingControlOverride({
+    required this.status,
+    this.wire,
+    this.options = const {},
+    this.defaultOption,
+  });
+
+  String get fingerprint {
+    if (status != ThinkingCapabilityStatus.supported) {
+      return status.name;
+    }
+    final sortedKeys = options.keys.toList()..sort();
+    final canonicalOptions = <String, dynamic>{
+      for (final k in sortedKeys) k: options[k],
+    };
+    final canonicalPayload = jsonEncode({
+      'status': status.name,
+      'wire': wire,
+      'default_option': defaultOption,
+      'options': canonicalOptions,
+    });
+    return sha256.convert(utf8.encode(canonicalPayload)).toString();
+  }
+
+  static ThinkingControlOverride? tryParse(Object? raw) {
+    if (raw == null) return null;
+    if (raw is ThinkingControlOverride) return raw;
+    if (raw is! Map) return null;
+    try {
+      final map = Map<String, dynamic>.from(
+        raw.map((key, value) => MapEntry(key.toString(), value)),
+      );
+      return parse(map);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static ThinkingControlOverride parse(
+    Map<String, dynamic> tcMap, {
+    String context = 'thinking_control',
+  }) {
+    ModelAwareRuntimePolicy._rejectUnknown(tcMap, const {
+      'status',
+      'wire',
+      'options',
+      'default_option',
+      'default_option_id',
+    }, context);
+
+    final rawStatus = tcMap['status'];
+    if (rawStatus is! String) {
+      throw FormatException(
+        '$context.status is required and must be a string',
+      );
+    }
+    final status = ThinkingCapabilityStatus.tryParse(rawStatus.trim());
+    if (status == null) {
+      throw FormatException(
+        'Invalid thinking_control status: $rawStatus (expected supported, unsupported, or unknown)',
+      );
+    }
+
+    if (status != ThinkingCapabilityStatus.supported) {
+      if (tcMap.containsKey('wire')) {
+        throw FormatException(
+          'thinking_control with status "${status.name}" cannot declare wire',
+        );
+      }
+      if (tcMap.containsKey('options')) {
+        final opts = tcMap['options'];
+        if (opts is Map && opts.isNotEmpty) {
+          throw FormatException(
+            'thinking_control with status "${status.name}" cannot declare options',
+          );
+        }
+      }
+      return ThinkingControlOverride(status: status);
+    }
+
+    final wire = tcMap['wire'];
+    if (wire is! String || wire.trim().isEmpty) {
+      throw FormatException(
+        '$context.wire is required when status is supported',
+      );
+    }
+    const knownWires = {
+      'openai_chat_effort',
+      'codex_responses_effort',
+      'anthropic_adaptive',
+      'anthropic_budget',
+      'toggle_effort',
+      'google_thinking',
+    };
+    if (!knownWires.contains(wire.trim())) {
+      throw FormatException(
+        'Unknown wire policy: $wire',
+      );
+    }
+
+    final rawOptions = tcMap['options'];
+    if (rawOptions is! Map || rawOptions.isEmpty) {
+      throw FormatException(
+        '$context.options must be a non-empty map when status is supported',
+      );
+    }
+    final options = <String, dynamic>{};
+    for (final optEntry in rawOptions.entries) {
+      if (optEntry.key is! String) {
+        throw FormatException(
+          'thinking_control option keys must be strings',
+        );
+      }
+      final optKey = (optEntry.key as String).trim();
+      if (optKey.isEmpty) {
+        throw FormatException(
+          'thinking_control option key cannot be empty',
+        );
+      }
+      final optVal = optEntry.value;
+      if (wire == 'anthropic_budget') {
+        final optKeyLower = optKey.toLowerCase();
+        if (optKeyLower == 'off' || optKeyLower == 'none') {
+          throw FormatException(
+            'anthropic_budget wire does not support disabling thinking (off/none option prohibited).',
+          );
+        }
+        if (optVal is! num ||
+            optVal.toInt() < 1024 ||
+            optVal != optVal.toInt()) {
+          throw FormatException(
+            'anthropic_budget option "$optKey" value must be an integer of at least 1024',
+          );
+        }
+        options[optKey] = optVal.toInt();
+      } else if (wire == 'toggle_effort') {
+        final optKeyLower = optKey.toLowerCase();
+        final bool isEnabled;
+        if (optVal is bool) {
+          isEnabled = optVal;
+        } else if (optVal is String) {
+          final strLower = optVal.trim().toLowerCase();
+          if (strLower == 'true' || strLower == 'on') {
+            isEnabled = true;
+          } else if (strLower == 'false' || strLower == 'off') {
+            isEnabled = false;
+          } else {
+            throw FormatException(
+              'toggle_effort option "$optKey" value "$optVal" must be a boolean or on/off',
+            );
+          }
+        } else {
+          throw FormatException(
+            'toggle_effort option "$optKey" value must be a boolean or on/off',
+          );
+        }
+        if ((optKeyLower == 'off' || optKeyLower == 'none') && isEnabled) {
+          throw FormatException(
+            'Option "$optKey" cannot map to active toggle value "$optVal". Off/none must disable thinking.',
+          );
+        }
+        if (optKeyLower == 'on' && !isEnabled) {
+          throw FormatException(
+            'Option "$optKey" cannot map to disabled toggle value "$optVal".',
+          );
+        }
+        options[optKey] = isEnabled;
+      } else if (wire == 'openai_chat_effort' ||
+          wire == 'codex_responses_effort') {
+        const allowedEfforts = {
+          'none',
+          'low',
+          'medium',
+          'high',
+          'xhigh',
+        };
+        if (optVal is! String ||
+            !allowedEfforts.contains(optVal.trim().toLowerCase())) {
+          throw FormatException(
+            '$wire option "$optKey" value "$optVal" is not a valid effort (allowed: ${allowedEfforts.join(', ')})',
+          );
+        }
+        final trimmedVal = optVal.trim().toLowerCase();
+        final optKeyLower = optKey.toLowerCase();
+        if ((optKeyLower == 'off' || optKeyLower == 'none') &&
+            trimmedVal != 'none') {
+          throw FormatException(
+            'Option "$optKey" cannot map to active effort "$optVal". Off/none must disable thinking.',
+          );
+        }
+        if (trimmedVal == 'none' &&
+            optKeyLower != 'off' &&
+            optKeyLower != 'none') {
+          throw FormatException(
+            'Option "$optKey" cannot map to disabling effort "$optVal" unless named off/none.',
+          );
+        }
+        if (optKeyLower == 'low' &&
+            (trimmedVal == 'high' ||
+                trimmedVal == 'xhigh' ||
+                trimmedVal == 'max')) {
+          throw FormatException(
+            'Option "$optKey" cannot map to escalating effort "$optVal".',
+          );
+        }
+        options[optKey] = trimmedVal;
+      } else if (wire == 'anthropic_adaptive') {
+        final optKeyLower = optKey.toLowerCase();
+        final String trimmedVal;
+        if (optVal is bool) {
+          if (optVal == false) {
+            trimmedVal = 'off';
+          } else {
+            throw FormatException(
+              'anthropic_adaptive option "$optKey" cannot be boolean true; specify effort tier (low, medium, high, max)',
+            );
+          }
+        } else if (optVal is String) {
+          trimmedVal = optVal.trim().toLowerCase();
+        } else {
+          throw FormatException(
+            'anthropic_adaptive option "$optKey" value must be an effort string or false',
+          );
+        }
+        const allowedAdaptive = {
+          'none',
+          'off',
+          'low',
+          'medium',
+          'high',
+          'max',
+        };
+        if (!allowedAdaptive.contains(trimmedVal)) {
+          throw FormatException(
+            'anthropic_adaptive option "$optKey" value "$optVal" is not a valid effort (allowed: ${allowedAdaptive.join(', ')})',
+          );
+        }
+        final isDisable = trimmedVal == 'none' || trimmedVal == 'off';
+        if ((optKeyLower == 'off' || optKeyLower == 'none') && !isDisable) {
+          throw FormatException(
+            'Option "$optKey" cannot map to active effort "$optVal". Off/none must disable thinking.',
+          );
+        }
+        if (isDisable && optKeyLower != 'off' && optKeyLower != 'none') {
+          throw FormatException(
+            'Option "$optKey" cannot map to disabling value "$optVal" unless named off/none.',
+          );
+        }
+        if (optKeyLower == 'low' &&
+            (trimmedVal == 'high' || trimmedVal == 'max')) {
+          throw FormatException(
+            'Option "$optKey" cannot map to escalating effort "$optVal".',
+          );
+        }
+        options[optKey] = trimmedVal;
+      } else if (wire == 'google_thinking') {
+        final optKeyLower = optKey.toLowerCase();
+        if (optVal is num) {
+          final b = optVal.toInt();
+          if (b < 0 || optVal != b) {
+            throw FormatException(
+              'google_thinking option "$optKey" budget must be a non-negative integer',
+            );
+          }
+          if ((optKeyLower == 'off' || optKeyLower == 'none') && b != 0) {
+            throw FormatException(
+              'Option "$optKey" cannot map to active budget "$optVal". Off/none must disable thinking.',
+            );
+          }
+          if (b == 0 && optKeyLower != 'off' && optKeyLower != 'none') {
+            throw FormatException(
+              'Option "$optKey" cannot map to 0 budget unless named off/none.',
+            );
+          }
+          options[optKey] = b;
+        } else if (optVal is String) {
+          final trimmedVal = optVal.trim().toLowerCase();
+          const allowedGoogleLevels = {
+            'none',
+            'off',
+            'low',
+            'medium',
+            'high',
+          };
+          if (!allowedGoogleLevels.contains(trimmedVal)) {
+            throw FormatException(
+              'google_thinking option "$optKey" value "$optVal" is not a valid level (allowed: ${allowedGoogleLevels.join(', ')})',
+            );
+          }
+          final isDisable = trimmedVal == 'none' || trimmedVal == 'off';
+          if ((optKeyLower == 'off' || optKeyLower == 'none') && !isDisable) {
+            throw FormatException(
+              'Option "$optKey" cannot map to active level "$optVal". Off/none must disable thinking.',
+            );
+          }
+          if (isDisable && optKeyLower != 'off' && optKeyLower != 'none') {
+            throw FormatException(
+              'Option "$optKey" cannot map to disabling level "$optVal" unless named off/none.',
+            );
+          }
+          if (optKeyLower == 'low' && trimmedVal == 'high') {
+            throw FormatException(
+              'Option "$optKey" cannot map to escalating level "$optVal".',
+            );
+          }
+          options[optKey] = trimmedVal;
+        } else {
+          throw FormatException(
+            'google_thinking option "$optKey" value must be an integer budget or level string',
+          );
+        }
+      }
+    }
+
+    final defaultOption = (tcMap['default_option'] ?? tcMap['default_option_id'])
+        ?.toString()
+        .trim();
+    if (defaultOption != null && defaultOption.isNotEmpty) {
+      if (!options.containsKey(defaultOption)) {
+        throw FormatException(
+          'default_option "$defaultOption" must be one of declared options: ${options.keys.toList()}',
+        );
+      }
+    }
+
+    return ThinkingControlOverride(
+      status: status,
+      wire: wire.trim(),
+      options: Map.unmodifiable(options),
+      defaultOption:
+          (defaultOption != null && defaultOption.isNotEmpty)
+              ? defaultOption
+              : null,
+    );
+  }
+}
+
+class ModelCapabilityOverride {
+  final bool? supportsImageInput;
+  final ThinkingControlOverride? thinkingControl;
+
+  const ModelCapabilityOverride({
+    this.supportsImageInput,
+    this.thinkingControl,
+  });
+
+  String get fingerprint {
+    final canonicalPayload = jsonEncode({
+      'supports_image_input': supportsImageInput,
+      'thinking_control': thinkingControl?.fingerprint,
+    });
+    return sha256.convert(utf8.encode(canonicalPayload)).toString();
+  }
+}
+
 class ModelAwareRuntimePolicy {
   static const defaults = ModelAwareRuntimePolicy(
     contextModelLimits: {},
@@ -418,15 +795,22 @@ class ModelAwareRuntimePolicy {
       targetRatio: 0.10,
       models: {},
     ),
+    modelCapabilities: {},
   );
 
   final Map<String, int> contextModelLimits;
   final ModelAwareCompactionPolicy compaction;
+  final Map<String, ModelCapabilityOverride> modelCapabilities;
 
   const ModelAwareRuntimePolicy({
     required this.contextModelLimits,
     required this.compaction,
+    this.modelCapabilities = const {},
   });
+
+  ModelCapabilityOverride? capabilityOverrideFor(String modelId) {
+    return modelCapabilities[modelId];
+  }
 
   factory ModelAwareRuntimePolicy.load(File file) {
     if (!file.existsSync() || file.readAsStringSync().trim().isEmpty) {
@@ -501,6 +885,74 @@ class ModelAwareRuntimePolicy {
         ),
       );
     }
+
+    final rawCapabilities = _optionalMap(
+      root['model_capabilities'],
+      'model_capabilities',
+    );
+    final capabilities = <String, ModelCapabilityOverride>{};
+    for (final entry in rawCapabilities.entries) {
+      final modelId = entry.key;
+      if (modelId.contains('*')) {
+        throw FormatException(
+          'Wildcard model keys are prohibited in model_capabilities: $modelId',
+        );
+      }
+      final rawConfig = _optionalMap(
+        entry.value,
+        'model_capabilities.$modelId',
+      );
+
+      // Detect and actionably reject retired nested provider schema
+      final hasNestedProviderShape = rawConfig.values.any((v) =>
+          v is Map &&
+          (v.containsKey('supports_image_input') ||
+              v.containsKey('thinking_control')));
+      if (hasNestedProviderShape) {
+        throw FormatException(
+          'Nested provider-instance format in model_capabilities is no longer supported. '
+          'model_capabilities must be keyed directly by exact model identity '
+          '(e.g. model_capabilities."$modelId": {supports_image_input: ...}).',
+        );
+      }
+
+      _rejectUnknown(rawConfig, const {
+        'supports_image_input',
+        'thinking_control',
+      }, 'model_capabilities.$modelId');
+
+      bool? supportsImageInput;
+      if (rawConfig.containsKey('supports_image_input')) {
+        final val = rawConfig['supports_image_input'];
+        if (val != null && val is! bool) {
+          throw FormatException(
+            'model_capabilities.$modelId.supports_image_input must be a boolean',
+          );
+        }
+        supportsImageInput = val as bool?;
+      }
+
+      ThinkingControlOverride? thinkingControl;
+      if (rawConfig.containsKey('thinking_control')) {
+        final rawTc = rawConfig['thinking_control'];
+        if (rawTc != null) {
+          final tcMap = _optionalMap(
+            rawTc,
+            'model_capabilities.$modelId.thinking_control',
+          );
+          thinkingControl = ThinkingControlOverride.parse(
+            tcMap,
+            context: 'model_capabilities.$modelId.thinking_control',
+          );
+        }
+      }
+
+      capabilities[modelId] = ModelCapabilityOverride(
+        supportsImageInput: supportsImageInput,
+        thinkingControl: thinkingControl,
+      );
+    }
+
     return ModelAwareRuntimePolicy(
       contextModelLimits: Map.unmodifiable(limits),
       compaction: ModelAwareCompactionPolicy(
@@ -508,6 +960,7 @@ class ModelAwareRuntimePolicy {
         targetRatio: targetRatio,
         models: Map.unmodifiable(models),
       ),
+      modelCapabilities: Map.unmodifiable(capabilities),
     );
   }
 

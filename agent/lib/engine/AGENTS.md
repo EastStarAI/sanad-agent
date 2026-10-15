@@ -19,6 +19,7 @@ This contract applies to `agent/lib/engine/`.
 - Runtime collaborators read live state through contexts and mutate through callbacks; they never retain a parallel history list.
 - Persist raw interface request id on every ordinary user message for replay/edit boundaries.
 - Reload persisted active history before appending a user turn so a committed replay replacement is not duplicated.
+- When an existing pre-admitted user record lacks its admitted attachments, repair and persist that record in place before model execution; never append a second user turn or leave the repair only in memory.
 - Preserve visible thoughts and reasoning separately from final content and opaque provider state.
 - History healing must not synthesize a tool result while an unresolved suspended checkpoint or a valid requester-bound deferred result owns that tool-call id.
 - Each model invocation mints one model-step id shared by its chunks, reasoning, checkpoint, and assistant message.
@@ -36,13 +37,14 @@ This contract applies to `agent/lib/engine/`.
 - Automatic failover within one model invocation must exclude every provider instance that already failed before streaming; it must never revisit an exhausted route in the same chain.
 - Opt-in request dumps serialize sanitized JSON-compatible request and normalized response projections; arbitrary typed values may contribute only through `toJson`, and raw streaming transport lines never become the durable response contract.
 - Internal accumulated usage remains separate from the latest immutable context-usage projection exposed to clients.
+- Turn admission authoritatively freezes an immutable `RouteCapabilityProfile` for the turn before model execution; in-flight retries or config reloads do not mutate the snapshot. Outgoing wire bodies preserve the exact requested model ID and do not rewrite it to aliases. Adapters (including OpenAI-compatible and Ollama) enforce model vision capabilities against the resolved profile before HTTP dispatch; pixel-bearing turns targeted at unsupported or unknown models fail closed with `LocalImageCapabilityException` without network I/O.
 
 ## Run Cancellation
 - `RunCancellationScope` is the run-owned cancellation primitive keyed by `runId`; provider, tool, and wait layers register bounded cleanup callbacks on it.
 - `AgentRunner` attaches to the active scope for the authoritative turn and must not publish run-scoped output after scope invalidation.
 - `release()` on a registration handle is idempotent and removes a resource from future cleanup without cancelling it.
 - Stop acceptance invalidates publication synchronously; cleanup is parallel, bounded, and reports a typed terminal outcome.
-- Provider turns register request-owned HTTP transport on `RunCancellationScope`; shared adapter clients must not be closed by another run's cancellation.
+- Provider turns register request-owned HTTP transport on `RunCancellationScope`. When `requestClientFactory` is provided (e.g., in isolated tests), it creates fresh request-owned clients closed upon request completion or cancellation. In production, scoped requests create per-request owned HTTP clients closed upon completion/cancellation, while `adapterSharedClient` is used unowned only outside cancellation scopes. Explicit `requestClient` retains its original ownership contract.
 - `ToolExecutionCoordinator` passes the active scope through `ToolContext` and gates tool start/complete events on `isPublicationOpen`.
 - `ToolTerminalizationService` emits one durable `cancelled` terminal per executing tool before `stopped`; late completions must not replace locked terminals.
 - Shell execution uses `ProcessTreeController` for owned containment and bounded tree termination; tools opt into cooperative cancellation explicitly.

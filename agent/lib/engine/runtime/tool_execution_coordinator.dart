@@ -7,6 +7,7 @@ import '../../core/models/view_image_media_metadata.dart';
 import '../../capabilities/registry/tools_registry.dart';
 import '../../capabilities/tools/base_tool.dart';
 import '../../core/di.dart';
+import '../../core/provider_runtime/route_capability_resolver.dart';
 import '../../evolution/db/persisted_runtime_state_repository.dart';
 import '../../evolution/session_manager.dart';
 import '../../plugins/plugin_manager.dart';
@@ -353,6 +354,7 @@ class ToolExecutionCoordinator {
 
   ToolContext _toolContextFor(
     ToolCall toolCall, {
+    ToolExecutionCallbacks? callbacks,
     RunCancellationScope? cancellationScope,
   }) {
     return ToolContext(
@@ -364,6 +366,8 @@ class ToolExecutionCoordinator {
       cancellationScope: cancellationScope,
       onExecutionProgress: (progress) => checkpointCoordinator
           .saveExecutingToolProgress(toolCall.id, progress),
+      imageSupport:
+          callbacks?.currentImageSupport() ?? RouteImageSupport.unknown,
     );
   }
 
@@ -646,6 +650,7 @@ class ToolExecutionCoordinator {
             toolCall.arguments,
             context: _toolContextFor(
               toolCall,
+              callbacks: callbacks,
               cancellationScope: cancellationScope,
             ),
           );
@@ -855,6 +860,7 @@ class ToolExecutionCoordinator {
               toolCall.arguments,
               context: _toolContextFor(
                 toolCall,
+                callbacks: callbacks,
                 cancellationScope: cancellationScope,
               ),
             ),
@@ -1079,4 +1085,7 @@ abstract class ToolExecutionCallbacks {
   /// Delivers pending steer messages into the last tool-result messages after
   /// a tool batch completes.
   void applyPendingSteerToToolResults(int numToolCalls);
+
+  /// Returns the frozen image input support capability of the active turn.
+  RouteImageSupport currentImageSupport() => RouteImageSupport.unknown;
 }

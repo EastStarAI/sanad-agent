@@ -4,7 +4,14 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
 
-enum RouteThinkingSelectorState { hidden, unavailable, selectable, legacy }
+enum RouteThinkingSelectorState {
+  hidden,
+  loading,
+  selectable,
+  providerManaged,
+  fetchFailure,
+  legacy,
+}
 
 class RouteThinkingControl {
   RouteThinkingControl._();
@@ -113,6 +120,9 @@ class RouteThinkingControl {
     if (sessionDescriptor == null) {
       return false;
     }
+    if (sessionDescriptor.status == ThinkingCapabilityStatus.unknown) {
+      return false;
+    }
     if (sessionRouteRevision == null ||
         activeRouteRevision == null ||
         sessionRouteRevision != activeRouteRevision) {
@@ -176,6 +186,8 @@ class RouteThinkingControl {
   static RouteThinkingSelectorState selectorState({
     required Capability capabilities,
     ThinkingControlDescriptorDto? descriptor,
+    bool isLoading = false,
+    bool hasFetchError = false,
   }) {
     if (!capabilities.supportsThinkingModeChange) {
       return RouteThinkingSelectorState.hidden;
@@ -185,18 +197,25 @@ class RouteThinkingControl {
           ? RouteThinkingSelectorState.hidden
           : RouteThinkingSelectorState.legacy;
     }
-    if (descriptor == null) {
-      return RouteThinkingSelectorState.unavailable;
+    if (descriptor != null) {
+      return switch (descriptor.status) {
+        ThinkingCapabilityStatus.unsupported =>
+          RouteThinkingSelectorState.hidden,
+        ThinkingCapabilityStatus.unknown =>
+          RouteThinkingSelectorState.providerManaged,
+        ThinkingCapabilityStatus.supported =>
+          descriptor.isSelectable
+              ? RouteThinkingSelectorState.selectable
+              : RouteThinkingSelectorState.providerManaged,
+      };
     }
-    return switch (descriptor.status) {
-      ThinkingCapabilityStatus.unsupported => RouteThinkingSelectorState.hidden,
-      ThinkingCapabilityStatus.unknown =>
-        RouteThinkingSelectorState.unavailable,
-      ThinkingCapabilityStatus.supported =>
-        descriptor.isSelectable
-            ? RouteThinkingSelectorState.selectable
-            : RouteThinkingSelectorState.hidden,
-    };
+    if (isLoading) {
+      return RouteThinkingSelectorState.loading;
+    }
+    if (hasFetchError) {
+      return RouteThinkingSelectorState.fetchFailure;
+    }
+    return RouteThinkingSelectorState.providerManaged;
   }
 
   static bool isValidSelection({
@@ -238,13 +257,10 @@ class RouteThinkingControl {
       if (providerDefault != null) {
         return providerDefault.id;
       }
-      final mediumOption = descriptor.options
-          .where((o) => o.id.toLowerCase() == 'medium')
-          .firstOrNull;
-      if (mediumOption != null) {
-        return mediumOption.id;
+      if (descriptor.options.length == 1) {
+        return descriptor.options.first.id;
       }
-      return descriptor.options.first.id;
+      return null;
     }
     if (legacyModes.isNotEmpty) {
       if (legacyModes.contains('balanced')) {
@@ -252,7 +268,7 @@ class RouteThinkingControl {
       }
       return legacyModes.first;
     }
-    return 'medium';
+    return null;
   }
 
   static String labelForSelection({
@@ -278,7 +294,7 @@ class RouteThinkingControl {
       }
       return effectiveId;
     }
-    return 'Medium';
+    return 'Default';
   }
 
   static String _normalizeModelId(String modelId, String providerInstanceId) {

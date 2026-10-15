@@ -8,6 +8,7 @@ import 'package:sanad_agent/core/e2e_agent_runtime_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_runtime/session_queue_provider_override.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
@@ -338,7 +339,10 @@ void setupDI() {
     () => buildProviderThinkingRegistry(),
   );
   getIt.registerLazySingleton<ThinkingCapabilityAssembler>(
-    () => ThinkingCapabilityAssembler(getIt<ProviderThinkingRegistry>()),
+    () => ThinkingCapabilityAssembler(
+      getIt<ProviderThinkingRegistry>(),
+      getIt<Config>(),
+    ),
   );
 
   getIt.registerLazySingleton<ThinkingControlCacheResolver>(
@@ -350,6 +354,17 @@ void setupDI() {
       cacheResolver: getIt<ThinkingControlCacheResolver>(),
       assembler: getIt<ThinkingCapabilityAssembler>(),
       registry: getIt<ProviderThinkingRegistry>(),
+      config: getIt<Config>(),
+    ),
+  );
+  getIt.registerLazySingleton<RouteCapabilityResolver>(
+    () => RouteCapabilityResolver(
+      instances: getIt<ProviderInstanceRepository>(),
+      config: getIt<Config>(),
+      modelsDevService: getIt.isRegistered<ModelsDevService>()
+          ? getIt<ModelsDevService>()
+          : null,
+      thinkingResolver: getIt<ThinkingSelectionResolver>(),
     ),
   );
   getIt.registerLazySingleton<ThinkingRoutePreferenceStore>(
@@ -374,6 +389,10 @@ void setupDI() {
       getIt<ProviderInstanceRepository>(),
       getIt<AgentRuntimeService>(),
       getIt<ThinkingCapabilityAssembler>(),
+      config: getIt<Config>(),
+      modelsDevService: getIt.isRegistered<ModelsDevService>()
+          ? getIt<ModelsDevService>()
+          : null,
     ),
   );
 

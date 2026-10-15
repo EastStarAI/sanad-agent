@@ -27,6 +27,7 @@ import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -41,6 +42,8 @@ import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
+import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 
@@ -1037,6 +1040,84 @@ void main() {
       );
       expect(sessionManager.getMessages(runner.sessionId), hasLength(1));
     });
+
+    test(
+      'preadmitted replacement with configured attachments survives commit and reopen without duplicate turn',
+      () async {
+        final attachment = UserAttachment(
+          id: 'att-preadmit-1',
+          mediaId: 'med-preadmit-1',
+          safeName: 'preadmit.png',
+          mimeType: 'image/png',
+          sizeBytes: 256,
+          sha256: 'c' * 64,
+          kind: UserAttachmentKind.image,
+          agentLocalReference: 'rel/preadmit.png',
+        );
+
+        final preadmitted = Message(
+          role: MessageRole.user,
+          content: 'preadmitted text',
+          metadata: {
+            'request_id': 'req-preadmitted',
+            'input_kind': MessageHistoryIdentity.rootTurn,
+            'history_status': MessageHistoryIdentity.active,
+          },
+        );
+        final session = sessionManager.createSession('mock');
+        final commitResult = sessionManager.appendRootUserMessage(
+          session.sessionId,
+          preadmitted,
+        );
+        expect(commitResult.inserted, isTrue);
+
+        final runner = AgentRunner(
+          MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'response',
+              ),
+            ),
+          ]),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+
+        runner.configureUserAttachments([attachment]);
+        final committed = await runner.commitUserMessage(
+          'preadmitted text',
+          requestId: 'req-preadmitted',
+        );
+
+        expect(committed.attachments, hasLength(1));
+        expect(committed.attachments.single.id, 'att-preadmit-1');
+        expect(runner.history.last.attachments, hasLength(1));
+
+        // Re-entry / reopen with same request ID returns same record without duplicate message
+        final reopenedCommit = await runner.commitUserMessage(
+          'preadmitted text',
+          requestId: 'req-preadmitted',
+        );
+        expect(reopenedCommit.attachments, hasLength(1));
+        expect(sessionManager.getMessages(session.sessionId), hasLength(1));
+
+        // A fresh runner reopening the persisted session sees the attachments
+        final reopenedRunner = AgentRunner(
+          MockAdapter([]),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+        expect(reopenedRunner.history, hasLength(1));
+        expect(reopenedRunner.history.first.attachments, hasLength(1));
+        expect(
+          reopenedRunner.history.first.attachments.single.id,
+          'att-preadmit-1',
+        );
+      },
+    );
 
     test(
       'parallel view_image starts redact paths and completions follow durable history',
@@ -5318,6 +5399,151 @@ void main() {
             (item.continuationMetadata['completed_tool_results']
                 as Map)['call-b'],
             equals('done-call-b'),
+          );
+        },
+      );
+    });
+
+    group('turn capability profile admission and freezing', () {
+      test(
+        'freezes capability profile at turn admission and preserves across mid-turn config changes',
+        () async {
+          final configFile = File('${tempDir.path}/config.yaml');
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: true
+  model-v2:
+    supports_image_input: false
+''');
+
+          final config = Config();
+          GetIt.I.registerSingleton<Config>(config);
+
+          final repo = ProviderInstanceRepository.fromDatabase(stateDb.db);
+          GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+          final now = DateTime.now();
+          repo.createInstance(
+            ProviderInstance(
+              id: 'custom-provider',
+              templateId: kCustomProviderTemplateId,
+              displayName: 'Custom Provider',
+              protocol: 'openai_chat_completions',
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'First reply',
+              ),
+            ),
+          ]);
+
+          final runner = AgentRunner(adapter, registry, sessionManager);
+
+          // Turn admission via streamMessage
+          final stream = runner.streamMessage(
+            'Hello vision',
+            providerId: 'custom-provider',
+            model: 'model-v1',
+          );
+          await for (final _ in stream) {}
+
+          final admittedProfile = runner.debugTurnCapabilityProfile;
+          expect(admittedProfile, isNotNull);
+          expect(admittedProfile!.providerInstanceId, 'custom-provider');
+          expect(admittedProfile.modelId, 'model-v1');
+          expect(admittedProfile.imageSupport, RouteImageSupport.supported);
+          expect(admittedProfile.evidenceSource, 'override');
+          expect(
+            adapter.lastOptions?.routeCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+
+          // Mid-turn config file change on disk
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: false
+  model-v2:
+    supports_image_input: false
+''');
+          config.reloadModelAwarePolicy();
+
+          // Admitted profile remains frozen!
+          expect(
+            runner.debugTurnCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+
+          // Explicit updateTurnRoute updates the admitted profile for the new route
+          runner.updateTurnRoute(
+            providerId: 'custom-provider',
+            modelId: 'model-v2',
+          );
+
+          final updatedProfile = runner.debugTurnCapabilityProfile;
+          expect(updatedProfile, isNotNull);
+          expect(updatedProfile!.providerInstanceId, 'custom-provider');
+          expect(updatedProfile.modelId, 'model-v2');
+          expect(updatedProfile.imageSupport, RouteImageSupport.unsupported);
+        },
+      );
+
+      test(
+        'run admits profile and freezes it across turn iterations',
+        () async {
+          final configFile = File('${tempDir.path}/config.yaml');
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: true
+''');
+
+          final config = Config();
+          GetIt.I.registerSingleton<Config>(config);
+
+          final repo = ProviderInstanceRepository.fromDatabase(stateDb.db);
+          GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+          final now = DateTime.now();
+          repo.createInstance(
+            ProviderInstance(
+              id: 'custom-provider',
+              templateId: kCustomProviderTemplateId,
+              displayName: 'Custom Provider',
+              protocol: 'openai_chat_completions',
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(role: MessageRole.assistant, content: 'Done'),
+            ),
+          ]);
+
+          final runner = AgentRunner(adapter, registry, sessionManager);
+
+          await runner.sendMessage(
+            'Test message',
+            providerId: 'custom-provider',
+            model: 'model-v1',
+          );
+
+          expect(
+            runner.debugTurnCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+          expect(
+            adapter.lastOptions?.routeCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
           );
         },
       );

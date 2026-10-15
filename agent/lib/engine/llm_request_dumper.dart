@@ -335,13 +335,23 @@ class LLMRequestDumper {
   static dynamic sanitizePayloadForTesting(dynamic value) =>
       _sanitizePayload(value);
 
-  /// Recursively traverses a payload, replacing typed image blocks and data
-  /// URIs before generic secret/string redaction.
+  /// Recursively traverses a payload, replacing typed image blocks, native Ollama
+  /// image arrays, and data URIs before generic secret/string redaction.
   static dynamic _sanitizePayload(dynamic value) {
     if (value is Map) {
       final image = _imagePayloadMetadata(value);
       if (image != null) return image;
-      return value.map((key, child) => MapEntry(key, _sanitizePayload(child)));
+      return value.map((key, child) {
+        if (key == 'images') {
+          if (child is List) {
+            return MapEntry(key, child.map(_sanitizeNativeImage).toList());
+          }
+          if (child is String) {
+            return MapEntry(key, _sanitizeNativeImage(child));
+          }
+        }
+        return MapEntry(key, _sanitizePayload(child));
+      });
     }
     if (value is List) return value.map(_sanitizePayload).toList();
     if (value is String) return _sanitizeString(value);
@@ -384,11 +394,123 @@ class LLMRequestDumper {
     final dataUri = _parseDataUri(payload);
     mimeType ??= dataUri?.mimeType;
     final base64Value = dataUri?.payload ?? payload;
+    final decodedBytes = _decodedBase64Bytes(base64Value);
+    if (decodedBytes != null &&
+        (mimeType == null ||
+            mimeType == 'unknown' ||
+            mimeType == 'application/octet-stream')) {
+      mimeType = _sniffMimeTypeFromBase64(base64Value);
+    }
     return {
       'type': 'image_redacted',
       'mime_type': mimeType ?? 'unknown',
-      'decoded_bytes': _decodedBase64Bytes(base64Value),
+      'decoded_bytes': decodedBytes,
     };
+  }
+
+  static Map<String, dynamic> _sanitizeNativeImage(dynamic item) {
+    if (item is Map) {
+      final image = _imagePayloadMetadata(item);
+      if (image != null) return image;
+    }
+    if (item is! String) {
+      return const {
+        'type': 'image_redacted',
+        'mime_type': 'unknown',
+        'decoded_bytes': null,
+      };
+    }
+
+    final dataUri = _parseDataUri(item);
+    final String base64Payload;
+    String? mimeType;
+    if (dataUri != null) {
+      base64Payload = dataUri.payload;
+      if (dataUri.mimeType.isNotEmpty) {
+        mimeType = dataUri.mimeType;
+      }
+    } else {
+      base64Payload = item;
+    }
+
+    final decodedBytes = _decodedBase64Bytes(base64Payload);
+    if (decodedBytes == null) {
+      return {
+        'type': 'image_redacted',
+        'mime_type': mimeType ?? 'unknown',
+        'decoded_bytes': null,
+      };
+    }
+
+    if (mimeType == null ||
+        mimeType == 'unknown' ||
+        mimeType == 'application/octet-stream') {
+      mimeType = _sniffMimeTypeFromBase64(base64Payload);
+    }
+
+    return {
+      'type': 'image_redacted',
+      'mime_type': mimeType,
+      'decoded_bytes': decodedBytes,
+    };
+  }
+
+  static String _sniffMimeTypeFromBase64(String base64Payload) {
+    if (base64Payload.isEmpty) return 'unknown';
+    try {
+      final headerLength = base64Payload.length >= 16
+          ? 16
+          : base64Payload.length;
+      final bytes = base64.decode(base64Payload.substring(0, headerLength));
+      return _sniffMimeTypeFromBytes(bytes);
+    } catch (_) {
+      return 'unknown';
+    }
+  }
+
+  static String _sniffMimeTypeFromBytes(List<int> bytes) {
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4e &&
+        bytes[3] == 0x47 &&
+        bytes[4] == 0x0d &&
+        bytes[5] == 0x0a &&
+        bytes[6] == 0x1a &&
+        bytes[7] == 0x0a) {
+      return 'image/png';
+    }
+    if (bytes.length >= 4 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4e &&
+        bytes[3] == 0x47) {
+      return 'image/png';
+    }
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xff &&
+        bytes[1] == 0xd8 &&
+        bytes[2] == 0xff) {
+      return 'image/jpeg';
+    }
+    if (bytes.length >= 3 &&
+        bytes[0] == 0x47 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46) {
+      return 'image/gif';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'image/webp';
+    }
+    return 'unknown';
   }
 
   static ({String mimeType, String payload})? _parseDataUri(String value) {

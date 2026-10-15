@@ -190,7 +190,13 @@ class SessionTurnReplayCommandHandler {
       final replayMessage = action == 'edit'
           ? (editedMessage ?? '')
           : inspection.originalMessage;
-      if (replayMessage.isEmpty) {
+      final rawAttachmentEdits = event.payload['attachment_edits'];
+      final hasEditsAttachments =
+          rawAttachmentEdits is List && rawAttachmentEdits.isNotEmpty;
+      final hasAttachments = rawAttachmentEdits == null
+          ? inspection.targetHasAttachments
+          : hasEditsAttachments;
+      if (replayMessage.isEmpty && !hasAttachments) {
         await _emitResult(
           emitEnvelope,
           sessionId: sessionId,
@@ -247,11 +253,9 @@ class SessionTurnReplayCommandHandler {
         return;
       }
       final targetRunId = _targetRunId(postIdle);
-      final rawAttachmentEdits = event.payload['attachment_edits'];
       final sourceSession = _sessionManager.getSession(sessionId);
-      final hasRetrySourceAttachments =
+      final hasRetainedSourceAttachments =
           rawAttachmentEdits == null &&
-          action == 'retry' &&
           sourceSession != null &&
           postIdle.targetMessageIndex >= 0 &&
           postIdle.targetMessageIndex < sourceSession.messages.length &&
@@ -260,7 +264,7 @@ class SessionTurnReplayCommandHandler {
               .attachments
               .isNotEmpty;
       if ((rawAttachmentEdits is List && rawAttachmentEdits.isNotEmpty) ||
-          hasRetrySourceAttachments) {
+          hasRetainedSourceAttachments) {
         stagedAttachmentStore = _attachmentStore;
       }
       List<UserAttachment> replayAttachments;
@@ -292,6 +296,7 @@ class SessionTurnReplayCommandHandler {
         replacementRequestId: commandRequestId,
         replacementText: replayMessage,
         action: action,
+        attachments: replayAttachments,
       );
       if (admission == null) {
         final current = replay.inspect(
@@ -431,9 +436,8 @@ class SessionTurnReplayCommandHandler {
         session.messages[inspection.targetMessageIndex].attachments;
     final originalsById = {for (final item in originals) item.id: item};
     final raw = event.payload['attachment_edits'];
-    final edits = raw == null && action == 'retry'
-        ? originals.map<Object?>((item) => {'reference_id': item.id}).toList()
-        : raw;
+    final edits = raw ??
+        originals.map<Object?>((item) => {'reference_id': item.id}).toList();
     if (edits is! List ||
         edits.length > UserAttachmentPolicy.maxFilesPerMessage) {
       throw const FormatException('Attachment edits are invalid.');

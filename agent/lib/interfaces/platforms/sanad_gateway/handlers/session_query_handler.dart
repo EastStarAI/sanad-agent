@@ -364,7 +364,11 @@ class SessionQueryHandler {
       }
 
       if (message.role == MessageRole.tool) {
-        final resolvedToolContext = _resolveToolContext(messages, message);
+        final resolvedToolContext = _resolveToolContext(
+          messages,
+          message,
+          sessionId: sessionId,
+        );
         final visibleContent =
             message.metadata?['steer_original_content']?.toString() ??
             message.content ??
@@ -1105,14 +1109,16 @@ class SessionQueryHandler {
 
   _ResolvedToolContext _resolveToolContext(
     List<Message> messages,
-    Message message,
-  ) {
-    var toolCallId = message.toolCallId;
+    Message message, {
+    String? sessionId,
+  }) {
+    var toolCallId =
+        message.toolCallId ?? message.metadata?['tool_call_id']?.toString();
     String? toolName;
     String? runId = message.metadata?['run_id']?.toString();
     String? modelStepId = message.metadata?['model_step_id']?.toString();
 
-    if (toolCallId != null) {
+    if (toolCallId != null && toolCallId.isNotEmpty) {
       for (final previous in messages) {
         if (previous.role != MessageRole.assistant ||
             previous.toolCalls == null) {
@@ -1128,6 +1134,18 @@ class SessionQueryHandler {
         }
         if (toolName != null) {
           break;
+        }
+      }
+      if (toolName == null && sessionId != null && sessionId.isNotEmpty) {
+        final origin = _sessionManager.db.findOriginatingToolCall(
+          sessionId,
+          toolCallId: toolCallId,
+          turnId: message.metadata?['turn_id']?.toString(),
+        );
+        if (origin != null) {
+          toolName = origin.toolCall.name;
+          runId ??= origin.runId;
+          modelStepId ??= origin.modelStepId;
         }
       }
     } else {

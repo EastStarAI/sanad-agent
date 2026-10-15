@@ -43,6 +43,9 @@ This contract applies to `agent/lib/core/`.
 - The dependency-composition default-adapter binding resolves the current runtime default on each lookup; it must never retain a missing-provider adapter across onboarding.
 - Shared context services remain provider-neutral; each model turn supplies its live routed adapter explicitly.
 - When a session/turn supplies no model, resolve the configured default dynamically; isolated tests without registered configuration may use the established safe placeholder fallback rather than crashing.
+- Model capability declarations (`model_capabilities` in `config.yaml`) and intrinsic capability resolution are keyed solely by exact model identity; provider instance UUIDs, templates, and endpoints do not select or hint intrinsic metadata.
+- Catalog lookups in `ModelsDevService` resolve intrinsic capabilities across catalog namespaces. Grounded aliases (`groundedModelAliases`) are strictly same-generation aliases only (no cross-generation fallbacks). Exact selected model ID is authoritative if present; when missing, contradictory candidate aliases within the same vendor fail closed (`null`).
+- `ModelsDevService` catalog hydration is wired into daemon and standalone bootstrap lifecycles before turn admission is enabled, guaranteeing zero HTTP calls at admission/measurement/tool loops. Explicit provider model refresh (`manual: true`) forces catalog reload (`forceRefresh: true`), whereas background/startup uses TTL.
 
 ## Credential and State Storage
 - Keep instance metadata/model cache/recent selections in the shared agent state database through the owning repositories.

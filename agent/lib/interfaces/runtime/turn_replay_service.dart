@@ -1,4 +1,5 @@
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -39,6 +40,7 @@ class TurnReplayInspection {
   final int historyRevision;
   final bool containsSteers;
   final TurnReplaySafety safety;
+  final bool targetHasAttachments;
   final TurnReplayInspectionFailure? failure;
 
   const TurnReplayInspection({
@@ -51,6 +53,7 @@ class TurnReplayInspection {
     required this.historyRevision,
     required this.containsSteers,
     required this.safety,
+    this.targetHasAttachments = false,
     this.failure,
   });
 
@@ -196,7 +199,8 @@ class TurnReplayService {
     }
 
     final originalMessage = target.content?.trim() ?? '';
-    if (originalMessage.isEmpty) {
+    final hasAttachments = target.attachments.isNotEmpty;
+    if (originalMessage.isEmpty && !hasAttachments) {
       return _failure(
         sessionId,
         targetRequestId,
@@ -241,6 +245,7 @@ class TurnReplayService {
       historyRevision: session.historyRevision,
       containsSteers: containsSteers,
       safety: safety,
+      targetHasAttachments: hasAttachments,
     );
   }
 
@@ -253,12 +258,14 @@ class TurnReplayService {
     required String replacementRequestId,
     required String replacementText,
     required String action,
+    List<UserAttachment> attachments = const [],
   }) {
     if (!inspection.canReplay) return null;
 
     final replacement = Message(
       role: MessageRole.user,
       content: replacementText,
+      attachments: attachments,
       metadata: {
         'request_id': replacementRequestId,
         'input_kind': MessageHistoryIdentity.rootTurn,

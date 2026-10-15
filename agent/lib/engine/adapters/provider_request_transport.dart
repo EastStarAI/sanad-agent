@@ -14,10 +14,15 @@ class ProviderRequestTransport {
     required LLMRequestOptions options,
     http.Client? adapterSharedClient,
     http.Client? requestClient,
+    http.Client Function()? requestClientFactory,
   }) : _options = options,
        _scope = options.cancellationScope,
        _watchdogs = options.watchdogs {
-    if (requestClient != null) {
+    final effectiveFactory = requestClientFactory ?? options.requestClientFactory;
+    if (effectiveFactory != null) {
+      _client = effectiveFactory();
+      _ownsClient = true;
+    } else if (requestClient != null) {
       _client = requestClient;
       // An explicitly supplied request client is still request-owned when a
       // cancellation scope is present. This keeps test/custom transports as

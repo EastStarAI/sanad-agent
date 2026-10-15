@@ -4,8 +4,10 @@ import 'dart:io';
 
 import 'package:sanad_agent/capabilities/runtime/workspace_path_resolver.dart';
 import 'package:sanad_agent/capabilities/runtime/workspace_tools/view_image_handler.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/hosted_binary_relay.dart';
@@ -101,6 +103,10 @@ Future<void> main() async {
               workspacePath: null,
               admittedAttachmentPaths: paths,
               authorizeExternal: (_, _, _) async {},
+              context: ToolContext(
+                sessionId: 'remote-session',
+                imageSupport: RouteImageSupport.supported,
+              ),
             );
         socket.push('fixture_turn_result', {
           'request_id': requestId,

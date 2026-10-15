@@ -16,6 +16,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
+import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 
@@ -37,6 +38,11 @@ Future<void> main(List<String> args) async {
   print('--- Sanad Agent Daemon ---');
 
   await getIt<AuthManager>().initialize();
+  try {
+    await getIt<ModelsDevService>().ensureLoaded();
+  } catch (e) {
+    Logger('DaemonStartup').warning('Failed to hydrate models.dev catalog: $e');
+  }
   final gatewayManager = getIt<GatewayManager>();
 
   // Register platforms

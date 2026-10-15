@@ -1145,7 +1145,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     final repository = conversationRepository;
     final TurnReplayResult result;
     if (attachmentEdits != null) {
-      if (repository is! AttachmentReplayRepository || message == null) {
+      if (repository is! AttachmentReplayRepository) {
         return const TurnReplayResult(
           outcome: 'attachments_unsupported',
           safety: TurnReplaySafety.unknown,
@@ -1160,7 +1160,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         targetTurnId: targetTurnId,
         expectedHistoryRevision: revision,
         action: action,
-        message: message,
+        message: message ?? '',
         attachmentEdits: attachmentEdits,
         providerInstanceId: state.nextMessageProviderId,
         modelId: state.nextMessageModel,

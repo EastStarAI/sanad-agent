@@ -350,10 +350,10 @@ void main() {
       expect(openRouter.effectiveThinkingPolicyId, 'aggregator_upstream');
       expect(gemini.effectiveThinkingPolicyId, 'google_thinking');
       expect(deepSeek.effectiveThinkingPolicyId, 'deepseek_thinking');
+      expect(kimi.effectiveThinkingPolicyId, 'kimi_thinking');
       expect(openCodeGo.effectiveThinkingPolicyId, 'openai_chat_effort');
       // Ambiguous chat_completions templates fail closed until a dedicated
       // first-release policy is opted in (Task 43 Gate R0/A).
-      expect(kimi.effectiveThinkingPolicyId, 'unknown');
       expect(nvidia.effectiveThinkingPolicyId, 'unknown');
       expect(custom.effectiveThinkingPolicyId, 'unknown');
     });
@@ -1070,7 +1070,7 @@ void main() {
         templateId: 'opencode-go',
         protocol: 'openai_compatible',
         apiMode: 'chat_completions',
-        modelId: 'kimi-k2.7-code',
+        modelId: 'deepseek-v4-flash',
         capabilityRevision: 'rev-1',
       );
 
@@ -1082,6 +1082,18 @@ void main() {
         'high',
         'xhigh',
       ]);
+
+      // Kimi models are not claimed by chatPolicy heuristic; they are governed by KimiThinkingPolicy
+      const kimiContext = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'opencode-go',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'kimi-k2.7-code',
+        capabilityRevision: 'rev-1',
+      );
+      final kimiDesc = chatPolicy.resolveCapability(kimiContext);
+      expect(kimiDesc.status, ThinkingCapabilityStatus.unsupported);
     });
 
     test('restricts o1 models to medium and high', () {

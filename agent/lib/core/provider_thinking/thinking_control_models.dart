@@ -37,10 +37,10 @@ enum ThinkingControlKind {
     return switch (raw) {
       'effort' => ThinkingControlKind.effort,
       'toggle' => ThinkingControlKind.toggle,
-      'token_budget' => ThinkingControlKind.tokenBudget,
+      'token_budget' || 'tokenBudget' => ThinkingControlKind.tokenBudget,
       'level' => ThinkingControlKind.level,
       'adaptive' => ThinkingControlKind.adaptive,
-      'model_variant' => ThinkingControlKind.modelVariant,
+      'model_variant' || 'modelVariant' => ThinkingControlKind.modelVariant,
       _ => null,
     };
   }
@@ -173,22 +173,26 @@ class ThinkingControlDescriptor {
   static ThinkingControlDescriptor unknown({
     String capabilityRevision = 'unknown',
     String source = 'unknown',
+    DateTime? observedAt,
   }) {
     return ThinkingControlDescriptor(
       status: ThinkingCapabilityStatus.unknown,
       capabilityRevision: capabilityRevision,
       source: source,
+      observedAt: observedAt,
     );
   }
 
   static ThinkingControlDescriptor unsupported({
     String capabilityRevision = 'unsupported',
     String source = 'profile',
+    DateTime? observedAt,
   }) {
     return ThinkingControlDescriptor(
       status: ThinkingCapabilityStatus.unsupported,
       capabilityRevision: capabilityRevision,
       source: source,
+      observedAt: observedAt,
     );
   }
 

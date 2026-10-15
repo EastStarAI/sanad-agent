@@ -5,7 +5,9 @@ import 'package:sanad_agent/capabilities/image/image_policy.dart';
 import 'package:sanad_agent/capabilities/image/image_worker.dart';
 import 'package:sanad_agent/capabilities/runtime/workspace_path_resolver.dart';
 import 'package:sanad_agent/capabilities/runtime/workspace_tools/view_image_handler.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:test/test.dart';
 
 final class _FakeImageWorker extends ImageWorker {
@@ -58,6 +60,11 @@ void main() {
       },
     );
 
+    final supportedContext = ToolContext(
+      sessionId: 'test-session',
+      imageSupport: RouteImageSupport.supported,
+    );
+
     test(
       'returns safe text then truthful image for an internal path',
       () async {
@@ -69,6 +76,7 @@ void main() {
           authorizeExternal: (path, arguments, context) async {
             approvalCalled = true;
           },
+          context: supportedContext,
         );
 
         expect(result.isError, isFalse);
@@ -92,6 +100,7 @@ void main() {
             expect(reads, 0);
             authorizedPath = path;
           },
+          context: supportedContext,
         );
 
         expect(result.isError, isFalse);
@@ -112,6 +121,7 @@ void main() {
           approvalPath = path;
           throw Exception('denied');
         },
+        context: supportedContext,
       );
 
       expect(approvalPath, externalImage.resolveSymbolicLinksSync());
@@ -130,6 +140,7 @@ void main() {
           admittedAttachmentPaths: [externalImage.path],
           authorizeExternal: (path, arguments, context) async =>
               fail('attachment grants must not request workspace approval'),
+          context: supportedContext,
         );
         expect(granted.isError, isFalse);
         expect(reads, 1);
@@ -142,6 +153,7 @@ void main() {
           workspacePath: null,
           admittedAttachmentPaths: [externalImage.path],
           authorizeExternal: (path, arguments, context) async {},
+          context: supportedContext,
         );
         expect(denied.errorCode, ToolResultErrorCode.permissionDenied);
         expect(reads, 0);
@@ -160,6 +172,7 @@ void main() {
             workspacePath: workspace.path,
             admittedAttachmentPaths: const [],
             authorizeExternal: (path, arguments, context) async {},
+            context: supportedContext,
           );
           expect(result.errorCode, ToolResultErrorCode.invalidInput);
         }
@@ -169,6 +182,7 @@ void main() {
           workspacePath: workspace.path,
           admittedAttachmentPaths: const [],
           authorizeExternal: (path, arguments, context) async {},
+          context: supportedContext,
         );
         expect(directoryResult.errorCode, ToolResultErrorCode.invalidInput);
 
@@ -185,10 +199,82 @@ void main() {
               workspacePath: workspace.path,
               admittedAttachmentPaths: const [],
               authorizeExternal: (path, arguments, context) async {},
+              context: supportedContext,
             );
         expect(failed.errorCode, ToolResultErrorCode.unsupportedFormat);
         expect(failed.blocks, everyElement(isA<ToolTextBlock>()));
       },
     );
+
+    test(
+      'unsupported image capability returns typed error without reading bytes',
+      () async {
+        final context = ToolContext(
+          sessionId: 'test-session',
+          imageSupport: RouteImageSupport.unsupported,
+        );
+        final result = await handler().executeResult(
+          {'path': internalImage.path},
+          workspacePath: workspace.path,
+          admittedAttachmentPaths: const [],
+          authorizeExternal: (path, arguments, context) async {},
+          context: context,
+        );
+
+        expect(result.isError, isTrue);
+        expect(result.errorCode, ToolResultErrorCode.executionFailed);
+        expect(
+          result.displayText,
+          'Image inspection is not supported because the active model route does not support image input.',
+        );
+        expect(result.blocks.whereType<ToolImageBlock>(), isEmpty);
+        expect(reads, 0);
+      },
+    );
+
+    test(
+      'unknown image capability returns actionable config guidance without reading bytes',
+      () async {
+        final context = ToolContext(
+          sessionId: 'test-session',
+          imageSupport: RouteImageSupport.unknown,
+        );
+        final result = await handler().executeResult(
+          {'path': internalImage.path},
+          workspacePath: workspace.path,
+          admittedAttachmentPaths: const [],
+          authorizeExternal: (path, arguments, context) async {},
+          context: context,
+        );
+
+        expect(result.isError, isTrue);
+        expect(result.errorCode, ToolResultErrorCode.executionFailed);
+        expect(
+          result.displayText,
+          'Image inspection is unavailable because image input capability is unknown for the active model route. Specify supports_image_input in config.yaml under model_capabilities.',
+        );
+        expect(result.blocks.whereType<ToolImageBlock>(), isEmpty);
+        expect(reads, 0);
+      },
+    );
+
+    test('missing context defaults to unknown capability', () async {
+      final result = await handler().executeResult(
+        {'path': internalImage.path},
+        workspacePath: workspace.path,
+        admittedAttachmentPaths: const [],
+        authorizeExternal: (path, arguments, context) async {},
+        context: null,
+      );
+
+      expect(result.isError, isTrue);
+      expect(result.errorCode, ToolResultErrorCode.executionFailed);
+      expect(
+        result.displayText,
+        'Image inspection is unavailable because image input capability is unknown for the active model route. Specify supports_image_input in config.yaml under model_capabilities.',
+      );
+      expect(result.blocks.whereType<ToolImageBlock>(), isEmpty);
+      expect(reads, 0);
+    });
   });
 }

@@ -37,6 +37,8 @@ This contract applies to `agent/lib/evolution/db/`.
   `origin_message_id` as first-class message columns. Normal reads return
   `active` rows only; superseded rows stay stored.
 - `sessions.history_revision` is independent from execution and route revisions. Soft rewind revalidates the latest active root and accepts the replacement user record in one transaction with that compare-and-swap.
+- Soft-rewind attachment association commits in that same transaction: every replacement attachment must match exactly one staged row or a retained row owned by the target message in the same session. Missing, foreign, or stale associations reject and roll back the entire admission, preserving history, revision and previous attachment ownership.
+- Originating tool-call resolution across page-budget boundaries queries strictly within the same session id by turn id or tool-call id, returning only immutable tool name, call id, and raw arguments without loading full history or crossing session boundaries.
 - Session lineage (`lineage_id`, `parent_session_id`, fork target identities,
   `fork_sequence`) is independent of session lifetime. Deleting a parent
   nulls `parent_session_id` on children and never cascades to child rows.

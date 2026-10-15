@@ -519,6 +519,225 @@ void main() {
     expect(loader.cancelled, isTrue);
   });
 
+  testWidgets('view-image typed text-only failure renders explanation and target filename without media or assistant text', (
+    tester,
+  ) async {
+    final mapper = UnifiedDeviceMapper();
+    final toolUse = mapper.mapLiveEvent({
+      'event': 'tool_use',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_unsupported_1',
+        'input': {'path': '/workspace/test_chart.png', 'detail': 'auto'},
+        'status': 'running',
+      },
+    })!;
+
+    final toolResult = mapper.mapLiveEvent({
+      'event': 'tool_result',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_unsupported_1',
+        'output': 'Image inspection is not supported because the active model route does not support image input.',
+        'isError': true,
+        'status': 'error',
+        'toolResult': {
+          'schemaVersion': 1,
+          'blocks': [
+            {
+              'type': 'text',
+              'text': 'Image inspection is not supported because the active model route does not support image input.',
+            }
+          ],
+          'isError': true,
+          'errorCode': 'execution_failed',
+        },
+      },
+    })!;
+
+    final merged = toolUse.merge(toolResult);
+
+    await tester.pumpWidget(
+      _app(EventTile(event: merged, isExpanded: true)),
+    );
+
+    expect(
+      find.text('View Image: test_chart.png', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Image inspection is not supported because the active model route does not support image input.'),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.error_outline_rounded), findsWidgets);
+    expect(find.byKey(const Key('view_image_thumbnail')), findsNothing);
+    expect(find.byKey(const Key('view_image_unavailable')), findsNothing);
+  });
+
+  testWidgets('view-image typed failure for unknown capability displays truthful guidance', (
+    tester,
+  ) async {
+    final mapper = UnifiedDeviceMapper();
+    final toolUse = mapper.mapLiveEvent({
+      'event': 'tool_use',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_unknown_1',
+        'input': {'path': 'relative/sub/schema.png', 'detail': 'auto'},
+        'status': 'running',
+      },
+    })!;
+
+    final toolResult = mapper.mapLiveEvent({
+      'event': 'tool_result',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_unknown_1',
+        'output': 'Image inspection is unavailable because image input capability is unknown for the active model route. Specify supports_image_input in config.yaml under model_capabilities.',
+        'isError': true,
+        'status': 'error',
+      },
+    })!;
+
+    final merged = toolUse.merge(toolResult);
+
+    await tester.pumpWidget(
+      _app(EventTile(event: merged, isExpanded: true)),
+    );
+
+    expect(
+      find.text('View Image: schema.png', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Image inspection is unavailable because image input capability is unknown for the active model route. Specify supports_image_input in config.yaml under model_capabilities.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('view-image ordinary file error remains honestly visible', (
+    tester,
+  ) async {
+    final mapper = UnifiedDeviceMapper();
+    final event = mapper.mapLiveEvent({
+      'event': 'tool_result',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_not_found',
+        'input': {'path': 'missing_file.png'},
+        'output': 'Image file was not found.',
+        'isError': true,
+        'status': 'error',
+      },
+    })!;
+
+    await tester.pumpWidget(
+      _app(EventTile(event: event, isExpanded: true)),
+    );
+
+    expect(
+      find.text('View Image: missing_file.png', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Image file was not found.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('view-image history hydration parity with live event source', (
+    tester,
+  ) async {
+    final mapper = UnifiedDeviceMapper();
+    final history = mapper.mapHistory([
+      {
+        'id': 'msg-1',
+        'type': 'tool_use',
+        'tool': 'view_image',
+        'input': {'path': 'hydrated.png'},
+        'tool_call_id': 'call_hist_1',
+      },
+      {
+        'id': 'msg-2',
+        'type': 'tool_result',
+        'tool': 'view_image',
+        'output': 'Image inspection is not supported because the active model route does not support image input.',
+        'isError': true,
+        'status': 'error',
+        'tool_call_id': 'call_hist_1',
+      },
+    ]);
+
+    expect(history.length, 2);
+    final merged = history[0].merge(history[1]);
+
+    await tester.pumpWidget(
+      _app(EventTile(event: merged, isExpanded: true)),
+    );
+
+    expect(
+      find.text('View Image: hydrated.png', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Image inspection is not supported because the active model route does not support image input.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('view-image running state without media renders executing progress and no failure banner', (
+    tester,
+  ) async {
+    final runningEvent = CanonicalEvent(
+      id: 'tool_running_1',
+      kind: EventKind.toolCall,
+      status: EventStatus.running,
+      tool: {
+        'name': 'view_image',
+        'input': {'path': 'pending_chart.png'},
+      },
+      timestamp: DateTime.now(),
+    );
+
+    await tester.pumpWidget(
+      _app(EventTile(event: runningEvent, isExpanded: true)),
+    );
+
+    expect(find.byKey(const Key('view_image_error')), findsNothing);
+    expect(find.byKey(const Key('view_image_error_message')), findsNothing);
+    expect(find.text('Executing tool...'), findsOneWidget);
+    expect(find.textContaining('Failed'), findsNothing);
+  });
+
+  testWidgets('successful view_image with absent or ambiguous metadata is neutral and does not expose base64', (
+    tester,
+  ) async {
+    const rawBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    final ambiguousEvent = CanonicalEvent(
+      id: 'tool_success_no_media',
+      kind: EventKind.toolCall,
+      status: EventStatus.done,
+      tool: {
+        'name': 'view_image',
+        'input': {'path': 'photo.png'},
+        'output': {'type': 'image', 'data': rawBase64},
+        'isError': false,
+      },
+      timestamp: DateTime.now(),
+    );
+
+    await tester.pumpWidget(
+      _app(EventTile(event: ambiguousEvent, isExpanded: true)),
+    );
+
+    expect(find.byKey(const Key('view_image_error')), findsNothing);
+    expect(find.byKey(const Key('view_image_error_message')), findsNothing);
+    expect(find.byKey(const Key('view_image_unavailable')), findsOneWidget);
+    expect(find.text('Image unavailable'), findsOneWidget);
+    expect(find.textContaining('Failed'), findsNothing);
+    expect(find.textContaining(rawBase64), findsNothing);
+  });
+
   test('view-image repository scopes requests and evicts its bounded cache', () async {
     var requests = 0;
     final repository = ViewImageMediaRepository(

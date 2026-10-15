@@ -1,8 +1,10 @@
 /// Validates thinking selections against the active route descriptor.
 library;
 
+import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_model_id.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
@@ -32,16 +34,19 @@ class ThinkingSelectionResolver {
   final ThinkingControlCacheResolver _cacheResolver;
   final ThinkingCapabilityAssembler _assembler;
   final ProviderThinkingRegistry _registry;
+  final Config? _config;
 
   ThinkingSelectionResolver({
     required ProviderInstanceRepository instances,
     required ThinkingControlCacheResolver cacheResolver,
     required ThinkingCapabilityAssembler assembler,
     required ProviderThinkingRegistry registry,
+    Config? config,
   }) : _instances = instances,
        _cacheResolver = cacheResolver,
        _assembler = assembler,
-       _registry = registry;
+       _registry = registry,
+       _config = config;
 
   ThinkingSelectionResolution resolve({
     required String providerInstanceId,
@@ -71,13 +76,15 @@ class ThinkingSelectionResolver {
     if (descriptor.status == ThinkingCapabilityStatus.unsupported) {
       throw ThinkingSelectionException(
         code: ThinkingSelectionErrorCode.capabilityUnsupported,
-        message: 'Thinking controls are unsupported for the active model route.',
+        message:
+            'Thinking controls are unsupported for the active model route.',
       );
     }
     if (descriptor.status == ThinkingCapabilityStatus.unknown) {
       throw ThinkingSelectionException(
         code: ThinkingSelectionErrorCode.capabilityUnknown,
-        message: 'Thinking controls are unavailable for the active model route.',
+        message:
+            'Thinking controls are unavailable for the active model route.',
       );
     }
 
@@ -109,8 +116,35 @@ class ThinkingSelectionResolver {
     required ThinkingControlDescriptor descriptor,
     required String? selectionId,
   }) {
+    final override = _config?.modelAwarePolicy
+        .capabilityOverrideFor(model.value)
+        ?.thinkingControl;
+
+    if (override != null) {
+      return _buildResolutionFromControlOverride(
+        control: override,
+        descriptor: descriptor,
+        instance: instance,
+        selectionId: selectionId,
+      );
+    }
+
+    final rawDeclared = model.modelMetadata['thinking_control'];
+    final declaredOverride = ThinkingControlOverride.tryParse(rawDeclared);
+    if (declaredOverride != null) {
+      return _buildResolutionFromControlOverride(
+        control: declaredOverride,
+        descriptor: descriptor,
+        instance: instance,
+        selectionId: selectionId,
+      );
+    }
+
     final template = ThinkingRoutePolicy.resolveTemplate(instance);
-    final policyId = template.effectiveThinkingPolicyId;
+    final policyId = ThinkingRoutePolicy.policyIdFor(
+      instance,
+      modelId: model.value,
+    );
     final policy = _registry.resolveForTemplate(thinkingPolicyId: policyId);
     final context = ThinkingPolicyContext(
       providerInstanceId: instance.id,
@@ -122,6 +156,7 @@ class ThinkingSelectionResolver {
       capabilityRevision: descriptor.capabilityRevision,
       modelMetadata: model.modelMetadata,
     );
+
     final directive = policy.resolveDirective(context, selectionId);
     if (selectionId != null && directive is UseProviderDefault) {
       throw ThinkingSelectionException(
@@ -136,24 +171,143 @@ class ThinkingSelectionResolver {
     );
   }
 
+  ThinkingSelectionResolution _buildResolutionFromControlOverride({
+    required ThinkingControlOverride control,
+    required ThinkingControlDescriptor descriptor,
+    required ProviderInstance instance,
+    required String? selectionId,
+  }) {
+    final effectiveSelection =
+        (selectionId == null || selectionId.trim().isEmpty)
+            ? control.defaultOption
+            : selectionId.trim();
+
+    if (effectiveSelection == null || effectiveSelection.isEmpty) {
+      return ThinkingSelectionResolution(
+        selectionId: null,
+        descriptor: descriptor,
+        directive: const UseProviderDefault(),
+      );
+    }
+
+    if (control.status != ThinkingCapabilityStatus.supported ||
+        !control.options.containsKey(effectiveSelection)) {
+      throw ThinkingSelectionException(
+        code: ThinkingSelectionErrorCode.optionUnavailable,
+        message: 'The selected thinking option is unavailable for this route.',
+      );
+    }
+
+    final wire = control.wire;
+    final template = ThinkingRoutePolicy.resolveTemplate(instance);
+    final apiMode = ThinkingRoutePolicy.apiModeFor(instance, template);
+    if (wire == null ||
+        !ThinkingRoutePolicy.isWireCompatible(
+          wire: wire,
+          protocol: instance.protocol,
+          apiMode: apiMode,
+        )) {
+      throw ThinkingSelectionException(
+        code: ThinkingSelectionErrorCode.capabilityUnsupported,
+        message:
+            'Wire policy $wire is incompatible with ${instance.protocol} route (apiMode: $apiMode).',
+      );
+    }
+
+    final optionVal = control.options[effectiveSelection];
+    final NativeThinkingDirective directive = switch (wire) {
+      'openai_chat_effort' => OpenAiEffortDirective(optionVal.toString()),
+      'codex_responses_effort' => ResponsesReasoningDirective(
+        effort: optionVal.toString(),
+      ),
+      'anthropic_adaptive' => switch (optionVal) {
+        'none' ||
+        'off' ||
+        false => const ThinkingToggleDirective(enabled: false),
+        _ => AnthropicAdaptiveDirective(optionVal.toString()),
+      },
+      'anthropic_budget' => switch (optionVal) {
+        num n when n >= 1024 => AnthropicBudgetDirective(n.toInt()),
+        _ => throw ThinkingSelectionException(
+          code: ThinkingSelectionErrorCode.optionUnavailable,
+          message: 'Anthropic budget must be an integer >= 1024.',
+        ),
+      },
+      'toggle_effort' => switch (optionVal) {
+        bool b => ThinkingToggleDirective(enabled: b),
+        'true' || 'on' => const ThinkingToggleDirective(enabled: true),
+        'false' || 'off' => const ThinkingToggleDirective(enabled: false),
+        _ => throw ThinkingSelectionException(
+          code: ThinkingSelectionErrorCode.optionUnavailable,
+          message: 'Toggle option value must be boolean or on/off.',
+        ),
+      },
+      'google_thinking' => switch (optionVal) {
+        0 || 'none' || 'off' => const GoogleLevelDirective('off'),
+        num n => GoogleBudgetDirective(n.toInt()),
+        _ => GoogleLevelDirective(optionVal.toString()),
+      },
+      _ => throw ThinkingSelectionException(
+        code: ThinkingSelectionErrorCode.capabilityUnsupported,
+        message: 'Unsupported wire policy: $wire',
+      ),
+    };
+
+    return ThinkingSelectionResolution(
+      selectionId: selectionId ?? effectiveSelection,
+      descriptor: descriptor,
+      directive: directive,
+    );
+  }
+
   ModelOption _modelForRoute({
     required ProviderInstance instance,
     required String modelId,
   }) {
-    final cached = _cacheResolver.resolve(
-      providerInstanceId: instance.id,
-      modelId: modelId,
-      templateId: instance.templateId,
-      protocol: instance.protocol,
-      configRevision: instance.configRevision,
-      credentialRevision: instance.credentialRevision,
-    );
-    if (cached != null) {
-      return ModelOption.fromJson({
-        'value': modelId,
-        'label': modelId,
-        'thinking_control': cached,
-      });
+    final cached = _instances.readModelCache(instance.id, 'models');
+    if (cached != null &&
+        cached['config_revision'] == instance.configRevision &&
+        cached['credential_revision'] == instance.credentialRevision) {
+      final models = cached['models'] as List<dynamic>? ?? const [];
+      final target = ProviderModelId.normalize(
+        templateId: instance.templateId,
+        protocol: instance.protocol,
+        rawModelId: modelId,
+      );
+      for (final entry in models) {
+        if (entry is Map) {
+          try {
+            final map = Map<String, dynamic>.from(entry);
+            if (!map.containsKey('value') && map.containsKey('id')) {
+              map['value'] = map['id'];
+            }
+            final option = ModelOption.fromJson(map);
+            final opt = ProviderModelId.normalize(
+              templateId: instance.templateId,
+              protocol: instance.protocol,
+              rawModelId: option.value,
+            );
+            if (opt.isNotEmpty && opt == target) {
+              if (option.thinkingControl == null) {
+                final cachedTc = _cacheResolver.resolve(
+                  providerInstanceId: instance.id,
+                  modelId: modelId,
+                  templateId: instance.templateId,
+                  protocol: instance.protocol,
+                  configRevision: instance.configRevision,
+                  credentialRevision: instance.credentialRevision,
+                );
+                if (cachedTc != null) {
+                  return option.copyWith(
+                    thinkingControl: ThinkingControlDescriptor.fromMap(cachedTc),
+                  );
+                }
+              }
+              return option;
+            }
+          } catch (_) {}
+        }
+      }
     }
     return ModelOption(value: modelId, label: modelId);
   }

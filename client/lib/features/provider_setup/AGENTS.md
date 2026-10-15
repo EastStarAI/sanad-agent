@@ -47,6 +47,9 @@ This contract applies to `client/lib/features/provider_setup/`.
 - Keep temporary provider-name lookup misses from degrading the UI to raw instance UUIDs.
 
 ## Provider Account Usage
+- `ProviderUsageCubit` owns the per-device provider display-name catalog used by the composer; catalog generations are separate from usage/support request generations.
+- Publish instance names only when `ProviderSetupCubit.snapshotGeneration` advances after a successful snapshot load or mutation. Navigation, auth cancellation, readiness error text, and failed loads are not snapshot authority; a successful empty snapshot may clear the catalog.
+- Preserve catalog invalidation generations across device clears until cubit disposal so late pre-clear responses cannot repopulate names. An authoritative unchanged snapshot must still neutralize pending stale catalog loads; quiescent identical snapshots remain no-ops.
 - Scope usage state by target device and provider instance; late capability or snapshot responses must not restore deleted instances or cross a device change.
 - Discover usage support from the daemon rather than provider names or authentication methods.
 - Keep successful snapshots visible for one minute and use stale-while-revalidate after expiry without polling or blocking provider cards.

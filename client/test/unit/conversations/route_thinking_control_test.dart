@@ -177,7 +177,7 @@ void main() {
       );
     });
 
-    test('shows unavailable state for unknown descriptors', () {
+    test('shows providerManaged state for null descriptors when idle', () {
       const capabilities = Capability(
         supportsThinkingModeChange: true,
         thinkingModeSource: ThinkingModeSource.model,
@@ -188,7 +188,96 @@ void main() {
           capabilities: capabilities,
           descriptor: null,
         ),
-        RouteThinkingSelectorState.unavailable,
+        RouteThinkingSelectorState.providerManaged,
+      );
+    });
+
+    test('shows loading state when isLoading is true without descriptor', () {
+      const capabilities = Capability(
+        supportsThinkingModeChange: true,
+        thinkingModeSource: ThinkingModeSource.model,
+      );
+
+      expect(
+        RouteThinkingControl.selectorState(
+          capabilities: capabilities,
+          descriptor: null,
+          isLoading: true,
+        ),
+        RouteThinkingSelectorState.loading,
+      );
+    });
+
+    test('shows fetchFailure state when hasFetchError is true without descriptor', () {
+      const capabilities = Capability(
+        supportsThinkingModeChange: true,
+        thinkingModeSource: ThinkingModeSource.model,
+      );
+
+      expect(
+        RouteThinkingControl.selectorState(
+          capabilities: capabilities,
+          descriptor: null,
+          hasFetchError: true,
+        ),
+        RouteThinkingSelectorState.fetchFailure,
+      );
+    });
+
+    test('shows providerManaged state for status unknown descriptors', () {
+      const capabilities = Capability(
+        supportsThinkingModeChange: true,
+        thinkingModeSource: ThinkingModeSource.model,
+      );
+      const descriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.unknown,
+      );
+
+      expect(
+        RouteThinkingControl.selectorState(
+          capabilities: capabilities,
+          descriptor: descriptor,
+        ),
+        RouteThinkingSelectorState.providerManaged,
+      );
+    });
+
+    test('shows providerManaged state for status supported with empty options', () {
+      const capabilities = Capability(
+        supportsThinkingModeChange: true,
+        thinkingModeSource: ThinkingModeSource.model,
+      );
+      const descriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        options: [],
+      );
+
+      expect(
+        RouteThinkingControl.selectorState(
+          capabilities: capabilities,
+          descriptor: descriptor,
+        ),
+        RouteThinkingSelectorState.providerManaged,
+      );
+    });
+
+    test('retains selectable state when descriptor is cached even if isLoading is true', () {
+      const capabilities = Capability(
+        supportsThinkingModeChange: true,
+        thinkingModeSource: ThinkingModeSource.model,
+      );
+      const descriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
+      );
+
+      expect(
+        RouteThinkingControl.selectorState(
+          capabilities: capabilities,
+          descriptor: descriptor,
+          isLoading: true,
+        ),
+        RouteThinkingSelectorState.selectable,
       );
     });
 
@@ -359,7 +448,7 @@ void main() {
       );
     });
 
-    test('resolves medium option when neither defaultOptionId nor isProviderDefault is set', () {
+    test('resolves Default label when neither defaultOptionId nor isProviderDefault is set', () {
       const descriptorNoDefault = ThinkingControlDescriptorDto(
         status: ThinkingCapabilityStatus.supported,
         kind: ThinkingControlKind.effort,
@@ -376,7 +465,7 @@ void main() {
           selectionId: null,
           legacyModes: const [],
         ),
-        'Medium',
+        'Default',
       );
     });
 
@@ -391,14 +480,14 @@ void main() {
       );
     });
 
-    test('falls back to Medium when descriptor has no options and legacy modes is empty', () {
+    test('falls back to Default when descriptor has no options and legacy modes is empty', () {
       expect(
         RouteThinkingControl.labelForSelection(
           descriptor: null,
           selectionId: null,
           legacyModes: const [],
         ),
-        'Medium',
+        'Default',
       );
     });
   });
@@ -457,7 +546,7 @@ void main() {
       );
     });
 
-    test('resolves medium option when defaultOptionId and isProviderDefault are omitted', () {
+    test('returns null when defaultOptionId and isProviderDefault are omitted', () {
       const descriptorNoDefault = ThinkingControlDescriptorDto(
         status: ThinkingCapabilityStatus.supported,
         kind: ThinkingControlKind.effort,
@@ -474,7 +563,7 @@ void main() {
           selectionId: null,
           legacyModes: const [],
         ),
-        'medium',
+        isNull,
       );
     });
 

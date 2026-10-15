@@ -55,6 +55,7 @@ Do not introduce convenience code that weakens these boundaries.
 ### Provider and Configuration Ownership
 - Provider templates, instances, credentials status, model options, readiness, defaults, limits, and failover settings come from the agent provider runtime.
 - Provider setup remains instance-first; the client must not hardcode providers, synthesize instances, or treat cached models as readiness.
+- The client manages the provider display-name catalog centrally in `ProviderUsageCubit`, isolated per device and decoupled from per-instance usage/support request generations. Authoritative snapshot boundaries are governed by internal `snapshotGeneration` in `ProviderSetupCubit`, ensuring successful provider mutations (`create`, `rename`, `remove`) in `ProviderSetupFlow` synchronize display names immediately without restarting the client; UI navigation, auth cancellation, intermediate forms, or load errors never advance generation and cannot clear cached catalogs, while pre-mutation in-flight responses cannot overwrite fresh state. Monotonic catalog generation authority persists across device clears to eliminate ABA stale-catalog races, and authoritative mutation snapshots neutralize pending in-flight loads.
 - Never expose raw access,refresh,polling,device,provider,or recovery-owner credentials in logs or UI state. Socket and user-visible-error diagnostics must also omit command payloads,event content,custom names,and raw Client-instance identity;log bounded lifecycle/type/count metadata only.
 
 ## Development & Testing Requirements

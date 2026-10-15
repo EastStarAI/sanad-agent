@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77I final acceptance; 77I2 complete with Go live evidence"
-remaining_estimate: "77I2 0%; parent final acceptance remains open and is not inferred from Go success"
+current_gate: "77I5 — native Ollama image acceptance, grounded thinking controls/defaults and final PR delivery"
+remaining_estimate: "Final acceptance remains open; current gates and evidence are owned by 77I5, not inferred from an earlier provider success"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -13,11 +13,11 @@ reference_grounding: "ready; resolve the owning evidence packet before each chil
 
 ## 1. الهدف والحالة
 
-التنفيذ الأساسي موجود؛القبول الحي أُعيد فتحه في [Task 77I](tasks/77i-live-image-preview-and-provider-projection-repair.md) بسبب عيوب المعاينة الحية والاسترجاع السحابي. التنفيذ ينتج حد أداة typed، وأداة `view_image` محلية آمنة، ومرفقات مستخدم لا تصل bytes الخاصة بها تلقائيًا إلى النموذج، وعرضًا قابلًا للفتح للصور داخل المحادثة، مع تكافؤ محلي/بعيد واستعادة لا تعيد فتح الملف بعد اكتمال الأداة.
+التنفيذ الأساسي موجود؛ أُعيد فتح القبول الحي في [Task 77I](tasks/77i-live-image-preview-and-provider-projection-repair.md)، ثم جُمعت الإصلاحات والبوابات الحالية في [77I5](tasks/77i5-unified-provider-model-capabilities.md). هذه المهمة الأخيرة تملك حالة الإغلاق الحالية، بما فيها اكتشاف ونقل صور Ollama والتفكير وجاهزية الـPR. ينتج التنفيذ حد أداة typed، وأداة `view_image` محلية آمنة، ومرفقات صور تُرسل كبكسلات بعد admission والتحقق من التخزين ودعم النموذج عبر codec البروتوكول الفعلي، وعرضًا قابلًا للفتح للصور داخل المحادثة، مع تكافؤ محلي/بعيد واستعادة لا تعيد فتح الملف بعد اكتمال الأداة.
 
 يشمل النطاق: لصق الصور، السحب والإفلات، File Picker، زر `+` في يسار الـcomposer بجوار Permission Mode، صور وبطاقات الملفات داخل رسالة المستخدم، استعادة المرفقات في Edit & Retry، ونقل الملفات إلى وكيل بعيد عبر hosted capability متوافقة.
 
-خارج النطاق: إرسال مرفق المستخدم مباشرةً كـprovider image input، URL/data URI من المستخدم، OCR، animated/multi-frame images، recursive remote-folder upload، thumbnails للمجلدات، تغيير `system_screenshot`، أو اختراع امتداد غير قياسي لـOpenAI Chat.
+خارج النطاق: URL/data URI كمسار يقدمه المستخدم، OCR، animated/multi-frame images، recursive remote-folder upload، thumbnails للمجلدات، تغيير `system_screenshot`، أو اختراع امتداد غير قياسي لـOpenAI Chat. إرسال صور المستخدم المتحقق منها مباشرةً على مسار يدعم الصور أصبح ضمن النطاق المعتمد في 77I5؛ لا يُستخدم نموذج مساعد أو إسقاط صامت للبكسلات.
 
 ## 2. القرارات المقفلة
 
@@ -75,10 +75,10 @@ detail = low | auto | high | original
 
 ### 2.5 ما يراه النموذج
 
-- المرفقات لا تتحول تلقائيًا إلى provider image/file parts.
-- النموذج يستقبل نص المستخدم ثم projection محدودة ومرتبة تذكر الاسم والنوع والمسار الموجود على جهاز الوكيل، وتطلب استخدام `view_image` أو أداة الملف/التصفح المناسبة عند الحاجة.
-- attachment bytes لا تدخل provider request إلا كنتيجة tool صريحة بعد أن يختار النموذج الأداة.
-- text-only provider تطبق fallback الخاصة بنتيجة الأداة، لا fallback على مرفق المستخدم الخام.
+- صور المستخدم المعتمدة تُقرأ من request-owned `AttachmentStore` مع التحقق من jail والحالة والحجم والـhash وmagic MIME، ثم تُرسل كبكسلات عبر codec الفعلي إذا أثبت snapshot النموذج دعم الصور.
+- المرفقات غير الصورية تحتفظ بـprojection نصية محدودة ومرتبة للاسم والنوع ومرجع الوكيل، لا client-local path بعيد ولا file parts غير معلنة.
+- نتائج `view_image` الصورية تبقى typed في التاريخ وتُسلسل عبر البروتوكول الفعلي مع حفظ tool-call/result pairing؛ لا تُعدّل الرسائل canonical لإضافة رسالة إسقاط الصور الصادرة.
+- الصور الموجودة على مسار unsupported/unknown توقف الإرسال قبل أي طلب فاقد للبكسلات. الاستدعاء الجديد لـ`view_image` في هذا المسار يُرجع نتيجة خطأ نصية واضحة ومختلفة بين unsupported وunknown؛ لا يوصي projection غير الصوري بفحص لا يدعمه النموذج، ولا fallback أو resend تلقائي.
 
 ### 2.6 تجربة Composer ورسالة المستخدم والتحرير
 
@@ -100,7 +100,7 @@ detail = low | auto | high | original
 
 - `LLMAdapter` يعلن القدرة الأصلية على نتائج الأدوات: Codex Responses وAnthropic تستخدمان `imageToolResults`. هذه القدرة تختلف عن قبول الصورة كسياق user في Chat Completions.
 - يشمل النطاق المعتمد الآن OpenAI-compatible Chat مع إسقاط صور نتائج الأدوات إلى رسالة user اصطناعية بعد مجموعة نتائج الأدوات كاملة، عندما يثبت catalog دعم الصور للمزود والنموذج الفعليين. التاريخ canonical لا يتغير؛ لا model-name inference أو endpoint probing.
-- unknown/missing/text-only وcustom endpoints غير الموثقة وOllama native تبقى fail-closed. التنفيذ والقبول الحي في [Task 77I2](tasks/77i2-openai-compatible-tool-image-projection.md).
+- دعم الصور intrinsic للنموذج نفسه، وليس مقيدًا باسم المزود أو عنوانه الرسمي: explicit model-only override ثم إعلان endpoint صالح للنموذج المحدد ثم exact trusted catalog evidence. أسماء discovery وحدها لا تنفي دليل catalog معروفًا، وunknown/unsupported يبقيان fail-closed. قبول Ollama native مستقل في [77I5](tasks/77i5-unified-provider-model-capabilities.md)، ولا يُستنتج من نجاح Chat في [77I2](tasks/77i2-openai-compatible-tool-image-projection.md).
 - Responses يستخدم `function_call_output.output` من `input_text`/`input_image`. Anthropic يستخدم nested text/image blocks داخل `tool_result`.
 - text-only adapter ترسل `displayText` ثم marker واحد: `[Image omitted: active provider does not accept image tool results.]` بلا retry أو mutation للتاريخ.
 - hosted attachment/media transport تستخدم capability الحالية `supports_attachments` مع wire events versioned؛ client يخفي أو يعطل remote attachment actions عند غياب الدعم ويفشل مغلقًا بدل تضمين bytes في `device_command`.
@@ -117,7 +117,7 @@ detail = low | auto | high | original
 ## 3. طريقة التنفيذ المعتمدة
 
 - ينفذ العمل كاملًا داخل Worktree `77-hosted-attachment-media-relay` فقط، مع بقاء فرع المستودع العام داخل الـsubmodule وفرع المستودع الخاص متطابقين مع سجل التقدم.
-- تنفذ المهام بترتيب Task map أدناه دون فتح مسارات تنفيذ متوازية. داخل كل مهمة تنفذ البوابات بالترتيب المكتوب، ولا تبدأ بوابة قبل إغلاق سابقتها بالأدلة المطلوبة.
+- Task map أدناه يسجل ترتيب التأسيس الأصلي. التفويض الأحدث يسمح بتوازي التنفيذ في Git worktrees مستقلة، مع كاتب واحد لكل عزلة ومراجعات مستقلة؛ القبول الحي يظل بيد الوكيل الرئيسي نفسه. لا تنقل تغييرات غير مقبولة إلى فرع التسليم، ولا تغلق بوابة اعتمادًا على تقرير كاتبها وحده.
 - عند إغلاق كل بوابة: تحدّث checklist و`current_gate` وسجل الأدلة ونسبة المتبقي داخل ملف المهمة نفسه قبل متابعة البوابة التالية.
 - عند إغلاق كل مهمة: تحدّث حالتها إلى `complete`، ثم تحدّث checklist و`current_gate` و`remaining_estimate` وسجل التقدم في هذه الخطة، وتشغّل تحقق المهمة كاملًا، ثم تنشئ commit مركزًا وتدفع فرع المستودع المالك قبل الانتقال للمهمة التالية.
 - إذا غيّرت مهمة عامة gitlink المستودع العام، يثبّت المستودع الخاص ذلك المؤشر في commit مركز ويدفع فرعه؛ لا تنشأ PR أثناء التنفيذ.
