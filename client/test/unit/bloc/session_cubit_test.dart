@@ -2762,6 +2762,18 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   }
 
   @override
+  Future<WorkspacePolicy> setWorkspaceSecurityPolicy({
+    required String workspaceId,
+    required String workspacePath,
+    WorkspacePermissionMode? permissionMode,
+    ExecutionMode? executionMode,
+    HostDiscoveryPolicy? hostDiscoveryPolicy,
+    int? expectedRevision,
+  }) async {
+    return const WorkspacePolicy();
+  }
+
+  @override
   Stream<WorkspacePolicy> watchWorkspacePolicy(String workspaceId) {
     return const Stream.empty();
   }

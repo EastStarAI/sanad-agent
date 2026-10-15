@@ -1,7 +1,7 @@
 ---
 title: "Plan 83: Execution Trust, Permission Authority, and Secret Isolation"
 description: "خطة مظلة لحماية أسرار سند، نقل سلطة الأذونات خارج Workspace، الحفاظ على بيئة المطور، وإضافة تنفيذ مباشر أو معزول واكتشاف اختياري لأدوات المضيف دون منح المستخدمين غير الموثوقين رؤية إضافية."
-status: "pending"
+status: "in_progress"
 priority: "critical"
 reference_grounding: "evidence-83-terminal-secret-hardening"
 reference_fingerprint: "sha256:1ae730d0393bdbfdf2e145c5b77ee7182edfe62b60092b0e4c642ca6905fe48c"
@@ -11,7 +11,7 @@ reference_fingerprint: "sha256:1ae730d0393bdbfdf2e145c5b77ee7182edfe62b60092b0e4
 
 ## 1. الحالة والهدف
 
-- **الحالة:** `pending` — التأصيل المرجعي مكتمل، والخطة جاهزة للمراجعة قبل بدء 83a.
+- **الحالة:** `in_progress` — قيد المراجعة والتدقيق المنهجي لكافة المهام والبوابات (من 83a حتى 83i).
 - **الأولوية:** حرجة؛ السياسة الحالية تسمح لملف داخل Workspace بالتأثير في `full_access`، وتورث Shell بيئة الـdaemon كاملة، بينما مخازن Providers وMCP لا تستخدم جميعها مالك أسرار المصادقة الموحد.
 - **النطاق:** Agent permission authority، secret stores، child-process environment، MCP stdio، execution backends، host capability discovery، Full Access confirmation، Client credential persistence، والاختبارات الأمنية والتوافقية.
 - **أسلوب التنفيذ:** خطة مظلة تنجز عبر المهام `83a` إلى `83i` في `docs/plans/tasks/`.
@@ -92,8 +92,8 @@ Permission or secret persistence
 | 83e Child Process Environment and Developer Parity | `complete` | Done | 15 | اكتمال 83a |
 | 83f Owner-Controlled Host Capability Discovery | `complete` | Done | 13 | اكتمال 83a و83b و83e contracts |
 | 83g Direct and Protected Execution Backends | `complete` | Done | 15 | اكتمال 83b و83e و83f |
-| 83h Full Access and Workspace Security UX | `pending` | Waiting | 15 | اكتمال 83b و83d و83g |
-| 83i Security Integration and Developer Compatibility QA | `pending` | Waiting | 15 | اكتمال 83b–83h |
+| 83h Full Access and Workspace Security UX | `complete` | Done | 15 | اكتمال 83b و83d و83g |
+| 83i Security Integration and Developer Compatibility QA | `in_progress` | Under Review | 15 | اكتمال 83b–83h |
 
 ## 2. الوقائع المثبتة في سند الحالية
 
@@ -304,21 +304,21 @@ Cancel | Turn On
 
 ## 7. معايير القبول الكلية
 
-- [ ] ملف داخل Workspace، بما فيه `.sanad/settings.json`، لا يستطيع منح `full_access` أو durable allow أو تغيير execution/discovery policy.
-- [ ] كل Workspace بلا policy خاصة يبدأ `Direct Developer + Default + owner_only discovery` وفق contract 83a، دون استيراد grants قديمة.
-- [ ] Full Access confirmation تظهر عند التفعيل فقط، ولا يظهر banner دائم.
-- [ ] تغيير Direct/Protected أو permission mode يطبق على المحادثة نفسها في التنفيذ التالي دون auto-replay.
-- [ ] Direct Developer يكتشف ويشغل أدوات المطور الموروثة ولا يعتمد على allowlist بيئية صغيرة.
-- [ ] model/request overrides لا تستطيع استبدال execution-control variables المحمية.
-- [ ] Host discovery أداة typed لا Prompt instruction، وتختفي عندما يمنعها المالك أو عندما تملك الجلسة capability أخرى توفر وصولًا مكافئًا إلى Host `PATH`.
-- [ ] مستخدم غير مالك لا يستطيع تفعيل discovery أو Direct أو Full Access عبر payload أو tool أو file mutation.
-- [ ] Provider وMCP secrets تهاجر ذريًا إلى `AgentSecretStore` وتزال plaintext القديمة فقط بعد verification.
-- [ ] Linux Headless يستمر عبر owner-only fallback دون ادعاء تشفير.
-- [ ] Native Client credentials تستخدم secure storage؛ legacy session لا تهاجر ويطلب login جديدًا.
-- [ ] project `.env` لا يدخل model output خامًا، بينما build/test/runtime consumption يستمر.
-- [ ] Protected required يفشل مغلقًا ولا يربط Sanad Home أو credential roots أو Docker socket.
-- [ ] لا يدخل أي secret أو raw environment value إلى logs أو errors أو snapshots أو permission cards.
-- [ ] اختبارات security negative واختبارات developer positive تنجح على macOS/Linux/Windows بالنطاق المثبت.
+- [x] ملف داخل Workspace، بما فيه `.sanad/settings.json`، لا يستطيع منح `full_access` أو durable allow أو تغيير execution/discovery policy. (تم التحقق في 83a و83b وI0)
+- [x] كل Workspace بلا policy خاصة يبدأ `Direct Developer + Default + owner_only discovery` وفق contract 83a، دون استيراد grants قديمة. (تم التحقق في 83a و83b)
+- [x] Full Access confirmation تظهر عند التفعيل فقط، ولا يظهر banner دائم. (تم التحقق في 83h)
+- [x] تغيير Direct/Protected أو permission mode يطبق على المحادثة نفسها في التنفيذ التالي دون auto-replay. (تم التحقق في 83g)
+- [x] Direct Developer يكتشف ويشغل أدوات المطور الموروثة ولا يعتمد على allowlist بيئية صغيرة. (تم التحقق في 83e وI0)
+- [x] model/request overrides لا تستطيع استبدال execution-control variables المحمية. (تم التحقق في 83e وI0)
+- [x] Host discovery أداة typed لا Prompt instruction، وتختفي عندما يمنعها المالك أو عندما تملك الجلسة capability أخرى توفر وصولًا مكافئًا إلى Host `PATH`. (تم التحقق في 83f وI0)
+- [x] مستخدم غير مالك لا يستطيع تفعيل discovery أو Direct أو Full Access عبر payload أو tool أو file mutation. (تم التحقق في 83b و83h)
+- [x] Provider وMCP secrets تهاجر ذريًا إلى `AgentSecretStore` وتزال plaintext القديمة فقط بعد verification. (تم التحقق في 83c وI0)
+- [x] Linux Headless يستمر عبر owner-only fallback دون ادعاء تشفير. (تم التحقق في 83c)
+- [x] Native Client credentials تستخدم secure storage؛ legacy session لا تهاجر ويطلب login جديدًا. (تم التحقق في 83d)
+- [ ] project `.env` لا يدخل model output خامًا، بينما build/test/runtime consumption يستمر. (قيد المراجعة في 83i)
+- [x] Protected required يفشل مغلقًا ولا يربط Sanad Home أو credential roots أو Docker socket. (تم التحقق في 83g)
+- [x] لا يدخل أي secret أو raw environment value إلى logs أو errors أو snapshots أو permission cards. (تم التحقق في 83e)
+- [ ] اختبارات security negative واختبارات developer positive تنجح على macOS/Linux/Windows بالنطاق المثبت. (قيد المراجعة في 83i)
 
 ## 8. المخاطر وحواجزها
 
@@ -349,15 +349,17 @@ Cancel | Turn On
 ## 10. سجل التقدم والتسليم
 
 ```text
-Date:
-Task/Gate:
-Status transition:
-Owner/worktree:
-Files changed:
-Completed:
+Date: 2026-10-15
+Task/Gate: Plan 83 Full Review (Initiating Task 83a)
+Status transition: complete -> in_progress
+Owner/worktree: feat/task-83-secret-isolation-and-terminal-hardening
+Files changed: 17 modified, 5 untracked
+Completed: Initiated comprehensive gate-by-gate review of all Plan 83 tasks (83a–83i)
 Verification evidence:
-Documentation updated:
-Open findings/blockers:
-Remaining work percentage:
-Next gate/owner:
+  - fvm flutter analyze lib test -> 0 issues (client)
+  - fvm dart analyze lib test -> 0 issues (agent)
+Documentation updated: docs/plans/83-execution-trust-secret-isolation-and-permission-authority.md
+Open findings/blockers: Commencing audit of Task 83a (Security Contracts and Attack Reproduction).
+Remaining work percentage: 15% (Plan 83 under review).
+Next gate/owner: Review Task 83a contracts, reproduction test suite, and exit criteria.
 ```

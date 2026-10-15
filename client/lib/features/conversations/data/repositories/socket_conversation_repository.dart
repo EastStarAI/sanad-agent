@@ -533,6 +533,26 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
+  Future<WorkspacePolicy> setWorkspaceSecurityPolicy(
+    DeviceConfig agent, {
+    required String workspaceId,
+    required String workspacePath,
+    WorkspacePermissionMode? permissionMode,
+    ExecutionMode? executionMode,
+    HostDiscoveryPolicy? hostDiscoveryPolicy,
+    int? expectedRevision,
+  }) {
+    return _clientFor(agent).setWorkspaceSecurityPolicy(
+      workspaceId: workspaceId,
+      workspacePath: workspacePath,
+      permissionMode: permissionMode,
+      executionMode: executionMode,
+      hostDiscoveryPolicy: hostDiscoveryPolicy,
+      expectedRevision: expectedRevision,
+    );
+  }
+
+  @override
   Stream<WorkspacePolicy> watchWorkspacePolicy(
     DeviceConfig agent,
     String workspaceId,

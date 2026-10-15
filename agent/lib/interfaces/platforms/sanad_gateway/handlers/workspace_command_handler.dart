@@ -1034,21 +1034,42 @@ class WorkspaceCommandHandler {
   ) async {
     final requestId = event.payload['request_id'] as String?;
     final workspacePath = event.payload['workspace_path'] as String?;
+    final workspaceId = event.payload['workspace_id'] as String?;
 
-    if (workspacePath == null || workspacePath.isEmpty) {
+    if ((workspacePath == null || workspacePath.isEmpty) &&
+        (workspaceId == null || workspaceId.isEmpty)) {
       return _bridge.buildAgentEventEnvelope(
         CanonicalEvent(
           type: 'error',
           payload: {
             'request_id': requestId,
-            'message': 'workspace_path is required',
+            'message': 'workspace_path or workspace_id is required',
           },
         ),
       );
     }
 
     try {
-      final policy = await _policyStore!.readPolicy(workspacePath);
+      final String resolvedPath;
+      if (workspacePath != null && workspacePath.isNotEmpty) {
+        resolvedPath = workspacePath;
+      } else {
+        final ws = await _runtimeService.describeWorkspaceById(workspaceId!);
+        resolvedPath = ws?['path'] as String? ?? '';
+      }
+      final sec = await _policyStore!.readSecurityPolicy(
+        workspaceId ?? '',
+        canonicalPath: resolvedPath,
+      );
+      final isOwner = !_isManagedRemote(event);
+      final policy = WorkspacePolicy(
+        permissionMode: sec.permissionMode,
+        executionMode: sec.executionMode,
+        hostDiscoveryPolicy: sec.hostDiscoveryPolicy,
+        revision: sec.revision,
+        editableByOwner: isOwner,
+        permissions: sec.permissions,
+      );
       return _bridge.buildAgentEventEnvelope(
         CanonicalEvent(
           type: CanonicalEventTypes.workspaceGetPolicy,
@@ -1077,22 +1098,37 @@ class WorkspaceCommandHandler {
     if (rejected != null) return rejected;
     final workspaceId = event.payload['workspace_id'] as String?;
     final permissionModeString = event.payload['permission_mode'] as String?;
+    final executionModeString = event.payload['execution_mode'] as String?;
+    final hostDiscoveryString =
+        event.payload['host_discovery_policy'] as String?;
+    final expectedRevision =
+        (event.payload['expected_revision'] as num?)?.toInt();
 
-    if (workspaceId == null ||
-        workspaceId.isEmpty ||
-        permissionModeString == null) {
+    if (workspaceId == null || workspaceId.isEmpty) {
       return _bridge.buildAgentEventEnvelope(
         CanonicalEvent(
           type: 'error',
           payload: {
             'request_id': requestId,
-            'message': 'workspace_id and permission_mode are required',
+            'message': 'workspace_id is required',
           },
         ),
       );
     }
 
-    final mode = WorkspacePermissionMode.fromValue(permissionModeString);
+    if (_isManagedRemote(event)) {
+      return _bridge.buildAgentEventEnvelope(
+        CanonicalEvent(
+          type: 'error',
+          payload: {
+            'request_id': requestId,
+            'code': 'permission_denied',
+            'message': 'Only the workspace owner can modify security policies',
+          },
+        ),
+      );
+    }
+
     try {
       final workspace = await _runtimeService.describeWorkspaceById(
         workspaceId,
@@ -1108,15 +1144,42 @@ class WorkspaceCommandHandler {
         workspaceId,
         canonicalPath: workspacePath,
       );
+
+      if (expectedRevision != null && currentSec.revision != expectedRevision) {
+        return _bridge.buildAgentEventEnvelope(
+          CanonicalEvent(
+            type: 'error',
+            payload: {
+              'request_id': requestId,
+              'code': 'stale_revision',
+              'message':
+                  'Policy was modified by another session. Please refresh.',
+            },
+          ),
+        );
+      }
+
       final updatedSec = currentSec.copyWith(
         workspaceId: workspaceId,
         canonicalPath: workspacePath,
-        permissionMode: mode,
+        permissionMode: permissionModeString != null
+            ? WorkspacePermissionMode.fromValue(permissionModeString)
+            : currentSec.permissionMode,
+        executionMode: executionModeString != null
+            ? ExecutionMode.fromValue(executionModeString)
+            : currentSec.executionMode,
+        hostDiscoveryPolicy: hostDiscoveryString != null
+            ? HostDiscoveryPolicy.fromValue(hostDiscoveryString)
+            : currentSec.hostDiscoveryPolicy,
       );
-      await _policyStore.saveSecurityPolicy(updatedSec);
+      final savedSec = await _policyStore.saveSecurityPolicy(updatedSec);
       final updated = WorkspacePolicy(
-        permissionMode: updatedSec.permissionMode,
-        permissions: updatedSec.permissions,
+        permissionMode: savedSec.permissionMode,
+        executionMode: savedSec.executionMode,
+        hostDiscoveryPolicy: savedSec.hostDiscoveryPolicy,
+        revision: savedSec.revision,
+        editableByOwner: true,
+        permissions: savedSec.permissions,
       );
 
       final broadcastEvent = CanonicalEvent(

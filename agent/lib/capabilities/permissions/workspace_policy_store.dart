@@ -35,19 +35,40 @@ class WorkspacePolicyStore {
     return null;
   }
 
+  static String _resolveSymlink(String path) {
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) return trimmed;
+    try {
+      final dir = Directory(trimmed);
+      if (dir.existsSync()) {
+        return dir.resolveSymbolicLinksSync();
+      }
+    } catch (_) {}
+    return trimmed;
+  }
+
   Future<WorkspacePolicy> readPolicy(String workspacePath) async {
     final repo = _resolveRepository();
     if (repo != null) {
       final sec = repo.getPolicyByPath(workspacePath);
       return WorkspacePolicy(
         permissionMode: sec.permissionMode,
+        executionMode: sec.executionMode,
+        hostDiscoveryPolicy: sec.hostDiscoveryPolicy,
+        revision: sec.revision,
+        editableByOwner: true,
         permissions: sec.permissions,
       );
     }
-    final cached = _inMemoryStore[workspacePath];
+    final resolvedPath = _resolveSymlink(workspacePath);
+    final cached = _inMemoryStore[workspacePath] ?? _inMemoryStore[resolvedPath];
     if (cached != null) {
       return WorkspacePolicy(
         permissionMode: cached.permissionMode,
+        executionMode: cached.executionMode,
+        hostDiscoveryPolicy: cached.hostDiscoveryPolicy,
+        revision: cached.revision,
+        editableByOwner: true,
         permissions: cached.permissions,
       );
     }
@@ -66,12 +87,17 @@ class WorkspacePolicyStore {
       repo.savePolicy(updated);
       return;
     }
-    _inMemoryStore[workspacePath] = WorkspaceSecurityPolicy(
+    final sec = WorkspaceSecurityPolicy(
       workspaceId: _inMemoryStore[workspacePath]?.workspaceId ?? '',
       canonicalPath: workspacePath,
       permissionMode: policy.permissionMode,
       permissions: policy.permissions,
     );
+    _inMemoryStore[workspacePath] = sec;
+    final resolved = _resolveSymlink(workspacePath);
+    if (resolved.isNotEmpty) {
+      _inMemoryStore[resolved] = sec;
+    }
   }
 
   Future<void> savePermissionMode(
@@ -97,7 +123,11 @@ class WorkspacePolicyStore {
       return repo.getPolicy(workspaceId, canonicalPath: canonicalPath);
     }
     final key = workspaceId.isNotEmpty ? workspaceId : (canonicalPath ?? '');
+    final resolvedPath =
+        canonicalPath != null ? _resolveSymlink(canonicalPath) : null;
     return _inMemoryStore[key] ??
+        (canonicalPath != null ? _inMemoryStore[canonicalPath] : null) ??
+        (resolvedPath != null ? _inMemoryStore[resolvedPath] : null) ??
         WorkspaceSecurityPolicy.cleanDefault(
           workspaceId: workspaceId,
           canonicalPath: canonicalPath ?? '',
@@ -117,6 +147,10 @@ class WorkspacePolicyStore {
     _inMemoryStore[key] = policy;
     if (policy.canonicalPath.isNotEmpty) {
       _inMemoryStore[policy.canonicalPath] = policy;
+      final resolved = _resolveSymlink(policy.canonicalPath);
+      if (resolved.isNotEmpty) {
+        _inMemoryStore[resolved] = policy;
+      }
     }
     return policy;
   }

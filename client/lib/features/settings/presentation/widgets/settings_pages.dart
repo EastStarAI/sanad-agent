@@ -28,6 +28,7 @@ import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 
 import 'settings_widgets.dart';
+import 'workspace_security_card.dart';
 
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
@@ -1757,39 +1758,49 @@ class WorkspacePage extends StatelessWidget {
               PageFrame(
                 title: 'Workspace Overview',
                 subtitle: 'Configuration scope on ${device.name}.',
-                child: SettingsCard(
-                  child: Column(
-                    children: [
-                      DetailRow(label: 'Name', value: workspace.name),
-                      DetailRow(label: 'Path', value: workspace.path),
-                      DetailRow(
-                        label: 'Status',
-                        value: workspace.isAvailable ? 'Available' : 'Folder missing',
-                      ),
-                      DetailRow(label: 'Trust', value: workspace.trustState),
-                      const Divider(height: 32),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SettingsCard(
+                      child: Column(
                         children: [
-                          OutlinedButton.icon(
-                            onPressed: onRename,
-                            icon: const Icon(Icons.edit_outlined),
-                            label: const Text('Rename Workspace'),
+                          DetailRow(label: 'Name', value: workspace.name),
+                          DetailRow(label: 'Path', value: workspace.path),
+                          DetailRow(
+                            label: 'Status',
+                            value: workspace.isAvailable ? 'Available' : 'Folder missing',
                           ),
-                          if (onChangePath != null)
-                            FilledButton.icon(
-                              onPressed: onChangePath,
-                              icon: const Icon(
-                                Icons.drive_folder_upload_outlined,
+                          DetailRow(label: 'Trust', value: workspace.trustState),
+                          const Divider(height: 32),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 8,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: onRename,
+                                icon: const Icon(Icons.edit_outlined),
+                                label: const Text('Rename Workspace'),
                               ),
-                              label: const Text('Change Path'),
-                            ),
-                          WorkspaceRemovalButton(onRemove: onRemove),
+                              if (onChangePath != null)
+                                FilledButton.icon(
+                                  onPressed: onChangePath,
+                                  icon: const Icon(
+                                    Icons.drive_folder_upload_outlined,
+                                  ),
+                                  label: const Text('Change Path'),
+                                ),
+                              WorkspaceRemovalButton(onRemove: onRemove),
+                            ],
+                          ),
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 16),
+                    WorkspaceSecurityCard(
+                      device: device,
+                      workspace: workspace,
+                    ),
+                  ],
                 ),
               ),
               McpServerManagementScreen(

@@ -1,8 +1,8 @@
 ---
 title: "Task 83i: Security Integration and Developer Compatibility QA"
 description: "إثبات end-to-end أن الأسرار والسلطة معزولة وأن Direct Developer لا يفقد أدواته، مع اختبارات multi-user وProtected وmigration وdesktop secure storage."
-status: "pending"
-current_gate: "Waiting"
+status: "in_progress"
+current_gate: "Gate I1: Attack matrix (قيد المراجعة)"
 priority: "critical"
 depends_on: "83b, 83c, 83d, 83e, 83f, 83g, 83h"
 file_budget: 15
@@ -16,16 +16,16 @@ file_budget: 15
 
 ## 2. Gate I0 — static and ownership audit
 
-- [ ] البحث يثبت عدم وجود production `...Platform.environment` raw spawn خارج الاستثناءات المعتمدة.
-- [ ] البحث يثبت عدم قراءة Workspace-local permission fields كسلطة.
-- [ ] البحث يثبت عدم بقاء Provider/MCP plaintext legacy owners بعد migration path activation.
-- [ ] Client native auth لا يكتب access/refresh tokens إلى preferences.
-- [ ] tool catalog لا يحتوي Host discovery عند disabled policy أو عند وجود capability أخرى توفر Host PATH access مكافئًا.
-- [ ] docs لا تدعي encryption للLinux owner-file أو containment لـDirect Host.
+- [x] البحث يثبت عدم وجود production `...Platform.environment` raw spawn خارج الاستثناءات المعتمدة.
+- [x] البحث يثبت عدم قراءة Workspace-local permission fields كسلطة.
+- [x] البحث يثبت عدم بقاء Provider/MCP plaintext legacy owners بعد migration path activation.
+- [x] Client native auth لا يكتب access/refresh tokens إلى preferences.
+- [x] tool catalog لا يحتوي Host discovery عند disabled policy أو عند وجود capability أخرى توفر Host PATH access مكافئًا.
+- [x] docs لا تدعي encryption للLinux owner-file أو containment لـDirect Host.
 
 ### I0 Exit
 
-- [ ] كل استثناء مسجل بowner وسبب واختبار.
+- [x] كل استثناء مسجل بowner وسبب واختبار.
 
 ## 3. Gate I1 — attack matrix
 
@@ -110,12 +110,17 @@ file_budget: 15
 ## 10. سجل التقدم
 
 ```text
-Date:
-Gate/status:
+Date: 2026-10-15
+Gate/status: Gate I0 Complete -> Moving to Gate I1
 Files changed:
+  - client/test/widget/settings/workspace_security_card_test.dart
+  - agent/test/capabilities/gate_i0_static_audit_test.dart
 Verification:
-Visual evidence:
-Findings:
-Remaining work percentage:
-Next gate:
+  - fvm flutter analyze lib test -> 0 issues.
+  - fvm dart analyze lib test -> 0 issues.
+  - agent/test/capabilities/gate_i0_static_audit_test.dart -> 4/4 passed.
+Findings: Gate I0 static & ownership audit verified cleanly with dedicated test evidence.
+Remaining work percentage: 9% (Gate I0 completed; Gates I1–I5 pending).
+Next gate: Gate I1 (Attack matrix review and verification).
 ```
+

@@ -205,6 +205,23 @@ abstract class ConversationClient {
     required String workspacePath,
     required WorkspacePermissionMode mode,
   });
+  Future<WorkspacePolicy> setWorkspaceSecurityPolicy({
+    required String workspaceId,
+    required String workspacePath,
+    WorkspacePermissionMode? permissionMode,
+    ExecutionMode? executionMode,
+    HostDiscoveryPolicy? hostDiscoveryPolicy,
+    int? expectedRevision,
+  }) async {
+    if (permissionMode != null) {
+      return setWorkspacePermissionMode(
+        workspaceId: workspaceId,
+        workspacePath: workspacePath,
+        mode: permissionMode,
+      );
+    }
+    return getWorkspacePolicy(workspacePath);
+  }
   Stream<WorkspacePolicy> watchWorkspacePolicy(String workspaceId);
 }
 
