@@ -528,7 +528,7 @@ Future<void> configureDependencies({
 
   if (!getIt.isRegistered<TrayManagerAdapter>()) {
     getIt.registerLazySingleton<TrayManagerAdapter>(
-      () => NativeTrayManagerAdapter(),
+      () => createPlatformTrayManagerAdapter(),
     );
   }
 

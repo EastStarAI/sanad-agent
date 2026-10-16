@@ -29,7 +29,7 @@ Under the background lifecycle model:
 | **macOS** | Supported | Supported | `NSStatusItem` menu in top system bar; click opens menu or restores window. |
 | **Windows** | Supported | Supported | `Shell_NotifyIcon` in taskbar tray; right-click context menu, left-click restores window. |
 | **Linux** | Supported | Supported | `StatusNotifierItem` over D-Bus; the panel hosts the icon and opens the menu, so click events stay with the panel. On GNOME this requires the AppIndicator extension (Ubuntu ships and enables it). |
-| **Web / Mobile** | N/A | N/A | Background lifecycle and system tray are native desktop only. |
+| **Web / Mobile** | N/A | N/A | Background lifecycle and system tray are native desktop only. The Web build resolves the no-op tray backend at compile time and never links the native tray library (see 5.1). |
 
 ---
 
@@ -127,6 +127,35 @@ All native platform plugins (`window_manager`, `tray_manager`) are wrapped behin
 - `DesktopWindowManagerAdapter`: encapsulates window show, hide, focus, preventClose, and destroy.
 - `TrayManagerAdapter`: encapsulates tray initialization, context menu updates, and destruction.
 - `TrayMenuBuilder`: pure function producing `TrayMenuItemDescriptor` lists, allowing 100% test coverage of menu layout, sorting, truncation, and callbacks without requiring native C++ or platform channel execution.
+
+### 5.1 Compile-time tray backend boundary
+
+`tray_manager` reaches the native `nativeapi`/`cnativeapi` FFI library. That library
+cannot be compiled for the Web (`dart:ffi unsupported`; `Only JS interop members
+may be 'external'`), and a runtime platform guard cannot remove it from the
+transitive compile graph. Abstracting the tray behind `TrayManagerAdapter` is
+therefore not sufficient on its own: the *import* of the tray package must be
+platform-conditional.
+
+All tray files are workspace-relative under
+`client/lib/infrastructure/platform/`:
+
+| File | Compiled for | Contents |
+| :--- | :--- | :--- |
+| `tray_manager_adapter.dart` | every target | `TrayManagerAdapter` contract, no native import |
+| `tray_manager_backend.dart` | every target | Conditional import selecting the backend, plus `createPlatformTrayManagerAdapter()` |
+| `tray_manager_backend_native.dart` | `dart.library.io` | `NativeTrayManagerAdapter`; the only library that imports `package:tray_manager` |
+| `tray_manager_backend_unsupported.dart` | every non-`dart.library.io` target, including Web | `UnsupportedTrayManagerAdapter`, a total no-op |
+
+Rules:
+- No library other than `tray_manager_backend_native.dart` may import `package:tray_manager`
+  or another native FFI plugin.
+- `tray_manager_service.dart` re-exports the contract and the factory, so consumers keep
+  importing the tray surface from one place.
+- Dependency injection resolves the adapter only through `createPlatformTrayManagerAdapter()`;
+  it must not name a concrete backend class.
+- Desktop behavior is unchanged: macOS, Windows, and Linux still receive the native adapter,
+  and any target without a native backend gets a silent no-op instead of a compile failure.
 
 ---
 

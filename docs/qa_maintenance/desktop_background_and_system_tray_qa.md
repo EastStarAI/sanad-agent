@@ -18,11 +18,14 @@ Technical spec: `docs/technical/desktop_background_and_system_tray.md`
 | Platform scope | Tray integration is initialized on macOS, Windows, and Linux desktop; web and mobile never advertise a tray | Tray initialized or advertised on web/mobile |
 | Linux behavior | Closing the window hides it, a real `StatusNotifierItem` is registered on the session bus, and the panel menu carries every action including `Show` | Linux exits on window close, advertises no item, or registers an icon with no menu |
 | Dependency compatibility | Linux desktop build succeeds on the supported toolchain baseline (GLib < 2.74 included) | Deferred tray dependency breaks the Linux build |
+| Web compilation boundary | The Client Web build compiles without the native tray/FFI library: only `tray_manager_backend_native.dart` imports `package:tray_manager`, and the Web artifact carries the no-op unsupported adapter | Web build fails on `cnativeapi`/`ffi` (`Only JS interop members may be 'external'`), a shared library imports `package:tray_manager`, or a runtime `kIsWeb` check substitutes for the compile-time boundary |
 | Explicit quit ownership | Only `Quit` destroys the app: tray, CLI endpoint, cache flush, state disposal, window destroy | Window close disposes sockets, CLI endpoint, or application state |
 
 Automated owners:
 - `client/test/unit/infrastructure/platform/desktop_lifecycle_manager_test.dart`
+- `client/test/unit/infrastructure/platform/tray_manager_backend_test.dart`
 - `client/linux/CMakeLists.txt` GLib compatibility shim (verified by `fvm flutter build linux --debug`)
+- Real Web compilation (verified by `fvm flutter build web --debug --target lib/driver_main.dart`)
 
 ---
 
@@ -92,5 +95,6 @@ complete:
 ```bash
 cd client && fvm flutter analyze 2>&1 | tail -5
 cd client && fvm flutter test test/unit/infrastructure/platform/ 2>&1 | tail -5
+cd client && fvm flutter build web --debug --target lib/driver_main.dart 2>&1 | tail -5
 cd client && fvm flutter build linux --debug 2>&1 | tail -5
 ```
