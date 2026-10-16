@@ -377,9 +377,9 @@
   "thinkingModeNoControlTooltip": "لا يوجد مستوى تفكير قابل للاختيار لهذا النموذج.",
   "thinkingModeUnknownLabel": "غير مُبلَّغ عنه",
   "thinkingModeUnknownTooltip": "لم يتم الإبلاغ عن خيارات التفكير لهذا النموذج.",
-  "thinkingModeProviderDefaultLabel": "افتراضي",
+  "thinkingModeNotSelectedLabel": "غير محدد",
   "thinkingModeTokenBudgetLabel": "ميزانية الرموز",
   "thinkingModeTokenBudgetAnnotation": "{tokens} توكن",
   "thinkingModeSelectBudgetTooltip": "اختر نمط التفكير · الميزانية: {budget}",
-  "thinkingModeProviderDefaultAnnotation": "الافتراضي لدى المزوّد: {option}"
+  "thinkingModeProviderDefaultHint": "الافتراضي لدى المزوّد"
 }

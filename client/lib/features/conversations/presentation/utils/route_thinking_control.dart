@@ -251,11 +251,23 @@ class RouteThinkingControl {
     return descriptor.options.any((option) => option.id == trimmed);
   }
 
-  /// True when the route has no explicit thinking selection, which means the
-  /// request omits thinking and the provider decides.
-  static bool usesProviderDefault({required String? selectionId}) {
+  /// The exact option id this route must admit, given the stored [selectionId].
+  ///
+  /// A valid explicit choice wins verbatim, including an exact `Off`; a choice
+  /// the current descriptor no longer advertises (or no choice at all) resolves
+  /// to the route's known native default, and `null` when this route declares no
+  /// valid default — meaning the request omits thinking rather than the client
+  /// guessing a tier. A `null`, non-selectable or silent descriptor is not proof
+  /// that an explicit choice is invalid, so it is never rewritten.
+  static String? resolveSelectionId({
+    required ThinkingControlDescriptorDto? descriptor,
+    required String? selectionId,
+  }) {
     final trimmed = selectionId?.trim();
-    return trimmed == null || trimmed.isEmpty;
+    if (trimmed != null && trimmed.isNotEmpty && isValidSelection(descriptor: descriptor, selectionId: trimmed)) {
+      return trimmed;
+    }
+    return nativeDefaultOption(descriptor)?.id;
   }
 
   /// The menu entry that must be checked for [selectionId]. An explicit
@@ -279,11 +291,14 @@ class RouteThinkingControl {
     return null;
   }
 
-  /// The descriptor's documented native default option, when the agent declared
-  /// one through `defaultOptionId` or `isProviderDefault`. This is annotation
-  /// metadata only: it must never turn an untouched request into a concrete
-  /// level, and it is never dispatched on its own.
-  static ThinkingControlOptionDto? documentedDefaultOption(
+  /// The descriptor's known native default option, when the agent declared one
+  /// through `defaultOptionId` or `isProviderDefault` **and** that declaration
+  /// still matches a current declared exact option. An unknown or stale default
+  /// name resolves to no option at all, so the client never invents a tier.
+  ///
+  /// This is the option the route itself would apply, so it is the only value
+  /// the composer may auto-select when the user made no explicit choice.
+  static ThinkingControlOptionDto? nativeDefaultOption(
     ThinkingControlDescriptorDto? descriptor,
   ) {
     if (descriptor == null || descriptor.options.isEmpty) {
@@ -326,39 +341,32 @@ class RouteThinkingControl {
     return descriptor?.kind == ThinkingControlKind.tokenBudget;
   }
 
-  /// Label for the current thinking state, or `null` when nothing is selected.
+  /// Label for the currently admitted thinking selection, or `null` when this
+  /// route admits no selection at all.
   ///
-  /// An explicit selection shows the descriptor label for that exact option. An
-  /// unset selection has no label here: the documented native default is
-  /// annotation metadata that must not be presented as a chosen level, and the
-  /// omission label itself is localized copy supplied by the caller.
+  /// Only a real admitted selection is labelled here: the route's native
+  /// default is auto-selected through the composer selection path, so it is
+  /// labelled exactly like any other selected option, and the unselected label
+  /// itself is localized copy supplied by the caller.
   static String? labelForSelection({
     required ThinkingControlDescriptorDto? descriptor,
     required String? selectionId,
-    required List<String> legacyModes,
   }) {
     final explicitId = selectionId?.trim();
-    if (explicitId != null && explicitId.isNotEmpty) {
-      final fromDescriptor = descriptor?.options
-          .where((option) => option.id == explicitId)
-          .map((option) => option.label)
-          .firstOrNull;
-      if (fromDescriptor != null && fromDescriptor.isNotEmpty) {
-        return fromDescriptor;
-      }
-      if (explicitId.toLowerCase() == 'medium') {
-        return 'Medium';
-      }
-      return explicitId;
+    if (explicitId == null || explicitId.isEmpty) {
+      return null;
     }
-    final legacyFallback = checkedMenuEntryId(
-      selectionId: null,
-      legacyModes: legacyModes,
-    );
-    if (legacyFallback != null && legacyFallback.isNotEmpty) {
-      return legacyFallback;
+    final fromDescriptor = descriptor?.options
+        .where((option) => option.id == explicitId)
+        .map((option) => option.label)
+        .firstOrNull;
+    if (fromDescriptor != null && fromDescriptor.isNotEmpty) {
+      return fromDescriptor;
     }
-    return null;
+    if (explicitId.toLowerCase() == 'medium') {
+      return 'Medium';
+    }
+    return explicitId;
   }
 
   static String normalizeModelId(String modelId, [String? providerInstanceId]) {
@@ -375,33 +383,4 @@ class RouteThinkingControl {
 
   static String _normalizeModelId(String modelId, String providerInstanceId) =>
       normalizeModelId(modelId, providerInstanceId);
-}
-
-/// A typed thinking-selector menu choice.
-///
-/// Provider-default omission is its own variant carrying no option id instead of
-/// a reserved native string, so an agent-declared option id can never equal it
-/// and can never silently dispatch omission. An explicit choice dispatches its
-/// exact declared id verbatim.
-class ThinkingMenuChoice {
-  /// Omission: the request carries no thinking selection and the provider decides.
-  const ThinkingMenuChoice.providerDefault() : optionId = null;
-
-  /// An exact declared option id, or an exact legacy device mode id.
-  const ThinkingMenuChoice.option(String id) : optionId = id;
-
-  /// The exact id dispatched for this choice; null for omission only.
-  final String? optionId;
-
-  bool get isProviderDefault => optionId == null;
-
-  @override
-  bool operator ==(Object other) => other is ThinkingMenuChoice && other.optionId == optionId;
-
-  @override
-  int get hashCode => optionId.hashCode;
-
-  @override
-  String toString() =>
-      isProviderDefault ? 'ThinkingMenuChoice.providerDefault()' : 'ThinkingMenuChoice.option($optionId)';
 }

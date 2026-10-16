@@ -662,26 +662,19 @@ void main() {
         RouteThinkingControl.labelForSelection(
           descriptor: descriptor,
           selectionId: 'high',
-          legacyModes: const [],
         ),
         'High',
       );
     });
 
-    test('returns no label for the omission state instead of the documented native default', () {
+    test('returns no label while nothing is admitted for the route', () {
       expect(
         RouteThinkingControl.labelForSelection(
           descriptor: descriptor,
           selectionId: null,
-          legacyModes: const [],
         ),
         isNull,
-        reason: 'the omission label is localized copy supplied by the widget',
-      );
-      expect(
-        RouteThinkingControl.documentedDefaultOption(descriptor)?.label,
-        'Medium',
-        reason: 'the native default stays annotation metadata, not a selection',
+        reason: 'the unselected label is localized copy supplied by the widget',
       );
     });
 
@@ -704,18 +697,30 @@ void main() {
         RouteThinkingControl.labelForSelection(
           descriptor: descriptorWithoutDefaultId,
           selectionId: null,
-          legacyModes: const [],
         ),
         isNull,
       );
     });
 
-    test('keeps an explicit selection distinct from the provider-default label', () {
+    test('labels the auto-selected native default like any ordinary option', () {
+      expect(
+        RouteThinkingControl.labelForSelection(
+          descriptor: descriptor,
+          selectionId: RouteThinkingControl.resolveSelectionId(
+            descriptor: descriptor,
+            selectionId: null,
+          ),
+        ),
+        'Medium',
+        reason: 'the admitted native default is a real selection, not an annotation',
+      );
+    });
+
+    test('keeps an explicit selection distinct from the native-default label', () {
       expect(
         RouteThinkingControl.labelForSelection(
           descriptor: descriptor,
           selectionId: 'off',
-          legacyModes: const [],
         ),
         'off',
       );
@@ -723,13 +728,12 @@ void main() {
         RouteThinkingControl.labelForSelection(
           descriptor: descriptor,
           selectionId: null,
-          legacyModes: const [],
         ),
         isNot('off'),
       );
     });
 
-    test('returns no label when no native default is documented', () {
+    test('returns no label when no native default is declared', () {
       const descriptorNoDefault = ThinkingControlDescriptorDto(
         status: ThinkingCapabilityStatus.supported,
         kind: ThinkingControlKind.effort,
@@ -744,47 +748,24 @@ void main() {
         RouteThinkingControl.labelForSelection(
           descriptor: descriptorNoDefault,
           selectionId: null,
-          legacyModes: const [],
         ),
         isNull,
       );
     });
 
-    test('resolves legacy balanced mode when descriptor is null', () {
+    test('returns no label when descriptor has no options', () {
       expect(
         RouteThinkingControl.labelForSelection(
           descriptor: null,
           selectionId: null,
-          legacyModes: const ['quick', 'balanced', 'deep'],
         ),
-        'balanced',
+        isNull,
       );
     });
-
-    test(
-      'returns no label when descriptor has no options and legacy modes is empty',
-      () {
-        expect(
-          RouteThinkingControl.labelForSelection(
-            descriptor: null,
-            selectionId: null,
-            legacyModes: const [],
-          ),
-          isNull,
-        );
-      },
-    );
   });
 
-  group('RouteThinkingControl provider-default and checked entry', () {
-    test('reports provider default only when no explicit selection is stored', () {
-      expect(RouteThinkingControl.usesProviderDefault(selectionId: null), isTrue);
-      expect(RouteThinkingControl.usesProviderDefault(selectionId: '   '), isTrue);
-      expect(RouteThinkingControl.usesProviderDefault(selectionId: 'off'), isFalse);
-      expect(RouteThinkingControl.usesProviderDefault(selectionId: 'high'), isFalse);
-    });
-
-    test('checks the exact explicit selection and never a descriptor default', () {
+  group('RouteThinkingControl native default and checked entry', () {
+    test('checks the exact admitted selection and never a descriptor default', () {
       expect(
         RouteThinkingControl.checkedMenuEntryId(
           selectionId: 'low',
@@ -805,24 +786,8 @@ void main() {
           legacyModes: const [],
         ),
         isNull,
+        reason: 'an unselected model route checks no native row',
       );
-    });
-
-    test('keeps omission a typed variant no declared option id can impersonate', () {
-      const omission = ThinkingMenuChoice.providerDefault();
-      const reservedLookingId = ThinkingMenuChoice.option('__provider_default__');
-
-      expect(omission.isProviderDefault, isTrue);
-      expect(omission.optionId, isNull);
-      expect(ThinkingMenuChoice.option('high').isProviderDefault, isFalse);
-      expect(ThinkingMenuChoice.option('high').optionId, 'high');
-      expect(
-        reservedLookingId,
-        isNot(omission),
-        reason: 'a declared native id must never equal the omission choice',
-      );
-      expect(reservedLookingId.optionId, '__provider_default__');
-      expect(ThinkingMenuChoice.option(''), isNot(omission));
     });
 
     test('keeps the legacy mode fallback for legacy routes only', () {
@@ -849,7 +814,7 @@ void main() {
       );
     });
 
-    test('exposes the documented native default as annotation metadata only', () {
+    test('exposes the declared native default as the auto-selection target', () {
       const descriptor = ThinkingControlDescriptorDto(
         status: ThinkingCapabilityStatus.supported,
         kind: ThinkingControlKind.effort,
@@ -861,9 +826,9 @@ void main() {
         ],
       );
 
-      expect(RouteThinkingControl.documentedDefaultOption(descriptor)?.id, 'medium');
+      expect(RouteThinkingControl.nativeDefaultOption(descriptor)?.id, 'medium');
       expect(
-        RouteThinkingControl.documentedDefaultOption(descriptor)?.label,
+        RouteThinkingControl.nativeDefaultOption(descriptor)?.label,
         'Medium',
       );
     });
@@ -882,18 +847,182 @@ void main() {
         ],
       );
 
-      expect(RouteThinkingControl.documentedDefaultOption(descriptor)?.id, 'high');
+      expect(RouteThinkingControl.nativeDefaultOption(descriptor)?.id, 'high');
     });
 
-    test('reports no documented default when the descriptor omits one', () {
+    test('reports no native default when the descriptor declares none', () {
       const descriptor = ThinkingControlDescriptorDto(
         status: ThinkingCapabilityStatus.supported,
         kind: ThinkingControlKind.effort,
         options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
       );
 
-      expect(RouteThinkingControl.documentedDefaultOption(descriptor), isNull);
-      expect(RouteThinkingControl.documentedDefaultOption(null), isNull);
+      expect(RouteThinkingControl.nativeDefaultOption(descriptor), isNull);
+      expect(RouteThinkingControl.nativeDefaultOption(null), isNull);
+    });
+
+    test('leaves an unknown declared default unselected', () {
+      const staleDefaultId = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        kind: ThinkingControlKind.effort,
+        defaultOptionId: 'ultra',
+        options: [
+          ThinkingControlOptionDto(id: 'low', label: 'Low'),
+          ThinkingControlOptionDto(id: 'high', label: 'High'),
+        ],
+      );
+      const staleFlagDescriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        kind: ThinkingControlKind.effort,
+        // The flag only counts when it still marks a current declared option.
+        options: [
+          ThinkingControlOptionDto(id: 'low', label: 'Low'),
+          ThinkingControlOptionDto(id: 'high', label: 'High'),
+        ],
+      );
+
+      expect(RouteThinkingControl.nativeDefaultOption(staleDefaultId), isNull);
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: staleDefaultId,
+          selectionId: null,
+        ),
+        isNull,
+        reason: 'an unknown native default must never be guessed',
+      );
+      expect(
+        RouteThinkingControl.nativeDefaultOption(staleFlagDescriptor),
+        isNull,
+      );
+    });
+
+    test('admits a valid explicit choice verbatim, including Off', () {
+      const descriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        kind: ThinkingControlKind.toggle,
+        defaultOptionId: 'on',
+        options: [
+          ThinkingControlOptionDto(id: 'off', label: 'Off', isOff: true),
+          ThinkingControlOptionDto(id: 'on', label: 'On', isProviderDefault: true),
+        ],
+      );
+
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: descriptor,
+          selectionId: 'off',
+        ),
+        'off',
+      );
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: descriptor,
+          selectionId: 'on',
+        ),
+        'on',
+      );
+    });
+
+    test('admits the declared native default when no valid choice exists', () {
+      const descriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        kind: ThinkingControlKind.effort,
+        defaultOptionId: 'medium',
+        options: [
+          ThinkingControlOptionDto(id: 'low', label: 'Low'),
+          ThinkingControlOptionDto(id: 'medium', label: 'Medium'),
+          ThinkingControlOptionDto(id: 'high', label: 'High'),
+        ],
+      );
+
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: descriptor,
+          selectionId: null,
+        ),
+        'medium',
+      );
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: descriptor,
+          selectionId: '   ',
+        ),
+        'medium',
+      );
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: descriptor,
+          selectionId: 'ultra',
+        ),
+        'medium',
+        reason: 'a removed choice falls back only to a known valid default',
+      );
+    });
+
+    test('admits no selection when no native default is known', () {
+      const descriptor = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.supported,
+        kind: ThinkingControlKind.effort,
+        options: [
+          ThinkingControlOptionDto(id: 'low', label: 'Low'),
+          ThinkingControlOptionDto(id: 'high', label: 'High'),
+        ],
+      );
+
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: descriptor,
+          selectionId: null,
+        ),
+        isNull,
+        reason: 'the client never guesses a tier or fabricates Off',
+      );
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: descriptor,
+          selectionId: 'ultra',
+        ),
+        isNull,
+        reason: 'a removed choice with no known default becomes no selection',
+      );
+    });
+
+    test('never rewrites an explicit choice on silent or unselectable evidence', () {
+      const silent = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.unknown,
+      );
+      const unsupported = ThinkingControlDescriptorDto(
+        status: ThinkingCapabilityStatus.unsupported,
+      );
+
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: silent,
+          selectionId: 'high',
+        ),
+        'high',
+      );
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: unsupported,
+          selectionId: 'high',
+        ),
+        'high',
+      );
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: null,
+          selectionId: 'high',
+        ),
+        'high',
+      );
+      expect(
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: null,
+          selectionId: null,
+        ),
+        isNull,
+      );
     });
 
     test('exposes only declared positive integral token budgets', () {

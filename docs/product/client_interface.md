@@ -116,9 +116,11 @@ created only after the first accepted send.
 
 The same composer is used for a new conversation and an existing session. It
 preserves per-device drafts and the selected workspace, provider, model, and
-thinking mode. A first-time user with no thinking preference starts at
-`balanced`, while saved returning-user choices remain unchanged. When the
-runtime has an authoritative provider/model route, the model selector is never
+thinking mode. A first-time user with no thinking preference starts unset: a
+model-scoped route then admits that route's own declared native default as an
+ordinary option, while a legacy device-list route may initialize `balanced`.
+Saved returning-user choices remain unchanged. When the runtime has an
+authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
 The thinking control remains visible for every selected model and route and is
@@ -127,13 +129,26 @@ selectable menu when the route resolves options, and otherwise a distinct
 disabled control that separates a resolved no-control route, an unreported
 (unknown) route, and a route whose device carries no thinking transport at all
 (`Unavailable`). Loading and refresh-failure stay their own states, and a
-disabled control never claims that the model cannot reason. A documented
-provider default is annotation only: an untouched selection shows the
-provider-default (omission) entry, which stays distinct from an explicitly
-selected native default and from an explicit `Off`. Choosing the provider-default
-entry clears the stored level so the request omits thinking; that entry is a
-typed omission choice rather than a reserved level id, so no declared option can
-collide with it, while unknown evidence never rewrites a stored explicit choice.
+disabled control never claims that the model cannot reason. The menu contains
+exactly the declared native options and no synthetic `Default` entry: when no
+valid explicit choice exists, the route's own declared native default (such as
+`Medium`) is selected as that ordinary option and sent as the ordinary option,
+while a valid explicit choice — including an explicit `Off` — always wins. The
+declared default is disclosed only as a provider-default hint line inside the
+expanded menu, below that option's own row; the chip, the persistent interface
+and any other surface never claim a provider default, and a route whose declared
+default is unknown or absent marks no row. Choices render strongest-first, which
+reverses the declared order for display only and keeps every exact native id,
+option set, dispatch value and native metadata unchanged. A
+route whose declared default is unknown or absent stays unselected with an honest
+localized prompt until the user chooses, and never guesses a tier or fabricates
+`Off`; unknown evidence never rewrites a stored explicit choice. Selecting any
+row dispatches exactly that declared id, so a declared option can never collide
+with a reserved omission value. Switching conversations on an unchanged route
+admits the newly opened conversation's own declared default when that conversation
+has no valid explicit choice of its own: a conversation keeps its own choice, no
+conversation inherits its sibling's admitted value, and the admitted value is
+written for the conversation the composer currently owns.
 Token-budget presets display their declared token value, and a preset whose
 declared count is missing or fractional is still labelled as a budget without
 inventing one. A budget is never presented as a vendor effort level, and boolean

@@ -144,7 +144,7 @@ void main() {
       );
     });
 
-    test('exact V4.1 default is annotated, never promoted into a selection', () {
+    test('exact V4.1 default is admitted as its own ordinary option', () {
       final descriptor = RouteThinkingControl.resolveDescriptor(
         snapshot: _snapshotFor(
           modelId: v41ModelId,
@@ -154,20 +154,24 @@ void main() {
         modelId: v41ModelId,
       );
 
-      // The documented native default is annotation metadata only.
+      // The grounded native default is the auto-selection target, not a
+      // separate synthetic entry.
+      expect(RouteThinkingControl.nativeDefaultOption(descriptor)?.id, 'high');
       expect(
-        RouteThinkingControl.documentedDefaultOption(descriptor)?.id,
+        RouteThinkingControl.resolveSelectionId(
+          descriptor: descriptor,
+          selectionId: null,
+        ),
         'high',
+        reason: 'no explicit choice admits the route own native default',
       );
-      // Untouched selection has no level label: the omission label is localized
-      // widget copy, never the grounded tier.
+      // An admitted selection is labelled by its own declared option.
       expect(
         RouteThinkingControl.labelForSelection(
           descriptor: descriptor,
-          selectionId: null,
-          legacyModes: const [],
+          selectionId: 'high',
         ),
-        isNull,
+        'High',
       );
       // No concrete menu row is checked while the selection is unset.
       expect(
@@ -180,20 +184,18 @@ void main() {
 
       // Explicit Off remains an explicit, valid selection.
       expect(
-        RouteThinkingControl.labelForSelection(
+        RouteThinkingControl.resolveSelectionId(
           descriptor: descriptor,
           selectionId: 'off',
-          legacyModes: const [],
         ),
-        'Off',
+        'off',
       );
       expect(
         RouteThinkingControl.labelForSelection(
           descriptor: descriptor,
-          selectionId: 'high',
-          legacyModes: const [],
+          selectionId: 'off',
         ),
-        'High',
+        'Off',
       );
       expect(
         RouteThinkingControl.isValidSelection(
@@ -216,7 +218,6 @@ void main() {
         RouteThinkingControl.labelForSelection(
           descriptor: null,
           selectionId: null,
-          legacyModes: const [],
         ),
         isNull,
       );
@@ -247,15 +248,14 @@ void main() {
           RouteThinkingControl.labelForSelection(
             descriptor: descriptor,
             selectionId: null,
-            legacyModes: const [],
           ),
           isNull,
           reason: 'an unsupported route must never claim a level',
         );
         expect(
-          RouteThinkingControl.documentedDefaultOption(descriptor),
+          RouteThinkingControl.nativeDefaultOption(descriptor),
           isNull,
-          reason: 'no option exists, so there is nothing to annotate',
+          reason: 'no option exists, so there is no default to admit',
         );
       }
 

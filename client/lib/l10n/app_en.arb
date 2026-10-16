@@ -377,7 +377,10 @@
   "thinkingModeNoControlTooltip": "No selectable thinking level is reported for this model.",
   "thinkingModeUnknownLabel": "Not reported",
   "thinkingModeUnknownTooltip": "Thinking options are not reported for this model.",
-  "thinkingModeProviderDefaultLabel": "Default",
+  "thinkingModeNotSelectedLabel": "Not selected",
+  "@thinkingModeNotSelectedLabel": {
+    "description": "Composer thinking chip shown only while a selectable route admits no selection: there is no valid explicit choice and the route declares no known native match, so the control stays honest instead of claiming a level or a provider default."
+  },
   "thinkingModeTokenBudgetLabel": "Token budget",
   "thinkingModeTokenBudgetAnnotation": "{tokens} tokens",
   "@thinkingModeTokenBudgetAnnotation": {
@@ -395,12 +398,8 @@
       }
     }
   },
-  "thinkingModeProviderDefaultAnnotation": "provider default: {option}",
-  "@thinkingModeProviderDefaultAnnotation": {
-    "placeholders": {
-      "option": {
-        "type": "String"
-      }
-    }
+  "thinkingModeProviderDefaultHint": "Provider default",
+  "@thinkingModeProviderDefaultHint": {
+    "description": "Hint shown inside the expanded thinking menu below the single option the Agent declared as this route's native default. A menu hint only: it never appears on the composer chip, in a synthetic Default row, or when the declared default is unknown."
   }
 }
