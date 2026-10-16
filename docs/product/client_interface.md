@@ -11,8 +11,9 @@ adapting navigation and controls to the available screen width.
 
 ## Device context
 
-The selected device is the top-level context for the client. Device management
-lets the user:
+The selected device is the top-level context for the client. To add a device,
+open **Settings**, then click **+** beside **Devices** in the Settings sidebar
+to open **Add device**. Device management lets the user:
 
 - switch between paired computers and servers;
 - see connection and availability state;

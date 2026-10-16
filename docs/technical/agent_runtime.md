@@ -114,7 +114,7 @@ The daemon runs natively across Windows, macOS, Linux, and WSL (Windows Subsyste
 
 - **Runtime Query Interface:** The client requests tool specs and folder structures directly from the daemon via Socket.IO endpoints (e.g. `browse_workspace_tree`). The client is treated as a presentation layer and does not read local folders or parse `.agent/skills/` configurations itself.
 - **Workspace Tools:** `LocalRuntimeCatalog` assembles per-turn workspace tools from dedicated handlers in `agent/lib/capabilities/runtime/workspace_tools/`:
-  - `file_read`, `file_write`, `file_edit`, `search_glob`, `search_grep`, and `shell_execute` each run from their own handler class.
+  - `file_read`, `file_write`, `file_edit`, `search_glob`, `search_grep`, and `shell_execute` each run from their own handler class. `file_edit` supports single find-and-replace (`old_string`/`new_string`) as well as atomic multi-chunk replacements (`edits`) applied in reverse order to preserve preceding text offsets.
   - `search_grep` normalizes regex alternation patterns so both grep-style escaped pipes (`\|`) and raw pipes (`|`) are treated as regex alternation. The `glob` parameter uses `grep -r --include` semantics: it matches both full relative paths and basenames, and expands brace alternatives such as `*.{dart,ts}`. Malformed regex patterns fall back to literal search.
   - Workspace search tools are `restartReplaySafe` since they are read-only.
 - **Offline / Local Engine Support:** The daemon operates fully in offline environments when paired with local LLM engines (Ollama, LM Studio, or llama.cpp). Tool execution and wizard validation connect via fast HTTP version checks to avoid trigger-happy timeouts caused by local GPU/VRAM spin-up latency.

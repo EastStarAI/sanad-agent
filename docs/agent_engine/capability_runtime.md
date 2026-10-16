@@ -41,22 +41,26 @@ delegation, and permissioned platform actions remain unsafe unless their exact
 contract proves otherwise.
 
 Workspace file operations are implemented by focused read/write/edit/search
-handlers. Paths are canonicalized before host access. Targets inside the selected
-workspace execute directly; targets outside it execute directly only in
-`full_access` mode, while `default` mode suspends the turn for user approval.
-Remembered grants are scoped by tool plus canonical target. Approval cards expose
-only the action and canonical path, while durable checkpoints retain the original
-arguments required to resume safely. External results use absolute paths and
-internal results remain workspace-relative. Recursive glob/grep discovery omits
-common generated, cache, build, and dependency trees such as virtual
-environments, `site-packages`, `.next`, `dist`, and `target`. A candidate that passes binary sniffing but cannot be
-decoded as UTF-8 is skipped without failing the whole search. Shell execution
-follows host-native command semantics, enforces workspace/path and permission
-policy, applies a bounded timeout, bounds stdout and stderr while streaming, and
-terminates the command process tree where supported. Child processes are not
-trusted to emit valid UTF-8: malformed byte sequences are replaced during
-bounded decoding rather than escaping the tool future and terminating the
-Agent daemon.
+handlers. `file_edit` supports single find-and-replace (`old_string`/`new_string`)
+and atomic multi-chunk replacements (`edits`). Multi-chunk edits validate all chunks,
+verify uniqueness unless `replace_all` is set, and reject overlapping ranges before
+modifying the file on disk; non-overlapping matches are applied in reverse order
+(bottom-to-top) to preserve preceding text offsets and line positions. Paths are
+canonicalized before host access. Targets inside the selected workspace execute
+directly; targets outside it execute directly only in `full_access` mode, while
+`default` mode suspends the turn for user approval. Remembered grants are scoped
+by tool plus canonical target. Approval cards expose only the action and canonical
+path, while durable checkpoints retain the original arguments required to resume
+safely. External results use absolute paths and internal results remain
+workspace-relative. Recursive glob/grep discovery omits common generated, cache,
+build, and dependency trees such as virtual environments, `site-packages`, `.next`,
+`dist`, and `target`. A candidate that passes binary sniffing but cannot be decoded
+as UTF-8 is skipped without failing the whole search. Shell execution follows
+host-native command semantics, enforces workspace/path and permission policy,
+applies a bounded timeout, bounds stdout and stderr while streaming, and terminates
+the command process tree where supported. Child processes are not trusted to emit
+valid UTF-8: malformed byte sequences are replaced during bounded decoding rather
+than escaping the tool future and terminating the Agent daemon.
 
 ## Tool Output Budgets
 

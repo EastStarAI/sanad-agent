@@ -102,7 +102,7 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
       }
     }
     ```
-  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, `session.stop_recovery_ack`, `device.update.check`, `device.update.apply`, and `device.runtime.restart`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
+  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, `session.stop_recovery_ack`, `device.update.check`, `device.update.apply`, `device.runtime.restart`, `device.cli.execute`, and `device.cli.cancel`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
   - Every routed command has a canonical `request_id`. The gateway records a
     short-lived private route from that identifier to the originating app
     socket before dispatching the command. It does not broadcast a generic
@@ -156,6 +156,16 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
       "permissionMode": "default" | "full_access"
     }
     ```
+
+#### B.2. Remote CLI Relay Commands (Plan 102)
+- **Command: `device.cli.execute`**
+  - Relays structured CLI command execution (`argv`, `stdin`, `timeout_seconds`) to the target Agent's existing `SanadCommandRunner`.
+  - Streams `device.cli.stdout`, `device.cli.stderr`, and structured `device.cli.event` lifecycle envelopes before emitting a single terminal `device.cli.result`.
+  - Complete schema, error codes, and boundaries: see [Remote CLI Relay Protocol](remote_cli_relay_protocol.md).
+
+- **Command: `device.cli.cancel`**
+  - Aborts an in-flight CLI execution identified by `target_request_id` without stopping unrelated sessions.
+  - Complete specification: see [Remote CLI Relay Protocol](remote_cli_relay_protocol.md).
 
 #### C. Reverse Tool Result
 - **Event: `tool_result` (Client → Backend)**

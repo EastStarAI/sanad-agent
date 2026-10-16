@@ -54,6 +54,20 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 
+# Deferred-Linux tray dependency compatibility.
+#
+# tray_manager pulls in nativeapi, whose Linux GTK/GIO backend compiles with
+# G_APPLICATION_DEFAULT_FLAGS, a name that only exists from GLib 2.74 onwards.
+# System tray support remains macOS/Windows-only, but the dependency still has to
+# compile for every Linux desktop build, so alias the symbol to the identical
+# legacy flag when the local GLib predates 2.74 (for example Ubuntu 22.04 with
+# GLib 2.72). Defined before the generated plugin subdirectories so those plugin
+# targets inherit the compatibility definition.
+pkg_check_modules(GLIB_COMPAT_PROBE glib-2.0)
+if(GLIB_COMPAT_PROBE_FOUND AND GLIB_COMPAT_PROBE_VERSION VERSION_LESS 2.74)
+  add_compile_definitions(G_APPLICATION_DEFAULT_FLAGS=G_APPLICATION_FLAGS_NONE)
+endif()
+
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 

@@ -25,6 +25,8 @@ The canonical app composition flow must only go through:
 - Always define route configurations inside `AppRoutes` and routing logical handlers/redirects inside `AppRouter`.
 - Keep authentication-aware redirects and guards strictly centralized in `AppRouter`.
 - Navigation diagnostics log only route paths and bounded decisions. Query strings, fragments, OAuth authorization codes/state, and redirect values carrying them must never enter logs.
+- Reconcile an externally applied route through `ConversationHistoryController.reconcile()` — the single stack-reconciliation entry point. `GoRouterHistorySync.reconcileFromRoute` delegates to it, and route owners must not re-derive which stack branch applies.
+- Clear navigation history when the authenticated identity changes (sign-out, or a different account): history belongs to exactly one identity.
 - Treat `/` as the app bootstrap gate. It must render the bootstrap/loading screen and defer gateway/device readiness decisions to the centralized gateway state flow before `/home` is shown.
 - Full logout must clear app-wide, user-scoped ephemeral transport state such as cross-transport event deduplication before the next authenticated session starts.
 - An authenticated mobile/web session remains on the cached application surface while the cloud is transiently unavailable; route to login only after terminal session invalidation.
@@ -47,13 +49,13 @@ Route identity is based on `(kind, deviceId, sessionId, workspaceId)`. Two desti
 - URL/destination reconciliation across devices.
 
 ### New Conversation Marker
-New Conversation is NOT represented by a null/empty sessionId on an existing session route. Instead, it has its own route path `/conversations/:deviceId/new` and its own `ConversationDestinationKind.newConversation`. The route string `new` is the sentinel path segment.
+New Conversation is NOT represented by a null/empty sessionId on an existing session route. Instead, it has its own route path `/conversations/:deviceId/new` and its own `ConversationDestinationKind.newConversation`. The route string `new` is the sentinel path segment. The surface has exactly one route identity: the intent that opens it returns the destination it resolved — including any restored workspace preselection — and callers route with that returned destination instead of rebuilding a location themselves.
 
 ### URL / Deep-Link / Device Reconciliation Rules
 1. **URL → Destination**: `ConversationDestination.fromRouteParams()` parses GoRouter path/query params into a typed destination. The `new` path segment maps to `newConversation`; a non-`new` sessionId maps to `session`; no sessionId maps to `conversationsList`.
 2. **Deep-link → Device resolution**: The `deviceId` from the URL is authoritative. If the device is not available or has been removed, the redirect guard falls back to the first available device, then to onboarding if no devices exist.
 3. **Device-native navigation**: UI intents (sidebar tap, New Conversation button) construct a `ConversationDestination` directly and navigate via `context.go(destination.routePath)`.
-4. **Browser synchronization**: History changes from GoRouter pop/forward are reconciled with `NavigationHistoryController` snapshots to prevent update loops between route parsing and state emission.
+4. **Browser synchronization**: History changes from GoRouter pop/forward are reconciled with `ConversationHistoryController` snapshots through `reconcile()` to prevent update loops between route parsing and state emission.
 5. **Session restoration after restart**: The typed `ConversationDestination` per device from `ConversationCacheStore` is the sole restart source. A `session` destination is reopened when valid; a `newConversation` destination reopens New Conversation with its nullable workspace preselection. `lastSelectedSessionId` is context inheritance only and must never infer a restart destination. A missing destination defaults to New Conversation. If the session was deleted while offline, the fallback in rule 6 applies.
 
 ### Pruning / Fallback (Deletion or Lost Destination)
@@ -67,11 +69,12 @@ New Conversation is NOT represented by a null/empty sessionId on an existing ses
 3. **External delete event** (`session_deleted` from another device): Same logic as local deletion, without the transport confirmation step.
 4. **Deleted destination during fallback**: The consuming same-device fallback helpers prune invalid candidates and remove the selected fallback from its source stack, preventing duplicate Back entries.
 5. **New Conversation in history**: Never pruned (always reachable). If New Conversation has a `workspaceId` and the workspace is gone, the workspace preselection is silently dropped.
+6. **Partial projection absence**: Absence from a per-section, first-page-only sidebar projection is never proof that a route destination is invalid. Destinations are presented as requested; only a confirmed deletion replaces one, and a session the daemon genuinely does not have surfaces the conversation history-load failure presentation.
 
 ### Navigation History Controller
 Defined in `core/navigation/navigation_history_controller.dart`. The controller:
 - Manages back/current/forward stacks of `ConversationDestination`.
-- Exposes `navigateTo()`, `goBack()`, `goForward()`, `replaceCurrent()`, `removeFromHistory()`, `clear()`.
+- Exposes `navigateTo()`, `goBack()`, `goForward()`, `replaceCurrent()`, `removeFromHistory()`, `clear()`, and `reconcile()` (the single route-reconciliation entry point, reporting its `NavigationReconciliation` branch).
 - Emits `NavigationHistorySnapshot` changes via a broadcast stream.
 - Synchronizes with GoRouter without creating update loops.
 

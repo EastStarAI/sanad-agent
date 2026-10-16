@@ -441,7 +441,7 @@ class LocalRuntimeCatalog {
           name: 'file_edit',
           displayName: 'Edit File',
           description:
-              'Perform an exact string replacement inside the workspace or in an authorized external file. old_string must preserve indentation and must not include file_read line-number prefixes. Fails when no unique match exists unless replace_all is true.',
+              'Perform exact string replacements inside the workspace or in an authorized external file. Provide either old_string and new_string for a single replacement, or edits for multiple non-contiguous replacements in the same file. Each old_string must preserve indentation and must not include file_read line-number prefixes. Fails atomically if any match is missing or ambiguous unless replace_all is true, or if edits overlap.',
           inputSchema: const {
             'type': 'object',
             'properties': {
@@ -449,8 +449,23 @@ class LocalRuntimeCatalog {
               'old_string': {'type': 'string'},
               'new_string': {'type': 'string'},
               'replace_all': {'type': 'boolean'},
+              'edits': {
+                'type': 'array',
+                'description':
+                    'Optional list of edits to apply in one call. Each edit requires old_string and new_string.',
+                'items': {
+                  'type': 'object',
+                  'properties': {
+                    'old_string': {'type': 'string'},
+                    'new_string': {'type': 'string'},
+                    'replace_all': {'type': 'boolean'},
+                  },
+                  'required': ['old_string', 'new_string'],
+                  'additionalProperties': false,
+                },
+              },
             },
-            'required': ['path', 'old_string', 'new_string'],
+            'required': ['path'],
             'additionalProperties': false,
           },
           category: 'workspace_io',

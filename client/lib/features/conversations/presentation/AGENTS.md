@@ -74,6 +74,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - In a non-empty timeline, reveal a new user row only when needed and only by the minimum direct, animation-free offset that clears the composer; this must not mutate follow eligibility or rebuild the opening anchor.
 
 ## Device Switch and Sidebar
+- A device switch is one typed navigation, never a bare active-agent selection: switch the cache context and active agent, await the target device's cache projection, resolve its typed last destination with the same resolver startup restore uses, then record that destination on `ConversationHistoryController` and move the route to it. URL, history current destination, selection, and presented conversation must always describe one device; cross-device Back is allowed and must be deterministic and visible in the URL.
 - Missing workspaces remain visible with historical sessions; disable new workspace conversation intent and route hover-only workspace settings actions with explicit device and workspace ids.
 - `SessionSidebarCubit` is a pure projection of `ConversationCacheRepository.snapshotStream`; it owns no cache maps, cursors, or drafts.
 - `SessionSearchCubit` owns only transient debounced search state, generations, and search cursors. Search results never mutate or masquerade as the sidebar cache, and anchored result intent must enter the existing atomic history-swap path.
@@ -92,6 +93,10 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 
 ## Navigation and Deletion
 - `NavigationHistoryController` solely owns back, current, and forward destinations; widgets must not keep parallel history.
+- An externally applied route is reconciled only through `ConversationHistoryController.reconcile()`; do not re-derive which stack branch applies.
+- Absence from `SessionCubit.agentSessions` is absence from a per-section, first-page-only projection and never proof that a destination is invalid. Open a session route with the matching selected session when it is known, otherwise with the typed placeholder; a session the daemon genuinely does not have surfaces the existing history-load failure with retry. Confirmed deletion remains the only automatic New Conversation fallback.
+- `startNewChat` returns the resolved `ConversationDestination`, including any restored workspace preselection. Every caller routes with that returned destination instead of rebuilding a New Conversation location, so the surface keeps one route identity.
+- The selection listener may never move the route on behalf of an explicit navigation. Its only permitted transition is promoting a New Conversation that has materialized into the session created by its first send, replacing the consumed New Conversation entry in place.
 - Synchronize session selection, New Conversation, browser history, and GoRouter changes through the shared controller without update loops.
 - Do not optimistically clear the current selected session before deletion confirmation.
 - Non-current deletion removes cache/draft/history identity without changing current presentation.

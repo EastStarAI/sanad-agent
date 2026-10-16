@@ -84,6 +84,12 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Provider auth start requires instance identity; default selection requires ready status.
 - Model refresh remains multi-stage under one request id and model snapshots expose authoritative instance readiness with normalized instance-local model ids.
 
+## Remote CLI Relay
+- `RemoteCliCommandHandler` runs the Agent's existing command runner in-process with injected standard I/O sinks, event sink, and signal stream: never evaluate a shell and never reimplement a CLI command.
+- Reject a duplicate `request_id` while an execution is in flight, and while its completed record is inside the bounded deduplication TTL. Pruning that TTL is also what drops post-terminal late copies.
+- Contain caller disconnect by cancelling the active execution, and materialize caller brief content into a managed temporary location that is always cleaned up.
+- Command payloads, argv, and standard input never enter logs or durable state.
+
 ## Permission and Platform Tools
 - Sensitive approval uses canonical permission request/response and persists enough state for restart recovery.
 - `think` and `steer` never mutate Workspace permission policy. Only the
