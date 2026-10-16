@@ -1931,6 +1931,204 @@ void main() {
     await cubit.close();
   });
 
+  test('resolveDeviceDestination is the single resolver for restore and device switch', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final cacheStore = ConversationCacheStore();
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    // No persisted destination for this device: New Conversation.
+    expect(
+      cubit.resolveDeviceDestination(agent.id),
+      ConversationDestination.newConversation(deviceId: agent.id),
+    );
+
+    // A persisted session destination is restored as typed, unchanged.
+    final sessionDestination = ConversationDestination.session(
+      deviceId: agent.id,
+      sessionId: session.id,
+    );
+    cacheStore.recordLastDestination(sessionDestination);
+    expect(cubit.resolveDeviceDestination(agent.id), sessionDestination);
+
+    // A workspace-less New Conversation destination is restored as typed too.
+    const newWithoutWorkspace = ConversationDestination.newConversation(deviceId: 'agent-1');
+    cacheStore.recordLastDestination(newWithoutWorkspace);
+    expect(cubit.resolveDeviceDestination(agent.id), newWithoutWorkspace);
+
+    // The resolver delegates workspace validity to the typed restart source: a
+    // preselection the section authoritatively reports as missing is dropped.
+    cacheStore.recordLastDestination(
+      const ConversationDestination.newConversation(
+        deviceId: 'agent-1',
+        workspaceId: 'workspace-a',
+      ),
+    );
+    cacheStore.applyWorkspacesRefreshed(
+      agent.id,
+      const [],
+      generation: cacheStore.advanceWorkspacesGeneration(agent.id),
+    );
+    expect(
+      cubit.resolveDeviceDestination(agent.id),
+      ConversationDestination.newConversation(deviceId: agent.id),
+    );
+
+    await cubit.close();
+    cacheStore.dispose();
+  });
+
+  test('startNewChat returns the resolved destination including the restored workspace', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final contextualSession = Session(
+      id: 'session-context',
+      title: 'Context session',
+      deviceId: agent.id,
+      workspaceId: 'workspace-a',
+      createdAt: DateTime(2026, 1, 1),
+      updatedAt: DateTime(2026, 1, 1),
+    );
+    final cacheStore = ConversationCacheStore();
+    cacheStore.applyWorkspacesRefreshed(
+      agent.id,
+      const [DeviceWorkspace(id: 'workspace-a', name: 'A', path: '/a')],
+      generation: cacheStore.advanceWorkspacesGeneration(agent.id),
+    );
+    cacheStore.applySessionCreated(agent.id, contextualSession);
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+    final historyCtrl = ConversationHistoryController();
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      historyController: historyCtrl,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    // The construction refresh replaces the section projection from the
+    // transport; re-publish the canonical workspace context before the intent.
+    cacheStore
+      ..applyWorkspacesRefreshed(
+        agent.id,
+        const [DeviceWorkspace(id: 'workspace-a', name: 'A', path: '/a')],
+        generation: cacheStore.advanceWorkspacesGeneration(agent.id),
+      )
+      ..applySessionCreated(agent.id, contextualSession);
+    await cubit.selectSession(contextualSession);
+
+    const expected = ConversationDestination.newConversation(
+      deviceId: 'agent-1',
+      workspaceId: 'workspace-a',
+    );
+    final resolved = await cubit.startNewChat(agent);
+
+    // The caller routes with this destination, so the resolved workspace is the
+    // presented route instead of a workspace-less location.
+    expect(resolved, expected);
+    expect(historyCtrl.snapshot.current, expected);
+    expect(cacheRepository.lastDestination(agent.id), expected);
+
+    // Re-applying the resolved destination (the canonical route echo) must not
+    // create a second destination or a second history entry.
+    final repeated = await cubit.startNewChat(agent, workspaceId: resolved.workspaceId);
+    expect(repeated, expected);
+    expect(historyCtrl.snapshot.current, expected);
+    expect(historyCtrl.snapshot.backStack.length, 1);
+
+    await cubit.close();
+    cacheStore.dispose();
+  });
+
+  test('switchActiveDevice switches the cache context then records one typed navigation', () async {
+    socket.setConnected(true);
+    final deviceB = DeviceConfig(id: 'device-b', name: 'Device B', isOnline: true);
+    final sessionB = Session(
+      id: 'session-b',
+      title: 'Session B',
+      deviceId: deviceB.id,
+      createdAt: DateTime(2026, 1, 2),
+      updatedAt: DateTime(2026, 1, 2),
+    );
+    final deviceBClient = _FakeDeviceClient(
+      config: deviceB,
+      controller: socket,
+      initialSessions: [sessionB],
+    );
+    agentCubit.registerClient(deviceB.id, deviceBClient);
+    repository.seedAgents([agent, deviceB], activeAgentId: agent.id);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent, deviceB]));
+
+    final cacheStore = ConversationCacheStore();
+    cacheStore.applySessionCreated(agent.id, session);
+    cacheStore.applySessionCreated(deviceB.id, sessionB);
+    cacheStore.recordLastDestination(
+      ConversationDestination.session(deviceId: agent.id, sessionId: session.id),
+    );
+    cacheStore.recordLastDestination(
+      ConversationDestination.session(deviceId: deviceB.id, sessionId: sessionB.id),
+    );
+    cacheStore.setActiveDevice(agent.id);
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+
+    final deviceASession = ConversationDestination.session(
+      deviceId: agent.id,
+      sessionId: session.id,
+    );
+    final historyCtrl = ConversationHistoryController()..setInitial(deviceASession);
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      historyController: historyCtrl,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(cubit.state.selectedSession?.id, session.id);
+
+    final deviceBSession = ConversationDestination.session(
+      deviceId: deviceB.id,
+      sessionId: sessionB.id,
+    );
+    final resolved = await cubit.switchActiveDevice(deviceB);
+
+    // One typed navigation: cache context, active agent, selection, and history
+    // current destination all describe the new device.
+    expect(resolved, deviceBSession);
+    expect(cacheRepository.activeDeviceId, deviceB.id);
+    expect((agentCubit.state as DeviceActive).activeAgent.id, deviceB.id);
+    expect(cubit.state.selectedSession?.deviceId, deviceB.id);
+    expect(cubit.state.selectedSession?.id, sessionB.id);
+    expect(historyCtrl.snapshot.current, deviceBSession);
+    expect(historyCtrl.snapshot.backStack, [deviceASession]);
+
+    // Back and Forward then move predictably across devices.
+    expect(historyCtrl.goBack(), deviceASession);
+    expect(historyCtrl.snapshot.forwardStack, [deviceBSession]);
+    expect(historyCtrl.goForward(), deviceBSession);
+
+    await cubit.close();
+    deviceBClient.dispose();
+    cacheStore.dispose();
+  });
+
   test('E4: restart recovery: cache persists last selected session for HomeScreen restore', () async {
     socket.setConnected(true);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));

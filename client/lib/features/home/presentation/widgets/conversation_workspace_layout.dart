@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
+import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/session_sidebar.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
@@ -162,7 +163,11 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
         ? getIt<ConversationHistoryController>()
         : null;
 
-    void navigate(ConversationDestination? destination) {
+    void navigate(ConversationDestination? destination, String source) {
+      navTrace(
+        'ui.$source',
+        'dest=${destTrace(destination)} -> ${destination?.routePath} back=${historyController?.snapshot.backStack.length} fwd=${historyController?.snapshot.forwardStack.length}',
+      );
       if (destination != null) context.go(destination.routePath);
     }
 
@@ -234,7 +239,7 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
                   const SizedBox(width: 4),
                   IconButton(
                     key: const Key('sidebar_back_btn'),
-                    onPressed: hasBack ? () => navigate(historyController.goBack()) : null,
+                    onPressed: hasBack ? () => navigate(historyController.goBack(), 'back') : null,
                     icon: const Icon(
                       Icons.arrow_back_rounded,
                       size: 16,
@@ -245,7 +250,7 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
                   const SizedBox(width: 4),
                   IconButton(
                     key: const Key('sidebar_forward_btn'),
-                    onPressed: hasForward ? () => navigate(historyController.goForward()) : null,
+                    onPressed: hasForward ? () => navigate(historyController.goForward(), 'forward') : null,
                     icon: const Icon(
                       Icons.arrow_forward_rounded,
                       size: 16,
@@ -281,7 +286,7 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
     return WorkspaceShortcutHandler(
       historyController: historyController,
       onToggleSidebar: togglePin,
-      onNavigate: navigate,
+      onNavigate: (destination) => navigate(destination, 'shortcut'),
       child: Stack(
         children: [
           Row(

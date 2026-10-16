@@ -415,6 +415,54 @@ void main() {
     });
   });
 
+  group('reconcile', () {
+    test('takes the first externally applied route as the initial destination', () {
+      final dest = ConversationDestination.session(deviceId: 'd1', sessionId: 's1');
+
+      expect(controller.reconcile(dest), NavigationReconciliation.setInitial);
+      expect(controller.snapshot.current, dest);
+      expect(controller.snapshot.backStack, isEmpty);
+      expect(controller.snapshot.forwardStack, isEmpty);
+    });
+
+    test('is a no-op when the route already describes the current destination', () {
+      final dest = ConversationDestination.session(deviceId: 'd1', sessionId: 's1');
+      controller.setInitial(dest);
+
+      expect(controller.reconcile(dest), NavigationReconciliation.noop);
+      expect(controller.snapshot.backStack, isEmpty);
+      expect(controller.snapshot.forwardStack, isEmpty);
+    });
+
+    test('follows the existing back and forward stacks instead of appending', () {
+      final d1 = ConversationDestination.session(deviceId: 'd1', sessionId: 's1');
+      final d2 = ConversationDestination.session(deviceId: 'd1', sessionId: 's2');
+      controller
+        ..navigateTo(d1)
+        ..navigateTo(d2);
+
+      expect(controller.reconcile(d1), NavigationReconciliation.goBack);
+      expect(controller.snapshot.current, d1);
+      expect(controller.snapshot.forwardStack, [d2]);
+      expect(controller.snapshot.backStack, isEmpty);
+
+      expect(controller.reconcile(d2), NavigationReconciliation.goForward);
+      expect(controller.snapshot.current, d2);
+      expect(controller.snapshot.backStack, [d1]);
+      expect(controller.snapshot.forwardStack, isEmpty);
+    });
+
+    test('navigates when the route belongs to neither stack', () {
+      final d1 = ConversationDestination.session(deviceId: 'd1', sessionId: 's1');
+      final d2 = ConversationDestination.session(deviceId: 'd1', sessionId: 's2');
+      controller.navigateTo(d1);
+
+      expect(controller.reconcile(d2), NavigationReconciliation.navigateTo);
+      expect(controller.snapshot.current, d2);
+      expect(controller.snapshot.backStack, [d1]);
+    });
+  });
+
   group('GoRouterHistorySync', () {
     // Unit-level GoRouterHistorySync tests require a GoRouter instance.
     // These test the reconciliation logic indirectly through the controller.

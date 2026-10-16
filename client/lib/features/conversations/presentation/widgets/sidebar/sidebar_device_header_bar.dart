@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 
 import '../../../../devices/domain/models/device_config.dart';
@@ -140,6 +141,7 @@ class _DeviceDropdown extends StatelessWidget {
     );
 
     return PopupMenuButton<Object?>(
+      key: const Key('sidebar_device_switcher_btn'),
       tooltip: '',
       offset: const Offset(0, 26),
       color: theme.colorScheme.surface,
@@ -164,6 +166,12 @@ class _DeviceDropdown extends StatelessWidget {
         child: displayWidget,
       ),
       itemBuilder: (context) {
+        navTrace(
+          'ui.deviceMenu',
+          devices
+              .map((device) => '${device.name}[online=${device.isOnline} local=${device.isLocalReachable}]')
+              .join(' '),
+        );
         return [
           ...devices.map((device) {
             final isSelected = device.id == activeDevice?.id;

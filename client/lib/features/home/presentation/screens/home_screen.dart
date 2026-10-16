@@ -7,8 +7,8 @@ import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.da
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/di/injection.dart';
-import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
+import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
@@ -100,28 +100,26 @@ class _HomeScreenState extends State<HomeScreen> {
   void _applyInitialDestination() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final routeDestination = widget.destination;
-      if (routeDestination == null || !mounted) return;
+      if (routeDestination == null || !mounted) {
+        navTrace('home.applyRoute', 'route=null mounted=$mounted branch=skip');
+        return;
+      }
       final dest = routeDestination.isConversationsList
           ? ConversationDestination.newConversation(deviceId: routeDestination.deviceId)
           : routeDestination;
 
       // Sync with navigation history controller for external route changes
-      // (browser pop/forward, deep link). Uses stack reconciliation to
-      // distinguish back/forward from new navigation.
+      // (browser pop/forward, deep link). Stack reconciliation has exactly one
+      // implementation, owned by the controller.
       final historyCtrl = getIt<ConversationHistoryController>();
-      if (historyCtrl.snapshot.current == null) {
-        historyCtrl.setInitial(dest);
-      } else if (dest != historyCtrl.snapshot.current) {
-        final back = historyCtrl.snapshot.backStack;
-        final forward = historyCtrl.snapshot.forwardStack;
-        if (back.isNotEmpty && back.last == dest) {
-          historyCtrl.goBack();
-        } else if (forward.isNotEmpty && forward.first == dest) {
-          historyCtrl.goForward();
-        } else {
-          historyCtrl.navigateTo(dest);
-        }
-      }
+      final before = historyCtrl.snapshot;
+      final branch = historyCtrl.reconcile(dest);
+      navTrace(
+        'home.applyRoute',
+        'route=${destTrace(dest)} | '
+            '${historyTrace(back: before.backStack, current: before.current, forward: before.forwardStack)} '
+            'branch=${branch.name}',
+      );
 
       // Set active agent. Session selection is applied by _HomeScreenContent,
       // whose BuildContext is below the SessionCubit provider created here.
@@ -252,17 +250,28 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
       if (dest == null) {
         final deviceState = context.read<DeviceCubit>().state;
         final activeDevice = deviceState is DeviceActive ? deviceState.activeAgent : null;
-        if (activeDevice == null) return;
-        final restored = context.read<ConversationCacheRepository>().restartDestination(activeDevice.id);
-        final history = getIt<ConversationHistoryController>();
-        if (history.snapshot.current == null) {
-          history.setInitial(restored);
-        } else {
-          history.navigateTo(restored);
+        if (activeDevice == null) {
+          navTrace('home.applySession', 'route=null device=none branch=abort');
+          return;
         }
+        final restored = context.read<SessionCubit>().resolveDeviceDestination(activeDevice.id);
+        final history = getIt<ConversationHistoryController>();
+        final branch = history.reconcile(restored);
+        navTrace(
+          'home.applySession',
+          'route=null restored=${destTrace(restored)} '
+              'selected=${shortId(context.read<SessionCubit>().state.selectedSession?.id)} '
+              'branch=restore:${branch.name}',
+        );
         if (mounted) context.go(restored.routePath);
         return;
       }
+
+      final selectedSessionId = context.read<SessionCubit>().state.selectedSession?.id;
+      navTrace(
+        'home.applySession',
+        'route=${destTrace(dest)} selected=${shortId(selectedSessionId)} branch=enter',
+      );
 
       final devices = switch (context.read<DeviceCubit>().state) {
         DeviceActive(:final agents) => agents,
@@ -273,28 +282,26 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
       if (destinationAgent == null) {
         final fallbackAgent = devices.firstOrNull;
         if (fallbackAgent == null) return;
-        final fallback = ConversationDestination.newConversation(deviceId: fallbackAgent.id);
-        getIt<ConversationHistoryController>().replaceCurrent(fallback);
-        await context.read<SessionCubit>().startNewChat(fallbackAgent);
-        if (mounted) context.go(fallback.routePath);
+        // The requested device is not in the inventory. Its typed destination is
+        // unknowable here, so the active conversation falls back to New
+        // Conversation through the single owner of that intent.
+        final resolved = await context.read<SessionCubit>().startNewChat(fallbackAgent);
+        if (mounted) context.go(resolved.routePath);
         return;
       }
 
       if (dest.isSession && dest.sessionId != null) {
-        if (context.read<SessionCubit>().state.selectedSession?.id == dest.sessionId) {
+        if (selectedSessionId == dest.sessionId) {
+          navTrace('home.applySession', 'route=${destTrace(dest)} branch=already-selected');
           return;
         }
-        final knownSessions = context.read<SessionCubit>().state.agentSessions[dest.deviceId];
-        final selectedSessionId = context.read<SessionCubit>().state.selectedSession?.id;
-        if (knownSessions != null &&
-            knownSessions.every((session) => session.id != dest.sessionId) &&
-            selectedSessionId != dest.sessionId) {
-          final fallback = ConversationDestination.newConversation(deviceId: dest.deviceId);
-          getIt<ConversationHistoryController>().replaceCurrent(fallback);
-          await context.read<SessionCubit>().startNewChat(destinationAgent);
-          if (mounted) context.go(fallback.routePath);
-          return;
-        }
+        // Absence from `agentSessions` is absence from a per-section,
+        // first-page-only projection that is replaced wholesale on every
+        // refresh, so it is never proof that the destination is invalid. Route
+        // sessions are presented as-is: the matching selected session when it
+        // is already known, otherwise the typed placeholder that the atomic
+        // history swap fills in. A session that truly does not exist fails that
+        // load and surfaces the existing failure/retry presentation.
         final routeSession = HomeScreen.resolveRouteSession(
           destination: dest,
           selectedSession: context.read<SessionCubit>().state.selectedSession,
@@ -302,14 +309,25 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
         );
         await context.read<SessionCubit>().selectSession(routeSession);
       } else if (dest.isNewConversation) {
-        await context.read<SessionCubit>().startNewChat(
+        final resolved = await context.read<SessionCubit>().startNewChat(
           destinationAgent,
           workspaceId: dest.workspaceId,
         );
+        // The New Conversation surface must have a single route identity. The
+        // resolver may attach the restored workspace this route arrived
+        // without, so make that resolved destination the visible URL instead of
+        // leaving the history current destination and the URL disagreeing.
+        if (mounted && resolved != dest) {
+          navTrace('home.applySession', 'route=${destTrace(dest)} -> ${destTrace(resolved)} branch=new-align');
+          context.go(resolved.routePath);
+        }
       } else if (dest.isConversationsList) {
-        await context.read<SessionCubit>().startNewChat(destinationAgent);
+        // The device conversation list is not a typed destination of its own:
+        // it presents the resolved New Conversation destination for the device.
+        final resolved = await context.read<SessionCubit>().startNewChat(destinationAgent);
         if (mounted) {
-          context.go(AppRoutes.newConversationLocation(destinationAgent.id));
+          navTrace('home.applySession', 'route=${destTrace(dest)} -> ${destTrace(resolved)} branch=conversationsList');
+          context.go(resolved.routePath);
         }
       }
     });
@@ -453,13 +471,31 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
       listener: (context, state) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!context.mounted) return;
+          final session = state.selectedSession;
+          final deviceId = session?.deviceId;
+          if (session == null || deviceId == null || session.id.isEmpty) return;
           final historyCtrl = getIt<ConversationHistoryController>();
-          final destination = historyCtrl.snapshot.current;
-          if (destination == null) return;
-          final currentLocation = GoRouterState.of(context).uri.toString();
-          if (currentLocation != destination.routePath) {
-            context.go(destination.routePath);
+          final current = historyCtrl.snapshot.current;
+          // Only the transition that genuinely creates a conversation may move
+          // the route: the New Conversation surface that the first send
+          // consumed no longer exists, so its history entry is replaced by the
+          // session it produced. Every other selection change belongs to an
+          // explicit navigation (sidebar tap, Back/Forward, deep link) that
+          // already owns the route, so it must never be overridden here.
+          if (current == null || !current.isNewConversation || current.deviceId != deviceId) {
+            return;
           }
+          final destination = ConversationDestination.session(
+            deviceId: deviceId,
+            sessionId: session.id,
+          );
+          if (destination == current) return;
+          navTrace(
+            'home.selectionListener',
+            'promote ${destTrace(current)} -> ${destTrace(destination)}',
+          );
+          historyCtrl.replaceCurrent(destination);
+          context.go(destination.routePath);
         });
       },
       child: BlocListener<DeviceCubit, DeviceState>(
