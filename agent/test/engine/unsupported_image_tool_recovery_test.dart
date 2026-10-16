@@ -12,6 +12,7 @@ import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
@@ -24,12 +25,16 @@ import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_exception.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_wire_vocabulary.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
+import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
 
 final class _TestViewImageTool extends BaseTool {
@@ -568,4 +573,89 @@ model_capabilities:
       expect(notice!.message, contains('Provider response:'));
     },
   );
+
+  test(
+    'local thinking-wire rejection is presented as a configuration problem, not a provider failure',
+    () async {
+      final session = sessionManager.createSession(
+        'text-only-model',
+        providerId: 'custom-text-provider-uuid',
+      );
+      final adapter = _ThrowingThinkingWireAdapter();
+      final runner = AgentRunner(
+        adapter,
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: session.sessionId,
+      );
+
+      await expectLater(
+        runner
+            .streamMessage(
+              'Hello',
+              requestId: 'req-thinking-wire',
+              providerId: 'custom-text-provider-uuid',
+              model: 'text-only-model',
+            )
+            .toList(),
+        throwsA(
+          isA<RuntimeRecoveryRequired>().having(
+            (e) => e.reason,
+            'reason',
+            RuntimeFailureReason.invalidRequest,
+          ),
+        ),
+      );
+
+      final notice = recovery.activeNotice(session.sessionId);
+      expect(notice, isNotNull);
+      expect(notice!.status, RuntimeNoticeStatus.blocked);
+      expect(notice.reason, RuntimeFailureReason.invalidRequest);
+      expect(notice.title, 'Thinking option not supported');
+      expect(notice.message, contains('exceeds this request'));
+      // A rejection decided locally must not be framed as a provider response
+      // or a contact failure.
+      expect(notice.message, isNot(contains('Provider response')));
+      expect(notice.message, isNot(contains('contact')));
+      expect(notice.message, isNot(contains('custom-text-provider-uuid')));
+    },
+  );
+}
+
+/// Adapter that fails at the local wire boundary, as a thinking-wire rejection
+/// does before any HTTP dispatch.
+final class _ThrowingThinkingWireAdapter implements LLMAdapter {
+  @override
+  Future<AgentResponse> generateResponse(
+    List<dynamic> history, {
+    List<dynamic>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    throw const ThinkingWireSerializationException(
+      'Anthropic thinking budget 16384 exceeds this request max_tokens 4096; '
+      'the selected budget cannot be honoured.',
+    );
+  }
+
+  @override
+  Stream<AgentResponse> generateStream(
+    List<dynamic> history, {
+    List<dynamic>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async* {
+    yield await generateResponse(
+      history,
+      tools: tools,
+      modelOverride: modelOverride,
+      options: options,
+    );
+  }
+
+  @override
+  Future<int> getContextLimit([String? modelOverride]) async => 4096;
+
+  @override
+  Future<List<ModelOption>> getAvailableModels() async => const [];
 }

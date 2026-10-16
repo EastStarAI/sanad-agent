@@ -10,6 +10,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/route_thinking_control.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/route_thinking_mode_selector.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
@@ -19,8 +20,84 @@ import 'package:sanad_client/features/provider_setup/data/provider_setup_client.
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 import '../mocks/mock_socket_service.dart';
+
+/// Reads the option ids of the built thinking menu without opening it, so route
+/// resolution can be asserted without tapping (and without mutating selection).
+/// A `null` entry is the provider-default omission choice.
+List<String?> thinkingMenuOptionIds(WidgetTester tester) {
+  final finder = find.byKey(const Key('route_thinking_mode_selector_button'));
+  expect(finder, findsOneWidget);
+  final button = tester.widget<PopupMenuButton<ThinkingMenuChoice>>(finder);
+  return button
+      .itemBuilder(tester.element(finder))
+      .map((item) => (item as PopupMenuItem<ThinkingMenuChoice>).value?.optionId)
+      .toList(growable: false);
+}
+
+/// Reads the secondary annotation of one built menu entry, if any. Pass `null`
+/// for the provider-default omission entry.
+String? thinkingMenuSecondaryLabel(WidgetTester tester, String? optionId) {
+  final finder = find.byKey(const Key('route_thinking_mode_selector_button'));
+  final button = tester.widget<PopupMenuButton<ThinkingMenuChoice>>(finder);
+  final items = button.itemBuilder(tester.element(finder)).cast<PopupMenuItem<ThinkingMenuChoice>>();
+  final entry = items.where((item) => item.value?.optionId == optionId).firstOrNull;
+  if (entry == null) {
+    return null;
+  }
+  final texts = <String>[];
+  void collect(Widget? widget) {
+    if (widget == null) {
+      return;
+    }
+    if (widget is Text) {
+      final data = widget.data;
+      if (data != null) {
+        texts.add(data);
+      }
+      return;
+    }
+    if (widget is Row) {
+      widget.children.forEach(collect);
+      return;
+    }
+    if (widget is Column) {
+      widget.children.forEach(collect);
+      return;
+    }
+    if (widget is Flexible) {
+      collect(widget.child);
+      return;
+    }
+    if (widget is Expanded) {
+      collect(widget.child);
+      return;
+    }
+    if (widget is Padding) {
+      collect(widget.child);
+      return;
+    }
+    if (widget is Align) {
+      collect(widget.child);
+    }
+  }
+
+  collect(entry.child);
+  return texts.length > 1 ? texts[1] : null;
+}
+
+/// Reads the tooltip explanation attached to one selector state container.
+String thinkingStateTooltip(WidgetTester tester, String containerKey) {
+  final tooltip = tester.widget<Tooltip>(
+    find.descendant(
+      of: find.byKey(Key(containerKey)),
+      matching: find.byType(Tooltip),
+    ),
+  );
+  return tooltip.message ?? '';
+}
 
 class _TestRealProviderSetupClient extends ProviderSetupClientImpl {
   _TestRealProviderSetupClient({required super.connectionCoordinator});
@@ -143,6 +220,7 @@ void main() {
     DeviceConfig? activeAgent,
     ConversationInputCubit? inputCubit,
     SessionCubit? sessionCubit,
+    Locale? locale,
   }) {
     Widget child = Scaffold(
       body: RouteThinkingModeSelector(
@@ -166,7 +244,12 @@ void main() {
         child: child,
       );
     }
-    return MaterialApp(home: child);
+    return MaterialApp(
+      home: child,
+      locale: locale,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+    );
   }
 
   testWidgets('renders Loading... chip without cache while awaiting snapshot', (
@@ -227,7 +310,18 @@ void main() {
       find.byKey(const Key('route_thinking_mode_selector_button')),
       findsOneWidget,
     );
-    expect(find.text('Low'), findsOneWidget);
+    expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+    expect(
+      thinkingMenuOptionIds(tester),
+      <String?>[null, 'low', 'high'],
+      reason: 'the resolved route keeps omission plus its exact options',
+    );
+    expect(
+      thinkingMenuSecondaryLabel(tester, null),
+      'provider default: Low',
+      reason: 'the documented native default is annotation, not a selection',
+    );
+    expect(find.byKey(const Key('chip_Low')), findsNothing);
   });
 
   testWidgets('renders Retry chip on fetch failure and retries on tap', (
@@ -286,11 +380,12 @@ void main() {
       find.byKey(const Key('route_thinking_mode_selector_button')),
       findsOneWidget,
     );
-    expect(find.text('High'), findsOneWidget);
+    expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+    expect(thinkingMenuOptionIds(tester), contains('high'));
   });
 
   testWidgets(
-    'renders Default chip for providerManaged models without Off label',
+    'renders a distinct unknown chip without Off label',
     (tester) async {
       fakeClient.snapshotResult = const ModelCacheSnapshotDto(
         instances: [
@@ -322,12 +417,29 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.byKey(const Key('route_thinking_mode_provider_managed')),
+        find.byKey(const Key('route_thinking_mode_unknown')),
         findsOneWidget,
       );
-      expect(find.text('Default'), findsOneWidget);
+      expect(find.text('Not reported'), findsOneWidget);
+      expect(
+        find.byKey(const Key('route_thinking_mode_no_control')),
+        findsNothing,
+        reason: 'unknown evidence must stay distinct from resolved no-control',
+      );
+      expect(
+        find.byKey(const Key('route_thinking_mode_hidden')),
+        findsNothing,
+        reason: 'the thinking control stays visible for every model route',
+      );
+      // Unknown evidence must not be presented as a chosen level.
+      expect(find.text('Default'), findsNothing);
       expect(find.text('Off'), findsNothing);
       expect(find.text('Unavailable'), findsNothing);
+      expect(
+        find.byKey(const Key('route_thinking_mode_selector_button')),
+        findsNothing,
+        reason: 'no selectable menu exists for unknown evidence',
+      );
     },
   );
 
@@ -385,7 +497,12 @@ void main() {
         find.byKey(const Key('route_thinking_mode_selector_button')),
         findsOneWidget,
       );
-      expect(find.text('High Effort'), findsOneWidget);
+      expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+      expect(
+        thinkingMenuOptionIds(tester),
+        contains('high'),
+        reason: 'provider-1 resolves its own High Effort option',
+      );
 
       final inputSlice2 = createInputSlice(
         nextMessageProviderId: 'provider-2',
@@ -397,10 +514,15 @@ void main() {
 
       expect(find.text('High Effort'), findsNothing);
       expect(
-        find.byKey(const Key('route_thinking_mode_provider_managed')),
+        find.byKey(const Key('route_thinking_mode_unknown')),
         findsOneWidget,
+        reason: 'the second provider reported no thinking control for this id',
       );
-      expect(find.text('Default'), findsOneWidget);
+      expect(
+        find.byKey(const Key('route_thinking_mode_no_control')),
+        findsNothing,
+      );
+      expect(find.text('Not reported'), findsOneWidget);
     },
   );
 
@@ -496,7 +618,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Route A Low'), findsNothing);
-      expect(find.text('Route B High'), findsOneWidget);
+      expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+      expect(
+        thinkingMenuOptionIds(tester),
+        contains('high'),
+        reason: 'the second route resolves its own documented default option',
+      );
+      expect(thinkingMenuOptionIds(tester), isNot(contains('low')));
     },
   );
 
@@ -538,7 +666,12 @@ void main() {
       await tester.pumpWidget(createWidget(inputSlice: inputSlice1));
       await tester.pumpAndSettle();
 
-      expect(find.text('Medium Effort'), findsOneWidget);
+      expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+      expect(
+        thinkingMenuOptionIds(tester),
+        contains('medium'),
+        reason: 'the cached descriptor for this route kept its own option',
+      );
 
       // Now set pending completer for any background refresh
       fakeClient.pendingSnapshotCompleter = Completer<ModelCacheSnapshotDto>();
@@ -559,6 +692,11 @@ void main() {
         findsNothing,
       );
       expect(find.text('Medium Effort'), findsOneWidget);
+      expect(
+        thinkingMenuOptionIds(tester),
+        contains('medium'),
+        reason: 'an explicit selection keeps showing its own option label',
+      );
     },
   );
 
@@ -600,7 +738,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Agent 1 High'), findsOneWidget);
+    expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+    expect(
+      thinkingMenuOptionIds(tester),
+      contains('high'),
+      reason: 'agent 1 resolves its own High option',
+    );
 
     // Now prepare a pending completer for agent 2
     final completerAgent2 = Completer<ModelCacheSnapshotDto>();
@@ -647,7 +790,12 @@ void main() {
     );
 
     await tester.pumpAndSettle();
-    expect(find.text('Agent 2 Low'), findsOneWidget);
+    expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+    expect(
+      thinkingMenuOptionIds(tester),
+      contains('low'),
+      reason: 'agent 2 resolves its own Low option',
+    );
   });
 
   testWidgets(
@@ -693,7 +841,12 @@ void main() {
 
       await tester.pumpWidget(createWidget(inputSlice: sliceA));
       await tester.pumpAndSettle();
-      expect(find.text('Route A Low'), findsOneWidget);
+      expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+      expect(
+        thinkingMenuOptionIds(tester),
+        contains('low'),
+        reason: 'route A resolves its own Low option',
+      );
 
       final sliceB = createInputSlice(
         nextMessageProviderId: 'provider-1',
@@ -702,19 +855,25 @@ void main() {
 
       await tester.pumpWidget(createWidget(inputSlice: sliceB));
       await tester.pumpAndSettle();
-      expect(find.text('Route B High'), findsOneWidget);
+      expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+      expect(
+        thinkingMenuOptionIds(tester),
+        <String?>[null, 'high'],
+        reason: 'route B resolves only its own High option',
+      );
 
       // Now switch back to Route A. With pending completer on background fetch:
       fakeClient.pendingSnapshotCompleter = Completer<ModelCacheSnapshotDto>();
       await tester.pumpWidget(createWidget(inputSlice: sliceA));
       await tester.pump();
 
-      // No flicker to loading! Route A Low is displayed immediately
+      // No flicker to loading! Route A's own descriptor is displayed immediately
       expect(
         find.byKey(const Key('route_thinking_mode_loading')),
         findsNothing,
       );
-      expect(find.text('Route A Low'), findsOneWidget);
+      expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+      expect(thinkingMenuOptionIds(tester), contains('low'));
     },
   );
 
@@ -765,16 +924,16 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Authoritative unknown: shows Default, NOT Loading...
+      // Authoritative unknown: shows the unknown chip, NOT Loading...
       expect(
         find.byKey(const Key('route_thinking_mode_loading')),
         findsNothing,
       );
       expect(
-        find.byKey(const Key('route_thinking_mode_provider_managed')),
+        find.byKey(const Key('route_thinking_mode_unknown')),
         findsOneWidget,
       );
-      expect(find.text('Default'), findsOneWidget);
+      expect(find.text('Not reported'), findsOneWidget);
     },
   );
 
@@ -925,8 +1084,13 @@ void main() {
       await tester.pumpWidget(createWidget(inputSlice: sliceA));
       await tester.pumpAndSettle();
 
-      expect(find.text('Low'), findsOneWidget);
-      expect(find.text('High'), findsNothing);
+      expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+      expect(
+        thinkingMenuOptionIds(tester),
+        <String?>[null, 'low'],
+        reason: 'VendorA/model resolves only its own Low option',
+      );
+      expect(thinkingMenuOptionIds(tester), isNot(contains('high')));
 
       final sliceB = createInputSlice(
         nextMessageProviderId: 'provider-1',
@@ -936,8 +1100,13 @@ void main() {
       await tester.pumpWidget(createWidget(inputSlice: sliceB));
       await tester.pumpAndSettle();
 
-      expect(find.text('High'), findsOneWidget);
-      expect(find.text('Low'), findsNothing);
+      expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+      expect(
+        thinkingMenuOptionIds(tester),
+        <String?>[null, 'high'],
+        reason: 'VendorB/model resolves only its own High option',
+      );
+      expect(thinkingMenuOptionIds(tester), isNot(contains('low')));
     },
   );
 
@@ -998,7 +1167,12 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('chip_Medium')), findsOneWidget);
+        expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+        expect(
+          thinkingMenuOptionIds(tester),
+          contains('medium'),
+          reason: 'the documented default is annotated, not selected',
+        );
 
         fakeClient.snapshotResult = const ModelCacheSnapshotDto(
           instances: [
@@ -1035,7 +1209,12 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('chip_Off')), findsOneWidget);
+        expect(
+          find.byKey(const Key('chip_Default')),
+          findsOneWidget,
+          reason: 'refresh must not turn the untouched request into the off tier',
+        );
+        expect(thinkingMenuOptionIds(tester), contains('off'));
 
         await tester.tap(find.byKey(const Key('route_thinking_mode_selector_button')));
         await tester.pumpAndSettle();
@@ -1043,6 +1222,15 @@ void main() {
         expect(find.byKey(const Key('thinking_mode_option_off')), findsOneWidget);
         expect(find.byKey(const Key('thinking_mode_option_max')), findsOneWidget);
         expect(find.byKey(const Key('thinking_mode_option_low')), findsNothing);
+        expect(
+          find.byKey(const Key('thinking_mode_omission_check')),
+          findsOneWidget,
+          reason: 'omission is the checked entry, not the documented off default',
+        );
+        expect(
+          find.byKey(const Key('thinking_mode_check_off')),
+          findsNothing,
+        );
       },
     );
 
@@ -1471,7 +1659,7 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('route_thinking_mode_provider_managed')), findsOneWidget);
+        expect(find.byKey(const Key('route_thinking_mode_unknown')), findsOneWidget);
         expect(inputCubit.selectedThinkingMode, isNull);
       },
     );
@@ -1561,7 +1749,17 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('route_thinking_mode_hidden')), findsOneWidget);
+        expect(find.byKey(const Key('route_thinking_mode_no_control')), findsOneWidget);
+        expect(
+          find.byKey(const Key('route_thinking_mode_hidden')),
+          findsNothing,
+          reason: 'a resolved no-control route stays visible and explained',
+        );
+        expect(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+          findsNothing,
+          reason: 'no selectable menu may be offered for an unsupported route',
+        );
         expect(inputCubit.selectedThinkingMode, isNull);
       },
     );
@@ -1613,7 +1811,7 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('route_thinking_mode_provider_managed')), findsOneWidget);
+        expect(find.byKey(const Key('route_thinking_mode_unknown')), findsOneWidget);
 
         fakeClient.snapshotResult = const ModelCacheSnapshotDto(
           instances: [
@@ -1999,10 +2197,16 @@ void main() {
           findsOneWidget,
         );
         expect(
-          find.byKey(const Key('chip_High')),
+          find.byKey(const Key('chip_Default')),
           findsOneWidget,
-          reason: 'the grounded model default is High, not a fabricated Default',
+          reason: 'untouched selection shows omission, not the grounded default',
         );
+        expect(
+          thinkingMenuSecondaryLabel(tester, null),
+          'provider default: High',
+          reason: 'the grounded model default is annotation metadata',
+        );
+        expect(thinkingMenuOptionIds(tester), contains('high'));
 
         await tester.tap(
           find.byKey(const Key('route_thinking_mode_selector_button')),
@@ -2024,15 +2228,20 @@ void main() {
           );
         }
         expect(
-          find.byKey(const Key('thinking_mode_check_high')),
+          find.byKey(const Key('thinking_mode_omission_check')),
           findsOneWidget,
-          reason: 'the grounded default tier must be the checked entry',
+          reason: 'omission is checked while no explicit tier is selected',
+        );
+        expect(
+          find.byKey(const Key('thinking_mode_check_high')),
+          findsNothing,
+          reason: 'the grounded default tier is annotated, not checked',
         );
       },
     );
 
     testWidgets(
-      'keeps the selector hidden for the pre-fix unsupported V4.1 descriptor',
+      'keeps a visible explained control for the pre-fix unsupported V4.1 descriptor',
       (tester) async {
         fakeClient.snapshotResult = const ModelCacheSnapshotDto(
           instances: [
@@ -2067,8 +2276,13 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(
-          find.byKey(const Key('route_thinking_mode_hidden')),
+          find.byKey(const Key('route_thinking_mode_no_control')),
           findsOneWidget,
+          reason: 'an unevidenced near-ID keeps a visible, explained control',
+        );
+        expect(
+          find.byKey(const Key('route_thinking_mode_hidden')),
+          findsNothing,
         );
         expect(
           find.byKey(const Key('route_thinking_mode_selector_button')),
@@ -2077,5 +2291,1060 @@ void main() {
         );
       },
     );
+  });
+
+  group('approved always-visible thinking control', () {
+    testWidgets(
+      'keeps distinct visible chips for no-control and unknown routes',
+      (tester) async {
+        const noControlDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.unsupported,
+        );
+        const unknownDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.unknown,
+        );
+
+        Future<void> pumpWith(
+          ThinkingControlDescriptorDto descriptor,
+          String modelId,
+        ) async {
+          fakeClient.snapshotResult = ModelCacheSnapshotDto(
+            instances: [
+              ModelCacheInstanceDto(
+                id: 'provider-1',
+                displayName: 'P1',
+                status: 'ready',
+                isDefault: true,
+                cacheStatus: 'fetched',
+                models: [
+                  ModelCacheModelDto(id: modelId, thinkingControl: descriptor),
+                ],
+              ),
+            ],
+            recent: const [],
+          );
+          await tester.pumpWidget(
+            createWidget(
+              inputSlice: createInputSlice(
+                nextMessageProviderId: 'provider-1',
+                nextMessageModel: modelId,
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+        }
+
+        await pumpWith(noControlDescriptor, 'model-a');
+        expect(find.byKey(const Key('route_thinking_mode_no_control')), findsOneWidget);
+        expect(find.byKey(const Key('route_thinking_mode_unknown')), findsNothing);
+        expect(find.byKey(const Key('route_thinking_mode_hidden')), findsNothing);
+        expect(find.byKey(const Key('chip_No control')), findsOneWidget);
+        expect(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+          findsNothing,
+        );
+
+        await pumpWith(unknownDescriptor, 'model-b');
+        expect(find.byKey(const Key('route_thinking_mode_unknown')), findsOneWidget);
+        expect(find.byKey(const Key('route_thinking_mode_no_control')), findsNothing);
+        expect(find.byKey(const Key('route_thinking_mode_hidden')), findsNothing);
+        expect(find.byKey(const Key('chip_Not reported')), findsOneWidget);
+        // Neither state may be presented as a chosen level or as "Default".
+        expect(find.byKey(const Key('chip_Default')), findsNothing);
+        expect(find.byKey(const Key('chip_Off')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'returns the explicit selection to provider default through the Default entry',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    kind: ThinkingControlKind.effort,
+                    defaultOptionId: 'high',
+                    options: [
+                      ThinkingControlOptionDto(id: 'off', label: 'Off', isOff: true),
+                      ThinkingControlOptionDto(
+                        id: 'high',
+                        label: 'High',
+                        isProviderDefault: true,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final inputCubit = _TestConversationInputCubit();
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-a',
+              nextMessageThinkingMode: 'off',
+            ),
+            inputCubit: inputCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Explicit Off stays visible and checked as Off.
+        expect(find.byKey(const Key('chip_Off')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('route_thinking_mode_selector_button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('thinking_mode_check_off')), findsOneWidget);
+        expect(
+          find.byKey(const Key('thinking_mode_omission_check')),
+          findsNothing,
+        );
+
+        await tester.tap(
+          find.byKey(const Key('thinking_mode_omission_entry')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(inputCubit.selectCount, 1);
+        expect(
+          inputCubit.selectedThinkingMode,
+          isNull,
+          reason: 'Default clears the selection so the request omits thinking',
+        );
+        expect(
+          inputCubit.selectedThinkingMode,
+          isNot('__provider_default__'),
+          reason: 'omission must never dispatch a declared or reserved id',
+        );
+      },
+    );
+
+    testWidgets(
+      'presents the same explicit level differently from provider default',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    kind: ThinkingControlKind.effort,
+                    defaultOptionId: 'medium',
+                    options: [
+                      ThinkingControlOptionDto(id: 'medium', label: 'Medium'),
+                      ThinkingControlOptionDto(id: 'off', label: 'Off', isOff: true),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        Future<void> pumpWith(String? thinkingMode) async {
+          await tester.pumpWidget(
+            createWidget(
+              inputSlice: createInputSlice(
+                nextMessageProviderId: 'provider-1',
+                nextMessageModel: 'model-a',
+                nextMessageThinkingMode: thinkingMode,
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+        }
+
+        // Untouched: omission, annotated with the documented native default.
+        await pumpWith(null);
+        expect(find.byKey(const Key('chip_Default')), findsOneWidget);
+        expect(find.byKey(const Key('chip_Medium')), findsNothing);
+        expect(
+          thinkingMenuSecondaryLabel(tester, null),
+          'provider default: Medium',
+        );
+
+        // Explicitly selected native default: a real selection, not omission.
+        await pumpWith('medium');
+        expect(find.byKey(const Key('chip_Medium')), findsOneWidget);
+        expect(find.byKey(const Key('chip_Default')), findsNothing);
+        await tester.tap(find.byKey(const Key('route_thinking_mode_selector_button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('thinking_mode_check_medium')), findsOneWidget);
+        expect(
+          find.byKey(const Key('thinking_mode_omission_check')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'annotates token-budget presets with their real token values',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-budget',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    kind: ThinkingControlKind.tokenBudget,
+                    defaultOptionId: 'high',
+                    options: [
+                      ThinkingControlOptionDto(id: 'off', label: 'Off', isOff: true),
+                      ThinkingControlOptionDto(
+                        id: 'low',
+                        label: 'Low',
+                        budgetTokens: 1024,
+                      ),
+                      ThinkingControlOptionDto(
+                        id: 'high',
+                        label: 'High',
+                        budgetTokens: 8192,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-budget',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          thinkingMenuOptionIds(tester),
+          <String?>[null, 'off', 'low', 'high'],
+          reason: 'budget presets keep their exact ids and are never expanded',
+        );
+        expect(
+          thinkingMenuSecondaryLabel(tester, 'low'),
+          '1024 tokens',
+          reason: 'the preset is identified as a token budget with its real value',
+        );
+        expect(thinkingMenuSecondaryLabel(tester, 'high'), '8192 tokens');
+        expect(
+          thinkingMenuSecondaryLabel(tester, 'off'),
+          isNull,
+          reason: 'an Off preset carries no budget',
+        );
+
+        // A selected budget discloses its token value on the control itself.
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-budget',
+              nextMessageThinkingMode: 'low',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('chip_Low')), findsOneWidget);
+        final selector = tester.widget<PopupMenuButton<ThinkingMenuChoice>>(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+        );
+        expect(selector.tooltip, contains('1024 tokens'));
+      },
+    );
+
+    testWidgets(
+      'keeps boolean native options labelled On and Off',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-toggle',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    kind: ThinkingControlKind.toggle,
+                    options: [
+                      ThinkingControlOptionDto(id: 'off', label: 'Off', isOff: true),
+                      ThinkingControlOptionDto(
+                        id: 'low',
+                        label: 'On',
+                        isProviderDefault: true,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-toggle',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          thinkingMenuOptionIds(tester),
+          <String?>[null, 'off', 'low'],
+        );
+        await tester.tap(find.byKey(const Key('route_thinking_mode_selector_button')));
+        await tester.pumpAndSettle();
+        expect(find.text('On'), findsOneWidget);
+        expect(find.text('Off'), findsOneWidget);
+        expect(
+          find.byKey(const Key('thinking_mode_option_medium')),
+          findsNothing,
+          reason: 'a boolean contract must not gain effort tiers',
+        );
+      },
+    );
+
+    testWidgets(
+      'preserves an explicit selection while thinking evidence is unknown',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.unknown,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-a',
+              nextMessageThinkingMode: 'high',
+            ),
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('chip_Not reported')), findsOneWidget);
+        expect(
+          inputCubit.selectCount,
+          0,
+          reason: 'unknown evidence must not rewrite the explicit selection',
+        );
+        expect(inputCubit.selectedThinkingMode, isNull);
+      },
+    );
+  });
+
+  group('bounded independent-review repairs', () {
+    testWidgets(
+      'keeps a disabled unavailable control when the route carries no thinking transport',
+      (tester) async {
+        const capabilities = Capability(supportsThinkingModeChange: false);
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(),
+            capabilities: capabilities,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('route_thinking_mode_hidden')),
+          findsNothing,
+          reason: 'a route without thinking transport keeps a visible control',
+        );
+        expect(
+          find.byKey(const Key('route_thinking_mode_unavailable')),
+          findsOneWidget,
+        );
+        expect(find.text('Unavailable'), findsOneWidget);
+        expect(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+          findsNothing,
+          reason: 'no menu may be offered when thinking transport is absent',
+        );
+      },
+    );
+
+    testWidgets(
+      'keeps a disabled unavailable control when the legacy device list is empty',
+      (tester) async {
+        const capabilities = Capability(
+          supportsThinkingModeChange: true,
+          thinkingModesList: [],
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(),
+            capabilities: capabilities,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('route_thinking_mode_hidden')),
+          findsNothing,
+          reason: 'an empty legacy list is an unavailable transport, not absence',
+        );
+        expect(
+          find.byKey(const Key('route_thinking_mode_unavailable')),
+          findsOneWidget,
+        );
+        expect(find.text('Unavailable'), findsOneWidget);
+        expect(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'keeps the legacy device list selectable when modes are declared',
+      (tester) async {
+        const capabilities = Capability(
+          supportsThinkingModeChange: true,
+          thinkingModesList: ['quick', 'balanced', 'deep'],
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(),
+            capabilities: capabilities,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('route_thinking_mode_unavailable')), findsNothing);
+        expect(find.text('balanced'), findsOneWidget);
+        expect(thinkingMenuOptionIds(tester), ['quick', 'balanced', 'deep']);
+      },
+    );
+
+    testWidgets(
+      'identifies an undeclared token-budget preset as a budget without inventing a value',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-budget',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    kind: ThinkingControlKind.tokenBudget,
+                    options: [
+                      ThinkingControlOptionDto(
+                        id: 'off',
+                        label: 'Off',
+                        isOff: true,
+                      ),
+                      ThinkingControlOptionDto(
+                        id: 'low',
+                        label: 'Low',
+                        budgetTokens: 1024,
+                      ),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-budget',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          thinkingMenuSecondaryLabel(tester, 'high'),
+          'Token budget',
+          reason: 'a budget preset stays identifiable as a budget without a declared token count',
+        );
+        expect(thinkingMenuSecondaryLabel(tester, 'low'), '1024 tokens');
+        expect(
+          thinkingMenuSecondaryLabel(tester, 'off'),
+          isNull,
+          reason: 'an Off preset carries no budget',
+        );
+      },
+    );
+
+    testWidgets(
+      'does not invent a token count for a truncated fractional budget',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-fractional',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    kind: ThinkingControlKind.effort,
+                    options: [
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-fractional',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          thinkingMenuSecondaryLabel(tester, 'high'),
+          isNull,
+          reason: 'fractional budget metadata is absent evidence, not 1024',
+        );
+      },
+    );
+
+    testWidgets(
+      'dispatches a declared option whose exact id was the omission sentinel',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-sentinel',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    kind: ThinkingControlKind.effort,
+                    options: [
+                      ThinkingControlOptionDto(
+                        id: '__provider_default__',
+                        label: 'Native Sentinel',
+                      ),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final inputCubit = _TestConversationInputCubit();
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-sentinel',
+            ),
+            inputCubit: inputCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Native Sentinel'));
+        await tester.pumpAndSettle();
+
+        expect(
+          inputCubit.selectedThinkingMode,
+          '__provider_default__',
+          reason: 'a declared native option id must dispatch itself, never omission',
+        );
+      },
+    );
+
+    testWidgets(
+      'keeps omission a typed choice that no declared id can collide with',
+      (tester) async {
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-sentinel',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    kind: ThinkingControlKind.effort,
+                    options: [
+                      ThinkingControlOptionDto(
+                        id: '__provider_default__',
+                        label: 'Native Sentinel',
+                      ),
+                      ThinkingControlOptionDto(
+                        id: 'provider_default',
+                        label: 'Declared Key Twin',
+                      ),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final inputCubit = _TestConversationInputCubit();
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'model-sentinel',
+              nextMessageThinkingMode: 'high',
+            ),
+            inputCubit: inputCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('thinking_mode_omission_entry')),
+          findsOneWidget,
+          reason: 'omission is keyed as a typed choice, separate from any declared id',
+        );
+        expect(
+          find.byKey(const Key('thinking_mode_option___provider_default__')),
+          findsOneWidget,
+          reason: 'the declared option keeps its exact id as its own distinct entry',
+        );
+        expect(
+          find.byKey(const Key('thinking_mode_option_provider_default')),
+          findsOneWidget,
+          reason: 'a declared id close to the omission key family keeps its own entry',
+        );
+
+        await tester.tap(
+          find.byKey(const Key('thinking_mode_omission_entry')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(inputCubit.selectCount, 1);
+        expect(
+          inputCubit.selectedThinkingMode,
+          isNull,
+          reason: 'omission clears the selection so the request omits thinking',
+        );
+
+        // The declared id next to the omission key family dispatches itself.
+        await tester.tap(
+          find.byKey(const Key('route_thinking_mode_selector_button')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const Key('thinking_mode_option_provider_default')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(inputCubit.selectCount, 2);
+        expect(
+          inputCubit.selectedThinkingMode,
+          'provider_default',
+          reason: 'a declared option is never rewritten into omission',
+        );
+      },
+    );
+  });
+
+  group('documented budget-default annotation', () {
+    Future<void> pumpBudgetModel(
+      WidgetTester tester, {
+      required String? defaultOptionId,
+      required List<ThinkingControlOptionDto> options,
+      String modelId = 'model-budget-default',
+      ThinkingControlKind kind = ThinkingControlKind.tokenBudget,
+    }) async {
+      fakeClient.snapshotResult = ModelCacheSnapshotDto(
+        instances: [
+          ModelCacheInstanceDto(
+            id: 'provider-1',
+            displayName: 'P1',
+            status: 'ready',
+            isDefault: true,
+            cacheStatus: 'fetched',
+            models: [
+              ModelCacheModelDto(
+                id: modelId,
+                thinkingControl: ThinkingControlDescriptorDto(
+                  status: ThinkingCapabilityStatus.supported,
+                  kind: kind,
+                  defaultOptionId: defaultOptionId,
+                  options: options,
+                ),
+              ),
+            ],
+          ),
+        ],
+        recent: const [],
+      );
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: createInputSlice(
+            nextMessageProviderId: 'provider-1',
+            nextMessageModel: modelId,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'discloses the declared budget of a documented budget default',
+      (tester) async {
+        await pumpBudgetModel(
+          tester,
+          defaultOptionId: 'low',
+          options: const [
+            ThinkingControlOptionDto(id: 'off', label: 'Off', isOff: true),
+            ThinkingControlOptionDto(
+              id: 'low',
+              label: 'Low',
+              budgetTokens: 1024,
+            ),
+            ThinkingControlOptionDto(id: 'high', label: 'High'),
+          ],
+        );
+
+        final rowAnnotation = thinkingMenuSecondaryLabel(tester, 'low');
+        expect(
+          rowAnnotation,
+          '1024 tokens',
+          reason: 'the ordinary budget row keeps its declared count',
+        );
+        expect(
+          thinkingMenuSecondaryLabel(tester, null),
+          'provider default: Low · $rowAnnotation',
+          reason: 'a documented budget default reuses its ordinary row budget annotation',
+        );
+      },
+    );
+
+    testWidgets(
+      'identifies an amount-unknown documented budget default as a budget',
+      (tester) async {
+        await pumpBudgetModel(
+          tester,
+          defaultOptionId: 'high',
+          options: const [
+            ThinkingControlOptionDto(id: 'off', label: 'Off', isOff: true),
+            ThinkingControlOptionDto(id: 'high', label: 'High'),
+          ],
+        );
+
+        expect(
+          thinkingMenuSecondaryLabel(tester, 'high'),
+          'Token budget',
+          reason: 'the ordinary row identifies the preset as a budget',
+        );
+        expect(
+          thinkingMenuSecondaryLabel(tester, null),
+          'provider default: High · Token budget',
+          reason: 'a budget-preset default is never presented as a native effort default alone',
+        );
+      },
+    );
+
+    testWidgets(
+      'keeps the plain annotation for a documented non-budget effort default',
+      (tester) async {
+        await pumpBudgetModel(
+          tester,
+          defaultOptionId: null,
+          kind: ThinkingControlKind.effort,
+          options: const [
+            ThinkingControlOptionDto(id: 'low', label: 'Low', budgetTokens: 1024),
+            ThinkingControlOptionDto(
+              id: 'high',
+              label: 'High',
+              isProviderDefault: true,
+            ),
+          ],
+          modelId: 'model-effort-default',
+        );
+
+        expect(
+          thinkingMenuSecondaryLabel(tester, null),
+          'provider default: High',
+          reason: 'an ordinary effort default gains no budget wording',
+        );
+        expect(
+          thinkingMenuSecondaryLabel(tester, 'low'),
+          '1024 tokens',
+          reason: 'a declared budget annotation stays on its own row',
+        );
+      },
+    );
+  });
+
+  group('localized thinking-control copy', () {
+    const arabic = Locale('ar');
+
+    Future<void> pumpForModel(
+      WidgetTester tester,
+      ThinkingControlDescriptorDto descriptor,
+      String modelId, {
+      Locale? locale = arabic,
+    }) async {
+      fakeClient.snapshotResult = ModelCacheSnapshotDto(
+        instances: [
+          ModelCacheInstanceDto(
+            id: 'provider-1',
+            displayName: 'P1',
+            status: 'ready',
+            isDefault: true,
+            cacheStatus: 'fetched',
+            models: [
+              ModelCacheModelDto(id: modelId, thinkingControl: descriptor),
+            ],
+          ),
+        ],
+        recent: const [],
+      );
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: createInputSlice(
+            nextMessageProviderId: 'provider-1',
+            nextMessageModel: modelId,
+          ),
+          locale: locale,
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('localizes the no-control label and explanation', (
+      tester,
+    ) async {
+      await pumpForModel(
+        tester,
+        const ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.unsupported,
+        ),
+        'model-no-control',
+      );
+
+      expect(
+        find.byKey(const Key('route_thinking_mode_no_control')),
+        findsOneWidget,
+      );
+      expect(find.text('لا يوجد تحكم'), findsOneWidget);
+      expect(
+        find.text('No control'),
+        findsNothing,
+        reason: 'the localized surface must not fall back to an English literal',
+      );
+      expect(
+        thinkingStateTooltip(tester, 'route_thinking_mode_no_control'),
+        'لا يوجد مستوى تفكير قابل للاختيار لهذا النموذج.',
+      );
+      expect(
+        find.byKey(const Key('route_thinking_mode_selector_button')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('localizes the not-reported label and explanation', (
+      tester,
+    ) async {
+      await pumpForModel(
+        tester,
+        const ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.unknown,
+        ),
+        'model-unknown',
+      );
+
+      expect(
+        find.byKey(const Key('route_thinking_mode_unknown')),
+        findsOneWidget,
+      );
+      expect(find.text('غير مُبلَّغ عنه'), findsOneWidget);
+      expect(find.text('Not reported'), findsNothing);
+      expect(
+        thinkingStateTooltip(tester, 'route_thinking_mode_unknown'),
+        'لم يتم الإبلاغ عن خيارات التفكير لهذا النموذج.',
+      );
+      expect(find.byKey(const Key('chip_افتراضي')), findsNothing);
+    });
+
+    testWidgets('localizes the omission entry and its default annotation', (
+      tester,
+    ) async {
+      await pumpForModel(
+        tester,
+        const ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          kind: ThinkingControlKind.effort,
+          defaultOptionId: 'high',
+          options: [
+            ThinkingControlOptionDto(id: 'low', label: 'Low'),
+            ThinkingControlOptionDto(id: 'high', label: 'High'),
+          ],
+        ),
+        'model-default',
+      );
+
+      expect(
+        find.byKey(const Key('chip_افتراضي')),
+        findsOneWidget,
+        reason: 'an untouched selection shows the localized omission label',
+      );
+      expect(find.byKey(const Key('chip_Default')), findsNothing);
+
+      await tester.tap(
+        find.byKey(const Key('route_thinking_mode_selector_button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(const Key('thinking_mode_title_omission'))).data,
+        'افتراضي',
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const Key('thinking_mode_secondary_omission')),
+            )
+            .data,
+        'الافتراضي لدى المزوّد: High',
+      );
+      expect(
+        find.byKey(const Key('thinking_mode_omission_entry')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('localizes the unavailable explanation', (tester) async {
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: createInputSlice(),
+          capabilities: const Capability(supportsThinkingModeChange: false),
+          locale: arabic,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('غير متاح'), findsOneWidget);
+      expect(
+        thinkingStateTooltip(tester, 'route_thinking_mode_unavailable'),
+        'اختيار نمط التفكير غير متاح لهذا الجهاز.',
+      );
+    });
   });
 }

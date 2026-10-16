@@ -9,8 +9,10 @@ description: "Focused matrix for bounded LM Studio native reasoning discovery fr
 
 Verifies that an LM Studio route exposes only the finite thinking options the
 local server declares for the exact model, that every advertised option reaches
-the real OpenAI-compatible Chat request body unchanged, and that absent,
-failing, malformed or ambiguous native evidence fabricates no control.
+the real OpenAI-compatible Chat request body unchanged, that a documented native
+default stays descriptor metadata and is never dispatched implicitly by an
+omitted selection, and that absent, failing, malformed or ambiguous native
+evidence fabricates no control.
 
 Out of scope for this page:
 
@@ -54,8 +56,8 @@ back into raw endpoint evidence.
 |---|---|---|
 | 1 | Native declaration `allowed_options: [off, on, low, medium, high]`, `default: medium` | Raw `lm_studio_reasoning` evidence plus an `openai_chat_effort` declaration containing exactly `low`/`medium`/`high`; supported descriptor of kind effort with labels Low/Medium/High, `default_option_id: medium`, source `endpoint_declared` |
 | 2 | Each advertised option selected | Actual body carries `reasoning_effort` equal to the selected native value with no value remap; no `thinking` envelope is invented; the wire model id is unchanged |
-| 3 | Native `default: high` | The default selection reproduces the declared native default (`reasoning_effort: high`) instead of an invented tier |
-| 4 | Native `default: on` (no evidenced wire value) | Options stay `low`/`medium`/`high`, `default_option_id` is absent, and the default selection omits `reasoning_effort` entirely |
+| 3 | Native `default: high` | `default_option_id` stays `high` truthful metadata; an omitted, cleared or whitespace-only selection is still provider-default omission (no `reasoning_effort`, no invented thinking field), and explicitly selecting High dispatches `reasoning_effort: high` |
+| 4 | Native `default: on` (no evidenced wire value) | Options stay `low`/`medium`/`high`, `default_option_id` is absent, and every omitted/cleared selection omits `reasoning_effort` entirely |
 | 5 | Native declaration `[off, on]` only | Raw evidence is retained, no declaration is produced, the descriptor stays `unknown`, an explicit level is rejected with `thinking_capability_unknown`, and nothing is dispatched |
 | 6 | Malformed finite list (`bogus` value, mixed types, empty list, non-list `allowed_options`), default outside the declared list, non-string default, non-object `reasoning` | No declaration, no retained evidence, descriptor `unknown`, zero dispatch |
 | 7 | Native probe HTTP failure, transport failure, or a non-object payload | Compatibility discovery is preserved (`live` source, same label and context), no declaration, descriptor `unknown`, and the request is still dispatched without any thinking field |
@@ -73,9 +75,23 @@ proved that the native read omitted configured authentication and could replace
 an existing compatibility declaration. Native discovery now shares the existing
 model-discovery authentication headers, and enrichment leaves an already-present
 compatibility declaration untouched (even if malformed), rather than promoting
-or silently replacing its authority. All twelve focused scenarios and 228
-focused/adjacent tests pass; Agent analysis reports no issues. This is source
-acceptance only, not live execution.
+or silently replacing its authority. At that prior bounded source checkpoint all
+twelve focused scenarios and 228 focused/adjacent tests passed, and Agent
+analysis reported no issues. That receipt is historical to that checkpoint: it
+does not describe the current checkout, and its neighbour totals were not re-run
+by the provider-default omission correction below. This is source acceptance
+only, not live execution.
+
+Provider-default omission correction: scenario 3 previously asserted that an
+omitted selection dispatched the documented native default
+(`reasoning_effort: high`). The shared resolver deliberately resolves an omitted,
+cleared or whitespace-only selection to `UseProviderDefault`, so that assertion
+was stale against the owning contract and was reproduced as a single red failure
+(11 passed / 1 failed) before the correction. Scenario 3 now proves
+`default_option_id: high` metadata retention, real Chat-body omission for
+null/empty/whitespace selections, and exact `reasoning_effort: high` dispatch
+only when High is explicitly selected. The focused twelve-scenario file remains
+the owning receipt for this correction.
 
 ## Verification steps
 
@@ -85,10 +101,10 @@ acceptance only, not live execution.
    and in-memory state database described below.
 2. Confirm the original red baseline, not only the green result: with native enrichment
    absent, eight of the original nine scenarios fail (advertised-option discovery,
-   descriptor delivery, per-option Chat bodies, default preservation, unmappable
-   default, probe-failure preservation, identity/ambiguity, and probe
-   boundedness). Scenario 6 is a negative-only check and passes in both states by
-   design.
+   descriptor delivery, per-option Chat bodies, declared-default metadata with
+   provider-default omission, unmappable default, probe-failure preservation,
+   identity/ambiguity, and probe boundedness). Scenario 6 is a negative-only check
+   and passes in both states by design.
 3. Re-run the owning neighbour suites when the adapter discovery path changes:
    the adapter, provider-thinking coverage, model-cache and runtime-service
    suites must stay green, since LM Studio shares the OpenAI-compatible adapter
@@ -97,8 +113,9 @@ acceptance only, not live execution.
 Automated coverage ownership: `agent/test/engine/adapters/lm_studio_native_thinking_discovery_test.dart`
 owns native evidence parsing, exact/ambiguous identity matching, declaration
 derivation, descriptor delivery through the production model cache,
-`reasoning_effort` bodies for every advertised option, default preservation
-versus omission, fail-closed malformed/probe-failure behavior, and the absence of
+`reasoning_effort` bodies for every advertised option, declared-default metadata
+with provider-default omission and explicit default dispatch, fail-closed
+malformed/probe-failure behavior, and the absence of
 request-time endpoint probes. `agent/test/core/provider_thinking/project_thinking_coverage_test.dart`
 retains the registry-wide claim that an unevidenced `lm-studio` model with no
 native evidence stays `unknown`.

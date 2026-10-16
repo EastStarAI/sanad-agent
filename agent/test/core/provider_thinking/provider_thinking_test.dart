@@ -2,6 +2,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/core/provider_thinking/aggregator_thinking_wire_codec.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_wire_vocabulary.dart';
 import 'package:sanad_agent/core/provider_thinking/aggregator_upstream_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/anthropic_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/anthropic_thinking_wire_codec.dart';
@@ -330,9 +331,9 @@ void main() {
       expect(deepSeek.effectiveThinkingPolicyId, 'deepseek_thinking');
       expect(kimi.effectiveThinkingPolicyId, 'kimi_thinking');
       expect(openCodeGo.effectiveThinkingPolicyId, 'openai_chat_effort');
-      // Ambiguous chat_completions templates fail closed until a dedicated
-      // first-release policy is opted in (Task 43 Gate R0/A).
-      expect(nvidia.effectiveThinkingPolicyId, 'unknown');
+      // The shipped NVIDIA template is the hosted NIM catalog and owns its own
+      // documented per-model Chat contracts.
+      expect(nvidia.effectiveThinkingPolicyId, 'nim_thinking');
       expect(custom.effectiveThinkingPolicyId, 'unknown');
     });
   });
@@ -737,7 +738,13 @@ void main() {
 
       final descriptor = policy.resolveCapability(context);
       expect(descriptor.kind, ThinkingControlKind.level);
-      expect(descriptor.containsOptionId('minimal'), isTrue);
+      expect(descriptor.options.map((option) => option.id), [
+        'minimal',
+        'low',
+        'medium',
+        'high',
+      ]);
+      expect(descriptor.defaultOptionId, 'medium');
       expect(
         policy.resolveDirective(context, 'medium'),
         isA<GoogleLevelDirective>(),
@@ -745,6 +752,128 @@ void main() {
       expect(
         policy.resolveDirective(context, 'medium'),
         isNot(isA<GoogleBudgetDirective>()),
+      );
+    });
+
+    test('advertises the documented minimal level only where grounded', () {
+      const minimalContext = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'gemini',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'gemini-3-flash-preview',
+        capabilityRevision: 'rev-1',
+      );
+      final minimal = policy.resolveCapability(minimalContext);
+      expect(minimal.containsOptionId('minimal'), isTrue);
+      expect(
+        policy.resolveDirective(minimalContext, 'minimal'),
+        isA<GoogleLevelDirective>().having(
+          (directive) => directive.level,
+          'level',
+          'minimal',
+        ),
+      );
+
+      // Gemini 3.8 Flash documents that `minimal` returns an error.
+      const flashContext = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'gemini',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'gemini-3.8-flash',
+        capabilityRevision: 'rev-1',
+      );
+      expect(
+        policy.resolveCapability(flashContext).containsOptionId('minimal'),
+        isFalse,
+      );
+      expect(
+        policy.resolveCapability(flashContext).defaultOptionId,
+        'medium',
+        reason: 'the official thinking table documents Medium as 3.8 default',
+      );
+
+      // Gemini 3 Pro preview documents Low/High only, default High.
+      const proContext = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'gemini',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'gemini-3-pro-preview',
+        capabilityRevision: 'rev-1',
+      );
+      final pro = policy.resolveCapability(proContext);
+      expect(pro.options.map((option) => option.id), ['low', 'high']);
+      expect(pro.defaultOptionId, 'high');
+      expect(
+        policy.resolveDirective(proContext, 'medium'),
+        isA<UseProviderDefault>(),
+      );
+
+      // Gemini 3.1 Pro preview is directly documented as Low/Medium/High with
+      // default High on the official thinking table.
+      const pro31Context = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'gemini',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'gemini-3.1-pro-preview',
+        capabilityRevision: 'rev-1',
+      );
+      final pro31 = policy.resolveCapability(pro31Context);
+      expect(pro31.kind, ThinkingControlKind.level);
+      expect(pro31.options.map((option) => option.id), [
+        'low',
+        'medium',
+        'high',
+      ]);
+      expect(pro31.defaultOptionId, 'high');
+      expect(
+        policy.resolveDirective(pro31Context, 'medium'),
+        isA<GoogleLevelDirective>().having(
+          (directive) => directive.level,
+          'level',
+          'medium',
+        ),
+      );
+
+      // Models without an obtained per-model finite set stay unknown.
+      const unknownContext = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'gemini',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'gemini-3.1-flash-lite',
+        capabilityRevision: 'rev-1',
+      );
+      expect(
+        policy.resolveCapability(unknownContext).status,
+        ThinkingCapabilityStatus.unknown,
+      );
+    });
+
+    test('never advertises Off for an always-on Gemini Pro model', () {
+      const context = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'gemini',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'gemini-2.5-pro',
+        capabilityRevision: 'rev-1',
+      );
+
+      final descriptor = policy.resolveCapability(context);
+      expect(descriptor.kind, ThinkingControlKind.tokenBudget);
+      expect(descriptor.options.map((option) => option.id), [
+        'low',
+        'medium',
+        'high',
+      ]);
+      expect(descriptor.options.any((option) => option.isOff), isFalse);
+      expect(
+        policy.resolveDirective(context, 'off'),
+        isA<UseProviderDefault>(),
       );
     });
   });
@@ -936,6 +1065,140 @@ void main() {
       expect((body['reasoning'] as Map).containsKey('effort'), isFalse);
     });
 
+    test('disables reasoning with the documented effort-none envelope', () {
+      // The official OpenRouter guide documents `reasoning.effort: "none"` as
+      // disabling reasoning and never an explicitly enabled zero budget.
+      final googleOffBody = <String, dynamic>{
+        'model': 'google/gemini-2.5-flash',
+      };
+      AggregatorThinkingWireCodec.applyReasoning(
+        googleOffBody,
+        const GoogleBudgetDirective(0),
+      );
+      expect(googleOffBody['reasoning'], {'effort': 'none'});
+      expect(
+        (googleOffBody['reasoning'] as Map).containsKey('enabled'),
+        isFalse,
+      );
+      expect(
+        (googleOffBody['reasoning'] as Map).containsKey('max_tokens'),
+        isFalse,
+      );
+
+      final effortNoneBody = <String, dynamic>{'model': 'openai/gpt-5.6-sol'};
+      AggregatorThinkingWireCodec.applyReasoning(
+        effortNoneBody,
+        const OpenAiEffortDirective('none'),
+      );
+      expect(effortNoneBody['reasoning'], {'effort': 'none'});
+      expect(
+        (effortNoneBody['reasoning'] as Map).containsKey('enabled'),
+        isFalse,
+        reason: 'a documented effort-none disable must not stay enabled',
+      );
+
+      final toggleOffBody = <String, dynamic>{'model': 'kimi/kimi-k2.6'};
+      AggregatorThinkingWireCodec.applyReasoning(
+        toggleOffBody,
+        const ThinkingToggleDirective(enabled: false),
+      );
+      expect(toggleOffBody['reasoning'], {'effort': 'none'});
+    });
+
+    test('rejects a non-admitted directive before dispatch', () {
+      // Only canonical admitted values may be serialized. A non-admitted
+      // effort, alias string, casing/whitespace variant, negative budget or
+      // non-admitted Google level fails actionably at body build time instead
+      // of being silently omitted or remapped onto another value.
+      for (final value in ['off', 'false', 'disabled', 'NONE', ' none ', '']) {
+        expect(
+          () => AggregatorThinkingWireCodec.applyReasoning(<String, dynamic>{
+            'model': 'openai/o3-mini',
+          }, OpenAiEffortDirective(value)),
+          throwsA(isA<ThinkingWireSerializationException>()),
+          reason: 'non-admitted effort "$value" must be rejected',
+        );
+      }
+
+      for (final budget in [-1, -8192]) {
+        expect(
+          () => AggregatorThinkingWireCodec.applyReasoning(<String, dynamic>{
+            'model': 'google/gemini-2.5-flash',
+          }, GoogleBudgetDirective(budget)),
+          throwsA(isA<ThinkingWireSerializationException>()),
+          reason: 'non-admitted budget $budget must be rejected',
+        );
+      }
+
+      // `off` is not an admitted native Google level.
+      expect(
+        () => AggregatorThinkingWireCodec.applyReasoning(<String, dynamic>{
+          'model': 'google/gemini-3.6-flash',
+        }, const GoogleLevelDirective('off')),
+        throwsA(isA<ThinkingWireSerializationException>()),
+      );
+
+      // A non-positive Anthropic budget is not an admitted budget control.
+      expect(
+        () => AggregatorThinkingWireCodec.applyReasoning(<String, dynamic>{
+          'model': 'anthropic/claude-3.7-sonnet',
+        }, const AnthropicBudgetDirective(0)),
+        throwsA(isA<ThinkingWireSerializationException>()),
+      );
+
+      // A directive the envelope cannot carry is rejected, not dropped.
+      expect(
+        () => AggregatorThinkingWireCodec.applyReasoning(<String, dynamic>{
+          'model': 'openai/o3-mini',
+        }, const ResponsesReasoningDirective(effort: 'high')),
+        throwsA(isA<ThinkingWireSerializationException>()),
+      );
+    });
+
+    test(
+      'keeps every admitted positive tier and default omission unchanged',
+      () {
+        const positiveEfforts = [
+          'minimal',
+          'low',
+          'medium',
+          'high',
+          'xhigh',
+          'max',
+        ];
+        for (final effort in positiveEfforts) {
+          final body = <String, dynamic>{'model': 'openai/o3-mini'};
+          AggregatorThinkingWireCodec.applyReasoning(
+            body,
+            OpenAiEffortDirective(effort),
+          );
+          expect(body['reasoning'], {'enabled': true, 'effort': effort});
+        }
+        for (final level in ['minimal', 'low', 'medium', 'high']) {
+          final body = <String, dynamic>{'model': 'google/gemini-3.6-flash'};
+          AggregatorThinkingWireCodec.applyReasoning(
+            body,
+            GoogleLevelDirective(level),
+          );
+          expect(body['reasoning'], {'enabled': true, 'effort': level});
+        }
+        for (final budget in [1024, 8192, 24576]) {
+          final body = <String, dynamic>{'model': 'google/gemini-2.5-flash'};
+          AggregatorThinkingWireCodec.applyReasoning(
+            body,
+            GoogleBudgetDirective(budget),
+          );
+          expect(body['reasoning'], {'enabled': true, 'max_tokens': budget});
+        }
+        final defaultBody = <String, dynamic>{'model': 'openai/o3-mini'};
+        AggregatorThinkingWireCodec.applyReasoning(
+          defaultBody,
+          const UseProviderDefault(),
+        );
+        expect(defaultBody.containsKey('reasoning'), isFalse);
+      },
+    );
+
     test('maps Google level directive to effort without max_tokens', () {
       final body = <String, dynamic>{'model': 'google/gemini-3.6-flash'};
       AggregatorThinkingWireCodec.applyReasoning(
@@ -1114,17 +1377,22 @@ void main() {
       expect(body['thinking'], {'type': 'disabled'});
     });
 
-    test('lowers manual budget when max_tokens is smaller', () {
+    test('rejects an explicit budget the request max_tokens cannot honour', () {
       final body = <String, dynamic>{
         'model': 'claude-sonnet-4-5',
         'max_tokens': 4096,
       };
-      AnthropicThinkingWireCodec.applyThinking(
-        body,
-        const AnthropicBudgetDirective(16384),
-      );
 
-      expect(body['thinking'], {'type': 'enabled', 'budget_tokens': 4095});
+      expect(
+        () => AnthropicThinkingWireCodec.applyThinking(
+          body,
+          const AnthropicBudgetDirective(16384),
+        ),
+        throwsA(isA<ThinkingWireSerializationException>()),
+      );
+      // The request fails before dispatch instead of shipping a smaller
+      // budget than the one the user selected.
+      expect(body.containsKey('thinking'), isFalse);
     });
 
     test('preserves manual budget when max_tokens is larger', () {
@@ -1138,6 +1406,27 @@ void main() {
       );
 
       expect(body['thinking'], {'type': 'enabled', 'budget_tokens': 8192});
+    });
+
+    test('emits the largest budget that still fits below max_tokens', () {
+      final body = <String, dynamic>{
+        'model': 'claude-sonnet-4-5',
+        'max_tokens': 8192,
+      };
+      AnthropicThinkingWireCodec.applyThinking(
+        body,
+        const AnthropicBudgetDirective(8191),
+      );
+
+      expect(body['thinking'], {'type': 'enabled', 'budget_tokens': 8191});
+
+      expect(
+        () => AnthropicThinkingWireCodec.applyThinking(
+          <String, dynamic>{'model': 'claude-sonnet-4-5', 'max_tokens': 8192},
+          const AnthropicBudgetDirective(8192),
+        ),
+        throwsA(isA<ThinkingWireSerializationException>()),
+      );
     });
   });
 

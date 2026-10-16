@@ -5,7 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:test/test.dart';
 
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
@@ -13,7 +15,12 @@ import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.da
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
 import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
+import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
@@ -293,43 +300,45 @@ void main() {
       expect(snap!.first.value, equals('gpt-4o'));
     });
 
-    test('refresh enriches cached models with thinking_control metadata', () async {
-      repo.createInstance(
-        ProviderInstance(
-          id: 'inst-thinking',
-          templateId: 'openai',
-          displayName: 'OpenAI',
-          protocol: ProviderProtocol.openaiCompatible,
-          authMethod: ProviderAuthMethod.apiKey,
-          configRevision: 2,
-          credentialRevision: 1,
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
-        ),
-      );
-
-      runtime.adapterOverride = MockLLMAdapter(
-        () async => [
-          ModelOption(
-            value: 'o3',
-            label: 'O3',
-            supportsReasoning: true,
+    test(
+      'refresh enriches cached models with thinking_control metadata',
+      () async {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'inst-thinking',
+            templateId: 'openai',
+            displayName: 'OpenAI',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 2,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
           ),
-        ],
-      );
+        );
 
-      final models = await cacheService.refresh('inst-thinking', manual: true);
-      expect(models, hasLength(1));
-      expect(models.first.thinkingControl, isNotNull);
-      expect(
-        models.first.thinkingControl!.status,
-        ThinkingCapabilityStatus.supported,
-      );
+        runtime.adapterOverride = MockLLMAdapter(
+          () async => [
+            ModelOption(value: 'o3', label: 'O3', supportsReasoning: true),
+          ],
+        );
 
-      final cached = cacheService.snapshot('inst-thinking');
-      expect(cached?.first.thinkingControl, isNotNull);
-      expect(cached?.first.toJson()['thinking_control'], isNotNull);
-    });
+        final models = await cacheService.refresh(
+          'inst-thinking',
+          manual: true,
+        );
+        expect(models, hasLength(1));
+        expect(models.first.thinkingControl, isNotNull);
+        expect(
+          models.first.thinkingControl!.status,
+          ThinkingCapabilityStatus.supported,
+        );
+
+        final cached = cacheService.snapshot('inst-thinking');
+        expect(cached?.first.thinkingControl, isNotNull);
+        expect(cached?.first.toJson()['thinking_control'], isNotNull);
+      },
+    );
 
     test(
       'reasoning output alone does not imply supported thinking controls',
@@ -542,23 +551,154 @@ void main() {
           refreshed.first.thinkingControl!.status,
           ThinkingCapabilityStatus.unknown,
         );
-        expect(
-          refreshed.first.thinkingControl!.source,
-          'live_probe_failed',
-        );
+        expect(refreshed.first.thinkingControl!.source, 'live_probe_failed');
 
         // Check DB metadata has the error string
         final cachedRow = repo.readModelCache('inst-1', 'models')!;
         expect(cachedRow['last_error'], contains('Network disconnected'));
         expect(cachedRow['source'], equals('cache_stale'));
         final cachedModel = ModelOption.fromJson(
-          Map<String, dynamic>.from(
-            (cachedRow['models'] as List).first as Map,
-          ),
+          Map<String, dynamic>.from((cachedRow['models'] as List).first as Map),
         );
         expect(
           cachedModel.thinkingControl!.status,
           ThinkingCapabilityStatus.unknown,
+        );
+      },
+    );
+
+    test(
+      'failed refresh retains model-owned thinking facts while live-probe evidence stays invalidated',
+      () async {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'inst-facts',
+            templateId: 'openai',
+            displayName: 'OpenAI',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 3,
+            credentialRevision: 2,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final assembler = buildDefaultThinkingCapabilityAssembler();
+        final instance = repo.findById('inst-facts')!;
+
+        // A source-backed exact model fact (`o3-mini`) and a live-probe-derived
+        // fixture are both persisted by an earlier successful refresh.
+        final modelOwnedFact = assembler.assemble(
+          instance: instance,
+          model: ModelOption(value: 'o3-mini', label: 'o3-mini'),
+        );
+        expect(modelOwnedFact.status, ThinkingCapabilityStatus.supported);
+        expect(modelOwnedFact.source, 'profile');
+
+        final liveEvidence = ThinkingControlDescriptor(
+          status: ThinkingCapabilityStatus.supported,
+          kind: ThinkingControlKind.toggle,
+          options: const [
+            ThinkingControlOption(id: 'off', label: 'Off', isOff: true),
+            ThinkingControlOption(id: 'on', label: 'On'),
+          ],
+          defaultOptionId: 'on',
+          capabilityRevision: '3:2:ollama_live:probable-local',
+          source: 'live',
+        );
+
+        repo.upsertModelCache(
+          instanceId: 'inst-facts',
+          cacheKey: 'models',
+          models: [
+            ModelOption(
+              value: 'o3-mini',
+              label: 'o3-mini',
+              thinkingControl: modelOwnedFact,
+            ).toJson(),
+            ModelOption(
+              value: 'probable-local',
+              label: 'Probable Local',
+              thinkingControl: liveEvidence,
+            ).toJson(),
+          ],
+          fetchedAt: DateTime.now().subtract(const Duration(minutes: 10)),
+          source: 'live',
+          configRevision: 3,
+          credentialRevision: 2,
+        );
+
+        runtime.adapterOverride = MockLLMAdapter(() async {
+          throw SocketException('Network disconnected');
+        });
+
+        final refreshed = await cacheService.refresh(
+          'inst-facts',
+          manual: true,
+        );
+        expect(
+          repo.readModelCache('inst-facts', 'models')!['source'],
+          equals('cache_stale'),
+        );
+
+        // Model-owned fact survives: the documented capability is not a network
+        // claim and must not silently reset to provider-managed.
+        final retainedFact = refreshed.firstWhere(
+          (model) => model.value == 'o3-mini',
+        );
+        expect(
+          retainedFact.thinkingControl!.status,
+          ThinkingCapabilityStatus.supported,
+        );
+        expect(retainedFact.thinkingControl!.source, 'profile');
+
+        // Live-probe evidence keeps its authoritative failure provenance.
+        final invalidatedLive = refreshed.firstWhere(
+          (model) => model.value == 'probable-local',
+        );
+        expect(
+          invalidatedLive.thinkingControl!.status,
+          ThinkingCapabilityStatus.unknown,
+        );
+        expect(invalidatedLive.thinkingControl!.source, 'live_probe_failed');
+
+        // The user-visible effect: the retained fact still resolves to its
+        // typed native directive after the failed refresh.
+        final registry = buildProviderThinkingRegistry();
+        final resolver = ThinkingSelectionResolver(
+          instances: repo,
+          cacheResolver: ThinkingControlCacheResolver(repo),
+          assembler: assembler,
+          registry: registry,
+          config: config,
+        );
+        final resolution = resolver.resolve(
+          providerInstanceId: 'inst-facts',
+          modelId: 'o3-mini',
+          selectionId: 'high',
+        );
+        expect(
+          resolution.descriptor.status,
+          ThinkingCapabilityStatus.supported,
+        );
+        expect(resolution.directive, isA<OpenAiEffortDirective>());
+        expect((resolution.directive as OpenAiEffortDirective).effort, 'high');
+
+        // The invalidated live model still fails closed.
+        expect(
+          () => resolver.resolve(
+            providerInstanceId: 'inst-facts',
+            modelId: 'probable-local',
+            selectionId: 'on',
+          ),
+          throwsA(
+            isA<ThinkingSelectionException>().having(
+              (e) => e.code,
+              'code',
+              ThinkingSelectionErrorCode.capabilityUnknown,
+            ),
+          ),
         );
       },
     );
@@ -589,7 +729,9 @@ void main() {
         int catalogHttpCalls = 0;
         bool catalogImageSupport = false;
 
-        final tempDir = Directory.systemTemp.createTempSync('mdev-refresh-test-');
+        final tempDir = Directory.systemTemp.createTempSync(
+          'mdev-refresh-test-',
+        );
         final modelsDev = ModelsDevService(
           cacheFilePathOverride: '${tempDir.path}/models_dev_cache.json',
           client: MockClient((request) async {
@@ -601,7 +743,9 @@ void main() {
                   'models': {
                     'claude-haiku-4.5': {
                       'modalities': {
-                        'input': catalogImageSupport ? ['text', 'image'] : ['text'],
+                        'input': catalogImageSupport
+                            ? ['text', 'image']
+                            : ['text'],
                       },
                     },
                   },
@@ -636,14 +780,22 @@ void main() {
           modelId: 'claude-haiku-4.5',
         );
         expect(turn1Profile.imageSupport, RouteImageSupport.unsupported);
-        expect(catalogHttpCalls, 1, reason: 'Zero HTTP during Turn 1 admission');
+        expect(
+          catalogHttpCalls,
+          1,
+          reason: 'Zero HTTP during Turn 1 admission',
+        );
 
         // 3. Fake catalog changes to true
         catalogImageSupport = true;
 
         // 4. Explicit manual refresh is called
         await serviceWithCatalog.refresh('inst-catalog', manual: true);
-        expect(catalogHttpCalls, 2, reason: 'Manual refresh forced catalog reload');
+        expect(
+          catalogHttpCalls,
+          2,
+          reason: 'Manual refresh forced catalog reload',
+        );
 
         // 5. Next admission (Turn 2) resolves supported
         final turn2Profile = resolver.resolveSync(
@@ -651,10 +803,389 @@ void main() {
           modelId: 'claude-haiku-4.5',
         );
         expect(turn2Profile.imageSupport, RouteImageSupport.supported);
-        expect(catalogHttpCalls, 2, reason: 'Zero HTTP during Turn 2 admission');
+        expect(
+          catalogHttpCalls,
+          2,
+          reason: 'Zero HTTP during Turn 2 admission',
+        );
 
         // 6. Prior frozen Turn 1 profile remains immutable
         expect(turn1Profile.imageSupport, RouteImageSupport.unsupported);
+      },
+    );
+  });
+
+  group('failed refresh reconstructs thinking descriptors from current authority', () {
+    late Directory tempHome;
+    late AgentStateDatabase state;
+    late ProviderInstanceRepository repo;
+    late Config config;
+    late TestAgentRuntimeService runtime;
+    late ProviderModelCacheService cacheService;
+    late ThinkingCapabilityAssembler assembler;
+    late ThinkingSelectionResolver resolver;
+
+    const overrideHome = '''
+model_capabilities:
+  declared-fixture:
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: low
+        high: high
+''';
+
+    /// Valid Home configuration without the model-only thinking override.
+    const overrideFreeHome = '''
+model_capabilities:
+  unrelated-fixture-marker:
+    supports_image_input: true
+''';
+
+    void writeHomeConfig(String content) {
+      File(p.join(tempHome.path, 'config.yaml')).writeAsStringSync(content);
+      config.reloadModelAwarePolicy();
+    }
+
+    ProviderInstance openAiInstance({int configRevision = 1}) {
+      final inst = ProviderInstance(
+        id: 'inst-authority',
+        templateId: 'openai',
+        displayName: 'OpenAI',
+        protocol: ProviderProtocol.openaiCompatible,
+        authMethod: ProviderAuthMethod.apiKey,
+        configRevision: configRevision,
+        credentialRevision: 1,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      repo.createInstance(inst);
+      return inst;
+    }
+
+    void seedCache(ProviderInstance instance, List<ModelOption> models) {
+      repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: models.map((model) => model.toJson()).toList(),
+        fetchedAt: DateTime.now().subtract(const Duration(minutes: 20)),
+        source: 'live',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+      );
+    }
+
+    setUp(() {
+      tempHome = Directory.systemTemp.createTempSync(
+        'sanad_refresh_authority_',
+      );
+      setSanadHomeOverride(tempHome.path);
+      state = AgentStateDatabase.inMemory();
+      repo = ProviderInstanceRepository.fromDatabase(state.db);
+      config = Config(environment: {'SANAD_HOME': tempHome.path});
+      runtime = TestAgentRuntimeService(config, repo);
+      assembler = ThinkingCapabilityAssembler(
+        buildProviderThinkingRegistry(),
+        config,
+      );
+      resolver = ThinkingSelectionResolver(
+        instances: repo,
+        cacheResolver: ThinkingControlCacheResolver(repo),
+        assembler: assembler,
+        registry: buildProviderThinkingRegistry(),
+        config: config,
+      );
+      cacheService = ProviderModelCacheService(
+        repo,
+        runtime,
+        assembler,
+        config: config,
+        cooldown: const Duration(seconds: 2),
+      );
+      writeHomeConfig(overrideFreeHome);
+    });
+
+    tearDown(() {
+      try {
+        setSanadHomeOverride(null);
+        state.dispose();
+      } finally {
+        if (tempHome.existsSync()) {
+          tempHome.deleteSync(recursive: true);
+        }
+      }
+    });
+
+    void failRefreshAdapter() {
+      runtime.adapterOverride = MockLLMAdapter(() async {
+        throw SocketException('Network disconnected');
+      });
+    }
+
+    test(
+      'unchanged authority: model-owned fact survives and still resolves',
+      () async {
+        final inst = openAiInstance();
+        final enriched = assembler.enrich(
+          instance: inst,
+          model: ModelOption(value: 'o3-mini', label: 'o3-mini'),
+        );
+        expect(enriched.thinkingControl!.source, 'profile');
+        seedCache(inst, [enriched]);
+        failRefreshAdapter();
+
+        final refreshed = await cacheService.refresh(inst.id, manual: true);
+        final retained = refreshed.firstWhere((m) => m.value == 'o3-mini');
+        expect(
+          retained.thinkingControl!.status,
+          ThinkingCapabilityStatus.supported,
+        );
+        expect(retained.thinkingControl!.source, 'profile');
+        expect(
+          repo.readModelCache(inst.id, 'models')!['source'],
+          equals('cache_stale'),
+        );
+
+        final resolution = resolver.resolve(
+          providerInstanceId: inst.id,
+          modelId: 'o3-mini',
+          selectionId: 'high',
+        );
+        expect((resolution.directive as OpenAiEffortDirective).effort, 'high');
+      },
+    );
+
+    test('removed override is not resurrected by a failed refresh', () async {
+      final inst = ProviderInstance(
+        id: 'inst-authority-override',
+        templateId: kCustomProviderTemplateId,
+        displayName: 'Custom',
+        protocol: ProviderProtocol.openaiCompatible,
+        authMethod: ProviderAuthMethod.apiKey,
+        configRevision: 1,
+        credentialRevision: 1,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      repo.createInstance(inst);
+      writeHomeConfig(overrideHome);
+
+      final enriched = assembler.enrich(
+        instance: inst,
+        model: ModelOption(value: 'declared-fixture', label: 'Declared'),
+      );
+      expect(enriched.thinkingControl!.source, 'config_override');
+      expect(
+        enriched.thinkingControl!.status,
+        ThinkingCapabilityStatus.supported,
+      );
+      seedCache(inst, [enriched]);
+
+      // The user removes the model-only override from the Home configuration.
+      writeHomeConfig(overrideFreeHome);
+      failRefreshAdapter();
+
+      final refreshed = await cacheService.refresh(inst.id, manual: true);
+      final model = refreshed.firstWhere((m) => m.value == 'declared-fixture');
+      expect(
+        model.thinkingControl!.status,
+        ThinkingCapabilityStatus.unknown,
+        reason: 'a removed override must not be resurrected from cache',
+      );
+      expect(model.thinkingControl!.source, 'live_probe_failed');
+      expect(
+        () => resolver.resolve(
+          providerInstanceId: inst.id,
+          modelId: 'declared-fixture',
+          selectionId: 'high',
+        ),
+        throwsA(
+          isA<ThinkingSelectionException>().having(
+            (e) => e.code,
+            'code',
+            ThinkingSelectionErrorCode.capabilityUnknown,
+          ),
+        ),
+      );
+    });
+
+    test(
+      'changed config revision fails closed instead of retaining stale controls',
+      () async {
+        final inst = openAiInstance();
+        final enriched = assembler.enrich(
+          instance: inst,
+          model: ModelOption(value: 'o3-mini', label: 'o3-mini'),
+        );
+        seedCache(inst, [enriched]);
+
+        // The route configuration changed after the cached descriptor was written.
+        repo.update(inst.copyWith(configRevision: 2));
+        failRefreshAdapter();
+
+        final refreshed = await cacheService.refresh(inst.id, manual: true);
+        final model = refreshed.firstWhere((m) => m.value == 'o3-mini');
+        expect(model.thinkingControl!.status, ThinkingCapabilityStatus.unknown);
+        expect(model.thinkingControl!.source, 'live_probe_failed');
+      },
+    );
+
+    test(
+      'route mode change fails closed for a declaration it cannot honor',
+      () async {
+        final inst = ProviderInstance(
+          id: 'inst-authority-mode',
+          templateId: kCustomProviderTemplateId,
+          displayName: 'Custom',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+        repo.createInstance(inst);
+        writeHomeConfig(overrideHome);
+        final enriched = assembler.enrich(
+          instance: inst,
+          model: ModelOption(value: 'declared-fixture', label: 'Declared'),
+        );
+        expect(
+          enriched.thinkingControl!.status,
+          ThinkingCapabilityStatus.supported,
+        );
+        seedCache(inst, [enriched]);
+
+        // The actual API mode changes; the Chat effort declaration is no longer
+        // compatible and must not survive the failed refresh.
+        repo.update(
+          inst.copyWith(protocol: ProviderProtocol.anthropicCompatible),
+        );
+        failRefreshAdapter();
+
+        final refreshed = await cacheService.refresh(inst.id, manual: true);
+        final model = refreshed.firstWhere(
+          (m) => m.value == 'declared-fixture',
+        );
+        expect(model.thinkingControl!.status, ThinkingCapabilityStatus.unknown);
+        expect(model.thinkingControl!.source, 'live_probe_failed');
+      },
+    );
+
+    test(
+      'endpoint-declared controls are not reclassified as intrinsic support',
+      () async {
+        final inst = ProviderInstance(
+          id: 'inst-authority-endpoint',
+          templateId: kCustomProviderTemplateId,
+          displayName: 'Custom',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+        repo.createInstance(inst);
+
+        // The endpoint itself declares the control in its discovery metadata.
+        final enriched = assembler.enrich(
+          instance: inst,
+          model: ModelOption(
+            value: 'declared-endpoint-fixture',
+            label: 'Declared Endpoint',
+            modelMetadata: const {
+              'thinking_control': {
+                'status': 'supported',
+                'wire': 'openai_chat_effort',
+                'options': {'low': 'low', 'high': 'high'},
+              },
+            },
+          ),
+        );
+        expect(enriched.thinkingControl!.source, 'endpoint_declared');
+        expect(
+          enriched.thinkingControl!.status,
+          ThinkingCapabilityStatus.supported,
+        );
+        seedCache(inst, [enriched]);
+        failRefreshAdapter();
+
+        final refreshed = await cacheService.refresh(inst.id, manual: true);
+        final model = refreshed.firstWhere(
+          (m) => m.value == 'declared-endpoint-fixture',
+        );
+        expect(
+          model.thinkingControl!.status,
+          ThinkingCapabilityStatus.unknown,
+          reason:
+              'route-owned endpoint evidence cannot be revalidated by a failed '
+              'model-list refresh and must not be retained as intrinsic support',
+        );
+        expect(model.thinkingControl!.source, 'live_probe_failed');
+      },
+    );
+
+    test(
+      'changed credential revision fails closed instead of retaining controls',
+      () async {
+        final inst = openAiInstance();
+        final enriched = assembler.enrich(
+          instance: inst,
+          model: ModelOption(value: 'o3-mini', label: 'o3-mini'),
+        );
+        seedCache(inst, [enriched]);
+
+        repo.update(inst.copyWith(credentialRevision: 2));
+        failRefreshAdapter();
+
+        final refreshed = await cacheService.refresh(inst.id, manual: true);
+        final model = refreshed.firstWhere((m) => m.value == 'o3-mini');
+        expect(model.thinkingControl!.status, ThinkingCapabilityStatus.unknown);
+        expect(model.thinkingControl!.source, 'live_probe_failed');
+      },
+    );
+
+    test(
+      'authoritative failure and live evidence keep their invalidation',
+      () async {
+        final inst = openAiInstance();
+        final invalidated = ModelOption(
+          value: 'o3-mini',
+          label: 'o3-mini',
+          thinkingControl: ThinkingControlDescriptor.unknown(
+            capabilityRevision: 'probe_failed:o3-mini',
+            source: 'live_probe_failed',
+          ),
+        );
+        final liveEvidence = ModelOption(
+          value: 'probable-local',
+          label: 'Probable Local',
+          thinkingControl: ThinkingControlDescriptor(
+            status: ThinkingCapabilityStatus.supported,
+            kind: ThinkingControlKind.toggle,
+            options: const [
+              ThinkingControlOption(id: 'off', label: 'Off', isOff: true),
+              ThinkingControlOption(id: 'on', label: 'On'),
+            ],
+            defaultOptionId: 'on',
+            capabilityRevision: '1:1:ollama_live:probable-local',
+            source: 'live',
+          ),
+        );
+        seedCache(inst, [invalidated, liveEvidence]);
+        failRefreshAdapter();
+
+        final refreshed = await cacheService.refresh(inst.id, manual: true);
+        for (final model in refreshed) {
+          expect(
+            model.thinkingControl!.status,
+            ThinkingCapabilityStatus.unknown,
+            reason: '${model.value} must not be resurrected',
+          );
+          expect(model.thinkingControl!.source, 'live_probe_failed');
+        }
       },
     );
   });

@@ -144,7 +144,7 @@ void main() {
       );
     });
 
-    test('exact V4.1 default is the grounded tier, not a fabricated Default', () {
+    test('exact V4.1 default is annotated, never promoted into a selection', () {
       final descriptor = RouteThinkingControl.resolveDescriptor(
         snapshot: _snapshotFor(
           modelId: v41ModelId,
@@ -154,21 +154,28 @@ void main() {
         modelId: v41ModelId,
       );
 
+      // The documented native default is annotation metadata only.
       expect(
-        RouteThinkingControl.effectiveSelectionId(
-          descriptor: descriptor,
-          selectionId: null,
-          legacyModes: const [],
-        ),
+        RouteThinkingControl.documentedDefaultOption(descriptor)?.id,
         'high',
       );
+      // Untouched selection has no level label: the omission label is localized
+      // widget copy, never the grounded tier.
       expect(
         RouteThinkingControl.labelForSelection(
           descriptor: descriptor,
           selectionId: null,
           legacyModes: const [],
         ),
-        'High',
+        isNull,
+      );
+      // No concrete menu row is checked while the selection is unset.
+      expect(
+        RouteThinkingControl.checkedMenuEntryId(
+          selectionId: null,
+          legacyModes: const [],
+        ),
+        isNull,
       );
 
       // Explicit Off remains an explicit, valid selection.
@@ -179,6 +186,14 @@ void main() {
           legacyModes: const [],
         ),
         'Off',
+      );
+      expect(
+        RouteThinkingControl.labelForSelection(
+          descriptor: descriptor,
+          selectionId: 'high',
+          legacyModes: const [],
+        ),
+        'High',
       );
       expect(
         RouteThinkingControl.isValidSelection(
@@ -196,18 +211,18 @@ void main() {
         reason: 'a remapped alias is never a valid client selection',
       );
 
-      // No authoritative descriptor stays honestly provider-managed.
+      // No authoritative descriptor still yields no level label.
       expect(
         RouteThinkingControl.labelForSelection(
           descriptor: null,
           selectionId: null,
           legacyModes: const [],
         ),
-        'Default',
+        isNull,
       );
     });
 
-    test('near-ID and pre-fix descriptors stay hidden with no invented options', () {
+    test('near-ID and pre-fix descriptors gain no invented options', () {
       for (final modelId in [
         'deepseek-v4.1-flash-x',
         'deepseek-v41-flash',
@@ -223,8 +238,24 @@ void main() {
             capabilities: _modelControlsCapabilities,
             descriptor: descriptor,
           ),
-          RouteThinkingSelectorState.hidden,
-          reason: '$modelId must not gain a thinking selector',
+          RouteThinkingSelectorState.noControl,
+          reason:
+              '$modelId must show a truthful no-control state, never a selectable '
+              'menu and never a hidden selector',
+        );
+        expect(
+          RouteThinkingControl.labelForSelection(
+            descriptor: descriptor,
+            selectionId: null,
+            legacyModes: const [],
+          ),
+          isNull,
+          reason: 'an unsupported route must never claim a level',
+        );
+        expect(
+          RouteThinkingControl.documentedDefaultOption(descriptor),
+          isNull,
+          reason: 'no option exists, so there is nothing to annotate',
         );
       }
 

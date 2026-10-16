@@ -358,5 +358,16 @@
   "toolWritingFile": "جاري كتابة الملف...",
   "toolEditingFile": "جاري تعديل الملف...",
   "toolSearchingFiles": "جاري البحث في الملفات...",
-  "toolExecuting": "جاري تنفيذ الأداة..."
+  "toolExecuting": "جاري تنفيذ الأداة...",
+  "thinkingModeUnavailableLabel": "غير متاح",
+  "thinkingModeUnavailableTooltip": "اختيار نمط التفكير غير متاح لهذا الجهاز.",
+  "thinkingModeNoControlLabel": "لا يوجد تحكم",
+  "thinkingModeNoControlTooltip": "لا يوجد مستوى تفكير قابل للاختيار لهذا النموذج.",
+  "thinkingModeUnknownLabel": "غير مُبلَّغ عنه",
+  "thinkingModeUnknownTooltip": "لم يتم الإبلاغ عن خيارات التفكير لهذا النموذج.",
+  "thinkingModeProviderDefaultLabel": "افتراضي",
+  "thinkingModeTokenBudgetLabel": "ميزانية الرموز",
+  "thinkingModeTokenBudgetAnnotation": "{tokens} توكن",
+  "thinkingModeSelectBudgetTooltip": "اختر نمط التفكير · الميزانية: {budget}",
+  "thinkingModeProviderDefaultAnnotation": "الافتراضي لدى المزوّد: {option}"
 }

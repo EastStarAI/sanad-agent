@@ -181,7 +181,7 @@ model_capabilities:
           'openai-codex': 'codex_responses_effort',
           'kimi': 'kimi_thinking',
           'anthropic': 'anthropic_thinking',
-          'nvidia': 'unknown',
+          'nvidia': 'nim_thinking',
           'openai': 'openai_chat_effort',
           'openrouter': 'aggregator_upstream',
           'gemini': 'google_thinking',
@@ -602,10 +602,11 @@ model_capabilities:
             24576,
           );
 
-          // 2. Level on gemini-3-pro-preview
+          // 2. Level on gemini-3.8-flash (documented Low/Medium/High, default
+          // Medium). Gemini 3 Pro preview documents Low/High only.
           final resLevel = resolver.resolve(
             providerInstanceId: 'inst-gemini',
-            modelId: 'gemini-3-pro-preview',
+            modelId: 'gemini-3.8-flash',
             selectionId: 'medium',
           );
           expect(
@@ -1185,9 +1186,11 @@ model_capabilities:
       );
 
       test(
-        'model-only resolution across representative templates (kimi, custom, nvidia, openai, opencode-go, gemini, openrouter); persists across rename and recreate; mode-incompatible rejection',
+        'model-only resolution on native/partner dialects (kimi, opencode-go); persists across rename and recreate; mode-incompatible rejection',
         () {
-          // 1. Evidence resolves identically across representative templates
+          // 1. Native Kimi semantics are proven on the routes that document
+          // them (the first-party template and the documented partner Chat
+          // route); generic/local carriers are asserted separately below.
           final instances = <String, ProviderInstance>{
             'kimi': ProviderInstance(
               id: 'inst-multi-kimi',
@@ -1198,55 +1201,10 @@ model_capabilities:
               createdAt: DateTime.now(),
               updatedAt: DateTime.now(),
             ),
-            'custom': ProviderInstance(
-              id: 'inst-multi-custom',
-              templateId: kCustomProviderTemplateId,
-              displayName: 'Custom OpenAI-Compatible',
-              protocol: ProviderProtocol.openaiCompatible,
-              authMethod: ProviderAuthMethod.apiKey,
-              createdAt: DateTime.now(),
-              updatedAt: DateTime.now(),
-            ),
-            'nvidia': ProviderInstance(
-              id: 'inst-multi-nvidia',
-              templateId: 'nvidia',
-              displayName: 'NVIDIA NIM Endpoint',
-              protocol: ProviderProtocol.openaiCompatible,
-              authMethod: ProviderAuthMethod.apiKey,
-              createdAt: DateTime.now(),
-              updatedAt: DateTime.now(),
-            ),
-            'openai': ProviderInstance(
-              id: 'inst-multi-openai',
-              templateId: 'openai',
-              displayName: 'OpenAI Endpoint',
-              protocol: ProviderProtocol.openaiCompatible,
-              authMethod: ProviderAuthMethod.apiKey,
-              createdAt: DateTime.now(),
-              updatedAt: DateTime.now(),
-            ),
             'opencode-go': ProviderInstance(
               id: 'inst-multi-opencode-go',
               templateId: 'opencode-go',
               displayName: 'OpenCode Go Endpoint',
-              protocol: ProviderProtocol.openaiCompatible,
-              authMethod: ProviderAuthMethod.apiKey,
-              createdAt: DateTime.now(),
-              updatedAt: DateTime.now(),
-            ),
-            'gemini': ProviderInstance(
-              id: 'inst-multi-gemini',
-              templateId: 'gemini',
-              displayName: 'Google Gemini Endpoint',
-              protocol: ProviderProtocol.openaiCompatible,
-              authMethod: ProviderAuthMethod.apiKey,
-              createdAt: DateTime.now(),
-              updatedAt: DateTime.now(),
-            ),
-            'openrouter': ProviderInstance(
-              id: 'inst-multi-openrouter',
-              templateId: 'openrouter',
-              displayName: 'OpenRouter Gateway',
               protocol: ProviderProtocol.openaiCompatible,
               authMethod: ProviderAuthMethod.apiKey,
               createdAt: DateTime.now(),
@@ -1422,8 +1380,19 @@ model_capabilities:
             );
           }
 
-          // 2. Persistence across rename
-          final customInst = instances['custom']!;
+          // 2. Persistence across rename on a generic compatible carrier: the
+          // documented standard effort ladder follows the model, and the
+          // carrier keeps no native Kimi toggle.
+          final customInst = ProviderInstance(
+            id: 'inst-multi-custom',
+            templateId: kCustomProviderTemplateId,
+            displayName: 'Custom OpenAI-Compatible',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          );
+          repo.createInstance(customInst);
           final renamedCustom = customInst.copyWith(
             displayName: 'Renamed Custom Chat Route',
             updatedAt: DateTime.now(),
@@ -1582,20 +1551,14 @@ model_capabilities:
       );
 
       test(
-        'Production BaseOpenAIAdapter HTTP dispatch across representative templates (kimi, openai, opencode-go, gemini, nvidia, custom)',
+        'Production BaseOpenAIAdapter HTTP dispatch on native/partner Chat templates (kimi, opencode-go)',
         () async {
+          // Kimi native/partner semantics are dispatched on the routes that
+          // document them; the hosted NIM catalog and generic carriers are
+          // covered by their own focused suites.
           final dispatchTemplates = <String, ProviderProfile>{
             'kimi': ProviderRegistry.findByNameOrAlias('kimi')!,
-            'openai': ProviderRegistry.findByNameOrAlias('openai')!,
             'opencode-go': ProviderRegistry.findByNameOrAlias('opencode-go')!,
-            'gemini': ProviderRegistry.findByNameOrAlias('gemini')!,
-            'nvidia': ProviderRegistry.findByNameOrAlias('nvidia')!,
-            'custom': const ProviderProfile(
-              name: kCustomProviderTemplateId,
-              displayName: 'Custom OpenAI-Compatible',
-              protocol: ProviderProtocol.openaiCompatible,
-              apiMode: 'chat_completions',
-            ),
           };
 
           for (final entry in dispatchTemplates.entries) {
@@ -1893,6 +1856,97 @@ model_capabilities:
             );
             expect(wireOmit.containsKey('thinking'), isFalse);
             expect(wireOmit.containsKey('reasoning_effort'), isFalse);
+          },
+        );
+
+        test(
+          'generic, local and NIM carriers expose only their evidenced dialect facts',
+          () {
+            // A generic compatible Chat route: the documented standard effort
+            // ladder only (no native envelope, no invented disable).
+            final customInst = ProviderInstance(
+              id: 'inst-carrier-custom',
+              templateId: kCustomProviderTemplateId,
+              displayName: 'Carrier Custom',
+              protocol: ProviderProtocol.openaiCompatible,
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            );
+            repo.createInstance(customInst);
+            final customK3 = assembler.assemble(
+              instance: customInst,
+              model: ModelOption(value: 'kimi-k3', label: 'Kimi K3'),
+            );
+            expect(customK3.status, ThinkingCapabilityStatus.supported);
+            expect(customK3.options.map((option) => option.id), [
+              'low',
+              'high',
+              'max',
+            ]);
+            expect(customK3.defaultOptionId, isNull);
+            final customK26 = assembler.assemble(
+              instance: customInst,
+              model: ModelOption(value: 'kimi-k2.6', label: 'Kimi K2.6'),
+            );
+            expect(
+              customK26.status,
+              ThinkingCapabilityStatus.unknown,
+              reason: 'a native toggle is not evidenced on a generic Chat wire',
+            );
+
+            // A local carrier hosting a ZAI model: the same boundary.
+            final localInst = ProviderInstance(
+              id: 'inst-carrier-local',
+              templateId: 'llama-cpp',
+              displayName: 'Carrier Local',
+              protocol: ProviderProtocol.openaiCompatible,
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            );
+            repo.createInstance(localInst);
+            final localGlm = assembler.assemble(
+              instance: localInst,
+              model: ModelOption(value: 'glm-4.5', label: 'GLM 4.5'),
+            );
+            expect(localGlm.status, ThinkingCapabilityStatus.unknown);
+
+            // The hosted NIM catalog keeps its own documented per-model contracts
+            // and does not inherit first-party bare ids.
+            final nimInst = ProviderInstance(
+              id: 'inst-carrier-nim',
+              templateId: 'nvidia',
+              displayName: 'Carrier NIM',
+              protocol: ProviderProtocol.openaiCompatible,
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            );
+            repo.createInstance(nimInst);
+            final nimDeepSeek = assembler.assemble(
+              instance: nimInst,
+              model: ModelOption(
+                value: 'deepseek-ai/deepseek-v4-flash',
+                label: 'DeepSeek V4 Flash',
+              ),
+            );
+            expect(nimDeepSeek.status, ThinkingCapabilityStatus.supported);
+            expect(nimDeepSeek.options.map((option) => option.id), [
+              'none',
+              'high',
+              'max',
+            ]);
+            expect(nimDeepSeek.defaultOptionId, 'high');
+            final nimBareKimi = assembler.assemble(
+              instance: nimInst,
+              model: ModelOption(value: 'kimi-k3', label: 'Kimi K3'),
+            );
+            expect(
+              nimBareKimi.status,
+              ThinkingCapabilityStatus.unknown,
+              reason: 'the bare id is not a hosted NIM fact',
+            );
           },
         );
 

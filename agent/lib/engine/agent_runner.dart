@@ -35,6 +35,7 @@ import '../core/provider_thinking/thinking_route_session_sync.dart';
 import '../core/provider_thinking/thinking_route_preference.dart';
 import '../core/provider_thinking/thinking_route_preference_store.dart';
 import '../core/provider_thinking/thinking_selection_resolver.dart';
+import '../core/provider_thinking/thinking_wire_vocabulary.dart';
 import '../core/secrets_redactor.dart';
 import 'agent_context_assembler.dart';
 import 'llm_request_dumper.dart';
@@ -1274,6 +1275,26 @@ class AgentRunner {
         reason: reason,
         title: 'Image input not supported',
         message: error.userMessage,
+        providerInstanceId: providerInstanceId,
+        providerDisplayName: displayName,
+        requestId: _turnRoute.turnRequestId,
+        retryAfter: null,
+        forceBlocked: true,
+        runId: _authoritativeRunId,
+      );
+      throw RuntimeRecoveryRequired(sessionId, reason);
+    }
+    // A local thinking-wire rejection (an explicitly selected budget the request
+    // cannot honour) is decided before dispatch, so it must be presented as the
+    // actionable configuration problem it is rather than as a provider failure.
+    if (error is ThinkingWireSerializationException) {
+      const reason = RuntimeFailureReason.invalidRequest;
+      final displayName = recovery.providerDisplayName(providerInstanceId);
+      recovery.reportFailure(
+        sessionId: sessionId,
+        reason: reason,
+        title: 'Thinking option not supported',
+        message: error.message,
         providerInstanceId: providerInstanceId,
         providerDisplayName: displayName,
         requestId: _turnRoute.turnRequestId,

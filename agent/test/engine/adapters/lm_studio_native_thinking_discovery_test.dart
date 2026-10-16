@@ -13,7 +13,10 @@
 /// model inference is involved, and no request is dispatched outside the
 /// loopback mock. Native-only values (`on`/`off`) must never be mapped onto the
 /// compatibility Chat wire, and an unmappable native default must never be
-/// invented as a selectable level.
+/// invented as a selectable level. A documented native default stays truthful
+/// descriptor metadata: an omitted, cleared or whitespace-only selection remains
+/// provider-default omission, and the default reaches the wire only when it is
+/// actually selected.
 library;
 
 import 'dart:convert';
@@ -364,7 +367,7 @@ void main() {
     });
 
     test(
-      'a mappable native default is preserved as the default selection',
+      'a mappable native default stays descriptor metadata and omission omits',
       () async {
         final h = await _openHarness(
           nativeModels: [_nativeModel(key: _modelId, defaultOption: 'high')],
@@ -373,18 +376,53 @@ void main() {
 
         await h.cacheService.refresh(_Harness.instanceId, manual: true);
 
+        // The documented native default is retained as truthful descriptor
+        // metadata. It never turns an omitted selection into a request field.
         expect(h.cachedModel()!.thinkingControl!.defaultOptionId, 'high');
 
-        final resolution = h.selectionResolver.resolve(
+        for (final omitted in <String?>[null, '', '   ']) {
+          final resolution = h.selectionResolver.resolve(
+            providerInstanceId: _Harness.instanceId,
+            modelId: _modelId,
+            selectionId: omitted,
+          );
+          expect(
+            resolution.directive,
+            isA<UseProviderDefault>(),
+            reason: 'omitted selection "$omitted" stays provider default',
+          );
+
+          final body = await h.send(selectionId: omitted);
+          expect(
+            body.containsKey('reasoning_effort'),
+            isFalse,
+            reason: 'omission must not dispatch the native default: "$omitted"',
+          );
+          expect(
+            body.containsKey('thinking'),
+            isFalse,
+            reason: 'no fabricated thinking envelope on the Chat wire',
+          );
+          expect(body['model'], _modelId);
+        }
+
+        // Explicitly selecting the documented default dispatches it exactly.
+        final explicit = h.selectionResolver.resolve(
           providerInstanceId: _Harness.instanceId,
           modelId: _modelId,
-          selectionId: null,
+          selectionId: 'high',
         );
-        expect(resolution.directive, isA<OpenAiEffortDirective>());
-        expect((resolution.directive as OpenAiEffortDirective).effort, 'high');
+        expect(explicit.directive, isA<OpenAiEffortDirective>());
+        expect((explicit.directive as OpenAiEffortDirective).effort, 'high');
 
-        final body = await h.send(selectionId: null);
-        expect(body['reasoning_effort'], 'high');
+        final explicitBody = await h.send(selectionId: 'high');
+        expect(explicitBody['reasoning_effort'], 'high');
+        expect(
+          explicitBody.containsKey('thinking'),
+          isFalse,
+          reason: 'no fabricated thinking envelope on the Chat wire',
+        );
+        expect(h.chatBodies, hasLength(4));
       },
     );
 

@@ -4,7 +4,7 @@ status: "in_progress"
 priority: "high"
 depends_on: "77g1, hosted relay with supports_attachments"
 current_gate: "G3"
-remaining_estimate: "20%"
+remaining_estimate: "Gate-based: final merged-candidate verification and visible remote acceptance remain; no current percentage or ETA."
 evidence_id: "77e"
 ---
 

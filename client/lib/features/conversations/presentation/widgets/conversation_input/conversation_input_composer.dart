@@ -777,9 +777,15 @@ class _UnifiedComposerContainer extends StatelessWidget {
           children: [
             Icon(Symbols.neurology, size: 16, color: dimTextColor),
             const SizedBox(width: 4),
-            Text(
-              label,
-              style: GoogleFonts.inter(color: dimTextColor, fontSize: 12),
+            // The always-visible control must stay horizontally bounded in a
+            // narrow composer: the label shrinks instead of overflowing the row.
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(color: dimTextColor, fontSize: 12),
+              ),
             ),
             if (enabled) ...[
               const SizedBox(width: 4),

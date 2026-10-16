@@ -9,9 +9,14 @@ import 'anthropic_thinking_policy.dart';
 import 'codex_responses_effort_thinking_policy.dart';
 import 'deepseek_model_catalog.dart';
 import 'deepseek_thinking_policy.dart';
+import 'gpt_oss_model_catalog.dart';
+import 'compatible_chat_effort_facts.dart';
+import 'thinking_wire_dialect.dart';
 import 'kimi_thinking_policy.dart';
+import 'nim_thinking_policy.dart';
 import 'openai_chat_effort_thinking_policy.dart';
 import 'openai_reasoning_models.dart';
+import 'xai_model_catalog.dart';
 import 'zai_model_catalog.dart';
 import 'zai_thinking_policy.dart';
 
@@ -48,16 +53,41 @@ class ThinkingRoutePolicy {
     // Exact evidenced model knowledge takes precedence on compatible API modes (model-only contract).
     if (modelId != null) {
       if (apiMode == 'chat_completions' || apiMode == 'chat') {
-        if (KimiThinkingPolicy.isEvidencedModel(modelId)) {
-          return KimiThinkingPolicy.policyIdentifier;
+        final dialect = wireDialectFor(instance);
+        // The hosted NIM catalog owns its own documented per-model contracts;
+        // they are selected before any first-party extension can leak onto it.
+        if (dialect == ThinkingWireDialect.nimChat &&
+            NimThinkingPolicy.isEvidencedModel(modelId)) {
+          return NimThinkingPolicy.policyIdentifier;
         }
-        if (DeepSeekModelCatalog.isEvidencedModel(modelId)) {
-          return DeepSeekThinkingPolicy.policyIdentifier;
+        // First-party native envelopes only on evidenced native dialects.
+        if (dialect.allowsFirstPartyNativeEnvelope) {
+          if (KimiThinkingPolicy.isEvidencedModel(modelId)) {
+            return KimiThinkingPolicy.policyIdentifier;
+          }
+          if (DeepSeekModelCatalog.isEvidencedModel(modelId)) {
+            return DeepSeekThinkingPolicy.policyIdentifier;
+          }
+          if (ZaiModelCatalog.isEvidencedModel(modelId)) {
+            return ZaiThinkingPolicy.policyIdentifier;
+          }
         }
-        if (ZaiModelCatalog.isEvidencedModel(modelId)) {
-          return ZaiThinkingPolicy.policyIdentifier;
+        // Documented standard-effort facts remain available on the compatible
+        // wire, without the family's native envelope or disable.
+        if (dialect == ThinkingWireDialect.compatibleChat &&
+            CompatibleChatEffortFacts.isEvidencedModel(modelId)) {
+          return OpenAiChatEffortThinkingPolicy.policyIdentifier;
         }
         if (OpenAiReasoningModels.isEvidencedModel(modelId)) {
+          return OpenAiChatEffortThinkingPolicy.policyIdentifier;
+        }
+        // Exact xAI Grok facts use the documented Chat `reasoning_effort` field.
+        if (XaiModelCatalog.supportsEffort(modelId)) {
+          return OpenAiChatEffortThinkingPolicy.policyIdentifier;
+        }
+        // Exact `gpt-oss` facts are intrinsic model facts on the compatible
+        // Chat reasoning-effort mode.
+        if (GptOssModelCatalog.isGroundedModelId(modelId)) {
           return OpenAiChatEffortThinkingPolicy.policyIdentifier;
         }
       } else if (apiMode == 'anthropic_messages' || apiMode == 'messages') {
@@ -104,26 +134,64 @@ class ThinkingRoutePolicy {
     );
   }
 
-  /// Validates declared wire against route protocol and apiMode.
+  /// Classifies the actual wire dialect for [instance].
+  static ThinkingWireDialect wireDialectFor(ProviderInstance instance) {
+    final template = resolveTemplate(instance);
+    return ThinkingWireDialectFacts.forTemplate(
+      template.name,
+      isCustom: instance.isCustom,
+      apiMode: apiModeFor(instance, template),
+    );
+  }
+
+  /// The documented OpenAI-compatible Chat predicate shared by every Chat wire.
+  static bool _isOpenAiCompatibleChat(String protocol, String apiMode) {
+    final p = protocol.trim().toLowerCase();
+    final m = apiMode.trim().toLowerCase();
+    final isOpenAi =
+        p == ProviderProtocol.openaiCompatible.toLowerCase() ||
+        p == 'openai' ||
+        p == 'openai_compatible';
+    final isChat = m == 'chat_completions' || m == 'chat';
+    return isOpenAi && isChat;
+  }
+
   static bool isWireCompatible({
     required String wire,
     required String protocol,
     required String apiMode,
+    String? templateId,
+    bool isCustom = false,
   }) {
     final p = protocol.trim().toLowerCase();
     final m = apiMode.trim().toLowerCase();
     switch (wire) {
+      case 'nim_kimi_thinking':
+      case 'nim_qwen_thinking':
+        // These wires are serialized by the template-kwargs codec, which the
+        // adapter selects only for the generic Chat codec and the hosted NIM
+        // catalog. Compatibility therefore requires the normalized
+        // OpenAI-compatible Chat protocol *and* an eligible serializer dialect:
+        // an Anthropic or native-Ollama protocol never qualifies merely because
+        // its configured API-mode string says chat, and an aggregator
+        // envelope, Responses body or Messages body cannot carry them either.
+        if (!_isOpenAiCompatibleChat(protocol, apiMode)) {
+          return false;
+        }
+        final dialect = ThinkingWireDialectFacts.forTemplate(
+          templateId ?? '',
+          isCustom: isCustom,
+          apiMode: apiMode,
+        );
+        return dialect == ThinkingWireDialect.nimChat ||
+            dialect == ThinkingWireDialect.compatibleChat;
       case 'openai_chat_effort':
       case 'toggle_effort':
       case 'kimi_thinking':
       case 'deepseek_thinking':
       case 'zai_thinking':
-        final isOpenAi =
-            p == ProviderProtocol.openaiCompatible.toLowerCase() ||
-            p == 'openai' ||
-            p == 'openai_compatible';
-        final isChat = m == 'chat_completions' || m == 'chat';
-        return isOpenAi && isChat;
+      case 'nim_thinking':
+        return _isOpenAiCompatibleChat(protocol, apiMode);
       case 'codex_responses_effort':
         final isOpenAi =
             p == ProviderProtocol.openaiCompatible.toLowerCase() ||

@@ -21,6 +21,7 @@ import 'package:sanad_agent/engine/adapters/ollama_adapter.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_wire_vocabulary.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/engine/llm_request_dumper.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
@@ -2165,7 +2166,48 @@ void main() {
     });
 
     test(
-      'lowers manual thinking budget when maxOutputTokens is smaller',
+      'rejects an explicit thinking budget the request max_tokens cannot honour',
+      () async {
+        var requestCount = 0;
+        final mockClient = MockClient((request) async {
+          requestCount++;
+          return http.Response(
+            jsonEncode({
+              'content': [
+                {'type': 'text', 'text': 'Done'},
+              ],
+              'stop_reason': 'end_turn',
+            }),
+            200,
+          );
+        });
+
+        final adapter = BaseAnthropicAdapter(
+          config,
+          profile,
+          client: mockClient,
+        );
+
+        await expectLater(
+          adapter.generateResponse(
+            [Message(role: MessageRole.user, content: 'Hi')],
+            modelOverride: 'claude-sonnet-4-5',
+            options: const LLMRequestOptions(
+              maxOutputTokens: 4096,
+              thinkingDirective: AnthropicBudgetDirective(16384),
+            ),
+          ),
+          throwsA(isA<ThinkingWireSerializationException>()),
+        );
+
+        // Honest local failure: the explicitly selected budget is never
+        // silently replaced, and nothing reaches the provider.
+        expect(requestCount, equals(0));
+      },
+    );
+
+    test(
+      'sends an explicitly selected thinking budget unchanged when it fits',
       () async {
         late Map<String, dynamic> capturedBody;
         final mockClient = MockClient((request) async {
@@ -2191,15 +2233,15 @@ void main() {
           [Message(role: MessageRole.user, content: 'Hi')],
           modelOverride: 'claude-sonnet-4-5',
           options: const LLMRequestOptions(
-            maxOutputTokens: 4096,
+            maxOutputTokens: 32000,
             thinkingDirective: AnthropicBudgetDirective(16384),
           ),
         );
 
-        expect(capturedBody['max_tokens'], equals(4096));
+        expect(capturedBody['max_tokens'], equals(32000));
         expect(capturedBody['thinking'], {
           'type': 'enabled',
-          'budget_tokens': 4095,
+          'budget_tokens': 16384,
         });
       },
     );

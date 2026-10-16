@@ -120,6 +120,25 @@ thinking mode. A first-time user with no thinking preference starts at
 runtime has an authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
+The thinking control remains visible for every selected model and route and is
+never removed. It renders exactly the options the Agent descriptor supplies: a
+selectable menu when the route resolves options, and otherwise a distinct
+disabled control that separates a resolved no-control route, an unreported
+(unknown) route, and a route whose device carries no thinking transport at all
+(`Unavailable`). Loading and refresh-failure stay their own states, and a
+disabled control never claims that the model cannot reason. A documented
+provider default is annotation only: an untouched selection shows the
+provider-default (omission) entry, which stays distinct from an explicitly
+selected native default and from an explicit `Off`. Choosing the provider-default
+entry clears the stored level so the request omits thinking; that entry is a
+typed omission choice rather than a reserved level id, so no declared option can
+collide with it, while unknown evidence never rewrites a stored explicit choice.
+Token-budget presets display their declared token value, and a preset whose
+declared count is missing or fractional is still labelled as a budget without
+inventing one. A budget is never presented as a vendor effort level, and boolean
+native controls keep their `On`/`Off` labels. The menu, not the Client, owns the
+level set: the Client adds no Tier, alias, or inferred budget.
+
 Composer suggestions have distinct interaction types. A no-argument runtime
 action is available only from a leading slash and executes as soon as the user
 chooses it with Enter or the pointer. A skill can be inserted at any slash

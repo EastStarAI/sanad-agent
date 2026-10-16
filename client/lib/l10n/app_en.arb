@@ -358,5 +358,37 @@
   "toolWritingFile": "Writing file...",
   "toolEditingFile": "Editing file...",
   "toolSearchingFiles": "Searching files...",
-  "toolExecuting": "Executing tool..."
+  "toolExecuting": "Executing tool...",
+  "thinkingModeUnavailableLabel": "Unavailable",
+  "thinkingModeUnavailableTooltip": "Thinking mode selection is not available for this device.",
+  "thinkingModeNoControlLabel": "No control",
+  "thinkingModeNoControlTooltip": "No selectable thinking level is reported for this model.",
+  "thinkingModeUnknownLabel": "Not reported",
+  "thinkingModeUnknownTooltip": "Thinking options are not reported for this model.",
+  "thinkingModeProviderDefaultLabel": "Default",
+  "thinkingModeTokenBudgetLabel": "Token budget",
+  "thinkingModeTokenBudgetAnnotation": "{tokens} tokens",
+  "@thinkingModeTokenBudgetAnnotation": {
+    "placeholders": {
+      "tokens": {
+        "type": "int"
+      }
+    }
+  },
+  "thinkingModeSelectBudgetTooltip": "Select Thinking Mode · budget: {budget}",
+  "@thinkingModeSelectBudgetTooltip": {
+    "placeholders": {
+      "budget": {
+        "type": "String"
+      }
+    }
+  },
+  "thinkingModeProviderDefaultAnnotation": "provider default: {option}",
+  "@thinkingModeProviderDefaultAnnotation": {
+    "placeholders": {
+      "option": {
+        "type": "String"
+      }
+    }
+  }
 }

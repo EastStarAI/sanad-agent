@@ -40,6 +40,12 @@ class AnthropicThinkingPolicy implements ProviderThinkingPolicy {
                 (id) => ThinkingControlOption(
                   id: id,
                   label: AnthropicModelCatalog.labelForOptionId(id),
+                  // Disclose the exact token count this route resolves for the
+                  // option, from the catalog's own budget authority.
+                  budgetTokens: AnthropicModelCatalog.budgetTokensForSelection(
+                    modelId: context.modelId,
+                    selectionId: id,
+                  ),
                 ),
               )
               .toList(growable: false),

@@ -87,6 +87,7 @@ class ProviderRegistry {
       authType: 'api_key',
       apiMode: 'chat_completions',
       aliases: ['nvidia-nim'],
+      thinkingPolicyId: 'nim_thinking',
       docsUrl: 'https://build.nvidia.com',
       apiKeyRequirement: ApiKeyRequirement.required,
       authMethods: [ProviderAuthMethod.apiKey],

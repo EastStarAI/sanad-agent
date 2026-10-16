@@ -35,6 +35,13 @@ String? migrateLegacyThinkingSelectionId({
   if (trimmed == null || trimmed.isEmpty) {
     return null;
   }
+  // An id the route actually advertises is a current option id, never a legacy
+  // alias. Documented modern ids such as the Gemini `minimal` thinking level
+  // collide with legacy alias spellings and must never be silently remapped to
+  // a different advertised value.
+  if (descriptor.containsOptionId(trimmed)) {
+    return null;
+  }
   final lowered = trimmed.toLowerCase();
   if (lowered == 'ultra') {
     if (descriptor.containsOptionId('max')) return 'max';

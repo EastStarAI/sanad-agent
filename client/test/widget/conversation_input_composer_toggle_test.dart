@@ -17,6 +17,8 @@ import 'package:sanad_client/utils/app_platform.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart' show kSupportedLocales;
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -94,6 +96,8 @@ void main() {
           BlocProvider<VoiceStreamCubit>.value(value: voiceCubit),
         ],
         child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: kSupportedLocales,
           home: Scaffold(
             body: ConversationInputComposer(
               chatController: chatController,
@@ -688,8 +692,16 @@ void main() {
   testWidgets('bottom controls do not overflow on a narrow mobile width', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(280, 500));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    // A narrow viewport must drive layout and MediaQuery together, exactly as a
+    // real narrow device does; otherwise the composer keeps taking its wide
+    // branch while being laid out at mobile width. `setSurfaceSize` alone only
+    // changes the layout size.
+    tester.view.physicalSize = const Size(280, 500);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
 
     await pumpComposer(
       tester,

@@ -5,6 +5,7 @@ import 'aggregator_upstream_thinking_policy.dart';
 import 'deepseek_thinking_policy.dart';
 import 'google_thinking_policy.dart';
 import 'kimi_thinking_policy.dart';
+import 'nim_thinking_policy.dart';
 import 'ollama_live_thinking_policy.dart';
 import 'codex_responses_effort_thinking_policy.dart';
 import 'anthropic_thinking_policy.dart';
@@ -27,6 +28,7 @@ const reservedThinkingPolicyIds = [
   'ollama_live',
   'kimi_thinking',
   'zai_thinking',
+  'nim_thinking',
 ];
 
 ProviderThinkingRegistry buildProviderThinkingRegistry() {
@@ -42,6 +44,7 @@ ProviderThinkingRegistry buildProviderThinkingRegistry() {
   registry.register(const OllamaLiveThinkingPolicy());
   registry.register(const KimiThinkingPolicy());
   registry.register(const ZaiThinkingPolicy());
+  registry.register(const NimThinkingPolicy());
   return registry;
 }
 
