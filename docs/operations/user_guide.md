@@ -84,7 +84,8 @@ You can install the native agent on a headless server without installing the
 Flutter client there.
 
 1. Sign in to Sanad Client on desktop, mobile, or web.
-2. Open **Device Management** and choose **Add device**.
+2. Open **Settings**, then click **+** beside the **Devices** heading in the
+   Settings sidebar to open **Add device**.
 3. Give the device a name.
 4. Copy the complete generated command and run it once on the target computer
    or server. Do not extract, reconstruct, or share its embedded credential.

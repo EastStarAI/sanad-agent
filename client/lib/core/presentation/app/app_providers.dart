@@ -26,6 +26,8 @@ import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
+import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_approval_coordinator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:provider/provider.dart';
@@ -116,6 +118,13 @@ class AppProviders extends StatelessWidget {
         BlocProvider(
           create: (_) => getIt<ProviderUsageCubit>(),
         ),
+        BlocProvider(
+          create: (_) {
+            final cubit = getIt<ClientCliCubit>();
+            unawaited(cubit.load());
+            return cubit;
+          },
+        ),
       ],
       child: MultiProvider(
         providers: [
@@ -127,6 +136,9 @@ class AppProviders extends StatelessWidget {
           Provider<AppLogStore>.value(value: logStore),
           Provider<DeviceConnectionCoordinator>.value(
             value: connectionCoordinator,
+          ),
+          Provider<ClientCliApprovalCoordinator>.value(
+            value: getIt<ClientCliApprovalCoordinator>(),
           ),
         ],
         child: ToastificationWrapper(child: child),

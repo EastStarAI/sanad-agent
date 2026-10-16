@@ -178,11 +178,12 @@ class ThinkingSelectionResolver {
     required ProviderInstance instance,
     required String? selectionId,
   }) {
-    final effectiveSelection =
-        (selectionId == null || selectionId.trim().isEmpty)
-            ? control.defaultOption
-            : selectionId.trim();
-
+    // Provider-default omission contract: an omitted, cleared or whitespace-only
+    // selection is `UseProviderDefault` for configuration and endpoint
+    // declarations alike. A documented default stays truthful descriptor
+    // metadata (`defaultOptionId`) and is dispatched only when it is actually
+    // selected; it never turns omission into an explicit request field.
+    final effectiveSelection = selectionId?.trim();
     if (effectiveSelection == null || effectiveSelection.isEmpty) {
       return ThinkingSelectionResolution(
         selectionId: null,
@@ -207,6 +208,8 @@ class ThinkingSelectionResolver {
           wire: wire,
           protocol: instance.protocol,
           apiMode: apiMode,
+          templateId: instance.templateId,
+          isCustom: instance.isCustom,
         )) {
       throw ThinkingSelectionException(
         code: ThinkingSelectionErrorCode.capabilityUnsupported,
@@ -234,6 +237,41 @@ class ThinkingSelectionResolver {
           message: 'Anthropic budget must be an integer >= 1024.',
         ),
       },
+      'nim_kimi_thinking' => switch (optionVal) {
+        bool b => ChatTemplateBooleanDirective(key: 'thinking', value: b),
+        'true' ||
+        'on' => ChatTemplateBooleanDirective(key: 'thinking', value: true),
+        'false' ||
+        'off' => ChatTemplateBooleanDirective(key: 'thinking', value: false),
+        _ => throw ThinkingSelectionException(
+          code: ThinkingSelectionErrorCode.optionUnavailable,
+          message:
+              'NIM template-kwargs toggle value must be boolean or on/off.',
+        ),
+      },
+      'nim_qwen_thinking' => switch (optionVal) {
+        bool b => ChatTemplateBooleanDirective(
+          key: 'enable_thinking',
+          value: b,
+        ),
+        'true' || 'on' => ChatTemplateBooleanDirective(
+          key: 'enable_thinking',
+          value: true,
+        ),
+        'false' || 'off' => ChatTemplateBooleanDirective(
+          key: 'enable_thinking',
+          value: false,
+        ),
+        'low' ||
+        'medium' ||
+        'xhigh' => OpenAiEffortDirective(optionVal.toString()),
+        _ => throw ThinkingSelectionException(
+          code: ThinkingSelectionErrorCode.optionUnavailable,
+          message:
+              'Self-hosted NIM Qwen value must be boolean/on/off or one of '
+              'low, medium, xhigh.',
+        ),
+      },
       'toggle_effort' => switch (optionVal) {
         bool b => ThinkingToggleDirective(enabled: b),
         'true' || 'on' => const ThinkingToggleDirective(enabled: true),
@@ -244,7 +282,7 @@ class ThinkingSelectionResolver {
         ),
       },
       'google_thinking' => switch (optionVal) {
-        0 || 'none' || 'off' => const GoogleLevelDirective('off'),
+        0 || 'none' || 'off' => const GoogleBudgetDirective(0),
         num n => GoogleBudgetDirective(n.toInt()),
         _ => GoogleLevelDirective(optionVal.toString()),
       },
@@ -300,7 +338,9 @@ class ThinkingSelectionResolver {
                 );
                 if (cachedTc != null) {
                   return option.copyWith(
-                    thinkingControl: ThinkingControlDescriptor.fromMap(cachedTc),
+                    thinkingControl: ThinkingControlDescriptor.fromMap(
+                      cachedTc,
+                    ),
                   );
                 }
               }

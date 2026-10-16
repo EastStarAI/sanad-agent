@@ -421,15 +421,32 @@ model_capabilities:
         expect(resolution.directive, isA<OpenAiEffortDirective>());
         expect((resolution.directive as OpenAiEffortDirective).effort, 'high');
 
-        // Configured default_option (low) is applied on omission, avoiding unknown server default
-        final defaultRes = overrideResolver.resolve(
+        // The documented default stays truthful descriptor metadata but never
+        // turns omission into an explicit request field: a null, empty or
+        // whitespace-only selection is provider Default by omission.
+        expect(resolution.descriptor.defaultOptionId, 'low');
+        for (final omitted in <String?>[null, '', '   ']) {
+          final defaultRes = overrideResolver.resolve(
+            providerInstanceId: 'inst-1',
+            modelId: 'custom-reasoner',
+            selectionId: omitted,
+          );
+          expect(defaultRes.selectionId, isNull);
+          expect(defaultRes.directive, isA<UseProviderDefault>());
+        }
+
+        // Explicitly selecting the advertised default dispatches it exactly.
+        final explicitDefault = overrideResolver.resolve(
           providerInstanceId: 'inst-1',
           modelId: 'custom-reasoner',
-          selectionId: null,
+          selectionId: 'low',
         );
-        expect(defaultRes.selectionId, 'low');
-        expect(defaultRes.directive, isA<OpenAiEffortDirective>());
-        expect((defaultRes.directive as OpenAiEffortDirective).effort, 'low');
+        expect(explicitDefault.selectionId, 'low');
+        expect(explicitDefault.directive, isA<OpenAiEffortDirective>());
+        expect(
+          (explicitDefault.directive as OpenAiEffortDirective).effort,
+          'low',
+        );
 
         // Invalid option rejected
         expect(
@@ -807,14 +824,28 @@ model_capabilities:
           'budget_tokens': 8192,
         });
 
-        // 2. Default option maps to tier_min (2048)
-        final resDefault = testResolver.resolve(
+        // 2. The declared default (`tier_min` → 2048) is descriptor metadata;
+        // an omitted/empty/whitespace selection stays provider Default by
+        // omission and dispatches nothing, while explicitly selecting the
+        // advertised default sends its exact value.
+        expect(resBudget.descriptor.defaultOptionId, 'tier_min');
+        for (final omitted in <String?>[null, '', '  ']) {
+          final resDefault = testResolver.resolve(
+            providerInstanceId: 'inst-anthropic-custom',
+            modelId: 'claude-custom',
+            selectionId: omitted,
+          );
+          expect(resDefault.selectionId, isNull);
+          expect(resDefault.directive, isA<UseProviderDefault>());
+        }
+
+        final explicitDefault = testResolver.resolve(
           providerInstanceId: 'inst-anthropic-custom',
           modelId: 'claude-custom',
-          selectionId: null,
+          selectionId: 'tier_min',
         );
         expect(
-          (resDefault.directive as AnthropicBudgetDirective).budgetTokens,
+          (explicitDefault.directive as AnthropicBudgetDirective).budgetTokens,
           2048,
         );
 
@@ -1047,7 +1078,7 @@ model_capabilities:
         expect(adaptiveLowBody['thinking'], {'type': 'adaptive'});
         expect(adaptiveLowBody['output_config'], {'effort': 'low'});
 
-        // 3. google_thinking: off (budget 0) maps to GoogleLevelDirective('off')
+        // 3. google_thinking: declared Off preserves the documented zero budget.
         final resGoogleOff = testResolver.resolve(
           providerInstanceId: 'inst-google-gemini',
           modelId: 'gemini-2-flash-thinking',
@@ -1055,17 +1086,16 @@ model_capabilities:
         );
         expect(
           resGoogleOff.directive,
-          isA<GoogleLevelDirective>().having((d) => d.level, 'level', 'off'),
+          isA<GoogleBudgetDirective>().having((d) => d.budget, 'budget', 0),
         );
         final googleOffBody = <String, dynamic>{};
         GoogleThinkingWireCodec.applyThinkingConfig(
           googleOffBody,
           resGoogleOff.directive,
         );
-        expect(
-          googleOffBody['extra_body']['google']['thinking_config']['thinking_level'],
-          'off',
-        );
+        expect(googleOffBody['extra_body']['google']['thinking_config'], {
+          'thinking_budget': 0,
+        });
 
         // 4. google_thinking: budget maps to GoogleBudgetDirective
         final resGoogleBudget = testResolver.resolve(
@@ -1304,7 +1334,9 @@ model_capabilities:
         expect(assembledO3.kind, ThinkingControlKind.effort);
         expect(assembledO3.options.map((o) => o.id), ['low', 'medium', 'high']);
 
-        // 4. Custom OpenAI with deepseek-v4-flash gets exact DeepSeek controls
+        // 4. Custom OpenAI with deepseek-v4-flash exposes only the documented
+        // standard effort ladder: the family's native envelope and its disable
+        // are not evidenced on a generic compatible Chat wire.
         final assembledDeepSeek = assembler.assemble(
           instance: customOpenAi,
           model: ModelOption(
@@ -1314,11 +1346,11 @@ model_capabilities:
         );
         expect(assembledDeepSeek.status, ThinkingCapabilityStatus.supported);
         expect(assembledDeepSeek.options.map((o) => o.id), [
-          'off',
           'low',
           'high',
           'max',
         ]);
+        expect(assembledDeepSeek.defaultOptionId, isNull);
       },
     );
 
@@ -1448,8 +1480,18 @@ model_capabilities:
           'status': 'supported',
           'kind': 'toggle',
           'options': [
-            {'id': 'off', 'label': 'Off', 'is_off': true, 'is_provider_default': false},
-            {'id': 'on', 'label': 'On', 'is_off': false, 'is_provider_default': true},
+            {
+              'id': 'off',
+              'label': 'Off',
+              'is_off': true,
+              'is_provider_default': false,
+            },
+            {
+              'id': 'on',
+              'label': 'On',
+              'is_off': false,
+              'is_provider_default': true,
+            },
           ],
           'default_option_id': 'on',
           'capability_revision': '1:1:ollama_live:gemma4:e2b',
@@ -1479,8 +1521,14 @@ model_capabilities:
           modelId: 'gemma4:e2b',
           selectionId: 'off',
         );
-        expect(offResolution.descriptor.status, ThinkingCapabilityStatus.supported);
-        expect(offResolution.directive, const ThinkingToggleDirective(enabled: false));
+        expect(
+          offResolution.descriptor.status,
+          ThinkingCapabilityStatus.supported,
+        );
+        expect(
+          offResolution.directive,
+          const ThinkingToggleDirective(enabled: false),
+        );
 
         // Wire serialization for Off: think: false
         final offBody = <String, dynamic>{'model': 'gemma4:e2b'};
@@ -1493,8 +1541,14 @@ model_capabilities:
           modelId: 'gemma4:e2b',
           selectionId: 'on',
         );
-        expect(onResolution.descriptor.status, ThinkingCapabilityStatus.supported);
-        expect(onResolution.directive, const ThinkingToggleDirective(enabled: true));
+        expect(
+          onResolution.descriptor.status,
+          ThinkingCapabilityStatus.supported,
+        );
+        expect(
+          onResolution.directive,
+          const ThinkingToggleDirective(enabled: true),
+        );
 
         // Wire serialization for On: think: true
         final onBody = <String, dynamic>{'model': 'gemma4:e2b'};
@@ -1507,12 +1561,18 @@ model_capabilities:
           modelId: 'gemma4:e2b',
           selectionId: null,
         );
-        expect(defaultResolution.descriptor.status, ThinkingCapabilityStatus.supported);
+        expect(
+          defaultResolution.descriptor.status,
+          ThinkingCapabilityStatus.supported,
+        );
         expect(defaultResolution.directive, isA<UseProviderDefault>());
 
         // Wire serialization for Default: think is omitted
         final defaultBody = <String, dynamic>{'model': 'gemma4:e2b'};
-        OllamaThinkingWireCodec.applyThink(defaultBody, defaultResolution.directive);
+        OllamaThinkingWireCodec.applyThink(
+          defaultBody,
+          defaultResolution.directive,
+        );
         expect(defaultBody.containsKey('think'), isFalse);
       },
     );
@@ -1780,7 +1840,8 @@ model_capabilities:
                   {'id': 'on', 'label': 'On'},
                 ],
                 'default_option_id': 'on',
-                'capability_revision': '1:1:ollama_live:gemma4:e2b', // old rev 1:1
+                'capability_revision':
+                    '1:1:ollama_live:gemma4:e2b', // old rev 1:1
                 'source': 'live',
                 'observed_at': staleObservedAt.toIso8601String(),
               },

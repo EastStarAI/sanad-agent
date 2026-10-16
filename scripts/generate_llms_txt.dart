@@ -30,6 +30,17 @@ class DocMeta {
   });
 }
 
+/// Mirrors the generated-artifact rule in `scripts/lint_wiki.dart`: dependency
+/// link trees that Flutter's tooling generates inside the workspace
+/// (`ephemeral/.plugin_symlinks/` on Linux/Windows, `ephemeral/.symlinks/` on
+/// macOS/iOS) resolve into the pub cache and are gitignored. Their `AGENTS.md`
+/// files are third-party package contracts and must never enter this
+/// repository's index. Keep this rule in sync with the linter.
+bool isGeneratedDependencyPath(String cleanPath) {
+  return cleanPath.contains('/.plugin_symlinks/') ||
+      cleanPath.contains('/ephemeral/.symlinks/');
+}
+
 DocMeta parseFile(File file) {
   final content = file.readAsStringSync().replaceAll('\r\n', '\n');
   final match = frontmatterRegExp.firstMatch(content);
@@ -118,7 +129,8 @@ void main() async {
           !cleanPath.contains('docs/archive/') &&
           !cleanPath.contains('/refrence_projects/') &&
           !cleanPath.startsWith('refrence_projects/') &&
-          !cleanPath.contains('/node_modules/')) {
+          !cleanPath.contains('/node_modules/') &&
+          !isGeneratedDependencyPath(cleanPath)) {
         agentsMetas.add(parseFile(entity));
       }
     }

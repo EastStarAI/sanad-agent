@@ -14,6 +14,7 @@ import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 typedef RouteThinkingModeChipBuilder =
     Widget Function(
@@ -251,6 +252,11 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     if (currentSelection == null || currentSelection.isEmpty) {
       return;
     }
+    if (descriptor != null && descriptor.status == ThinkingCapabilityStatus.unknown) {
+      // Unknown evidence is not capability proof: keep the user's explicit
+      // choice instead of rewriting it to provider default on a guess.
+      return;
+    }
     final isInvalid =
         descriptor == null ||
         !descriptor.isSelectable ||
@@ -314,27 +320,105 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
   }
 
   List<_ThinkingMenuEntry> _menuEntries({
+    required AppLocalizations l10n,
     required RouteThinkingSelectorState selectorState,
     required ThinkingControlDescriptorDto? descriptor,
   }) {
     if (selectorState == RouteThinkingSelectorState.legacy) {
       return widget.capabilities.thinkingModesList
-          .map((mode) => _ThinkingMenuEntry(id: mode, label: mode))
+          .map(
+            (mode) => _ThinkingMenuEntry(
+              choice: ThinkingMenuChoice.option(mode),
+              label: mode,
+            ),
+          )
           .toList(growable: false);
     }
-    return descriptor?.options
-            .map(
-              (option) => _ThinkingMenuEntry(
-                id: option.id,
-                label: option.label,
-              ),
-            )
-            .toList(growable: false) ??
-        const [];
+    if (selectorState != RouteThinkingSelectorState.selectable) {
+      return const [];
+    }
+    final documentedDefault = RouteThinkingControl.documentedDefaultOption(descriptor);
+    final documentedDefaultAnnotation = _documentedDefaultAnnotation(
+      l10n: l10n,
+      descriptor: descriptor,
+    );
+    return <_ThinkingMenuEntry>[
+      // Omission stays a first-class, distinct typed choice so the user can
+      // return to provider default after an explicit Off or level. The
+      // documented native default is shown as annotation only and is never sent
+      // by this entry, and no declared option id can impersonate it.
+      _ThinkingMenuEntry(
+        choice: const ThinkingMenuChoice.providerDefault(),
+        label: l10n.thinkingModeProviderDefaultLabel,
+        secondaryLabel: documentedDefault == null ? null : documentedDefaultAnnotation,
+      ),
+      ...?descriptor?.options.map(
+        (option) => _ThinkingMenuEntry(
+          choice: ThinkingMenuChoice.option(option.id),
+          label: option.label,
+          secondaryLabel: _budgetAnnotation(
+            l10n: l10n,
+            descriptor: descriptor,
+            option: option,
+          ),
+        ),
+      ),
+    ];
+  }
+
+  /// Annotation for the omission entry: the documented native default, plus the
+  /// same truthful budget annotation its ordinary menu row carries when that
+  /// default is itself a token-budget preset (declared count, or an
+  /// amount-unknown budget marker). A budget-preset default is therefore never
+  /// presented as a native effort default alone, and no count is invented.
+  String? _documentedDefaultAnnotation({
+    required AppLocalizations l10n,
+    required ThinkingControlDescriptorDto? descriptor,
+  }) {
+    final documentedDefault = RouteThinkingControl.documentedDefaultOption(descriptor);
+    if (documentedDefault == null) {
+      return null;
+    }
+    final annotation = l10n.thinkingModeProviderDefaultAnnotation(
+      documentedDefault.label,
+    );
+    final budgetAnnotation = _budgetAnnotation(
+      l10n: l10n,
+      descriptor: descriptor,
+      option: documentedDefault,
+    );
+    if (budgetAnnotation == null) {
+      return annotation;
+    }
+    // Punctuation-only glue between two already localized messages.
+    return '$annotation · $budgetAnnotation';
+  }
+
+  /// Budget annotation for an option: its exact declared token count when the
+  /// descriptor declared one, otherwise a plain budget marker for a
+  /// token-budget preset whose count is absent. No token value is ever invented
+  /// and an effort-like label is never the whole story for a budget preset.
+  String? _budgetAnnotation({
+    required AppLocalizations l10n,
+    required ThinkingControlDescriptorDto? descriptor,
+    required ThinkingControlOptionDto option,
+  }) {
+    final declaredTokens = RouteThinkingControl.declaredBudgetTokens(option);
+    if (declaredTokens != null) {
+      return l10n.thinkingModeTokenBudgetAnnotation(declaredTokens);
+    }
+    if (RouteThinkingControl.isUndeclaredBudgetPreset(
+      descriptor: descriptor,
+      option: option,
+    )) {
+      return l10n.thinkingModeTokenBudgetLabel;
+    }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     final usesModelControls = widget.capabilities.usesModelThinkingControls;
     Session? session;
     if (usesModelControls) {
@@ -355,9 +439,19 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     );
 
     Widget content;
-    if (selectorState == RouteThinkingSelectorState.hidden) {
-      content = const SizedBox(
-        key: Key('route_thinking_mode_hidden'),
+    if (selectorState == RouteThinkingSelectorState.unavailable) {
+      // The route carries no thinking transport. The control stays visible and
+      // disabled so the surface never disappears, and it offers no menu.
+      content = KeyedSubtree(
+        key: const Key('route_thinking_mode_unavailable'),
+        child: Tooltip(
+          message: l10n.thinkingModeUnavailableTooltip,
+          child: widget.chipBuilder(
+            context,
+            l10n.thinkingModeUnavailableLabel,
+            enabled: false,
+          ),
+        ),
       );
     } else if (selectorState == RouteThinkingSelectorState.loading) {
       content = KeyedSubtree(
@@ -375,54 +469,105 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
           ),
         ),
       );
-    } else if (selectorState == RouteThinkingSelectorState.providerManaged) {
+    } else if (selectorState == RouteThinkingSelectorState.noControl) {
       content = KeyedSubtree(
-        key: const Key('route_thinking_mode_provider_managed'),
+        key: const Key('route_thinking_mode_no_control'),
         child: Tooltip(
-          message: 'Thinking is managed by the provider',
-          child: widget.chipBuilder(context, 'Default', enabled: false),
+          message: l10n.thinkingModeNoControlTooltip,
+          child: widget.chipBuilder(
+            context,
+            l10n.thinkingModeNoControlLabel,
+            enabled: false,
+          ),
+        ),
+      );
+    } else if (selectorState == RouteThinkingSelectorState.unknown) {
+      content = KeyedSubtree(
+        key: const Key('route_thinking_mode_unknown'),
+        child: Tooltip(
+          message: l10n.thinkingModeUnknownTooltip,
+          child: widget.chipBuilder(
+            context,
+            l10n.thinkingModeUnknownLabel,
+            enabled: false,
+          ),
         ),
       );
     } else {
       final currentSelection = _currentSelectionId(session);
-      final label = RouteThinkingControl.labelForSelection(
-        descriptor: descriptor,
-        selectionId: currentSelection,
-        legacyModes: widget.capabilities.thinkingModesList,
-      );
+      final label =
+          RouteThinkingControl.labelForSelection(
+            descriptor: descriptor,
+            selectionId: currentSelection,
+            legacyModes: widget.capabilities.thinkingModesList,
+          ) ??
+          l10n.thinkingModeProviderDefaultLabel;
 
-      final effectiveSelection = RouteThinkingControl.effectiveSelectionId(
-        descriptor: descriptor,
-        selectionId: currentSelection,
-        legacyModes: widget.capabilities.thinkingModesList,
-      );
+      final isLegacy = selectorState == RouteThinkingSelectorState.legacy;
+      final usesProviderDefault = !isLegacy && RouteThinkingControl.usesProviderDefault(selectionId: currentSelection);
+      final legacyCheckedId = isLegacy
+          ? RouteThinkingControl.checkedMenuEntryId(
+              selectionId: currentSelection,
+              legacyModes: widget.capabilities.thinkingModesList,
+            )
+          : null;
+      final ThinkingMenuChoice? checkedChoice = isLegacy
+          ? (legacyCheckedId == null ? null : ThinkingMenuChoice.option(legacyCheckedId))
+          : (usesProviderDefault
+                ? const ThinkingMenuChoice.providerDefault()
+                : ThinkingMenuChoice.option(currentSelection!.trim()));
+
+      final selectedOption = descriptor?.options.where((option) => option.id == currentSelection?.trim()).firstOrNull;
+      final selectedBudgetAnnotation = selectedOption == null
+          ? null
+          : _budgetAnnotation(
+              l10n: l10n,
+              descriptor: descriptor,
+              option: selectedOption,
+            );
 
       final menuEntries = _menuEntries(
+        l10n: l10n,
         selectorState: selectorState,
         descriptor: descriptor,
       );
 
-      content = PopupMenuButton<String>(
+      content = PopupMenuButton<ThinkingMenuChoice>(
         key: const Key('route_thinking_mode_selector_button'),
-        tooltip: 'Select Thinking Mode',
+        tooltip: selectedBudgetAnnotation == null
+            ? 'Select Thinking Mode'
+            : l10n.thinkingModeSelectBudgetTooltip(selectedBudgetAnnotation),
+        // Bounded width so a label plus its budget/default annotation stays
+        // readable instead of overflowing the menu row.
+        constraints: const BoxConstraints(minWidth: 240),
         child: widget.chipBuilder(context, label, enabled: true),
         itemBuilder: (context) {
           final theme = Theme.of(context);
           return menuEntries
               .map(
                 (entry) {
-                  final isSelected = entry.id == effectiveSelection;
-                  return PopupMenuItem<String>(
-                    key: Key('thinking_mode_option_${entry.id}'),
-                    value: entry.id,
-                    height: 32,
+                  // Omission and declared options occupy disjoint widget-key
+                  // namespaces, so a declared id can never collide with the
+                  // omission entry even though every value is typed.
+                  final optionKey = entry.choice.isProviderDefault
+                      ? 'thinking_mode_omission_entry'
+                      : 'thinking_mode_option_${entry.choice.optionId}';
+                  final checkKey = entry.choice.isProviderDefault
+                      ? 'thinking_mode_omission_check'
+                      : 'thinking_mode_check_${entry.choice.optionId}';
+                  final isSelected = entry.choice == checkedChoice;
+                  final secondaryLabel = entry.secondaryLabel;
+                  return PopupMenuItem<ThinkingMenuChoice>(
+                    key: Key(optionKey),
+                    value: entry.choice,
+                    height: secondaryLabel == null ? 32 : 44,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (isSelected)
                           Icon(
                             Icons.check,
-                            key: Key('thinking_mode_check_${entry.id}'),
+                            key: Key(checkKey),
                             size: 14,
                             color: theme.colorScheme.primary,
                           )
@@ -432,13 +577,36 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
                             width: 14,
                           ),
                         const SizedBox(width: 8),
-                        Text(
-                          entry.label,
-                          key: Key('thinking_mode_title_${entry.id}'),
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                            color: isSelected ? theme.colorScheme.primary : null,
+                        Flexible(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                entry.label,
+                                key: Key('thinking_mode_title_${entry.choice.optionId ?? 'omission'}'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                                  color: isSelected ? theme.colorScheme.primary : null,
+                                ),
+                              ),
+                              if (secondaryLabel != null)
+                                Text(
+                                  secondaryLabel,
+                                  key: Key(
+                                    'thinking_mode_secondary_${entry.choice.optionId ?? 'omission'}',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                       ],
@@ -448,11 +616,13 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
               )
               .toList(growable: false);
         },
-        onSelected: (value) {
+        onSelected: (choice) {
+          // Omission clears the explicit selection so the request omits
+          // thinking; an explicit choice dispatches its exact declared id.
           unawaited(
             context.read<ConversationInputCubit>().selectThinkingMode(
               scope: widget.capabilities.thinkingModeScope,
-              thinkingMode: value,
+              thinkingMode: choice.optionId,
             ),
           );
         },
@@ -483,8 +653,16 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
 }
 
 class _ThinkingMenuEntry {
-  final String id;
+  final ThinkingMenuChoice choice;
   final String label;
 
-  const _ThinkingMenuEntry({required this.id, required this.label});
+  /// Optional annotation under the label: the documented provider default or the
+  /// declared token budget of a budget preset.
+  final String? secondaryLabel;
+
+  const _ThinkingMenuEntry({
+    required this.choice,
+    required this.label,
+    this.secondaryLabel,
+  });
 }

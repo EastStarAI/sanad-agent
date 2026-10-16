@@ -64,3 +64,35 @@ class OllamaThinkLevelDirective extends NativeThinkingDirective {
 
   const OllamaThinkLevelDirective(this.level);
 }
+
+/// A documented Chat-template keyword Boolean that toggles thinking.
+///
+/// NVIDIA NIM (and compatible NIM containers) document reasoning as a finite
+/// `chat_template_kwargs` Boolean instead of an effort field: `{"thinking":
+/// true|false}` for Kimi and `{"enable_thinking": true|false}` for Qwen. The
+/// key is a finite validated allowlist — arbitrary JSON or an unknown key can
+/// never reach the wire.
+class ChatTemplateBooleanDirective extends NativeThinkingDirective {
+  /// Documented, mode-compatible template-kwargs keys.
+  static const admittedKeys = {'thinking', 'enable_thinking'};
+
+  final String key;
+  final bool value;
+
+  factory ChatTemplateBooleanDirective({
+    required String key,
+    required bool value,
+  }) {
+    if (!admittedKeys.contains(key)) {
+      throw ArgumentError.value(
+        key,
+        'key',
+        'Unsupported chat_template_kwargs key (admitted: '
+            '${admittedKeys.join(", ")})',
+      );
+    }
+    return ChatTemplateBooleanDirective._(key, value);
+  }
+
+  const ChatTemplateBooleanDirective._(this.key, this.value);
+}

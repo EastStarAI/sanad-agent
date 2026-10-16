@@ -16,6 +16,7 @@ import '../../core/provider_thinking/google_thinking_wire_codec.dart';
 import '../../core/provider_thinking/native_thinking_directive.dart';
 import '../../core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
 import '../../core/provider_thinking/thinking_route_policy.dart';
+import '../../core/provider_thinking/thinking_wire_vocabulary.dart';
 import '../../core/provider_thinking/zai_thinking_wire_codec.dart';
 import '../../core/models/model_metadata.dart';
 import '../../core/di.dart';
@@ -181,6 +182,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
           var resolvedOptions = options;
           if (profile.name == 'lm-studio') {
             resolvedOptions = await _withLmStudioNativeReasoning(options);
+          }
+          if (profile.name == 'openrouter') {
+            resolvedOptions = _withOpenRouterReasoning(resolvedOptions);
           }
           _availableModelsSource = 'live';
           _lastModelsException = null;
@@ -445,6 +449,38 @@ class BaseOpenAIAdapter implements LLMAdapter {
   /// derived declaration below and from any enriched descriptor.
   static const lmStudioReasoningEvidenceKey = 'lm_studio_reasoning';
 
+  /// Documented aggregator gateway effort vocabulary in documented descending
+  /// effort order (`https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.md`).
+  ///
+  /// The wire member is `reasoning.supported_efforts`: a finite list of these
+  /// exact values, an explicit `null` documenting every gateway value, or an
+  /// omitted member documenting no effort selector at all. Membership is
+  /// validated against the shared `ThinkingWireVocabulary`, so discovery and the
+  /// typed declaration parser can never drift; this list only fixes the
+  /// documented order an explicit `null` (all values) declaration advertises.
+  static const _openRouterGatewayEfforts = <String>[
+    'max',
+    'xhigh',
+    'high',
+    'medium',
+    'low',
+    'minimal',
+    'none',
+  ];
+
+  /// Explicit route-control evidence published for a model whose discovery wire
+  /// documents `reasoning` but for which no trustworthy declaration can be
+  /// derived.
+  ///
+  /// The wire's own evidence owns the exact route's control state, so an
+  /// unusable declaration resolves that route to `unknown` instead of silently
+  /// adopting an unrelated intrinsic ladder. Model-owned image, reasoning-output,
+  /// context and other discovery facts stay untouched: only `thinking_control`
+  /// is published, and no documented value is copied, adapted or remapped.
+  static const _openRouterUnresolvedControl = <String, Object?>{
+    'status': 'unknown',
+  };
+
   /// Documented native LM Studio public reasoning values for
   /// `capabilities.reasoning.allowed_options` / `capabilities.reasoning.default`
   /// (`https://lmstudio.ai/docs/developer/rest/list`).
@@ -607,6 +643,142 @@ class BaseOpenAIAdapter implements LLMAdapter {
       if (options.containsKey(declaration.defaultOption))
         'default_option': declaration.defaultOption,
     };
+  }
+
+  /// Enriches discovered aggregator models with the finite thinking declaration
+  /// documented on each `GET /models` item.
+  ///
+  /// The discovery wire itself owns this schema: only the registered aggregator
+  /// provider identity consumes it, never a generic/local/custom Chat endpoint
+  /// and never a URL substring guess. Each option is read from its own exact
+  /// model item, so no cross-model, cross-case or cross-namespace inference is
+  /// possible; two items claiming one exact identity declare a control only when
+  /// their raw evidence agrees, and conflicting claims publish unresolved route
+  /// evidence instead of either claim.
+  ///
+  /// Raw endpoint evidence stays the verbatim item member (`reasoning`) while
+  /// the validated declaration is written separately to `thinking_control`. A
+  /// declaration already owned by the compatibility discovery wire is left
+  /// untouched: aggregator enrichment never replaces or competes with it.
+  ///
+  /// A model item that documents `reasoning` owns its route's control state:
+  /// when that documentation yields no trustworthy declaration — no effort
+  /// selector, malformed values or flags, a default inconsistent with the
+  /// documented set, a mixed or conflicting duplicate claim for one exact
+  /// identity — the option receives explicit `unknown` route-control evidence
+  /// rather than falling back to an unrelated intrinsic ladder. An identity whose
+  /// rows are all names-only publishes nothing, so existing authority and
+  /// intrinsic model knowledge stay intact, and every documented canonical effort
+  /// value is declared truthfully with its own exact value.
+  List<ModelOption> _withOpenRouterReasoning(List<ModelOption> options) {
+    if (options.isEmpty) return options;
+
+    final evidenceSignatures = <String, Set<String>>{};
+    for (final option in options) {
+      evidenceSignatures
+          .putIfAbsent(option.value, () => <String>{})
+          .add(
+            jsonEncode([
+              option.modelMetadata.containsKey('reasoning'),
+              option.modelMetadata['reasoning'],
+            ]),
+          );
+    }
+
+    return options.map((option) {
+      if (option.modelMetadata.containsKey('thinking_control')) return option;
+      final signatures = evidenceSignatures[option.value];
+      final ambiguous = signatures == null || signatures.length != 1;
+      if (!option.modelMetadata.containsKey('reasoning') && !ambiguous) {
+        return option;
+      }
+      final declaration = ambiguous
+          ? _openRouterUnresolvedControl
+          : _openRouterThinkingControl(option.modelMetadata['reasoning']) ??
+                _openRouterUnresolvedControl;
+      return option.copyWith(
+        modelMetadata: {
+          ...option.modelMetadata,
+          'thinking_control': declaration,
+        },
+      );
+    }).toList();
+  }
+
+  /// Strictly validates one discovered aggregator `reasoning` declaration.
+  ///
+  /// Returns the validated `openai_chat_effort` declaration, or `null` when the
+  /// presented documentation yields no trustworthy declaration. Every documented
+  /// canonical effort is admissible, so no documented set is reduced, clamped or
+  /// aliased; no default, budget choice, bound or effort value is ever invented.
+  static Map<String, Object?>? _openRouterThinkingControl(Object? raw) {
+    if (raw is! Map) return null;
+
+    final efforts = _openRouterDocumentedEfforts(raw);
+    if (efforts == null) return null;
+
+    final mandatoryRaw = raw['mandatory'];
+    if (raw.containsKey('mandatory') && mandatoryRaw is! bool) return null;
+    final defaultEnabled = raw['default_enabled'];
+    if (raw.containsKey('default_enabled') && defaultEnabled is! bool) {
+      return null;
+    }
+
+    final defaultEffortRaw = raw['default_effort'];
+    if (raw.containsKey('default_effort')) {
+      if (defaultEffortRaw is! String || !efforts.contains(defaultEffortRaw)) {
+        return null;
+      }
+    }
+
+    // A documented mandatory model has no Off option and rejects
+    // `effort: "none"`, so the disable value is never advertised for it.
+    final admissible = mandatoryRaw == true
+        ? efforts.where((effort) => effort != 'none').toList(growable: false)
+        : efforts;
+    if (admissible.isEmpty) return null;
+
+    String? defaultOption;
+    if (defaultEffortRaw is String) {
+      if (defaultEffortRaw != 'none' &&
+          defaultEnabled != false &&
+          admissible.contains(defaultEffortRaw)) {
+        defaultOption = defaultEffortRaw;
+      }
+    }
+
+    return {
+      'status': 'supported',
+      'wire': 'openai_chat_effort',
+      'options': {for (final effort in admissible) effort: effort},
+      'default_option': ?defaultOption,
+    };
+  }
+
+  /// The documented finite effort set for one aggregator model item, or `null`
+  /// when the member is omitted, malformed, duplicated or outside the documented
+  /// gateway vocabulary.
+  ///
+  /// An explicit `null` documents every gateway value; an omitted member
+  /// documents no effort selector at all. Admissibility comes from the shared
+  /// `ThinkingWireVocabulary` the typed declaration parser validates against, so
+  /// every documented canonical value (`max`, `xhigh`, `high`, `medium`, `low`,
+  /// `minimal`, `none`) is declarable here and none is rejected or remapped.
+  static List<String>? _openRouterDocumentedEfforts(Map<dynamic, dynamic> raw) {
+    if (!raw.containsKey('supported_efforts')) return null;
+
+    final rawEfforts = raw['supported_efforts'];
+    if (rawEfforts == null) return List<String>.of(_openRouterGatewayEfforts);
+    if (rawEfforts is! List || rawEfforts.isEmpty) return null;
+
+    final efforts = <String>[];
+    for (final entry in rawEfforts) {
+      if (entry is! String) return null;
+      if (!ThinkingWireVocabulary.isAdmittedEffort(entry)) return null;
+      if (efforts.contains(entry)) return null;
+      efforts.add(entry);
+    }
+    return efforts;
   }
 
   String _resolveModel(String? override) {

@@ -7,6 +7,7 @@ import '../engine/adapters/provider_profile.dart';
 import '../engine/adapters/provider_registry.dart';
 import 'constants.dart';
 import 'provider_thinking/thinking_control_models.dart';
+import 'provider_thinking/thinking_wire_vocabulary.dart';
 
 class Config {
   static const String _defaultGatewayUrl = 'https://api.sanad.eaststarai.com';
@@ -31,13 +32,12 @@ class Config {
   Config({
     Map<String, String>? environment,
     ModelAwareRuntimePolicy? modelAwarePolicy,
-  })  : _environment = environment ?? Platform.environment,
-        _env = DotEnv() {
+  }) : _environment = environment ?? Platform.environment,
+       _env = DotEnv() {
     _loadEnvFiles();
-    _modelAwarePolicy = modelAwarePolicy ??
-        ModelAwareRuntimePolicy.load(
-          File('${getSanadHome()}/config.yaml'),
-        );
+    _modelAwarePolicy =
+        modelAwarePolicy ??
+        ModelAwareRuntimePolicy.load(File('${getSanadHome()}/config.yaml'));
   }
 
   /// Loads (or reloads) the env files from the path resolved by [getEnvPath]
@@ -484,9 +484,7 @@ class ThinkingControlOverride {
 
     final rawStatus = tcMap['status'];
     if (rawStatus is! String) {
-      throw FormatException(
-        '$context.status is required and must be a string',
-      );
+      throw FormatException('$context.status is required and must be a string');
     }
     final status = ThinkingCapabilityStatus.tryParse(rawStatus.trim());
     if (status == null) {
@@ -525,11 +523,11 @@ class ThinkingControlOverride {
       'anthropic_budget',
       'toggle_effort',
       'google_thinking',
+      'nim_kimi_thinking',
+      'nim_qwen_thinking',
     };
     if (!knownWires.contains(wire.trim())) {
-      throw FormatException(
-        'Unknown wire policy: $wire',
-      );
+      throw FormatException('Unknown wire policy: $wire');
     }
 
     final rawOptions = tcMap['options'];
@@ -541,15 +539,11 @@ class ThinkingControlOverride {
     final options = <String, dynamic>{};
     for (final optEntry in rawOptions.entries) {
       if (optEntry.key is! String) {
-        throw FormatException(
-          'thinking_control option keys must be strings',
-        );
+        throw FormatException('thinking_control option keys must be strings');
       }
       final optKey = (optEntry.key as String).trim();
       if (optKey.isEmpty) {
-        throw FormatException(
-          'thinking_control option key cannot be empty',
-        );
+        throw FormatException('thinking_control option key cannot be empty');
       }
       final optVal = optEntry.value;
       if (wire == 'anthropic_budget') {
@@ -598,16 +592,96 @@ class ThinkingControlOverride {
             'Option "$optKey" cannot map to disabled toggle value "$optVal".',
           );
         }
+        if (ThinkingWireVocabulary.isAdmittedEffortTier(optKeyLower)) {
+          throw FormatException(
+            'Option "$optKey" cannot map to Boolean "$optVal": a canonical '
+            'effort id must carry its own canonical effort value, not a '
+            'Boolean toggle.',
+          );
+        }
         options[optKey] = isEnabled;
+      } else if (wire == 'nim_kimi_thinking' || wire == 'nim_qwen_thinking') {
+        // NVIDIA NIM documents thinking as a finite chat_template_kwargs
+        // Boolean; the self-hosted Qwen container documents the Boolean disable
+        // plus an effort ladder. Boolean fields stay genuine validated Booleans
+        // and a key named after a disable or an effort tier must not lie.
+        final optKeyLower = optKey.toLowerCase();
+        final bool? toggleValue;
+        if (optVal is bool) {
+          toggleValue = optVal;
+        } else if (optVal is String) {
+          final strLower = optVal.trim().toLowerCase();
+          if (strLower == 'true' || strLower == 'on') {
+            toggleValue = true;
+          } else if (strLower == 'false' || strLower == 'off') {
+            toggleValue = false;
+          } else {
+            toggleValue = null;
+          }
+        } else {
+          toggleValue = null;
+        }
+
+        if (toggleValue == null) {
+          // Effort values are only admissible on the Qwen wire, and only as an
+          // exact canonical value on a key named after that same value.
+          final isEffortValue =
+              wire == 'nim_qwen_thinking' &&
+              optVal is String &&
+              ThinkingWireVocabulary.nimQwenEffortIds.contains(
+                optVal.trim().toLowerCase(),
+              );
+          if (!isEffortValue) {
+            throw FormatException(
+              '$wire option "$optKey" value "$optVal" must be a boolean/on/off'
+              '${wire == 'nim_qwen_thinking' ? ' or one of ${ThinkingWireVocabulary.nimQwenEffortIds.join(', ')}' : ''}',
+            );
+          }
+          if (optKeyLower != optVal.trim().toLowerCase()) {
+            throw FormatException(
+              'Option "$optKey" cannot map to effort "$optVal": the option id '
+              'must name the canonical effort value it sends.',
+            );
+          }
+          if (optKeyLower == 'off' ||
+              optKeyLower == 'none' ||
+              optKeyLower == 'on') {
+            throw FormatException(
+              'Option "$optKey" cannot map to active effort "$optVal".',
+            );
+          }
+          options[optKey] = optVal.trim().toLowerCase();
+          continue;
+        }
+
+        if ((optKeyLower == 'off' || optKeyLower == 'none') && toggleValue) {
+          throw FormatException(
+            'Option "$optKey" cannot map to active toggle value "$optVal". '
+            'Off/none must disable thinking.',
+          );
+        }
+        if (optKeyLower == 'on' && !toggleValue) {
+          throw FormatException(
+            'Option "$optKey" cannot map to disabled toggle value "$optVal".',
+          );
+        }
+        // A canonical effort-tier id must not lie in either direction: it may
+        // neither hide a disable (false) nor advertise an effort while
+        // dispatching an unspecified enabled/default Boolean (true).
+        if (ThinkingWireVocabulary.isAdmittedEffortTier(optKeyLower)) {
+          throw FormatException(
+            'Option "$optKey" cannot map to Boolean "$optVal": a canonical '
+            'effort id must carry its own canonical effort value, not a '
+            'Boolean toggle.',
+          );
+        }
+        options[optKey] = toggleValue;
       } else if (wire == 'openai_chat_effort' ||
           wire == 'codex_responses_effort') {
-        const allowedEfforts = {
-          'none',
-          'low',
-          'medium',
-          'high',
-          'xhigh',
-        };
+        // The documented effort vocabulary is centralized so declarations and
+        // the typed serializers admit exactly the same finite values; canonical
+        // `minimal` and `max` are part of it.
+        const allowedEfforts = ThinkingWireVocabulary.effortIds;
         if (optVal is! String ||
             !allowedEfforts.contains(optVal.trim().toLowerCase())) {
           throw FormatException(
@@ -629,12 +703,15 @@ class ThinkingControlOverride {
             'Option "$optKey" cannot map to disabling effort "$optVal" unless named off/none.',
           );
         }
-        if (optKeyLower == 'low' &&
-            (trimmedVal == 'high' ||
-                trimmedVal == 'xhigh' ||
-                trimmedVal == 'max')) {
+        // Shared no-remap invariant: any canonical effort id must carry its own
+        // canonical value, not just `low`.
+        if (!ThinkingWireVocabulary.canonicalEffortMatches(
+          optionId: optKey,
+          value: trimmedVal,
+        )) {
           throw FormatException(
-            'Option "$optKey" cannot map to escalating effort "$optVal".',
+            'Option "$optKey" cannot map to effort "$optVal": a canonical '
+            'effort id must carry its own canonical value.',
           );
         }
         options[optKey] = trimmedVal;
@@ -656,14 +733,7 @@ class ThinkingControlOverride {
             'anthropic_adaptive option "$optKey" value must be an effort string or false',
           );
         }
-        const allowedAdaptive = {
-          'none',
-          'off',
-          'low',
-          'medium',
-          'high',
-          'max',
-        };
+        const allowedAdaptive = {'none', 'off', 'low', 'medium', 'high', 'max'};
         if (!allowedAdaptive.contains(trimmedVal)) {
           throw FormatException(
             'anthropic_adaptive option "$optKey" value "$optVal" is not a valid effort (allowed: ${allowedAdaptive.join(', ')})',
@@ -680,10 +750,13 @@ class ThinkingControlOverride {
             'Option "$optKey" cannot map to disabling value "$optVal" unless named off/none.',
           );
         }
-        if (optKeyLower == 'low' &&
-            (trimmedVal == 'high' || trimmedVal == 'max')) {
+        if (!ThinkingWireVocabulary.canonicalEffortMatches(
+          optionId: optKey,
+          value: trimmedVal,
+        )) {
           throw FormatException(
-            'Option "$optKey" cannot map to escalating effort "$optVal".',
+            'Option "$optKey" cannot map to effort "$optVal": a canonical '
+            'effort id must carry its own canonical value.',
           );
         }
         options[optKey] = trimmedVal;
@@ -710,11 +783,9 @@ class ThinkingControlOverride {
         } else if (optVal is String) {
           final trimmedVal = optVal.trim().toLowerCase();
           const allowedGoogleLevels = {
+            ...ThinkingWireVocabulary.googleLevelIds,
             'none',
             'off',
-            'low',
-            'medium',
-            'high',
           };
           if (!allowedGoogleLevels.contains(trimmedVal)) {
             throw FormatException(
@@ -732,9 +803,14 @@ class ThinkingControlOverride {
               'Option "$optKey" cannot map to disabling level "$optVal" unless named off/none.',
             );
           }
-          if (optKeyLower == 'low' && trimmedVal == 'high') {
+          // Shared no-remap invariant for the documented level ids.
+          if (!ThinkingWireVocabulary.canonicalLevelMatches(
+            optionId: optKey,
+            value: trimmedVal,
+          )) {
             throw FormatException(
-              'Option "$optKey" cannot map to escalating level "$optVal".',
+              'Option "$optKey" cannot map to level "$optVal": a canonical '
+              'level id must carry its own canonical value.',
             );
           }
           options[optKey] = trimmedVal;
@@ -746,9 +822,10 @@ class ThinkingControlOverride {
       }
     }
 
-    final defaultOption = (tcMap['default_option'] ?? tcMap['default_option_id'])
-        ?.toString()
-        .trim();
+    final defaultOption =
+        (tcMap['default_option'] ?? tcMap['default_option_id'])
+            ?.toString()
+            .trim();
     if (defaultOption != null && defaultOption.isNotEmpty) {
       if (!options.containsKey(defaultOption)) {
         throw FormatException(
@@ -761,10 +838,9 @@ class ThinkingControlOverride {
       status: status,
       wire: wire.trim(),
       options: Map.unmodifiable(options),
-      defaultOption:
-          (defaultOption != null && defaultOption.isNotEmpty)
-              ? defaultOption
-              : null,
+      defaultOption: (defaultOption != null && defaultOption.isNotEmpty)
+          ? defaultOption
+          : null,
     );
   }
 }
@@ -904,10 +980,12 @@ class ModelAwareRuntimePolicy {
       );
 
       // Detect and actionably reject retired nested provider schema
-      final hasNestedProviderShape = rawConfig.values.any((v) =>
-          v is Map &&
-          (v.containsKey('supports_image_input') ||
-              v.containsKey('thinking_control')));
+      final hasNestedProviderShape = rawConfig.values.any(
+        (v) =>
+            v is Map &&
+            (v.containsKey('supports_image_input') ||
+                v.containsKey('thinking_control')),
+      );
       if (hasNestedProviderShape) {
         throw FormatException(
           'Nested provider-instance format in model_capabilities is no longer supported. '
