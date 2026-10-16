@@ -1,6 +1,7 @@
 import 'package:logging/logging.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
+import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/core/navigation/route_refresh_notifier.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
@@ -212,6 +213,7 @@ class AppRouter {
     required String matchedLocation,
     GatewayConnectionStatus? gatewayStatus,
   }) {
+    _logger.info('NavTrace router.redirect | uri=${uri.path} matched=$matchedLocation');
     final currentUri = uri;
     final isLoggingIn = matchedLocation == AppRoutes.login;
     final isSplash = matchedLocation == AppRoutes.splash;
@@ -391,11 +393,17 @@ class AppRouter {
     required String reason,
   }) {
     final redirectPath = redirect == null ? 'allow' : Uri.parse(redirect).path;
-    _logger.info(
-      'AppRouterRedirect: auth=${authState.runtimeType} '
-      'desktop=${AppPlatform.isDesktop} location=$matchedLocation '
-      'uriPath=${uri.path} redirectPath=$redirectPath reason=$reason',
-    );
+    // Noise reduction: the allow case fires on every navigation and drowns the
+    // actionable redirect decisions. Keep allow at fine, redirects at info.
+    final logLine =
+        'AppRouterRedirect: auth=${authState.runtimeType} '
+        'desktop=${AppPlatform.isDesktop} location=$matchedLocation '
+        'uriPath=${uri.path} redirectPath=$redirectPath reason=$reason';
+    if (redirect == null) {
+      _logger.fine(logLine);
+    } else {
+      _logger.info(logLine);
+    }
     return redirect;
   }
 
@@ -438,6 +446,8 @@ class AppRouter {
       queryParameters: state.uri.queryParameters,
       isNew: state.matchedLocation == AppRoutes.newConversation || state.uri.path.endsWith('/new'),
     );
+
+    navTrace('router.buildHome', 'uri=${state.uri} parsed=${destTrace(destination)}');
 
     final child =
         overrideBuilder?.call(context, state) ??
