@@ -9,6 +9,7 @@ import '../../../../core/models/message.dart';
 import '../../../../core/models/tool_execution_result.dart';
 import '../../../models/delivery/models.dart';
 import '../../../models/device_control.dart';
+import '../../../models/remote_cli.dart';
 
 final class CanonicalViewImageMedia extends ViewImageMediaMetadata {
   const CanonicalViewImageMedia({
@@ -382,4 +383,12 @@ class CanonicalEventTypes {
       DeviceControlCommands.runtimeRestart;
   static const String deviceRuntimeRestartAccepted =
       DeviceControlCommands.runtimeRestartAccepted;
+
+  // ── Plan 102: Remote CLI Relay ──────────────────────────────────────
+  static const String deviceCliExecute = RemoteCliCommands.execute;
+  static const String deviceCliCancel = RemoteCliCommands.cancel;
+  static const String deviceCliStdout = RemoteCliCommands.stdout;
+  static const String deviceCliStderr = RemoteCliCommands.stderr;
+  static const String deviceCliEvent = RemoteCliCommands.event;
+  static const String deviceCliResult = RemoteCliCommands.result;
 }

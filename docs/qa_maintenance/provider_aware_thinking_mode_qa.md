@@ -52,18 +52,18 @@ routes, and never silently ignore an explicit unsupported selection.
 | OpenCode Go model outside the exact evidenced ids | The template's registered generic effort policy publishes only exact-model-owned facts: a model without its own evidence advertises no tiers, and no family-level recognition or guessed ladder promotes it |
 | OpenCode Go exact DeepSeek V4.1 Flash (`deepseek-v4.1-flash`) | Exact model-owned DeepSeek facts override the Go generic effort policy: selector visible with `Off`/`Low`/`High`/`Max` and default `High`; `off` sends disabled thinking with no effort, `low`/`high`/`max` send enabled thinking plus that exact `reasoning_effort`; an empty/null selection sends neither field; the wire keeps the exact model id |
 | DeepSeek documented effort remaps | `minimal`/`medium`/`xhigh`/`ultra` are never visible tiers and are rejected as selections (`optionUnavailable`) instead of being relabelled |
-| DeepSeek V4.1 near-IDs (`deepseek-v4.1-flash-x`, `deepseek-v4.1-flash-thinking`, `deepseek-v41-flash`, `deepseek-v4-1-flash`, `deepseek-v4.1`, casing variants) | Remain unevidenced: Go keeps its generic result, the chip stays hidden, and a selection is rejected before HTTP; no family/prefix/substring rule may promote them |
+| DeepSeek V4.1 near-IDs (`deepseek-v4.1-flash-x`, `deepseek-v4.1-flash-thinking`, `deepseek-v41-flash`, `deepseek-v4-1-flash`, `deepseek-v4.1`, casing variants) | Remain unevidenced: Go keeps its generic result, the client keeps a visible disabled no-control/unknown chip, and a selection is rejected before HTTP; no family/prefix/substring rule may promote them |
 | OpenCode Go unknown model with `supports_reasoning_output=true` | Control remains unavailable; reasoning output alone does not invent selectable effort |
 | Explicit empty `thinking_mode` session preference | Client transmits the present empty field; daemon clears persistence and emits `thinking_mode: null` |
 | Client `thinking_mode_source=model` | Composer uses model/`thinking_control` options only; empty list does not fall back to `balanced` |
 | Client exact model descriptor identity | Resolves thinking descriptors using exact model ID; preserves catalog namespaces (`VendorA/model` vs `VendorB/model`), case (`CaseModel` vs `casemodel`), and variant markers (`~`, `:`); strips only transport-owned provider-instance prefixes (`provider-1/`) with exact boundaries |
-| Client unsupported descriptor | Thinking chip hidden |
+| Client unsupported descriptor | Visible, disabled `No control` chip; no menu is offered and the chip never claims the model cannot reason |
 | Client initial descriptor load | Shows `Loading...` until the authoritative snapshot arrives |
-| Client authoritative unknown descriptor | Shows `Default` / provider-managed behavior; does not invent selectable controls or display a false `Unavailable` state |
+| Client authoritative unknown descriptor | Visible, disabled `Not reported` chip; does not invent selectable controls, never renders the provider-default entry or a level, and is never conflated with the `Unavailable` transport state |
 | Route revision mismatch | Stale session descriptor ignored |
 | Explicit model refresh on mounted route | Composer updates options, default, and capability revision without route change or restart |
 | Model refresh invalidating current selection | Selection repaired visibly to provider default (`null`), retaining valid selections |
-| Model refresh removing descriptor or marking unsupported | Transitions visibly to provider-managed (`Default`) or hidden |
+| Model refresh removing descriptor or marking unsupported | Transitions visibly to the disabled `Not reported` (removed evidence) or `No control` (unsupported) chip; the control never disappears |
 | Failed, late, or cross-device model update events | Retains prior validated authority on failure; ignores foreign device/provider events |
 | Model/provider switch invalidating selection | Preference cleared + correction event |
 | Daemon restart with queued turn | Revalidates persisted selection before provider call |
@@ -89,6 +89,10 @@ routes, and never silently ignore an explicit unsupported selection.
 | Failed refresh with authoritative failure or live evidence | Already-invalidated descriptors (`live_probe_failed`, `cache_stale`) and native/live probe descriptors stay `live_probe_failed` unknown until a successful refresh |
 | Failed refresh with endpoint-declared controls | a control declared only by the endpoint's own discovery metadata is route-owned evidence and is never reclassified as intrinsic support: it becomes `live_probe_failed` unknown until a successful refresh revalidates it |
 | Failed refresh with a changed credential revision | a bumped credential revision fails closed exactly like a config revision change; the stale supported descriptor is not retained |
+| Client route without thinking transport | `supports_thinking_mode_change=false`, or a legacy-mode device whose `thinking_modes_list` is empty, renders a visible disabled `Unavailable` chip and offers no menu; the control is never removed from the composer |
+| Client provider-default entry | A typed omission choice that carries no option id and clears any stored level. A declared option id — including a legacy-looking reserved string — is never mapped to omission and dispatches that exact id |
+| Client token-budget preset without a declared count | The menu annotation still identifies the preset as a token budget; no token value is invented and no effort-like label stands alone for it |
+| Client fractional declared budget (`budget_tokens: 1024.5`) | Parsed as absent metadata, never truncated to `1024`, and never re-serialized as a real count |
 
 ## Automated anchors
 
@@ -101,9 +105,10 @@ routes, and never silently ignore an explicit unsupported selection.
 - `agent/test/core/provider_thinking/opencode_go_deepseek_v41_thinking_regression_test.dart` (exact V4.1 Flash policy/descriptor, production Go Chat mock-HTTP default/Off/effort wire, near-ID negatives)
 - `agent/test/engine/thinking_selection_agent_runner_test.dart`
 - `agent/e2e_test/thinking_mode_gate_i_e2e_test.dart` (`--concurrency=1`)
-- `client/test/unit/conversations/route_thinking_control_test.dart` (exact model identity, freshness arbitration, route binding)
-- `client/test/unit/conversations/opencode_go_deepseek_v41_thinking_selector_test.dart` (exact V4.1 descriptor visibility, grounded default label, near-ID hidden negative)
-- `client/test/widget/route_thinking_mode_selector_test.dart` (exact identity, refresh lifecycle, invalidation repair, restoration, exact V4.1 visible tiers)
+- `client/test/unit/conversations/route_thinking_control_test.dart` (exact model identity, freshness arbitration, route binding, unavailable-vs-hidden state, typed omission choice, declared/undeclared budget presets)
+- `client/test/unit/conversations/thinking_control_dto_test.dart` (declared integral budgets only: fractional, zero, signed, non-numeric and non-finite metadata stay absent, including after round-trip)
+- `client/test/unit/conversations/opencode_go_deepseek_v41_thinking_selector_test.dart` (exact V4.1 descriptor visibility, grounded default label, near-ID no-control negative)
+- `client/test/widget/route_thinking_mode_selector_test.dart` (exact identity, refresh lifecycle, invalidation repair, restoration, exact V4.1 visible tiers, disabled `Unavailable` transport state, typed omission entry, undeclared budget annotation)
 - `client/test/unit/provider_setup/provider_setup_client_impl_test.dart` (event stream projection)
 - `client/test/unit/provider_setup/model_cache_snapshot_dto_test.dart` (event parsing)
 - `client/test/unit/bloc/conversation_input_cubit_test.dart` (model-scoped defaults/clear)

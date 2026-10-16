@@ -62,6 +62,27 @@ fvm dart run scripts/workflow_guards/bin/verify.dart [--tail <n>] [--] <command>
 - JSON output: pass `--json` to output a structured JSON envelope.
 - Windows-safe: direct execution where possible, shell routing with strict metacharacter validation for `.cmd`/`.bat` wrappers.
 
+## Wiki lint guard coverage
+
+The suite also regression-covers the repository wiki lint guard,
+`scripts/lint_wiki.dart` (`test/wiki_lint_test.dart`):
+
+```bash
+cd scripts/workflow_guards && fvm dart test test/wiki_lint_test.dart
+```
+
+It drives the real script against a temporary sandbox and proves that:
+
+- dependency link trees Flutter generates below
+  `*/flutter/ephemeral/.plugin_symlinks/` and
+  `*/Flutter/ephemeral/.symlinks/` never count as repository contracts;
+- real repository contracts stay discoverable and must still be indexed in
+  `docs/llms.txt`, even when their path merely resembles the exclusion;
+- frontmatter, index, and link checks on real pages still fail closed.
+
+Run `fvm flutter pub get` in `client/` first to reproduce the actual generated
+paths in the checkout.
+
 ## Tests
 
 ```bash

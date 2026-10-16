@@ -1,6 +1,6 @@
 ---
 name: install-sanad
-description: Install, update, or prepare Sanad for normal use or source development on macOS, Windows, or Linux. Use when an AI agent must inspect a machine for an existing Sanad installation or checkout, explain the release-user and developer-source paths, install the Client and local Agent, install an Agent on a remote server, update packaged components, or safely update and run a development checkout.
+description: Install, update, or prepare Sanad for normal use or source development on macOS, Windows, or Linux. Use when an AI agent must inspect a machine for an existing Sanad installation or checkout, explain the release-user and developer-source paths, install the Client and local Agent, install an Agent on a remote server, quickly create a Google Cloud Free Tier server and pair Sanad, update packaged components, or safely update and run a development checkout.
 ---
 
 # Install Sanad
@@ -18,8 +18,17 @@ Keep the release-user and developer-source workflows separate.
   locations only. Ask for the project path when it cannot be identified safely.
 - Never overwrite, reset, clean, stash, commit, or discard a dirty repository
   unless the user explicitly authorizes that exact action.
-- Never request, quote, log, or reconstruct a pairing token, access token,
-  refresh token, provider credential, signing secret, or user content.
+- Never request, quote, log, or reconstruct access tokens, refresh tokens,
+  provider credentials, signing secrets, or user content. For an explicitly
+  authorized agent-operated remote install only, accept the user's complete
+  **Add device** command containing its short-lived, single-use creation token.
+  Validate the official bootstrap, transmit it without echoing, tracing, or
+  persisting it in project artifacts, and never extract/reconstruct its token.
+  Explain that this consent covers creation-command exposure in chat/tool
+  history and that the generated installer command may use token arguments;
+  do not claim zero exposure. Keep SSH transport arguments credential-free.
+  If the user does not accept that exposure, have them execute it directly or
+  use interactive Portal sign-in. This exception never covers durable credentials.
 - Use only official Sanad sources:
   - repository: `https://github.com/EastStarAI/sanad-agent`
   - releases: `https://github.com/EastStarAI/sanad-agent/releases/latest`
@@ -28,6 +37,16 @@ Keep the release-user and developer-source workflows separate.
 - Do not disable operating-system security controls. Read the latest release
   notes before describing current signing or platform support.
 - Preserve Sanad Home and user workspaces during installation and update.
+
+## Google Cloud Fast Route
+
+For a Google Cloud / GCP / free cloud server request, read
+[references/google-cloud-free-tier.md](references/google-cloud-free-tier.md)
+and follow that specialized release-user route instead of repeating the generic
+local/source questionnaire below. It owns prerequisites, at most two initial
+questions, resource reuse, eligible provisioning, just-in-time pairing, and
+minimal built-in verification. Keep the safety rules above. Do not promise an
+unconditional zero bill or duplicate an existing free allowance.
 
 ## 1. Inspect the Target
 
@@ -99,9 +118,12 @@ Agent service.
 
 Offer two equal choices:
 
-1. **Pair through Sanad Client:** direct the user to **Device Management → Add
-   device** and have them run the complete generated command on the target
-   machine. Do not ask them to paste its embedded credential into the AI chat.
+1. **Pair through Sanad Client:** open **Settings**, then click **+** beside
+   **Devices** in the Settings sidebar to open **Add device**. Have the user run
+   the complete generated command on the target
+   machine, or accept their complete generated command for an authorized remote
+   installation under the single-use creation-token exception above. Never ask
+   for the credential separately or echo the command into reports.
 2. **Install the Agent directly:** choose Portal sign-in or local-only mode and
    run the matching official installer after approval.
 

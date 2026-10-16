@@ -94,6 +94,21 @@ void main() {
         final editMap = Map.fromEntries(editDetails);
         expect(editMap['File'], 'lib/main.dart');
         expect(editMap['Changes'], '+3 -2 lines');
+
+        final multiEditDetails = CliToolFormatter.formatPermissionDetails(
+          toolName: 'file_edit',
+          toolInput: {
+            'path': '/repo/project/lib/main.dart',
+            'edits': [
+              {'old_string': 'line 1', 'new_string': 'line 1.1'},
+              {'old_string': 'line 5\nline 6', 'new_string': 'line 5.1'},
+            ],
+          },
+          workspacePath: '/repo/project',
+        );
+        final multiEditMap = Map.fromEntries(multiEditDetails);
+        expect(multiEditMap['File'], 'lib/main.dart');
+        expect(multiEditMap['Edits'], '2 (+2 -3 lines)');
       },
     );
 
@@ -139,6 +154,21 @@ void main() {
           ansi: false,
         ),
         '🔧 Reading file: README.md',
+      );
+      expect(
+        CliToolFormatter.formatToolCalling(
+          'file_edit',
+          {
+            'path': '/app/lib/main.dart',
+            'edits': [
+              {'old_string': 'a', 'new_string': 'b'},
+              {'old_string': 'c', 'new_string': 'd'},
+            ],
+          },
+          workspacePath: '/app',
+          ansi: false,
+        ),
+        '🔧 Editing file: lib/main.dart (2 edits)',
       );
       expect(
         CliToolFormatter.formatToolCalling('search_grep', {

@@ -35,3 +35,11 @@ Dependencies must follow:
 - Feature UI must not read agent-owned files or discover agent-owned catalogs directly when a daemon query surface exists.
 - Cross-feature navigation and composition belong to their owning Home/core coordinators; individual feature widgets must not create competing global routing state.
 - Tool cancellation projects `EventStatus.cancelled` with terminal precedence; live `tool_result` and history hydration must preserve the same generation, revision, reason, timestamps, and cleanup outcome. Reject older or unversioned late terminal results after an authoritative revision, and let `stopped` defensively close only same-run running tools that missed a terminal packet.
+
+## Client CLI Host Ownership (Plan 102)
+- `client/lib/features/client_cli/` owns the local `sanad-client` command surface. It is a Client-owned host, not a second authority: the Client keeps account and device authority, the target Agent keeps runtime and command-execution authority, and the surface relays without persisting command payloads.
+- `ClientCliHost` owns at most one HTTP/WebSocket host per active Sanad Home. Record read/write with atomic owner-only permissions, liveness plus authenticated health verification, and deterministic no-owner, disabled, ambiguous, and version-mismatch failures belong to `ClientCliOwnership` and `ClientCliDiscovery` under `data/`; presentation must not read the ownership record or probe endpoints directly.
+- CLI home resolution follows the active Sanad Home through `ClientCliHomeResolver`; do not add a second home selector or share a cross-home preference namespace.
+- Execution approval is user-owned: requests flow through `ClientCliApprovalCoordinator` and surface in the approval overlay as allow-once, allow-session, or deny. Never auto-approve and never bypass Agent session or tool permission authority.
+- The host never evaluates a shell, never reimplements an Agent CLI command, and never logs argv, standard input, or command payloads.
+- Design reference: `docs/technical/remote_cli_relay_protocol.md`.

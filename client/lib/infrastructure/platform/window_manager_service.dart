@@ -37,6 +37,41 @@ class WindowManagerService with WindowListener {
   static ValueListenable<bool> get compactModeListenable => _isCompactMode;
   static ValueListenable<bool> get maximizedOrFullScreenListenable => _isMaximizedOrFullScreen;
 
+  static Future<void> Function()? _onCloseRequested;
+
+  static void setCloseRequestHandler(Future<void> Function()? handler) {
+    _onCloseRequested = handler;
+  }
+
+  static Future<void> hide() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+    await windowManager.hide();
+  }
+
+  static Future<void> show() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+    if (await windowManager.isMinimized()) {
+      await windowManager.restore();
+    }
+    await windowManager.show();
+  }
+
+  static Future<void> focus() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+    await windowManager.focus();
+  }
+
+  static Future<void> showAndFocus() async {
+    await show();
+    await focus();
+  }
+
+  static Future<void> closeOrDestroy() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+    await windowManager.setPreventClose(false);
+    await windowManager.destroy();
+  }
+
   static Future<void> toggleMaximized() async {
     if (!AppPlatform.isDesktop || !_isInitialized) return;
 
@@ -217,6 +252,8 @@ class WindowManagerService with WindowListener {
 
       await windowManager.show();
       await windowManager.focus();
+
+      await windowManager.setPreventClose(true);
 
       if (isMaximized) {
         await windowManager.maximize();
@@ -400,5 +437,17 @@ class WindowManagerService with WindowListener {
   @override
   void onWindowLeaveFullScreen() {
     unawaited(_refreshMaximizedOrFullScreenState());
+  }
+
+  @override
+  void onWindowClose() async {
+    if (!AppPlatform.isDesktop) return;
+    if (_onCloseRequested != null) {
+      await _onCloseRequested!();
+      return;
+    }
+    // Background operation is the default on every desktop platform: hiding keeps
+    // the Agent and the Client CLI endpoint available until an explicit quit.
+    await hide();
   }
 }
