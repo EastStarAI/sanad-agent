@@ -1,7 +1,7 @@
 ---
 title: "77K — Native thinking auto-selection without a Default entry"
 status: "in_progress"
-current_gate: "G1/G2 implementation, bounded review repairs (conversation admission, real preference evidence, menu-only hint, strongest-first display) and focused verification evidenced; independent re-review and live acceptance owned by the principal"
+current_gate: "Independent focused verification and source handoff complete; Web runtime update blocked by upstream native-tray FFI import; live retest pending"
 ---
 
 # Goal
@@ -47,7 +47,8 @@ This user-approved decision supersedes the synthetic Default-omission menu and `
 
 - [x] Update closest stale owning contract, Client product/technical/QA documentation and current Plan77/77I5 decision sections. Correct the already-observed provider-protocol unknown-state key mismatch while updating the affected thinking section. Historical notes may remain clearly historical, not competing current requirements.
 - [x] Return changed/new paths, behavioral explanation, tests/evidence, unexercised cases and any uncertainty in the external report. Preserve all unrelated work and leave no temporary probe in tracked scope.
-- [ ] Principal independently reviews and verifies, preserves the result into delivery, creates the authorized local checkpoint and removes this completed worker worktree.
+- [x] Principal independently reviews and verifies, preserves the result into delivery, creates the authorized local checkpoint and removes this completed worker worktree.
+  Independent receipt: 180 focused tests passed in 7.76s, Flutter analysis passed in 7.62s, wiki passed in 1.11s, staged secret scan and diff checks passed. Commit `ba3eae7` preserves exact verified tree `44a2b55f3f93591c432c5da79079be56b71dc9ae`; delivery fast-forwarded identically and the completed worker worktree was removed. A native macOS rebuild regenerated the existing CocoaPods lock for the already-declared native dependency, with no manual dependency/version change. The Agent restart and macOS rebuild completed, but the Web hot restart exposed the upstream tray package's unconditional native FFI import. A scoped platform-import isolation repair is required before live testing; no thinking product requirement is changed by that repair.
 - [ ] Only after actual source handoff and completion of the owned runtime update, the existing tester conversation produces a fresh per-Client live report. Do not claim this gate from widget tests or old process ages.
 
 ## Implementation record (delegated lane)
