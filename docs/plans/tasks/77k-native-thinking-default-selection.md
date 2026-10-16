@@ -1,7 +1,7 @@
 ---
 title: "77K — Native thinking auto-selection without a Default entry"
 status: "in_progress"
-current_gate: "Independent focused verification and source handoff complete; Web runtime update blocked by upstream native-tray FFI import; live retest pending"
+current_gate: "Implementation independently verified and preserved; Web import blocker closed by 77L, owned runtime updated; same-session per-Client interactive retest active"
 ---
 
 # Goal
