@@ -85,6 +85,7 @@ class AppBootstrap {
       final lifecycle = getIt<DesktopLifecycleManager>();
       WidgetsBinding.instance.addObserver(lifecycle);
       WindowManagerService.setCloseRequestHandler(() => lifecycle.handleWindowClose());
+      WindowManagerService.setReopenRequestHandler(() => lifecycle.handleReopenRequest());
       await getIt<AppTrayService>().initialize();
     }
     await _trace('desktop-lifecycle-ready');

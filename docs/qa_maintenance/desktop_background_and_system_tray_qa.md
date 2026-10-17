@@ -22,6 +22,7 @@ Technical spec: `docs/technical/desktop_background_and_system_tray.md`
 | Explicit quit ownership | Only `Quit` destroys the app: tray, CLI endpoint, cache flush, state disposal, window destroy | Window close disposes sockets, CLI endpoint, or application state |
 | Tray restart invariant | After any Client hot restart the menu bar still shows exactly one tray icon, and the previous isolate's icon and callbacks are gone | A second tray icon appears per hot restart, or clicking a stale icon reaches a dead isolate |
 | Tray artwork | macOS shows the white background-free mark in the menu bar tint; Windows/Linux show the brand-blue mark; both come from `client/assets/tray/` | The icon draws the opaque app logo as a black square, or is tinted wrong for the platform |
+| macOS close survivor | On macOS, closing the last window hides it and the process, tray icon, sockets, and CLI endpoint stay alive, because `macos/Runner/AppDelegate.swift` answers `false` to `applicationShouldTerminateAfterLastWindowClosed` | macOS terminates the process on window close (`Platform exit requested` right after `Hiding desktop window`) and the tray icon disappears |
 
 Automated owners:
 - `client/test/unit/infrastructure/platform/desktop_lifecycle_manager_test.dart`
@@ -37,6 +38,7 @@ Automated owners:
 |---|---|---|
 | Close-to-hide | `handleWindowClose(isLinux: false)` hides the window and keeps sockets, caches, and the CLI endpoint alive | Process exits, or state/sockets are disposed on close |
 | Restore | `showWindow()` shows and focuses the existing window | A second window is created or focus is lost |
+| Dock reopen (macOS) | After closing the window, clicking the Dock icon, opening the app from Finder/Spotlight, or running `open -a <bundle>` restores and focuses the window and logs `Restoring desktop window from background` | Nothing happens and only the tray `Show` item can restore the window |
 | Re-entrancy | Repeated close/show/quit requests stay deterministic; `quit()` runs its cleanup once | Duplicate cleanup, double exit, or a half-disposed app |
 | Quit cleanup | Each cleanup step is attempted even when an earlier step throws | One failing step aborts the remaining teardown |
 
@@ -82,6 +84,8 @@ complete:
 | Step | Expected |
 |---|---|
 | Close the window with the tray icon visible | Client keeps running; tray icon remains; sockets and the CLI endpoint stay available |
+| On macOS, close the window and then click the Dock icon (or run `open -a <bundle>`) | The window returns and is focused; the tray icon count stays at one |
+| On macOS, quit from the tray `Quit` item (or `Cmd+Q`) | Full shutdown: deterministic teardown runs and the tray icon is removed |
 | `sanad-client devices` while the window is hidden | Same result as with the window visible |
 | Tray → Show, and tray icon click | Window restored and focused |
 | Tray → recent conversation | Window foregrounded on that conversation only |

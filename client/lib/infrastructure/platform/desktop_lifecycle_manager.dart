@@ -90,6 +90,15 @@ class DesktopLifecycleManager with WidgetsBindingObserver {
     await hideWindow();
   }
 
+  /// macOS requests a reopen when the user clicks the Dock icon, opens the app
+  /// from Finder/Spotlight while it keeps running in the background, so the
+  /// window is restored through the same Show path the tray item uses instead of
+  /// being shown by the native delegate.
+  Future<void> handleReopenRequest() async {
+    if (_isQuitting) return;
+    await showWindow();
+  }
+
   @override
   Future<AppExitResponse> didRequestAppExit() async {
     _logger.info('Platform exit requested: performing explicit quit');
