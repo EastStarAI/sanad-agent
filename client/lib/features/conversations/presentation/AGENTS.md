@@ -5,6 +5,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 
 ## Cubit and Widget Ownership
 - Cubits translate user intent into repository operations and project domain state; they must not parse socket events or own duplicate stores.
+- `SessionMessagesCubit` orchestrates session conversation state and presentation streams; it delegates workspace browsing, creation, selection, permission policies, and local tool broadcasts to `SessionWorkspaceCoordinator`, and delegates turn interventions (steer, queue deletion, stop/recovery, replay, fork, runtime notice retry, and suspended requests) to `SessionInterventionCoordinator`. The cubit keeps only the state its own projections read, including requested history anchors, and delegates in-flight stop-recovery acknowledgment claims to the intervention coordinator so the claim set has exactly one owner.
 - Keep large conversation entry widgets as orchestration boundaries and extract stateless/presentational slices.
 - Extract user message rendering into `UserMessageTile`; user messages exceeding 5 lines default to a 5-line collapsed height with a bubble-wide tap toggle ("Read more" / "See less") and smooth height animation.
 - The parent composer owns long-lived text controllers, focus nodes, and inline suspension coordination. New Conversation requests input focus on first presentation, and blank non-control composer taps delegate focus to the same node without intercepting child controls.
