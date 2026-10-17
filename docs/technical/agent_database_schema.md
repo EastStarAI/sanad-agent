@@ -664,10 +664,12 @@ Task 51 adds a third revision stream. `sessions.history_revision` orders
 active-history mutations and must never be compared with
 `session_execution_snapshots.revision` or `sessions.route_revision`.
 
-`SessionDB` remains the SQL owner of `sessions` and `messages`. Soft rewind and
-replacement-user acceptance commit in one `AgentStateDatabase.transaction`
-together with the `history_revision` compare-and-swap. Replay admission must
-not delete rows or rewrite the session's message list by truncation.
+`SessionDB` (via `SessionRepository`, `SessionMessageRepository`, and
+`SessionForkCommitRepository`) remains the SQL owner of `sessions` and
+`messages`. Soft rewind and replacement-user acceptance commit in one
+`AgentStateDatabase.transaction` together with the `history_revision`
+compare-and-swap. Replay admission must not delete rows or rewrite the
+session's message list by truncation.
 
 ### 7.1. Identity and activity columns
 

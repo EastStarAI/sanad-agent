@@ -18,6 +18,13 @@ This contract applies to `agent/lib/evolution/db/`.
 ## Repository Ownership
 - Each table has one repository responsible for schema-facing CRUD and query semantics.
 - Composition facades may delegate but must not duplicate SQL or maintain parallel state.
+- Session database responsibilities are decomposed into cohesive owners behind the `SessionDB` facade:
+  - `SessionRepository`: session lifecycle, metadata, titles, and workspace records.
+  - `SessionMessageRepository`: message append/read, history projection, and tool-result records.
+  - `ScheduledTaskRepository`: scheduled task persistence.
+  - `SuspendedCheckpointRepository`: suspended checkpoints and work-item state.
+  - `SessionForkCommitRepository`: fork, soft-rewind, and root-user commit records.
+  - `SessionDB`: delegating facade preserving the public API surface.
 - Keep DTO/enums at a stable export seam only while migration requires it.
 - Legacy tables and methods remain migration-only and cannot accept new production work.
 - `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps and the pending-vacuum marker.

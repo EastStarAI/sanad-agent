@@ -7,7 +7,9 @@ This contract applies to `agent/lib/interfaces/`.
 - Connect runtime execution to external platforms through typed, asynchronous, non-blocking boundaries.
 - Keep platform transport, runtime admission, canonical protocol translation, and durable domain state in separate owners.
 - `GatewayManager` routes responses; it must not classify runtime work or inspect event names to infer delivery.
-- `SessionRunOrchestrator` admits and coordinates work; it must not own provider adapters, protocol parsing, or table-specific SQL.
+- `SessionRunOrchestrator` admits and coordinates work; it must not own provider adapters, protocol parsing, or table-specific SQL. It delegates controlled restart checkpointing to `SessionRestartCheckpointManager`, stop/cancellation and tool terminalization to `SessionStopCoordinator`, and session/workspace metadata resolution to `SessionMetadataResolver`.
+- `SessionStopCoordinator` owns stop, cancellation, tool terminalization, stop-draft recovery, and queue draining, including preserving an interactive user-input wait across a managed daemon stop (`preserveInteractiveWait`/`preserveInteractiveWaits`). Startup recovery restores that wait instead of recording an unknown tool outcome.
+- `LocalWorkspaceRuntimeService` provides high-level workspace operations; it delegates MCP lifecycle, OAuth, config mutations, and inspection to `WorkspaceMcpCoordinator`, and delegates directory tree browsing, folder mutations, preview tokens, and path confinement boundaries to `WorkspaceFileSystemCoordinator`. It keeps ownership of the resources it creates: disposal drains pending filesystem mutations before releasing its MCP runtime manager, OAuth service, and local databases.
 - Platform adapters translate transport lifecycle only; they must not duplicate shared Sanad protocol or runtime workflows.
 
 ## Failure Isolation

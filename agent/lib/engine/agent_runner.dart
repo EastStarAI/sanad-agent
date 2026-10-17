@@ -8,8 +8,6 @@ import '../core/models/message.dart';
 import '../core/models/user_attachment.dart';
 import '../core/models/tool_execution_result.dart';
 import '../core/models/agent_response.dart';
-import '../core/models/llm_provider_state.dart';
-import '../core/models/llm_usage_snapshot.dart';
 import '../capabilities/registry/tools_registry.dart';
 import '../capabilities/models/tool_schema.dart';
 import '../capabilities/tools/memory_tool.dart';
@@ -19,34 +17,22 @@ import '../core/di.dart';
 import '../core/config.dart';
 import '../evolution/attachments/attachment_store.dart';
 import '../evolution/session_manager.dart';
-import '../evolution/db/runtime/session_route_mutation_coordinator.dart';
 import '../evolution/db/persisted_runtime_state_repository.dart';
 import '../evolution/models/pending_steer_record.dart';
-import '../evolution/models/session_route_transition.dart';
 import '../evolution/memory/file_memory_store.dart';
 import '../plugins/plugin_manager.dart';
 import '../core/models/tool_call.dart';
 import '../core/utils/scrubber.dart';
-import '../core/provider_runtime/runtime_failure_reason.dart';
-import '../core/provider_runtime/runtime_notice.dart';
 import '../core/provider_runtime/runtime_recovery_exception.dart';
-import '../core/provider_runtime/runtime_recovery_service.dart';
-import '../core/provider_thinking/thinking_route_session_sync.dart';
 import '../core/provider_thinking/thinking_route_preference.dart';
 import '../core/provider_thinking/thinking_route_preference_store.dart';
 import '../core/provider_thinking/thinking_selection_resolver.dart';
-import '../core/provider_thinking/thinking_wire_vocabulary.dart';
-import '../core/secrets_redactor.dart';
 import 'agent_context_assembler.dart';
 import 'llm_request_dumper.dart';
 import 'history_healer.dart';
 import 'history_image_pruner.dart';
 import 'metrics_tracker.dart';
 import 'tool_concurrency_evaluator.dart';
-import 'adapters/llm_http_exception.dart';
-import 'adapters/provider_request_cancelled_exception.dart';
-import 'adapters/rate_limited_llm_adapter.dart';
-import 'adapters/provider_state_rejected_exception.dart';
 import 'runtime/continuation_checkpoint_coordinator.dart';
 import 'runtime/deferred_tool_result.dart';
 import 'runtime/llm_route_snapshot.dart';
@@ -54,22 +40,24 @@ import 'runtime/response_continuation_coordinator.dart';
 import 'runtime/steer_coordinator.dart' as steer_lib;
 import 'runtime/tool_execution_coordinator.dart';
 import 'runtime/run_cancellation_scope.dart';
-import '../evolution/compaction/model_projection_builder.dart';
-import '../core/agent_runtime_service.dart';
-import '../evolution/db/session_history_revision_repository.dart';
-import '../evolution/db/session_projection_revision_repository.dart';
-import '../engine/compaction/compaction.dart';
 import 'context/context.dart';
-import 'runtime/compaction_coordinator.dart';
 import 'runtime/turn_route_state.dart';
 import '../core/provider_runtime/provider_instance_repository.dart';
 import '../core/provider_runtime/route_capability_resolver.dart';
 import 'adapters/models_dev_service.dart';
+import 'runtime/runner_recovery_coordinator.dart';
+import 'runtime/runner_compaction_orchestrator.dart';
+import 'runtime/runner_resume_coordinator.dart';
+import 'runtime/runner_admission_gate.dart';
+import 'runtime/runner_context_projector.dart';
+import 'runtime/runner_stream_coordinator.dart';
 
 /// Legacy re-exports so existing imports of the steer constants from
 /// `agent_runner.dart` continue to work without touching call sites.
 export 'runtime/steer_coordinator.dart'
     show steerMarkerOpen, steerMarkerClose, steerChannelNote;
+export 'runtime/runner_compaction_orchestrator.dart'
+    show CompactionProviderSeed;
 
 class PendingSteerDeliveryCommit {
   final List<Message> history;
@@ -81,51 +69,61 @@ class PendingSteerDeliveryCommit {
   });
 }
 
-class CompactionProviderSeed {
-  final List<Message> projection;
-  final List<ToolSchema> tools;
-  final LLMRequestOptions options;
-
-  CompactionProviderSeed({
-    required List<Message> projection,
-    required List<ToolSchema> tools,
-    required this.options,
-  }) : projection = List.unmodifiable(projection),
-       tools = List.unmodifiable(tools);
-}
-
-class AgentRunner {
+class AgentRunner
+    implements
+        RunnerRecoveryHost,
+        RunnerCompactionHost,
+        RunnerResumeHost,
+        RunnerContextHost,
+        RunnerStreamHost {
   static final Logger _logger = Logger('AgentRunner');
 
   final LLMAdapter adapter;
+  @override
   final ToolsRegistry registry;
+  @override
   final SessionManager sessionManager;
+  @override
   final PluginManager pluginManager;
   final DeferredToolResultResolver? _deferredToolResultResolver;
   final AttachmentStore? _attachmentStore;
+  @override
   late final FileMemoryStore memoryStore;
+  @override
   late final String sessionId;
 
+  late final RunnerAdmissionGate _admissionGate = RunnerAdmissionGate();
+  late final RunnerRecoveryCoordinator _recoveryCoordinator =
+      RunnerRecoveryCoordinator(this, logger: _logger);
+  late final RunnerCompactionOrchestrator _compactionOrchestrator =
+      RunnerCompactionOrchestrator(this);
+  late final RunnerResumeCoordinator _resumeCoordinator =
+      RunnerResumeCoordinator(this);
+  late final RunnerContextProjector _contextProjector =
+      RunnerContextProjector(this);
+  late final RunnerStreamCoordinator _streamCoordinator =
+      RunnerStreamCoordinator(this);
+
+  @override
   List<Message> history = [];
   int _currentTurnStartIndex = 0;
-  bool _stopRequested = false;
   bool _allowManualAmbiguousToolRecovery = false;
-  bool _overflowCompactionRetried = false;
-  DateTime? _lastCompactionCompletedAt;
-  static const _compactionCooldown = Duration(seconds: 30);
-  bool _providerRequestInFlight = false;
-  Completer<void>? _restartDrainRelease;
 
-  bool get stopRequested => _stopRequested;
-  bool get providerRequestInFlight => _providerRequestInFlight;
+  bool get stopRequested => _admissionGate.stopRequested;
+  bool get providerRequestInFlight => _admissionGate.providerRequestInFlight;
 
   void markProviderResponseTerminalCommitted() {
-    _settleProviderRequest();
+    _admissionGate.markProviderResponseTerminalCommitted(
+      checkpointCoordinator: _checkpointCoordinator,
+      checkpointCtx: _checkpointCtx,
+    );
   }
 
   void _settleProviderRequest() {
-    _checkpointCoordinator.markModelRequestSettled(ctx: _checkpointCtx);
-    _providerRequestInFlight = false;
+    _admissionGate.settleProviderRequest(
+      checkpointCoordinator: _checkpointCoordinator,
+      checkpointCtx: _checkpointCtx,
+    );
   }
 
   /// Allows one explicit user recovery command to continue past an ambiguous
@@ -135,67 +133,39 @@ class AgentRunner {
     _allowManualAmbiguousToolRecovery = true;
   }
 
-  void beginControlledRestartDrain() {
-    _restartDrainRelease ??= Completer<void>();
-  }
+  void beginControlledRestartDrain() =>
+      _admissionGate.beginControlledRestartDrain();
 
-  void cancelControlledRestartDrain() {
-    final release = _restartDrainRelease;
-    _restartDrainRelease = null;
-    if (release != null && !release.isCompleted) release.complete();
-  }
+  void cancelControlledRestartDrain() =>
+      _admissionGate.cancelControlledRestartDrain();
 
   /// Atomically claims permission to invoke the provider after any restart
   /// drain has been released.
-  ///
-  /// The drain check and the durable/in-memory in-flight markers deliberately
-  /// execute without an intervening await. This prevents a restart safety
-  /// scan from observing a safe checkpoint after this run has passed its gate
-  /// but before it becomes visible as a provider blocker.
-  Future<bool> _claimProviderRequestAfterRestartDrain() async {
-    while (true) {
-      final release = _restartDrainRelease;
-      if (release != null) {
-        await release.future;
-        continue;
-      }
-      if (_stopRequested) return false;
-      _checkpointCoordinator.saveCheckpoint(
-        ctx: _checkpointCtx,
-        checkpointKind: ContinuationCheckpointCoordinator
-            .checkpointKindModelRequestInFlight,
-        resumeHistoryLength: history.length,
+  Future<bool> _claimProviderRequestAfterRestartDrain() =>
+      _admissionGate.claimProviderRequestAfterRestartDrain(
+        checkpointCoordinator: _checkpointCoordinator,
+        checkpointCtx: _checkpointCtx,
+        historyLength: history.length,
       );
-      _providerRequestInFlight = true;
-      return true;
-    }
-  }
 
   static const checkpointKindInitialModelRequest =
       ContinuationCheckpointCoordinator.checkpointKindInitialModelRequest;
   static const checkpointKindAfterToolResult =
       ContinuationCheckpointCoordinator.checkpointKindAfterToolResult;
 
-  void requestStop() {
-    _stopRequested = true;
-    _providerRequestInFlight = false;
-    cancelControlledRestartDrain();
-    _cancellationScope?.invalidate(reason: RunCancellationReason.userStop);
-  }
+  void requestStop() => _admissionGate.requestStop();
 
-  void attachCancellationScope(RunCancellationScope scope) {
-    _cancellationScope = scope;
-  }
+  void attachCancellationScope(RunCancellationScope scope) =>
+      _admissionGate.attachCancellationScope(scope);
 
-  void detachCancellationScope(RunCancellationScope scope) {
-    if (identical(_cancellationScope, scope)) {
-      _cancellationScope = null;
-    }
-  }
+  void detachCancellationScope(RunCancellationScope scope) =>
+      _admissionGate.detachCancellationScope(scope);
 
-  bool get canPublishRunEvents => _cancellationScope?.isPublicationOpen ?? true;
+  bool get canPublishRunEvents => _admissionGate.canPublishRunEvents;
 
-  RunCancellationScope? get cancellationScope => _cancellationScope;
+  @override
+  RunCancellationScope? get cancellationScope =>
+      _admissionGate.cancellationScope;
 
   /// Three-tier context assembler responsible for building the single system
   /// message sent to the LLM on every turn.
@@ -203,6 +173,7 @@ class AgentRunner {
   /// Tiers (stable → context → volatile) are ordered so the longest,
   /// least-changing prefix remains byte-stable across turns, maximizing
   /// LLM prefix-cache reuse. See [AgentContextAssembler] for the full contract.
+  @override
   final AgentContextAssembler contextAssembler = AgentContextAssembler();
 
   /// Collaborators extracted in Gate C. Each owns a single cohesive
@@ -215,15 +186,11 @@ class AgentRunner {
 
   MetricsTracker? _metricsTracker;
   Future<Map<String, dynamic>?>? _contextUsageSnapshotFuture;
-  ConfirmedInputUsageBaseline? _pendingInputUsageBaseline;
-  ConfirmedInputUsageBaseline? _confirmedInputUsageBaseline;
-  RequestPressureSnapshot? _lastPreflightPressure;
-  bool _autoCompactionBlockedForRun = false;
+  @override
   String? currentModelStepId;
   String? _authoritativeRunId;
   String? _authoritativeWorkItemId;
   int? _authoritativeGeneration;
-  RunCancellationScope? _cancellationScope;
   LLMRouteSnapshot? _lastSuccessfulLlmRoute;
   void Function(PendingSteerRecord record)? _onPendingSteerChanged;
   PendingSteerDeliveryCommit Function(
@@ -290,20 +257,23 @@ class AgentRunner {
     }
   }
 
+  @override
+  Future<void> admitTurnCapabilityProfile() => _admitTurnCapabilityProfile();
+
   @visibleForTesting
   void debugSetConfirmedInputUsageBaseline(
-    ConfirmedInputUsageBaseline baseline,
+    ConfirmedInputUsageBaseline? baseline,
   ) {
-    _confirmedInputUsageBaseline = baseline;
+    _compactionOrchestrator.setConfirmedInputUsageBaseline(baseline);
   }
 
   @visibleForTesting
   RequestPressureSnapshot? get debugLastPreflightPressure =>
-      _lastPreflightPressure;
+      _compactionOrchestrator.lastPreflightPressure;
 
   @visibleForTesting
   ConfirmedInputUsageBaseline? get debugConfirmedInputUsageBaseline =>
-      _confirmedInputUsageBaseline;
+      _compactionOrchestrator.confirmedInputUsageBaseline;
 
   void beginAuthoritativeRun(
     String? runId, {
@@ -315,7 +285,7 @@ class AgentRunner {
     _authoritativeWorkItemId = workItemId;
     _authoritativeGeneration = generation;
     _lastSuccessfulLlmRoute = null;
-    _autoCompactionBlockedForRun = false;
+    _compactionOrchestrator.resetRunFlags();
     _turnRoute.setTurnRunId(runId);
   }
 
@@ -347,13 +317,14 @@ class AgentRunner {
     _authoritativeRunId = null;
     _authoritativeWorkItemId = null;
     _authoritativeGeneration = null;
-    _cancellationScope = null;
+    _admissionGate.clearCancellationScope();
     _onPendingSteerChanged = null;
     _onCommitPendingSteerDelivery = null;
     _onRootMessageCommitted = null;
     _turnRoute.setTurnRunId(null);
   }
 
+  @override
   String? get activeModel => _metricsTracker?.activeModel;
   set activeModel(String? value) {
     _metricsTracker ??= MetricsTracker();
@@ -388,6 +359,7 @@ class AgentRunner {
 
   /// The active model's total context window size, used by the client UI
   /// to compute the "X% ctx" context-fill percentage indicator.
+  @override
   Future<int?> getContextTokens() async {
     try {
       final routing = _turnRoute.resolveTurnRouting();
@@ -429,20 +401,7 @@ class AgentRunner {
 
   void _updateMetrics(AgentResponse response) {
     _metricsTracker?.updateMetrics(response);
-    final usage = response.usage;
-    final pending = _pendingInputUsageBaseline;
-    if (usage == null || pending == null) return;
-    final inputTokens = LlmUsageSnapshot.fromProviderUsage(usage).inputTokens;
-    if (inputTokens != null) {
-      _confirmedInputUsageBaseline = pending.copyWithInputTokens(inputTokens);
-      if (getIt.isRegistered<CompactionCoordinator>()) {
-        getIt<CompactionCoordinator>().reconcileLatestProviderUsage(
-          sessionId: sessionId,
-          routeSignature: pending.routeSignature,
-          inputTokens: inputTokens,
-        );
-      }
-    }
+    _compactionOrchestrator.confirmInputUsageBaseline(response.usage);
   }
 
   Future<void> _stageInputUsageBaseline({
@@ -450,102 +409,12 @@ class AgentRunner {
     required List<Map<String, dynamic>> toolSchemas,
     required String? providerId,
     required String? modelId,
-  }) async {
-    if (providerId == null ||
-        modelId == null ||
-        !getIt.isRegistered<AgentRuntimeService>()) {
-      _pendingInputUsageBaseline = null;
-      return;
-    }
-    final measurementAdapter = _wireMeasurementAdapter(
-      _turnRoute.adapterForTurn(),
-    );
-    final wireMeasurement = measurementAdapter is WireInputUsageMeasurer
-        ? await (measurementAdapter as WireInputUsageMeasurer).measureInput(
-            requestMessages,
-            tools: registry.allTools.map((tool) => tool.schema).toList(),
-            modelOverride: modelId,
-            options: _requestOptionsForTurn(providerId),
-          )
-        : null;
-    _pendingInputUsageBaseline = ConfirmedInputUsageBaseline(
-      routeSignature: getIt<AgentRuntimeService>().resolveSignature(
-        providerId: providerId,
-        modelId: modelId,
-      ),
-      inputTokens: 0,
-      conversationMessages: requestMessages,
-      systemPrompt: '',
-      runtimeContext: '',
-      toolSchemas: toolSchemas,
-      wireMeasurement: wireMeasurement,
-    );
-  }
-
-  static LLMAdapter _wireMeasurementAdapter(LLMAdapter adapter) =>
-      adapter is RateLimitedLLMAdapter ? adapter.providerAdapter : adapter;
-
-  Future<void> _restoreConfirmedInputUsageBaseline({
-    required List<Message> prospectiveHistory,
-    required WireInputUsageMeasurer measurer,
-    required RouteSignature routeSignature,
-    required String? providerId,
-    required String? modelId,
-    required WireInputMeasurement currentMeasurement,
-  }) async {
-    if (_confirmedInputUsageBaseline != null) return;
-
-    for (var index = prospectiveHistory.length - 1; index >= 0; index--) {
-      final message = prospectiveHistory[index];
-      if (message.role != MessageRole.assistant) continue;
-      final metadata = message.metadata;
-      final usage = metadata?['usage'];
-      final inputTokens = usage is Map ? usage['input_tokens'] : null;
-      if (inputTokens is! num || inputTokens <= 0) continue;
-
-      final recordedModel = metadata?['model']?.toString();
-      final recordedProvider = metadata?['provider']?.toString();
-      final contextUsage = metadata?['context_usage'];
-      final recordedContextProvider = contextUsage is Map
-          ? contextUsage['provider_instance_id']?.toString()
-          : null;
-      final providerMatches =
-          <String?>{
-            routeSignature.providerInstanceId,
-            routeSignature.templateId,
-            providerId,
-          }.contains(recordedProvider) ||
-          <String?>{
-            routeSignature.providerInstanceId,
-            routeSignature.templateId,
-            providerId,
-          }.contains(recordedContextProvider);
-      if (recordedModel != routeSignature.modelId || !providerMatches) {
-        continue;
-      }
-
-      final measuredMessages = prospectiveHistory.sublist(0, index);
-      final toolSchemas = registry.allTools.map((tool) => tool.schema).toList();
-      final measurement = await measurer.measureInput(
-        measuredMessages,
-        tools: toolSchemas,
-        modelOverride: modelId,
-        options: _requestOptionsForTurn(providerId),
-      );
-      if (measurement == null) return;
-      if (!currentMeasurement.extendsMeasurement(measurement)) return;
-      _confirmedInputUsageBaseline = ConfirmedInputUsageBaseline(
-        routeSignature: routeSignature,
-        inputTokens: inputTokens.round(),
-        conversationMessages: measuredMessages,
-        systemPrompt: '',
-        runtimeContext: '',
-        toolSchemas: toolSchemas.map((schema) => schema.toJson()).toList(),
-        wireMeasurement: measurement,
-      );
-      return;
-    }
-  }
+  }) => _compactionOrchestrator.stageInputUsageBaseline(
+    requestMessages: requestMessages,
+    toolSchemas: toolSchemas,
+    providerId: providerId,
+    modelId: modelId,
+  );
 
   AgentRunner(
     this.adapter,
@@ -629,6 +498,18 @@ class AgentRunner {
     _saveHistory();
   }
 
+  @override
+  AttachmentStore? get attachmentStore =>
+      _attachmentStore ??
+      (getIt.isRegistered<AttachmentStore>() ? getIt<AttachmentStore>() : null);
+
+  @override
+  bool get supportsImageInput =>
+      _turnCapabilityProfile?.imageSupport == RouteImageSupport.supported;
+
+  @override
+  void pruneProcessedHistoryImages() => _pruneProcessedHistoryImages();
+
   void _reloadPersistedHistory() {
     final session = sessionManager.getSession(sessionId);
     if (session != null) {
@@ -664,6 +545,7 @@ class AgentRunner {
     _pendingUserAttachments = List<UserAttachment>.unmodifiable(attachments);
   }
 
+  @override
   Future<Message> commitUserMessage(
     String? userContent, {
     String? requestId,
@@ -742,15 +624,6 @@ class AgentRunner {
     return history[index];
   }
 
-  bool _hasPersistableAssistantState(Message message) {
-    return (message.content?.isNotEmpty ?? false) ||
-        (message.toolCalls?.isNotEmpty ?? false) ||
-        (message.thought?.isNotEmpty ?? false) ||
-        (message.reasoning?.isNotEmpty ?? false) ||
-        message.providerState != null ||
-        message.finishReason != LLMFinishReason.unknown;
-  }
-
   void _healHistory() {
     final suspendedToolCallIds = sessionManager
         .listSuspendedCheckpoints(status: 'awaiting_permission')
@@ -815,7 +688,7 @@ class AgentRunner {
     parallel: parallel,
     callbacks: _RunnerToolCallbacks(this),
     ctx: _checkpointCtx,
-    cancellationScope: _cancellationScope,
+    cancellationScope: cancellationScope,
     onToolEvent: onToolEvent,
   );
 
@@ -837,7 +710,7 @@ class AgentRunner {
     String? thinkingMode,
     DateTime? receivedAt,
   }) async {
-    _stopRequested = false;
+    _admissionGate.resetStopRequested();
     memoryStore.resetConsolidationFailures();
     _metricsTracker = MetricsTracker(startTime: receivedAt);
     final effectiveRequestId = requestId ?? _turnRoute.turnRequestId;
@@ -881,6 +754,7 @@ class AgentRunner {
     }
   }
 
+  @override
   bool shouldParallelizeToolBatch(List<ToolCall> toolCalls) {
     return ToolConcurrencyEvaluator.shouldParallelizeToolBatch(toolCalls);
   }
@@ -935,7 +809,7 @@ class AgentRunner {
       providerInstanceId: providerInstanceId,
       thinkingMode: thinkingMode,
       thinkingDirective: profile?.thinkingDirective,
-      cancellationScope: _cancellationScope,
+      cancellationScope: cancellationScope,
       routeCapabilitySnapshot: profile?.rawOverride,
       routeCapabilityProfile: profile,
       attachmentStore:
@@ -1044,11 +918,6 @@ class AgentRunner {
     if (record != null) _onPendingSteerChanged?.call(record);
   }
 
-  RuntimeRecoveryService? get _recoveryService =>
-      getIt.isRegistered<RuntimeRecoveryService>()
-      ? getIt<RuntimeRecoveryService>()
-      : null;
-
   bool _claimOwnedAutomaticRetry() {
     if (!getIt.isRegistered<PersistedRuntimeStateRepository>()) {
       return true;
@@ -1068,184 +937,8 @@ class AgentRunner {
     );
   }
 
-  void _clearResumingOnProviderProgress() {
-    _recoveryService?.clearResumingOnProgress(
-      sessionId,
-      runId: _authoritativeRunId,
-    );
-  }
-
-  /// Central secrets redactor used when surfacing provider error text in
-  /// runtime notices (Plan 30 Phase H §6).
-  static const SecretsRedactor _secretsRedactor = SecretsRedactor();
-
-  /// Per-reason automatic retry budget (Plan 30 Phase H §5).
-  ///
-  /// Deterministic 4xx (auth, billing, model-not-found, content-policy,
-  /// payload/format/SSL) and `unknown` get **zero** automatic retries — they
-  /// suspend immediately with the original reason. Network/timeout get a small
-  /// bounded budget; rate-limit/overloaded retry until they convert to
-  /// blocked (handled by the cooldown/retry-after path).
-  int _automaticRetryBudget(RuntimeFailureReason reason) {
-    switch (reason) {
-      case RuntimeFailureReason.networkError:
-        // Three total attempts (the initial request plus two retries) absorb
-        // short upstream connection resets without creating a long retry loop.
-        return 2;
-      case RuntimeFailureReason.timeout:
-        return 1;
-      case RuntimeFailureReason.rateLimit:
-      case RuntimeFailureReason.upstreamRateLimit:
-      case RuntimeFailureReason.overloaded:
-        return 3;
-      case RuntimeFailureReason.toolRuntimeError:
-      case RuntimeFailureReason.localRuntimeError:
-        return 1;
-      // Deterministic failures: never auto-retry.
-      case RuntimeFailureReason.auth:
-      case RuntimeFailureReason.billing:
-      case RuntimeFailureReason.tlsCertificate:
-      case RuntimeFailureReason.modelNotFound:
-      case RuntimeFailureReason.contentPolicyBlocked:
-      case RuntimeFailureReason.contextOverflow:
-      case RuntimeFailureReason.payloadTooLarge:
-      case RuntimeFailureReason.invalidRequest:
-      case RuntimeFailureReason.unknown:
-        return 0;
-    }
-  }
-
-  Duration _fallbackRetryDelay(RuntimeFailureReason reason, int attempt) {
-    final baseSeconds = switch (reason) {
-      RuntimeFailureReason.rateLimit => 60,
-      RuntimeFailureReason.upstreamRateLimit => 60,
-      RuntimeFailureReason.overloaded => 3,
-      _ => 2,
-    };
-    final multiplier = attempt < 1 ? 1 : (1 << attempt);
-    final seconds = (baseSeconds * multiplier).clamp(1, 60);
-    return Duration(seconds: seconds);
-  }
-
-  /// Builds a single user-facing `message` from an app description plus the
-  /// redacted provider response when available (Plan 30 Phase H §6). Never
-  /// appends raw/un-redacted provider text.
-  String _buildNoticeMessage(
-    RuntimeFailureReason reason,
-    String? providerBody,
-    String? providerDisplayName,
-  ) {
-    final base = _defaultAppMessage(reason, providerDisplayName);
-    final raw = providerBody?.trim();
-    if (raw == null || raw.isEmpty) return base;
-    final redacted = _secretsRedactor.redact(raw);
-    // Avoid duplicating the provider text when it is already similar to base.
-    return '$base\n\nProvider response: $redacted';
-  }
-
-  String _defaultAppMessage(
-    RuntimeFailureReason reason,
-    String? providerDisplayName,
-  ) {
-    final p = providerDisplayName == null ? '' : '$providerDisplayName ';
-    switch (reason) {
-      case RuntimeFailureReason.auth:
-        return 'The API key or token for $p is invalid or expired.';
-      case RuntimeFailureReason.billing:
-        return 'This ${p}account has insufficient credits or quota.';
-      case RuntimeFailureReason.rateLimit:
-      case RuntimeFailureReason.upstreamRateLimit:
-        return 'Too many requests to $p. Wait or switch provider.';
-      case RuntimeFailureReason.overloaded:
-        return '${p}is currently overloaded. Retry shortly.';
-      case RuntimeFailureReason.timeout:
-        return 'The request to ${p}took too long to complete.';
-      case RuntimeFailureReason.networkError:
-        return 'The agent could not reach $p.';
-      case RuntimeFailureReason.tlsCertificate:
-        return 'The TLS/SSL certificate for ${p}could not be verified.';
-      case RuntimeFailureReason.contextOverflow:
-        return 'The conversation exceeds the model context window.';
-      case RuntimeFailureReason.payloadTooLarge:
-        return 'The request payload is too large.';
-      case RuntimeFailureReason.invalidRequest:
-        return 'The request format was rejected by $p.';
-      case RuntimeFailureReason.modelNotFound:
-        return 'The selected model is not available on $p.';
-      case RuntimeFailureReason.contentPolicyBlocked:
-        return 'The request was blocked by the provider content policy.';
-      case RuntimeFailureReason.toolRuntimeError:
-        return 'A tool execution error occurred. Retry when ready.';
-      case RuntimeFailureReason.localRuntimeError:
-        return 'A local runtime error occurred. Retry when ready.';
-      case RuntimeFailureReason.unknown:
-        return 'An unexpected error occurred while contacting $p.';
-    }
-  }
-
-  LlmHttpException? _asHttpFailure(Object error) => switch (error) {
-    LlmHttpException failure => failure,
-    ProviderStateRejectedException rejected => rejected.httpFailure,
-    _ => null,
-  };
-
-  List<Message>? _recoverRejectedProviderState(
-    Object error,
-    ResponseContinuationCoordinator continuation,
-    List<Message> effectiveHistory,
-  ) {
-    if (error is! ProviderStateRejectedException ||
-        !continuation.claimProviderStateFallback()) {
-      return null;
-    }
-
-    final updatedHistory = _clearRejectedProviderState(history, error);
-    final updatedEffectiveHistory = _clearRejectedProviderState(
-      effectiveHistory,
-      error,
-    );
-    final historyChanged = !_sameMessageIdentities(history, updatedHistory);
-    history = updatedHistory;
-    if (historyChanged) _saveHistory();
-    return updatedEffectiveHistory;
-  }
-
-  List<Message> _clearRejectedProviderState(
-    List<Message> messages,
-    ProviderStateRejectedException rejection,
-  ) {
-    return messages
-        .map((message) {
-          final state = message.providerState;
-          if (state?.namespace != rejection.namespace ||
-              state?.issuer != rejection.issuer) {
-            return message;
-          }
-          final data = Map<String, dynamic>.from(state!.data);
-          var changed = false;
-          for (final key in rejection.dataKeysToClear) {
-            changed = data.remove(key) != null || changed;
-          }
-          if (!changed) return message;
-          if (data.isEmpty) return message.copyWith(clearProviderState: true);
-          return message.copyWith(
-            providerState: LLMProviderState(
-              namespace: state.namespace,
-              issuer: state.issuer,
-              data: data,
-            ),
-          );
-        })
-        .toList(growable: true);
-  }
-
-  static bool _sameMessageIdentities(List<Message> left, List<Message> right) {
-    if (left.length != right.length) return false;
-    for (var index = 0; index < left.length; index++) {
-      if (!identical(left[index], right[index])) return false;
-    }
-    return true;
-  }
+  void _clearResumingOnProviderProgress() =>
+      _recoveryCoordinator.clearResumingOnProviderProgress();
 
   Future<bool> _handleRuntimeFailure(
     Object error, {
@@ -1256,298 +949,26 @@ class AgentRunner {
     required Set<String> failedProviderInstanceIds,
     List<Message>? failedProviderProjection,
     List<ToolSchema>? failedProviderTools,
-  }) async {
-    if (error is RateLimitCancelled ||
-        error is ProviderRequestCancelledException) {
-      throw RuntimeRecoveryCancelled(sessionId);
-    }
-    final recovery = _recoveryService;
-    if (recovery == null ||
-        providerInstanceId == null ||
-        providerInstanceId.isEmpty) {
-      return false;
-    }
-    if (error is LocalImageCapabilityException) {
-      const reason = RuntimeFailureReason.invalidRequest;
-      final displayName = recovery.providerDisplayName(providerInstanceId);
-      recovery.reportFailure(
-        sessionId: sessionId,
-        reason: reason,
-        title: 'Image input not supported',
-        message: error.userMessage,
-        providerInstanceId: providerInstanceId,
-        providerDisplayName: displayName,
-        requestId: _turnRoute.turnRequestId,
-        retryAfter: null,
-        forceBlocked: true,
-        runId: _authoritativeRunId,
-      );
-      throw RuntimeRecoveryRequired(sessionId, reason);
-    }
-    // A local thinking-wire rejection (an explicitly selected budget the request
-    // cannot honour) is decided before dispatch, so it must be presented as the
-    // actionable configuration problem it is rather than as a provider failure.
-    if (error is ThinkingWireSerializationException) {
-      const reason = RuntimeFailureReason.invalidRequest;
-      final displayName = recovery.providerDisplayName(providerInstanceId);
-      recovery.reportFailure(
-        sessionId: sessionId,
-        reason: reason,
-        title: 'Thinking option not supported',
-        message: error.message,
-        providerInstanceId: providerInstanceId,
-        providerDisplayName: displayName,
-        requestId: _turnRoute.turnRequestId,
-        retryAfter: null,
-        forceBlocked: true,
-        runId: _authoritativeRunId,
-      );
-      throw RuntimeRecoveryRequired(sessionId, reason);
-    }
-    final httpFailure = _asHttpFailure(error);
-    final httpRetryAfter = httpFailure?.retryAfter;
-    // For HTTP failures, use the raw body for classification and the notice
-    // message. For non-HTTP errors (network, SSL, etc.) use toString() for
-    // both classification and the redacted notice message (Plan 30 P1 §4).
-    final providerBody = httpFailure?.body ?? error.toString();
-    final reason = RuntimeFailureReason.classify(
-      statusCode: httpFailure?.statusCode,
-      body: providerBody,
-      hasTrustedTemporaryReset: httpRetryAfter != null,
-    );
-    if (reason == RuntimeFailureReason.contextOverflow &&
-        !streamStarted &&
-        !_overflowCompactionRetried &&
-        getIt.isRegistered<CompactionCoordinator>() &&
-        getIt.isRegistered<SessionHistoryRevisionRepository>() &&
-        getIt.isRegistered<AgentRuntimeService>()) {
-      _overflowCompactionRetried = true;
-      final coordinator = getIt<CompactionCoordinator>();
-      final revisionRepo = getIt<SessionHistoryRevisionRepository>();
-      final revision = revisionRepo.read(sessionId);
-      final projectionRevision = _currentProjectionRevision();
-      if (revision != null) {
-        final timeline = _compactionTimelineForSession();
-        if (timeline.isEmpty) {
-          // Fall through to recovery notice below.
-        } else {
-          final activeBoundary = getIt<ModelProjectionBuilder>()
-              .buildForSession(sessionId)
-              .activeBoundary;
-          final contextWindow = await getContextTokens() ?? 128_000;
-          final policy = getIt.isRegistered<Config>()
-              ? getIt<Config>().compactionPolicyForModel(modelId ?? '')
-              : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
-          final targetRequestTokens =
-              (_effectiveInputWindow(contextWindow) * policy.targetRatio)
-                  .round();
-          final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
-            providerId: providerInstanceId,
-            modelId: modelId,
-          );
-          final request = CompactionEngineRequest(
-            compactionId: '',
-            sessionId: sessionId,
-            trigger: CompactionTrigger.overflow,
-            sourceRevision: revision.toCompactionRevision(),
-            routeSignature: routeSignature,
-            contextWindowTokens: contextWindow,
-            timeline: timeline,
-            systemPrompt: contextAssembler.assemble() ?? '',
-            runtimeContext: '',
-            toolSchemas: const [],
-            providerProjection: failedProviderProjection,
-            providerTools: failedProviderTools ?? const [],
-            providerRequestOptions: _compactionRequestOptions(
-              providerInstanceId,
-              compactionId: 'overflow',
-            ),
-            projectionRevision: projectionRevision,
-            previousSummary: activeBoundary?.internalSummary,
-            previousSourceRange: activeBoundary?.sourceRange,
-            targetRequestTokens: targetRequestTokens,
-            thresholdRatio: policy.threshold,
-          );
-          final outcome = await coordinator.runCompaction(
-            request: request,
-            force: true,
-          );
-          if (outcome?.status == CompactionStatus.completed) {
-            _refreshCanonicalHistoryAfterCompaction();
-            return true;
-          }
-        }
-      }
-    }
-    // When the failure is non-HTTP (no statusCode), retryAfter comes from
-    // the fallback delay only — no header to parse.
-    final retryAfter = httpRetryAfter ?? _fallbackRetryDelay(reason, attempt);
-    final decision = reason.decision();
-    // Per-reason budget (Phase H §5). Deterministic 4xx + unknown get 0.
-    final budget = _automaticRetryBudget(reason);
-    final exhaustedAutomaticRetries = attempt >= budget;
-    if (reason == RuntimeFailureReason.rateLimit ||
-        reason == RuntimeFailureReason.upstreamRateLimit) {
-      recovery.recordProviderCooldown(providerInstanceId, retryAfter);
-    }
+  }) => _recoveryCoordinator.handleRuntimeFailure(
+    error,
+    providerInstanceId: providerInstanceId,
+    modelId: modelId,
+    attempt: attempt,
+    streamStarted: streamStarted,
+    failedProviderInstanceIds: failedProviderInstanceIds,
+    failedProviderProjection: failedProviderProjection,
+    failedProviderTools: failedProviderTools,
+  );
 
-    if (!streamStarted && decision.allowAutoFailover) {
-      failedProviderInstanceIds.add(providerInstanceId);
-      final candidate = recovery.selectFailoverCandidate(
-        failedInstanceId: providerInstanceId,
-        requestedModelId: modelId ?? '',
-        excludedInstanceIds: failedProviderInstanceIds,
-      );
-      if (candidate != null) {
-        recovery.reportFailure(
-          sessionId: sessionId,
-          reason: reason,
-          providerInstanceId: providerInstanceId,
-          requestId: _turnRoute.turnRequestId,
-          retryAfter: retryAfter,
-          runId: _authoritativeRunId,
-        );
-        if (getIt.isRegistered<SessionRouteMutationCoordinator>()) {
-          final routeCoordinator = getIt<SessionRouteMutationCoordinator>();
-          final persisted = getIt
-              .isRegistered<PersistedRuntimeStateRepository>();
-          final claimed = persisted
-              ? routeCoordinator.claimAutoFailover(
-                  sessionId: sessionId,
-                  workItemId: _authoritativeWorkItemId,
-                  runId: _authoritativeRunId,
-                  generation: _authoritativeGeneration,
-                  expectedProviderInstanceId: providerInstanceId,
-                  providerInstanceId: candidate.id,
-                  model: modelId!,
-                  reason: reason.name.replaceAllMapped(
-                    RegExp(r'([A-Z])'),
-                    (match) => '_${match.group(1)!.toLowerCase()}',
-                  ),
-                  requestId: _turnRoute.turnRequestId,
-                  publish: true,
-                )
-              : routeCoordinator.mutate(
-                  sessionId: sessionId,
-                  providerInstanceId: candidate.id,
-                  model: modelId!,
-                  source: SessionRouteSource.autoFailover,
-                  reason: reason.name.replaceAllMapped(
-                    RegExp(r'([A-Z])'),
-                    (match) => '_${match.group(1)!.toLowerCase()}',
-                  ),
-                  requestId: _turnRoute.turnRequestId,
-                  publish: true,
-                );
-          if (persisted && claimed == null) {
-            throw RuntimeRecoveryRequired(sessionId, reason);
-          }
-        } else {
-          // Isolated runner tests may omit the production persistence graph.
-          sessionManager.updateSessionProviderId(sessionId, candidate.id);
-        }
-        if (getIt.isRegistered<ThinkingRouteSessionSync>()) {
-          final revalidated = getIt<ThinkingRouteSessionSync>()
-              .revalidateAndApplySession(
-                sessionId: sessionId,
-                providerInstanceId: candidate.id,
-                modelId: modelId!,
-              );
-          _turnRoute.updateTurnThinkingMode(revalidated.selectionId);
-        }
-        _turnRoute.rewriteQueuedProvider(candidate.id);
-        recovery.emitResuming(
-          sessionId: sessionId,
-          reason: 'auto_failover',
-          requestId: _turnRoute.turnRequestId,
-          providerInstanceId: candidate.id,
-          providerDisplayName: candidate.displayName,
-          message: 'Continuing automatically with ${candidate.displayName}.',
-          runId: _authoritativeRunId,
-        );
-        return true;
-      }
-    }
-
-    // Only reasons with a budget > 0 and retryable may auto-retry, and only
-    // before the budget is exhausted (Phase H §5). Deterministic 4xx and
-    // unknown fall straight through to a suspended blocked/fatal notice.
-    if (!streamStarted && budget > 0 && !exhaustedAutomaticRetries) {
-      recovery.reportFailure(
-        sessionId: sessionId,
-        reason: reason,
-        providerInstanceId: providerInstanceId,
-        requestId: _turnRoute.turnRequestId,
-        retryAfter: retryAfter,
-        runId: _authoritativeRunId,
-      );
-      final resumed = await recovery.waitForRetry(
-        sessionId,
-        retryAfter,
-        runId: _authoritativeRunId,
-      );
-      if (!resumed) {
-        if (recovery.isStopped(sessionId, runId: _authoritativeRunId)) {
-          throw RuntimeRecoveryCancelled(sessionId);
-        }
-        // A provider change, manual retry, or queued-message handoff wakes the
-        // same runner by aborting its retry timer. The durable work item still
-        // owns `waiting` at this point, so reclaim it before issuing another
-        // provider request. Continuing without this transition leaves the
-        // client snapshot stuck on `waiting` and makes the later terminal
-        // commit lose to recovery ownership.
-        if (!_claimOwnedAutomaticRetry()) {
-          _logger.info(
-            'Interrupted retry lost durable ownership for session $sessionId; '
-            'leaving recovery state authoritative.',
-          );
-          throw RuntimeRecoveryRequired(sessionId, reason);
-        }
-        _turnRoute.refreshFromSession();
-        return true;
-      }
-      if (!_claimOwnedAutomaticRetry()) {
-        _logger.info(
-          'Automatic retry lost durable ownership for session $sessionId; '
-          'leaving recovery state authoritative.',
-        );
-        throw RuntimeRecoveryRequired(sessionId, reason);
-      }
-      recovery.emitResuming(
-        sessionId: sessionId,
-        reason: 'retrying',
-        requestId: _turnRoute.turnRequestId,
-        providerInstanceId: providerInstanceId,
-        message: 'Retrying the last request.',
-        runId: _authoritativeRunId,
-      );
-      return true;
-    }
-
-    // Suspended state: keep the ORIGINAL reason and message. Do not rewrite
-    // the reason to `unknown` and do not replace the message with a generic
-    // "Recovery needs your input" (Plan 30 Phase H §5, §6). The provider
-    // response (if any) is appended after central redaction.
-    //
-    // P1 §3: when the automatic retry budget for a waiting-class reason is
-    // exhausted, force the notice to `blocked` so the client shows
-    // Stop / Retry / Change Provider instead of a waiting spinner with no timer.
-    final budgetExhaustedWaiting =
-        exhaustedAutomaticRetries &&
-        reason.decision().noticeStatus == RuntimeNoticeStatus.waiting;
-    final displayName = recovery.providerDisplayName(providerInstanceId);
-    recovery.reportFailure(
-      sessionId: sessionId,
-      reason: reason,
-      providerInstanceId: providerInstanceId,
-      requestId: _turnRoute.turnRequestId,
-      retryAfter: budgetExhaustedWaiting ? null : retryAfter,
-      message: _buildNoticeMessage(reason, providerBody, displayName),
-      forceBlocked: budgetExhaustedWaiting,
-      runId: _authoritativeRunId,
-    );
-    throw RuntimeRecoveryRequired(sessionId, reason);
-  }
+  List<Message>? _recoverRejectedProviderState(
+    Object error,
+    ResponseContinuationCoordinator continuation,
+    List<Message> effectiveHistory,
+  ) => _recoveryCoordinator.recoverRejectedProviderState(
+    error,
+    continuation,
+    effectiveHistory,
+  );
 
   Future<Message> _getNextResponse({
     String? runtimeSystemPrompt,
@@ -1617,10 +1038,14 @@ class AgentRunner {
             options: _requestOptionsForTurn(provider),
           );
         } finally {
-          if (_stopRequested) _providerRequestInFlight = false;
+          if (_admissionGate.stopRequested) {
+            _admissionGate.providerRequestInFlight = false;
+          }
         }
         _lastSuccessfulLlmRoute = LLMRouteSnapshot(
-          adapter: _providerAdapterForBackground(route.adapter),
+          adapter: RunnerStreamCoordinator.providerAdapterForBackground(
+            route.adapter,
+          ),
           providerInstanceId: provider,
           modelOverride: route.modelOverride,
         );
@@ -1680,7 +1105,7 @@ class AgentRunner {
       },
     );
 
-    if (_hasPersistableAssistantState(responseMessage)) {
+    if (RunnerStreamCoordinator.hasPersistableAssistantState(responseMessage)) {
       history.add(responseMessage);
       await pluginManager.notifyMessage(responseMessage);
       await pluginManager.runPostExecution(responseMessage);
@@ -1695,7 +1120,7 @@ class AgentRunner {
         parallel: shouldParallelizeToolBatch(toolCalls),
         callbacks: _RunnerToolCallbacks(this),
         ctx: _checkpointCtx,
-        cancellationScope: _cancellationScope,
+        cancellationScope: cancellationScope,
       );
       return await _getNextResponse(
         runtimeSystemPrompt: runtimeSystemPrompt,
@@ -1745,56 +1170,19 @@ class AgentRunner {
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
-  }) async* {
-    if (_stopRequested) return;
-    _stopRequested = false;
-    memoryStore.resetConsolidationFailures();
-    _metricsTracker = MetricsTracker(startTime: receivedAt);
-    final effectiveRequestId = requestId ?? _turnRoute.turnRequestId;
-    _turnRoute.configureTurn(
-      providerId: providerId,
-      model: model,
-      thinkingMode: thinkingMode,
-      requestId: effectiveRequestId,
-    );
-    await _admitTurnCapabilityProfile();
-    _turnRoute.applyTurnSwitchIfNeeded();
-    final durableRoot = await commitUserMessage(
-      userContent,
-      requestId: effectiveRequestId,
-      receivedAt: receivedAt,
-    );
-    final onRootMessageCommitted = _onRootMessageCommitted;
-    if (onRootMessageCommitted != null) {
-      await onRootMessageCommitted(durableRoot);
-    }
-    _beginModelStep();
-    _checkpointCoordinator.saveCheckpoint(
-      ctx: _checkpointCtx,
-      checkpointKind:
-          ContinuationCheckpointCoordinator.checkpointKindInitialModelRequest,
-      resumeHistoryLength: history.length,
-    );
-
-    final scrubber = StreamingScrubber();
-    try {
-      await for (final chunk in _streamNextResponse(
-        runtimeSystemPrompt: runtimeSystemPrompt,
-        onToolEvent: onToolEvent,
-        onSteerContinuation: onSteerContinuation,
-        onThoughtDelta: onThoughtDelta,
-        onReasoningDelta: onReasoningDelta,
-        preserveModelStepId: true,
-      )) {
-        final cleanChunk = scrubber.feed(chunk);
-        if (cleanChunk.isNotEmpty) {
-          yield cleanChunk;
-        }
-      }
-    } finally {
-      _turnRoute.setTurnRequestId(null);
-    }
-  }
+  }) => _streamCoordinator.streamMessage(
+    userContent,
+    requestId: requestId,
+    runtimeSystemPrompt: runtimeSystemPrompt,
+    providerId: providerId,
+    model: model,
+    thinkingMode: thinkingMode,
+    receivedAt: receivedAt,
+    onToolEvent: onToolEvent,
+    onSteerContinuation: onSteerContinuation,
+    onThoughtDelta: onThoughtDelta,
+    onReasoningDelta: onReasoningDelta,
+  );
 
   Stream<String> resumeStream({
     String? requestId,
@@ -1806,42 +1194,17 @@ class AgentRunner {
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
-  }) async* {
-    try {
-      await _restoreCheckpointForResume(requestId: requestId);
-    } catch (e) {
-      _checkpointCoordinator.blockWorkItemOnResumeFailure(e);
-      rethrow;
-    }
-    final effectiveRequestId = requestId ?? _turnRoute.turnRequestId;
-    _turnRoute.configureTurn(
-      providerId: providerId,
-      model: model,
-      thinkingMode: thinkingMode,
-      requestId: effectiveRequestId,
-    );
-    await _admitTurnCapabilityProfile();
-    _turnRoute.applyTurnSwitchIfNeeded();
-
-    final scrubber = StreamingScrubber();
-    try {
-      await for (final chunk in _streamNextResponse(
-        runtimeSystemPrompt: runtimeSystemPrompt,
-        onToolEvent: onToolEvent,
-        onSteerContinuation: onSteerContinuation,
-        onThoughtDelta: onThoughtDelta,
-        onReasoningDelta: onReasoningDelta,
-        preserveModelStepId: true,
-      )) {
-        final cleanChunk = scrubber.feed(chunk);
-        if (cleanChunk.isNotEmpty) {
-          yield cleanChunk;
-        }
-      }
-    } finally {
-      _turnRoute.setTurnRequestId(null);
-    }
-  }
+  }) => _streamCoordinator.resumeStream(
+    requestId: requestId,
+    runtimeSystemPrompt: runtimeSystemPrompt,
+    providerId: providerId,
+    model: model,
+    thinkingMode: thinkingMode,
+    onToolEvent: onToolEvent,
+    onSteerContinuation: onSteerContinuation,
+    onThoughtDelta: onThoughtDelta,
+    onReasoningDelta: onReasoningDelta,
+  );
 
   /// Patches the last assistant [Message] in history with [metadata] (usage, model,
   /// provider, context_tokens, runtime_ms) and re-saves the session to the DB.
@@ -1859,311 +1222,6 @@ class AgentRunner {
     _saveHistory();
   }
 
-  Stream<String> _streamNextResponse({
-    String? runtimeSystemPrompt,
-    ToolEventCallback? onToolEvent,
-    void Function()? onSteerContinuation,
-    bool preserveModelStepId = false,
-    ResponseContinuationCoordinator? continuation,
-    FutureOr<void> Function(String thought)? onThoughtDelta,
-    FutureOr<void> Function(String reasoning)? onReasoningDelta,
-  }) async* {
-    continuation ??= ResponseContinuationCoordinator();
-    if (!preserveModelStepId || currentModelStepId == null) {
-      _beginModelStep();
-    }
-    _checkpointCoordinator.saveCheckpoint(
-      ctx: _checkpointCtx,
-      resumeHistoryLength: history.length,
-    );
-    final tools = registry.allTools.map((t) => t.schema).toList();
-
-    _steerCoordinator.drainPreApiSteer(_RunnerSteerCallbacks(this));
-
-    var effectiveHistory = await _prepareProviderHistory(
-      runtimeSystemPrompt: runtimeSystemPrompt,
-    );
-
-    String fullContent = '';
-    List<ToolCall>? accumulatedToolCalls;
-    String? thought;
-    String? reasoning;
-    LLMProviderState? providerState;
-    var finishReason = LLMFinishReason.unknown;
-    final accumulatedMessageMetadata = <String, dynamic>{};
-
-    bool isToolCall = false;
-    Message? lastMessage;
-    var streamStarted = false;
-
-    final routing = _turnRoute.resolveTurnRouting();
-    var model = routing.model;
-    var provider = routing.providerId;
-    var baseUrl = routing.baseUrl;
-    var apiKey = routing.apiKey;
-    _turnRoute.cacheResolvedRoute(_turnRoute.adapterForTurn(), model);
-
-    if (provider != null && model != null) {
-      activeProvider = provider;
-      activeModel = model;
-    }
-
-    final attemptsByProviderInstanceId = <String, int>{};
-    final failedProviderInstanceIds = <String>{};
-    while (true) {
-      if (_stopRequested) return;
-      try {
-        final route = _turnRoute.routeForTurn();
-        if (!await _claimProviderRequestAfterRestartDrain()) return;
-        _logger.info('🧠 [Agent] Thinking...');
-        if (LLMRequestDumper.isEnabled) {
-          await LLMRequestDumper.dumpRequest(
-            sessionId: sessionId,
-            history: effectiveHistory,
-            tools: tools,
-            model: model,
-            provider: provider,
-            baseUrl: baseUrl,
-            apiKey: apiKey,
-          );
-        }
-        try {
-          await _stageInputUsageBaseline(
-            requestMessages: effectiveHistory,
-            toolSchemas: tools.map((tool) => tool.toJson()).toList(),
-            providerId: provider,
-            modelId: model,
-          );
-          await for (final response in route.adapter.generateStream(
-            effectiveHistory,
-            tools: tools,
-            modelOverride: route.modelOverride,
-            options: _requestOptionsForTurn(provider),
-          )) {
-            if (_stopRequested) return;
-            _clearResumingOnProviderProgress();
-            // Any provider event makes a transparent retry unsafe: reasoning,
-            // metadata, or a partial tool call may already be visible or carry
-            // state even when no final-content text has arrived yet.
-            streamStarted = true;
-            _updateMetrics(response);
-            lastMessage = response.message;
-            if (response.finishReason != LLMFinishReason.unknown) {
-              finishReason = response.finishReason;
-            }
-            if (response.message.toolCalls?.isNotEmpty ?? false) {
-              isToolCall = true;
-              accumulatedToolCalls ??= [];
-              accumulatedToolCalls.addAll(response.message.toolCalls!);
-            }
-
-            if (response.message.thought != null) {
-              final thoughtDelta = response.message.thought!;
-              thought = (thought ?? '') + thoughtDelta;
-              if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
-                await onThoughtDelta(thoughtDelta);
-              }
-            }
-            if (response.message.reasoning != null) {
-              final reasoningDelta = response.message.reasoning!;
-              reasoning = (reasoning ?? '') + reasoningDelta;
-              if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
-                await onReasoningDelta(reasoningDelta);
-              }
-            }
-            if (response.message.providerState != null) {
-              providerState = response.message.providerState;
-            }
-            if (response.message.metadata != null) {
-              accumulatedMessageMetadata.addAll(response.message.metadata!);
-            }
-
-            final chunk = response.message.content ?? '';
-            fullContent += chunk;
-            if (chunk.isNotEmpty) {
-              yield chunk;
-            }
-          }
-        } finally {
-          if (_stopRequested) _providerRequestInFlight = false;
-        }
-        _lastSuccessfulLlmRoute = LLMRouteSnapshot(
-          adapter: _providerAdapterForBackground(route.adapter),
-          providerInstanceId: provider,
-          modelOverride: route.modelOverride,
-        );
-        if (_stopRequested) return;
-        break;
-      } catch (e) {
-        _settleProviderRequest();
-        _turnRoute.invalidateResolvedRoute();
-        if (LLMRequestDumper.isEnabled) {
-          await LLMRequestDumper.recordError(e);
-        }
-        final sanitizedHistory = _recoverRejectedProviderState(
-          e,
-          continuation,
-          effectiveHistory,
-        );
-        if (sanitizedHistory != null) {
-          effectiveHistory = sanitizedHistory;
-          continue;
-        }
-        final providerAttempt = provider == null
-            ? 0
-            : attemptsByProviderInstanceId[provider] ?? 0;
-        final handled = await _handleRuntimeFailure(
-          e,
-          providerInstanceId: provider,
-          modelId: model,
-          attempt: providerAttempt,
-          streamStarted: streamStarted,
-          failedProviderInstanceIds: failedProviderInstanceIds,
-          failedProviderProjection: effectiveHistory,
-          failedProviderTools: tools,
-        );
-        if (!handled) {
-          rethrow;
-        }
-        if (provider != null) {
-          attemptsByProviderInstanceId[provider] = providerAttempt + 1;
-        }
-        final refreshedRouting = _turnRoute.resolveTurnRouting();
-        model = refreshedRouting.model;
-        provider = refreshedRouting.providerId;
-        baseUrl = refreshedRouting.baseUrl;
-        apiKey = refreshedRouting.apiKey;
-      }
-    }
-    _turnRoute.invalidateResolvedRoute();
-
-    if (_stopRequested) return;
-
-    if (lastMessage != null) {
-      if (lastMessage.toolCalls != null && lastMessage.toolCalls!.isNotEmpty) {
-        isToolCall = true;
-      }
-
-      final assistantMessage = Message(
-        role: MessageRole.assistant,
-        content: fullContent.isEmpty ? null : fullContent,
-        toolCalls: accumulatedToolCalls ?? lastMessage.toolCalls,
-        thought: thought ?? lastMessage.thought,
-        reasoning: reasoning ?? lastMessage.reasoning,
-        providerState: providerState ?? lastMessage.providerState,
-        finishReason: finishReason == LLMFinishReason.unknown
-            ? lastMessage.finishReason
-            : finishReason,
-        metadata: {
-          ...accumulatedMessageMetadata,
-          if (_authoritativeRunId != null) 'run_id': _authoritativeRunId,
-          if (currentModelStepId != null) 'model_step_id': currentModelStepId,
-        },
-      );
-      if (_hasPersistableAssistantState(assistantMessage)) {
-        history.add(assistantMessage);
-        await pluginManager.notifyMessage(assistantMessage);
-        await pluginManager.runPostExecution(assistantMessage);
-        _saveHistory();
-        _pruneProcessedHistoryImages();
-      }
-      if (isToolCall && assistantMessage.toolCalls != null) {
-        if (_stopRequested) return;
-        final toolCalls = assistantMessage.toolCalls!;
-        _settleProviderRequest();
-        if (_stopRequested) return;
-        await _toolExecutionCoordinator.executeToolCalls(
-          toolCalls,
-          parallel: shouldParallelizeToolBatch(toolCalls),
-          callbacks: _RunnerToolCallbacks(this),
-          ctx: _checkpointCtx,
-          cancellationScope: _cancellationScope,
-          onToolEvent: onToolEvent,
-        );
-        if (_stopRequested) return;
-        yield* _streamNextResponse(
-          runtimeSystemPrompt: runtimeSystemPrompt,
-          onToolEvent: onToolEvent,
-          onSteerContinuation: onSteerContinuation,
-          continuation: continuation,
-          onThoughtDelta: onThoughtDelta,
-          onReasoningDelta: onReasoningDelta,
-        );
-      } else {
-        if (_steerCoordinator.hasPendingSteers) {
-          _settleProviderRequest();
-          _steerCoordinator.markLastAssistantSupersededBySteer(
-            _RunnerSteerCallbacks(this),
-          );
-          _steerCoordinator.appendPendingSteersAsUserMessages(
-            _RunnerSteerCallbacks(this),
-          );
-          onSteerContinuation?.call();
-          yield* _streamNextResponse(
-            runtimeSystemPrompt: runtimeSystemPrompt,
-            onToolEvent: onToolEvent,
-            onSteerContinuation: onSteerContinuation,
-            continuation: continuation,
-            onThoughtDelta: onThoughtDelta,
-            onReasoningDelta: onReasoningDelta,
-          );
-          return;
-        }
-        if (assistantMessage.finishReason == LLMFinishReason.incomplete &&
-            continuation.claimIncompleteContinuation()) {
-          _settleProviderRequest();
-          yield* _streamNextResponse(
-            runtimeSystemPrompt: runtimeSystemPrompt,
-            onToolEvent: onToolEvent,
-            onSteerContinuation: onSteerContinuation,
-            continuation: continuation,
-            onThoughtDelta: onThoughtDelta,
-            onReasoningDelta: onReasoningDelta,
-          );
-          return;
-        }
-        if (_authoritativeRunId == null) {
-          _settleProviderRequest();
-        }
-        _logger.info('🏁 [Agent] Final answer committed');
-      }
-    } else if (fullContent.isNotEmpty) {
-      _logger.info('🏁 [Agent] Final answer committed');
-      final assistantMessage = Message(
-        role: MessageRole.assistant,
-        content: fullContent,
-        metadata: {
-          if (_authoritativeRunId != null) 'run_id': _authoritativeRunId,
-          if (currentModelStepId != null) 'model_step_id': currentModelStepId,
-        },
-      );
-      history.add(assistantMessage);
-      await pluginManager.notifyMessage(assistantMessage);
-      await pluginManager.runPostExecution(assistantMessage);
-      _saveHistory();
-      if (_authoritativeRunId == null) {
-        _settleProviderRequest();
-      }
-      if (_steerCoordinator.hasPendingSteers) {
-        _settleProviderRequest();
-        _steerCoordinator.markLastAssistantSupersededBySteer(
-          _RunnerSteerCallbacks(this),
-        );
-        _steerCoordinator.appendPendingSteersAsUserMessages(
-          _RunnerSteerCallbacks(this),
-        );
-        onSteerContinuation?.call();
-        yield* _streamNextResponse(
-          runtimeSystemPrompt: runtimeSystemPrompt,
-          onToolEvent: onToolEvent,
-          onSteerContinuation: onSteerContinuation,
-          onThoughtDelta: onThoughtDelta,
-          onReasoningDelta: onReasoningDelta,
-        );
-      }
-    }
-  }
-
   Stream<String> resumeAfterToolCall({
     required String toolCallId,
     required String toolName,
@@ -2174,555 +1232,57 @@ class AgentRunner {
     ToolEventCallback? onToolEvent,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
-  }) async* {
-    try {
-      await _toolExecutionCoordinator.executeSingleToolCall(
-        ToolCall(id: toolCallId, name: toolName, arguments: arguments),
-        callbacks: _RunnerToolCallbacks(this),
-        onToolEvent: onToolEvent,
-        emitStartEvent: false,
-        forcedOutput: forcedOutput,
-        forcedIsError: forcedIsError,
+  }) => _streamCoordinator.resumeAfterToolCall(
+    toolCallId: toolCallId,
+    toolName: toolName,
+    arguments: arguments,
+    runtimeSystemPrompt: runtimeSystemPrompt,
+    forcedOutput: forcedOutput,
+    forcedIsError: forcedIsError,
+    onToolEvent: onToolEvent,
+    onThoughtDelta: onThoughtDelta,
+    onReasoningDelta: onReasoningDelta,
+  );
+
+  List<Message> _buildEffectiveHistory({String? runtimeSystemPrompt}) =>
+      _contextProjector.buildEffectiveHistory(
+        runtimeSystemPrompt: runtimeSystemPrompt,
       );
-    } catch (e) {
-      _checkpointCoordinator.blockWorkItemOnResumeFailure(e);
-      rethrow;
-    }
-    _checkpointCoordinator.saveCheckpoint(
-      ctx: _checkpointCtx,
-      checkpointKind:
-          ContinuationCheckpointCoordinator.checkpointKindAfterToolResult,
-      resumeHistoryLength: history.length,
-    );
-    yield* _streamNextResponse(
-      runtimeSystemPrompt: runtimeSystemPrompt,
-      onToolEvent: onToolEvent,
-      onThoughtDelta: onThoughtDelta,
-      onReasoningDelta: onReasoningDelta,
-    );
-  }
 
-  Future<void> _restoreCheckpointForResume({String? requestId}) async {
-    final activeItem = getIt.isRegistered<PersistedRuntimeStateRepository>()
-        ? getIt<PersistedRuntimeStateRepository>().findActiveWorkItem(sessionId)
-        : null;
-    final recoverInterruptedToolsAsUnknown =
-        activeItem?.continuationMetadata[ContinuationCheckpointCoordinator
-            .automaticUnknownToolRecoveryKey] ==
-        true;
-    final allowAmbiguousToolInterruption =
-        _allowManualAmbiguousToolRecovery || recoverInterruptedToolsAsUnknown;
-    _allowManualAmbiguousToolRecovery = false;
-    final expectedRequestId = requestId ?? activeItem?.requestId;
-    final expectedMessage = activeItem?.payload['message']?.toString();
-    final hasOwnedUserMessage = history.any((message) {
-      if (message.role != MessageRole.user) return false;
-      final messageRequestId = message.metadata?['request_id']?.toString();
-      if (expectedRequestId != null && expectedRequestId.isNotEmpty) {
-        return messageRequestId == expectedRequestId;
-      }
-      return expectedMessage != null && message.content == expectedMessage;
-    });
-    _checkpointCoordinator.repairMissingPreProviderCheckpoint(
-      ctx: _checkpointCtx,
-      resumeHistoryLength: history.length,
-      requestId: expectedRequestId,
-      hasOwnedUserMessage: hasOwnedUserMessage,
-    );
-    final result = _checkpointCoordinator.restoreCheckpointForResume(
-      currentHistoryLength: history.length,
-      allowAmbiguousToolInterruption: allowAmbiguousToolInterruption,
-      neutralizeAllInterruptedTools: recoverInterruptedToolsAsUnknown,
-    );
-    if (result.resumeHistoryLength < 0) return; // no-op (no repo / no item)
+  Future<List<Message>> _prepareProviderHistory({
+    String? runtimeSystemPrompt,
+  }) => _contextProjector.prepareProviderHistory(
+    runtimeSystemPrompt: runtimeSystemPrompt,
+  );
 
-    final recoveryToolCallIds = <String>{
-      ...result.ambiguousToolCallIds,
-      ...result.deferredToolCallIds,
-      ...result.restartTerminalizedToolCallIds,
-    }.toList();
-    final recoveryBatch = recoveryToolCallIds.isEmpty
-        ? null
-        : _findAssistantToolBatch(recoveryToolCallIds);
-    if (recoveryToolCallIds.isNotEmpty && recoveryBatch == null) {
-      throw StateError(
-        'Cannot continue session $sessionId: the durable assistant tool-call '
-        'batch for the recovering tools is missing from conversation history.',
-      );
-    }
-
-    if (history.length > result.resumeHistoryLength) {
-      history = history.take(result.resumeHistoryLength).toList(growable: true);
-      if (recoveryBatch != null &&
-          !_containsAssistantToolBatch(recoveryBatch.toolCalls!)) {
-        history.add(recoveryBatch);
-      }
-      _saveHistory();
-    }
-
-    if (result.savedTurnStartIndex != null) {
-      _currentTurnStartIndex = result.savedTurnStartIndex!;
-    }
-
-    if (result.savedModelStepId != null) {
-      currentModelStepId = result.savedModelStepId;
-    }
-
-    if (recoveryBatch != null) {
-      final toolCalls = recoveryBatch.toolCalls!;
-      if (result.ambiguousToolCallIds.isNotEmpty) {
-        _recordAmbiguousToolInterruptions(
-          result.ambiguousToolCallIds,
-          toolCalls,
-        );
-      }
-      await _toolExecutionCoordinator.executeToolCalls(
-        toolCalls,
-        parallel: shouldParallelizeToolBatch(toolCalls),
-        callbacks: _RunnerToolCallbacks(this),
-        ctx: _checkpointCtx,
-        cancellationScope: _cancellationScope,
-      );
-    }
-    if (recoverInterruptedToolsAsUnknown) {
-      _checkpointCoordinator.clearAutomaticUnknownToolRecoveryIntent();
-    }
-  }
-
-  Message? _findAssistantToolBatch(List<String> requiredToolCallIds) {
-    final requiredIds = requiredToolCallIds.toSet();
-    for (final message in history.reversed) {
-      final calls = message.toolCalls;
-      if (message.role != MessageRole.assistant || calls == null) continue;
-      final batchIds = calls.map((call) => call.id).toSet();
-      if (batchIds.containsAll(requiredIds)) return message;
-    }
-    return null;
-  }
-
-  bool _containsAssistantToolBatch(List<ToolCall> expectedCalls) {
-    final expectedIds = expectedCalls.map((call) => call.id).toList();
-    return history.any((message) {
-      if (message.role != MessageRole.assistant) return false;
-      final actualIds = message.toolCalls?.map((call) => call.id).toList();
-      if (actualIds == null || actualIds.length != expectedIds.length) {
-        return false;
-      }
-      for (var index = 0; index < expectedIds.length; index++) {
-        if (actualIds[index] != expectedIds[index]) return false;
-      }
-      return true;
-    });
-  }
-
-  void _recordAmbiguousToolInterruptions(
-    List<String> toolCallIds,
-    List<ToolCall> durableBatch,
-  ) {
-    const interruptionResult =
-        'Error: Tool execution was interrupted before completion could be '
-        'confirmed. The outcome is unknown, and the tool was not executed '
-        'again to avoid duplicating side effects.';
-    final completedResults = <String, String>{};
-    final completedOutputs = <String, Map<String, dynamic>>{};
-    final callsById = {for (final call in durableBatch) call.id: call};
-
-    for (final toolCallId in toolCallIds) {
-      final matchedCall = callsById[toolCallId];
-      if (matchedCall == null) {
-        throw StateError(
-          'Cannot continue session $sessionId: interrupted tool $toolCallId '
-          'is missing from its durable assistant tool-call batch.',
-        );
-      }
-      completedResults[toolCallId] = interruptionResult;
-      completedOutputs[toolCallId] = _checkpointCoordinator.toolOutputRecord(
-        matchedCall,
-        interruptionResult,
-        isError: true,
-        sentToProvider: false,
-      );
-    }
-
-    _checkpointCoordinator.saveCheckpoint(
-      ctx: _checkpointCtx,
-      additionalToolResults: completedResults,
-      additionalToolOutputs: completedOutputs,
-      currentlyExecutingToolCallIds: const [],
-    );
-  }
-
-  LLMAdapter _providerAdapterForBackground(LLMAdapter turnAdapter) {
-    return switch (turnAdapter) {
-      RateLimitedLLMAdapter() => turnAdapter.providerAdapter,
-      _ => turnAdapter,
-    };
-  }
-
-  /// Builds the effective message list sent to the LLM on every turn.
-  ///
-  /// [history] contains ONLY user/assistant/tool messages — no system messages
-  /// are ever stored there. All system context is assembled by
-  /// [AgentContextAssembler] into a single `system` message prepended here.
-  ///
-  /// The three-tier structure (stable → context → volatile) inside the
-  /// assembled string is ordered for maximum LLM prefix-cache efficiency:
-  /// the stable identity block (longest, never changes) lives at the top so
-  List<Message> _providerConversationMessages() {
-    if (getIt.isRegistered<ModelProjectionBuilder>()) {
-      try {
-        return getIt<ModelProjectionBuilder>()
-            .buildForSession(sessionId)
-            .conversationMessages;
-      } catch (error) {
-        _logger.warning(
-          'Compaction projection unavailable for $sessionId: $error',
-        );
-      }
-    }
-    return history;
-  }
-
-  String? _contextProviderTemplate() {
-    if (getIt.isRegistered<AgentRuntimeService>()) {
-      try {
-        final routing = _turnRoute.resolveTurnRouting();
-        return getIt<AgentRuntimeService>()
-            .resolveSignature(
-              providerId: routing.providerId,
-              modelId: routing.model,
-            )
-            .templateId;
-      } catch (_) {
-        // Fall through to the static configuration identity.
-      }
-    }
-    return getIt.isRegistered<Config>()
-        ? getIt<Config>().resolveProviderName()
-        : null;
-  }
-
-  List<Message> _buildEffectiveHistory({String? runtimeSystemPrompt}) {
-    // Provider payload uses active model projection; canonical [history] stays intact.
-    final effectiveHistory = List<Message>.from(
-      _providerConversationMessages(),
-    );
-
-    // Update volatile tier with the current turn's live data.
-    final memorySections = <String>[];
-    final memoryBlock = memoryStore.formatForSystemPrompt('memory');
-    if (memoryBlock != null) {
-      memorySections.add(memoryBlock);
-    }
-    final userBlock = memoryStore.formatForSystemPrompt('user');
-    if (userBlock != null) {
-      memorySections.add(userBlock);
-    }
-    contextAssembler.setVolatile(
-      memoryContext: memorySections.join('\n\n'),
-      sessionId: sessionId,
-      model: _turnRoute.effectiveModel ?? activeModel,
-      provider: _contextProviderTemplate(),
-    );
-
-    // Update context tier if a per-turn workspace context was supplied.
-    // LocalRuntimeOrchestrator passes this on every turn; non-workspace turns
-    // pass null which preserves the previously set context (or none).
-    if (runtimeSystemPrompt != null) {
-      contextAssembler.setContext(runtimeSystemPrompt);
-    }
-
-    // Assemble all tiers into one system message and prepend to history.
-    final systemContent = contextAssembler.assemble();
-    if (systemContent != null) {
-      effectiveHistory.insert(
-        0,
-        Message(role: MessageRole.system, content: systemContent),
-      );
-    }
-    return effectiveHistory;
-  }
-
+  /// Test-facing projection hook kept on the runner boundary; the context
+  /// projector owns the implementation the live provider path uses.
   @visibleForTesting
   static Future<List<Message>> projectUserAttachmentsForProvider({
     required AttachmentStore store,
     required String sessionId,
     required List<Message> messages,
     bool supportsImageInput = false,
-  }) async {
-    final projected = <Message>[];
-    for (final message in messages) {
-      if (message.role != MessageRole.user || message.attachments.isEmpty) {
-        projected.add(message);
-        continue;
-      }
-      final remainingAttachments = <UserAttachment>[];
-      final textProjectedAttachments = <UserAttachment>[];
-      for (final attachment in message.attachments) {
-        final isImage =
-            attachment.kind == UserAttachmentKind.image ||
-            attachment.mimeType.toLowerCase().startsWith('image/');
-        if (supportsImageInput && isImage) {
-          remainingAttachments.add(attachment);
-        } else {
-          textProjectedAttachments.add(attachment);
-        }
-      }
-
-      if (textProjectedAttachments.isEmpty) {
-        projected.add(message.copyWith(attachments: remainingAttachments));
-        continue;
-      }
-
-      final lines = <String>[
-        if (message.content != null && message.content!.isNotEmpty)
-          message.content!,
-        '',
-        'Agent-local attachments (inspect only with the appropriate tool):',
-      ];
-      for (final attachment in textProjectedAttachments) {
-        try {
-          final path = await store.resolvePath(
-            sessionId: sessionId,
-            attachmentId: attachment.id,
-          );
-          lines.add(
-            '- ${attachment.safeName} (${attachment.kind.name}): $path',
-          );
-        } on AttachmentStoreException {
-          lines.add(
-            '- ${attachment.safeName} (${attachment.kind.name}): unavailable',
-          );
-        }
-      }
-      final hasProjectedImages = textProjectedAttachments.any(
-        (a) =>
-            a.kind == UserAttachmentKind.image ||
-            a.mimeType.toLowerCase().startsWith('image/'),
-      );
-      if (hasProjectedImages) {
-        lines.add(
-          'Use the scoped read/list tools for files; image inspection is not supported by the current model route; do not infer file contents from names.',
-        );
-      } else {
-        lines.add(
-          'Use the scoped read/list tools for files; do not infer file contents from names.',
-        );
-      }
-      projected.add(
-        message.copyWith(
-          content: lines.join('\n').trim(),
-          attachments: remainingAttachments,
-        ),
-      );
-    }
-    return projected;
-  }
-
-  Future<List<Message>> _prepareProviderHistory({
-    String? runtimeSystemPrompt,
-  }) async {
-    var effectiveHistory = _buildEffectiveHistory(
-      runtimeSystemPrompt: runtimeSystemPrompt,
-    );
-    effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
-    if (await _maybeRunPreflightCompaction(
-      runtimeSystemPrompt: runtimeSystemPrompt,
-      prospectiveHistory: effectiveHistory,
-    )) {
-      effectiveHistory = _buildEffectiveHistory(
-        runtimeSystemPrompt: runtimeSystemPrompt,
-      );
-      effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
-    }
-    final store =
-        _attachmentStore ??
-        (getIt.isRegistered<AttachmentStore>()
-            ? getIt<AttachmentStore>()
-            : null);
-    if (store == null) return effectiveHistory;
-    final supportsImageInput =
-        _turnCapabilityProfile?.imageSupport == RouteImageSupport.supported;
-    return projectUserAttachmentsForProvider(
-      store: store,
-      sessionId: sessionId,
-      messages: effectiveHistory,
-      supportsImageInput: supportsImageInput,
-    );
-  }
+  }) => RunnerContextProjector.projectUserAttachmentsForProvider(
+    store: store,
+    sessionId: sessionId,
+    messages: messages,
+    supportsImageInput: supportsImageInput,
+  );
 
   Future<bool> _maybeRunPreflightCompaction({
     String? runtimeSystemPrompt,
     required List<Message> prospectiveHistory,
-  }) async {
-    if (_autoCompactionBlockedForRun) {
-      return false;
-    }
-    if (!getIt.isRegistered<CompactionCoordinator>() ||
-        !getIt.isRegistered<SessionHistoryRevisionRepository>() ||
-        !getIt.isRegistered<AgentRuntimeService>()) {
-      return false;
-    }
-    final revisionRepo = getIt<SessionHistoryRevisionRepository>();
-    final revision = revisionRepo.read(sessionId);
-    if (revision == null) {
-      return false;
-    }
-    final timelineEntries = _compactionTimelineForSession();
-    if (timelineEntries.isEmpty) {
-      return false;
-    }
-    final projection = getIt<ModelProjectionBuilder>().buildForSession(
-      sessionId,
-    );
-    final routing = _turnRoute.resolveTurnRouting();
-    final contextWindow = await getContextTokens() ?? 128_000;
-    final policy = getIt.isRegistered<Config>()
-        ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
-        : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
-    final turnAdapter = _wireMeasurementAdapter(_turnRoute.adapterForTurn());
-    final wireMeasurement = turnAdapter is WireInputUsageMeasurer
-        ? await (turnAdapter as WireInputUsageMeasurer).measureInput(
-            prospectiveHistory,
-            tools: registry.allTools.map((tool) => tool.schema).toList(),
-            modelOverride: routing.model,
-            options: _requestOptionsForTurn(routing.providerId),
-          )
-        : null;
-    final wireEstimatedInputTokens =
-        wireMeasurement?.estimatedTokens ??
-        (turnAdapter is WireInputTokenEstimator
-            ? await (turnAdapter as WireInputTokenEstimator)
-                  .estimateInputTokens(
-                    prospectiveHistory,
-                    tools: registry.allTools
-                        .map((tool) => tool.schema)
-                        .toList(),
-                    modelOverride: routing.model,
-                    options: _requestOptionsForTurn(routing.providerId),
-                  )
-            : null);
-    final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
-      providerId: routing.providerId,
-      modelId: routing.model,
-    );
-    if (turnAdapter is WireInputUsageMeasurer && wireMeasurement != null) {
-      await _restoreConfirmedInputUsageBaseline(
-        prospectiveHistory: prospectiveHistory,
-        measurer: turnAdapter as WireInputUsageMeasurer,
-        routeSignature: routeSignature,
-        providerId: routing.providerId,
-        modelId: routing.model,
-        currentMeasurement: wireMeasurement,
-      );
-    }
-    final toolSchemas = registry.allTools
-        .map((tool) => tool.schema.toJson())
-        .toList();
-    RequestPressureSnapshot? preflightPressure;
-    if (getIt.isRegistered<ContextCompactionEngine>()) {
-      final pressure = RequestPressureEvaluator().evaluate(
-        routeSignature: routeSignature,
-        contextWindowTokens: contextWindow,
-        conversationMessages: prospectiveHistory,
-        systemPrompt: '',
-        runtimeContext: '',
-        toolSchemas: toolSchemas,
-        confirmedInputUsage: _confirmedInputUsageBaseline,
-        wireEstimatedInputTokens: wireEstimatedInputTokens,
-        wireMeasurement: wireMeasurement,
-        thresholdRatio: policy.threshold,
-      );
-      preflightPressure = pressure;
-      _lastPreflightPressure = pressure;
-      if (!pressure.exceedsThreshold) {
-        return false;
-      }
-      final withinCooldown =
-          _lastCompactionCompletedAt != null &&
-          DateTime.now().toUtc().difference(_lastCompactionCompletedAt!) <
-              _compactionCooldown;
-      if (withinCooldown &&
-          pressure.estimatedRequestTokens <= pressure.effectiveInputBudget) {
-        return false;
-      }
-    }
-    final request = CompactionEngineRequest(
-      compactionId: '',
-      sessionId: sessionId,
-      trigger: CompactionTrigger.auto,
-      sourceRevision: revision.toCompactionRevision(),
-      routeSignature: routeSignature,
-      contextWindowTokens: contextWindow,
-      preflightPressure: preflightPressure,
-      timeline: timelineEntries,
-      systemPrompt: contextAssembler.assemble() ?? '',
-      runtimeContext: runtimeSystemPrompt ?? '',
-      toolSchemas: toolSchemas,
-      providerProjection: prospectiveHistory,
-      providerTools: registry.allTools.map((tool) => tool.schema).toList(),
-      providerRequestOptions: _compactionRequestOptions(
-        routing.providerId,
-        compactionId: 'auto',
-      ),
-      projectionRevision: _currentProjectionRevision(),
-      previousSummary: projection.activeBoundary?.internalSummary,
-      previousSourceRange: projection.activeBoundary?.sourceRange,
-      targetRequestTokens:
-          (_effectiveInputWindow(contextWindow) * policy.targetRatio).round(),
-      thresholdRatio: policy.threshold,
-    );
-    final outcome = await getIt<CompactionCoordinator>().runCompaction(
-      request: request,
-      force: true,
-    );
-    if (outcome?.status == CompactionStatus.completed) {
-      _lastCompactionCompletedAt = DateTime.now().toUtc();
-      _autoCompactionBlockedForRun = false;
-      _refreshCanonicalHistoryAfterCompaction();
-      return true;
-    }
-    if (outcome?.status == CompactionStatus.failed) {
-      _autoCompactionBlockedForRun = true;
-    }
-    return false;
-  }
+  }) => _compactionOrchestrator.maybeRunPreflightCompaction(
+    runtimeSystemPrompt: runtimeSystemPrompt,
+    prospectiveHistory: prospectiveHistory,
+  );
 
-  LLMRequestOptions _compactionRequestOptions(
-    String? providerInstanceId, {
-    required String compactionId,
-  }) {
-    return LLMRequestOptions(
-      sessionId: sessionId,
-      requestId: 'compaction:$compactionId:${const Uuid().v4()}',
-      providerInstanceId: providerInstanceId,
-      thinkingMode: _turnRoute.effectiveThinkingMode,
-      cancellationScope: _cancellationScope,
-    );
-  }
+  int _currentProjectionRevision() =>
+      _compactionOrchestrator.currentProjectionRevision();
 
-  int _currentProjectionRevision() {
-    if (!getIt.isRegistered<SessionProjectionRevisionRepository>()) return 0;
-    return getIt<SessionProjectionRevisionRepository>()
-            .read(sessionId)
-            ?.value ??
-        0;
-  }
-
-  static int _effectiveInputWindow(int contextWindow) =>
-      calculateEffectiveInputWindow(contextWindow);
-
-  void _refreshCanonicalHistoryAfterCompaction() {
-    final session = sessionManager.getSession(sessionId);
-    if (session != null) {
-      history = session.messages.toList();
-      _healHistory();
-    }
-    _checkpointCoordinator.saveCheckpoint(
-      ctx: _checkpointCtx,
-      resumeHistoryLength: history.length,
-    );
-  }
+  void _refreshCanonicalHistoryAfterCompaction() =>
+      _compactionOrchestrator.refreshCanonicalHistoryAfterCompaction();
 
   /// Test hook for Plan 53d preflight compaction verification.
   @visibleForTesting
@@ -2736,18 +1296,9 @@ class AgentRunner {
   /// without running preflight compaction or inventing a user turn.
   Future<CompactionProviderSeed> prepareCompactionProviderSeed({
     String? runtimeSystemPrompt,
-  }) async {
-    var projection = _buildEffectiveHistory(
-      runtimeSystemPrompt: runtimeSystemPrompt,
-    );
-    projection = await pluginManager.runPreExecution(projection);
-    final routing = _turnRoute.resolveTurnRouting();
-    return CompactionProviderSeed(
-      projection: projection,
-      tools: registry.allTools.map((tool) => tool.schema).toList(),
-      options: _requestOptionsForTurn(routing.providerId),
-    );
-  }
+  }) => _compactionOrchestrator.prepareCompactionProviderSeed(
+    runtimeSystemPrompt: runtimeSystemPrompt,
+  );
 
   @visibleForTesting
   void debugSaveCheckpointForTesting({
@@ -2783,32 +1334,20 @@ class AgentRunner {
     _refreshCanonicalHistoryAfterCompaction();
   }
 
-  /// Test hook for Plan 53d overflow recovery verification.
-  List<IndexedConversationMessage> _compactionTimelineForSession() {
-    if (getIt.isRegistered<ModelProjectionBuilder>()) {
-      final canonical = getIt<ModelProjectionBuilder>().loadCanonicalTimeline(
-        sessionId,
-      );
-      if (canonical.messages.isNotEmpty) {
-        return [
-          for (final entry in canonical.messages)
-            IndexedConversationMessage(
-              rowId: entry.rowId,
-              message: entry.message,
-            ),
-        ];
-      }
-    }
-    return history
-        .asMap()
-        .entries
-        .map((entry) {
-          return IndexedConversationMessage(
-            rowId: entry.key + 1,
-            message: entry.value,
-          );
-        })
-        .toList(growable: false);
+  List<IndexedConversationMessage> _compactionTimelineForSession() =>
+      _compactionOrchestrator.compactionTimelineForSession();
+
+  LLMRequestOptions _compactionRequestOptions(
+    String? providerInstanceId, {
+    required String compactionId,
+  }) {
+    return LLMRequestOptions(
+      sessionId: sessionId,
+      requestId: 'compaction:$compactionId:${const Uuid().v4()}',
+      providerInstanceId: providerInstanceId,
+      thinkingMode: _turnRoute.effectiveThinkingMode,
+      cancellationScope: cancellationScope,
+    );
   }
 
   @visibleForTesting
@@ -2836,6 +1375,157 @@ class AgentRunner {
       return false;
     }
   }
+
+  // --- RunnerRecoveryHost, RunnerCompactionHost, RunnerResumeHost ---
+
+  @override
+  String? get authoritativeRunId => _authoritativeRunId;
+
+  @override
+  String? get authoritativeWorkItemId => _authoritativeWorkItemId;
+
+  @override
+  int? get authoritativeGeneration => _authoritativeGeneration;
+
+  @override
+  TurnRouteState get turnRoute => _turnRoute;
+
+  @override
+  void saveHistory() => _saveHistory();
+
+  @override
+  String assembleSystemPrompt() => contextAssembler.assemble() ?? '';
+
+  @override
+  List<IndexedConversationMessage> compactionTimelineForSession() =>
+      _compactionTimelineForSession();
+
+  @override
+  int currentProjectionRevision() => _currentProjectionRevision();
+
+  @override
+  LLMRequestOptions compactionRequestOptions(
+    String providerInstanceId, {
+    required String compactionId,
+  }) => _compactionRequestOptions(providerInstanceId, compactionId: compactionId);
+
+  @override
+  void refreshCanonicalHistoryAfterCompaction() =>
+      _refreshCanonicalHistoryAfterCompaction();
+
+  @override
+  bool claimOwnedAutomaticRetry() => _claimOwnedAutomaticRetry();
+
+  @override
+  void updateSessionProviderId(String candidateId) =>
+      sessionManager.updateSessionProviderId(sessionId, candidateId);
+
+  @override
+  ContinuationCheckpointCoordinator get checkpointCoordinator =>
+      _checkpointCoordinator;
+
+  @override
+  CheckpointContext get checkpointCtx => _checkpointCtx;
+
+  @override
+  void healHistory() => _healHistory();
+
+  @override
+  LLMRequestOptions requestOptionsForTurn(String? providerId) =>
+      _requestOptionsForTurn(providerId);
+
+  @override
+  List<Message> buildEffectiveHistory({String? runtimeSystemPrompt}) =>
+      _buildEffectiveHistory(runtimeSystemPrompt: runtimeSystemPrompt);
+
+  @override
+  ToolExecutionCoordinator get toolExecutionCoordinator =>
+      _toolExecutionCoordinator;
+
+  @override
+  ToolExecutionCallbacks get toolCallbacks => _RunnerToolCallbacks(this);
+
+  @override
+  int get currentTurnStartIndex => _currentTurnStartIndex;
+
+  @override
+  set currentTurnStartIndex(int value) => _currentTurnStartIndex = value;
+
+  @override
+  bool consumeManualAmbiguousToolRecovery() {
+    final allowed = _allowManualAmbiguousToolRecovery;
+    _allowManualAmbiguousToolRecovery = false;
+    return allowed;
+  }
+
+  // --- RunnerContextHost & RunnerStreamHost ---
+
+  @override
+  RunnerAdmissionGate get admissionGate => _admissionGate;
+
+  @override
+  RunnerRecoveryCoordinator get recoveryCoordinator => _recoveryCoordinator;
+
+  @override
+  RunnerResumeCoordinator get resumeCoordinator => _resumeCoordinator;
+
+  @override
+  steer_lib.SteerCoordinator get steerCoordinator => _steerCoordinator;
+
+  @override
+  steer_lib.SteerCallbacks get steerCallbacks => _RunnerSteerCallbacks(this);
+
+  @override
+  FutureOr<void> Function(Message)? get onRootMessageCommitted =>
+      _onRootMessageCommitted;
+
+  @override
+  void beginModelStep() => _beginModelStep();
+
+  @override
+  void updateMetrics(AgentResponse response) => _updateMetrics(response);
+
+  @override
+  void resetMetricsTracker(DateTime? receivedAt) {
+    _metricsTracker = MetricsTracker(startTime: receivedAt);
+  }
+
+  @override
+  void setActiveRoute(String? provider, String? model) {
+    activeProvider = provider;
+    activeModel = model;
+  }
+
+  @override
+  void setLastSuccessfulLlmRoute(LLMRouteSnapshot snapshot) {
+    _lastSuccessfulLlmRoute = snapshot;
+  }
+
+  @override
+  Future<void> stageInputUsageBaseline({
+    required List<Message> requestMessages,
+    required List<Map<String, dynamic>> toolSchemas,
+    required String? providerId,
+    required String? modelId,
+  }) => _stageInputUsageBaseline(
+    requestMessages: requestMessages,
+    toolSchemas: toolSchemas,
+    providerId: providerId,
+    modelId: modelId,
+  );
+
+  @override
+  Future<List<Message>> prepareProviderHistory({String? runtimeSystemPrompt}) =>
+      _prepareProviderHistory(runtimeSystemPrompt: runtimeSystemPrompt);
+
+  @override
+  Future<bool> maybeRunPreflightCompaction({
+    String? runtimeSystemPrompt,
+    required List<Message> prospectiveHistory,
+  }) => _maybeRunPreflightCompaction(
+    runtimeSystemPrompt: runtimeSystemPrompt,
+    prospectiveHistory: prospectiveHistory,
+  );
 }
 
 /// Bridges [ToolExecutionCoordinator] history mutations back to the runner
