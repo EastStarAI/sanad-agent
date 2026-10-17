@@ -22,9 +22,11 @@ the agent today's date in the schedule's zone.
 
 ## Locked decisions
 
-- **B-D1 — Advance before dispatch.** The next instant is persisted **before** the run event is
-  emitted, so a crash cannot fire the same slot twice. A crash between persisting and emitting may
-  skip one occurrence; that is the accepted direction of error (at-most-once, never duplicate).
+- **B-D1 — Advance before dispatch. (Already landed in the reviewed 112a gate.)** The next instant
+  is persisted **before** the run event is emitted, so a crash cannot fire the same slot twice. A
+  crash between persisting and emitting may skip one occurrence; that is the accepted direction of
+  error (at-most-once, never duplicate). Do not re-implement it here; keep its regression test green
+  and extend recovery around it.
 - **B-D2 — Startup re-arm with an explicit missed-occurrence policy.** On initialization every
   enabled schedule computes its next future instant. A missed instant inside the grace window fires
   once immediately; a missed instant beyond grace is skipped with a recorded reason and the schedule
@@ -62,12 +64,14 @@ the agent today's date in the schedule's zone.
 
 ### B1 — Durable dispatch and recovery
 
-- [ ] Make dispatch persist the advanced next instant before emitting the run event (B-D1).
+- [x] (landed in 112a) Dispatch persists the advanced next instant before emitting the run event
+      (B-D1); the ordering regression test already exists and must stay green.
 - [ ] Implement the startup re-arm and the missed-occurrence policy (B-D2) with the grace window
       owned by one place, shared by every recurring kind.
 - [ ] Implement interval anchoring on the stored last run (B-D3) and preserve one-shot behavior
       (B-D4).
-- [ ] Record `last_run_at` / `last_status` per dispatch (B-D6).
+- [ ] Record `last_run_at` / `last_status` per dispatch (B-D6). The `fired` path landed in 112a;
+      this gate adds the `skipped_missed` and `error` paths and their reasons.
 - [ ] Tests cover: due-inside-grace firing once on startup and advancing; due-beyond-grace skipping
       with a recorded reason and advancing without a burst; a durable-ordering test proving no double
       fire when the process stops between persisting and emitting; interval cadence unchanged across
@@ -91,6 +95,9 @@ the agent today's date in the schedule's zone.
 
 - [ ] Update the scheduling documentation for the wake, recovery, and missed-occurrence policy and
       the outcome fields.
+- [ ] Reconcile the `enabled` column description in `docs/technical/agent_database_schema.md`
+      ("0 if paused") with the fact that pause/resume is out of scope, so the column description does
+      not imply an unimplemented feature.
 - [ ] Update the runtime-context documentation if it enumerates the context sections.
 - [ ] Report the gate outcome with exact commands, preserved exit status, and bounded output.
 
@@ -102,7 +109,7 @@ the agent today's date in the schedule's zone.
       instant, and records `last_status='skipped_missed'` with a logged reason.
 - [ ] Downtime spanning several occurrences produces one fire at most, never a burst.
 - [ ] No double fire is observable when the process stops between persisting the advanced instant and
-      emitting the event.
+      emitting the event (regression of the 112a ordering fix).
 - [ ] An `interval` schedule keeps its cadence across a restart (no re-anchoring).
 - [ ] After `cancel`, no event is emitted for that schedule and no row remains.
 - [ ] A `daily` schedule at a fixed local time keeps that local time across both daylight transition

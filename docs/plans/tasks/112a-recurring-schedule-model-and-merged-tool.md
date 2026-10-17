@@ -1,8 +1,8 @@
 ---
 title: "Task 112a — Recurring Schedule Model and Merged Schedule Tool"
-status: pending
-current_gate: A0
-remaining_estimate: 100%
+status: delivered (draft pull request open)
+current_gate: A4
+remaining_estimate: 0%
 depends_on: "None"
 evidence_id: "sched-recurrence"
 evidence_fingerprint: "sha256:0e9237785d2fa58cbcfc8a8856c65d33452919bba2bd900701c4db22cf325bd1"
@@ -91,8 +91,10 @@ storage that survives a daemon restart.
       `agent/test/interfaces/interfaces_test.mocks.dart` (generated), and
       `agent/e2e_test/durable_recovery_restart_e2e_test.dart`.
 - [x] Record the A0 file list in this task before editing:
-      - `agent/lib/evolution/scheduling/schedule_model.dart` (new)
-      - `agent/lib/evolution/scheduling/occurrence_calculator.dart` (new)
+      - `agent/lib/evolution/scheduling/schedule_model.dart` (new; one module owning the value
+        object, vocabulary parsing, zone interpretation, and occurrence computation — the planned
+        separate `occurrence_calculator.dart` was consolidated into it to keep the scheduling rules
+        in a single pure-Dart unit)
       - `agent/lib/evolution/cron_scheduler.dart`
       - `agent/lib/evolution/db/session_db.dart`
       - `agent/lib/evolution/db/agent_state_database.dart`
@@ -184,3 +186,34 @@ storage that survives a daemon restart.
 - [x] **Do not commit.** The orchestrator reviews the diff, re-runs the gates, and commits.
 - [x] Report: status (`Succeeded` / `Failed` / `Unsure`), touched files, exact commands with
       outcomes, skipped coverage, and unresolved uncertainty.
+
+## Review gate and delivery
+
+The implementer's diff was reviewed by an independent agent before this task was closed. The
+reviewer confirmed seven recorded findings with evidence and repaired them in the same worktree:
+
+- **R1 (major)** — the simulated daylight seam was reachable production code: it is now
+  `@visibleForTesting`, and a new test exercises the `local` zone across a real host daylight
+  transition, skipping with a logged reason only on a host whose zone never observes one. On this
+  host (`EEST+0300`) the test runs.
+- **R2 (major)** — dispatch emitted the run event before persisting: the advanced instant (or the
+  deletion for a one-shot task) is now persisted first, which is the at-most-once ordering. This is
+  `112b` decision B-D1 and is therefore already satisfied.
+- **R3 (major)** — the recorded outcome used a value outside the locked vocabulary: it is now
+  `fired`, and the schema document names `fired` / `skipped_missed` / `error`.
+- **R4 (minor)** — the model-facing schema now marks `action` required while legacy inference stays
+  for calls persisted before the merge.
+- **R5 (minor)** — the duplicated environment read is gone; `Config` owns the zone default.
+- **R6 (minor)** — the mirrored `run_at` key and its read fallback are gone; only the migration
+  rename and its test remain.
+- **R7 (minor)** — the unreachable second weekly scan was removed.
+
+Independently re-verified by the orchestrator after the review, not accepted on report alone:
+`fvm dart analyze` exit 0, `fvm dart test test/capabilities test/evolution` exit 0 with 483 passed
+and 6 skipped in 14s, and the repaired code confirmed present in the delivered commit.
+
+Delivery: branch `feat/112-recurring-schedules-merged-tool` on top of
+`feature/view-image-docs-plan-77`, opened as a draft pull request with the mandatory labels. The
+recurring wake, recovery, and time-awareness work continues in
+`docs/plans/tasks/112b-recurring-wake-integration-and-recovery.md` on the same branch and pull
+request. No merge or ready-for-review transition happens without explicit authorization.
