@@ -52,7 +52,6 @@ class _FileToolTileState extends State<FileToolTile> {
   bool? _lastIsDark;
   TextSpan? _cachedCodeBlockSpan;
   final Map<String, List<TextSpan>> _highlightCache = {};
-  static final Set<String> _loggedEvents = {};
   bool _showMarkdown = true;
 
   @override
@@ -628,6 +627,7 @@ class _FileToolTileState extends State<FileToolTile> {
     final newString = mapInput['new_string']?.toString();
     final rawEdits = mapInput['edits'];
     final startLine = parsedOutput != null ? parsedOutput['startLine'] as int? : null;
+    final editStartLines = _parseEditStartLines(parsedOutput);
 
     String? fallbackPatch;
     if (rawEdits is List && rawEdits.isNotEmpty) {
@@ -663,21 +663,6 @@ class _FileToolTileState extends State<FileToolTile> {
 
     final displayPatch = patch ?? fallbackPatch;
 
-    final eventId = widget.event.id;
-    if (!_loggedEvents.contains(eventId)) {
-      _loggedEvents.add(eventId);
-      debugPrint(
-        '🔍 [FileToolTile Debug Log - Event ID: $eventId]\n'
-        'Input: $input\n'
-        'Output: $rawOutput\n'
-        'Parsed Output: $parsedOutput\n'
-        'Old String: $oldString\n'
-        'New String: $newString\n'
-        'Display Patch:\n$displayPatch\n'
-        '=== End of Debug Log ===',
-      );
-    }
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -704,6 +689,7 @@ class _FileToolTileState extends State<FileToolTile> {
             displayPatch,
             filePath: path.toString(),
             startLine: startLine,
+            editStartLines: editStartLines,
           ),
         ] else ...[
           _buildFallback(context, input, rawOutput),
@@ -912,6 +898,7 @@ class _FileToolTileState extends State<FileToolTile> {
     String patch, {
     required String filePath,
     int? startLine,
+    List<int>? editStartLines,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -927,7 +914,7 @@ class _FileToolTileState extends State<FileToolTile> {
     final redTextColor = isDark ? Colors.red.shade300 : Colors.red.shade900;
     final greenTextColor = isDark ? Colors.green.shade300 : Colors.green.shade900;
 
-    final parsedLines = parseAndPairDiff(patch, startLine: startLine);
+    final parsedLines = parseAndPairDiff(patch, startLine: startLine, editStartLines: editStartLines);
     final widgets = <Widget>[];
 
     for (final line in parsedLines) {
@@ -1030,39 +1017,41 @@ class _FileToolTileState extends State<FileToolTile> {
       );
     }
 
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.05),
+    return SelectionArea(
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.05),
+          ),
         ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 350),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                scrollDirection: Axis.vertical,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minWidth: constraints.maxWidth,
-                    ),
-                    child: IntrinsicWidth(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: widgets,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 350),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  scrollDirection: Axis.vertical,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minWidth: constraints.maxWidth,
+                      ),
+                      child: IntrinsicWidth(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: widgets,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -1221,31 +1210,35 @@ class _FileToolTileState extends State<FileToolTile> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showLineNumbers) ...[
-            SizedBox(
-              width: 36,
-              child: Text(
-                lineNumber != null ? '$lineNumber' : '',
-                style: lineNumbersStyle,
-                textAlign: TextAlign.right,
+            SelectionContainer.disabled(
+              child: SizedBox(
+                width: 36,
+                child: Text(
+                  lineNumber != null ? '$lineNumber' : '',
+                  style: lineNumbersStyle,
+                  textAlign: TextAlign.right,
+                ),
               ),
             ),
             const SizedBox(width: 12),
           ],
-          SizedBox(
-            width: 10,
-            child: Text(
-              prefix,
-              style: GoogleFonts.firaCode(
-                fontSize: 11,
-                color: prefixColor,
-                fontWeight: FontWeight.bold,
-                height: 1.5,
+          SelectionContainer.disabled(
+            child: SizedBox(
+              width: 10,
+              child: Text(
+                prefix,
+                style: GoogleFonts.firaCode(
+                  fontSize: 11,
+                  color: prefixColor,
+                  fontWeight: FontWeight.bold,
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
               ),
-              textAlign: TextAlign.center,
             ),
           ),
           const SizedBox(width: 8),
-          SelectableText.rich(
+          Text.rich(
             TextSpan(
               style: defaultStyle,
               children: [codeSpan],
@@ -1338,14 +1331,40 @@ class _FileToolTileState extends State<FileToolTile> {
     return spans;
   }
 
-  List<ParsedDiffLine> parseAndPairDiff(String patch, {int? startLine}) {
+  List<int>? _parseEditStartLines(Map<String, dynamic>? parsedOutput) {
+    final raw = parsedOutput?['editStartLines'];
+    if (raw is! List) return null;
+    final lines = <int>[];
+    for (final item in raw) {
+      if (item is num) {
+        lines.add(item.toInt());
+      } else {
+        final parsed = int.tryParse(item?.toString() ?? '');
+        if (parsed == null) return null;
+        lines.add(parsed);
+      }
+    }
+    return lines;
+  }
+
+  List<ParsedDiffLine> parseAndPairDiff(String patch, {int? startLine, List<int>? editStartLines}) {
     final List<ParsedDiffLine> tempLines = [];
     final lines = const LineSplitter().convert(patch);
 
     int? oldLineCounter = startLine;
     int? newLineCounter = startLine;
+    var hunkIndex = 0;
 
     for (final line in lines) {
+      if (line == '---') {
+        // Multi-chunk hunk separator: reposition counters at the next chunk's start.
+        hunkIndex++;
+        if (editStartLines != null && hunkIndex < editStartLines.length) {
+          oldLineCounter = editStartLines[hunkIndex];
+          newLineCounter = editStartLines[hunkIndex];
+        }
+        continue;
+      }
       if (line.startsWith('+')) {
         tempLines.add(
           ParsedDiffLine(

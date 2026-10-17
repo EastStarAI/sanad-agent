@@ -8,6 +8,7 @@ import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.
 import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
 import 'package:sanad_client/core/theme/app_themes.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
+import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/auth/presentation/widgets/device_login_challenge_overlay.dart';
 import 'package:sanad_client/features/client_cli/presentation/widgets/client_cli_approval_overlay.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_capabilities_cubit.dart';
@@ -35,6 +36,10 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   AppRouterSetup? _routerSetup;
+
+  /// Last observed authenticated identity. Used to detect sign-out and account
+  /// switches, which must not inherit the previous identity's navigation history.
+  String? _authenticatedUserId;
 
   @override
   void didChangeDependencies() {
@@ -92,6 +97,18 @@ class _AppShellState extends State<AppShell> {
                 );
               }
             }
+          },
+        ),
+        BlocListener<AuthCubit, AuthState>(
+          listener: (context, authState) {
+            final userId = authState is AuthAuthenticated ? authState.userId : null;
+            final previousUserId = _authenticatedUserId;
+            _authenticatedUserId = userId;
+            if (previousUserId == null || previousUserId == userId) return;
+            // Navigation history describes one authenticated identity's own
+            // conversations. Sign-out or a different account must not inherit
+            // destinations that no longer belong to the current identity.
+            getIt<ConversationHistoryController>().clear();
           },
         ),
       ],

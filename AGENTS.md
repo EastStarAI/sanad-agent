@@ -114,8 +114,9 @@ Choose verification by blast radius:
 
 ## 5. UI Localization Constraint
 
-* **No Inline Arabic:** Handwritten Dart, widget and UI source in `client/` must never contain Arabic text as a literal; Arabic reaches the interface only through the `ar` localization catalog. Generated localization Dart (`lib/l10n/app_localizations*.dart`) naturally carries the translated strings and is not a source restriction.
-* **English Source Locale:** `client/lib/l10n/app_en.arb` is the authored source of truth for every user-visible string, and localized surfaces read strings through `AppLocalizations`, so the shipped Arabic UI is explicitly supported. [client/AGENTS.md](client/AGENTS.md) owns the concrete localization rules and [docs/technical/client_multilanguage.md](docs/technical/client_multilanguage.md) owns the remaining-string coverage report.
+* **Localized Interface Text:** The Client interface is multilingual (`en` and `ar` RTL). Every user-facing string is resolved through the Client localization system instead of being hard-coded in widget code, with `client/lib/l10n/app_en.arb` remaining the authored source locale. Handwritten Dart, widget and UI source in `client/` must never contain Arabic text as a literal; generated localization Dart (`lib/l10n/app_localizations*.dart`) naturally carries the translated strings and is not a source restriction.
+* **English-Only Non-Interface Artifacts:** Documentation, code, comments, logs, protocol payloads, and agent-facing output remain English-only.
+* **Owning Contract:** `client/AGENTS.md` owns locale mechanics and string ownership, and [docs/technical/client_multilanguage.md](docs/technical/client_multilanguage.md) owns the remaining-string coverage report; keep that detail there rather than duplicating it here.
 
 ---
 

@@ -161,6 +161,44 @@ Rules:
 
 ## 6. Dependency and Toolchain Compatibility
 
+### 6.1. Native tray icon lifetime
+
+The tray icon is a native object owned by the process (`NSStatusItem` on macOS,
+`Shell_NotifyIcon` on Windows, a `StatusNotifierItem` on Linux), not by the Dart
+isolate. `tray_manager` 0.8.0 and its `nativeapi` 0.5.1+ core release those
+handles through a `NativeFinalizer` when the isolate group shuts down, and revoke
+the callbacks the previous isolate registered.
+
+Earlier versions released the handles only through a Dart `Finalizer`, which does
+not run on a Flutter hot restart: every restart left one more tray icon behind in
+the operating system and could call into a dead isolate on the next click. The
+Client therefore pins `tray_manager` at 0.8.0 or newer, and tray changes are
+verified with an actual hot restart (`sanad-dev restart client`), because a fresh
+process launch never exercises this boundary.
+
+### 6.2. Tray icon assets
+
+| Platform | Asset | Why |
+| :--- | :--- | :--- |
+| macOS | `client/assets/tray/sanad-tray-macos.png` | The bar owns the colour: the icon is a white monochrome glyph (`isIconTemplate = true`) drawn in the menu bar's own tint |
+| Windows / Linux | `client/assets/tray/sanad-tray-default.png` | The icon is drawn as-is, in brand blue `#60A5FA` |
+
+Both assets are 36x36 renders of
+`docs/assets/brand/sanad-adaptive-foreground-source.svg` (the same artwork as
+`client/assets/sanad_adaptive_foreground.png`): the artwork's alpha bounding box
+is centred on a square canvas with a 2% margin, so it fills the icon instead of
+floating inside the source file's empty margins, and the square canvas keeps the
+lockup's aspect ratio when the platform stretches the image to 18x18 points.
+Never point the tray at `client/assets/app-logo.png`: that artwork is fully
+opaque, so it draws as a black square in the menu bar. Regenerate both assets if
+the brand artwork changes, keeping the same canvas geometry and colours.
+
+macOS keeps the platform default icon size (18x18 points) and no explicit size is
+set; the tray adapter also releases any previously created icon before creating a
+replacement, so a re-initialization inside one isolate cannot orphan an icon.
+
+### 6.3. Linux build compatibility
+
 Tray support is macOS/Windows only, but the tray dependency is a normal
 cross-platform Flutter plugin, so its Linux backend is compiled for every Linux
 desktop build. `tray_manager` pulls in `nativeapi`, whose GTK/GIO backend calls
@@ -172,7 +210,7 @@ before the generated plugin subdirectories are added. This keeps supported Linux
 development toolchains (for example Ubuntu 22.04 with GLib 2.72) building the
 Client with the Linux tray enabled.
 
-### 6.1. Linux runtime surface
+### 6.4. Linux runtime surface
 
 - The tray icon is a `StatusNotifierItem` published over the session D-Bus by
   `tray_manager`, so no `libappindicator` package is required at runtime; the
