@@ -10,6 +10,7 @@ import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/user_attachment.dart';
@@ -20,6 +21,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
@@ -91,6 +93,11 @@ void main() {
     final configFile = File('${tempHomeDir.path}/config.yaml');
     configFile.writeAsStringSync('model_capabilities: {}\n');
     config = Config(environment: {'SANAD_HOME': tempHomeDir.path});
+    // The runtime boundary resolves its root from the process-level Sanad home,
+    // so the harness redirects and prepares an isolated root instead of relying
+    // on a developer machine's already prepared home.
+    setSanadHomeOverride(tempHomeDir.path);
+    await SanadHomeBootstrap.identity().prepare();
     GetIt.I.registerSingleton<Config>(config);
 
     providerRepo = ProviderInstanceRepository(state);
@@ -182,6 +189,7 @@ void main() {
   });
 
   tearDown(() async {
+    setSanadHomeOverride(null);
     if (tempHomeDir.existsSync()) {
       tempHomeDir.deleteSync(recursive: true);
     }

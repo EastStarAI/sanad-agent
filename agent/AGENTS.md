@@ -71,6 +71,7 @@ This contract applies to `agent/`.
 - `sanad-dev` linked-worktree runs provide one isolated `SANAD_HOME` containing identity, credentials, sessions, memories, and request dumps; they must remove inherited `SANAD_STATE_HOME`.
 - External and test harnesses may still use `SANAD_STATE_HOME` to redirect mutable state without relocating identity or provider credentials.
 - E2E tests that initialize DI/SQLite or launch an agent process must set temporary `SANAD_HOME` and `SANAD_STATE_HOME` roots explicitly; Dart child processes must receive both variables instead of inheriting the caller's values.
+- In-process suites that reach the runtime home boundary redirect it with `setSanadHomeOverride` and prepare that root before building the runtime, so a clean CI runner never depends on a developer machine's already prepared Sanad Home.
 - Source worktrees consume global Sanad configuration and must not create a competing repository-local `.env`.
 - Do not create hidden scratch or temporary directories inside the repository.
 - Missing provider configuration must not prevent daemon startup; fail lazily when an LLM operation actually requires a provider.
