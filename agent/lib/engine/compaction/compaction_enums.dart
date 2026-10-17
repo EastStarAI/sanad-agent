@@ -30,7 +30,38 @@ enum CompactionFailureReason {
   persistenceFailed,
   interrupted;
 
-  String get wireValue => name;
+  String get wireValue {
+    switch (this) {
+      case CompactionFailureReason.sessionBusy:
+        return 'session_busy';
+      case CompactionFailureReason.compactionInProgress:
+        return 'compaction_in_progress';
+      case CompactionFailureReason.claimLost:
+        return 'claim_lost';
+      case CompactionFailureReason.sourceRevisionStale:
+        return 'source_revision_stale';
+      case CompactionFailureReason.summarizationFailed:
+        return 'summarization_failed';
+      case CompactionFailureReason.continuityValidationFailed:
+        return 'continuity_validation_failed';
+      case CompactionFailureReason.projectionStillOverBudget:
+        return 'projection_still_over_budget';
+      case CompactionFailureReason.persistenceFailed:
+        return 'persistence_failed';
+      case CompactionFailureReason.interrupted:
+        return 'interrupted';
+    }
+  }
+
+  static CompactionFailureReason? fromWire(String? value) {
+    if (value == null) return null;
+    for (final reason in values) {
+      if (reason.wireValue == value || reason.name == value) {
+        return reason;
+      }
+    }
+    return null;
+  }
 }
 
 /// How request pressure was measured relative to provider-confirmed usage.

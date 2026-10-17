@@ -79,9 +79,7 @@ abstract final class CompactionOperationCodec {
     CompactionFailureReason? failureReason;
     final failureWire = row['failure_reason'] as String?;
     if (failureWire != null) {
-      failureReason = CompactionFailureReason.values.firstWhere(
-        (value) => value.wireValue == failureWire,
-      );
+      failureReason = CompactionFailureReason.fromWire(failureWire);
     }
     return CompactionOperationRecord(
       compactionId: row['compaction_id'] as String,

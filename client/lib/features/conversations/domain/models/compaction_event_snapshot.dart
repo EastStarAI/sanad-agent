@@ -194,18 +194,29 @@ class SessionCompactResult extends Equatable {
   });
 
   factory SessionCompactResult.fromJson(Map<String, dynamic> json) {
+    final outcome = json['outcome']?.toString() ?? 'failed';
+    final failureReason = json['failure_reason']?.toString() ??
+        (outcome != 'accepted' ? outcome : null);
     return SessionCompactResult(
-      outcome: json['outcome']?.toString() ?? 'failed',
-      failureReason: json['failure_reason']?.toString(),
+      outcome: outcome,
+      failureReason: failureReason,
       compactionId: json['compaction_id']?.toString(),
     );
   }
 
   bool get accepted => outcome == 'accepted';
 
-  bool get sessionBusy => outcome == 'session_busy';
+  bool get sessionBusy =>
+      outcome == 'session_busy' ||
+      outcome == 'sessionBusy' ||
+      failureReason == 'session_busy' ||
+      failureReason == 'sessionBusy';
 
-  bool get compactionInProgress => outcome == 'compaction_in_progress';
+  bool get compactionInProgress =>
+      outcome == 'compaction_in_progress' ||
+      outcome == 'compactionInProgress' ||
+      failureReason == 'compaction_in_progress' ||
+      failureReason == 'compactionInProgress';
 
   @override
   List<Object?> get props => [outcome, failureReason, compactionId];

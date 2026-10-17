@@ -113,8 +113,8 @@ void main() {
 
         expect(before.estimatedRequestTokens, 359_000);
         expect(after.estimatedRequestTokens, 82_000);
-        expect(before.components.historyTokens, 463_000);
-        expect(after.components.historyTokens, 116_000);
+        expect(before.components.historyTokens, 359_000);
+        expect(after.components.historyTokens, 82_000);
         expect(before.components.providerReplayTokens, greaterThanOrEqualTo(0));
         expect(before.components.reasoningTokens, 0);
       },

@@ -330,6 +330,12 @@ class CompactionBoundaryRepository {
     });
   }
 
+  /// Reconciles orphaned `started` compaction operations left over from an
+  /// interrupted daemon execution, transitioning them to terminal `failed`
+  /// with reason `interrupted`.
+  int reconcileOrphanedStartedOperations({DateTime? completedAt}) =>
+      recoverInterruptedStartedOperations(completedAt: completedAt);
+
   int recoverInterruptedStartedOperations({DateTime? completedAt}) {
     final terminalAt = (completedAt ?? DateTime.now())
         .toUtc()

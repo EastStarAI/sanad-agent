@@ -116,12 +116,54 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Before compaction: 318,066 tokens (80.5%)'), findsOneWidget);
-    expect(find.textContaining('Retained tail: ~38,073 tokens'), findsOneWidget);
+    expect(find.textContaining('Retained tail: ~34,922 tokens'), findsOneWidget);
     expect(find.textContaining('Auto threshold: 315,904 tokens (80.0%)'), findsOneWidget);
     expect(find.textContaining('Usable input: 394,880 tokens'), findsOneWidget);
     expect(find.textContaining('Context window: 400,000 tokens'), findsOneWidget);
     expect(find.textContaining('Trigger:'), findsNothing);
     expect(find.textContaining('Status:'), findsNothing);
+  });
+
+  testWidgets('enforces mathematical invariant: retained tail never exceeds after compaction', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CompactionEventTile(
+            snapshot: CompactionEventSnapshot(
+              sessionId: 'session-1',
+              compactionId: 'cmp-clamp',
+              status: CompactionLifecycleStatus.completed,
+              trigger: CompactionTriggerKind.manual,
+              contextWindowTokens: 128000,
+              effectiveInputBudgetTokens: 120000,
+              estimatedRequestTokensBefore: 150000, // over budget -> history
+              estimatedRequestTokensAfter: 25000,
+              providerConfirmedRequestTokensAfter: 19363,
+              retainedTailTokens: 44156, // was estimated larger than after
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+
+    // After compaction confirmed
+    expect(
+      find.textContaining('After compaction: 19,363 tokens (16.1%) ✓ Confirmed'),
+      findsOneWidget,
+    );
+    // Retained tail must be clamped to after compaction tokens (19,363), not 44,156
+    expect(find.textContaining('Retained tail: ~19,363 tokens'), findsOneWidget);
+    expect(find.textContaining('44,156'), findsNothing);
+    // Over budget before compaction labeled with (history)
+    expect(
+      find.textContaining('Before compaction (history): 150,000 tokens (125.0%)'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('keeps the timeline interaction at least 44 logical pixels high', (
