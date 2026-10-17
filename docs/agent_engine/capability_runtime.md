@@ -45,7 +45,10 @@ handlers. `file_edit` supports single find-and-replace (`old_string`/`new_string
 and atomic multi-chunk replacements (`edits`). Multi-chunk edits validate all chunks,
 verify uniqueness unless `replace_all` is set, and reject overlapping ranges before
 modifying the file on disk; non-overlapping matches are applied in reverse order
-(bottom-to-top) to preserve preceding text offsets and line positions. Paths are
+(bottom-to-top) to preserve preceding text offsets and line positions. The result
+payload reports `numEdits` plus `editStartLines` (per-chunk start lines aligned with
+the `---`-separated hunks in `patch`) so presentation layers can position each chunk
+without guessing. Paths are
 canonicalized before host access. Targets inside the selected workspace execute
 directly; targets outside it execute directly only in `full_access` mode, while
 `default` mode suspends the turn for user approval. Remembered grants are scoped
