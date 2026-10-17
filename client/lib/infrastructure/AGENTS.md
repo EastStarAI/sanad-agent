@@ -5,7 +5,7 @@ This contract applies strictly to the `sanad-client/lib/infrastructure/` directo
 
 ## Infrastructure Ownership
 * Use `infrastructure/` for low-level integration layers:
-  - Socket.IO and WebSocket connections.
+  - Socket.IO and WebSocket connections (`SocketConnectionController`, `SocketCommandTransport`, `HostedMediaRelayClient`, and the `SanadSocketService` facade).
   - Event routing and device client registries.
   - MCP configurations and automation connectors.
 * **DO NOT** place feature state management (Cubits/Blocs), UI components, or feature business workflows in this directory.
@@ -18,7 +18,7 @@ This contract applies strictly to the `sanad-client/lib/infrastructure/` directo
 - **Authenticated Local Transport:** Desktop Local Gateway HTTP and WebSocket consumers read the owner-only credential from the active Sanad Home and send it only as `x-sanad-local-token`. Never place it in a URL, query, process argument, compile-time define, preference, response, or log. Web and mobile never read it.
 - **Resilient Reconnections:**
   - Cloud transport relies on Socket.IO's native automatic reconnection logic.
-  - Local transport must use a custom automatic reconnection mechanism with exponential backoff (from 2s to 10s) and explicit disconnect/dispose guards built into `SanadSocketService` to ensure local capability restores dynamically.
+  - Local transport must use a custom automatic reconnection mechanism with exponential backoff (from 2s to 10s) and explicit disconnect/dispose guards built into `SocketConnectionController` (and exposed through `SanadSocketService`) to ensure local capability restores dynamically.
 - **Central Connection Ownership:** Delegate all routing and transport failovers to `DeviceConnectionCoordinator`. It must expose the effective `ConnectionScope` (`cloud` | `local`) based on `deviceId` and socket readiness, while keeping stream identity stable for each `device_id`. The coordinator delegates local daemon process management and status checking to the abstracted `LocalDaemonController` (defined in `sanad-agent/client/lib/features/devices/data/daemon/local_daemon_controller.dart`).
 - **Local Reachability Rule:** A device is a local candidate only when its `hardwareId` matches the current app hardware ID. Do not gate local routing on device or agent type.
 - **Online Semantics:** A same-hardware local daemon connection is sufficient to mark a device as online in the UI (since online means the daemon is reachable).
