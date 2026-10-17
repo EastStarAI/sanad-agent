@@ -485,7 +485,11 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     } else if (selectorState == RouteThinkingSelectorState.loading) {
       content = KeyedSubtree(
         key: const Key('route_thinking_mode_loading'),
-        child: widget.chipBuilder(context, 'Loading...', enabled: false),
+        child: widget.chipBuilder(
+          context,
+          l10n.thinkingModeLoadingLabel,
+          enabled: false,
+        ),
       );
     } else if (selectorState == RouteThinkingSelectorState.fetchFailure) {
       content = KeyedSubtree(
@@ -493,8 +497,12 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
         child: InkWell(
           onTap: () => unawaited(_loadSnapshot()),
           child: Tooltip(
-            message: 'Failed to load thinking options. Click to retry.',
-            child: widget.chipBuilder(context, 'Retry', enabled: true),
+            message: l10n.thinkingModeFetchFailureTooltip,
+            child: widget.chipBuilder(
+              context,
+              l10n.thinkingModeRetryLabel,
+              enabled: true,
+            ),
           ),
         ),
       );
@@ -566,7 +574,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
       content = PopupMenuButton<String>(
         key: const Key('route_thinking_mode_selector_button'),
         tooltip: selectedBudgetAnnotation == null
-            ? 'Select Thinking Mode'
+            ? l10n.thinkingModeSelectTooltip
             : l10n.thinkingModeSelectBudgetTooltip(selectedBudgetAnnotation),
         // Bounded width so a label plus its budget annotation stays readable
         // instead of overflowing the menu row.

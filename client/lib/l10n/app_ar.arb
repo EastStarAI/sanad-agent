@@ -373,6 +373,9 @@
   "clientCliDeny": "No, deny",
   "thinkingModeUnavailableLabel": "غير متاح",
   "thinkingModeUnavailableTooltip": "اختيار نمط التفكير غير متاح لهذا الجهاز.",
+  "thinkingModeLoadingLabel": "جارٍ التحميل...",
+  "thinkingModeRetryLabel": "إعادة المحاولة",
+  "thinkingModeFetchFailureTooltip": "تعذّر تحميل خيارات التفكير. انقر لإعادة المحاولة.",
   "thinkingModeNoControlLabel": "لا يوجد تحكم",
   "thinkingModeNoControlTooltip": "لا يوجد مستوى تفكير قابل للاختيار لهذا النموذج.",
   "thinkingModeUnknownLabel": "غير مُبلَّغ عنه",
@@ -380,6 +383,7 @@
   "thinkingModeNotSelectedLabel": "غير محدد",
   "thinkingModeTokenBudgetLabel": "ميزانية الرموز",
   "thinkingModeTokenBudgetAnnotation": "{tokens} توكن",
+  "thinkingModeSelectTooltip": "اختر نمط التفكير",
   "thinkingModeSelectBudgetTooltip": "اختر نمط التفكير · الميزانية: {budget}",
   "thinkingModeProviderDefaultHint": "الافتراضي لدى المزوّد"
 }
