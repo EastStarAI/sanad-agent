@@ -78,6 +78,14 @@ sanad skills add <source> --home "$SKL_HOME"
 |---|---|
 | Clean skill package | Installed; provenance records `scan: clean`. |
 | Staged package piping download to shell (`curl ... \| sh`) | Refused with finding listed; exit 1, nothing written. |
+| Staged package with declared host (`allowed_remote_exec`) matching download URL | Installed without `--allow-flagged`; provenance records `scan: allowed` and `allowed_remote_exec`. |
+| Staged package with undeclared host in download command | Refused with finding listed; exit 1, nothing written. |
+| Staged package with subdomain of declared host (`cdn.example.com`) | Installed without `--allow-flagged`; provenance records `scan: allowed`. |
+| Staged package with lookalike suffix (`example.com.evil.test`) or userinfo trick (`example.com@evil.test`) | Refused with finding listed; exit 1, nothing written. |
+| Staged package with one declared and one undeclared URL on same line | Refused with finding listed; exit 1, nothing written. |
+| Staged package declaring host but containing credential path or instruction override | Refused with non-suppressed finding listed; exit 1, nothing written. |
+| Multi-skill package where package A declares allowlist and package B does not | Package A allowed; package B with remote-exec is refused. |
+| Malformed or missing declaration | Degrades to default screening; malformed entries ignored. |
 | Staged package with credential path access (`.ssh/id_...`) | Refused with finding listed; exit 1, nothing written. |
 | Staged package with destructive commands (`rm -rf /`) | Refused with finding listed; exit 1, nothing written. |
 | Staged package with `chmod 777` | Refused with finding listed; exit 1, nothing written. |
