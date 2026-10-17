@@ -185,4 +185,88 @@ void main() {
       'later-legacy',
     ]);
   });
+
+  group('Gate A — Informational event reconciliation parity', () {
+    test('route transition merges when live event has logical id and history has UUID event_id', () {
+      final at = DateTime.utc(2026, 10, 15, 10);
+      final liveEvent = CanonicalEvent(
+        id: 'route_transition_session-1_2',
+        kind: EventKind.informational,
+        status: EventStatus.done,
+        text: 'Switched automatically from A to B',
+        timestamp: at,
+        sessionId: 'session-1',
+        eventId: 'trans-uuid-1',
+        metadata: const {
+          'informational': true,
+          'event_id': 'trans-uuid-1',
+          'route_revision': 2,
+          'source': 'auto_failover',
+        },
+      );
+      final historyEvent = CanonicalEvent(
+        id: 'trans-uuid-1',
+        kind: EventKind.informational,
+        status: EventStatus.done,
+        text: 'Switched automatically from A to B',
+        timestamp: at,
+        sessionId: 'session-1',
+        eventId: 'trans-uuid-1',
+        metadata: const {
+          'informational': true,
+          'event_id': 'trans-uuid-1',
+          'route_revision': 2,
+          'source': 'auto_failover',
+        },
+      );
+
+      final merged = CanonicalTimelineReconciler.fold([liveEvent, historyEvent]);
+
+      expect(
+        merged,
+        hasLength(1),
+        reason: 'Live route transition and history route transition must merge by event_id/route_revision, not duplicate',
+      );
+    });
+
+    test('session fork marker merges by session identity even if IDs differ', () {
+      final at = DateTime.utc(2026, 10, 15, 10);
+      final liveFork = CanonicalEvent(
+        id: 'fork_123456789',
+        kind: EventKind.informational,
+        status: EventStatus.done,
+        text: 'Conversation forked',
+        timestamp: at,
+        sessionId: 'session-child-1',
+        metadata: const {
+          'informational': true,
+          'informational_kind': 'session_fork',
+          'fork_sequence': 1,
+        },
+      );
+      final historyFork = CanonicalEvent(
+        id: 'fork_session-child-1',
+        kind: EventKind.informational,
+        status: EventStatus.done,
+        text: 'Conversation forked',
+        timestamp: at,
+        sessionId: 'session-child-1',
+        eventId: 'fork_session-child-1',
+        metadata: const {
+          'informational': true,
+          'informational_kind': 'session_fork',
+          'fork_sequence': 1,
+        },
+      );
+
+      final merged = CanonicalTimelineReconciler.fold([liveFork, historyFork]);
+
+      expect(
+        merged,
+        hasLength(1),
+        reason: 'Live fork event and history fork event must merge into a single timeline event',
+      );
+    });
+  });
 }
+

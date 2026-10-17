@@ -5,10 +5,16 @@ enum SessionRouteSource {
   recovery,
   autoFailover;
 
+  String get wireValue => switch (this) {
+    SessionRouteSource.user => 'user',
+    SessionRouteSource.recovery => 'recovery',
+    SessionRouteSource.autoFailover => 'auto_failover',
+  };
+
   static SessionRouteSource fromWireValue(Object? value) => switch (value?.toString()) {
     'user' => SessionRouteSource.user,
     'recovery' => SessionRouteSource.recovery,
-    'auto_failover' => SessionRouteSource.autoFailover,
+    'auto_failover' || 'autoFailover' => SessionRouteSource.autoFailover,
     final value => throw FormatException('Unknown session route source: $value'),
   };
 }

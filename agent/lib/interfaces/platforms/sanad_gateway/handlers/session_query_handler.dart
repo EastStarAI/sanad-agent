@@ -604,31 +604,120 @@ class SessionQueryHandler {
         session.forkSequence > 0 &&
         session.forkedFromMessageId != null &&
         session.forkedFromTurnId != null) {
-      final eventId = 'fork_${session.sessionId}';
-      historyMessages.add({
-        'id': eventId,
-        'event_id': eventId,
-        'sender': 'system',
-        'type': CanonicalEventTypes.sessionForked,
-        'content': 'Conversation forked',
-        'session_id': session.sessionId,
-        'created_at': session.createdAt.toUtc().toIso8601String(),
-        'metadata': {
-          'informational': true,
-          'informational_kind': 'session_fork',
-          'lineage_id': session.lineageId,
-          'parent_session_id': session.parentSessionId,
-          'forked_from_message_id': session.forkedFromMessageId,
-          'forked_from_turn_id': session.forkedFromTurnId,
-          'fork_sequence': session.forkSequence,
-        },
-      });
+      final targetMsgId = session.forkedFromMessageId!;
+      final targetTurnId = session.forkedFromTurnId!;
+
+      PersistedMessage? forkAnchorMessage;
+      for (final pm in persistedMessages) {
+        final m = pm.message;
+        final identity = MessageHistoryIdentity.read(m);
+        final matchesMsgId = identity.messageId == targetMsgId ||
+            identity.originMessageId == targetMsgId ||
+            m.metadata?['message_id']?.toString() == targetMsgId ||
+            m.metadata?['origin_message_id']?.toString() == targetMsgId;
+        final matchesTurn = identity.turnId == targetTurnId ||
+            m.metadata?['turn_id']?.toString() == targetTurnId;
+        if (matchesMsgId && matchesTurn) {
+          forkAnchorMessage = pm;
+          break;
+        }
+      }
+      if (forkAnchorMessage == null) {
+        for (final pm in persistedMessages) {
+          final m = pm.message;
+          final identity = MessageHistoryIdentity.read(m);
+          final matchesMsgId = identity.messageId == targetMsgId ||
+              identity.originMessageId == targetMsgId ||
+              m.metadata?['message_id']?.toString() == targetMsgId ||
+              m.metadata?['origin_message_id']?.toString() == targetMsgId;
+          if (matchesMsgId) {
+            forkAnchorMessage = pm;
+            break;
+          }
+        }
+      }
+      if (forkAnchorMessage == null) {
+        for (final pm in persistedMessages) {
+          final m = pm.message;
+          final identity = MessageHistoryIdentity.read(m);
+          final matchesTurn = identity.turnId == targetTurnId ||
+              m.metadata?['turn_id']?.toString() == targetTurnId;
+          if (matchesTurn) {
+            forkAnchorMessage = pm;
+            break;
+          }
+        }
+      }
+
+      if (forkAnchorMessage != null) {
+        int anchorRowId = forkAnchorMessage.rowId;
+        final anchorPmIndex = persistedMessages.indexOf(forkAnchorMessage);
+        for (var i = anchorPmIndex + 1; i < persistedMessages.length; i++) {
+          final pm = persistedMessages[i];
+          final id = MessageHistoryIdentity.read(pm.message);
+          if (id.turnId == targetTurnId ||
+              pm.message.metadata?['turn_id'] == targetTurnId) {
+            anchorRowId = pm.rowId;
+          } else {
+            break;
+          }
+        }
+
+        var insertionIndex = -1;
+        for (var i = historyMessages.length - 1; i >= 0; i--) {
+          final row = historyMessages[i];
+          if (row['source_message_row_id'] == anchorRowId) {
+            insertionIndex = i + 1;
+            break;
+          }
+          final meta = row['metadata'] as Map<String, dynamic>?;
+          final msgId =
+              row['message_id']?.toString() ?? meta?['message_id']?.toString();
+          final originId = meta?['origin_message_id']?.toString();
+          if (msgId == targetMsgId || originId == targetMsgId) {
+            insertionIndex = i + 1;
+            break;
+          }
+        }
+
+        if (insertionIndex != -1) {
+          final eventId = 'fork_${session.sessionId}';
+          final forkRow = <String, dynamic>{
+            'id': eventId,
+            'event_id': eventId,
+            'sender': 'system',
+            'type': CanonicalEventTypes.sessionForked,
+            'content': 'Conversation forked',
+            'session_id': session.sessionId,
+            'created_at': session.createdAt.toUtc().toIso8601String(),
+            'metadata': {
+              'informational': true,
+              'informational_kind': 'session_fork',
+              'lineage_id': session.lineageId,
+              'parent_session_id': session.parentSessionId,
+              'forked_from_message_id': session.forkedFromMessageId,
+              'forked_from_turn_id': session.forkedFromTurnId,
+              'fork_sequence': session.forkSequence,
+            },
+          };
+          if (insertionIndex >= historyMessages.length) {
+            historyMessages.add(forkRow);
+          } else {
+            historyMessages.insert(insertionIndex, forkRow);
+          }
+        }
+      }
     }
 
-    for (final transition
-        in _routeTransitions?.findForSession(sessionId) ??
-            const <SessionRouteTransition>[]) {
-      if (transition.source != SessionRouteSource.autoFailover) continue;
+    final transitions = (_routeTransitions?.findForSession(sessionId) ??
+            const <SessionRouteTransition>[])
+        .toList()
+      ..sort((a, b) => a.routeRevision.compareTo(b.routeRevision));
+
+    for (final transition in transitions) {
+      if (transition.reason == 'preferences_updated') {
+        continue;
+      }
       final previousProviderLabel =
           transition.previousProviderDisplayName ??
           transition.previousProviderInstanceId ??
@@ -636,59 +725,148 @@ class SessionQueryHandler {
       final nextProviderLabel =
           transition.providerDisplayName ?? transition.providerInstanceId;
       final reasonText = transition.reason?.replaceAll('_', ' ');
+
+      final String contentText;
+      switch (transition.source) {
+        case SessionRouteSource.autoFailover:
+          contentText =
+              'Switched automatically from '
+              '$previousProviderLabel '
+              'to $nextProviderLabel'
+              '${reasonText == null ? '' : ' because $reasonText'}. '
+              'Continuing with ${transition.model}.';
+          break;
+        case SessionRouteSource.user:
+          contentText =
+              'Switched provider to $nextProviderLabel (${transition.model}).';
+          break;
+        case SessionRouteSource.recovery:
+          contentText =
+              'Recovered session with $nextProviderLabel (${transition.model}).';
+          break;
+      }
+
       final transitionRow = <String, dynamic>{
         'id': transition.eventId,
         'event_id': transition.eventId,
         'sender': 'system',
         'type': 'session_route_transition',
-        'content':
-            'Switched automatically from '
-            '$previousProviderLabel '
-            'to $nextProviderLabel'
-            '${reasonText == null ? '' : ' because $reasonText'}. '
-            'Continuing with ${transition.model}.',
+        'content': contentText,
         ...transition.toPayload(),
         'created_at': transition.createdAt.toIso8601String(),
       };
-      // History rows use synthetic timestamps (session creation + index), so
-      // comparing them against the real transition time misplaces the notice.
-      // Anchor on the durable request_id instead: the transition belongs to
-      // the turn that carried that request, right before its next event.
+
       var insertionIndex = -1;
       final requestId = transition.requestId;
+
       if (requestId != null && requestId.isNotEmpty) {
-        var lastMatch = -1;
-        for (var i = 0; i < historyMessages.length; i++) {
-          if (historyMessages[i]['request_id']?.toString() == requestId) {
-            lastMatch = i;
+        final userMatchIndex = historyMessages.indexWhere(
+          (m) =>
+              m['request_id']?.toString() == requestId ||
+              (m['metadata'] is Map &&
+                  (m['metadata'] as Map)['request_id']?.toString() ==
+                      requestId),
+        );
+
+        if (userMatchIndex != -1) {
+          var turnEndIndex = historyMessages.length;
+          for (var i = userMatchIndex + 1; i < historyMessages.length; i++) {
+            final m = historyMessages[i];
+            if (m['sender'] == 'user' &&
+                m['input_kind'] != 'steer' &&
+                (m['metadata'] is! Map ||
+                    (m['metadata'] as Map)['steer'] != true)) {
+              turnEndIndex = i;
+              break;
+            }
+          }
+
+          var lastBeforeIndex = userMatchIndex;
+          for (var i = userMatchIndex + 1; i < turnEndIndex; i++) {
+            final row = historyMessages[i];
+            final type = row['type']?.toString();
+            if (type == 'final_answer') {
+              break;
+            }
+            final rawTerminal =
+                row['terminal_at']?.toString() ??
+                row['started_at']?.toString() ??
+                (row['metadata'] is Map
+                    ? (row['metadata'] as Map)['terminal_at']?.toString() ??
+                        (row['metadata'] as Map)['started_at']?.toString()
+                    : null);
+            if (rawTerminal != null) {
+              final parsed = DateTime.tryParse(rawTerminal);
+              if (parsed != null && parsed.isAfter(transition.createdAt)) {
+                break;
+              }
+            }
+            if (row['provider'] == transition.providerInstanceId ||
+                (row['metadata'] is Map &&
+                    (row['metadata'] as Map)['provider'] ==
+                        transition.providerInstanceId)) {
+              break;
+            }
+            lastBeforeIndex = i;
+          }
+          insertionIndex = lastBeforeIndex + 1;
+        } else {
+          // If the message exists in the session but on another page, don't insert here
+          final existsInSession = persistedMessages.isNotEmpty &&
+              _sessionManager.hasMessageWithRequestId(sessionId, requestId);
+          if (existsInSession) {
+            continue;
           }
         }
-        if (lastMatch != -1) {
-          insertionIndex = lastMatch + 1;
-        }
       }
-      if (insertionIndex == -1 &&
-          requestId != null &&
-          requestId.isNotEmpty &&
-          !isTailPage) {
-        continue;
-      }
-      if (insertionIndex == -1 && !isTailPage) {
-        continue;
-      }
+
       if (insertionIndex == -1) {
-        // Legacy transitions without request identity remain tail-only.
-        insertionIndex = historyMessages.indexWhere((row) {
-          final createdAt = DateTime.tryParse(
-            row['created_at']?.toString() ?? '',
-          );
-          return createdAt != null && createdAt.isAfter(transition.createdAt);
-        });
-        if (insertionIndex == -1) {
+        DateTime? rowRealTime(Map<String, dynamic> row) {
+          final rawTerminal =
+              row['terminal_at']?.toString() ??
+              row['started_at']?.toString() ??
+              (row['metadata'] is Map
+                  ? (row['metadata'] as Map)['terminal_at']?.toString() ??
+                      (row['metadata'] as Map)['started_at']?.toString()
+                  : null);
+          final rawReceived =
+              (row['metadata'] is Map
+                  ? (row['metadata'] as Map)['received_at']?.toString()
+                  : null) ??
+              row['received_at']?.toString();
+          final raw = rawTerminal ?? rawReceived;
+          if (raw != null) {
+            return DateTime.tryParse(raw)?.toUtc();
+          }
+          return null;
+        }
+
+        var lastBeforeTimeIndex = -1;
+        for (var i = 0; i < historyMessages.length; i++) {
+          final time = rowRealTime(historyMessages[i]);
+          if (time != null &&
+              (time.isBefore(transition.createdAt.toUtc()) ||
+                  time.isAtSameMomentAs(transition.createdAt.toUtc()))) {
+            lastBeforeTimeIndex = i;
+          }
+        }
+
+        if (lastBeforeTimeIndex != -1) {
+          insertionIndex = lastBeforeTimeIndex + 1;
+        } else if (isTailPage) {
           insertionIndex = historyMessages.length;
         }
       }
-      historyMessages.insert(insertionIndex, transitionRow);
+
+      if (insertionIndex == -1) {
+        continue;
+      }
+
+      if (insertionIndex >= historyMessages.length) {
+        historyMessages.add(transitionRow);
+      } else {
+        historyMessages.insert(insertionIndex, transitionRow);
+      }
     }
 
     final inFlight = _sessionManager.getInFlightSnapshot(sessionId);

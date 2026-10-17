@@ -45,6 +45,9 @@ class SessionManager {
     _inFlightSnapshots.remove(sessionId);
   }
 
+  bool hasMessageWithRequestId(String sessionId, String requestId) =>
+      _db.hasMessageWithRequestId(sessionId, requestId);
+
   factory SessionManager() {
     _instance ??= SessionManager._internal();
     return _instance!;

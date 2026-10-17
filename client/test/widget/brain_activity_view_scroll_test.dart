@@ -480,6 +480,39 @@ void main() {
     );
   });
 
+  testWidgets('forked session with subsequent messages anchors at the fork marker when opening', (tester) async {
+    final messages = [
+      for (var i = 0; i < 1000; i += 1) _event('fork-old-$i', EventKind.finalAnswer, 'fork old answer $i'),
+      CanonicalEvent(
+        id: 'fork_child-1',
+        kind: EventKind.informational,
+        text: 'Conversation forked',
+        timestamp: DateTime.utc(2026, 8, 31),
+        metadata: const {
+          'informational_kind': 'session_fork',
+          'fork_sequence': 1,
+        },
+      ),
+      for (var i = 0; i < 50; i += 1) _event('fork-subsequent-$i', EventKind.finalAnswer, 'subsequent answer $i'),
+    ];
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: messages,
+      initialViewportAnchorEventId: 'fork-old-0',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Conversation forked'), findsOneWidget);
+    expect(find.text('fork old answer 0'), findsNothing);
+  });
+
   testWidgets('restores a saved event for an idle session', (tester) async {
     final messages = [
       for (var i = 0; i < 1000; i += 1) _event('old-$i', EventKind.finalAnswer, 'old answer $i'),
