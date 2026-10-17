@@ -11,3 +11,10 @@ paths = [
   '''^agent/test/interfaces/remote_device_control_g6_security_test\.dart$''',
   '''^client/test/unit/services/sanad_socket_service_test\.dart$''',
 ]
+
+[[allowlists]]
+description = "CocoaPods SPEC CHECKSUMS in the macOS lockfile are podspec hashes, not credentials"
+rules = ["generic-api-key"]
+paths = [
+  '''^client/macos/Podfile\.lock$''',
+]
