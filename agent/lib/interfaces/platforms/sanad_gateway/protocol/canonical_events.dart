@@ -1,6 +1,85 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import '../../../../core/models/view_image_media_metadata.dart';
+export '../../../../core/models/view_image_media_metadata.dart'
+    show CanonicalMediaAvailability;
+
+import '../../../../core/models/message.dart';
+import '../../../../core/models/tool_execution_result.dart';
 import '../../../models/delivery/models.dart';
 import '../../../models/device_control.dart';
 import '../../../models/remote_cli.dart';
+
+final class CanonicalViewImageMedia extends ViewImageMediaMetadata {
+  const CanonicalViewImageMedia({
+    required super.mediaId,
+    required super.safeName,
+    required super.mimeType,
+    required super.width,
+    required super.height,
+    required super.availability,
+    this.bytes,
+  });
+
+  /// Agent-internal retrieval bytes. Inherited serialization is byte-free.
+  final Uint8List? bytes;
+}
+
+final class ViewImageMediaProjection {
+  static CanonicalViewImageMedia? project({
+    required String sessionId,
+    required String? toolName,
+    required String? toolCallId,
+    required ToolExecutionResult? result,
+  }) {
+    final metadata = ViewImageMediaMetadata.project(
+      sessionId: sessionId,
+      toolName: toolName,
+      toolCallId: toolCallId,
+      result: result,
+    );
+    if (metadata == null) return null;
+    final image = result!.blocks.whereType<ToolImageBlock>().firstOrNull;
+    return CanonicalViewImageMedia(
+      mediaId: metadata.mediaId,
+      safeName: metadata.safeName,
+      mimeType: metadata.mimeType,
+      width: metadata.width,
+      height: metadata.height,
+      availability: metadata.availability,
+      bytes: image == null
+          ? null
+          : Uint8List.fromList(base64.decode(image.dataBase64)),
+    );
+  }
+
+  static CanonicalViewImageMedia? resolve({
+    required String sessionId,
+    required String mediaId,
+    required List<Message> messages,
+  }) {
+    final toolNames = <String, String>{};
+    for (final message in messages) {
+      for (final call in message.toolCalls ?? const []) {
+        toolNames[call.id] = call.name;
+      }
+      if (message.role != MessageRole.tool) continue;
+      final callId =
+          message.toolCallId ?? message.metadata?['tool_call_id']?.toString();
+      final projection = project(
+        sessionId: sessionId,
+        toolName: callId != null ? toolNames[callId] : null,
+        toolCallId: callId,
+        result: message.toolResult,
+      );
+      if (projection?.mediaId == mediaId) return projection;
+    }
+    return null;
+  }
+}
+
+typedef ViewImageMediaHistoryLoader = List<Message> Function(String sessionId);
 
 /// Represents a standard event in the Sanad Unified Protocol.
 class CanonicalEvent {

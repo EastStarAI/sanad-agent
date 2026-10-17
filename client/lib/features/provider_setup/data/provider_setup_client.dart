@@ -129,6 +129,10 @@ abstract class ProviderSetupClient {
     DeviceConfig? agent,
   });
 
+  /// Broadcast stream of model cache update events (`started`, `updated`, `failed`)
+  /// emitted on terminal model refreshes and authoritative daemon notifications.
+  Stream<ModelCacheUpdateEvent> get modelUpdates => const Stream.empty();
+
   Future<List<RecentModelDto>> modelRecentList({DeviceConfig? agent});
 
   Future<void> modelRecentRecord({

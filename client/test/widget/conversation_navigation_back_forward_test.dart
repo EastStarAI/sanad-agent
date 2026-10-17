@@ -14,6 +14,7 @@ import 'package:sanad_client/features/auth/domain/auth_repository.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/conversations/data/repositories/conversation_media_loader_resolver.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
@@ -155,7 +156,15 @@ void main() {
       ..registerSingleton<DeviceCapabilitiesStore>(capabilities)
       ..registerSingleton<LocalToolRuntimeService>(LocalToolRuntimeService())
       ..registerSingleton<WorkspaceToolRuntimeContext>(WorkspaceToolRuntimeContext())
-      ..registerSingleton<ProviderSetupClient>(_FakeProviderSetupClient());
+      ..registerSingleton<ProviderSetupClient>(_FakeProviderSetupClient())
+      // The chat pane resolves its byte transport through this resolver, so the
+      // harness registers it exactly like `configureDependencies()` does.
+      ..registerSingleton<ConversationMediaLoaderResolver>(
+        ConversationMediaLoaderResolver(
+          cloudSocketService: socket,
+          hardwareId: deviceA.id,
+        ),
+      );
     providerUsage = ProviderUsageCubit(
       localDeviceId: deviceA.id,
       client: _FakeProviderSetupClient(),

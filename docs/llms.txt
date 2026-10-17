@@ -58,6 +58,8 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./scripts/sanad_dev/lib/src/runtime/AGENTS.md): Rules governing ./scripts/sanad_dev/lib/src/runtime.
 - [AGENTS](./shared/auth_lock/AGENTS.md): Rules governing ./shared/auth_lock.
 - [AGENTS](./shared/client_identity/AGENTS.md): Rules governing privacy-safe Client display references shared by Agent and Client.
+- [AGENTS](./shared/public_service_endpoints/AGENTS.md): Rules governing ./shared/public_service_endpoints.
+- [AGENTS](./shared/windows_path/AGENTS.md): Rules governing ./shared/windows_path.
 
 ## Functional Features & Architecture Guides
 
@@ -65,6 +67,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Capability Runtime Architecture](docs/agent_engine/capability_runtime.md): Architecture of tool specifications, runtime catalog assembly, permissions, MCP, workspace/web services, skills, and platform tools.
 - [Codex Responses Runtime Design](docs/agent_engine/codex_responses_runtime_design.md): تصميم codec وحالة الاستمرارية والبث والاستكمال لمحول Codex Responses في Sanad.
 - [LLM Adapter Runtime Contract](docs/agent_engine/llm_adapter_runtime_contract.md): عقد خيارات طلب النموذج، reasoning القابل للعرض، وحالة المزود اللازمة للاستكمال.
+- [Sanad Delegate CLI Relay Specification](docs/agent_engine/sanad_delegate_relay.md): Machine contract for the native `sanad run` relay: argument/workspace security boundaries, versioned result and event artifacts, exit codes, and supervisor lifecycle with event-first intervention.
 - [خارطة العمليات والأتمتة والنشر](docs/operations/MOC.md): فهرس وخارطة وثائق مسارات الأتمتة n8n، إعدادات الحاويات Docker، ومخططات النشر والتشغيل.
 - [Brand Asset Generation and Platform Handoff](docs/operations/brand_asset_handoff.md): Canonical Sanad identity sources, generated platform assets, review-ready community deliverables, and live-surface ownership.
 - [Code Signing Policy](docs/operations/code_signing_policy.md): Public artifact trust, protected signing, role separation, verification, and revocation policy for Sanad releases.
@@ -87,6 +90,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Agent Turn Startup Performance QA](docs/qa_maintenance/agent_turn_startup_performance_qa.md): Regression matrix for metadata-only admission, atomic root-message append, revision-validated history reuse, and Windows long-session latency.
 - [Bundled Product Skills QA](docs/qa_maintenance/bundled_product_skills_qa.md): Regression matrix for deterministic one-file skill embedding, SANAD_HOME installation, update, removal, customization safety, startup performance, and release artifacts.
 - [Clarifying Question RTL QA](docs/qa_maintenance/clarifying_question_rtl_qa.md): Verification matrix for Arabic directionality and platform-aware multiline behavior in clarifying questions.
+- [CLI Session Observability & Safe Intervention QA Matrix](docs/qa_maintenance/cli_session_observability_intervention_qa.md): QA validation matrix for daemon-backed CLI session observability, authoritative inspection, explicit question answering, ordinary tool permission decisions, cross-session safety, and scoped session termination.
 - [Client CLI and Remote Relay QA](docs/qa_maintenance/client_cli_remote_relay_qa.md): Gate-linked pass/fail coverage for Client CLI host, permissions, sanad-client runner, and remote relay delegation.
 - [Desktop Background Lifecycle and System Tray QA](docs/qa_maintenance/desktop_background_and_system_tray_qa.md): Gate-linked pass/fail coverage for close-to-hide behavior, tray projection, Agent/CLI lifecycle actions, and the manual macOS/Windows verification checklist.
 - [Client CLI and Background Operation](docs/product/client_cli_and_background_operation.md): User-facing behavior of Client CLI enablement, Default/Full-access permission modes, approval and denial outcomes, and macOS/Windows background tray operation.
@@ -103,10 +107,12 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Device Name Editing QA](docs/qa_maintenance/device_name_editing_qa.md): QA scenarios and test matrices for verifying device renaming.
 - [Device Workspace Sidebar QA](docs/qa_maintenance/device_workspace_sidebar_qa.md): Focused QA coverage for the Plan 32c device-scoped sidebar, including pagination, cache-first rendering, responsive layout, accessibility, and live ordering.
 - [Live Context Usage Indicator QA](docs/qa_maintenance/live_context_usage_indicator_qa.md): Regression matrix for latest provider usage, cached-input visibility, tool-loop updates, and history restoration.
+- [LM Studio Native Reasoning Discovery QA](docs/qa_maintenance/lm_studio_native_reasoning_discovery_qa.md): Regression matrix for exact native reasoning discovery, declared-descriptor delivery, unchanged `reasoning_effort` bodies, and fail-closed absent/malformed/ambiguous evidence.
 - [Local Gateway and Sanad Home Security QA](docs/qa_maintenance/local_gateway_and_sanad_home_security_qa.md): Regression matrix for authenticated loopback transport, secure local files, startup preparation, and isolated runtimes.
 - [Linux Service Lifecycle QA](docs/qa_maintenance/linux_service_lifecycle_qa.md): Automated and clean-host verification matrix for user/system systemd, OpenRC, typed status, migration, and transactional rollback.
 - [MCP Server Configuration QA](docs/qa_maintenance/mcp_server_configuration_qa.md): Security, form, import/export, OAuth, lifecycle, and regression checks for daemon-owned MCP server configuration.
 - [Memory Tool Reliability QA](docs/qa_maintenance/memory_tool_reliability.md): Regression matrix for compact memory results, atomic batches, file safety, bounded recovery, and frozen prompt snapshots.
+- [NVIDIA NIM Native Thinking Wire QA](docs/qa_maintenance/nvidia_thinking_wire_qa.md): Hosted NIM per-model thinking contracts, typed `chat_template_kwargs` toggles, wire-dialect boundaries, and the self-hosted-only Qwen declaration.
 - [Message Edit and Retry QA Matrix](docs/qa_maintenance/message_edit_retry_qa.md): Quality Assurance matrix for root-turn edit/retry, steer exclusion, idle boundary, and preserved original history.
 - [Conversation Fork QA Matrix](docs/qa_maintenance/conversation_fork_qa.md): Quality Assurance matrix for materialized conversation fork, lineage, and parent/child independence.
 - [SEC-01E Mobile OAuth Callback QA](docs/qa_maintenance/mobile_oauth_callback_qa.md): Regression and physical-device gates for PKCE callback delivery through Android App Links and iOS Universal Links.
@@ -116,6 +122,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Plan 30 Runtime Recovery Matrix](docs/qa_maintenance/plan30_runtime_recovery_matrix.md): Focused QA ownership for runtime recovery, route confirmation, reconnect hydration, and never-trapped-session behavior.
 - [Plan 50 Cancellation Regression Matrix](docs/qa_maintenance/plan50_cancellation_regression_matrix.md): Verified cancellation, cleanup, delivery-order, and restart-hydration regression coverage for Plan 50.
 - [OpenRouter App Attribution QA](docs/qa_maintenance/openrouter_app_attribution_qa.md): Regression matrix for exact attribution headers, sync/stream forwarding, authentication preservation, and provider isolation.
+- [OpenRouter Reasoning Discovery QA](docs/qa_maintenance/openrouter_reasoning_discovery_qa.md): Bounded aggregator finite-effort declaration discovery end to end into the declared descriptor and the exact Chat `reasoning` envelope, with fail-closed missing/malformed/ambiguous evidence.
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
 - [Provider-Aware Thinking Mode QA](docs/qa_maintenance/provider_aware_thinking_mode_qa.md): Focused matrix for model-scoped thinking controls, fail-closed unknown routes, sync/stream payload parity, and composer selector states.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
@@ -127,6 +134,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Session Title Generation QA](docs/qa_maintenance/session_title_generation_qa.md): Regression coverage for first-exchange background title generation, stale-result rejection, and client synchronization.
 - [Task 31 Authoritative Session State QA Matrix](docs/qa_maintenance/task31_authoritative_session_state_matrix.md): Regression coverage for durable execution snapshots, per-session attention isolation, reconnect recovery, and authoritative route failover UX.
 - [Task 36 Authoritative Steer, Queue, and Stop Recovery QA Matrix](docs/qa_maintenance/task36_authoritative_steer_queue_stop_recovery_matrix.md): Regression coverage for daemon-owned delivery classification, pending-steer cancellation, queue mutations, lossless Stop draft recovery, and first-writer restart claims.
+- [Remaining Hard-Coded UI Strings (Task 95)](docs/qa_maintenance/task95-remaining-ui-strings.md): Living inventory of remaining hard-coded English UI literals in Client presentation and screens after Task 95, grouped by file with counts, as the canonical incremental-localization checklist.
 - [Agent State Database Maintenance QA](docs/qa_maintenance/agent_state_database_maintenance_qa.md): Run/skip/fail matrix for startup orphan cleanup, 14-day terminal work-item prune, and thresholded VACUUM of state.db.
 - [Test Suite Performance and Ownership QA](docs/qa_maintenance/test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
 - [View Image Tool QA](docs/qa_maintenance/view_image_tool_qa.md): Regression matrix for typed results, user attachments, View Image conversation media, local/remote security, recovery, and pruning.
@@ -175,6 +183,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Workspace Identity, Rename, and Change Path Protocol](docs/technical/workspace_identity_protocol.md): Stable workspace UUID, availability projection, rename, path repair, and client routing contract.
 - [Windows-first Performance Plan](docs/plans/97-windows-first-agent-client-performance.md): Reviewed coordinated Windows-first Agent/Client responsiveness, recovery, request ownership, static activity UI, and final platform verification.
 - [Windows-first Performance QA](docs/qa_maintenance/windows_first_performance_qa.md): Before/after metrics, request-count and rendering regressions, test-cost budgets, and final interactive acceptance.
+- [Provider Composer Catalog Freshness QA](docs/qa_maintenance/provider_composer_catalog_freshness.md): Snapshot-generation authority, stale-response/clear-device races, composer label refresh and approval-gated live acceptance.
 - [Implementation Plans](docs/plans/): Architectural blueprints, milestones, and step-by-step implementation plans for project development phases.
 
 ## Reference Projects

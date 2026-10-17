@@ -25,6 +25,7 @@ dependencies:
   uuid: ^4.5.1
   ffi: ^2.1.2
   intl: ^0.20.0
+  image: ^4.9.1
   sanad_release_contract:
     path: ../release/contract
   sanad_auth_lock:

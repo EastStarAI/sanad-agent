@@ -1,8 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -21,6 +26,8 @@ void main() {
   late SessionManager sessions;
   late PersistedRuntimeStateRepository runtime;
   late CompactionBoundaryRepository compactionBoundaries;
+  late AttachmentStore attachmentStore;
+  late Directory tempHomeDir;
   late _RecordingOrchestrator orchestrator;
   late SessionTurnReplayCommandHandler handler;
   late String sessionId;
@@ -36,6 +43,8 @@ void main() {
       state,
       SessionHistoryRevisionRepository(state),
     );
+    tempHomeDir = Directory.systemTemp.createTempSync('replay_att_test_');
+    attachmentStore = AttachmentStore(state, stateHome: tempHomeDir.path);
     orchestrator = _RecordingOrchestrator();
     handler = SessionTurnReplayCommandHandler(
       orchestrator: orchestrator,
@@ -43,6 +52,7 @@ void main() {
       persistedState: runtime,
       compactionBoundaries: compactionBoundaries,
       bridge: _EnvelopeBridge(),
+      attachmentStore: attachmentStore,
       idleWaitTimeout: const Duration(milliseconds: 80),
       idlePollInterval: const Duration(milliseconds: 10),
     );
@@ -50,9 +60,51 @@ void main() {
   });
 
   tearDown(() async {
+    if (tempHomeDir.existsSync()) {
+      tempHomeDir.deleteSync(recursive: true);
+    }
     SessionManager.resetForTesting();
     await getIt.reset();
   });
+
+  Future<UserAttachment> createAttached({
+    required String sessionId,
+    required String messageId,
+    required String admissionId,
+    String name = 'photo.png',
+    List<int> bytes = const [1, 2, 3, 4],
+  }) async {
+    final sha = sha256.convert(bytes).toString();
+    final upload = await attachmentStore.create(
+      fileName: name,
+      expectedSize: bytes.length,
+      expectedSha256: sha,
+    );
+    await attachmentStore.write(upload, bytes);
+    final committed = await attachmentStore.commit(
+      upload,
+      sessionId: sessionId,
+      admissionId: admissionId,
+    );
+    attachmentStore.claimAdmissionAndPersist(
+      sessionId: sessionId,
+      admissionId: admissionId,
+      attachmentIds: [committed.id],
+      persist: (_, admitted) => [
+        Message(
+          role: MessageRole.user,
+          content: 'test',
+          attachments: admitted,
+          metadata: {
+            'request_id': admissionId,
+            'message_id': messageId,
+            'turn_id': 'turn-$messageId',
+          },
+        ),
+      ],
+    );
+    return committed;
+  }
 
   CanonicalEvent command({
     required String requestId,
@@ -62,6 +114,7 @@ void main() {
     Object? expectedHistoryRevision,
     String action = 'retry',
     String? message,
+    List<Map<String, dynamic>>? attachmentEdits,
     bool confirmed = false,
     bool confirmedDropSteers = false,
     String? providerInstanceId,
@@ -82,6 +135,7 @@ void main() {
             sessions.getSession(sessionId)?.historyRevision,
         'action': action,
         'message': ?message,
+        'attachment_edits': ?attachmentEdits,
         'confirmed_replay_unsafe': confirmed,
         'confirmed_drop_steers': confirmedDropSteers,
         'provider_instance_id': ?providerInstanceId,
@@ -783,6 +837,345 @@ void main() {
     expect(sessions.getMessages(sessionId).single.content, 'hello');
     expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
+
+  test(
+    'replay retry retains existing attachments and commits them as attached',
+    () async {
+      final targetMessage = Message(
+        role: MessageRole.user,
+        content: 'look at this image',
+        metadata: const {
+          'request_id': 'root-attach-1',
+          'message_id': 'msg-root-1',
+          'turn_id': 'turn-root-1',
+        },
+      );
+      sessions.saveSessionHistory(sessionId, [
+        targetMessage,
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+      final attached = await createAttached(
+        sessionId: sessionId,
+        messageId: 'msg-root-1',
+        admissionId: 'root-attach-1',
+      );
+      sessions.saveSessionHistory(sessionId, [
+        targetMessage.copyWith(attachments: [attached]),
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+
+      final target = sessions.getMessages(sessionId).first;
+      final envelopes = <Map<String, dynamic>>[];
+
+      await handler.handle(
+        command(
+          requestId: 'cmd-retry-att',
+          targetRequestId: 'root-attach-1',
+          targetMessageId: target.metadata?['message_id']?.toString(),
+          targetTurnId: target.metadata?['turn_id']?.toString(),
+          action: 'retry',
+        ),
+        (envelope) async => envelopes.add(envelope),
+      );
+
+      expect(envelopes.single['payload']['outcome'], 'accepted');
+      final active = sessions.getMessages(sessionId);
+      expect(active, hasLength(1));
+      expect(active.single.attachments, hasLength(1));
+      final replayedAtt = active.single.attachments.single;
+      expect(replayedAtt.safeName, attached.safeName);
+
+      // Verify user_attachments has status 'attached' and message_id updated
+      final attRows = state.db.select(
+        "SELECT message_id, status FROM user_attachments WHERE attachment_id = ?",
+        [replayedAtt.id],
+      );
+      expect(attRows, hasLength(1));
+      expect(attRows.single['status'], 'attached');
+      expect(
+        attRows.single['message_id'],
+        active.single.metadata?['message_id'],
+      );
+
+      // Verify orchestrator received event with attachment
+      expect(orchestrator.events, hasLength(1));
+      final dispatched = orchestrator.events.single;
+      expect(dispatched.message.attachments, hasLength(1));
+      expect(
+        (dispatched.turnRequest!.metadata['attachment_ids'] as List).single,
+        replayedAtt.id,
+      );
+    },
+  );
+
+  test(
+    'replay retry on message with empty text and attachments succeeds',
+    () async {
+      final targetMessage = Message(
+        role: MessageRole.user,
+        content: '',
+        metadata: const {
+          'request_id': 'root-empty-att',
+          'message_id': 'msg-empty-1',
+          'turn_id': 'turn-empty-1',
+        },
+      );
+      sessions.saveSessionHistory(sessionId, [
+        targetMessage,
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+      final attached = await createAttached(
+        sessionId: sessionId,
+        messageId: 'msg-empty-1',
+        admissionId: 'root-empty-att',
+      );
+      sessions.saveSessionHistory(sessionId, [
+        targetMessage.copyWith(attachments: [attached]),
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+
+      final target = sessions.getMessages(sessionId).first;
+      final envelopes = <Map<String, dynamic>>[];
+
+      await handler.handle(
+        command(
+          requestId: 'cmd-retry-empty',
+          targetRequestId: 'root-empty-att',
+          targetMessageId: target.metadata?['message_id']?.toString(),
+          targetTurnId: target.metadata?['turn_id']?.toString(),
+          action: 'retry',
+        ),
+        (envelope) async => envelopes.add(envelope),
+      );
+
+      expect(envelopes.single['payload']['outcome'], 'accepted');
+      final active = sessions.getMessages(sessionId);
+      expect(active, hasLength(1));
+      expect(active.single.content, '');
+      expect(active.single.attachments, hasLength(1));
+    },
+  );
+
+  test('replay edit with new attachment adds new and removes omitted', () async {
+    final targetMessage = Message(
+      role: MessageRole.user,
+      content: 'old text',
+      metadata: const {
+        'request_id': 'root-edit-att',
+        'message_id': 'msg-edit-1',
+        'turn_id': 'turn-edit-1',
+      },
+    );
+    sessions.saveSessionHistory(sessionId, [
+      targetMessage,
+      Message(role: MessageRole.assistant, content: 'response'),
+    ]);
+    final oldAttached = await createAttached(
+      sessionId: sessionId,
+      messageId: 'msg-edit-1',
+      admissionId: 'root-edit-att',
+      name: 'old.png',
+    );
+    sessions.saveSessionHistory(sessionId, [
+      targetMessage.copyWith(attachments: [oldAttached]),
+      Message(role: MessageRole.assistant, content: 'response'),
+    ]);
+
+    final newBytes = utf8.encode('new image content');
+    final newSha = sha256.convert(newBytes).toString();
+    final target = sessions.getMessages(sessionId).first;
+    final envelopes = <Map<String, dynamic>>[];
+
+    await handler.handle(
+      command(
+        requestId: 'cmd-edit-att',
+        targetRequestId: 'root-edit-att',
+        targetMessageId: target.metadata?['message_id']?.toString(),
+        targetTurnId: target.metadata?['turn_id']?.toString(),
+        action: 'edit',
+        message: 'new text',
+        attachmentEdits: [
+          {
+            'name': 'new.png',
+            'size_bytes': newBytes.length,
+            'sha256': newSha,
+            'data_base64': base64Encode(newBytes),
+          },
+        ],
+      ),
+      (envelope) async => envelopes.add(envelope),
+    );
+
+    expect(envelopes.single['payload']['outcome'], 'accepted');
+    final active = sessions.getMessages(sessionId);
+    expect(active, hasLength(1));
+    expect(active.single.content, 'new text');
+    expect(active.single.attachments, hasLength(1));
+    final newAtt = active.single.attachments.single;
+    expect(newAtt.safeName, 'new.png');
+    expect(newAtt.id, isNot(oldAttached.id));
+
+    // Old attached file is still associated with superseded message in SQLite
+    final oldRows = state.db.select(
+      "SELECT message_id, status FROM user_attachments WHERE attachment_id = ?",
+      [oldAttached.id],
+    );
+    expect(oldRows.single['status'], 'attached');
+    expect(oldRows.single['message_id'], 'msg-edit-1');
+  });
+
+  test(
+    'replay edit with invalid attachment upload fails admission without mutation',
+    () async {
+      final targetMessage = Message(
+        role: MessageRole.user,
+        content: 'original text',
+        metadata: const {
+          'request_id': 'root-invalid-att',
+          'message_id': 'msg-inv-1',
+          'turn_id': 'turn-inv-1',
+        },
+      );
+      sessions.saveSessionHistory(sessionId, [
+        targetMessage,
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+      final attached = await createAttached(
+        sessionId: sessionId,
+        messageId: 'msg-inv-1',
+        admissionId: 'root-invalid-att',
+      );
+      sessions.saveSessionHistory(sessionId, [
+        targetMessage.copyWith(attachments: [attached]),
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+
+      final initialRevision = sessions.getSession(sessionId)!.historyRevision;
+      final target = sessions.getMessages(sessionId).first;
+      final envelopes = <Map<String, dynamic>>[];
+
+      await handler.handle(
+        command(
+          requestId: 'cmd-invalid-att',
+          targetRequestId: 'root-invalid-att',
+          targetMessageId: target.metadata?['message_id']?.toString(),
+          targetTurnId: target.metadata?['turn_id']?.toString(),
+          action: 'edit',
+          message: 'edited text',
+          attachmentEdits: [
+            {
+              'name': 'corrupted.png',
+              'size_bytes': 10,
+              'sha256': '0' * 64, // mismatched sha256
+              'data_base64': base64Encode(utf8.encode('bad bytes!')),
+            },
+          ],
+        ),
+        (envelope) async => envelopes.add(envelope),
+      );
+
+      expect(
+        envelopes.single['payload']['outcome'],
+        'attachment_admission_failed',
+      );
+      expect(orchestrator.events, isEmpty);
+      expect(sessions.getSession(sessionId)!.historyRevision, initialRevision);
+      final active = sessions.getMessages(sessionId);
+      expect(active, hasLength(2));
+      expect(active.first.content, 'original text');
+      expect(active.first.attachments, hasLength(1));
+    },
+  );
+
+  test(
+    'replay edit with omitted attachment_edits on text-only message succeeds',
+    () async {
+      sessions.saveSessionHistory(sessionId, [
+        Message(
+          role: MessageRole.user,
+          content: 'plain text',
+          metadata: const {
+            'request_id': 'root-plain-edit',
+            'message_id': 'msg-plain-1',
+            'turn_id': 'turn-plain-1',
+          },
+        ),
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+
+      final target = sessions.getMessages(sessionId).first;
+      final envelopes = <Map<String, dynamic>>[];
+
+      await handler.handle(
+        command(
+          requestId: 'cmd-plain-edit',
+          targetRequestId: 'root-plain-edit',
+          targetMessageId: target.metadata?['message_id']?.toString(),
+          targetTurnId: target.metadata?['turn_id']?.toString(),
+          action: 'edit',
+          message: 'edited plain text',
+        ),
+        (envelope) async => envelopes.add(envelope),
+      );
+
+      expect(envelopes.single['payload']['outcome'], 'accepted');
+      final active = sessions.getMessages(sessionId);
+      expect(active, hasLength(1));
+      expect(active.single.content, 'edited plain text');
+      expect(active.single.attachments, isEmpty);
+    },
+  );
+
+  test(
+    'replay edit with omitted attachment_edits on message with attachments retains them',
+    () async {
+      final targetMessage = Message(
+        role: MessageRole.user,
+        content: 'original text with att',
+        metadata: const {
+          'request_id': 'root-retain-att',
+          'message_id': 'msg-retain-1',
+          'turn_id': 'turn-retain-1',
+        },
+      );
+      sessions.saveSessionHistory(sessionId, [
+        targetMessage,
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+      final attached = await createAttached(
+        sessionId: sessionId,
+        messageId: 'msg-retain-1',
+        admissionId: 'root-retain-att',
+      );
+      sessions.saveSessionHistory(sessionId, [
+        targetMessage.copyWith(attachments: [attached]),
+        Message(role: MessageRole.assistant, content: 'response'),
+      ]);
+
+      final target = sessions.getMessages(sessionId).first;
+      final envelopes = <Map<String, dynamic>>[];
+
+      await handler.handle(
+        command(
+          requestId: 'cmd-retain-edit',
+          targetRequestId: 'root-retain-att',
+          targetMessageId: target.metadata?['message_id']?.toString(),
+          targetTurnId: target.metadata?['turn_id']?.toString(),
+          action: 'edit',
+          message: 'edited text retaining att',
+        ),
+        (envelope) async => envelopes.add(envelope),
+      );
+
+      expect(envelopes.single['payload']['outcome'], 'accepted');
+      final active = sessions.getMessages(sessionId);
+      expect(active, hasLength(1));
+      expect(active.single.content, 'edited text retaining att');
+      expect(active.single.attachments, hasLength(1));
+      expect(active.single.attachments.single.id, isNot(attached.id));
+      expect(active.single.attachments.single.safeName, attached.safeName);
+    },
+  );
 }
 
 void _insertCompletedCompaction(

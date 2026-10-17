@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_thinking/session_route_thinking_control.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
@@ -37,6 +38,14 @@ import '../sanad_protocol_bridge.dart';
 /// explicitly by the [SanadProtocolBridge] rather than resolved via the service
 /// locator, so the handler stays decoupled from other runtime owners.
 class SessionQueryHandler {
+  static String _visibleToolInput(String name, Map<String, dynamic> arguments) {
+    if (name != 'view_image') return jsonEncode(arguments);
+    return jsonEncode({
+      'path': '[local image path redacted]',
+      if (arguments['detail'] != null) 'detail': arguments['detail'],
+    });
+  }
+
   final SessionManager _sessionManager;
   final SanadProtocolBridge _bridge;
   final SessionRunOrchestrator? _orchestrator;
@@ -237,6 +246,10 @@ class SessionQueryHandler {
           'sender': 'user',
           'type': 'user_message',
           'content': message.content ?? '',
+          if (message.attachments.isNotEmpty)
+            'attachments': UserAttachmentPolicy.publicProjection(
+              message.attachments,
+            ),
           'created_at': metadata?['received_at'] ?? msgTime,
           'session_id': sessionId,
           ...MessageHistoryIdentity.wireFields(message),
@@ -332,7 +345,7 @@ class SessionQueryHandler {
             'sender': 'ai',
             'type': 'tool_use',
             'tool': toolCall.name,
-            'input': jsonEncode(toolCall.arguments),
+            'input': _visibleToolInput(toolCall.name, toolCall.arguments),
             'status': isExecuting ? 'running' : 'done',
             'run_id': ?runId,
             'model_step_id': ?modelStepId,
@@ -351,7 +364,11 @@ class SessionQueryHandler {
       }
 
       if (message.role == MessageRole.tool) {
-        final resolvedToolContext = _resolveToolContext(messages, message);
+        final resolvedToolContext = _resolveToolContext(
+          messages,
+          message,
+          sessionId: sessionId,
+        );
         final visibleContent =
             message.metadata?['steer_original_content']?.toString() ??
             message.content ??
@@ -359,6 +376,12 @@ class SessionQueryHandler {
         final isError =
             message.metadata?['is_error'] == true ||
             visibleContent.startsWith('Error:');
+        final media = ViewImageMediaProjection.project(
+          sessionId: sessionId,
+          toolName: resolvedToolContext.toolName,
+          toolCallId: resolvedToolContext.toolCallId,
+          result: message.toolResult,
+        );
 
         final startedAt = message.metadata?['started_at']?.toString();
         final terminalAt = message.metadata?['terminal_at']?.toString();
@@ -375,6 +398,7 @@ class SessionQueryHandler {
           'status':
               message.metadata?['status']?.toString() ??
               (isError ? 'error' : 'done'),
+          if (media != null) 'media': media.toPublicJson(),
           if (resolvedToolContext.runId != null)
             'run_id': resolvedToolContext.runId,
           if (resolvedToolContext.modelStepId != null)
@@ -1085,14 +1109,16 @@ class SessionQueryHandler {
 
   _ResolvedToolContext _resolveToolContext(
     List<Message> messages,
-    Message message,
-  ) {
-    var toolCallId = message.toolCallId;
+    Message message, {
+    String? sessionId,
+  }) {
+    var toolCallId =
+        message.toolCallId ?? message.metadata?['tool_call_id']?.toString();
     String? toolName;
     String? runId = message.metadata?['run_id']?.toString();
     String? modelStepId = message.metadata?['model_step_id']?.toString();
 
-    if (toolCallId != null) {
+    if (toolCallId != null && toolCallId.isNotEmpty) {
       for (final previous in messages) {
         if (previous.role != MessageRole.assistant ||
             previous.toolCalls == null) {
@@ -1108,6 +1134,18 @@ class SessionQueryHandler {
         }
         if (toolName != null) {
           break;
+        }
+      }
+      if (toolName == null && sessionId != null && sessionId.isNotEmpty) {
+        final origin = _sessionManager.db.findOriginatingToolCall(
+          sessionId,
+          toolCallId: toolCallId,
+          turnId: message.metadata?['turn_id']?.toString(),
+        );
+        if (origin != null) {
+          toolName = origin.toolCall.name;
+          runId ??= origin.runId;
+          modelStepId ??= origin.modelStepId;
         }
       }
     } else {

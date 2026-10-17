@@ -1,3 +1,7 @@
+import 'package:sanad_agent/core/models/view_image_media_metadata.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/translators/agent_to_canonical.dart';
+import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -6,6 +10,7 @@ import 'package:test/test.dart';
 import 'package:get_it/get_it.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
@@ -22,6 +27,7 @@ import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -36,6 +42,8 @@ import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
+import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 
@@ -163,7 +171,15 @@ class ProviderStateRejectingAdapter implements LLMAdapter {
   }
 }
 
-class MockTool extends BaseTool {
+mixin _TypedTextTestTool on BaseTool {
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text(await execute(args, context: context));
+}
+
+class MockTool extends BaseTool with _TypedTextTestTool {
   @override
   ToolSchema get schema =>
       ToolSchema(name: 'test_tool', description: 'desc', parameters: {});
@@ -193,9 +209,19 @@ class StructuredErrorTool extends BaseTool {
         'Command timed out after 2000 ms.',
     'terminal_reason': 'timed_out',
   });
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text(
+    await execute(args, context: context),
+    isError: true,
+    errorCode: ToolResultErrorCode.timedOut,
+  );
 }
 
-class DelayedTool extends BaseTool {
+class DelayedTool extends BaseTool with _TypedTextTestTool {
   final Completer<void> started = Completer<void>();
   final Completer<void> release = Completer<void>();
 
@@ -915,6 +941,29 @@ class _FailOnceThenSucceedAdapter implements LLMAdapter {
   }
 }
 
+class _PreviewTool extends MockTool {
+  @override
+  ToolSchema get schema =>
+      ToolSchema(name: 'view_image', description: 'fixture', parameters: {});
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult(
+    blocks: [
+      ToolTextBlock(text: 'Image loaded (1×1, image/png, auto).'),
+      ToolImageBlock(
+        dataBase64: 'AQID',
+        mimeType: 'image/png',
+        width: 1,
+        height: 1,
+        detail: ToolImageDetail.auto,
+      ),
+    ],
+  );
+}
+
 void main() {
   group('AgentRunner', () {
     late ToolsRegistry registry;
@@ -993,6 +1042,251 @@ void main() {
     });
 
     test(
+      'preadmitted replacement with configured attachments survives commit and reopen without duplicate turn',
+      () async {
+        final attachment = UserAttachment(
+          id: 'att-preadmit-1',
+          mediaId: 'med-preadmit-1',
+          safeName: 'preadmit.png',
+          mimeType: 'image/png',
+          sizeBytes: 256,
+          sha256: 'c' * 64,
+          kind: UserAttachmentKind.image,
+          agentLocalReference: 'rel/preadmit.png',
+        );
+
+        final preadmitted = Message(
+          role: MessageRole.user,
+          content: 'preadmitted text',
+          metadata: {
+            'request_id': 'req-preadmitted',
+            'input_kind': MessageHistoryIdentity.rootTurn,
+            'history_status': MessageHistoryIdentity.active,
+          },
+        );
+        final session = sessionManager.createSession('mock');
+        final commitResult = sessionManager.appendRootUserMessage(
+          session.sessionId,
+          preadmitted,
+        );
+        expect(commitResult.inserted, isTrue);
+
+        final runner = AgentRunner(
+          MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'response',
+              ),
+            ),
+          ]),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+
+        runner.configureUserAttachments([attachment]);
+        final committed = await runner.commitUserMessage(
+          'preadmitted text',
+          requestId: 'req-preadmitted',
+        );
+
+        expect(committed.attachments, hasLength(1));
+        expect(committed.attachments.single.id, 'att-preadmit-1');
+        expect(runner.history.last.attachments, hasLength(1));
+
+        // Re-entry / reopen with same request ID returns same record without duplicate message
+        final reopenedCommit = await runner.commitUserMessage(
+          'preadmitted text',
+          requestId: 'req-preadmitted',
+        );
+        expect(reopenedCommit.attachments, hasLength(1));
+        expect(sessionManager.getMessages(session.sessionId), hasLength(1));
+
+        // A fresh runner reopening the persisted session sees the attachments
+        final reopenedRunner = AgentRunner(
+          MockAdapter([]),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+        expect(reopenedRunner.history, hasLength(1));
+        expect(reopenedRunner.history.first.attachments, hasLength(1));
+        expect(
+          reopenedRunner.history.first.attachments.single.id,
+          'att-preadmit-1',
+        );
+      },
+    );
+
+    test(
+      'parallel view_image starts redact paths and completions follow durable history',
+      () async {
+        registry.registerTool(_PreviewTool());
+        final runner = AgentRunner(MockAdapter([]), registry, sessionManager);
+        final calls = [
+          ToolCall(
+            id: 'parallel-preview-1',
+            name: 'view_image',
+            arguments: {'path': '/private/one.png'},
+          ),
+          ToolCall(
+            id: 'parallel-preview-2',
+            name: 'view_image',
+            arguments: {'path': '/private/two.png'},
+          ),
+        ];
+        runner.history.add(
+          Message(role: MessageRole.assistant, toolCalls: calls),
+        );
+        final inputs = <String>[];
+        var completed = 0;
+        await runner.executeToolCalls(
+          calls,
+          parallel: true,
+          onToolEvent:
+              ({
+                required toolName,
+                input,
+                output,
+                media,
+                required isError,
+                required isStart,
+                toolRunId,
+                startedAt,
+                terminalAt,
+                runtimeMs,
+              }) async {
+                if (isStart) {
+                  inputs.add(input ?? '');
+                } else {
+                  completed++;
+                  expect(media, isNotNull);
+                  expect(
+                    sessionManager
+                        .getMessages(runner.sessionId)
+                        .where((message) => message.role == MessageRole.tool),
+                    hasLength(2),
+                  );
+                }
+              },
+        );
+        expect(inputs, hasLength(2));
+        expect(inputs, everyElement(contains('[local image path redacted]')));
+        expect(inputs.join(), isNot(contains('/private/')));
+        expect(completed, 2);
+      },
+    );
+
+    test(
+      'view_image completion publishes byte-free live metadata matching history',
+      () async {
+        registry.registerTool(_PreviewTool());
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'preview-call',
+                  name: 'view_image',
+                  arguments: {'path': '/private/image.png'},
+                ),
+              ],
+            ),
+            isToolCall: true,
+          ),
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: 'done'),
+          ),
+        ]);
+        final runner = AgentRunner(adapter, registry, sessionManager);
+        ViewImageMediaMetadata? descriptor;
+        await runner
+            .streamMessage(
+              'preview',
+              onToolEvent:
+                  ({
+                    required toolName,
+                    input,
+                    output,
+                    media,
+                    required isError,
+                    required isStart,
+                    toolRunId,
+                    startedAt,
+                    terminalAt,
+                    runtimeMs,
+                  }) async {
+                    if (!isStart) {
+                      descriptor = media;
+                      expect(
+                        sessionManager
+                            .getMessages(runner.sessionId)
+                            .any(
+                              (message) =>
+                                  message.toolCallId == toolRunId &&
+                                  message.toolResult != null,
+                            ),
+                        isTrue,
+                        reason:
+                            'Live preview must not race durable media availability',
+                      );
+                    }
+                  },
+            )
+            .toList();
+        expect(descriptor, isNotNull);
+        expect(descriptor!.availability, CanonicalMediaAvailability.available);
+        final serialized = jsonEncode(descriptor!.toPublicJson());
+        expect(serialized, isNot(contains('AQID')));
+        expect(serialized, isNot(contains('/private/')));
+        final result = adapter.lastHistory!.firstWhere(
+          (message) => message.role == MessageRole.tool,
+        );
+        final hydrated = ViewImageMediaProjection.project(
+          sessionId: runner.sessionId,
+          toolName: 'view_image',
+          toolCallId: 'preview-call',
+          result: result.toolResult,
+        );
+        expect(descriptor!.toPublicJson(), hydrated!.toPublicJson());
+        final live = AgentToCanonical.translate(
+          GatewayResponse(
+            sessionId: runner.sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: result.content,
+              metadata: {'media': descriptor!.toPublicJson()},
+            ),
+            isToolResult: true,
+            toolName: 'view_image',
+            toolCallId: 'preview-call',
+          ),
+        );
+        expect(live.payload['media'], hydrated.toPublicJson());
+        expect(jsonEncode(live.toJson()), isNot(contains('AQID')));
+        final rejected = AgentToCanonical.translate(
+          GatewayResponse(
+            sessionId: runner.sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: result.content,
+              metadata: {
+                'media': {...descriptor!.toPublicJson(), 'dataBase64': 'AQID'},
+              },
+            ),
+            isToolResult: true,
+            toolName: 'view_image',
+            toolCallId: 'preview-call',
+          ),
+        );
+        expect(rejected.payload.containsKey('media'), isFalse);
+        expect(jsonEncode(rejected.toJson()), isNot(contains('AQID')));
+      },
+    );
+
+    test(
       'controlled restart parks an active tool loop before its next provider request',
       () async {
         final adapter = MockAdapter([
@@ -1029,6 +1323,7 @@ void main() {
                     required toolName,
                     input,
                     output,
+                    media,
                     required isError,
                     required isStart,
                     toolRunId,
@@ -1489,6 +1784,16 @@ void main() {
           .where((message) => message.role == MessageRole.tool)
           .toList();
       expect(toolResults, hasLength(2));
+      expect(
+        toolResults.every((message) => message.toolResult != null),
+        isTrue,
+      );
+      expect(
+        toolResults.every(
+          (message) => message.content == message.toolResult!.displayText,
+        ),
+        isTrue,
+      );
       expect(
         toolResults.map((message) => message.metadata?['run_id']).toSet(),
         {'run-segmented'},
@@ -2031,6 +2336,7 @@ void main() {
                   required toolName,
                   input,
                   output,
+                  media,
                   required isError,
                   required isStart,
                   toolRunId,
@@ -5097,6 +5403,151 @@ void main() {
         },
       );
     });
+
+    group('turn capability profile admission and freezing', () {
+      test(
+        'freezes capability profile at turn admission and preserves across mid-turn config changes',
+        () async {
+          final configFile = File('${tempDir.path}/config.yaml');
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: true
+  model-v2:
+    supports_image_input: false
+''');
+
+          final config = Config();
+          GetIt.I.registerSingleton<Config>(config);
+
+          final repo = ProviderInstanceRepository.fromDatabase(stateDb.db);
+          GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+          final now = DateTime.now();
+          repo.createInstance(
+            ProviderInstance(
+              id: 'custom-provider',
+              templateId: kCustomProviderTemplateId,
+              displayName: 'Custom Provider',
+              protocol: 'openai_chat_completions',
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'First reply',
+              ),
+            ),
+          ]);
+
+          final runner = AgentRunner(adapter, registry, sessionManager);
+
+          // Turn admission via streamMessage
+          final stream = runner.streamMessage(
+            'Hello vision',
+            providerId: 'custom-provider',
+            model: 'model-v1',
+          );
+          await for (final _ in stream) {}
+
+          final admittedProfile = runner.debugTurnCapabilityProfile;
+          expect(admittedProfile, isNotNull);
+          expect(admittedProfile!.providerInstanceId, 'custom-provider');
+          expect(admittedProfile.modelId, 'model-v1');
+          expect(admittedProfile.imageSupport, RouteImageSupport.supported);
+          expect(admittedProfile.evidenceSource, 'override');
+          expect(
+            adapter.lastOptions?.routeCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+
+          // Mid-turn config file change on disk
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: false
+  model-v2:
+    supports_image_input: false
+''');
+          config.reloadModelAwarePolicy();
+
+          // Admitted profile remains frozen!
+          expect(
+            runner.debugTurnCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+
+          // Explicit updateTurnRoute updates the admitted profile for the new route
+          runner.updateTurnRoute(
+            providerId: 'custom-provider',
+            modelId: 'model-v2',
+          );
+
+          final updatedProfile = runner.debugTurnCapabilityProfile;
+          expect(updatedProfile, isNotNull);
+          expect(updatedProfile!.providerInstanceId, 'custom-provider');
+          expect(updatedProfile.modelId, 'model-v2');
+          expect(updatedProfile.imageSupport, RouteImageSupport.unsupported);
+        },
+      );
+
+      test(
+        'run admits profile and freezes it across turn iterations',
+        () async {
+          final configFile = File('${tempDir.path}/config.yaml');
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: true
+''');
+
+          final config = Config();
+          GetIt.I.registerSingleton<Config>(config);
+
+          final repo = ProviderInstanceRepository.fromDatabase(stateDb.db);
+          GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+          final now = DateTime.now();
+          repo.createInstance(
+            ProviderInstance(
+              id: 'custom-provider',
+              templateId: kCustomProviderTemplateId,
+              displayName: 'Custom Provider',
+              protocol: 'openai_chat_completions',
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(role: MessageRole.assistant, content: 'Done'),
+            ),
+          ]);
+
+          final runner = AgentRunner(adapter, registry, sessionManager);
+
+          await runner.sendMessage(
+            'Test message',
+            providerId: 'custom-provider',
+            model: 'model-v1',
+          );
+
+          expect(
+            runner.debugTurnCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+          expect(
+            adapter.lastOptions?.routeCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+        },
+      );
+    });
   });
 }
 
@@ -5113,7 +5564,7 @@ class _ImmediateRetryRecoveryService extends RuntimeRecoveryService {
   }) async => true;
 }
 
-class GateDTestTool extends BaseTool {
+class GateDTestTool extends BaseTool with _TypedTextTestTool {
   final String _name;
   final Future<String> Function(Map<String, dynamic> args, ToolContext? context)
   _executeFn;

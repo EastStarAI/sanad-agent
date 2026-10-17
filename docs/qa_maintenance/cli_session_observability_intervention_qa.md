@@ -74,3 +74,16 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 | Racing duplicate intervention responses | Checkpoint in status `awaiting_permission` | Two responses arrive concurrently for the same `request_id` | Exactly one writer wins the database claim (`claimSuspendedCheckpointDecision`); winning response resumes execution (`outcome: resolved`). Losing writer receives `ALREADY_RESOLVED` and does NOT resume a second turn. |
 | Stale intervention after resolution | Checkpoint already resolved | A late intervention arrives for `request_id` | Gateway returns `outcome: already_resolved`, errorCode `ALREADY_RESOLVED`. |
 | Duplicate intervention across mismatched session | Checkpoint already resolved for session A | A duplicate arrives targeting session B | Gateway returns `outcome: cross_session_mismatch`, errorCode `CROSS_SESSION_MISMATCH` (cross-session validation takes precedence). |
+
+---
+
+## 7. Automated One-Shot Intervention Readiness (In-Process Coverage)
+
+`agent/test/cli/run_delegation_test.dart` locks the Section 4 policy without a daemon. Turn events are emitted only after the run dispatched the turn (`await client.turnDispatched.future`), because the initial `running` artifact is recorded before the runner subscribes to the client's event streams. The readiness contract is owned by Section 8.1 of `docs/technical/sanad_cli_architecture.md`.
+
+| Scenario | Automated Coverage | Readiness Gate |
+|---|---|---|
+| Clarification question surfaces as `needs_input` without terminating the run, resumption returns to `running`, and a gated tool stays `needs_permission` (fail-closed, no auto-answer) before completing | `surfaces non-terminal needs_input and needs_permission events without terminating run` | Turn dispatch readiness |
+| `--allow-all-tools` auto-approves ordinary tool permissions only; `system_ask_user` remains pending | `--allow-all-tools auto-approves ordinary tool permissions but leaves system_ask_user pending` | Turn dispatch readiness |
+| The `running` artifact is observable while the run has no turn-event subscriber, and an intervention emitted after dispatch readiness is always observed | `turn event readiness is the dispatch signal, not the initial running artifact` | Unbounded (held) pre-dispatch window |
+| Terminal classification precedence: timeout (124), SIGINT (130), external cancellation (130) and incomplete `missing_final` (1) are not overwritten by late events | sibling `run_delegation_test.dart` cases | Post-dispatch and post-terminal emission |

@@ -290,6 +290,7 @@ class AgentRuntimeService {
       return BaseAnthropicAdapter(
         _config,
         profile,
+        providerInstanceId: signature.providerInstanceId,
         modelContextLimitLookup: modelContextLimitLookup,
         baseUrlOverride: signature.normalizedBaseUrl,
         apiKeyOverride: resolvedApiKey,
@@ -300,6 +301,7 @@ class AgentRuntimeService {
         return CodexResponsesAdapter(
           _config,
           profile,
+          providerInstanceId: signature.providerInstanceId,
           modelsDevService: _modelsDevService,
           modelContextLimitLookup: modelContextLimitLookup,
           baseUrlOverride: signature.normalizedBaseUrl,
@@ -310,13 +312,18 @@ class AgentRuntimeService {
         return OllamaAdapter(
           _config,
           profile,
+          providerInstanceId: signature.providerInstanceId,
+          modelsDevService: _modelsDevService,
           modelContextLimitLookup: modelContextLimitLookup,
           baseUrlOverride: signature.normalizedBaseUrl,
+          apiKeyOverride: resolvedApiKey,
+          defaultModelOverride: signature.modelId,
         );
       } else {
         return BaseOpenAIAdapter(
           _config,
           profile,
+          providerInstanceId: signature.providerInstanceId,
           modelsDevService: _modelsDevService,
           modelContextLimitLookup: modelContextLimitLookup,
           baseUrlOverride: signature.normalizedBaseUrl,

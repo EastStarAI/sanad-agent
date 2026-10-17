@@ -1,4 +1,7 @@
 /// Google Gemini thinking policy (Task 43 Gate G).
+///
+/// The descriptor is built from the exact per-model documented facts in
+/// [GoogleModelCatalog]; no option set or default is shared across models.
 library;
 
 import 'google_model_catalog.dart';
@@ -16,54 +19,63 @@ class GoogleThinkingPolicy implements ProviderThinkingPolicy {
   @override
   ThinkingControlDescriptor resolveCapability(ThinkingPolicyContext context) {
     final kind = GoogleModelCatalog.thinkingKindForModel(context.modelId);
-    if (kind == GoogleRouteThinkingKind.unsupported) {
-      return ThinkingControlDescriptor.unsupported(
-        capabilityRevision: context.capabilityRevision,
-        source: 'profile',
-      );
-    }
+    final defaultOptionId = GoogleModelCatalog.defaultOptionIdForModel(
+      context.modelId,
+    );
 
-    final options = <ThinkingControlOption>[];
     switch (kind) {
       case GoogleRouteThinkingKind.tokenBudget:
-        options.addAll(
-          GoogleModelCatalog.budgetOptionIdsForModel(context.modelId)
+        return ThinkingControlDescriptor(
+          status: ThinkingCapabilityStatus.supported,
+          kind: ThinkingControlKind.tokenBudget,
+          options: GoogleModelCatalog.budgetOptionIdsForModel(context.modelId)
               .map(
                 (id) => ThinkingControlOption(
                   id: id,
                   label: GoogleModelCatalog.labelForOptionId(id),
                   isOff: id == 'off',
+                  isProviderDefault: id == defaultOptionId,
+                  // The documented disable resolves to a zero budget and is
+                  // Off, not a budget: only positive counts are disclosed.
+                  budgetTokens: switch (GoogleModelCatalog
+                      .budgetTokensForSelection(
+                        modelId: context.modelId,
+                        selectionId: id,
+                      )) {
+                    final int tokens when tokens > 0 => tokens,
+                    _ => null,
+                  },
                 ),
               )
               .toList(growable: false),
-        );
-        return ThinkingControlDescriptor(
-          status: ThinkingCapabilityStatus.supported,
-          kind: ThinkingControlKind.tokenBudget,
-          options: options,
+          defaultOptionId: defaultOptionId,
           capabilityRevision: context.capabilityRevision,
           source: 'profile',
         );
       case GoogleRouteThinkingKind.level:
-        options.addAll(
-          GoogleModelCatalog.levelOptionIdsForModel(context.modelId)
+        return ThinkingControlDescriptor(
+          status: ThinkingCapabilityStatus.supported,
+          kind: ThinkingControlKind.level,
+          options: GoogleModelCatalog.levelOptionIdsForModel(context.modelId)
               .map(
                 (id) => ThinkingControlOption(
                   id: id,
                   label: GoogleModelCatalog.labelForOptionId(id),
+                  isProviderDefault: id == defaultOptionId,
                 ),
               )
               .toList(growable: false),
-        );
-        return ThinkingControlDescriptor(
-          status: ThinkingCapabilityStatus.supported,
-          kind: ThinkingControlKind.level,
-          options: options,
+          defaultOptionId: defaultOptionId,
           capabilityRevision: context.capabilityRevision,
           source: 'profile',
         );
       case GoogleRouteThinkingKind.unsupported:
         return ThinkingControlDescriptor.unsupported(
+          capabilityRevision: context.capabilityRevision,
+          source: 'profile',
+        );
+      case GoogleRouteThinkingKind.unknown:
+        return ThinkingControlDescriptor.unknown(
           capabilityRevision: context.capabilityRevision,
           source: 'profile',
         );
@@ -83,9 +95,6 @@ class GoogleThinkingPolicy implements ProviderThinkingPolicy {
     final kind = GoogleModelCatalog.thinkingKindForModel(context.modelId);
     switch (kind) {
       case GoogleRouteThinkingKind.tokenBudget:
-        if (trimmed == 'off') {
-          return const GoogleBudgetDirective(0);
-        }
         final budget = GoogleModelCatalog.budgetTokensForSelection(
           modelId: context.modelId,
           selectionId: trimmed,
@@ -103,6 +112,7 @@ class GoogleThinkingPolicy implements ProviderThinkingPolicy {
         }
         return GoogleLevelDirective(trimmed);
       case GoogleRouteThinkingKind.unsupported:
+      case GoogleRouteThinkingKind.unknown:
         return const UseProviderDefault();
     }
   }

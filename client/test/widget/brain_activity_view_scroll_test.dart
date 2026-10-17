@@ -1,4 +1,6 @@
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/tool_group_tile.dart';
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -10,6 +12,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/screens/brain_activity_view.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input_panel.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -72,6 +75,58 @@ void main() {
     resolver.dispose();
     await conversationRepository.dispose();
     socket.dispose();
+  });
+
+  testWidgets('image-containing group opens by default and preserves manual expansion choices', (tester) async {
+    CanonicalEvent tool(String id, String name) => CanonicalEvent(
+      id: id,
+      kind: EventKind.toolCall,
+      status: EventStatus.done,
+      timestamp: DateTime.utc(2026, 10, 12),
+      sessionId: 'session-1',
+      tool: {
+        'name': name,
+        'output': 'done',
+        if (name == 'view_image')
+          'media': {
+            'media_id': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'name': 'view-image.png',
+            'mime_type': 'image/png',
+            'width': 1,
+            'height': 1,
+            'availability': 'unavailable',
+          },
+      },
+    );
+    final first = tool('ordinary', 'shell_execute');
+    final image = tool('image', 'view_image');
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [first, image],
+      initialViewportAnchorEventId: 'ordinary',
+    );
+    await tester.pumpAndSettle();
+    var group = tester.widget<ToolGroupTile>(find.byType(ToolGroupTile));
+    expect(group.isExpanded, isTrue);
+    expect(group.expandedChildEventIds, contains('image'));
+    expect(group.expandedChildEventIds, isNot(contains('ordinary')));
+    group.onChildToggleExpanded('image', false);
+    messagesController.add([first, image, tool('third', 'shell_execute')]);
+    await tester.pumpAndSettle();
+    group = tester.widget<ToolGroupTile>(find.byType(ToolGroupTile));
+    expect(group.isExpanded, isTrue);
+    expect(group.expandedChildEventIds, isNot(contains('image')));
+    group.onToggleExpanded(false);
+    await tester.pumpAndSettle();
+    messagesController.add([first, image, tool('third', 'shell_execute'), tool('fourth', 'shell_execute')]);
+    await tester.pumpAndSettle();
+    group = tester.widget<ToolGroupTile>(find.byType(ToolGroupTile));
+    expect(group.isExpanded, isFalse);
   });
 
   testWidgets('missing saved anchor falls back to the last user message without building all history', (tester) async {
@@ -1007,10 +1062,24 @@ void main() {
           'turn_id': 'turn-editable',
           'input_kind': 'root_turn',
           'replay_eligible': true,
+          'attachments': [
+            {
+              'schemaVersion': 1,
+              'id': 'existing-attachment',
+              'safeName': 'notes.txt',
+              'mimeType': 'text/plain',
+              'sizeBytes': 12,
+              'sha256': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              'kind': 'file',
+              'mediaId': 'existing-media',
+              'status': 'available',
+            },
+          ],
         },
       ),
     ];
 
+    var editPickCalls = 0;
     await _pumpBrainActivityView(
       tester,
       agentCubit: agentCubit,
@@ -1020,12 +1089,57 @@ void main() {
       messagesController: messagesController,
       initialMessages: messages,
       sessionId: 'session-1',
+      pickEditAttachmentFiles: () async {
+        editPickCalls += 1;
+        return [
+          InlineEditAttachmentSelection(
+            name: 'new-note.txt',
+            bytes: Uint8List.fromList(const [1, 2, 3]),
+          ),
+        ];
+      },
     );
     await tester.pump();
     await tester.tap(find.byTooltip('Edit message'));
     await tester.pump();
     expect(find.byKey(const Key('inline_message_editor')), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('inline_edit_attachment_existing-attachment'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey(
+          'remove_inline_edit_attachment_existing-attachment',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(
+        const ValueKey('inline_edit_attachment_existing-attachment'),
+      ),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const Key('cancel_message_edit_button')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('user_file_attachment_existing-attachment')), findsOneWidget);
 
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pump();
+    expect(
+      find.byKey(
+        const ValueKey('inline_edit_attachment_existing-attachment'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+    await tester.pumpAndSettle();
+    expect(editPickCalls, 1);
+    expect(find.text('new-note.txt'), findsOneWidget);
+    expect(find.text('Ready · new'), findsOneWidget);
     await _pumpBrainActivityView(
       tester,
       agentCubit: agentCubit,
@@ -1414,6 +1528,7 @@ Future<void> _pumpBrainActivityView(
   Future<void> Function()? onLoadNewerHistory,
   Future<void> Function(String eventId)? onLoadAnchoredHistory,
   ValueNotifier<List<CanonicalEvent>>? messagesNotifier,
+  Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles,
 }) {
   Widget buildView(List<CanonicalEvent> messages) => BrainActivityView(
     messagesStream: messagesController.stream,
@@ -1430,6 +1545,7 @@ Future<void> _pumpBrainActivityView(
     hasNewerHistory: hasNewerHistory,
     onLoadNewerHistory: onLoadNewerHistory,
     onLoadAnchoredHistory: onLoadAnchoredHistory,
+    pickEditAttachmentFiles: pickEditAttachmentFiles,
     visualState: ConversationVisualState.activeSession,
   );
 

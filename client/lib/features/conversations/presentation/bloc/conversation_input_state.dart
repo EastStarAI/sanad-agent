@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:equatable/equatable.dart';
@@ -6,6 +8,47 @@ import 'package:sanad_client/features/conversations/domain/models/device_suspend
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
+
+enum DraftAttachmentSource { picker, paste, drop }
+
+enum DraftAttachmentStatus { validating, uploading, ready, failed }
+
+class DraftAttachment extends Equatable {
+  const DraftAttachment({
+    required this.id,
+    required this.name,
+    required this.bytes,
+    required this.source,
+    this.status = DraftAttachmentStatus.validating,
+    this.error,
+  });
+
+  final String id;
+  final String name;
+  final Uint8List bytes;
+  final DraftAttachmentSource source;
+  final DraftAttachmentStatus status;
+  final String? error;
+
+  int get sizeBytes => bytes.length;
+  bool get isImage => RegExp(r'\.(png|jpe?g|gif|webp)$', caseSensitive: false).hasMatch(name);
+
+  DraftAttachment copyWith({
+    DraftAttachmentStatus? status,
+    String? error,
+    bool clearError = false,
+  }) => DraftAttachment(
+    id: id,
+    name: name,
+    bytes: bytes,
+    source: source,
+    status: status ?? this.status,
+    error: clearError ? null : error ?? this.error,
+  );
+
+  @override
+  List<Object?> get props => [id, name, sizeBytes, source, status, error];
+}
 
 class ConversationInputState extends Equatable {
   final bool isProcessing;
@@ -28,6 +71,8 @@ class ConversationInputState extends Equatable {
   final SessionExecutionSnapshot? executionSnapshot;
   final SessionAttentionState? attentionState;
   final bool isAwaitingMessageAcceptance;
+  final List<DraftAttachment> draftAttachments;
+  final String? attachmentError;
   final List<CanonicalEvent> queuedMessages;
   final Set<String> queuedMutationRequestIds;
   final Set<String> pendingSteerCancellationRequestIds;
@@ -54,6 +99,8 @@ class ConversationInputState extends Equatable {
     this.executionSnapshot,
     this.attentionState,
     this.isAwaitingMessageAcceptance = false,
+    this.draftAttachments = const [],
+    this.attachmentError,
     this.queuedMessages = const [],
     this.queuedMutationRequestIds = const {},
     this.pendingSteerCancellationRequestIds = const {},
@@ -94,6 +141,9 @@ class ConversationInputState extends Equatable {
     SessionAttentionState? attentionState,
     bool clearAttentionState = false,
     bool? isAwaitingMessageAcceptance,
+    List<DraftAttachment>? draftAttachments,
+    String? attachmentError,
+    bool clearAttachmentError = false,
     List<CanonicalEvent>? queuedMessages,
     Set<String>? queuedMutationRequestIds,
     Set<String>? pendingSteerCancellationRequestIds,
@@ -133,6 +183,8 @@ class ConversationInputState extends Equatable {
       executionSnapshot: clearExecutionSnapshot ? null : executionSnapshot ?? this.executionSnapshot,
       attentionState: clearAttentionState ? null : attentionState ?? this.attentionState,
       isAwaitingMessageAcceptance: isAwaitingMessageAcceptance ?? this.isAwaitingMessageAcceptance,
+      draftAttachments: draftAttachments ?? this.draftAttachments,
+      attachmentError: clearAttachmentError ? null : attachmentError ?? this.attachmentError,
       queuedMessages: queuedMessages ?? this.queuedMessages,
       queuedMutationRequestIds: queuedMutationRequestIds ?? this.queuedMutationRequestIds,
       pendingSteerCancellationRequestIds: pendingSteerCancellationRequestIds ?? this.pendingSteerCancellationRequestIds,
@@ -162,6 +214,8 @@ class ConversationInputState extends Equatable {
     executionSnapshot,
     attentionState,
     isAwaitingMessageAcceptance,
+    draftAttachments,
+    attachmentError,
     queuedMessages,
     queuedMutationRequestIds,
     pendingSteerCancellationRequestIds,

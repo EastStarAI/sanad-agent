@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'package:path/path.dart' as p;
+import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
 
@@ -15,6 +16,19 @@ class FileReadHandler {
   const FileReadHandler(this._pathResolver);
 
   Future<String> execute(
+    Map<String, dynamic> arguments,
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
+    final result = await executeResult(
+      arguments,
+      workspacePath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+    return result.displayText;
+  }
+
+  Future<ToolExecutionResult> executeResult(
     Map<String, dynamic> arguments,
     String workspacePath, {
     String? authorizedExternalRoot,
@@ -40,7 +54,7 @@ class FileReadHandler {
     return _handleFile(resolvedPath, workspaceRoot, offset, limit);
   }
 
-  Future<String> _handleDirectory(
+  Future<ToolExecutionResult> _handleDirectory(
     String resolvedPath,
     String workspaceRoot,
     int offset,
@@ -106,18 +120,20 @@ class FileReadHandler {
     }
     buffer.writeln('\n</entries>');
 
-    return WorkspaceToolsUtils.encode({
-      'type': 'directory',
-      'file': {
-        'filePath': relativePath,
-        'content': buffer.toString(),
-        'numEntries': sliced.length,
-        'totalEntries': list.length,
-      },
-    });
+    return ToolExecutionResult.text(
+      WorkspaceToolsUtils.encode({
+        'type': 'directory',
+        'file': {
+          'filePath': relativePath,
+          'content': buffer.toString(),
+          'numEntries': sliced.length,
+          'totalEntries': list.length,
+        },
+      }),
+    );
   }
 
-  Future<String> _handleFile(
+  Future<ToolExecutionResult> _handleFile(
     String resolvedPath,
     String workspaceRoot,
     int offset,
@@ -141,21 +157,23 @@ class FileReadHandler {
         ? await Isolate.run(() => _extractLines(content, offset, limit))
         : _extractLines(content, offset, limit);
 
-    return WorkspaceToolsUtils.encode({
-      'type': 'text',
-      'file': {
-        'filePath': _pathResolver.relativeToWorkspace(
-          workspaceRoot: workspaceRoot,
-          resolvedPath: resolvedPath,
-        ),
-        'content': result.selectedLines.join('\n'),
-        'numLines': result.selectedLines.length,
-        'startLine': result.startIndex + 1,
-        'totalLines': result.totalLines,
-        'truncated': result.truncated,
-        if (result.truncated) 'nextOffset': result.nextOffset,
-      },
-    });
+    return ToolExecutionResult.text(
+      WorkspaceToolsUtils.encode({
+        'type': 'text',
+        'file': {
+          'filePath': _pathResolver.relativeToWorkspace(
+            workspaceRoot: workspaceRoot,
+            resolvedPath: resolvedPath,
+          ),
+          'content': result.selectedLines.join('\n'),
+          'numLines': result.selectedLines.length,
+          'startLine': result.startIndex + 1,
+          'totalLines': result.totalLines,
+          'truncated': result.truncated,
+          if (result.truncated) 'nextOffset': result.nextOffset,
+        },
+      }),
+    );
   }
 
   static _LinesResult _extractLines(String content, int offset, int? limit) {

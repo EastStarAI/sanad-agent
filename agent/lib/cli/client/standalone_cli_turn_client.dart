@@ -10,6 +10,7 @@ import '../../core/provider_runtime/runtime_recovery_service.dart';
 import '../../core/provider_runtime/provider_model_cache_service.dart';
 import '../../core/sanad_home/runtime_ownership.dart';
 import '../../core/sanad_home/sanad_home_bootstrap.dart';
+import '../../engine/adapters/models_dev_service.dart';
 import '../../evolution/db/agent_state_database.dart';
 import '../../evolution/session_manager.dart';
 import '../../interfaces/models/agent_turn_request.dart';
@@ -60,6 +61,11 @@ class StandaloneCliTurnClient implements CliTurnClient {
         setupDI();
       }
       await getIt<AuthManager>().initialize();
+      if (getIt.isRegistered<ModelsDevService>()) {
+        try {
+          await getIt<ModelsDevService>().ensureLoaded();
+        } catch (_) {}
+      }
       SessionManager();
 
       final orchestrator = getIt<SessionRunOrchestrator>();

@@ -8,10 +8,24 @@ class ThinkingControlStaleEvidence {
 
   static const liveEvidenceTtl = Duration(minutes: 5);
 
+  static const _failureSources = {
+    'live_probe_failed',
+    'cache_stale',
+    'stale_live_evidence',
+  };
+
+  /// Whether [descriptor] carries explicit failure or invalidation provenance
+  /// (`live_probe_failed` from a failed live probe, `cache_stale` from a stale
+  /// cache write, `stale_live_evidence` from an already-degraded descriptor).
+  ///
+  /// This evidence stays authoritative regardless of wall-clock age or of a
+  /// descriptor the assembler could rebuild from persisted model metadata.
+  static bool isInvalidated(ThinkingControlDescriptor descriptor) {
+    return _failureSources.contains(descriptor.source);
+  }
+
   static bool isStale(ThinkingControlDescriptor descriptor) {
-    if (descriptor.source == 'live_probe_failed' ||
-        descriptor.source == 'cache_stale' ||
-        descriptor.source == 'stale_live_evidence') {
+    if (isInvalidated(descriptor)) {
       return true;
     }
     if (descriptor.source != 'live') {

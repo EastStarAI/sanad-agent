@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../engine/adapters/e2e_fixture_adapter.dart';
 import '../engine/adapters/llm_adapter.dart';
 import 'agent_runtime_service.dart';
@@ -8,7 +10,12 @@ import 'provider_runtime/provider_protocol_constants.dart';
 class E2eAgentRuntimeService extends AgentRuntimeService {
   E2eAgentRuntimeService(super.config, super.instanceRepository);
 
-  static const _adapter = E2eFixtureAdapter();
+  late final LLMAdapter _adapter = E2eFixtureAdapter(
+    toolResultMediaCapability:
+        Platform.environment['SANAD_E2E_TEXT_ONLY_TOOL_RESULTS'] == 'true'
+        ? ToolResultMediaCapability.textOnly
+        : ToolResultMediaCapability.imageToolResults,
+  );
 
   @override
   RouteSignature resolveSignature({String? providerId, String? modelId}) {

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../models/tool_schema.dart';
+import '../../core/models/tool_execution_result.dart';
 import '../../evolution/memory/file_memory_store.dart';
 import 'base_tool.dart';
 
@@ -80,52 +81,67 @@ class MemoryTool extends BaseTool {
   Future<String> execute(
     Map<String, dynamic> args, {
     ToolContext? context,
+  }) async => jsonEncode(await _executePayload(args));
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
   }) async {
+    final payload = await _executePayload(args);
+    final isError = payload['success'] != true;
+    return ToolExecutionResult.text(
+      jsonEncode(payload),
+      isError: isError,
+      errorCode: isError ? ToolResultErrorCode.invalidInput : null,
+    );
+  }
+
+  Future<Map<String, dynamic>> _executePayload(
+    Map<String, dynamic> args,
+  ) async {
     final action = args['action']?.toString().trim();
     final target = args['target']?.toString().trim() ?? 'memory';
     final content = args['content']?.toString().trim();
     final oldText = args['old_text']?.toString().trim() ?? '';
 
     if (target != 'memory' && target != 'user') {
-      return jsonEncode({
-        'success': false,
-        'error': "target must be 'memory' or 'user'.",
-      });
+      return {'success': false, 'error': "target must be 'memory' or 'user'."};
     }
 
     final rawOperations = args['operations'];
     if (rawOperations != null) {
       if (rawOperations is! List || rawOperations.isEmpty) {
-        return jsonEncode({
+        return {
           'success': false,
           'error': 'operations must be a non-empty array.',
-        });
+        };
       }
       final operations = <Map<String, dynamic>>[];
       for (final operation in rawOperations) {
         if (operation is! Map) {
-          return jsonEncode({
+          return {
             'success': false,
             'error': 'Every operation must be an object.',
-          });
+          };
         }
         try {
           operations.add(Map<String, dynamic>.from(operation));
         } on TypeError {
-          return jsonEncode({
+          return {
             'success': false,
             'error': 'Every operation key must be a string.',
-          });
+          };
         }
       }
-      return jsonEncode(_store.applyBatch(target, operations));
+      return _store.applyBatch(target, operations);
     }
 
     if (action == null || action.isEmpty) {
-      return jsonEncode({
+      return {
         'success': false,
         'error': 'action is required when operations is not provided.',
-      });
+      };
     }
 
     Map<String, dynamic> result;
@@ -155,6 +171,6 @@ class MemoryTool extends BaseTool {
         break;
     }
 
-    return jsonEncode(result);
+    return result;
   }
 }

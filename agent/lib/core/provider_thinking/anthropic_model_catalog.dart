@@ -1,11 +1,7 @@
 /// Fixed Anthropic model thinking tables (Task 43 Gate F).
 library;
 
-enum AnthropicRouteThinkingKind {
-  unsupported,
-  manualBudget,
-  adaptive,
-}
+enum AnthropicRouteThinkingKind { unsupported, manualBudget, adaptive }
 
 class AnthropicModelCatalog {
   AnthropicModelCatalog._();
@@ -21,21 +17,27 @@ class AnthropicModelCatalog {
   static const extendedAdaptiveEffortIds = ['low', 'medium', 'high', 'max'];
 
   static AnthropicRouteThinkingKind thinkingKindForModel(String modelId) {
-    final normalized = _normalizeModelId(modelId);
-    if (_matchesAny(normalized, _alwaysAdaptiveOnlyPatterns)) {
+    final canonical = _canonicalize(modelId);
+    if (_alwaysAdaptiveOnlyModels.contains(canonical)) {
       return AnthropicRouteThinkingKind.adaptive;
     }
-    if (_matchesAny(normalized, _adaptiveCapablePatterns)) {
+    if (_adaptiveCapableModels.contains(canonical)) {
       return AnthropicRouteThinkingKind.adaptive;
     }
-    if (_matchesAny(normalized, _manualOnlyPatterns)) {
+    if (_manualOnlyModels.contains(canonical)) {
       return AnthropicRouteThinkingKind.manualBudget;
     }
     return AnthropicRouteThinkingKind.unsupported;
   }
 
+  static bool isEvidencedModel(String modelId) {
+    return thinkingKindForModel(modelId) !=
+        AnthropicRouteThinkingKind.unsupported;
+  }
+
   static List<String> budgetOptionIdsForModel(String modelId) {
-    if (thinkingKindForModel(modelId) != AnthropicRouteThinkingKind.manualBudget) {
+    if (thinkingKindForModel(modelId) !=
+        AnthropicRouteThinkingKind.manualBudget) {
       return const [];
     }
     return budgetTokensByTier.keys.toList(growable: false);
@@ -45,8 +47,8 @@ class AnthropicModelCatalog {
     if (thinkingKindForModel(modelId) != AnthropicRouteThinkingKind.adaptive) {
       return const [];
     }
-    final normalized = _normalizeModelId(modelId);
-    if (_matchesAny(normalized, _extendedEffortPatterns)) {
+    final canonical = _canonicalize(modelId);
+    if (_extendedEffortModels.contains(canonical)) {
       return extendedAdaptiveEffortIds;
     }
     return baseAdaptiveEffortIds;
@@ -56,7 +58,8 @@ class AnthropicModelCatalog {
     required String modelId,
     required String selectionId,
   }) {
-    if (thinkingKindForModel(modelId) != AnthropicRouteThinkingKind.manualBudget) {
+    if (thinkingKindForModel(modelId) !=
+        AnthropicRouteThinkingKind.manualBudget) {
       return null;
     }
     return budgetTokensByTier[selectionId];
@@ -78,11 +81,12 @@ class AnthropicModelCatalog {
 
   /// Whether the route may expose an explicit off option in the descriptor.
   static bool supportsExplicitOff(String modelId) {
-    final normalized = _normalizeModelId(modelId);
-    if (_matchesAny(normalized, _noOffPatterns)) {
+    final canonical = _canonicalize(modelId);
+    if (_noOffModels.contains(canonical)) {
       return false;
     }
-    return thinkingKindForModel(modelId) != AnthropicRouteThinkingKind.unsupported;
+    return thinkingKindForModel(modelId) !=
+        AnthropicRouteThinkingKind.unsupported;
   }
 
   static String labelForOptionId(String optionId) {
@@ -96,51 +100,75 @@ class AnthropicModelCatalog {
     };
   }
 
-  static String _normalizeModelId(String modelId) {
-    final trimmed = modelId.trim().toLowerCase();
-    final withoutVendor = trimmed.contains('/')
-        ? trimmed.split('/').last
-        : trimmed;
-    return withoutVendor.replaceAll('.', '-');
+  static const Map<String, String> _explicitAliases = {
+    'claude-3.7-sonnet': 'claude-3-7-sonnet',
+    'claude-3-7-sonnet-20250219': 'claude-3-7-sonnet',
+    'claude-3.7-sonnet-20250219': 'claude-3-7-sonnet',
+    'claude-3.7-sonnet:thinking': 'claude-3-7-sonnet',
+    'anthropic/claude-3-7-sonnet': 'claude-3-7-sonnet',
+    'anthropic/claude-3.7-sonnet': 'claude-3-7-sonnet',
+    'anthropic/claude-3-7-sonnet-20250219': 'claude-3-7-sonnet',
+    'anthropic/claude-3.7-sonnet:thinking': 'claude-3-7-sonnet',
+    'claude-opus-4.7': 'claude-opus-4-7',
+    'anthropic/claude-opus-4.7': 'claude-opus-4-7',
+    'anthropic/claude-opus-4-7': 'claude-opus-4-7',
+    'claude-opus-4.8': 'claude-opus-4-8',
+    'anthropic/claude-opus-4.8': 'claude-opus-4-8',
+    'anthropic/claude-opus-4-8': 'claude-opus-4-8',
+    'claude-opus-4.6': 'claude-opus-4-6',
+    'anthropic/claude-opus-4.6': 'claude-opus-4-6',
+    'anthropic/claude-opus-4-6': 'claude-opus-4-6',
+    'claude-sonnet-4.6': 'claude-sonnet-4-6',
+    'anthropic/claude-sonnet-4.6': 'claude-sonnet-4-6',
+    'anthropic/claude-sonnet-4-6': 'claude-sonnet-4-6',
+    'claude-opus-4.5': 'claude-opus-4-5',
+    'anthropic/claude-opus-4.5': 'claude-opus-4-5',
+    'anthropic/claude-opus-4-5': 'claude-opus-4-5',
+    'claude-sonnet-4.5': 'claude-sonnet-4-5',
+    'anthropic/claude-sonnet-4.5': 'claude-sonnet-4-5',
+    'anthropic/claude-sonnet-4-5': 'claude-sonnet-4-5',
+    'claude-haiku-4.5': 'claude-haiku-4-5',
+    'anthropic/claude-haiku-4.5': 'claude-haiku-4-5',
+    'anthropic/claude-haiku-4-5': 'claude-haiku-4-5',
+    'anthropic/claude-fable-5': 'claude-fable-5',
+    'anthropic/claude-mythos-5': 'claude-mythos-5',
+    'anthropic/claude-sonnet-5': 'claude-sonnet-5',
+    'anthropic/claude-mythos-preview': 'claude-mythos-preview',
+  };
+
+  static String _canonicalize(String modelId) {
+    final trimmed = modelId.trim();
+    return _explicitAliases[trimmed] ?? trimmed;
   }
 
-  static bool _matchesAny(String normalized, List<String> patterns) {
-    return patterns.any(normalized.contains);
-  }
-
-  static const _alwaysAdaptiveOnlyPatterns = [
+  static const _alwaysAdaptiveOnlyModels = {
     'claude-fable-5',
     'claude-mythos-5',
     'claude-opus-4-8',
     'claude-opus-4-7',
     'claude-sonnet-5',
-  ];
+  };
 
-  static const _adaptiveCapablePatterns = [
+  static const _adaptiveCapableModels = {
     'claude-opus-4-6',
     'claude-sonnet-4-6',
     'claude-mythos-preview',
-  ];
+  };
 
-  static const _manualOnlyPatterns = [
+  static const _manualOnlyModels = {
     'claude-opus-4-5',
     'claude-sonnet-4-5',
     'claude-haiku-4-5',
-    'claude-3-5-sonnet',
-    'claude-3-5-haiku',
     'claude-3-7-sonnet',
-  ];
+  };
 
-  static const _extendedEffortPatterns = [
+  static const _extendedEffortModels = {
     'claude-fable-5',
     'claude-mythos-5',
     'claude-opus-4-8',
     'claude-opus-4-7',
     'claude-sonnet-5',
-  ];
+  };
 
-  static const _noOffPatterns = [
-    'claude-fable-5',
-    'claude-mythos-5',
-  ];
+  static const _noOffModels = {'claude-fable-5', 'claude-mythos-5'};
 }

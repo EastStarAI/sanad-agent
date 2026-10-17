@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:logging/logging.dart';
 
+import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
@@ -9,6 +10,8 @@ import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
+
+import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 
 /// Bounded concurrency queue helper to limit parallel tasks.
 class ConcurrencyLimiter {
@@ -44,6 +47,8 @@ class ProviderModelCacheService {
   final ProviderInstanceRepository _repo;
   final AgentRuntimeService _runtime;
   final ThinkingCapabilityAssembler _thinkingAssembler;
+  final Config? _config;
+  final ModelsDevService? _modelsDevService;
   final ConcurrencyLimiter _limiter;
   final Duration _cooldown;
 
@@ -57,9 +62,13 @@ class ProviderModelCacheService {
     this._repo,
     this._runtime,
     this._thinkingAssembler, {
+    Config? config,
+    ModelsDevService? modelsDevService,
     int maxConcurrency = 3,
     Duration cooldown = const Duration(minutes: 5),
-  }) : _limiter = ConcurrencyLimiter(maxConcurrency),
+  }) : _config = config,
+       _modelsDevService = modelsDevService,
+       _limiter = ConcurrencyLimiter(maxConcurrency),
        _cooldown = cooldown;
 
   /// Emits the instanceId when its model cache is successfully refreshed.
@@ -133,27 +142,42 @@ class ProviderModelCacheService {
       return active;
     }
 
-    active = _runTrackedRefresh(instance);
+    active = _runTrackedRefresh(instance, manual: manual);
     _activeRefreshes[instanceId] = active;
     return active;
   }
 
   Future<List<ModelOption>> _runTrackedRefresh(
-    ProviderInstance instance,
-  ) async {
+    ProviderInstance instance, {
+    bool manual = false,
+  }) async {
     try {
-      return await _limiter.run(() => _doLiveRefresh(instance));
+      return await _limiter.run(() => _doLiveRefresh(instance, manual: manual));
     } finally {
       _activeRefreshes.remove(instance.id);
     }
   }
 
-  Future<List<ModelOption>> _doLiveRefresh(ProviderInstance instance) async {
+  Future<List<ModelOption>> _doLiveRefresh(
+    ProviderInstance instance, {
+    bool manual = false,
+  }) async {
     final instanceId = instance.id;
     final configRev = instance.configRevision;
     final credRev = instance.credentialRevision;
 
     try {
+      try {
+        _config?.reloadModelAwarePolicy();
+      } catch (e) {
+        _logger.warning('Failed to reload model capability policy from config.yaml: ${e.runtimeType}');
+      }
+      try {
+        await _modelsDevService?.ensureLoaded(forceRefresh: manual);
+      } catch (e) {
+        _logger.warning('Failed to hydrate models.dev catalog: ${e.runtimeType}');
+      }
+
       // Model list fetches do not require a user-selected model; use a
       // placeholder so the adapter can be resolved for the instance.
       final signature = _runtime.resolveSignature(

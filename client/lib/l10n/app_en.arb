@@ -370,5 +370,40 @@
   "clientCliApprovalTitle": "Allow Sanad CLI to run remote command?",
   "clientCliAllowOnce": "Yes, allow this time",
   "clientCliAllowSession": "Yes, allow for this session",
-  "clientCliDeny": "No, deny"
+  "clientCliDeny": "No, deny",
+  "thinkingModeUnavailableLabel": "Unavailable",
+  "thinkingModeUnavailableTooltip": "Thinking mode selection is not available for this device.",
+  "thinkingModeLoadingLabel": "Loading...",
+  "thinkingModeRetryLabel": "Retry",
+  "thinkingModeFetchFailureTooltip": "Failed to load thinking options. Click to retry.",
+  "thinkingModeNoControlLabel": "No control",
+  "thinkingModeNoControlTooltip": "No selectable thinking level is reported for this model.",
+  "thinkingModeUnknownLabel": "Not reported",
+  "thinkingModeUnknownTooltip": "Thinking options are not reported for this model.",
+  "thinkingModeNotSelectedLabel": "Not selected",
+  "@thinkingModeNotSelectedLabel": {
+    "description": "Composer thinking chip shown only while a selectable route admits no selection: there is no valid explicit choice and the route declares no known native match, so the control stays honest instead of claiming a level or a provider default."
+  },
+  "thinkingModeTokenBudgetLabel": "Token budget",
+  "thinkingModeTokenBudgetAnnotation": "{tokens} tokens",
+  "@thinkingModeTokenBudgetAnnotation": {
+    "placeholders": {
+      "tokens": {
+        "type": "int"
+      }
+    }
+  },
+  "thinkingModeSelectTooltip": "Select Thinking Mode",
+  "thinkingModeSelectBudgetTooltip": "Select Thinking Mode · budget: {budget}",
+  "@thinkingModeSelectBudgetTooltip": {
+    "placeholders": {
+      "budget": {
+        "type": "String"
+      }
+    }
+  },
+  "thinkingModeProviderDefaultHint": "Provider default",
+  "@thinkingModeProviderDefaultHint": {
+    "description": "Hint shown inside the expanded thinking menu below the single option the Agent declared as this route's native default. A menu hint only: it never appears on the composer chip, in a synthetic Default row, or when the declared default is unknown."
+  }
 }

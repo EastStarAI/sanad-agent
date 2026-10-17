@@ -7,6 +7,8 @@ This contract applies to `agent/lib/evolution/`.
 - Own session/message persistence, title generation, scheduling, memory, and durable runtime state.
 - Keep interface admission, engine history, capability execution, and protocol delivery outside this domain.
 - Durable tables have one repository owner and share one agent-state database connection.
+- `AttachmentStore` owns session/message-scoped attachment bytes beneath the Agent state home. Callers stream only through bounded create/write/commit/cancel operations; generated opaque identities—not caller filenames—derive paths. Promotion requires verified bytes and existing same-session message ownership.
+- Attachment lookup is an exact `(session_id, attachment_id)` grant. Public projections never contain resolved paths. Session deletion removes metadata and bytes idempotently; startup cleanup removes partial files, missing-message metadata, and unowned promoted directories.
 
 ## Sessions and Titles
 - Persist every accepted interaction through `SessionManager` with workspace and selected model as first-class session state.

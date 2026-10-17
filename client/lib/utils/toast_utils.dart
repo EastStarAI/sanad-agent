@@ -5,11 +5,13 @@ import 'package:sanad_client/utils/app_platform.dart';
 
 class ToastUtils {
   static final _logger = Logger('ToastUtils');
+  static ValueChanged<String>? debugOnShowError;
 
   /// Minimum time user-visible feedback remains readable before auto-close.
   static const defaultDuration = Duration(seconds: 5);
 
   static void showError(BuildContext context, String message) {
+    debugOnShowError?.call(message);
     _logger.warning('Showing user-visible error toast');
     final isRtl = Directionality.of(context) == TextDirection.rtl;
     toastification.show(

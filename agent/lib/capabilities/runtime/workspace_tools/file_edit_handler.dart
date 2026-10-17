@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'dart:isolate';
+
+import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
 
@@ -9,6 +11,19 @@ class FileEditHandler {
   const FileEditHandler(this._pathResolver);
 
   Future<String> execute(
+    Map<String, dynamic> arguments,
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
+    final result = await executeResult(
+      arguments,
+      workspacePath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+    return result.displayText;
+  }
+
+  Future<ToolExecutionResult> executeResult(
     Map<String, dynamic> arguments,
     String workspacePath, {
     String? authorizedExternalRoot,
@@ -124,24 +139,26 @@ class FileEditHandler {
     }
 
     final firstEdit = edits.first;
-    return WorkspaceToolsUtils.encode({
-      'filePath': _pathResolver.relativeToWorkspace(
-        workspaceRoot: workspaceRoot,
-        resolvedPath: resolvedPath,
-      ),
-      'oldString': firstEdit.oldString.length > 100
-          ? '${firstEdit.oldString.substring(0, 100)}...'
-          : firstEdit.oldString,
-      'newString': firstEdit.newString.length > 100
-          ? '${firstEdit.newString.substring(0, 100)}...'
-          : firstEdit.newString,
-      'patch': patchBuffer.toString().trimRight(),
-      'replaceAll': isMulti ? false : firstEdit.replaceAll,
-      'numReplacements': editResult.totalReplacements,
-      'startLine': editResult.startLine,
-      if (isMulti) 'numEdits': edits.length,
-      if (isMulti) 'editStartLines': editResult.editStartLines,
-    });
+    return ToolExecutionResult.text(
+      WorkspaceToolsUtils.encode({
+        'filePath': _pathResolver.relativeToWorkspace(
+          workspaceRoot: workspaceRoot,
+          resolvedPath: resolvedPath,
+        ),
+        'oldString': firstEdit.oldString.length > 100
+            ? '${firstEdit.oldString.substring(0, 100)}...'
+            : firstEdit.oldString,
+        'newString': firstEdit.newString.length > 100
+            ? '${firstEdit.newString.substring(0, 100)}...'
+            : firstEdit.newString,
+        'patch': patchBuffer.toString().trimRight(),
+        'replaceAll': isMulti ? false : firstEdit.replaceAll,
+        'numReplacements': editResult.totalReplacements,
+        'startLine': editResult.startLine,
+        if (isMulti) 'numEdits': edits.length,
+        if (isMulti) 'editStartLines': editResult.editStartLines,
+      }),
+    );
   }
 
   static Future<_MultiEditResult> _applyEditsAsync(
@@ -153,9 +170,7 @@ class FileEditHandler {
       return _applyEdits(content, edits, isMulti);
     }
 
-    return Isolate.run(
-      () => _applyEdits(content, edits, isMulti),
-    );
+    return Isolate.run(() => _applyEdits(content, edits, isMulti));
   }
 
   static _MultiEditResult _applyEdits(
@@ -193,7 +208,8 @@ class FileEditHandler {
 
     var updated = content;
     for (final match in sortedDescending) {
-      updated = updated.substring(0, match.startIndex) +
+      updated =
+          updated.substring(0, match.startIndex) +
           match.newString +
           updated.substring(match.endIndex);
     }

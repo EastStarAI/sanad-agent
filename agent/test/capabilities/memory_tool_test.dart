@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/capabilities/tools/memory_tool.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/evolution/memory/file_memory_store.dart';
 
 void main() {
@@ -182,6 +183,25 @@ void main() {
       expect(empty['success'], isFalse);
       expect(nonObject['success'], isFalse);
       expect(nonStringKey['success'], isFalse);
+    });
+
+    test('typed success and error preserve legacy JSON projections', () async {
+      final typedRead = await tool.executeResult({
+        'action': 'read',
+        'target': 'memory',
+      });
+      final legacyRead = await tool.execute({
+        'action': 'read',
+        'target': 'memory',
+      });
+      expect(typedRead.displayText, legacyRead);
+      expect(typedRead.isError, isFalse);
+
+      final typedError = await tool.executeResult({'target': 'invalid'});
+      final legacyError = await tool.execute({'target': 'invalid'});
+      expect(typedError.displayText, legacyError);
+      expect(typedError.isError, isTrue);
+      expect(typedError.errorCode, ToolResultErrorCode.invalidInput);
     });
   });
 }

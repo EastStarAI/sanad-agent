@@ -7,8 +7,10 @@ import 'openai_effort_thinking_policy_base.dart';
 class OpenAiChatEffortThinkingPolicy extends OpenAiEffortThinkingPolicyBase {
   const OpenAiChatEffortThinkingPolicy();
 
+  static const policyIdentifier = 'openai_chat_effort';
+
   @override
-  String get policyId => 'openai_chat_effort';
+  String get policyId => policyIdentifier;
 
   @override
   NativeThinkingDirective buildDirective(String effort) {

@@ -1,7 +1,15 @@
 /// Applies typed Anthropic thinking directives to Messages API bodies.
+///
+/// An explicitly selected token budget is emitted exactly as selected. The
+/// Messages API requires `budget_tokens` to stay below `max_tokens`, so a
+/// selection the request cannot honour raises
+/// [ThinkingWireSerializationException] while the body is built: the request
+/// fails actionably before dispatch instead of silently sending a smaller
+/// budget than the one the user selected.
 library;
 
 import 'native_thinking_directive.dart';
+import 'thinking_wire_vocabulary.dart';
 
 class AnthropicThinkingWireCodec {
   AnthropicThinkingWireCodec._();
@@ -13,15 +21,21 @@ class AnthropicThinkingWireCodec {
     switch (directive) {
       case AnthropicBudgetDirective(:final budgetTokens):
         final maxTokens = _readMaxTokens(body);
-        final effectiveBudget = maxTokens == null
-            ? budgetTokens
-            : lowerBudgetTokens(
-                budgetTokens: budgetTokens,
-                maxTokens: maxTokens,
-              );
+        // A declared ceiling must genuinely host the selected budget: the
+        // Messages API requires `budget_tokens` to stay below `max_tokens`,
+        // which no positive budget can satisfy when the ceiling leaves no room
+        // for it. An absent `max_tokens` has no declared ceiling to compare
+        // against, so the selected budget passes through unchanged rather than
+        // being replaced.
+        if (maxTokens != null && budgetTokens > maxTokens - 1) {
+          throw ThinkingWireSerializationException(
+            'Anthropic thinking budget $budgetTokens exceeds this request\'s '
+            'max_tokens $maxTokens; the selected budget cannot be honoured.',
+          );
+        }
         body['thinking'] = {
           'type': 'enabled',
-          'budget_tokens': effectiveBudget,
+          'budget_tokens': budgetTokens,
         };
       case AnthropicAdaptiveDirective(:final effort):
         body['thinking'] = const {'type': 'adaptive'};
@@ -36,18 +50,6 @@ class AnthropicThinkingWireCodec {
       default:
         break;
     }
-  }
-
-  /// Anthropic requires `budget_tokens` to stay below `max_tokens`.
-  static int lowerBudgetTokens({
-    required int budgetTokens,
-    required int maxTokens,
-  }) {
-    if (maxTokens <= 1) {
-      return budgetTokens;
-    }
-    final ceiling = maxTokens - 1;
-    return budgetTokens > ceiling ? ceiling : budgetTokens;
   }
 
   static int? _readMaxTokens(Map<String, dynamic> body) {

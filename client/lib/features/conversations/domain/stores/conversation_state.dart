@@ -385,6 +385,7 @@ class ConversationState {
                 ? incoming.timestamp.difference(existing.timestamp).inMilliseconds
                 : null);
         return existing.copyWith(
+          text: incoming.text.isNotEmpty ? incoming.text : existing.text,
           tool: merged,
           status: _mergedToolStatus(existing, incoming),
           timestamp: existing.timestamp,

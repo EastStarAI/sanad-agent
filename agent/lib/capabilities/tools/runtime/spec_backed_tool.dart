@@ -1,3 +1,4 @@
+import '../../../core/models/tool_execution_result.dart';
 import '../../models/local_tool_spec.dart';
 import '../../models/tool_schema.dart';
 import '../base_tool.dart';
@@ -34,7 +35,20 @@ class CallbackTool extends SpecBackedTool {
   final LocalToolSpec toolSpec;
 
   @override
-  Future<String> execute(Map<String, dynamic> args, {ToolContext? context}) {
-    return _onExecute(args, context: context);
+  Future<String> execute(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async {
+    final result = await executeResult(args, context: context);
+    return result.displayText;
+  }
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async {
+    final text = await _onExecute(args, context: context);
+    return ToolExecutionResult.text(text);
   }
 }

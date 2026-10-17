@@ -636,6 +636,10 @@ fvm dart analyze
 fvm dart test
 ```
 
+The same suite also carries the regression coverage for the repository wiki
+lint guard (`test/wiki_lint_test.dart`), which drives `scripts/lint_wiki.dart`
+against a temporary sandbox that reproduces the real discovery paths.
+
 ## Documentation
 
 Behavior changes must update their owning page under `docs/` and the closest
@@ -647,10 +651,31 @@ Regenerate the machine-readable indexes:
 fvm dart run scripts/generate_llms_txt.dart
 ```
 
-Validate links and documentation ownership:
+Validate indexes, frontmatter, links, and documentation ownership:
 
 ```bash
 fvm dart run scripts/lint_wiki.dart
+```
+
+Every active page must be indexed in `docs/llms.txt` and carry Markdown
+frontmatter with both a `title` and a `description`. The validator discovers
+repository `AGENTS.md` contracts across the checkout, but it skips the
+dependency link trees Flutter generates inside the workspace:
+`client/linux/flutter/ephemeral/.plugin_symlinks/` and
+`client/windows/flutter/ephemeral/.plugin_symlinks/`, plus
+`client/macos/Flutter/ephemeral/.symlinks/`. Those trees resolve into the pub
+cache and contain third-party package contracts rather than this repository's,
+so `scripts/generate_llms_txt.dart` applies the same rule and never indexes
+them. Real repository contracts anywhere else stay discoverable and are still
+required to be indexed.
+
+Run dependency resolution (for example `fvm flutter pub get` in `client/`)
+before validating so those generated paths exist, then run the focused
+regression coverage for this boundary:
+
+```bash
+cd scripts/workflow_guards
+fvm dart test test/wiki_lint_test.dart
 ```
 
 ## Local binary testing

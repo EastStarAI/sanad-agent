@@ -45,6 +45,7 @@ import 'package:sanad_client/features/conversations/data/persistence/conversatio
 import 'package:sanad_client/features/conversations/data/persistence/shared_preferences_conversation_cache_persistence.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_cache_persistence.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/conversations/data/repositories/conversation_media_loader_resolver.dart';
 import 'package:sanad_client/features/devices/domain/device_preferences_repository.dart';
 import 'package:sanad_client/features/devices/data/device_preferences_repository_impl.dart';
 import 'package:sanad_client/features/devices/presentation/state/device_command_handler.dart';
@@ -210,6 +211,17 @@ Future<void> configureDependencies({
   if (!getIt.isRegistered<ISocketService>()) {
     getIt.registerLazySingleton<ISocketService>(
       () => getIt<SanadSocketService>(),
+    );
+  }
+
+  if (!getIt.isRegistered<ConversationMediaLoaderResolver>()) {
+    getIt.registerLazySingleton<ConversationMediaLoaderResolver>(
+      () => ConversationMediaLoaderResolver(
+        cloudSocketService: getIt<SanadSocketService>(
+          instanceName: 'cloudSocketService',
+        ),
+        hardwareId: getIt<String>(instanceName: 'hardwareId'),
+      ),
     );
   }
 
@@ -516,7 +528,7 @@ Future<void> configureDependencies({
 
   if (!getIt.isRegistered<TrayManagerAdapter>()) {
     getIt.registerLazySingleton<TrayManagerAdapter>(
-      () => NativeTrayManagerAdapter(),
+      () => createPlatformTrayManagerAdapter(),
     );
   }
 

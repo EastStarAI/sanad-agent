@@ -29,6 +29,7 @@ import 'package:sanad_client/features/devices/data/device_connection_coordinator
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/conversations/data/repositories/conversation_media_loader_resolver.dart';
 import 'package:sanad_client/features/devices/domain/device_preferences_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/screens/brain_activity_view.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/session_sidebar.dart';
@@ -757,6 +758,9 @@ class _MainContent extends StatelessWidget {
     final activityEligible =
         messagesState.error == null &&
         messagesState.attentionState?.visualState == SessionAttentionVisualState.runningOrResuming;
+    final mediaLoaders = getIt<ConversationMediaLoaderResolver>().resolve(
+      presentedDeviceId,
+    );
 
     return BrainActivityView(
       key: ValueKey('$sessionId:${messagesState.historyOpenRevision}'),
@@ -764,6 +768,8 @@ class _MainContent extends StatelessWidget {
       initialMessages: messagesState.messages,
       sessionId: sessionId,
       composerSessionId: composerSessionId,
+      viewImageMediaLoader: mediaLoaders.viewImage,
+      userAttachmentMediaLoader: mediaLoaders.attachment,
       initialViewportAnchorEventId: viewportAnchorEventId,
       followLatestOnOpen: hasActiveWork,
       activityEligible: activityEligible,

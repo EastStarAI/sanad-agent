@@ -44,6 +44,8 @@ This contract applies to `agent/`.
 - `GatewayManager` routes typed delivery policy; it does not inspect event names to infer delivery or runtime meaning.
 - `SanadProtocolBridge` dispatches/translates shared local/cloud canonical protocol. Focused handlers own workflows and receive dependencies explicitly rather than resolving hidden runtime owners.
 - Local and cloud Sanad transports remain independent adapters. Failure of one cannot stop the other or terminate the daemon event loop.
+- Hosted attachment/media admission requires `supports_attachments=true`; each relay envelope independently requires `version: "v1"`. Binary bytes travel only in bounded relay chunks and never in canonical commands/events, logs, or durable public state.
+- The hosted relay must stay bound to the live cloud socket. `io.io()` reuses one cached `Socket` per host whose `dispose()` clears every listener, so disposing the cloud socket (authorization loss, shutdown) must also forget the relay binding; otherwise the identity check in `initialize()` keeps the relay detached and relay events are dropped silently for the life of the process.
 - The cloud path is outbound; the local daemon path is an inbound loopback server on a configured dynamic port.
 - Runtime-rich turn input enters through typed interface models with explicit device, session, request, workspace, provider/model, thinking, origin, and delivery intent.
 - Workspace browsing, MCP, skills, slash commands, provider runtime, device settings, and session queries are daemon-owned services; clients render results but never become their source of truth.
@@ -69,6 +71,7 @@ This contract applies to `agent/`.
 - `sanad-dev` linked-worktree runs provide one isolated `SANAD_HOME` containing identity, credentials, sessions, memories, and request dumps; they must remove inherited `SANAD_STATE_HOME`.
 - External and test harnesses may still use `SANAD_STATE_HOME` to redirect mutable state without relocating identity or provider credentials.
 - E2E tests that initialize DI/SQLite or launch an agent process must set temporary `SANAD_HOME` and `SANAD_STATE_HOME` roots explicitly; Dart child processes must receive both variables instead of inheriting the caller's values.
+- In-process suites that reach the runtime home boundary redirect it with `setSanadHomeOverride` and prepare that root before building the runtime, so a clean CI runner never depends on a developer machine's already prepared Sanad Home.
 - Source worktrees consume global Sanad configuration and must not create a competing repository-local `.env`.
 - Do not create hidden scratch or temporary directories inside the repository.
 - Missing provider configuration must not prevent daemon startup; fail lazily when an LLM operation actually requires a provider.

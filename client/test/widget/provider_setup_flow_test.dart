@@ -18,6 +18,7 @@ import 'package:sanad_client/features/provider_setup/data/models/credential_summ
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
+import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_instance_form_view.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_picker_view.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
@@ -34,10 +35,13 @@ class _FakeClient extends ProviderSetupClient {
   });
 
   final List<ProviderDto> providers;
-  final List<ProviderInstanceDto> instances;
+  List<ProviderInstanceDto> instances;
   bool runtimeReady;
   final ModelOptionsDto? modelOptionsResult;
   final Object? modelRefreshError;
+  Object? listInstancesError;
+  Object? removeInstanceError;
+  Object? updateInstanceError;
   Completer<void>? usageSupportGate;
   final List<String> usageGetCalls = [];
   final List<String?> usageDeviceCalls = [];
@@ -134,7 +138,10 @@ class _FakeClient extends ProviderSetupClient {
   @override
   Future<List<ProviderInstanceDto>> listInstances({
     DeviceConfig? agent,
-  }) async => instances;
+  }) async {
+    if (listInstancesError case final error?) throw error;
+    return instances;
+  }
 
   @override
   Future<ProviderInstanceDto> createInstance({
@@ -177,7 +184,8 @@ class _FakeClient extends ProviderSetupClient {
     bool? allowAutoFailover,
     DeviceConfig? agent,
   }) async {
-    return ProviderInstanceDto(
+    if (updateInstanceError case final error?) throw error;
+    final updated = ProviderInstanceDto(
       id: providerInstanceId,
       templateId: 'openai',
       displayName: displayName ?? 'OpenAI',
@@ -192,6 +200,11 @@ class _FakeClient extends ProviderSetupClient {
       requestsPerMinute: requestsPerMinute ?? 0,
       allowAutoFailover: allowAutoFailover ?? true,
     );
+    instances = [
+      for (final i in instances)
+        if (i.id == providerInstanceId) updated else i,
+    ];
+    return updated;
   }
 
   @override
@@ -200,7 +213,8 @@ class _FakeClient extends ProviderSetupClient {
     required String displayName,
     DeviceConfig? agent,
   }) async {
-    return ProviderInstanceDto(
+    if (updateInstanceError case final error?) throw error;
+    final updated = ProviderInstanceDto(
       id: providerInstanceId,
       templateId: 'openai',
       displayName: displayName,
@@ -211,13 +225,21 @@ class _FakeClient extends ProviderSetupClient {
       configRevision: 2,
       credentialRevision: 1,
     );
+    instances = [
+      for (final i in instances)
+        if (i.id == providerInstanceId) updated else i,
+    ];
+    return updated;
   }
 
   @override
   Future<void> removeInstance({
     required String providerInstanceId,
     DeviceConfig? agent,
-  }) async {}
+  }) async {
+    if (removeInstanceError case final error?) throw error;
+    instances = instances.where((i) => i.id != providerInstanceId).toList();
+  }
 
   @override
   Future<void> setInstanceDefault({
@@ -1198,6 +1220,424 @@ void main() {
       expect(find.text('User Name'), findsOneWidget);
       expect(find.text('Disconnected'), findsNothing);
       expect(find.text('Reconnect account'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'provider setup flow updates ProviderUsageCubit display names on load and mutation',
+    (tester) async {
+      final fake = _FakeClient(
+        providers: [_provider(configured: true)],
+        instances: const [
+          ProviderInstanceDto(
+            id: 'inst-custom-1',
+            templateId: 'custom',
+            displayName: 'OpenAi Compatible',
+            protocol: 'openai_chat_completions',
+            authMethod: 'api_key',
+            status: 'ready',
+            isDefault: true,
+            configRevision: 1,
+            credentialRevision: 1,
+          ),
+        ],
+        runtimeReady: true,
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          ProviderSetupFlow(
+            client: fake,
+            showReadyState: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final usageCubit = tester
+          .element(find.byType(AnimatedSwitcher))
+          .read<ProviderUsageCubit>();
+
+      // Display name is immediately available in ProviderUsageCubit without restart
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'OpenAi Compatible'},
+      );
+
+      // Simulate updating / adding another provider instance via cubit
+      final setupCubit = tester
+          .element(find.byType(AnimatedSwitcher))
+          .read<ProviderSetupCubit>();
+
+      fake.instances = const [
+        ProviderInstanceDto(
+          id: 'inst-custom-1',
+          templateId: 'custom',
+          displayName: 'OpenAi Compatible Renamed',
+          protocol: 'openai_chat_completions',
+          authMethod: 'api_key',
+          status: 'ready',
+          isDefault: true,
+          configRevision: 2,
+          credentialRevision: 1,
+        ),
+        ProviderInstanceDto(
+          id: 'inst-custom-2',
+          templateId: 'custom',
+          displayName: 'Anthropic Compatible',
+          protocol: 'anthropic_messages',
+          authMethod: 'api_key',
+          status: 'ready',
+          isDefault: false,
+          configRevision: 1,
+          credentialRevision: 1,
+        ),
+      ];
+
+      await setupCubit.load(forcePicker: false);
+      await tester.pumpAndSettle();
+
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {
+          'inst-custom-1': 'OpenAi Compatible Renamed',
+          'inst-custom-2': 'Anthropic Compatible',
+        },
+      );
+    },
+  );
+
+  testWidgets(
+    'failed initial load with empty retained instances does not clear valid cached catalog',
+    (tester) async {
+      final agent = DeviceConfig(
+        id: 'hardware-1',
+        name: 'Device 1',
+        hardwareId: 'hardware-1',
+      );
+
+      final fake = _FakeClient(
+        providers: const [],
+        instances: const [],
+        runtimeReady: false,
+      );
+      fake.listInstancesError = Exception('network connection refused');
+
+      final usageCubit = ProviderUsageCubit(
+        client: fake,
+        localDeviceId: 'hardware-1',
+      );
+      addTearDown(usageCubit.close);
+
+      // Prepopulate usage cubit with cached display names
+      usageCubit.updateProviderDisplayNames(
+        agent: agent,
+        displayNames: {'inst-custom-1': 'Cached Custom Provider'},
+      );
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'Cached Custom Provider'},
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          ProviderSetupFlow(
+            device: agent,
+            client: fake,
+            usageCubit: usageCubit,
+            showReadyState: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The failed initial load must NOT wipe the cached catalog
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'Cached Custom Provider'},
+      );
+
+      final setupCubit = tester
+          .element(find.byType(AnimatedSwitcher))
+          .read<ProviderSetupCubit>();
+
+      // User navigation after failed load: backToPicker and clearError transitions
+      // must NOT clear the cached catalog or usage/support entries.
+      setupCubit.backToPicker();
+      await tester.pumpAndSettle();
+
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'Cached Custom Provider'},
+      );
+
+      setupCubit.clearError();
+      await tester.pumpAndSettle();
+
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'Cached Custom Provider'},
+      );
+    },
+  );
+
+  testWidgets(
+    'successful instances snapshot with unready default still updates names',
+    (tester) async {
+      final agent = DeviceConfig(
+        id: 'hardware-1',
+        name: 'Device 1',
+        hardwareId: 'hardware-1',
+      );
+
+      final fake = _FakeClient(
+        providers: [_provider(configured: true)],
+        instances: const [
+          ProviderInstanceDto(
+            id: 'inst-custom-1',
+            templateId: 'openai',
+            displayName: 'Unready OpenAi Compatible',
+            protocol: 'openai',
+            authMethod: 'api_key',
+            status: 'ready',
+            isDefault: true,
+            configRevision: 1,
+            credentialRevision: 1,
+          ),
+        ],
+        runtimeReady: false,
+      );
+
+      final usageCubit = ProviderUsageCubit(
+        client: fake,
+        localDeviceId: 'hardware-1',
+      );
+      addTearDown(usageCubit.close);
+
+      await tester.pumpWidget(
+        _wrap(
+          ProviderSetupFlow(
+            device: agent,
+            client: fake,
+            usageCubit: usageCubit,
+            showReadyState: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Successful snapshot with unready default must update names even if readiness error is present
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'Unready OpenAi Compatible'},
+      );
+    },
+  );
+
+  testWidgets(
+    'no-op navigation does not obsolete in-flight catalog loads',
+    (tester) async {
+      final agent = DeviceConfig(
+        id: 'hardware-1',
+        name: 'Device 1',
+        hardwareId: 'hardware-1',
+      );
+
+      final fake = _FakeClient(
+        providers: [_provider(configured: true)],
+        instances: const [
+          ProviderInstanceDto(
+            id: 'inst-custom-1',
+            templateId: 'openai',
+            displayName: 'OpenAi Compatible',
+            protocol: 'openai',
+            authMethod: 'api_key',
+            status: 'ready',
+            isDefault: true,
+            configRevision: 1,
+            credentialRevision: 1,
+          ),
+        ],
+        runtimeReady: true,
+      );
+
+      final usageCubit = ProviderUsageCubit(
+        client: fake,
+        localDeviceId: 'hardware-1',
+      );
+      addTearDown(usageCubit.close);
+
+      await tester.pumpWidget(
+        _wrap(
+          ProviderSetupFlow(
+            device: agent,
+            client: fake,
+            usageCubit: usageCubit,
+            showReadyState: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'OpenAi Compatible'},
+      );
+
+      final setupCubit = tester
+          .element(find.byType(AnimatedSwitcher))
+          .read<ProviderSetupCubit>();
+
+      // Navigation without new snapshot must not re-sync or obsolete catalog
+      setupCubit.backToPicker();
+      await tester.pumpAndSettle();
+
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'OpenAi Compatible'},
+      );
+    },
+  );
+
+  testWidgets(
+    'failed mutation preserves cached catalog display names',
+    (tester) async {
+      final agent = DeviceConfig(
+        id: 'hardware-1',
+        name: 'Device 1',
+        hardwareId: 'hardware-1',
+      );
+
+      final fake = _FakeClient(
+        providers: [_provider(configured: true)],
+        instances: const [
+          ProviderInstanceDto(
+            id: 'inst-custom-1',
+            templateId: 'openai',
+            displayName: 'OpenAi Compatible',
+            protocol: 'openai',
+            authMethod: 'api_key',
+            status: 'ready',
+            isDefault: true,
+            configRevision: 1,
+            credentialRevision: 1,
+          ),
+        ],
+        runtimeReady: true,
+      );
+
+      final usageCubit = ProviderUsageCubit(
+        client: fake,
+        localDeviceId: 'hardware-1',
+      );
+      addTearDown(usageCubit.close);
+
+      await tester.pumpWidget(
+        _wrap(
+          ProviderSetupFlow(
+            device: agent,
+            client: fake,
+            usageCubit: usageCubit,
+            showReadyState: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'OpenAi Compatible'},
+      );
+
+      final setupCubit = tester
+          .element(find.byType(AnimatedSwitcher))
+          .read<ProviderSetupCubit>();
+
+      // Select instance for edit
+      setupCubit.selectInstanceForEdit(fake.instances.first);
+      await tester.pumpAndSettle();
+
+      // Set an error on updateInstance
+      fake.updateInstanceError = Exception('failed to save provider details');
+
+      // Attempt mutation via cubit
+      await setupCubit.createOrUpdateInstance(
+        displayName: 'Should Not Save',
+        authMethod: 'api_key',
+      );
+      await tester.pumpAndSettle();
+
+      // Cached names must be preserved as is
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'OpenAi Compatible'},
+      );
+    },
+  );
+
+  testWidgets(
+    'authoritative successful removal of last instance clears display names',
+    (tester) async {
+      final agent = DeviceConfig(
+        id: 'hardware-1',
+        name: 'Device 1',
+        hardwareId: 'hardware-1',
+      );
+
+      final fake = _FakeClient(
+        providers: [_provider(configured: true)],
+        instances: [
+          const ProviderInstanceDto(
+            id: 'inst-custom-1',
+            templateId: 'openai',
+            displayName: 'OpenAi Compatible',
+            protocol: 'openai',
+            authMethod: 'api_key',
+            status: 'ready',
+            isDefault: true,
+            configRevision: 1,
+            credentialRevision: 1,
+          ),
+        ],
+        runtimeReady: true,
+      );
+
+      final usageCubit = ProviderUsageCubit(
+        client: fake,
+        localDeviceId: 'hardware-1',
+      );
+      addTearDown(usageCubit.close);
+
+      await tester.pumpWidget(
+        _wrap(
+          ProviderSetupFlow(
+            device: agent,
+            client: fake,
+            usageCubit: usageCubit,
+            showReadyState: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        {'inst-custom-1': 'OpenAi Compatible'},
+      );
+
+      final setupCubit = tester
+          .element(find.byType(AnimatedSwitcher))
+          .read<ProviderSetupCubit>();
+
+      // Authoritatively remove the last instance
+      await setupCubit.removeInstance('inst-custom-1');
+      await tester.pumpAndSettle();
+
+      // The authoritative removal of the last instance clears display names
+      expect(
+        usageCubit.state.displayNamesFor('hardware-1'),
+        isEmpty,
+      );
     },
   );
 }

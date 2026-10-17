@@ -1,3 +1,8 @@
+---
+title: "Sanad CLI Architecture"
+description: "Attached and in-process transports, runtime ownership, automation output, cancellation, and test-isolation contracts."
+---
+
 # Sanad CLI Architecture & Gateway Runtime Contract
 
 ## 1. Overview
@@ -204,6 +209,10 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
 E2E tests that initialize DI, open the on-disk SQLite owner, or launch an agent process use temporary roots for both `SANAD_HOME` and `SANAD_STATE_HOME`. Dart child processes receive both variables explicitly rather than inheriting the developer's environment. In-process tests set and clear both root overrides around each test.
 
 `AgentStateDatabase` additionally fails closed under the Dart test runner when no explicit state isolation is detectable. `test/guards/e2e_state_isolation_contract_test.dart` scans E2E persistent-runtime entry points and Dart child-process tests so newly added coverage cannot silently fall back to the user's normal Sanad database.
+
+### 8.1. Turn-Event Readiness in In-Process Runner Tests
+
+In-process `sanad run` coverage (`test/cli/run_delegation_test.dart`) gates turn events on **dispatch readiness** (`await client.turnDispatched.future`), never on the initial `running` artifact. `OneshotRunner` records that artifact through `RunArtifactCoordinator.recordInitial()` before it resolves the client, subscribes to the client's event streams and dispatches the turn, while the test transport publishes on a broadcast stream: an event emitted in that window has no subscriber, is dropped, and the awaiting observer can never resolve. The shared mock's intervention emitters therefore fail fast when nothing is subscribed, so a premature gate becomes a deterministic, actionable failure instead of a scheduler-dependent timeout.
 
 ---
 

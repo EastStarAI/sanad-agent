@@ -25,6 +25,7 @@ import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
@@ -43,6 +44,7 @@ import 'handlers/device_settings_command_handler.dart';
 import 'handlers/device_control_command_handler.dart';
 import 'handlers/provider_command_handler.dart';
 import 'handlers/session_fork_command_handler.dart';
+import 'handlers/attachment_admission_command_handler.dart';
 import 'handlers/session_query_handler.dart';
 import 'handlers/session_recovery_command_handler.dart';
 import 'handlers/session_compact_command_handler.dart';
@@ -63,6 +65,7 @@ class SanadProtocolBridge {
   WorkspaceCommandHandler? __workspaceHandler;
   SessionRecoveryCommandHandler? __recoveryHandler;
   SessionTurnReplayCommandHandler? __turnReplayHandler;
+  AttachmentAdmissionCommandHandler? __attachmentAdmissionHandler;
   SessionCompactCommandHandler? __compactHandler;
   SessionForkCommandHandler? __forkHandler;
   DeviceSettingsCommandHandler? __deviceSettingsHandler;
@@ -229,9 +232,20 @@ class SanadProtocolBridge {
                   getIt.isRegistered<CompactionBoundaryRepository>()
                   ? getIt<CompactionBoundaryRepository>()
                   : null,
+              attachmentStore: getIt.isRegistered<AttachmentStore>()
+                  ? getIt<AttachmentStore>()
+                  : null,
               bridge: this,
             )
           : null;
+
+  AttachmentAdmissionCommandHandler? get _attachmentAdmissionHandler =>
+      __attachmentAdmissionHandler ??= getIt.isRegistered<AttachmentStore>()
+      ? AttachmentAdmissionCommandHandler(
+          store: getIt<AttachmentStore>(),
+          bridge: this,
+        )
+      : null;
 
   SessionCompactCommandHandler? get _compactHandler =>
       __compactHandler ??= getIt.isRegistered<SessionRunOrchestrator>()
@@ -290,6 +304,12 @@ class SanadProtocolBridge {
 
     CanonicalEvent? event;
     switch (command) {
+      case 'attachment.admit':
+        event = CanonicalEvent(
+          type: 'attachment.admit',
+          sessionId: sessionId,
+          payload: payload,
+        );
       case 'get_sessions':
         event = CanonicalEvent(
           type: CanonicalEventTypes.getSessions,
@@ -728,6 +748,12 @@ class SanadProtocolBridge {
     Future<void> Function(Map<String, dynamic> envelope) emitEnvelope,
   ) async {
     switch (event.type) {
+      case 'attachment.admit':
+        final handler = _attachmentAdmissionHandler;
+        if (handler != null) {
+          await handler.handle(event, emitEnvelope);
+        }
+        return;
       case CanonicalEventTypes.getSessionHistory:
         await emitEnvelope(_sessionQueryHandler.buildHistoryEnvelope(event));
         return;
@@ -982,9 +1008,7 @@ class SanadProtocolBridge {
         );
         return;
       case CanonicalEventTypes.updateAppearance:
-        await emitEnvelope(
-          await _appearanceHandler.buildUpdateEnvelope(event),
-        );
+        await emitEnvelope(await _appearanceHandler.buildUpdateEnvelope(event));
         return;
       case CanonicalEventTypes.deviceUpdateCheck:
       case CanonicalEventTypes.deviceUpdateApply:

@@ -7,6 +7,7 @@ import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
 import '../../core/provider_thinking/openai_thinking_wire_codec.dart';
 import 'llm_request_options.dart';
+import 'tool_result_wire_codec.dart';
 
 class CodexResponsesException implements Exception {
   final String message;
@@ -54,6 +55,7 @@ class CodexResponsesCodec {
     required LLMRequestOptions options,
     List<ToolSchema>? tools,
     bool stream = false,
+    Map<String, String>? preloadedAttachments,
   }) {
     if (model.trim().isEmpty) {
       throw const FormatException(
@@ -66,7 +68,10 @@ class CodexResponsesCodec {
         .map((message) => message.content?.trim() ?? '')
         .where((content) => content.isNotEmpty)
         .join('\n\n');
-    final input = _historyToInput(history);
+    final input = _historyToInput(
+      history,
+      preloadedAttachments: preloadedAttachments,
+    );
     final reasoning = <String, dynamic>{};
     OpenAiThinkingWireCodec.applyResponsesReasoning(
       reasoning,
@@ -340,7 +345,10 @@ class CodexResponsesCodec {
     );
   }
 
-  List<Map<String, dynamic>> _historyToInput(List<Message> history) {
+  List<Map<String, dynamic>> _historyToInput(
+    List<Message> history, {
+    Map<String, String>? preloadedAttachments,
+  }) {
     final input = <Map<String, dynamic>>[];
     final seenReasoningIds = <String>{};
     for (final message in history) {
@@ -355,18 +363,30 @@ class CodexResponsesCodec {
         input.add({
           'type': 'function_call_output',
           'call_id': callId,
-          'output': message.content ?? '',
+          'output': ToolResultWireCodec.responsesOutput(message),
         });
         continue;
       }
 
       if (message.role == MessageRole.user) {
-        input.add({
-          'role': 'user',
-          'content': [
-            {'type': 'input_text', 'text': message.content ?? ''},
-          ],
-        });
+        final content = <Map<String, dynamic>>[
+          {'type': 'input_text', 'text': message.content ?? ''},
+        ];
+        for (final att in message.attachments) {
+          final b64 =
+              preloadedAttachments?[att.id] ??
+              ToolResultWireCodec.userAttachmentBase64(
+                att,
+                preloadedBase64: preloadedAttachments,
+              );
+          if (b64 != null) {
+            content.add({
+              'type': 'input_image',
+              'image_url': 'data:${att.mimeType};base64,$b64',
+            });
+          }
+        }
+        input.add({'role': 'user', 'content': content});
         continue;
       }
 
@@ -484,9 +504,7 @@ class CodexResponsesCodec {
         }
       } else if (type == 'function_call_output') {
         _requireNonEmpty(item, 'call_id', index);
-        if (item['output'] is! String) {
-          throw FormatException('Function output[$index] must be a string.');
-        }
+        _validateFunctionOutput(item['output'], index);
       } else if (type == 'message') {
         if (item['role'] != 'assistant' || item['content'] is! List) {
           throw FormatException(
@@ -670,6 +688,50 @@ class CodexResponsesCodec {
     final value = raw?.toString().trim().toLowerCase();
     if (value == null || value.isEmpty) return null;
     return value.replaceAll('-', '_').replaceAll(' ', '_');
+  }
+
+  static void _validateFunctionOutput(Object? output, int index) {
+    if (output is String) return;
+    if (output is! List || output.isEmpty) {
+      throw FormatException(
+        'Function output[$index] must be a string or non-empty content list.',
+      );
+    }
+    for (var partIndex = 0; partIndex < output.length; partIndex++) {
+      final part = _map(output[partIndex]);
+      if (part == null) {
+        throw FormatException(
+          'Function output[$index][$partIndex] must be an object.',
+        );
+      }
+      switch (part['type']) {
+        case 'input_text':
+          if (part['text'] is! String ||
+              (part['text'] as String).trim().isEmpty) {
+            throw FormatException(
+              'Function output[$index][$partIndex] has invalid text.',
+            );
+          }
+          break;
+        case 'input_image':
+          final imageUrl = part['image_url'];
+          final detail = part['detail'];
+          if (imageUrl is! String ||
+              !RegExp(
+                r'^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$',
+              ).hasMatch(imageUrl) ||
+              !const {'low', 'auto', 'high'}.contains(detail)) {
+            throw FormatException(
+              'Function output[$index][$partIndex] has invalid image data.',
+            );
+          }
+          break;
+        default:
+          throw FormatException(
+            'Function output[$index][$partIndex] has unsupported type.',
+          );
+      }
+    }
   }
 
   static void _requireNonEmpty(

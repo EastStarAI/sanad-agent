@@ -2,9 +2,12 @@ import 'dart:convert';
 import 'package:logging/logging.dart';
 import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
+import '../../core/models/tool_execution_result.dart';
+import '../../core/models/view_image_media_metadata.dart';
 import '../../capabilities/registry/tools_registry.dart';
 import '../../capabilities/tools/base_tool.dart';
 import '../../core/di.dart';
+import '../../core/provider_runtime/route_capability_resolver.dart';
 import '../../evolution/db/persisted_runtime_state_repository.dart';
 import '../../evolution/session_manager.dart';
 import '../../plugins/plugin_manager.dart';
@@ -19,6 +22,7 @@ typedef ToolEventCallback =
       required String toolName,
       String? input,
       String? output,
+      ViewImageMediaMetadata? media,
       required bool isError,
       required bool isStart,
       String? toolRunId,
@@ -60,6 +64,15 @@ class ToolExecutionCoordinator {
   }) : deferredToolResultResolver =
            deferredToolResultResolver ?? const DeferredToolResultResolver();
 
+  static String _eventInputFor(ToolCall toolCall) {
+    if (toolCall.name != 'view_image') return jsonEncode(toolCall.arguments);
+    return jsonEncode({
+      'path': '[local image path redacted]',
+      if (toolCall.arguments['detail'] != null)
+        'detail': toolCall.arguments['detail'],
+    });
+  }
+
   /// Executes a batch of tool calls sequentially or in parallel.
   ///
   /// [callbacks] bridge history mutations and history-save back to the runner
@@ -82,6 +95,8 @@ class ToolExecutionCoordinator {
     final completedResults = Map<String, String>.from(
       checkpointMeta['completed_tool_results'] as Map? ?? const {},
     );
+    final restoredTypedResults = checkpointCoordinator
+        .restoreCompletedToolResultsV2();
     final currentlyExecuting = List<String>.from(
       checkpointMeta['currently_executing_tools'] as List? ?? const [],
     );
@@ -92,6 +107,7 @@ class ToolExecutionCoordinator {
     final currentModelStepId = ctx.currentModelStepId;
 
     final finalResults = <String, String>{};
+    final typedResults = <String, ToolExecutionResult>{};
     final toolCallsToRun = <ToolCall>[];
     final interruptedTools = <String, String>{};
     final toolReplaySafety = <String, bool>{
@@ -113,9 +129,18 @@ class ToolExecutionCoordinator {
           deferred.requesterToolCallId == toolCall.id) {
         final resolution = await deferredToolResultResolver.resolve(deferred);
         completedResults[toolCall.id] = resolution.output;
+        final typedResolution = ToolExecutionResult.text(
+          resolution.output,
+          isError: resolution.isError,
+          errorCode: resolution.isError
+              ? ToolResultErrorCode.executionFailed
+              : null,
+        );
+        restoredTypedResults[toolCall.id] = typedResolution;
         checkpointCoordinator.saveCheckpoint(
           ctx: ctx,
           additionalToolResults: {toolCall.id: resolution.output},
+          additionalToolResultsV2: {toolCall.id: typedResolution},
           additionalToolOutputs: {
             toolCall.id: checkpointCoordinator.toolOutputRecord(
               toolCall,
@@ -136,18 +161,22 @@ class ToolExecutionCoordinator {
       // record is a legacy untagged durable result, fall back to durable
       // id-based reuse to preserve recovery semantics.
       final reusable = currentModelStepId == null
-          ? completedResults.containsKey(toolCall.id)
+          ? completedResults.containsKey(toolCall.id) ||
+                restoredTypedResults.containsKey(toolCall.id)
           : checkpointCoordinator.isCompletedResultForCausalToolCall(
               freshMeta,
               toolCall,
               modelStepId: currentModelStepId,
             );
       if (reusable) {
+        final restored = restoredTypedResults[toolCall.id];
+        if (restored != null) typedResults[toolCall.id] = restored;
         final storedRecord = checkpointCoordinator.completedToolOutputFor(
           freshMeta,
           toolCall.id,
         );
         finalResults[toolCall.id] =
+            restored?.displayText ??
             storedRecord?['result']?.toString() ??
             completedResults[toolCall.id] ??
             'Error: No result for tool call';
@@ -160,6 +189,11 @@ class ToolExecutionCoordinator {
             'Error: Tool execution was interrupted by a daemon crash/restart. Non-idempotent tool cannot be safely re-run.';
         finalResults[toolCall.id] = errMsg;
         interruptedTools[toolCall.id] = errMsg;
+        typedResults[toolCall.id] = ToolExecutionResult.text(
+          errMsg,
+          isError: true,
+          errorCode: ToolResultErrorCode.executionFailed,
+        );
         _logger.warning(
           '⚠️ [Agent] Tool call ${toolCall.name} was interrupted in a non-idempotent state. Skipping re-execution for safety.',
         );
@@ -172,6 +206,10 @@ class ToolExecutionCoordinator {
       checkpointCoordinator.saveCheckpoint(
         ctx: ctx,
         additionalToolResults: interruptedTools,
+        additionalToolResultsV2: {
+          for (final toolCallId in interruptedTools.keys)
+            toolCallId: typedResults[toolCallId]!,
+        },
         additionalToolOutputs: {
           for (final entry in interruptedTools.entries)
             entry.key: checkpointCoordinator.toolOutputRecord(
@@ -192,6 +230,7 @@ class ToolExecutionCoordinator {
               toolCallsToRun,
               callbacks: callbacks,
               ctx: ctx,
+              typedResults: typedResults,
               cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
               toolTiming: toolTiming,
@@ -200,6 +239,7 @@ class ToolExecutionCoordinator {
               toolCallsToRun,
               callbacks: callbacks,
               ctx: ctx,
+              typedResults: typedResults,
               cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
               toolTiming: toolTiming,
@@ -222,34 +262,51 @@ class ToolExecutionCoordinator {
       updatedMeta['completed_tool_outputs'] as Map? ?? const {},
     );
     for (final toolCall in toolCalls) {
-      finalResults[toolCall.id] = ToolOutputGuard.guardResult(
-        allCompleted[toolCall.id]?.toString() ??
-            finalResults[toolCall.id] ??
-            'Error: No result for tool call',
+      final outputRecord = allOutputs[toolCall.id];
+      final legacyIsError =
+          _lockedCancelledResult(toolCall.id) != null ||
+          (outputRecord is Map && outputRecord['is_error'] == true);
+      typedResults.putIfAbsent(
+        toolCall.id,
+        () => ToolExecutionResult.text(
+          allCompleted[toolCall.id]?.toString() ??
+              finalResults[toolCall.id] ??
+              'Error: No result for tool call',
+          isError: legacyIsError,
+          errorCode: legacyIsError ? ToolResultErrorCode.executionFailed : null,
+        ),
       );
     }
-    final batchGuardedResults = ToolOutputGuard.guardBatch(finalResults);
-    finalResults
+    final batchGuardedResults = _guardTypedBatch(typedResults);
+    typedResults
       ..clear()
       ..addAll(batchGuardedResults);
+    finalResults
+      ..clear()
+      ..addEntries(
+        typedResults.entries.map(
+          (entry) => MapEntry(entry.key, entry.value.displayText),
+        ),
+      );
+    checkpointCoordinator.saveCheckpoint(
+      ctx: ctx,
+      additionalToolResults: finalResults,
+      additionalToolResultsV2: typedResults,
+    );
 
     // Add all guarded results to history in the original tool-call order.
     // Presence checks preserve idempotency for resumed single-tool paths.
     for (final toolCall in toolCalls) {
       if (!_canPublishToolEvents(cancellationScope)) return;
-      final result = finalResults[toolCall.id]!;
+      final result = typedResults[toolCall.id]!;
       final alreadyAdded = callbacks.isToolMessagePresent(toolCall.id);
       if (!alreadyAdded) {
-        final outputRecord = allOutputs[toolCall.id];
-        final isError =
-            _lockedCancelledResult(toolCall.id) != null ||
-            (outputRecord is Map && outputRecord['is_error'] == true) ||
-            _resultIndicatesError(result);
         final timing = toolTiming[toolCall.id];
-        await callbacks.addToolMessage(
+        await _appendToolMessage(
+          callbacks,
+          checkpointCoordinator,
           toolCall,
           result,
-          isError: isError,
           startedAt: timing?.startedAt,
           terminalAt: timing?.terminalAt,
           runtimeMs: timing?.runtimeMs,
@@ -265,11 +322,39 @@ class ToolExecutionCoordinator {
       resumeHistoryLength: callbacks.currentHistoryLength(),
       removeRestartTerminalizedToolCallIds: toolCalls.map((call) => call.id),
     );
+    if (onToolEvent != null) {
+      for (final toolCall in toolCallsToRun.where(
+        (call) => call.name == 'view_image',
+      )) {
+        final result = typedResults[toolCall.id]!;
+        final timing = toolTiming[toolCall.id];
+        await _maybeEmitToolEvent(
+          cancellationScope,
+          emit: () => onToolEvent(
+            toolName: toolCall.name,
+            output: result.displayText,
+            media: ViewImageMediaMetadata.project(
+              sessionId: sessionId,
+              toolName: toolCall.name,
+              toolCallId: toolCall.id,
+              result: result,
+            ),
+            isError: result.isError,
+            isStart: false,
+            toolRunId: toolCall.id,
+            startedAt: timing?.startedAt,
+            terminalAt: timing?.terminalAt,
+            runtimeMs: timing?.runtimeMs,
+          ),
+        );
+      }
+    }
     callbacks.applyPendingSteerToToolResults(toolCalls.length);
   }
 
   ToolContext _toolContextFor(
     ToolCall toolCall, {
+    ToolExecutionCallbacks? callbacks,
     RunCancellationScope? cancellationScope,
   }) {
     return ToolContext(
@@ -281,6 +366,8 @@ class ToolExecutionCoordinator {
       cancellationScope: cancellationScope,
       onExecutionProgress: (progress) => checkpointCoordinator
           .saveExecutingToolProgress(toolCall.id, progress),
+      imageSupport:
+          callbacks?.currentImageSupport() ?? RouteImageSupport.unknown,
     );
   }
 
@@ -314,8 +401,17 @@ class ToolExecutionCoordinator {
     return record?.isTerminalCancelled == true ? record!.message : null;
   }
 
-  String _applyLateResultIsolation(String toolCallId, String result) {
-    return _lockedCancelledResult(toolCallId) ?? result;
+  ToolExecutionResult _applyLateResultIsolation(
+    String toolCallId,
+    ToolExecutionResult result,
+  ) {
+    final cancelled = _lockedCancelledResult(toolCallId);
+    if (cancelled == null) return result;
+    return ToolExecutionResult.text(
+      cancelled,
+      isError: true,
+      errorCode: ToolResultErrorCode.executionFailed,
+    );
   }
 
   Future<void> _maybeEmitToolEvent(
@@ -332,6 +428,7 @@ class ToolExecutionCoordinator {
     List<ToolCall> toolCallsToRun, {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    required Map<String, ToolExecutionResult> typedResults,
     RunCancellationScope? cancellationScope,
     ToolEventCallback? onToolEvent,
     Map<String, ({DateTime startedAt, DateTime terminalAt, int runtimeMs})>?
@@ -340,12 +437,10 @@ class ToolExecutionCoordinator {
     final results = <String, String>{};
     for (final toolCall in toolCallsToRun) {
       if (!_canPublishToolEvents(cancellationScope)) return results;
-      final argumentsString = jsonEncode(toolCall.arguments);
-      _logger.info(
-        '🛠️ [Agent] Requesting tool call: ${toolCall.name} (arguments: $argumentsString)',
-      );
+      final argumentsString = _eventInputFor(toolCall);
+      _logger.info('🛠️ [Agent] Requesting tool call: ${toolCall.name}');
       final startedAt = DateTime.now().toUtc();
-      if (onToolEvent != null) {
+      if (onToolEvent != null && toolCall.name != 'view_image') {
         await _maybeEmitToolEvent(
           cancellationScope,
           emit: () => onToolEvent(
@@ -378,21 +473,21 @@ class ToolExecutionCoordinator {
         appendToHistory: false,
         startedAtOverride: startedAt,
       );
-      final terminalAt = DateTime.now().toUtc();
-      final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
+      var terminalAt = DateTime.now().toUtc();
+      var runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
       toolTiming?[toolCall.id] = (
         startedAt: startedAt,
         terminalAt: terminalAt,
         runtimeMs: runtimeMs,
       );
-      var result = execution.result;
+      var typedResult = execution.result;
+      var result = typedResult.displayText;
       if (!_canPublishToolEvents(cancellationScope)) return results;
       final deferred = DeferredToolResultDescriptor.tryParseToolResult(
         result,
         sessionId: sessionId,
         toolCallId: toolCall.id,
       );
-      var isError = execution.isError;
       if (deferred != null) {
         checkpointCoordinator.saveCheckpoint(
           ctx: ctx,
@@ -401,44 +496,56 @@ class ToolExecutionCoordinator {
         );
         final resolution = await deferredToolResultResolver.resolve(deferred);
         if (!_canPublishToolEvents(cancellationScope)) return results;
-        result = resolution.output;
-        isError = resolution.isError;
-        final deferredTerminalAt = DateTime.now().toUtc();
-        final deferredRuntimeMs = deferredTerminalAt
-            .difference(startedAt)
-            .inMilliseconds;
+        typedResult = ToolExecutionResult.text(
+          resolution.output,
+          isError: resolution.isError,
+          errorCode: resolution.isError
+              ? ToolResultErrorCode.executionFailed
+              : null,
+        );
+        result = typedResult.displayText;
+        terminalAt = DateTime.now().toUtc();
+        runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
         toolTiming?[toolCall.id] = (
           startedAt: startedAt,
-          terminalAt: deferredTerminalAt,
-          runtimeMs: deferredRuntimeMs,
+          terminalAt: terminalAt,
+          runtimeMs: runtimeMs,
         );
-        if (onToolEvent != null) {
+        if (onToolEvent != null && toolCall.name != 'view_image') {
           await _maybeEmitToolEvent(
             cancellationScope,
             emit: () => onToolEvent(
               toolName: toolCall.name,
               output: result,
-              isError: isError,
+              media: ViewImageMediaMetadata.project(
+                sessionId: sessionId,
+                toolName: toolCall.name,
+                toolCallId: toolCall.id,
+                result: typedResult,
+              ),
+              isError: typedResult.isError,
               isStart: false,
               toolRunId: toolCall.id,
               startedAt: startedAt,
-              terminalAt: deferredTerminalAt,
-              runtimeMs: deferredRuntimeMs,
+              terminalAt: terminalAt,
+              runtimeMs: runtimeMs,
             ),
           );
         }
       }
+      typedResults[toolCall.id] = typedResult;
       results[toolCall.id] = result;
 
       // Save result and clear executing
       checkpointCoordinator.saveCheckpoint(
         ctx: ctx,
         additionalToolResults: {toolCall.id: result},
+        additionalToolResultsV2: {toolCall.id: typedResult},
         additionalToolOutputs: {
           toolCall.id: checkpointCoordinator.toolOutputRecord(
             toolCall,
             result,
-            isError: isError,
+            isError: typedResult.isError,
             sentToProvider: false,
           ),
         },
@@ -453,6 +560,7 @@ class ToolExecutionCoordinator {
     List<ToolCall> toolCallsToRun, {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    required Map<String, ToolExecutionResult> typedResults,
     RunCancellationScope? cancellationScope,
     ToolEventCallback? onToolEvent,
     Map<String, ({DateTime startedAt, DateTime terminalAt, int runtimeMs})>?
@@ -473,7 +581,7 @@ class ToolExecutionCoordinator {
             cancellationScope,
             emit: () => onToolEvent(
               toolName: toolCall.name,
-              input: jsonEncode(toolCall.arguments),
+              input: _eventInputFor(toolCall),
               isError: false,
               isStart: true,
               toolRunId: toolCall.id,
@@ -507,6 +615,11 @@ class ToolExecutionCoordinator {
         final tool = registry.getTool(toolCall.name);
         if (tool == null) {
           final result = 'Error: Tool ${toolCall.name} not found';
+          typedResults[toolCall.id] = ToolExecutionResult.text(
+            result,
+            isError: true,
+            errorCode: ToolResultErrorCode.notFound,
+          );
           final terminalAt = DateTime.now().toUtc();
           final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
           toolTiming?[toolCall.id] = (
@@ -519,6 +632,7 @@ class ToolExecutionCoordinator {
           checkpointCoordinator.saveCheckpoint(
             ctx: ctx,
             additionalToolResults: {toolCall.id: result},
+            additionalToolResultsV2: {toolCall.id: typedResults[toolCall.id]!},
             additionalToolOutputs: {
               toolCall.id: checkpointCoordinator.toolOutputRecord(
                 toolCall,
@@ -532,19 +646,18 @@ class ToolExecutionCoordinator {
           return;
         }
         try {
-          final rawResult = await tool.execute(
+          final rawResult = await tool.executeResult(
             toolCall.arguments,
             context: _toolContextFor(
               toolCall,
+              callbacks: callbacks,
               cancellationScope: cancellationScope,
             ),
           );
-          final isolatedResult = _applyLateResultIsolation(
-            toolCall.id,
-            rawResult,
+          final typedResult = _guardTypedResult(
+            _applyLateResultIsolation(toolCall.id, rawResult),
           );
-          final isError = _resultIndicatesError(isolatedResult);
-          final result = ToolOutputGuard.guardResult(isolatedResult);
+          final result = typedResult.displayText;
           final terminalAt = DateTime.now().toUtc();
           final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
           toolTiming?[toolCall.id] = (
@@ -553,16 +666,18 @@ class ToolExecutionCoordinator {
             runtimeMs: runtimeMs,
           );
           if (!_canPublishToolEvents(cancellationScope)) return;
+          typedResults[toolCall.id] = typedResult;
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
             ctx: ctx,
             additionalToolResults: {toolCall.id: result},
+            additionalToolResultsV2: {toolCall.id: typedResults[toolCall.id]!},
             additionalToolOutputs: {
               toolCall.id: checkpointCoordinator.toolOutputRecord(
                 toolCall,
                 result,
-                isError: isError,
+                isError: typedResult.isError,
                 sentToProvider: false,
               ),
             },
@@ -570,6 +685,11 @@ class ToolExecutionCoordinator {
           );
         } catch (e) {
           final result = 'Error executing tool: $e';
+          typedResults[toolCall.id] = ToolExecutionResult.text(
+            result,
+            isError: true,
+            errorCode: ToolResultErrorCode.executionFailed,
+          );
           final terminalAt = DateTime.now().toUtc();
           final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
           toolTiming?[toolCall.id] = (
@@ -583,6 +703,7 @@ class ToolExecutionCoordinator {
           checkpointCoordinator.saveCheckpoint(
             ctx: ctx,
             additionalToolResults: {toolCall.id: result},
+            additionalToolResultsV2: {toolCall.id: typedResults[toolCall.id]!},
             additionalToolOutputs: {
               toolCall.id: checkpointCoordinator.toolOutputRecord(
                 toolCall,
@@ -621,12 +742,18 @@ class ToolExecutionCoordinator {
           (outputRecord is Map && outputRecord['is_error'] == true) ||
           _resultIndicatesError(result);
       final timing = toolTiming?[toolCall.id];
-      if (onToolEvent != null) {
+      if (onToolEvent != null && toolCall.name != 'view_image') {
         await _maybeEmitToolEvent(
           cancellationScope,
           emit: () => onToolEvent(
             toolName: toolCall.name,
             output: result,
+            media: ViewImageMediaMetadata.project(
+              sessionId: sessionId,
+              toolName: toolCall.name,
+              toolCallId: toolCall.id,
+              result: typedResults[toolCall.id],
+            ),
             isError: isError,
             isStart: false,
             toolRunId: toolCall.id,
@@ -671,10 +798,10 @@ class ToolExecutionCoordinator {
       forcedIsError: forcedIsError,
       appendToHistory: true,
     );
-    return execution.result;
+    return execution.result.displayText;
   }
 
-  Future<({String result, bool isError})> _executeSingleToolCall(
+  Future<({ToolExecutionResult result})> _executeSingleToolCall(
     ToolCall toolCall, {
     required ToolExecutionCallbacks callbacks,
     RunCancellationScope? cancellationScope,
@@ -685,7 +812,7 @@ class ToolExecutionCoordinator {
     required bool appendToHistory,
     DateTime? startedAtOverride,
   }) async {
-    final argumentsString = jsonEncode(toolCall.arguments);
+    final argumentsString = _eventInputFor(toolCall);
     final startedAt = startedAtOverride ?? DateTime.now().toUtc();
     if (emitStartEvent && onToolEvent != null) {
       await _maybeEmitToolEvent(
@@ -701,45 +828,58 @@ class ToolExecutionCoordinator {
       );
     }
     if (!_canPublishToolEvents(cancellationScope)) {
-      return (result: 'Error: Tool execution cancelled.', isError: true);
+      return (
+        result: ToolExecutionResult.text(
+          'Error: Tool execution cancelled.',
+          isError: true,
+          errorCode: ToolResultErrorCode.executionFailed,
+        ),
+      );
     }
 
-    String result;
-    bool isError = forcedIsError;
+    ToolExecutionResult typedResult;
     if (forcedOutput != null) {
-      result = forcedOutput;
+      typedResult = ToolExecutionResult.text(
+        forcedOutput,
+        isError: forcedIsError,
+        errorCode: forcedIsError ? ToolResultErrorCode.executionFailed : null,
+      );
     } else {
       final tool = registry.getTool(toolCall.name);
       if (tool == null) {
-        result = 'Error: Tool ${toolCall.name} not found';
-        isError = true;
+        typedResult = ToolExecutionResult.text(
+          'Error: Tool ${toolCall.name} not found',
+          isError: true,
+          errorCode: ToolResultErrorCode.notFound,
+        );
       } else {
         try {
-          result = _applyLateResultIsolation(
+          typedResult = _applyLateResultIsolation(
             toolCall.id,
-            await tool.execute(
+            await tool.executeResult(
               toolCall.arguments,
               context: _toolContextFor(
                 toolCall,
+                callbacks: callbacks,
                 cancellationScope: cancellationScope,
               ),
             ),
           );
-          if (_lockedCancelledResult(toolCall.id) != null) {
-            isError = true;
-          }
         } catch (e) {
-          result = 'Error executing tool: $e';
-          isError = true;
+          typedResult = ToolExecutionResult.text(
+            'Error executing tool: $e',
+            isError: true,
+            errorCode: ToolResultErrorCode.executionFailed,
+          );
         }
       }
     }
-    isError = isError || _resultIndicatesError(result);
-    result = ToolOutputGuard.guardResult(result);
+    typedResult = _guardTypedResult(typedResult);
+    final result = typedResult.displayText;
     final terminalAt = DateTime.now().toUtc();
     final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
     if (!_canPublishToolEvents(cancellationScope)) {
-      return (result: result, isError: isError);
+      return (result: typedResult);
     }
 
     final isDeferredResult =
@@ -749,13 +889,33 @@ class ToolExecutionCoordinator {
           toolCallId: toolCall.id,
         ) !=
         null;
-    if (onToolEvent != null && !isDeferredResult) {
+    if (appendToHistory && toolCall.name == 'view_image') {
+      await _appendToolMessage(
+        callbacks,
+        checkpointCoordinator,
+        toolCall,
+        typedResult,
+        startedAt: startedAt,
+        terminalAt: terminalAt,
+        runtimeMs: runtimeMs,
+      );
+      callbacks.saveHistory();
+    }
+    if (onToolEvent != null &&
+        !isDeferredResult &&
+        (toolCall.name != 'view_image' || appendToHistory)) {
       await _maybeEmitToolEvent(
         cancellationScope,
         emit: () => onToolEvent(
           toolName: toolCall.name,
           output: result,
-          isError: isError,
+          media: ViewImageMediaMetadata.project(
+            sessionId: sessionId,
+            toolName: toolCall.name,
+            toolCallId: toolCall.id,
+            result: typedResult,
+          ),
+          isError: typedResult.isError,
           isStart: false,
           toolRunId: toolCall.id,
           startedAt: startedAt,
@@ -765,17 +925,114 @@ class ToolExecutionCoordinator {
       );
     }
 
-    if (appendToHistory) {
-      await callbacks.addToolMessage(
+    if (appendToHistory && toolCall.name != 'view_image') {
+      await _appendToolMessage(
+        callbacks,
+        checkpointCoordinator,
         toolCall,
-        result,
-        isError: isError,
+        typedResult,
         startedAt: startedAt,
         terminalAt: terminalAt,
         runtimeMs: runtimeMs,
       );
     }
-    return (result: result, isError: isError);
+    return (result: typedResult);
+  }
+
+  static ToolExecutionResult _guardTypedResult(
+    ToolExecutionResult result, {
+    int maxChars = ToolOutputGuard.maxResultChars,
+  }) {
+    final textBlocks = result.blocks.whereType<ToolTextBlock>().toList();
+    final totalChars = textBlocks.fold<int>(
+      0,
+      (sum, block) => sum + block.text.length,
+    );
+    if (totalChars <= maxChars) return result;
+    var remainingChars = maxChars;
+    var remainingTextBlocks = textBlocks.length;
+    final blocks = <ToolResultBlock>[];
+    for (final block in result.blocks) {
+      if (block is! ToolTextBlock) {
+        blocks.add(block);
+        continue;
+      }
+      final allowance = remainingTextBlocks == 0
+          ? 1
+          : (remainingChars ~/ remainingTextBlocks).clamp(1, maxChars);
+      final text = ToolOutputGuard.guardResult(block.text, maxChars: allowance);
+      blocks.add(ToolTextBlock(text: text));
+      remainingChars = (remainingChars - text.length).clamp(0, maxChars);
+      remainingTextBlocks--;
+    }
+    return ToolExecutionResult(
+      blocks: blocks,
+      isError: result.isError,
+      errorCode: result.errorCode,
+    );
+  }
+
+  static Map<String, ToolExecutionResult> _guardTypedBatch(
+    Map<String, ToolExecutionResult> results,
+  ) {
+    final guarded = <String, ToolExecutionResult>{
+      for (final entry in results.entries)
+        entry.key: _guardTypedResult(entry.value),
+    };
+    final total = guarded.values.fold<int>(
+      0,
+      (sum, result) => sum + result.displayText.length,
+    );
+    if (total <= ToolOutputGuard.maxBatchChars || guarded.isEmpty) {
+      return guarded;
+    }
+    final fairShare = ToolOutputGuard.maxBatchChars ~/ guarded.length;
+    return {
+      for (final entry in guarded.entries)
+        entry.key: _guardTypedResult(entry.value, maxChars: fairShare),
+    };
+  }
+
+  static Future<void> _appendToolMessage(
+    ToolExecutionCallbacks callbacks,
+    ContinuationCheckpointCoordinator checkpointCoordinator,
+    ToolCall toolCall,
+    ToolExecutionResult result, {
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
+  }) {
+    checkpointCoordinator.promoteCompletedToolResult(
+      Message(
+        role: MessageRole.tool,
+        toolResult: result,
+        toolCallId: toolCall.id,
+        metadata: {
+          'tool_call_id': toolCall.id,
+          'is_error': result.isError,
+          'started_at': ?startedAt?.toIso8601String(),
+          'terminal_at': ?terminalAt?.toIso8601String(),
+          'runtime_ms': ?runtimeMs,
+        },
+      ),
+    );
+    if (callbacks is TypedToolExecutionCallbacks) {
+      return (callbacks as TypedToolExecutionCallbacks).addTypedToolMessage(
+        toolCall,
+        result,
+        startedAt: startedAt,
+        terminalAt: terminalAt,
+        runtimeMs: runtimeMs,
+      );
+    }
+    return callbacks.addToolMessage(
+      toolCall,
+      result.displayText,
+      isError: result.isError,
+      startedAt: startedAt,
+      terminalAt: terminalAt,
+      runtimeMs: runtimeMs,
+    );
   }
 
   static bool _resultIndicatesError(String result) {
@@ -788,6 +1045,16 @@ class ToolExecutionCoordinator {
       return false;
     }
   }
+}
+
+abstract interface class TypedToolExecutionCallbacks {
+  Future<void> addTypedToolMessage(
+    ToolCall toolCall,
+    ToolExecutionResult result, {
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
+  });
 }
 
 /// Bridges history mutations from the coordinator back to the runner so the
@@ -818,4 +1085,7 @@ abstract class ToolExecutionCallbacks {
   /// Delivers pending steer messages into the last tool-result messages after
   /// a tool batch completes.
   void applyPendingSteerToToolResults(int numToolCalls);
+
+  /// Returns the frozen image input support capability of the active turn.
+  RouteImageSupport currentImageSupport() => RouteImageSupport.unknown;
 }
