@@ -8,6 +8,7 @@ class SkillFrontmatter {
   final List<String> preferredTools;
   final List<String> blockedTools;
   final bool? requiresApproval;
+  final List<String> allowedRemoteExec;
   final Map<String, dynamic> raw;
 
   const SkillFrontmatter({
@@ -18,6 +19,7 @@ class SkillFrontmatter {
     this.preferredTools = const [],
     this.blockedTools = const [],
     this.requiresApproval,
+    this.allowedRemoteExec = const [],
     this.raw = const {},
   });
 
@@ -35,6 +37,7 @@ class SkillFrontmatter {
       preferredTools: _stringListValue(frontmatter['preferred_tools']),
       blockedTools: _stringListValue(frontmatter['blocked_tools']),
       requiresApproval: _boolValue(frontmatter['requires_approval']),
+      allowedRemoteExec: _extractAllowedRemoteExec(frontmatter['metadata']),
       raw: frontmatter,
     );
   }
@@ -48,6 +51,8 @@ class SkillFrontmatter {
       if (preferredTools.isNotEmpty) 'preferred_tools': preferredTools,
       if (blockedTools.isNotEmpty) 'blocked_tools': blockedTools,
       if (requiresApproval != null) 'requires_approval': requiresApproval,
+      if (allowedRemoteExec.isNotEmpty)
+        'allowed_remote_exec': allowedRemoteExec,
       if (raw.isNotEmpty) 'raw': raw,
     };
   }
@@ -70,50 +75,91 @@ class SkillFrontmatter {
       return const {};
     }
 
-    final result = <String, dynamic>{};
-    String? currentKey;
-    List<String>? currentList;
+    var index = 0;
 
-    void commitList() {
-      if (currentKey == null || currentList == null) {
-        return;
+    Map<String, dynamic> parseMap(int baseIndent) {
+      final result = <String, dynamic>{};
+
+      while (index < frontmatterLines.length) {
+        final rawLine = frontmatterLines[index];
+        final trimmed = rawLine.trim();
+        if (trimmed.isEmpty || trimmed.startsWith('#')) {
+          index++;
+          continue;
+        }
+
+        final indent = rawLine.length - rawLine.trimLeft().length;
+        if (indent < baseIndent) {
+          break;
+        }
+
+        final separatorIndex = trimmed.indexOf(':');
+        if (separatorIndex <= 0) {
+          index++;
+          continue;
+        }
+
+        final key = trimmed.substring(0, separatorIndex).trim();
+        final value = trimmed.substring(separatorIndex + 1).trim();
+        index++;
+
+        if (value.isNotEmpty) {
+          result[key] = _parseScalar(value);
+          continue;
+        }
+
+        int nextIndex = index;
+        while (nextIndex < frontmatterLines.length) {
+          final candidate = frontmatterLines[nextIndex].trim();
+          if (candidate.isNotEmpty && !candidate.startsWith('#')) {
+            break;
+          }
+          nextIndex++;
+        }
+
+        if (nextIndex >= frontmatterLines.length) {
+          result[key] = const <String>[];
+          break;
+        }
+
+        final nextRaw = frontmatterLines[nextIndex];
+        final nextIndent = nextRaw.length - nextRaw.trimLeft().length;
+        final nextTrimmed = nextRaw.trim();
+
+        if (nextTrimmed.startsWith('-')) {
+          final list = <String>[];
+          while (index < frontmatterLines.length) {
+            final childRaw = frontmatterLines[index];
+            final childTrimmed = childRaw.trim();
+            if (childTrimmed.isEmpty || childTrimmed.startsWith('#')) {
+              index++;
+              continue;
+            }
+            final childIndent = childRaw.length - childRaw.trimLeft().length;
+            if (childIndent < nextIndent && !childTrimmed.startsWith('-')) {
+              break;
+            }
+            if (childTrimmed.startsWith('-')) {
+              list.add(_unquote(childTrimmed.substring(1).trim()));
+              index++;
+            } else {
+              break;
+            }
+          }
+          result[key] = List<String>.unmodifiable(list);
+        } else if (nextIndent > indent) {
+          final nested = parseMap(nextIndent);
+          result[key] = Map<String, dynamic>.unmodifiable(nested);
+        } else {
+          result[key] = const <String>[];
+        }
       }
-      result[currentKey!] = List<String>.unmodifiable(currentList!);
-      currentKey = null;
-      currentList = null;
+
+      return result;
     }
 
-    for (final rawLine in frontmatterLines) {
-      final trimmed = rawLine.trim();
-      if (trimmed.isEmpty || trimmed.startsWith('#')) {
-        continue;
-      }
-
-      if (currentKey != null && trimmed.startsWith('-')) {
-        currentList!.add(_unquote(trimmed.substring(1).trim()));
-        continue;
-      }
-
-      commitList();
-
-      final separatorIndex = trimmed.indexOf(':');
-      if (separatorIndex <= 0) {
-        continue;
-      }
-
-      final key = trimmed.substring(0, separatorIndex).trim();
-      final value = trimmed.substring(separatorIndex + 1).trim();
-      if (value.isEmpty) {
-        currentKey = key;
-        currentList = <String>[];
-        continue;
-      }
-
-      result[key] = _parseScalar(value);
-    }
-
-    commitList();
-    return Map<String, dynamic>.unmodifiable(result);
+    final parsed = parseMap(0);
+    return Map<String, dynamic>.unmodifiable(parsed);
   }
 
   static dynamic _parseScalar(String value) {
@@ -150,6 +196,26 @@ class SkillFrontmatter {
     }
 
     return value
+        .whereType<String>()
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  static List<String> _extractAllowedRemoteExec(dynamic metadata) {
+    if (metadata is! Map) {
+      return const [];
+    }
+    final raw = metadata['allowed_remote_exec'];
+    if (raw is String) {
+      final trimmed = raw.trim();
+      return trimmed.isEmpty ? const [] : <String>[trimmed];
+    }
+    if (raw is! List) {
+      return const [];
+    }
+
+    return raw
         .whereType<String>()
         .map((item) => item.trim())
         .where((item) => item.isNotEmpty)

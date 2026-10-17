@@ -139,6 +139,52 @@ reads `<SANAD_HOME>/skills` before compatibility roots. Workspace roots retain
 higher precedence. The client does not inspect skill files to determine runtime
 availability.
 
+### Third-party skill installs
+
+`sanad skills` is the CLI surface for user-installed skills; it is not the
+product bundle lifecycle. `add` fetches a public GitHub repository as a
+`.tar.gz` over HTTPS (no `git` binary and no credentials) or reads a local
+directory, then discovers either a root `SKILL.md` or `skills/<name>/SKILL.md`.
+
+The installer writes `<SANAD_HOME>/skills/<name>`. Passing the shared
+`--workspace <path|name>` option instead targets `<workspace>/.sanad/skills/<name>`,
+which is one of the workspace roots the registry already scans. The value may be
+a directory or the name of a registered workspace. The archive reader
+rejects absolute paths, `..` segments, links, and payloads beyond its size caps
+before anything is written; installation is staged and renamed, and an existing
+skill is never replaced without `--force`. A `SKILL.md` whose declared `name`
+contradicts its directory is rejected.
+
+Provenance is recorded per skills root in `.sanad-skills.json`, deliberately
+separate from the product-owned `.sanad-managed.json`. `remove` and `update`
+operate only on entries in that file, so bundled packages and hand-copied skills
+are never deleted or overwritten by this command.
+
+The daemon is not involved in the install itself. Because the skill registry
+scans these roots per request, an installed skill becomes available on the next
+turn without a restart, and bundled reconciliation leaves user-installed
+packages untouched.
+
+Installation, updates, and removal enforce strict destructive path and content
+safety boundaries. `remove` validates package names, rejects symbolic links,
+and verifies through link resolution that targets are strict descendants of the
+active skills root. `update` inspects the on-disk directory digest against the
+recorded provenance digest, preserving local modifications and skipping updates
+unless `--force` is supplied. Staged content is scanned before activation for
+credential paths, piping remote content to shells, encoded execution, exfiltration,
+destructive filesystem operations, permissive chmod, instruction overrides, and
+secret-harvesting phrasing; flagged packages are refused unless explicitly permitted
+via `--allow-flagged`, and the screening verdict (`clean` or `flagged`) is recorded
+in provenance. Publishers may declare authorized remote hosts in `SKILL.md` frontmatter
+under `metadata.allowed_remote_exec`. For host-scoped rules (`remote-exec`, `encoded-exec`,
+`exfiltration`), findings are suppressed when all URL hosts on the matched line are covered
+by that file's declaration (exact domain and subdomain match, e.g. `example.com` covers
+`cdn.example.com`). Lookalike suffixes, userinfo tricks, IP literals, bare localhost,
+relative paths, and undeclared hosts remain blocked. Rules that are not host-scoped
+(credential paths, destructive filesystem commands, chmod 777, instruction overrides,
+secret harvesting) are never suppressed. Packages passing solely through declared host
+allowances record the distinct verdict `allowed` and their declared host list in provenance.
+
 ## Platform Tools
 
 Platform-provided tools are explicit, turn-scoped contracts. Their specifications
