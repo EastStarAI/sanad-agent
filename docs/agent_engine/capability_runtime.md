@@ -140,6 +140,30 @@ reads `<SANAD_HOME>/skills` before compatibility roots. Workspace roots retain
 higher precedence. The client does not inspect skill files to determine runtime
 availability.
 
+### Third-party skill installs
+
+`sanad skills` is the CLI surface for user-installed skills; it is not the
+product bundle lifecycle. `add` fetches a public GitHub repository as a
+`.tar.gz` over HTTPS (no `git` binary and no credentials) or reads a local
+directory, then discovers either a root `SKILL.md` or `skills/<name>/SKILL.md`.
+
+The installer writes `<SANAD_HOME>/skills/<name>`, or
+`<workspace>/.sanad/skills/<name>` when `--project` is passed. The archive reader
+rejects absolute paths, `..` segments, links, and payloads beyond its size caps
+before anything is written; installation is staged and renamed, and an existing
+skill is never replaced without `--force`. A `SKILL.md` whose declared `name`
+contradicts its directory is rejected.
+
+Provenance is recorded per skills root in `.sanad-skills.json`, deliberately
+separate from the product-owned `.sanad-managed.json`. `remove` and `update`
+operate only on entries in that file, so bundled packages and hand-copied skills
+are never deleted or overwritten by this command.
+
+The daemon is not involved in the install itself. Because the skill registry
+scans these roots per request, an installed skill becomes available on the next
+turn without a restart, and bundled reconciliation leaves user-installed
+packages untouched.
+
 ## Platform Tools
 
 Platform-provided tools are explicit, turn-scoped contracts. Their specifications
