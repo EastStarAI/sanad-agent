@@ -26,3 +26,10 @@ This contract applies to `agent/lib/capabilities/permissions/`.
 ## Safety
 - Never log raw sensitive arguments, decisions containing secrets, or recovered payload text.
 - Platform-provided tools retain platform execution target and cannot be converted into local execution by approval.
+
+## Execution Posture and Security Authority
+- `ExecutionMode` defines workspace execution posture (`direct` host execution vs `protected` container/sandbox execution). The default for trusted workspaces opened by the owner is `direct`.
+- `HostDiscoveryPolicy` defines capability discovery rules (`disabled` vs `owner_only`). Discovery tools are omitted from the runtime catalog when disabled, when the caller is not the owner, or when equivalent host access already exists (e.g. direct shell).
+- `ChildProcessSecurityContract` classifies process purposes, environment sources, and secret owners. Untrusted requests must never override protected operator variables (`PATH`, `HOME`, loader hooks, Sanad internal tokens).
+- Authority Precedence: Owner required restrictions in daemon state > workspace approval policy > session/once grants > workspace files and model content. Model-writable files (such as `.sanad/settings.json`) cannot widen authority or grant `full_access`.
+

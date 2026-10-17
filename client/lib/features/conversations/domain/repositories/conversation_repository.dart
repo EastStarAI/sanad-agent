@@ -258,6 +258,25 @@ abstract class ConversationRepository {
     required String workspacePath,
     required WorkspacePermissionMode mode,
   });
+  Future<WorkspacePolicy> setWorkspaceSecurityPolicy(
+    DeviceConfig agent, {
+    required String workspaceId,
+    required String workspacePath,
+    WorkspacePermissionMode? permissionMode,
+    ExecutionMode? executionMode,
+    HostDiscoveryPolicy? hostDiscoveryPolicy,
+    int? expectedRevision,
+  }) async {
+    if (permissionMode != null) {
+      return setWorkspacePermissionMode(
+        agent,
+        workspaceId: workspaceId,
+        workspacePath: workspacePath,
+        mode: permissionMode,
+      );
+    }
+    return getWorkspacePolicy(agent, workspacePath);
+  }
   Stream<WorkspacePolicy> watchWorkspacePolicy(
     DeviceConfig agent,
     String workspaceId,

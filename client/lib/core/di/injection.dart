@@ -17,6 +17,7 @@ import 'package:sanad_client/features/devices/domain/device_client_registry.dart
 import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
+import 'package:sanad_client/features/auth/infrastructure/client_credential_store.dart';
 import 'package:sanad_client/features/auth/domain/auth_repository.dart';
 import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/features/auth/data/auth_repository_impl.dart';
@@ -89,9 +90,16 @@ Future<void> configureDependencies({
     );
   }
 
+  if (!getIt.isRegistered<ClientCredentialStore>()) {
+    getIt.registerLazySingleton<ClientCredentialStore>(
+      () => NativeClientCredentialStore(),
+    );
+  }
+
   if (!getIt.isRegistered<AuthService>()) {
     getIt.registerLazySingleton<AuthService>(
       () => AuthService(
+        credentialStore: getIt<ClientCredentialStore>(),
         clientInstanceId: getIt<String>(instanceName: 'clientInstanceId'),
         clientMetadata: getIt<ClientDisplayMetadata>(),
       ),

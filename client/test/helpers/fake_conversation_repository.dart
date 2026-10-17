@@ -774,14 +774,51 @@ class FakeConversationRepository implements ConversationRepository {
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+  }) {
+    return setWorkspaceSecurityPolicy(
+      agent,
+      workspaceId: workspaceId,
+      workspacePath: workspacePath,
+      permissionMode: mode,
+    );
+  }
+
+  final List<Map<String, dynamic>> setSecurityPolicyRequests = [];
+
+  @override
+  Future<WorkspacePolicy> setWorkspaceSecurityPolicy(
+    DeviceConfig agent, {
+    required String workspaceId,
+    required String workspacePath,
+    WorkspacePermissionMode? permissionMode,
+    ExecutionMode? executionMode,
+    HostDiscoveryPolicy? hostDiscoveryPolicy,
+    int? expectedRevision,
   }) async {
     setPermissionModeRequests.add({
       'device_id': agent.id,
       'workspace_id': workspaceId,
       'workspace_path': workspacePath,
-      'mode': mode,
+      if (permissionMode != null) 'mode': permissionMode,
     });
-    final updated = (seededWorkspacePolicies[workspacePath] ?? const WorkspacePolicy()).copyWith(permissionMode: mode);
+    setSecurityPolicyRequests.add({
+      'device_id': agent.id,
+      'workspace_id': workspaceId,
+      'workspace_path': workspacePath,
+      if (permissionMode != null) 'permission_mode': permissionMode,
+      if (executionMode != null) 'execution_mode': executionMode,
+      if (hostDiscoveryPolicy != null)
+        'host_discovery_policy': hostDiscoveryPolicy,
+      if (expectedRevision != null) 'expected_revision': expectedRevision,
+    });
+    final current =
+        seededWorkspacePolicies[workspacePath] ?? const WorkspacePolicy();
+    final updated = current.copyWith(
+      permissionMode: permissionMode ?? current.permissionMode,
+      executionMode: executionMode ?? current.executionMode,
+      hostDiscoveryPolicy: hostDiscoveryPolicy ?? current.hostDiscoveryPolicy,
+      revision: current.revision + 1,
+    );
     seededWorkspacePolicies[workspacePath] = updated;
     _policyController(workspaceId).add(updated);
     return updated;

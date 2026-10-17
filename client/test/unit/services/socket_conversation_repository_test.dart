@@ -454,6 +454,24 @@ class _TestConversationClient implements ConversationClient {
   }
 
   @override
+  Future<WorkspacePolicy> setWorkspaceSecurityPolicy({
+    required String workspaceId,
+    required String workspacePath,
+    WorkspacePermissionMode? permissionMode,
+    ExecutionMode? executionMode,
+    HostDiscoveryPolicy? hostDiscoveryPolicy,
+    int? expectedRevision,
+  }) async {
+    final updated = mockPolicy.copyWith(
+      permissionMode: permissionMode,
+      executionMode: executionMode,
+      hostDiscoveryPolicy: hostDiscoveryPolicy,
+    );
+    _policyController.add(updated);
+    return updated;
+  }
+
+  @override
   Stream<WorkspacePolicy> watchWorkspacePolicy(String workspaceId) {
     return _policyController.stream;
   }

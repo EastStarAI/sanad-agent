@@ -16,22 +16,19 @@ class SanadSettingsStore {
   McpSecretStore get _secrets =>
       McpSecretStore(homeDirectoryPath: _resolveSanadHomeDirectory());
 
+  /// Legacy non-authoritative read. Under Task 83b, workspace-local settings files
+  /// cannot dictate security policies; this method returns clean defaults and ignores
+  /// any legacy `permissionMode` or `permissions` fields.
   Future<WorkspacePolicy> readWorkspacePolicy(String workspacePath) async =>
-      WorkspacePolicy.fromJson(
-        await readWorkspaceSettingsDocument(workspacePath),
-      );
+      const WorkspacePolicy();
 
+  /// Deprecated. Under Task 83b, workspace policy is stored exclusively in the
+  /// daemon-private database via [WorkspaceSecurityPolicyRepository].
   Future<void> saveWorkspacePolicy(
     String workspacePath,
     WorkspacePolicy policy,
   ) async {
-    final file = settingsFileForWorkspace(workspacePath);
-    final current = await _readSettingsMap(file);
-    final merged = Map<String, dynamic>.from(current)
-      ..remove('permissionMode')
-      ..remove('permissions')
-      ..addAll(policy.toJson());
-    await _writeSettingsMap(file, merged);
+    // No-op: do not persist security policies to workspace settings.json.
   }
 
   Future<List<McpServerConfig>> readUserMcpServers() async =>

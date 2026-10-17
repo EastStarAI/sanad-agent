@@ -5,6 +5,7 @@ import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
 import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_callback_contract.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
+import 'package:sanad_client/features/auth/infrastructure/client_credential_store.dart';
 import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
 import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dart';
@@ -226,6 +227,7 @@ void main() {
   late MockDio dio;
   late SharedPreferences prefs;
   late StubColocatedAuthCouplingClient colocatedCoupling;
+  late InMemoryClientCredentialStore credentialStore;
 
   setUp(() async {
     AppPlatform.overrideIsDesktop = true;
@@ -234,11 +236,13 @@ void main() {
     mockStore = MockSanadSettingsStore();
     dio = MockDio();
     colocatedCoupling = StubColocatedAuthCouplingClient();
+    credentialStore = InMemoryClientCredentialStore();
     authService = AuthService(
       dio: dio,
       prefs: prefs,
       settingsStore: mockStore,
       colocatedCoupling: colocatedCoupling,
+      credentialStore: credentialStore,
     );
   });
 
@@ -312,33 +316,39 @@ void main() {
     });
 
     test(
-      'atomic auth session value overrides legacy credential mirrors',
+      'legacy SharedPreferences credentials are purged without migrating on init (Task 83d)',
       () async {
         await prefs.setString(
           'backend_auth_session_v1',
-          '{"access_token":"atomic-access","refresh_token":"atomic-refresh"}',
+          '{"access_token":"legacy-access","refresh_token":"legacy-refresh"}',
         );
         await prefs.setString('backend_access_token', 'legacy-access');
         await prefs.setString('backend_refresh_token', 'legacy-refresh');
 
         await authService.init(fallbackDeviceId: 'device-1');
 
-        expect(authService.accessToken, 'atomic-access');
+        // User starts logged out per Task 83d (no legacy migration)
+        expect(authService.accessToken, isNull);
+        expect(prefs.containsKey('backend_auth_session_v1'), isFalse);
+        expect(prefs.containsKey('backend_access_token'), isFalse);
+        expect(prefs.containsKey('backend_refresh_token'), isFalse);
         expect(mockStore.authDocument['access_token'], isNull);
         expect(mockStore.authDocument['refresh_token'], isNull);
       },
     );
 
     test(
-      'init uses the canonical desktop hardware id when auth is restored from preferences',
+      'init restores credentials from ClientCredentialStore and uses canonical hardware id',
       () async {
-        await prefs.setString('backend_access_token', 'prefs_token');
-        await prefs.setString('backend_refresh_token', 'prefs_refresh');
+        await credentialStore.writeCredentials(
+          accessToken: 'vault_token',
+          refreshToken: 'vault_refresh',
+        );
         await prefs.setString('hardware_id', 'stale_prefs_device');
 
         await authService.init(fallbackDeviceId: 'canonical_device');
 
-        expect(authService.accessToken, equals('prefs_token'));
+        expect(authService.accessToken, equals('vault_token'));
         expect(authService.hardwareId, equals('canonical_device'));
 
         expect(mockStore.authDocument['access_token'], isNull);
@@ -361,6 +371,7 @@ void main() {
         settingsStore: mockStore,
         portalAuth: portal,
         colocatedCoupling: colocatedCoupling,
+        credentialStore: credentialStore,
         callbackBindingFactory: () async => callbacks[callbackIndex++],
         authorizationLauncher: (uri) async {
           launchedUrls.add(uri);
@@ -409,6 +420,7 @@ void main() {
         prefs: prefs,
         settingsStore: mockStore,
         portalAuth: portal,
+        credentialStore: credentialStore,
         callbackBindingFactory: () async => callback,
         authorizationLauncher: (_) async => true,
       );
@@ -432,6 +444,7 @@ void main() {
           settingsStore: mockStore,
           portalAuth: portal,
           colocatedCoupling: colocatedCoupling,
+          credentialStore: credentialStore,
         );
         mockStore.authDocument = {
           'access_token': 'test_token',
@@ -441,6 +454,10 @@ void main() {
           'pending_device_token': 'legacy-pending',
           'hardware_id': 'test_hardware',
         };
+        await credentialStore.writeCredentials(
+          accessToken: 'test_token',
+          refreshToken: 'test_refresh',
+        );
         await prefs.setString('backend_access_token', 'stale-pref-token');
         await prefs.setString('backend_refresh_token', 'stale-pref-refresh');
         final exchange = authService.authenticationExchangeStream.first;
@@ -460,6 +477,7 @@ void main() {
         expect(mockStore.authDocument['pending_device_token'], isNull);
         expect(mockStore.authDocument['agent_logout_pending'], isTrue);
         expect(mockStore.authDocument['hardware_id'], equals('test_hardware'));
+        expect(await credentialStore.readCredentials(), isNull);
         expect(prefs.getString('backend_access_token'), isNull);
         expect(prefs.getString('backend_refresh_token'), isNull);
       },
@@ -474,6 +492,7 @@ void main() {
         settingsStore: mockStore,
         portalAuth: portal,
         colocatedCoupling: colocatedCoupling,
+        credentialStore: credentialStore,
       );
       mockStore.authDocument = {
         'access_token': 'test_token',
@@ -495,10 +514,15 @@ void main() {
         'refresh_token': 'test_refresh',
         'hardware_id': 'test_hardware',
       };
+      await credentialStore.writeCredentials(
+        accessToken: 'test_token',
+        refreshToken: 'test_refresh',
+      );
 
       await authService.logout().timeout(const Duration(seconds: 1));
 
       expect(authService.accessToken, isNull);
+      expect(await credentialStore.readCredentials(), isNull);
       expect(colocatedCoupling.logoutCalls, 1);
       expect(mockStore.authDocument['agent_logout_pending'], isTrue);
       expect(mockStore.authDocument['hardware_id'], 'test_hardware');
@@ -519,6 +543,11 @@ void main() {
           prefs: prefs,
           settingsStore: mockStore,
           portalAuth: portal,
+          credentialStore: credentialStore,
+        );
+        await credentialStore.writeCredentials(
+          accessToken: 'old-access',
+          refreshToken: 'old-refresh',
         );
         mockStore.authDocument = {
           'access_token': 'old-access',
@@ -533,7 +562,11 @@ void main() {
 
         expect(result.outcome, AuthRefreshOutcome.success);
         expect(result.accessToken, 'rotated-access');
-        expect(prefs.getString('backend_access_token'), 'rotated-access');
+        final creds = await credentialStore.readCredentials();
+        expect(creds?.$1, 'rotated-access');
+        expect(creds?.$2, 'rotated-refresh');
+        expect(prefs.getString('backend_access_token'), isNull);
+        expect(prefs.getString('backend_refresh_token'), isNull);
         expect(mockStore.authDocument['access_token'], isNull);
         expect(mockStore.authDocument['refresh_token'], isNull);
       },
@@ -549,6 +582,11 @@ void main() {
           prefs: prefs,
           settingsStore: mockStore,
           portalAuth: portal,
+          credentialStore: credentialStore,
+        );
+        await credentialStore.writeCredentials(
+          accessToken: 'old-access',
+          refreshToken: 'old-refresh',
         );
         mockStore.authDocument = {
           'access_token': 'old-access',
@@ -572,13 +610,19 @@ void main() {
         expect(result.accessToken, 'peer-access');
         expect(authService.accessToken, 'peer-access');
         expect(portal.refreshCalls, 0);
-        expect(prefs.getString('backend_refresh_token'), 'peer-refresh');
+        final creds = await credentialStore.readCredentials();
+        expect(creds?.$2, 'peer-refresh');
+        expect(prefs.getString('backend_refresh_token'), isNull);
       },
     );
 
     test(
       'treats desktop lock timeout as transient without clearing credentials',
       () async {
+        await credentialStore.writeCredentials(
+          accessToken: 'old-access',
+          refreshToken: 'old-refresh',
+        );
         mockStore.authDocument = {
           'access_token': 'old-access',
           'refresh_token': 'old-refresh',
@@ -593,7 +637,9 @@ void main() {
 
         expect(result.outcome, AuthRefreshOutcome.transientUnavailable);
         expect(authService.accessToken, 'old-access');
-        expect(prefs.getString('backend_refresh_token'), 'old-refresh');
+        final creds = await credentialStore.readCredentials();
+        expect(creds?.$2, 'old-refresh');
+        expect(prefs.getString('backend_refresh_token'), isNull);
       },
     );
 
@@ -614,6 +660,11 @@ void main() {
           prefs: prefs,
           settingsStore: mockStore,
           portalAuth: portal,
+          credentialStore: credentialStore,
+        );
+        await credentialStore.writeCredentials(
+          accessToken: 'old-access',
+          refreshToken: 'old-refresh',
         );
         mockStore.authDocument = {
           'access_token': 'old-access',
@@ -625,7 +676,9 @@ void main() {
         final result = await authService.refreshAccessToken();
 
         expect(result.outcome, AuthRefreshOutcome.terminalRejected);
-        expect(prefs.getString('backend_refresh_token'), 'old-refresh');
+        final creds = await credentialStore.readCredentials();
+        expect(creds?.$2, 'old-refresh');
+        expect(prefs.getString('backend_refresh_token'), isNull);
       },
     );
 
@@ -652,6 +705,11 @@ void main() {
             prefs: prefs,
             settingsStore: mockStore,
             portalAuth: portal,
+            credentialStore: credentialStore,
+          );
+          await credentialStore.writeCredentials(
+            accessToken: 'old-access',
+            refreshToken: 'old-refresh',
           );
           mockStore.authDocument = {
             'access_token': 'old-access',
@@ -663,8 +721,11 @@ void main() {
           final result = await authService.refreshAccessToken();
 
           expect(result.outcome, AuthRefreshOutcome.transientUnavailable);
-          expect(prefs.getString('backend_access_token'), 'old-access');
-          expect(prefs.getString('backend_refresh_token'), 'old-refresh');
+          final creds = await credentialStore.readCredentials();
+          expect(creds?.$1, 'old-access');
+          expect(creds?.$2, 'old-refresh');
+          expect(prefs.getString('backend_access_token'), isNull);
+          expect(prefs.getString('backend_refresh_token'), isNull);
         }
       },
     );

@@ -1814,7 +1814,12 @@ void main() {
           equals(CanonicalEventTypes.workspaceGetPolicy),
         );
         expect(emitted?['payload']['request_id'], equals('req-1'));
+        expect(emitted?['payload']['request_id'], equals('req-1'));
         expect(emitted?['payload']['permissionMode'], equals('full_access'));
+        expect(emitted?['payload']['executionMode'], equals('direct'));
+        expect(emitted?['payload']['hostDiscoveryPolicy'], equals('owner_only'));
+        expect(emitted?['payload']['editableByOwner'], isTrue);
+        expect(emitted?['payload']['revision'], isNotNull);
       },
     );
 
@@ -1841,6 +1846,8 @@ void main() {
               'workspace_id': workspace['id'],
               'workspace_path': forgedPath,
               'permission_mode': 'full_access',
+              'execution_mode': 'protected',
+              'host_discovery_policy': 'disabled',
             },
           },
           (envelope) async {
@@ -1862,6 +1869,14 @@ void main() {
           broadcast['payload']['policy']['permissionMode'],
           equals('full_access'),
         );
+        expect(
+          broadcast['payload']['policy']['executionMode'],
+          equals('protected'),
+        );
+        expect(
+          broadcast['payload']['policy']['hostDiscoveryPolicy'],
+          equals('disabled'),
+        );
 
         // Response second
         final response = emittedEnvelopes[1];
@@ -1871,12 +1886,22 @@ void main() {
         );
         expect(response['payload']['request_id'], equals('req-2'));
         expect(response['payload']['permissionMode'], equals('full_access'));
+        expect(response['payload']['executionMode'], equals('protected'));
+        expect(response['payload']['hostDiscoveryPolicy'], equals('disabled'));
 
-        // Verify stored on disk
+        // Verify stored in policy store
         final policy = await policyStore.readPolicy(workspacePath);
         expect(
           policy.permissionMode,
           equals(WorkspacePermissionMode.fullAccess),
+        );
+        expect(
+          policy.executionMode,
+          equals(ExecutionMode.protected),
+        );
+        expect(
+          policy.hostDiscoveryPolicy,
+          equals(HostDiscoveryPolicy.disabled),
         );
         expect(
           WorkspacePolicyStore.settingsFileForWorkspace(
@@ -1885,6 +1910,22 @@ void main() {
           isFalse,
         );
 
+        // Stale revision test:
+        emittedEnvelopes.clear();
+        await bridge.handleCommand({
+          'command': 'workspace.set_permission_mode',
+          'payload': {
+            'request_id': 'req-stale',
+            'workspace_id': workspace['id'],
+            'permission_mode': 'default',
+            'expected_revision': 999999, // Intentional mismatch
+          },
+        }, (envelope) async => emittedEnvelopes.add(envelope));
+
+        expect(emittedEnvelopes, hasLength(1));
+        expect(emittedEnvelopes.first['event'], equals('error'));
+        expect(emittedEnvelopes.first['payload']['code'], equals('stale_revision'));
+
         emittedEnvelopes.clear();
         await bridge.handleCommand({
           'command': 'workspace.set_permission_mode',
@@ -1892,6 +1933,7 @@ void main() {
             'request_id': 'req-3',
             'workspace_id': workspace['id'],
             'permission_mode': 'default',
+            'execution_mode': 'direct',
           },
         }, (envelope) async => emittedEnvelopes.add(envelope));
 
@@ -1901,8 +1943,17 @@ void main() {
           equals('default'),
         );
         expect(
-          (await policyStore.readPolicy(workspacePath)).permissionMode,
+          emittedEnvelopes.last['payload']['executionMode'],
+          equals('direct'),
+        );
+        final finalPolicy = await policyStore.readPolicy(workspacePath);
+        expect(
+          finalPolicy.permissionMode,
           WorkspacePermissionMode.defaultMode,
+        );
+        expect(
+          finalPolicy.executionMode,
+          ExecutionMode.direct,
         );
       },
     );

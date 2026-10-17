@@ -19,6 +19,7 @@ import 'package:sanad_agent/capabilities/runtime/web_search/web_fetch_service.da
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_security_policy_repository.dart';
 import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -35,6 +36,7 @@ import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:sanad_agent/evolution/db/session_projection_revision_repository.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_boundary_change.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/plugins/plugin_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
@@ -179,8 +181,12 @@ void setupDI() {
   getIt.registerLazySingleton<ProviderInstanceRepository>(
     () => ProviderInstanceRepository(getIt<AgentStateDatabase>()),
   );
-  // Plan 29: instance-keyed secret store (atomic, locked, owner-only).
-  getIt.registerLazySingleton<SecretStore>(() => SecureFileSecretStore());
+  // Plan 83: Unified Agent secret store (Keychain, DPAPI, SecretService/OwnerFile).
+  getIt.registerLazySingleton<AgentSecretStore>(() => createAgentSecretStore());
+  // Plan 29: instance-keyed secret store (atomic, locked, owner-only, vault-backed).
+  getIt.registerLazySingleton<SecretStore>(
+    () => SecureFileSecretStore(agentSecretStore: getIt<AgentSecretStore>()),
+  );
   // Plan 29: instance credential edits (keep/replace/remove) + summaries.
   getIt.registerLazySingleton<ProviderCredentialService>(
     () => ProviderCredentialService(
@@ -413,8 +419,13 @@ void setupDI() {
   getIt.registerLazySingleton<SuspendedCheckpointStore>(
     () => SuspendedCheckpointStore(sessionManager: getIt<SessionManager>()),
   );
+  getIt.registerLazySingleton<WorkspaceSecurityPolicyRepository>(
+    () => WorkspaceSecurityPolicyRepository(getIt<AgentStateDatabase>().db),
+  );
   getIt.registerLazySingleton<WorkspacePolicyStore>(
-    () => const WorkspacePolicyStore(),
+    () => WorkspacePolicyStore(
+      repository: getIt<WorkspaceSecurityPolicyRepository>(),
+    ),
   );
   getIt.registerLazySingleton<PermissionManager>(
     () => PermissionManager(

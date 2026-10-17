@@ -841,6 +841,22 @@ class SocketConversationClient implements ConversationClient {
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+  }) {
+    return setWorkspaceSecurityPolicy(
+      workspaceId: workspaceId,
+      workspacePath: workspacePath,
+      permissionMode: mode,
+    );
+  }
+
+  @override
+  Future<WorkspacePolicy> setWorkspaceSecurityPolicy({
+    required String workspaceId,
+    required String workspacePath,
+    WorkspacePermissionMode? permissionMode,
+    ExecutionMode? executionMode,
+    HostDiscoveryPolicy? hostDiscoveryPolicy,
+    int? expectedRevision,
   }) async {
     final gateway = _gateway;
     if (gateway == null) {
@@ -853,7 +869,11 @@ class SocketConversationClient implements ConversationClient {
         'request_id': requestId,
         'workspace_id': workspaceId,
         'workspace_path': workspacePath,
-        'permission_mode': mode.value,
+        if (permissionMode != null) 'permission_mode': permissionMode.value,
+        if (executionMode != null) 'execution_mode': executionMode.value,
+        if (hostDiscoveryPolicy != null)
+          'host_discovery_policy': hostDiscoveryPolicy.value,
+        if (expectedRevision != null) 'expected_revision': expectedRevision,
       },
       requestId: requestId,
     );
@@ -861,7 +881,7 @@ class SocketConversationClient implements ConversationClient {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       return WorkspacePolicy.fromJson(payload);
     }
-    throw StateError('Failed to set workspace permission mode');
+    throw StateError('Failed to set workspace security policy');
   }
 
   @override
