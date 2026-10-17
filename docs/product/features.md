@@ -139,10 +139,32 @@ session snapshot.
 
 ## Scheduling
 
-The agent can persist a task for a specific future time and execute it even
-when the client window is closed, as long as the agent service remains
-running. Recurring cron-style schedules are not part of the stable scheduling
-surface yet.
+The agent can persist one-shot and recurring tasks for future execution and run
+them even when the client window is closed, as long as the daemon remains
+running. Scheduling is managed through the action-oriented `schedule_task` tool
+(`create`, `list`, `cancel`, `update`).
+
+Recurring schedules use a bounded vocabulary:
+- `once`: absolute ISO-8601 timestamp (`at`) or relative delay (`in <n> <minutes|hours|days>`).
+- `interval`: elapsed-time intervals (`every <n> <minutes|hours|days>`).
+- `daily`: wall-clock time `HH:MM`.
+- `weekly`: one or more weekdays (`mon..sun`) plus wall-clock time `HH:MM`.
+- `monthly`: day of month (`1..31`) plus wall-clock time `HH:MM` (skipping months that lack the day).
+
+Schedules carry an explicit timezone: `local` (host operating system rules) or a
+fixed UTC offset (`Z`, `+HH:MM`, `-HH:MM`). The agent-level default comes from
+`SCHEDULE_TIMEZONE` (default `local`) and is persisted with each schedule at
+creation. Mutation (`cancel`, `update`) is owner-scoped to the originating
+conversation, while `list` provides device-wide visibility.
+
+### Wake, Recovery, and Missed-Occurrence Policy
+
+Schedules survive daemon restarts through SQLite persistence. When the daemon restarts:
+- **Advance before dispatch:** The next scheduled instant and status are persisted before emitting the run event (at-most-once delivery, preventing double fires).
+- **Startup re-arm with missed-occurrence policy:** Missed recurring occurrences are checked against a grace window (half the period clamped to `[120s, 2h]`). A missed instant inside grace fires once immediately and advances to the next future instant (`last_status = 'fired'`). A missed instant beyond grace fires zero times, advances without a burst, and records `last_status = 'skipped_missed'` with a logged reason; `last_run_at` is preserved from the previous execution (or remains null if never executed) so listings never imply a run that was skipped.
+- **Interval cadence anchoring:** `interval` recurrence anchors on the stored last run rather than the restart instant, preserving the recurrence cadence across restarts.
+- **Immediate mutation liveness:** `cancel` removes the in-memory timer and deletes the database row immediately; `update` stops the old timer and arms a new timer for the recomputed instant.
+- **Time awareness:** The agent's runtime context includes a date-and-zone awareness line (`Today: YYYY-MM-DD (zone: <zone>)`) with no clock time, keeping the context byte-stable within a day while informing the agent of today's date in the schedule's resolved timezone.
 
 ## Experimental voice
 
