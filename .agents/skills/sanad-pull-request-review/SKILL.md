@@ -19,14 +19,15 @@ Use this skill for evidence-first review. In the delegated Plan97 three-role wor
    - authentication, credentials, or security boundaries: `security-reviewed`;
    - release, signing, installers, or updaters: `release-reviewed`.
 7. Confirm a user with triage/write authority supplied each required positive-review label. Never add one merely to make CI green.
-8. Review dependency and lockfile diffs explicitly.
+8. Confirm the pull request also carries its mandatory non-protected labels: exactly one `type/*` and at least one `comp/*`, plus `platform/*` only when the change is platform-specific and a `size/*` entry when the size is material. Apply or request the missing labels, and report an unlabeled or misclassified pull request as a finding instead of reviewing around it. A green `All required checks pass` never proves these labels exist, because the protected-label job checks protected labels only.
+9. Review dependency and lockfile diffs explicitly.
 
 ## Findings Format
 
 Order findings by severity:
 
 - **Blocker:** unsafe, incorrect, acceptance-breaking, secret-exposing, or required evidence missing.
-- **Warning:** material risk or maintainability problem that should be resolved before merge.
+- **Warning:** material risk or maintainability problem that should be resolved before merge, including a pull request that is missing its mandatory `type/*` or `comp/*` labels.
 - **Suggestion:** non-blocking improvement.
 
 Each finding includes a precise path/location, impact, evidence, and actionable correction. If no finding remains, state the residual risks and exact verification reviewed. Do not claim approval for a security-sensitive change solely because this skill produced no findings.

@@ -13,6 +13,7 @@ import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.d
 import 'package:sanad_client/infrastructure/platform/tray_manager_backend.dart';
 import 'package:sanad_client/infrastructure/platform/tray_menu_builder.dart';
 import 'package:sanad_client/infrastructure/platform/tray_menu_descriptor.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 // The tray contract and its compile-time platform boundary stay re-exported so
 // existing consumers keep importing them from this service surface.
@@ -52,15 +53,25 @@ class AppTrayService {
 
   bool get isInitialized => _isInitialized;
 
+  /// The tray icon asset per platform.
+  ///
+  /// macOS draws the tray icon as a monochrome template image, so it needs the
+  /// background-free white mark; every other platform draws the icon as-is and
+  /// gets the brand blue mark. Both assets are the tightly cropped renderings of
+  /// `docs/assets/brand/sanad-adaptive-foreground-source.svg`.
+  static String get defaultIconAssetPath => AppPlatform.isMacOS
+      ? 'assets/tray/sanad-tray-macos.png'
+      : 'assets/tray/sanad-tray-default.png';
+
   Future<void> initialize({
-    String iconAssetPath = 'assets/app-logo.png',
+    String? iconAssetPath,
     String tooltip = 'Sanad',
   }) async {
     if (_isInitialized) return;
     _isInitialized = true;
 
     await _adapter.initialize(
-      iconAssetPath: iconAssetPath,
+      iconAssetPath: iconAssetPath ?? defaultIconAssetPath,
       tooltip: tooltip,
       onTrayIconClick: () => _lifecycleManager.showWindow(),
     );

@@ -20,6 +20,9 @@ Technical spec: `docs/technical/desktop_background_and_system_tray.md`
 | Dependency compatibility | Linux desktop build succeeds on the supported toolchain baseline (GLib < 2.74 included) | Deferred tray dependency breaks the Linux build |
 | Web compilation boundary | The Client Web build compiles without the native tray/FFI library: only `tray_manager_backend_native.dart` imports `package:tray_manager`, and the Web artifact carries the no-op unsupported adapter | Web build fails on `cnativeapi`/`ffi` (`Only JS interop members may be 'external'`), a shared library imports `package:tray_manager`, or a runtime `kIsWeb` check substitutes for the compile-time boundary |
 | Explicit quit ownership | Only `Quit` destroys the app: tray, CLI endpoint, cache flush, state disposal, window destroy | Window close disposes sockets, CLI endpoint, or application state |
+| Tray restart invariant | After any Client hot restart the menu bar still shows exactly one tray icon, and the previous isolate's icon and callbacks are gone | A second tray icon appears per hot restart, or clicking a stale icon reaches a dead isolate |
+| Tray artwork | macOS shows the white background-free mark in the menu bar tint; Windows/Linux show the brand-blue mark; both come from `client/assets/tray/` | The icon draws the opaque app logo as a black square, or is tinted wrong for the platform |
+| macOS close survivor | On macOS, closing the last window hides it and the process, tray icon, sockets, and CLI endpoint stay alive, because `macos/Runner/AppDelegate.swift` answers `false` to `applicationShouldTerminateAfterLastWindowClosed` | macOS terminates the process on window close (`Platform exit requested` right after `Hiding desktop window`) and the tray icon disappears |
 
 Automated owners:
 - `client/test/unit/infrastructure/platform/desktop_lifecycle_manager_test.dart`
@@ -35,6 +38,7 @@ Automated owners:
 |---|---|---|
 | Close-to-hide | `handleWindowClose(isLinux: false)` hides the window and keeps sockets, caches, and the CLI endpoint alive | Process exits, or state/sockets are disposed on close |
 | Restore | `showWindow()` shows and focuses the existing window | A second window is created or focus is lost |
+| Dock reopen (macOS) | After closing the window, clicking the Dock icon, opening the app from Finder/Spotlight, or running `open -a <bundle>` restores and focuses the window and logs `Restoring desktop window from background` | Nothing happens and only the tray `Show` item can restore the window |
 | Re-entrancy | Repeated close/show/quit requests stay deterministic; `quit()` runs its cleanup once | Duplicate cleanup, double exit, or a half-disposed app |
 | Quit cleanup | Each cleanup step is attempted even when an earlier step throws | One failing step aborts the remaining teardown |
 
@@ -80,12 +84,15 @@ complete:
 | Step | Expected |
 |---|---|
 | Close the window with the tray icon visible | Client keeps running; tray icon remains; sockets and the CLI endpoint stay available |
+| On macOS, close the window and then click the Dock icon (or run `open -a <bundle>`) | The window returns and is focused; the tray icon count stays at one |
+| On macOS, quit from the tray `Quit` item (or `Cmd+Q`) | Full shutdown: deterministic teardown runs and the tray icon is removed |
 | `sanad-client devices` while the window is hidden | Same result as with the window visible |
 | Tray → Show, and tray icon click | Window restored and focused |
 | Tray → recent conversation | Window foregrounded on that conversation only |
 | Tray → `Start Agent` / `Restart Agent` | Existing controller action runs once; menu status refreshes |
 | Tray → `Client CLI` | Toggles the same setting as Settings → Client CLI |
 | Tray → Quit | Tray removed, CLI ownership released, cache flushed, process exits |
+| `sanad-dev restart client` (hot restart) with the tray icon visible | Menu bar still shows exactly one tray icon; its menu still acts on the live Client |
 | Linux control | Window close hides the window, the tray item and CLI endpoint stay alive, and `Quit` ends the process |
 
 ---
@@ -97,4 +104,21 @@ cd client && fvm flutter analyze 2>&1 | tail -5
 cd client && fvm flutter test test/unit/infrastructure/platform/ 2>&1 | tail -5
 cd client && fvm flutter build web --debug --target lib/driver_main.dart 2>&1 | tail -5
 cd client && fvm flutter build linux --debug 2>&1 | tail -5
+```
+
+macOS tray-icon count per running Client process (one `statusItems` entry is expected;
+virtualization-free, no click required):
+
+```bash
+osascript -e 'tell application "System Events"
+set o to ""
+repeat with p in (every process whose name is "Sanad")
+set n to 0
+repeat with mb in (menu bars of p)
+set n to n + 1
+if n > 1 then set o to o & "pid " & (unix id of p) & " statusItems=" & (count of menu bar items of mb) & linefeed
+end repeat
+end repeat
+return o
+end tell'
 ```

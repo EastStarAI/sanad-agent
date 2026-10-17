@@ -155,6 +155,7 @@ void main() {
         expect(result['numReplacements'], 2);
         expect(result['numEdits'], 2);
         expect(result['startLine'], 5);
+        expect(result['editStartLines'], [5, 20]);
         expect(result['patch'], contains('- Line 5: initial content'));
         expect(result['patch'], contains('+ Line 5: updated content'));
         expect(result['patch'], contains('---'));

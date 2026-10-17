@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 // import 'package:macos_window_utils/macos/ns_window_button_type.dart';
@@ -41,6 +42,32 @@ class WindowManagerService with WindowListener {
 
   static void setCloseRequestHandler(Future<void> Function()? handler) {
     _onCloseRequested = handler;
+  }
+
+  /// The macOS delegate forwards Dock/Finder reopen requests to the Dart window
+  /// owner, because AppKit cannot un-hide a window that was ordered out.
+  static const String windowLifecycleChannelName = 'com.eaststarai.sanad/windowLifecycle';
+
+  static Future<void> Function()? _onReopenRequested;
+
+  static void setReopenRequestHandler(Future<void> Function()? handler) {
+    _onReopenRequested = handler;
+  }
+
+  static MethodChannel? _windowLifecycleChannel;
+
+  static void _registerReopenChannel() {
+    if (_windowLifecycleChannel != null) return;
+    final channel = const MethodChannel(windowLifecycleChannelName);
+    _windowLifecycleChannel = channel;
+    channel.setMethodCallHandler((call) async {
+      if (call.method != 'reopenRequested') return null;
+      final handler = _onReopenRequested;
+      if (handler != null) {
+        await handler();
+      }
+      return null;
+    });
   }
 
   static Future<void> hide() async {
@@ -180,6 +207,10 @@ class WindowManagerService with WindowListener {
 
   static Future<void> initialize() async {
     if (!AppPlatform.isDesktop) return;
+
+    if (AppPlatform.isMacOS) {
+      _registerReopenChannel();
+    }
 
     await windowManager.ensureInitialized();
     windowManager.addListener(_instance);

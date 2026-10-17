@@ -520,6 +520,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
       _socket?.disconnect();
       _socket?.dispose();
       _socket = null;
+      // Socket.dispose() clears every listener and `io.io()` reuses the cached
+      // Socket for the same host, so the next initialize() may receive this very
+      // instance back with no listeners. Forget the binding here, otherwise the
+      // identity check in initialize() keeps the binary relay detached and the
+      // relay events are silently dropped for the life of the process.
+      _binaryRelaySocket = null;
       _logger.info('Cloud Gateway disconnected without Agent authorization.');
       return;
     }
@@ -970,5 +976,6 @@ class ServerSanadGatewayPlatform extends BasePlatform
     }
     _voiceEngines.clear();
     _socket?.dispose();
+    _binaryRelaySocket = null;
   }
 }

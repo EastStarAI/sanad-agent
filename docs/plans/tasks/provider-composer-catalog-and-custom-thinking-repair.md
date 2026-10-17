@@ -1,7 +1,7 @@
 ---
 title: "Provider composer catalog refresh and custom thinking support (Historical Donor Task)"
 status: "consolidated"
-consolidated_into: "docs/plans/tasks/77i5-unified-provider-model-capabilities.md"
+consolidated_into: "docs/plans/tasks/done/77i5-unified-provider-model-capabilities.md"
 current_gate: "Consolidated into 77I5"
 remaining_estimate: "Consolidated"
 ---
@@ -9,7 +9,7 @@ remaining_estimate: "Consolidated"
 # Goal (Historical Donor Task)
 
 > [!NOTE]
-> This task has been consolidated into the active unified execution plan: [77i5-unified-provider-model-capabilities.md](77i5-unified-provider-model-capabilities.md).
+> This task has been consolidated into the archived unified execution plan: [77i5-unified-provider-model-capabilities.md](done/77i5-unified-provider-model-capabilities.md).
 > All active gates, execution boundaries, and reviewer acceptance are tracked exclusively in 77I5.
 
 Fix provider display-name freshness in composer without a Client restart, and support controlled thinking for custom providers using explicit, validated route semantics.
@@ -17,7 +17,7 @@ Fix provider display-name freshness in composer without a Client restart, and su
 ## Ownership and Consolidation
 
 - User authorized consolidation of this donor catalog repair and custom thinking research into the unified Plan 77 worktree.
-- The active unified plan is tracked in `docs/plans/tasks/77i5-unified-provider-model-capabilities.md`.
+- The unified plan is archived in `docs/plans/tasks/done/77i5-unified-provider-model-capabilities.md`.
 - No separate PR or independent main branch execution: changes are delivered and reviewed as part of the unified capabilities plan.
 - The donor worktree remains preserved as a read-only historical reference.
 
@@ -142,4 +142,4 @@ Sanad Agent already has mature native policy classes and wire codecs in `agent/l
   - `ProviderSetupFlow` synchronizes display names only when successful load/mutation advances `snapshotGeneration`.
   - Focused tests: 74/74 passed (`provider_usage_cubit_test.dart`, `provider_setup_flow_test.dart`, `conversation_input_panel_rebuild_test.dart`).
 - **G1 (Thinking Proposal) completed**: Research documented and grounded in Hermes reference.
-- **Consolidated into 77I5**: By user authorization, all subsequent architecture approval, capability implementation, and review proceed in `77i5-unified-provider-model-capabilities.md`.
+- **Consolidated into 77I5**: By user authorization, all subsequent architecture approval, capability implementation, and review proceed in `done/77i5-unified-provider-model-capabilities.md`.

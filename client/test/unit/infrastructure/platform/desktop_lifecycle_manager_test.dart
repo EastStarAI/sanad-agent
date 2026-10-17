@@ -65,6 +65,21 @@ void main() {
       expect(windowAdapter.focusCalls, equals(1));
     });
 
+    test('handleReopenRequest restores the hidden window through the show path', () async {
+      final manager = DesktopLifecycleManager(windowAdapter: windowAdapter);
+
+      await manager.handleWindowClose();
+      expect(manager.isWindowHidden, isTrue);
+      expect(windowAdapter.hideCalls, equals(1));
+
+      await manager.handleReopenRequest();
+
+      expect(windowAdapter.showCalls, equals(1));
+      expect(windowAdapter.focusCalls, equals(1));
+      expect(manager.isWindowHidden, isFalse);
+      expect(windowAdapter.destroyCalls, equals(0));
+    });
+
     test('handleWindowClose hides window without quitting or disposing', () async {
       bool trayDisposed = false;
       bool cliStopped = false;

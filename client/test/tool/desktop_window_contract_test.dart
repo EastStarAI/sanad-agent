@@ -200,6 +200,49 @@ void main() {
     expect(releaseScript, contains(r'if [ "$IMPELLER_SETTING" != "false" ]'));
   });
 
+  test('macOS runner keeps the app alive in the background and forwards reopen requests', () {
+    final appDelegate = File('macos/Runner/AppDelegate.swift').readAsStringSync();
+
+    // Flutter's template terminates the whole app as soon as the last window
+    // closes, which silently discards the tray icon on macOS only.
+    expect(appDelegate, contains('applicationShouldTerminateAfterLastWindowClosed'));
+    expect(
+      appDelegate,
+      isNot(matches(RegExp(r'applicationShouldTerminateAfterLastWindowClosed[\s\S]{0,200}return true'))),
+    );
+
+    // A Dock-icon click, Finder open, or Spotlight launch must restore the window
+    // through the Dart window owner, because AppKit cannot un-hide the window.
+    expect(appDelegate, contains('applicationShouldHandleReopen'));
+    expect(appDelegate, contains('com.eaststarai.sanad/windowLifecycle'));
+    expect(appDelegate, contains('reopenRequested'));
+  });
+
+  test('window service forwards the macOS reopen request to the lifecycle owner', () {
+    final service = File(
+      'lib/infrastructure/platform/window_manager_service.dart',
+    ).readAsStringSync();
+    final bootstrap = File('lib/core/bootstrap/app_bootstrap.dart').readAsStringSync();
+    final lifecycle = File(
+      'lib/infrastructure/platform/desktop_lifecycle_manager.dart',
+    ).readAsStringSync();
+
+    expect(
+      service,
+      contains("windowLifecycleChannelName = 'com.eaststarai.sanad/windowLifecycle'"),
+    );
+    expect(service, contains('static void setReopenRequestHandler'));
+    expect(
+      bootstrap,
+      contains('setReopenRequestHandler(() => lifecycle.handleReopenRequest())'),
+    );
+    expect(
+      bootstrap,
+      contains('setCloseRequestHandler(() => lifecycle.handleWindowClose())'),
+    );
+    expect(lifecycle, contains('Future<void> handleReopenRequest()'));
+  });
+
   test('supported native runners enforce the same minimum dimensions', () {
     final macOS = File('macos/Runner/MainFlutterWindow.swift').readAsStringSync();
     final windows = File('windows/runner/win32_window.cpp').readAsStringSync();

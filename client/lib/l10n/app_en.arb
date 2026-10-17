@@ -373,6 +373,9 @@
   "clientCliDeny": "No, deny",
   "thinkingModeUnavailableLabel": "Unavailable",
   "thinkingModeUnavailableTooltip": "Thinking mode selection is not available for this device.",
+  "thinkingModeLoadingLabel": "Loading...",
+  "thinkingModeRetryLabel": "Retry",
+  "thinkingModeFetchFailureTooltip": "Failed to load thinking options. Click to retry.",
   "thinkingModeNoControlLabel": "No control",
   "thinkingModeNoControlTooltip": "No selectable thinking level is reported for this model.",
   "thinkingModeUnknownLabel": "Not reported",
@@ -390,6 +393,7 @@
       }
     }
   },
+  "thinkingModeSelectTooltip": "Select Thinking Mode",
   "thinkingModeSelectBudgetTooltip": "Select Thinking Mode · budget: {budget}",
   "@thinkingModeSelectBudgetTooltip": {
     "placeholders": {

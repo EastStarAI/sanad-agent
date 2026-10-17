@@ -5,6 +5,7 @@ import 'package:logging/logging.dart';
 import 'package:go_router/go_router.dart';
 
 import 'conversation_destination.dart';
+import 'nav_trace.dart';
 
 /// Snapshot of the navigation history at a point in time.
 class NavigationHistorySnapshot {
@@ -41,6 +42,26 @@ class NavigationHistorySnapshot {
 
   @override
   String toString() => 'NavigationHistorySnapshot(back=$backStack, current=$current, forward=$forwardStack)';
+}
+
+/// The branch [ConversationHistoryController.reconcile] took for a route that
+/// GoRouter already made current. Reported so callers can trace the decision
+/// without re-deriving it.
+enum NavigationReconciliation {
+  /// The route already describes the current destination.
+  noop,
+
+  /// The controller had no current destination yet (first route of a session).
+  setInitial,
+
+  /// The route is the newest back destination, so the controller moved back.
+  goBack,
+
+  /// The route is the newest forward destination, so the controller moved on.
+  goForward,
+
+  /// The route is unrelated to either stack, so the controller navigated to it.
+  navigateTo,
 }
 
 /// Manages navigation history (back/current/forward stacks) for conversation
@@ -81,6 +102,7 @@ class ConversationHistoryController extends ChangeNotifier {
   void navigateTo(ConversationDestination destination) {
     if (destination == _current) {
       _logger.fine('navigateTo: duplicate of current, skipping');
+      navTrace('nav.navigateTo', 'dup-of-current ${destTrace(destination)} | $_traceSnapshot');
       return;
     }
 
@@ -90,6 +112,7 @@ class ConversationHistoryController extends ChangeNotifier {
     _current = destination;
     _forwardStack.clear();
     _logger.fine('navigateTo: $destination');
+    navTrace('nav.navigateTo', '-> ${destTrace(destination)} | $_traceSnapshot');
     _emit();
   }
 
@@ -106,6 +129,7 @@ class ConversationHistoryController extends ChangeNotifier {
     }
     _current = _backStack.removeLast();
     _logger.fine('goBack: $_current');
+    navTrace('nav.goBack', '-> ${destTrace(_current)} | $_traceSnapshot');
     _emit();
     return _current;
   }
@@ -123,6 +147,7 @@ class ConversationHistoryController extends ChangeNotifier {
     }
     _current = _forwardStack.removeAt(0);
     _logger.fine('goForward: $_current');
+    navTrace('nav.goForward', '-> ${destTrace(_current)} | $_traceSnapshot');
     _emit();
     return _current;
   }
@@ -132,6 +157,7 @@ class ConversationHistoryController extends ChangeNotifier {
   void replaceCurrent(ConversationDestination destination) {
     _current = destination;
     _logger.fine('replaceCurrent: $destination');
+    navTrace('nav.replaceCurrent', '-> ${destTrace(destination)} | $_traceSnapshot');
     _emit();
   }
 
@@ -141,6 +167,7 @@ class ConversationHistoryController extends ChangeNotifier {
     _backStack.removeWhere((d) => d == destination);
     _forwardStack.removeWhere((d) => d == destination);
     _logger.fine('removeFromHistory: $destination');
+    navTrace('nav.removeFromHistory', '${destTrace(destination)} | $_traceSnapshot');
     _emit();
   }
 
@@ -219,14 +246,48 @@ class ConversationHistoryController extends ChangeNotifier {
     _backStack.clear();
     _current = null;
     _forwardStack.clear();
+    navTrace('nav.clear', _traceSnapshot);
     _emit();
+  }
+
+  /// Reconcile the controller with a [destination] that GoRouter has already
+  /// made current (browser pop/forward, deep link, or the first route of a
+  /// session).
+  ///
+  /// This is the **only** stack-reconciliation implementation in the Client.
+  /// It compares the destination against the existing stacks and mutates this
+  /// controller; it never navigates GoRouter again, so it cannot create an
+  /// update loop. Callers that need to move the route own that call.
+  NavigationReconciliation reconcile(ConversationDestination destination) {
+    if (destination == _current) return NavigationReconciliation.noop;
+    if (_current == null) {
+      setInitial(destination);
+      return NavigationReconciliation.setInitial;
+    }
+    if (_backStack.isNotEmpty && _backStack.last == destination) {
+      goBack();
+      return NavigationReconciliation.goBack;
+    }
+    if (_forwardStack.isNotEmpty && _forwardStack.first == destination) {
+      goForward();
+      return NavigationReconciliation.goForward;
+    }
+    navigateTo(destination);
+    return NavigationReconciliation.navigateTo;
   }
 
   /// Set the initial current destination without affecting history stacks.
   void setInitial(ConversationDestination destination) {
     _current = destination;
+    navTrace('nav.setInitial', '-> ${destTrace(destination)} | $_traceSnapshot');
     _emit();
   }
+
+  String get _traceSnapshot => historyTrace(
+    back: _backStack,
+    current: _current,
+    forward: _forwardStack,
+  );
 
   void _emit() {
     notifyListeners();
@@ -246,9 +307,11 @@ class ConversationHistoryController extends ChangeNotifier {
 /// 1. **UI → GoRouter**: `navigateTo()` / `goBack()` / `goForward()` update the
 ///    controller then navigate via GoRouter. Always use these for UI intents.
 /// 2. **GoRouter → Controller**: Call [reconcileFromRoute] when an external
-///    route change is detected (browser pop/forward, deep link). This method
-///    compares the parsed destination against the controller's stacks and
-///    reconciles without calling `router.go()` again.
+///    route change is detected (browser pop/forward, deep link). It delegates
+///    to [ConversationHistoryController.reconcile], the single
+///    stack-reconciliation implementation, which compares the parsed
+///    destination against the controller's stacks without calling
+///    `router.go()` again.
 ///
 /// No update loop: [reconcileFromRoute] only mutates the controller. The UI
 /// will render the new route without a second GoRouter navigation.
@@ -296,21 +359,8 @@ class GoRouterHistorySync {
   /// externally. The method parses the new destination and reconciles stacks
   /// without navigating again (the URL is already current).
   void reconcileFromRoute(ConversationDestination destination) {
-    if (destination == _controller.snapshot.current) return;
-
-    final backStack = _controller.snapshot.backStack;
-    final forwardStack = _controller.snapshot.forwardStack;
-
-    if (backStack.isNotEmpty && backStack.last == destination) {
-      _logger.fine('browser back detected: $destination');
-      _controller.goBack();
-    } else if (forwardStack.isNotEmpty && forwardStack.first == destination) {
-      _logger.fine('browser forward detected: $destination');
-      _controller.goForward();
-    } else {
-      _logger.fine('external route change (deep link or initial): $destination');
-      _controller.navigateTo(destination);
-    }
+    final outcome = _controller.reconcile(destination);
+    _logger.fine('reconcileFromRoute: $destination -> ${outcome.name}');
   }
 
   bool get canGoBack => _controller.snapshot.canGoBack;

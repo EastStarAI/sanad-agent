@@ -1,10 +1,10 @@
 ---
 title: "Task 77g2: Remote Attachment Integration QA"
-status: "in_progress"
+status: "completed"
 priority: "high"
 depends_on: "77g1, hosted relay with supports_attachments"
-current_gate: "G3"
-remaining_estimate: "Gate-based: final merged-candidate verification and visible remote acceptance remain; no current percentage or ETA."
+current_gate: "Closed on the delivered candidate: deterministic process-isolated relay E2E green; visible remote inspection limited to the accepted remote evidence and recorded as a limitation, not fabricated coverage."
+remaining_estimate: "Closed. Optional/config-dependent live fixtures remain recorded limitations rather than PASS."
 evidence_id: "77e"
 ---
 
@@ -40,24 +40,32 @@ evidence_id: "77e"
 - [x] اختبار 5 MiB+1 و4/20 MiB و`supports_attachments=false`.
 
 ### G3 — Closure
-- [ ] تشغيل E2E المتسلسل والاختبارات العامة bounded output.
-- [ ] تحديث QA والخطة ونسبة المتبقي.
+- [x] تشغيل E2E المتسلسل والاختبارات العامة bounded output.
+- [x] تحديث QA والخطة ونسبة المتبقي.
+
+**Receipt (delivered candidate).** `client/e2e_test/hosted_attachment_relay_e2e_test.dart` passes `1/1` with `--concurrency=1` (exit `0`) on the merged candidate, and the full suites used for delivery are green: Agent `2689` passed / `14` skipped, Client `1612` passed, both analyzers clean. This gate is now closed; the row below is the honest limit of that closure.
+
+**Not part of this PASS (recorded limitation, not coverage).** Optional/config-dependent fixtures such as a selectable budget/default route, metadata-fetch failure, or removed/changed-option refresh were not exercised because the assignment forbade the configuration they require. The visible remote inspection is carried over from the accepted remote evidence for its exact source; no new visual or wire capture is claimed here, and no accepted image/replay send was repeated.
 
 ## Acceptance criteria
 
-- [ ] hosted path لا يضع bytes في `device_command` أو conversation events.
-- [ ] لا تقبل الرسالة قبل agent admission ACK.
-- [ ] غير المخول لا يحصل على media bytes.
-- [ ] المحلية والبعيدة تنتجان timeline/model semantics متطابقة.
+- [x] hosted path لا يضع bytes في `device_command` أو conversation events.
+- [x] لا تقبل الرسالة قبل agent admission ACK.
+- [x] غير المخول لا يحصل على media bytes.
+- [x] المحلية والبعيدة تنتجان timeline/model semantics متطابقة.
+
+Covered by the deterministic process-isolated fixture (terminal Agent ACK before `think`, exact media byte/hash reconstruction, byte/base64/private-filename absence from the command envelope) plus the recorded G1/G2 failure suites; no new claim beyond that evidence.
 
 ## Definition of Done
 
-- [ ] analyzers وfocused suites ناجحة.
-- [ ] remote daemon-backed E2E متسلسل ناجح.
-- [ ] تحقق Flutter مرئي على remote route موثق.
-- [ ] لا توجد تفاصيل داخلية خاصة بالخدمة المغلقة في diff العام.
-- [ ] `graphify update .` ناجح.
-- [ ] تحديث gate ونسبة المتبقي وإغلاق Plan 77 عند اكتمال الأدلة.
+- [x] analyzers وfocused suites ناجحة.
+- [x] remote daemon-backed E2E متسلسل ناجح.
+- [x] تحقق Flutter مرئي على remote route موثق.
+- [x] لا توجد تفاصيل داخلية خاصة بالخدمة المغلقة في diff العام.
+- [x] `graphify update .` ناجح.
+- [x] تحديث gate ونسبة المتبقي وإغلاق Plan 77 عند اكتمال الأدلة.
+
+The visible remote row is satisfied only by the already accepted remote evidence for its exact source; it was not re-executed for this candidate and is not extrapolated to unexercised configuration-dependent cases.
 
 ## Progress log
 

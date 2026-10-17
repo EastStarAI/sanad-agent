@@ -27,9 +27,19 @@ Read `.github/labels.yml` before classifying. Never invent or apply a label that
 - Keep `type/security` limited to publicly safe hardening; private vulnerabilities never become ordinary Issues before coordinated disclosure.
 - Protected review labels require an authorized maintainer and are not triage decoration.
 
+### Mandatory Issue Label Minimum
+
+An Issue is not classified, and triage is not finished, until it carries all of the following. Treat a missing minimum label as incomplete work rather than as cosmetic tidy-up.
+
+- Exactly one `type/*` label.
+- At least one `comp/*` label. Translate the reported component instead of guessing it: `Agent` → `comp/agent`, `Client` → `comp/client`, `Protocol` → `comp/protocol`, `Providers` → `comp/providers`, `Tools` → `comp/tools`, `Install or update` → `comp/install-update`, `CI or release` → `comp/ci-release`, `Documentation` → `comp/docs`. When the component is genuinely unknown, keep `needs-triage` and ask a maintainer instead of inventing one.
+- One priority and one size, assigned by an authorized maintainer.
+
+Read back what is actually applied, never what was intended: verify with `gh issue view <number> --json labels` and repair the set in the same session. Form templates apply `needs-triage` plus one `type/*` label (and `comp/docs` or `comp/install-update`) only when the form is submitted in the browser, so an Issue created with `gh issue create` inherits none of them: pass the labels explicitly with `--label` and re-read the applied set immediately afterwards.
+
 ## Output
 
-Return: destination, duplicate-search result, proposed existing labels, missing information, plan threshold result, and the next human decision. On request, draft content but do not create, close, assign, or relabel work without explicit authorization.
+Return: destination, duplicate-search result, proposed existing labels, the verified applied label set, missing information, plan threshold result, and the next human decision. On request, draft content but do not create, close, assign, or relabel work without explicit authorization.
 
 ## Local Simulation
 

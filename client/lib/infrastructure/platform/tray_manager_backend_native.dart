@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_client/infrastructure/platform/tray_manager_adapter.dart';
@@ -26,6 +25,8 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
     required String tooltip,
     required void Function() onTrayIconClick,
   }) async {
+    // Re-initialization must never leave a previously created native icon alive.
+    await destroy();
     try {
       final trayIcon = tm.TrayIcon.create();
       if (trayIcon == null) {
@@ -47,7 +48,11 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
         trayIcon.setContextMenuTrigger(tm.ContextMenuTrigger.rightClicked);
       } else {
         if (AppPlatform.isMacOS) {
-          trayIcon.iconSize = const Size(18, 18);
+          // The menu bar owns the tray colours: a template image is drawn as a
+          // monochrome glyph that follows the bar's appearance, so the icon is
+          // the background-free mark instead of the square app logo, and its
+          // size stays at the platform default (18x18 points).
+          trayIcon.isIconTemplate = true;
         }
         trayIcon.setContextMenuTrigger(tm.ContextMenuTrigger.clicked);
       }

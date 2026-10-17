@@ -3529,6 +3529,121 @@ void main() {
         reason: 'the localized menu must not fall back to an English literal',
       );
     });
+
+    testWidgets('localizes the loading label', (tester) async {
+      fakeClient.pendingSnapshotCompleter = Completer<ModelCacheSnapshotDto>();
+
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: createInputSlice(
+            nextMessageProviderId: 'provider-1',
+            nextMessageModel: 'model-a',
+          ),
+          locale: arabic,
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('route_thinking_mode_loading')),
+        findsOneWidget,
+      );
+      expect(find.text('جارٍ التحميل...'), findsOneWidget);
+      expect(
+        find.text('Loading...'),
+        findsNothing,
+        reason: 'the localized surface must not fall back to an English literal',
+      );
+
+      fakeClient.pendingSnapshotCompleter!.complete(
+        const ModelCacheSnapshotDto(instances: [], recent: []),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('route_thinking_mode_loading')), findsNothing);
+    });
+
+    testWidgets('localizes the retry label and its retry explanation', (
+      tester,
+    ) async {
+      fakeClient.shouldThrow = true;
+
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: createInputSlice(
+            nextMessageProviderId: 'provider-1',
+            nextMessageModel: 'model-a',
+          ),
+          locale: arabic,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('route_thinking_mode_fetch_failure')),
+        findsOneWidget,
+      );
+      expect(find.text('إعادة المحاولة'), findsOneWidget);
+      expect(find.text('Retry'), findsNothing);
+      expect(
+        thinkingStateTooltip(tester, 'route_thinking_mode_fetch_failure'),
+        'تعذّر تحميل خيارات التفكير. انقر لإعادة المحاولة.',
+      );
+
+      fakeClient.shouldThrow = false;
+      fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+        instances: [
+          ModelCacheInstanceDto(
+            id: 'provider-1',
+            displayName: 'P1',
+            status: 'ready',
+            isDefault: true,
+            cacheStatus: 'fetched',
+            models: [
+              ModelCacheModelDto(
+                id: 'model-a',
+                thinkingControl: ThinkingControlDescriptorDto(
+                  status: ThinkingCapabilityStatus.supported,
+                  options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
+                ),
+              ),
+            ],
+          ),
+        ],
+        recent: [],
+      );
+
+      await tester.tap(find.byKey(const Key('route_thinking_mode_fetch_failure')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('route_thinking_mode_fetch_failure')),
+        findsNothing,
+        reason: 'the localized retry affordance still performs the real refresh',
+      );
+    });
+
+    testWidgets('localizes the select-mode tooltip', (tester) async {
+      await pumpForModel(
+        tester,
+        const ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          kind: ThinkingControlKind.effort,
+          options: [
+            ThinkingControlOptionDto(id: 'low', label: 'Low'),
+            ThinkingControlOptionDto(id: 'high', label: 'High'),
+          ],
+        ),
+        'model-no-default',
+      );
+
+      expect(
+        tester
+            .widget<PopupMenuButton<String>>(
+              find.byKey(const Key('route_thinking_mode_selector_button')),
+            )
+            .tooltip,
+        'اختر نمط التفكير',
+      );
+    });
   });
 
   group('77K native thinking default auto-selection', () {
