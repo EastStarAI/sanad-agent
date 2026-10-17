@@ -60,12 +60,31 @@ sanad skills add <source> --home "$SKL_HOME"
 | Scenario | Expected result |
 |---|---|
 | `remove <name>` for an installed skill | Directory and provenance entry removed. |
+| `remove` with traversal or root segment (`..`, `.`, `../other`) | Refused with invalid name error, exit 1; filesystem untouched. |
+| `remove` where target is a symbolic link | Refused; link and target untouched, exit 1. |
+| `remove` resolving outside skills root | Refused; filesystem untouched, exit 1. |
 | `remove` for a hand-copied skill without `--force` | Refused with guidance. |
 | `remove --force` | Deletes the directory, never touches other skills. |
 | `remove` for a bundled product skill | Refused; the product owns it. |
 | `update` immediately after install | Reports `Up to date`, no rewrite. |
 | `update` after the source changes | Reinstalls and reports the change. |
+| `update` when local edits are present without `--force` | Skipped with local edits message; files and provenance unchanged. |
+| `update --force` when local edits are present | Replaces content with remote version and records new digest. |
 | `update` with an empty provenance file | Fails with a clear message, exit 1. |
+
+## Pre-activation security screening matrix
+
+| Scenario | Expected result |
+|---|---|
+| Clean skill package | Installed; provenance records `scan: clean`. |
+| Staged package piping download to shell (`curl ... \| sh`) | Refused with finding listed; exit 1, nothing written. |
+| Staged package with credential path access (`.ssh/id_...`) | Refused with finding listed; exit 1, nothing written. |
+| Staged package with destructive commands (`rm -rf /`) | Refused with finding listed; exit 1, nothing written. |
+| Staged package with `chmod 777` | Refused with finding listed; exit 1, nothing written. |
+| Staged package with instruction override phrasing | Refused with finding listed; exit 1, nothing written. |
+| Staged package with secret harvesting phrasing | Refused with finding listed; exit 1, nothing written. |
+| Flagged package installed with `add --allow-flagged` | Installed; provenance records `scan: flagged`. |
+| Binary file in skill package (e.g. icon/binary) | Skipped by scanner rather than misdecoded; installed intact. |
 
 ## Failure and isolation matrix
 

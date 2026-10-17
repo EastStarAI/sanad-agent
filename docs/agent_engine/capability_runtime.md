@@ -164,6 +164,18 @@ scans these roots per request, an installed skill becomes available on the next
 turn without a restart, and bundled reconciliation leaves user-installed
 packages untouched.
 
+Installation, updates, and removal enforce strict destructive path and content
+safety boundaries. `remove` validates package names, rejects symbolic links,
+and verifies through link resolution that targets are strict descendants of the
+active skills root. `update` inspects the on-disk directory digest against the
+recorded provenance digest, preserving local modifications and skipping updates
+unless `--force` is supplied. Staged content is scanned before activation for
+credential paths, piping remote content to shells, encoded execution, exfiltration,
+destructive filesystem operations, permissive chmod, instruction overrides, and
+secret-harvesting phrasing; flagged packages are refused unless explicitly permitted
+via `--allow-flagged`, and the screening verdict (`clean` or `flagged`) is recorded
+in provenance.
+
 ## Platform Tools
 
 Platform-provided tools are explicit, turn-scoped contracts. Their specifications

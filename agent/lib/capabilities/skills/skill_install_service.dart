@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 
 import 'skill_archive.dart';
 import 'skill_frontmatter.dart';
+import 'skill_scanner.dart';
 import 'skill_source.dart';
 
 /// Raised when an install, removal, or update cannot be completed safely.
@@ -20,6 +21,8 @@ class SkillInstallException implements Exception {
 }
 
 enum SkillScope { user, project }
+
+enum SkillInstallStatus { installed, updated, unchanged, skippedLocalEdits }
 
 /// One skill found inside a fetched source, ready to install.
 class SkillInstallPlan {
@@ -42,6 +45,7 @@ class SkillInstallOutcome {
     required this.path,
     required this.digest,
     required this.changed,
+    this.status = SkillInstallStatus.installed,
   });
 
   final String name;
@@ -49,6 +53,7 @@ class SkillInstallOutcome {
   final String path;
   final String digest;
   final bool changed;
+  final SkillInstallStatus status;
 }
 
 /// Provenance for one installed skill, used by `remove` and `update`.
@@ -62,6 +67,7 @@ class InstalledSkillRecord {
     this.kind = SkillSourceKind.github,
     this.ref,
     this.subPath,
+    this.scan,
   });
 
   final String name;
@@ -72,6 +78,7 @@ class InstalledSkillRecord {
   final SkillSourceKind kind;
   final String? ref;
   final String? subPath;
+  final String? scan;
 
   Map<String, Object?> toJson() => {
     'source': source,
@@ -81,6 +88,7 @@ class InstalledSkillRecord {
     'installedAt': installedAt.toUtc().toIso8601String(),
     if (ref != null) 'ref': ref,
     if (subPath != null) 'subPath': subPath,
+    if (scan != null) 'scan': scan,
   };
 
   factory InstalledSkillRecord.fromJson(
@@ -104,6 +112,7 @@ class InstalledSkillRecord {
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       ref: json['ref'] as String?,
       subPath: json['subPath'] as String?,
+      scan: json['scan'] as String?,
     );
   }
 }
@@ -174,6 +183,7 @@ class SkillInstallService {
     SkillSource source, {
     String? skill,
     bool force = false,
+    bool allowFlagged = false,
   }) async {
     final plans = await plansFor(source);
     final plan = _select(plans, skill, source);
@@ -183,6 +193,17 @@ class SkillInstallService {
       throw SkillInstallException(
         'Skill "${plan.name}" is already installed at ${target.path}. '
         'Re-run with --force to replace it.',
+      );
+    }
+
+    final scanner = const SkillScanner();
+    final report = scanner.scan(plan.files);
+    if (!report.isClean && !allowFlagged) {
+      throw SkillScanException(
+        'Skill "${plan.name}" was flagged by security screening:\n'
+        '${report.describe()}\n'
+        'Re-run with --allow-flagged to install anyway.',
+        report: report,
       );
     }
 
@@ -201,6 +222,7 @@ class SkillInstallService {
       installedAt: DateTime.now().toUtc(),
       ref: source.ref,
       subPath: source.subPath,
+      scan: report.verdict,
     );
     _writeProvenance(records);
 
@@ -210,19 +232,51 @@ class SkillInstallService {
       path: target.path,
       digest: digest,
       changed: !existed || previous?.digest != digest,
+      status: existed
+          ? SkillInstallStatus.updated
+          : SkillInstallStatus.installed,
     );
   }
 
   /// Removes a command-installed skill. Bundled and hand-copied skills are left
   /// alone unless [force] is set.
   bool remove(String name, {bool force = false}) {
-    final records = Map<String, InstalledSkillRecord>.from(readProvenance());
-    final target = Directory(p.join(skillsRoot.path, name));
-    if (!target.existsSync()) {
+    if (name == '.' || name == '..' || !_validName.hasMatch(name)) {
+      throw SkillInstallException(
+        'Invalid skill name "$name". Use letters, digits, dots, dashes, '
+        'and underscores, starting with a letter or digit.',
+      );
+    }
+
+    final targetPath = p.join(skillsRoot.path, name);
+    final entityType = FileSystemEntity.typeSync(
+      targetPath,
+      followLinks: false,
+    );
+    if (entityType == FileSystemEntityType.notFound) {
       throw SkillInstallException(
         'Skill "$name" is not installed in ${skillsRoot.path}.',
       );
     }
+    if (entityType == FileSystemEntityType.link) {
+      throw SkillInstallException(
+        'Skill "$name" is a symbolic link; refusing to remove.',
+      );
+    }
+
+    final resolvedRoot = skillsRoot.existsSync()
+        ? skillsRoot.resolveSymbolicLinksSync()
+        : p.canonicalize(skillsRoot.path);
+    final resolvedTarget = Directory(targetPath).resolveSymbolicLinksSync();
+
+    if (!p.isWithin(resolvedRoot, resolvedTarget) ||
+        resolvedTarget == resolvedRoot) {
+      throw SkillInstallException(
+        'Target for skill "$name" resolves outside the skills root: $resolvedTarget',
+      );
+    }
+
+    final records = Map<String, InstalledSkillRecord>.from(readProvenance());
     if (!records.containsKey(name)) {
       final bundled = _isBundled(name);
       if (!force) {
@@ -234,14 +288,18 @@ class SkillInstallService {
         );
       }
     }
-    target.deleteSync(recursive: true);
+
+    Directory(resolvedTarget).deleteSync(recursive: true);
     if (records.remove(name) != null) {
       _writeProvenance(records);
     }
     return true;
   }
 
-  Future<List<SkillInstallOutcome>> update({String? name}) async {
+  Future<List<SkillInstallOutcome>> update({
+    String? name,
+    bool force = false,
+  }) async {
     final records = readProvenance();
     final selected = name == null
         ? records.values.toList(growable: false)
@@ -255,7 +313,30 @@ class SkillInstallService {
     }
 
     final outcomes = <SkillInstallOutcome>[];
+    final updatedRecords = Map<String, InstalledSkillRecord>.from(records);
+
     for (final record in selected) {
+      final target = Directory(p.join(skillsRoot.path, record.name));
+      final exists = target.existsSync();
+      final onDiskDigest = exists
+          ? digestOf(await _readDirectory(target))
+          : null;
+      final hasLocalEdits = exists && onDiskDigest != record.digest;
+
+      if (hasLocalEdits && !force) {
+        outcomes.add(
+          SkillInstallOutcome(
+            name: record.name,
+            scope: scope,
+            path: target.path,
+            digest: record.digest,
+            changed: false,
+            status: SkillInstallStatus.skippedLocalEdits,
+          ),
+        );
+        continue;
+      }
+
       final source = SkillSource.parse(
         record.source,
         ref: record.ref,
@@ -263,33 +344,41 @@ class SkillInstallService {
       );
       final plans = await plansFor(source);
       final plan = _select(plans, record.name, source);
-      final target = Directory(p.join(skillsRoot.path, record.name));
-      final digest = digestOf(plan.files);
-      final changed = digest != record.digest || !target.existsSync();
+      final remoteDigest = digestOf(plan.files);
+      final changed =
+          remoteDigest != record.digest || !exists || (hasLocalEdits && force);
+
       if (changed) {
         await _writeAtomically(target, plan.files);
       }
+
       outcomes.add(
         SkillInstallOutcome(
           name: record.name,
           scope: scope,
           path: target.path,
-          digest: digest,
+          digest: remoteDigest,
           changed: changed,
+          status: changed
+              ? SkillInstallStatus.updated
+              : SkillInstallStatus.unchanged,
         ),
       );
-      records[record.name] = InstalledSkillRecord(
+
+      updatedRecords[record.name] = InstalledSkillRecord(
         name: record.name,
         source: source.recordedSource,
         kind: source.kind,
         scope: scope,
-        digest: digest,
+        digest: remoteDigest,
         installedAt: changed ? DateTime.now().toUtc() : record.installedAt,
         ref: source.ref,
         subPath: source.subPath,
+        scan: record.scan,
       );
     }
-    _writeProvenance(Map<String, InstalledSkillRecord>.from(records));
+
+    _writeProvenance(updatedRecords);
     return outcomes;
   }
 
@@ -484,7 +573,7 @@ class SkillInstallService {
     final first = files.keys.first.split('/').first;
     final hasRoot =
         first.isNotEmpty &&
-        files.keys.every((key) => key == first || key.startsWith('$first/'));
+        files.keys.every((key) => key.startsWith('$first/'));
     if (!hasRoot) return files;
     final stripped = <String, SkillArchiveEntry>{};
     for (final entry in files.entries) {

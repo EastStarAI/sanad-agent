@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../../../capabilities/skills/skill_install_service.dart';
 import '../../../capabilities/skills/skill_registry.dart';
+import '../../../capabilities/skills/skill_scanner.dart';
 import '../../../capabilities/skills/skill_source.dart';
 import '../../../core/constants.dart';
 import '../sanad_command.dart';
@@ -95,6 +96,11 @@ class SkillsAddCommand extends SanadCommand {
         help: 'Replace a skill that is already installed under the same name',
       )
       ..addFlag(
+        'allow-flagged',
+        negatable: false,
+        help: 'Install a skill even if security screening flagged findings',
+      )
+      ..addFlag(
         'project',
         negatable: false,
         help:
@@ -133,6 +139,7 @@ class SkillsAddCommand extends SanadCommand {
         source,
         skill: getOption('skill'),
         force: flagOf(this, 'force'),
+        allowFlagged: flagOf(this, 'allow-flagged'),
       );
       if (flagOf(this, 'json')) {
         stdoutSink.writeln(
@@ -157,6 +164,9 @@ class SkillsAddCommand extends SanadCommand {
     } on SkillSourceException catch (error) {
       stderrSink.writeln(error.message);
       return _usageExit;
+    } on SkillScanException catch (error) {
+      stderrSink.writeln(error.message);
+      return 1;
     } on SkillInstallException catch (error) {
       stderrSink.writeln(error.message);
       return 1;
@@ -222,11 +232,17 @@ class SkillsRemoveCommand extends SanadCommand {
 class SkillsUpdateCommand extends SanadCommand {
   SkillsUpdateCommand({super.customAction}) {
     addCommonOptions(argParser);
-    argParser.addFlag(
-      'project',
-      negatable: false,
-      help: 'Update skills in <workspace>/.sanad/skills',
-    );
+    argParser
+      ..addFlag(
+        'force',
+        negatable: false,
+        help: 'Overwrite locally modified skills with remote versions',
+      )
+      ..addFlag(
+        'project',
+        negatable: false,
+        help: 'Update skills in <workspace>/.sanad/skills',
+      );
   }
 
   @override
@@ -245,6 +261,7 @@ class SkillsUpdateCommand extends SanadCommand {
     try {
       final outcomes = await service.update(
         name: args.isEmpty ? null : args.first,
+        force: flagOf(this, 'force'),
       );
       if (flagOf(this, 'json')) {
         stdoutSink.writeln(
@@ -253,7 +270,10 @@ class SkillsUpdateCommand extends SanadCommand {
               for (final outcome in outcomes)
                 {
                   'skill': outcome.name,
-                  'status': outcome.changed ? 'updated' : 'unchanged',
+                  'status':
+                      outcome.status == SkillInstallStatus.skippedLocalEdits
+                      ? 'skippedLocalEdits'
+                      : (outcome.changed ? 'updated' : 'unchanged'),
                   'path': outcome.path,
                   'digest': outcome.digest,
                 },
@@ -262,9 +282,15 @@ class SkillsUpdateCommand extends SanadCommand {
         );
       } else {
         for (final outcome in outcomes) {
-          stdoutSink.writeln(
-            '${outcome.changed ? 'Updated' : 'Up to date'} ${outcome.name}',
-          );
+          if (outcome.status == SkillInstallStatus.skippedLocalEdits) {
+            stdoutSink.writeln(
+              'Skipped ${outcome.name} (local edits; re-run with --force)',
+            );
+          } else {
+            stdoutSink.writeln(
+              '${outcome.changed ? 'Updated' : 'Up to date'} ${outcome.name}',
+            );
+          }
         }
       }
       return 0;
