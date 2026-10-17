@@ -45,6 +45,7 @@ This contract applies to `agent/`.
 - `SanadProtocolBridge` dispatches/translates shared local/cloud canonical protocol. Focused handlers own workflows and receive dependencies explicitly rather than resolving hidden runtime owners.
 - Local and cloud Sanad transports remain independent adapters. Failure of one cannot stop the other or terminate the daemon event loop.
 - Hosted attachment/media admission requires `supports_attachments=true`; each relay envelope independently requires `version: "v1"`. Binary bytes travel only in bounded relay chunks and never in canonical commands/events, logs, or durable public state.
+- The hosted relay must stay bound to the live cloud socket. `io.io()` reuses one cached `Socket` per host whose `dispose()` clears every listener, so disposing the cloud socket (authorization loss, shutdown) must also forget the relay binding; otherwise the identity check in `initialize()` keeps the relay detached and relay events are dropped silently for the life of the process.
 - The cloud path is outbound; the local daemon path is an inbound loopback server on a configured dynamic port.
 - Runtime-rich turn input enters through typed interface models with explicit device, session, request, workspace, provider/model, thinking, origin, and delivery intent.
 - Workspace browsing, MCP, skills, slash commands, provider runtime, device settings, and session queries are daemon-owned services; clients render results but never become their source of truth.
