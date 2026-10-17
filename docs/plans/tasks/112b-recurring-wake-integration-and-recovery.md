@@ -1,6 +1,6 @@
 ---
 title: "Task 112b — Recurring Wake Integration, Recovery, and Time Awareness"
-status: completed
+status: delivered (draft pull request open)
 current_gate: B4
 remaining_estimate: 0%
 depends_on: "112a"
@@ -133,6 +133,37 @@ the agent today's date in the schedule's zone.
 - [x] The runtime context contains today's date and zone, contains no clock time, and is identical
       within the same day.
 - [x] `fvm dart analyze` is clean and the focused test files pass with preserved exit status.
+
+## Review gate and delivery
+
+The implementer's diff was reviewed by an independent agent before this task was closed. The reviewer
+confirmed or refuted each recorded hypothesis with evidence and repaired what it confirmed:
+
+- **S1** — the time-awareness line was asserted only through its helper with overridden inputs, so the
+  production resolution path was untested: the tests now assert the exact line shape and the absence of
+  clock time on the built context and exercise the default build path, resolving the zone through the
+  configured default.
+- **S2** — preserving `last_run_at` on a skipped occurrence was deliberate but undocumented and
+  unasserted: it is now stated in the product and schema documents, explained at the call site, and
+  covered for both a calendar and an interval schedule, including cadence anchoring across a restart.
+- **S3** — a stored last run far in the past was resolved by stepping one interval at a time: interval
+  occurrence and most-recent-due computation now use step arithmetic with a bounded correction, with
+  tests proving termination and at most one fire.
+- **S4** — refuted as a defect: one-shot startup behavior and its existing grace window are unchanged and
+  covered.
+- **S5** — refuted as a defect: the capability runtime importing the scheduling module matches the layer
+  order already used by the scheduling tool, and the module stays the single source of truth for zone
+  resolution.
+- **S6** — the duplicated one-shot branch in the grace policy was removed.
+
+Independently re-verified by the orchestrator after the review, not accepted on report alone:
+`fvm dart analyze` exit 0 and the full agent fast suite exit 0 with 2752 passed and 14 skipped before the
+main merge, and 2826 passed and 14 skipped after it.
+
+Delivery: commit on the same branch and pull request as 112a. The branch was then brought onto current
+`main` with a merge commit; the six conflicted files were conflicts of lineage only (main's content was
+byte-identical to this branch's pre-112a base), so this branch's version was authoritative. No merge or
+ready-for-review transition happens without explicit authorization.
 
 ## Definition of Done
 
