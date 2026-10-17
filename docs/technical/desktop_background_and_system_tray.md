@@ -47,7 +47,16 @@ The main application window is restored and focused whenever:
 - The user clicks "Show" in the system tray menu.
 - The user left-clicks the tray icon.
 - The user selects any conversation from the "Recent Conversations" submenu/list in the tray.
+- macOS asks the running app to reopen it (a Dock-icon click, a Finder/Spotlight open, or `open -a` on the bundle). The Runner's `applicationShouldHandleReopen` forwards that request to Dart over `com.eaststarai.sanad/windowLifecycle`, and `DesktopLifecycleManager.handleReopenRequest()` runs the Show path below, so window state keeps a single owner instead of being duplicated in Swift.
 - Implementation: `DesktopLifecycleManager.showWindow()` invokes `windowManager.show()` followed by `windowManager.focus()`.
+
+macOS keeps the app alive behind those paths because `macos/Runner/AppDelegate.swift`
+answers `false` from `applicationShouldTerminateAfterLastWindowClosed`. Flutter's
+template answers `true`, which makes AppKit terminate the process as soon as the last
+window closes and silently discards the tray icon on macOS only; Windows has no
+equivalent policy. Flutter's delegate also implements no reopen handling and AppKit
+never un-hides a window that `window_manager` ordered out, so a missing reopen
+handler leaves the app running with no way back except the tray menu.
 
 ### 3.3 Explicit Shutdown (`Quit`)
 
