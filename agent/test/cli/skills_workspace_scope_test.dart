@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
+import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:test/test.dart';
 
 import '../support/isolated_sanad_test_home.dart';
@@ -81,16 +82,29 @@ void main() {
     expect(stdoutBuffer.toString(), contains('(user)'));
   });
 
-  test('a missing workspace path is refused before anything is written', () async {
-    final code = await run([
-      ...addArgs(),
-      '--workspace',
-      p.join(temp.path, 'missing'),
-    ]);
+  test('an unknown workspace name is refused before anything is written', () async {
+    final code = await run([...addArgs(), '--workspace', 'no-such-workspace']);
 
     expect(code, 64);
-    expect(stderrBuffer.toString(), contains('Workspace path not found'));
+    expect(stderrBuffer.toString(), contains('No workspace matched'));
     expect(Directory(p.join(home.path, 'skills')).existsSync(), isFalse);
+  });
+
+  test('a registered workspace name resolves to its path', () async {
+    await LocalWorkspaceRuntimeService().createWorkspace(
+      name: 'demo-workspace',
+      path: workspace.path,
+    );
+
+    final code = await run([...addArgs(), '--workspace', 'demo-workspace']);
+
+    expect(code, 0);
+    expect(
+      File(p.join(workspace.path, '.sanad', 'skills', 'alpha', 'SKILL.md'))
+          .existsSync(),
+      isTrue,
+    );
+    expect(stdoutBuffer.toString(), contains('(workspace)'));
   });
 
   test('the removed --project flag is rejected', () async {

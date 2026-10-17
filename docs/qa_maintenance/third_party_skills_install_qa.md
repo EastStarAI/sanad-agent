@@ -94,7 +94,8 @@ sanad skills add <source> --home "$SKL_HOME"
 | Network unreachable | Exit 1 with the transport error, nothing written. |
 | Corrupt `.sanad-skills.json` | `list` still shows skills; add/update report a parse error. |
 | `--workspace <path>` install | Files land in `<path>/.sanad/skills`, Sanad Home untouched. |
-| `--workspace <missing path>` | Refused with a not-found message, nothing written. |
+| `--workspace <registered name>` install | Resolved to that workspace's root; files land in its `.sanad/skills`. |
+| `--workspace <unknown value>` | Refused with a not-found message listing known workspaces, nothing written. |
 | Interrupted install | No partial skill directory; only the temp directory is discarded. |
 
 ## Performance notes

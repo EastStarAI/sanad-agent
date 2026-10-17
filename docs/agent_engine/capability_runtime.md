@@ -148,8 +148,9 @@ product bundle lifecycle. `add` fetches a public GitHub repository as a
 directory, then discovers either a root `SKILL.md` or `skills/<name>/SKILL.md`.
 
 The installer writes `<SANAD_HOME>/skills/<name>`. Passing the shared
-`--workspace <path>` option instead targets `<path>/.sanad/skills/<name>`, which
-is one of the workspace roots the registry already scans. The archive reader
+`--workspace <path|name>` option instead targets `<workspace>/.sanad/skills/<name>`,
+which is one of the workspace roots the registry already scans. The value may be
+a directory or the name of a registered workspace. The archive reader
 rejects absolute paths, `..` segments, links, and payloads beyond its size caps
 before anything is written; installation is staged and renamed, and an existing
 skill is never replaced without `--force`. A `SKILL.md` whose declared `name`

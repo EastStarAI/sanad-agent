@@ -9,6 +9,8 @@ import '../../../capabilities/skills/skill_registry.dart';
 import '../../../capabilities/skills/skill_scanner.dart';
 import '../../../capabilities/skills/skill_source.dart';
 import '../../../core/constants.dart';
+import '../../../interfaces/runtime/local_workspace_runtime_service.dart';
+import '../../workspace/workspace_locator.dart';
 import '../sanad_command.dart';
 
 const int _usageExit = 64;
@@ -120,7 +122,7 @@ class SkillsAddCommand extends SanadCommand {
       return _usageExit;
     }
 
-    final resolved = _workspaceOverride(this);
+    final resolved = await _workspaceTarget(this);
     if (resolved.error != null) {
       stderrSink.writeln(resolved.error);
       return _usageExit;
@@ -200,7 +202,7 @@ class SkillsRemoveCommand extends SanadCommand {
       return _usageExit;
     }
 
-    final resolved = _workspaceOverride(this);
+    final resolved = await _workspaceTarget(this);
     if (resolved.error != null) {
       stderrSink.writeln(resolved.error);
       return _usageExit;
@@ -245,7 +247,7 @@ class SkillsUpdateCommand extends SanadCommand {
   @override
   Future<int> execute() async {
     final args = argResults?.rest ?? const <String>[];
-    final resolved = _workspaceOverride(this);
+    final resolved = await _workspaceTarget(this);
     if (resolved.error != null) {
       stderrSink.writeln(resolved.error);
       return _usageExit;
@@ -300,8 +302,16 @@ class SkillsUpdateCommand extends SanadCommand {
 }
 
 Future<int> listSkills(SanadCommand command, {required bool json}) async {
+  final target = await _workspaceTarget(
+    command,
+    defaultToCurrentDirectory: true,
+  );
+  if (target.error != null) {
+    command.stderrSink.writeln(target.error);
+    return _usageExit;
+  }
+  final workspace = target.path!;
   final registry = SkillRegistry(environment: _environmentFor(command));
-  final workspace = workspacePath(command);
   final report = await registry.list(workspacePath: workspace);
   final installed = <String, InstalledSkillRecord>{};
   for (final root in _provenanceRoots(workspace)) {
@@ -385,25 +395,59 @@ SkillInstallService _serviceFor(
 
 /// Resolves the shared `--workspace` option for a skills subcommand.
 ///
-/// These commands run standalone and never open the daemon, so they accept an
-/// existing directory path rather than a registered workspace ID. Omitting the
-/// option means the Sanad Home scope.
-({String? path, String? error}) _workspaceOverride(SanadCommand command) {
+/// An existing directory wins. Otherwise the value is resolved as a registered
+/// workspace ID or name through the same locator the other CLI commands use, so
+/// `--workspace sanad-agent` and `--workspace /path/to/sanad-agent` are
+/// equivalent. These commands run standalone and never open the daemon.
+Future<({String? path, String? error})> _workspaceTarget(
+  SanadCommand command, {
+  bool defaultToCurrentDirectory = false,
+}) async {
   final configured = command.getOption('workspace')?.trim();
   if (configured == null || configured.isEmpty) {
-    return (path: null, error: null);
-  }
-  final directory = Directory(configured);
-  if (!directory.existsSync()) {
     return (
-      path: null,
-      error:
-          'Workspace path not found: $configured\n'
-          'Pass an existing directory to --workspace, or omit it to use the '
-          'Sanad Home.',
+      path: defaultToCurrentDirectory ? Directory.current.path : null,
+      error: null,
     );
   }
-  return (path: directory.absolute.path, error: null);
+
+  final direct = Directory(configured);
+  if (direct.existsSync()) return (path: direct.absolute.path, error: null);
+
+  final match = await const WorkspaceLocator().resolveActiveWorkspace(
+    explicitIdOrPath: configured,
+  );
+  final resolved = match?['path']?.toString();
+  if (resolved != null && resolved.isNotEmpty) {
+    return (path: Directory(resolved).absolute.path, error: null);
+  }
+
+  final known = await _registeredWorkspaceNames();
+  return (
+    path: null,
+    error:
+        'No workspace matched "$configured".\n'
+        'Pass an existing directory or a registered workspace name'
+        '${known.isEmpty ? '' : ' ($known)'} to --workspace, or omit it to use '
+        'the Sanad Home.',
+  );
+}
+
+/// Names of registered workspaces, used only to make a failure actionable.
+Future<String> _registeredWorkspaceNames() async {
+  try {
+    final workspaces = await LocalWorkspaceRuntimeService().listWorkspaces();
+    final names =
+        workspaces
+            .map((workspace) => workspace['name']?.toString())
+            .whereType<String>()
+            .where((name) => name.isNotEmpty)
+            .toList()
+          ..sort();
+    return names.take(8).join(', ');
+  } catch (_) {
+    return '';
+  }
 }
 
 List<Directory> _provenanceRoots(String workspace) => [
@@ -421,12 +465,6 @@ Map<String, String> _environmentFor(SanadCommand command) {
   final environment = Map<String, String>.from(Platform.environment);
   environment['SANAD_HOME'] = getSanadHome();
   return environment;
-}
-
-String workspacePath(SanadCommand command) {
-  final configured = command.getOption('workspace');
-  if (configured != null && configured.isNotEmpty) return configured;
-  return Directory.current.path;
 }
 
 bool flagOf(SanadCommand command, String name) {
