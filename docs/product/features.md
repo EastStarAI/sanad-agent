@@ -139,10 +139,23 @@ session snapshot.
 
 ## Scheduling
 
-The agent can persist a task for a specific future time and execute it even
-when the client window is closed, as long as the agent service remains
-running. Recurring cron-style schedules are not part of the stable scheduling
-surface yet.
+The agent can persist one-shot and recurring tasks for future execution and run
+them even when the client window is closed, as long as the daemon remains
+running. Scheduling is managed through the action-oriented `schedule_task` tool
+(`create`, `list`, `cancel`, `update`).
+
+Recurring schedules use a bounded vocabulary:
+- `once`: absolute ISO-8601 timestamp (`at`) or relative delay (`in <n> <minutes|hours|days>`).
+- `interval`: elapsed-time intervals (`every <n> <minutes|hours|days>`).
+- `daily`: wall-clock time `HH:MM`.
+- `weekly`: one or more weekdays (`mon..sun`) plus wall-clock time `HH:MM`.
+- `monthly`: day of month (`1..31`) plus wall-clock time `HH:MM` (skipping months that lack the day).
+
+Schedules carry an explicit timezone: `local` (host operating system rules) or a
+fixed UTC offset (`Z`, `+HH:MM`, `-HH:MM`). The agent-level default comes from
+`SCHEDULE_TIMEZONE` (default `local`) and is persisted with each schedule at
+creation. Mutation (`cancel`, `update`) is owner-scoped to the originating
+conversation, while `list` provides device-wide visibility.
 
 ## Experimental voice
 

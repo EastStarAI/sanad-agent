@@ -3,39 +3,42 @@
 // Do not manually edit this file.
 
 // ignore_for_file: no_leading_underscores_for_library_prefixes
-import 'dart:async' as _i18;
+import 'dart:async' as _i19;
 
 import 'package:mockito/mockito.dart' as _i1;
-import 'package:mockito/src/dummies.dart' as _i17;
-import 'package:sanad_agent/capabilities/models/tool_schema.dart' as _i26;
+import 'package:mockito/src/dummies.dart' as _i18;
+import 'package:sanad_agent/capabilities/models/tool_schema.dart' as _i28;
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart' as _i4;
 import 'package:sanad_agent/core/models/message.dart' as _i9;
-import 'package:sanad_agent/core/models/tool_call.dart' as _i25;
-import 'package:sanad_agent/core/models/user_attachment.dart' as _i24;
+import 'package:sanad_agent/core/models/tool_call.dart' as _i26;
+import 'package:sanad_agent/core/models/user_attachment.dart' as _i25;
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart' as _i3;
 import 'package:sanad_agent/engine/agent_context_assembler.dart' as _i8;
 import 'package:sanad_agent/engine/agent_runner.dart' as _i10;
-import 'package:sanad_agent/engine/context/context.dart' as _i21;
+import 'package:sanad_agent/engine/context/context.dart' as _i22;
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart'
     as _i11;
-import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart' as _i31;
-import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart' as _i20;
-import 'package:sanad_agent/engine/runtime/steer_coordinator.dart' as _i23;
+import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart' as _i33;
+import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart' as _i21;
+import 'package:sanad_agent/engine/runtime/steer_coordinator.dart' as _i24;
+import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart'
+    as _i27;
 import 'package:sanad_agent/evolution/compaction/model_context_projection.dart'
-    as _i28;
-import 'package:sanad_agent/evolution/db/agent_state_database.dart' as _i27;
+    as _i30;
+import 'package:sanad_agent/evolution/db/agent_state_database.dart' as _i29;
 import 'package:sanad_agent/evolution/db/session_db.dart' as _i12;
 import 'package:sanad_agent/evolution/memory/file_memory_store.dart' as _i7;
-import 'package:sanad_agent/evolution/models/pending_steer_record.dart' as _i22;
-import 'package:sanad_agent/evolution/models/session_history_page.dart' as _i15;
+import 'package:sanad_agent/evolution/models/pending_steer_record.dart' as _i23;
+import 'package:sanad_agent/evolution/models/session_history_page.dart' as _i16;
 import 'package:sanad_agent/evolution/models/session_query.dart' as _i14;
+import 'package:sanad_agent/evolution/models/session_search.dart' as _i15;
 import 'package:sanad_agent/evolution/models/session_state.dart' as _i13;
-import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart' as _i29;
+import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart' as _i31;
 import 'package:sanad_agent/evolution/session_manager.dart' as _i5;
-import 'package:sanad_agent/evolution/title_service.dart' as _i30;
+import 'package:sanad_agent/evolution/title_service.dart' as _i32;
 import 'package:sanad_agent/interfaces/models/delivery/models.dart' as _i2;
-import 'package:sanad_agent/interfaces/models/gateway_event.dart' as _i19;
-import 'package:sanad_agent/interfaces/platforms/base_platform.dart' as _i16;
+import 'package:sanad_agent/interfaces/models/gateway_event.dart' as _i20;
+import 'package:sanad_agent/interfaces/platforms/base_platform.dart' as _i17;
 import 'package:sanad_agent/plugins/plugin_manager.dart' as _i6;
 
 // ignore_for_file: type=lint
@@ -124,22 +127,34 @@ class _FakeSessionQueryResult_12 extends _i1.SmartFake
     : super(parent, parentInvocation);
 }
 
-class _FakeSessionForkCommit_13 extends _i1.SmartFake
-    implements _i12.SessionForkCommit {
-  _FakeSessionForkCommit_13(Object parent, Invocation parentInvocation)
+class _FakeSessionSearchResult_13 extends _i1.SmartFake
+    implements _i15.SessionSearchResult {
+  _FakeSessionSearchResult_13(Object parent, Invocation parentInvocation)
     : super(parent, parentInvocation);
 }
 
-class _FakeSessionHistoryPage_14 extends _i1.SmartFake
-    implements _i15.SessionHistoryPage {
-  _FakeSessionHistoryPage_14(Object parent, Invocation parentInvocation)
+class _FakeRootUserMessageCommit_14 extends _i1.SmartFake
+    implements _i12.RootUserMessageCommit {
+  _FakeRootUserMessageCommit_14(Object parent, Invocation parentInvocation)
+    : super(parent, parentInvocation);
+}
+
+class _FakeSessionForkCommit_15 extends _i1.SmartFake
+    implements _i12.SessionForkCommit {
+  _FakeSessionForkCommit_15(Object parent, Invocation parentInvocation)
+    : super(parent, parentInvocation);
+}
+
+class _FakeSessionHistoryPage_16 extends _i1.SmartFake
+    implements _i16.SessionHistoryPage {
+  _FakeSessionHistoryPage_16(Object parent, Invocation parentInvocation)
     : super(parent, parentInvocation);
 }
 
 /// A class which mocks [BasePlatform].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockBasePlatform extends _i1.Mock implements _i16.BasePlatform {
+class MockBasePlatform extends _i1.Mock implements _i17.BasePlatform {
   MockBasePlatform() {
     _i1.throwOnMissingStub(this);
   }
@@ -148,7 +163,7 @@ class MockBasePlatform extends _i1.Mock implements _i16.BasePlatform {
   String get platformId =>
       (super.noSuchMethod(
             Invocation.getter(#platformId),
-            returnValue: _i17.dummyValue<String>(
+            returnValue: _i18.dummyValue<String>(
               this,
               Invocation.getter(#platformId),
             ),
@@ -183,39 +198,39 @@ class MockBasePlatform extends _i1.Mock implements _i16.BasePlatform {
           as bool);
 
   @override
-  _i18.Stream<_i19.GatewayEvent> get eventStream =>
+  _i19.Stream<_i20.GatewayEvent> get eventStream =>
       (super.noSuchMethod(
             Invocation.getter(#eventStream),
-            returnValue: _i18.Stream<_i19.GatewayEvent>.empty(),
+            returnValue: _i19.Stream<_i20.GatewayEvent>.empty(),
           )
-          as _i18.Stream<_i19.GatewayEvent>);
+          as _i19.Stream<_i20.GatewayEvent>);
 
   @override
-  _i18.Future<void> sendResponse(_i19.GatewayResponse? response) =>
+  _i19.Future<void> sendResponse(_i20.GatewayResponse? response) =>
       (super.noSuchMethod(
             Invocation.method(#sendResponse, [response]),
-            returnValue: _i18.Future<void>.value(),
-            returnValueForMissingStub: _i18.Future<void>.value(),
+            returnValue: _i19.Future<void>.value(),
+            returnValueForMissingStub: _i19.Future<void>.value(),
           )
-          as _i18.Future<void>);
+          as _i19.Future<void>);
 
   @override
-  _i18.Future<void> initialize() =>
+  _i19.Future<void> initialize() =>
       (super.noSuchMethod(
             Invocation.method(#initialize, []),
-            returnValue: _i18.Future<void>.value(),
-            returnValueForMissingStub: _i18.Future<void>.value(),
+            returnValue: _i19.Future<void>.value(),
+            returnValueForMissingStub: _i19.Future<void>.value(),
           )
-          as _i18.Future<void>);
+          as _i19.Future<void>);
 
   @override
-  _i18.Future<void> dispose() =>
+  _i19.Future<void> dispose() =>
       (super.noSuchMethod(
             Invocation.method(#dispose, []),
-            returnValue: _i18.Future<void>.value(),
-            returnValueForMissingStub: _i18.Future<void>.value(),
+            returnValue: _i19.Future<void>.value(),
+            returnValueForMissingStub: _i19.Future<void>.value(),
           )
-          as _i18.Future<void>);
+          as _i19.Future<void>);
 }
 
 /// A class which mocks [AgentRunner].
@@ -282,7 +297,7 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
   String get sessionId =>
       (super.noSuchMethod(
             Invocation.getter(#sessionId),
-            returnValue: _i17.dummyValue<String>(
+            returnValue: _i18.dummyValue<String>(
               this,
               Invocation.getter(#sessionId),
             ),
@@ -424,14 +439,14 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
   );
 
   @override
-  void attachCancellationScope(_i20.RunCancellationScope? scope) =>
+  void attachCancellationScope(_i21.RunCancellationScope? scope) =>
       super.noSuchMethod(
         Invocation.method(#attachCancellationScope, [scope]),
         returnValueForMissingStub: null,
       );
 
   @override
-  void detachCancellationScope(_i20.RunCancellationScope? scope) =>
+  void detachCancellationScope(_i21.RunCancellationScope? scope) =>
       super.noSuchMethod(
         Invocation.method(#detachCancellationScope, [scope]),
         returnValueForMissingStub: null,
@@ -439,7 +454,7 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
 
   @override
   void debugSetConfirmedInputUsageBaseline(
-    _i21.ConfirmedInputUsageBaseline? baseline,
+    _i22.ConfirmedInputUsageBaseline? baseline,
   ) => super.noSuchMethod(
     Invocation.method(#debugSetConfirmedInputUsageBaseline, [baseline]),
     returnValueForMissingStub: null,
@@ -461,7 +476,7 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
 
   @override
   void configureRootMessageCommitted(
-    _i18.FutureOr<void> Function(_i9.Message)? onCommitted,
+    _i19.FutureOr<void> Function(_i9.Message)? onCommitted,
   ) => super.noSuchMethod(
     Invocation.method(#configureRootMessageCommitted, [onCommitted]),
     returnValueForMissingStub: null,
@@ -471,10 +486,10 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
   void configurePendingSteerLifecycle({
     required String? runId,
     required int? generation,
-    void Function(_i22.PendingSteerRecord)? onChanged,
+    void Function(_i23.PendingSteerRecord)? onChanged,
     _i10.PendingSteerDeliveryCommit Function(
       List<_i9.Message>,
-      List<_i23.PendingSteerPlacement>,
+      List<_i24.PendingSteerPlacement>,
     )?
     onCommitDelivery,
   }) => super.noSuchMethod(
@@ -494,30 +509,30 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
   );
 
   @override
-  _i18.Future<int?> getContextTokens() =>
+  _i19.Future<int?> getContextTokens() =>
       (super.noSuchMethod(
             Invocation.method(#getContextTokens, []),
-            returnValue: _i18.Future<int?>.value(),
+            returnValue: _i19.Future<int?>.value(),
           )
-          as _i18.Future<int?>);
+          as _i19.Future<int?>);
 
   @override
-  _i18.Future<Map<String, dynamic>?> getContextUsageSnapshot() =>
+  _i19.Future<Map<String, dynamic>?> getContextUsageSnapshot() =>
       (super.noSuchMethod(
             Invocation.method(#getContextUsageSnapshot, []),
-            returnValue: _i18.Future<Map<String, dynamic>?>.value(),
+            returnValue: _i19.Future<Map<String, dynamic>?>.value(),
           )
-          as _i18.Future<Map<String, dynamic>?>);
+          as _i19.Future<Map<String, dynamic>?>);
 
   @override
-  void configureUserAttachments(List<_i24.UserAttachment>? attachments) =>
+  void configureUserAttachments(List<_i25.UserAttachment>? attachments) =>
       super.noSuchMethod(
         Invocation.method(#configureUserAttachments, [attachments]),
         returnValueForMissingStub: null,
       );
 
   @override
-  _i18.Future<_i9.Message> commitUserMessage(
+  _i19.Future<_i9.Message> commitUserMessage(
     String? userContent, {
     String? requestId,
     DateTime? receivedAt,
@@ -528,7 +543,7 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
               [userContent],
               {#requestId: requestId, #receivedAt: receivedAt},
             ),
-            returnValue: _i18.Future<_i9.Message>.value(
+            returnValue: _i19.Future<_i9.Message>.value(
               _FakeMessage_7(
                 this,
                 Invocation.method(
@@ -539,21 +554,13 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
               ),
             ),
           )
-          as _i18.Future<_i9.Message>);
+          as _i19.Future<_i9.Message>);
 
   @override
-  _i18.Future<void> executeToolCalls(
-    List<_i25.ToolCall>? toolCalls, {
+  _i19.Future<void> executeToolCalls(
+    List<_i26.ToolCall>? toolCalls, {
     required bool? parallel,
-    _i18.Future<void> Function({
-      required bool isError,
-      required bool isStart,
-      required String toolName,
-      String? input,
-      String? output,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    _i27.ToolEventCallback? onToolEvent,
   }) =>
       (super.noSuchMethod(
             Invocation.method(
@@ -561,10 +568,10 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
               [toolCalls],
               {#parallel: parallel, #onToolEvent: onToolEvent},
             ),
-            returnValue: _i18.Future<void>.value(),
-            returnValueForMissingStub: _i18.Future<void>.value(),
+            returnValue: _i19.Future<void>.value(),
+            returnValueForMissingStub: _i19.Future<void>.value(),
           )
-          as _i18.Future<void>);
+          as _i19.Future<void>);
 
   @override
   void addSystemMessage(String? content) => super.noSuchMethod(
@@ -573,7 +580,7 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
   );
 
   @override
-  _i18.Future<_i9.Message> sendMessage(
+  _i19.Future<_i9.Message> sendMessage(
     String? userContent, {
     String? requestId,
     String? runtimeSystemPrompt,
@@ -595,7 +602,7 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
                 #receivedAt: receivedAt,
               },
             ),
-            returnValue: _i18.Future<_i9.Message>.value(
+            returnValue: _i19.Future<_i9.Message>.value(
               _FakeMessage_7(
                 this,
                 Invocation.method(
@@ -613,10 +620,10 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
               ),
             ),
           )
-          as _i18.Future<_i9.Message>);
+          as _i19.Future<_i9.Message>);
 
   @override
-  bool shouldParallelizeToolBatch(List<_i25.ToolCall>? toolCalls) =>
+  bool shouldParallelizeToolBatch(List<_i26.ToolCall>? toolCalls) =>
       (super.noSuchMethod(
             Invocation.method(#shouldParallelizeToolBatch, [toolCalls]),
             returnValue: false,
@@ -672,7 +679,7 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
       );
 
   @override
-  _i18.Stream<String> streamMessage(
+  _i19.Stream<String> streamMessage(
     String? userContent, {
     String? requestId,
     String? runtimeSystemPrompt,
@@ -680,18 +687,10 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
     String? model,
     String? thinkingMode,
     DateTime? receivedAt,
-    _i18.Future<void> Function({
-      required bool isError,
-      required bool isStart,
-      required String toolName,
-      String? input,
-      String? output,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    _i27.ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
-    _i18.FutureOr<void> Function(String)? onThoughtDelta,
-    _i18.FutureOr<void> Function(String)? onReasoningDelta,
+    _i19.FutureOr<void> Function(String)? onThoughtDelta,
+    _i19.FutureOr<void> Function(String)? onReasoningDelta,
   }) =>
       (super.noSuchMethod(
             Invocation.method(
@@ -710,29 +709,21 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
                 #onReasoningDelta: onReasoningDelta,
               },
             ),
-            returnValue: _i18.Stream<String>.empty(),
+            returnValue: _i19.Stream<String>.empty(),
           )
-          as _i18.Stream<String>);
+          as _i19.Stream<String>);
 
   @override
-  _i18.Stream<String> resumeStream({
+  _i19.Stream<String> resumeStream({
     String? requestId,
     String? runtimeSystemPrompt,
     String? providerId,
     String? model,
     String? thinkingMode,
-    _i18.Future<void> Function({
-      required bool isError,
-      required bool isStart,
-      required String toolName,
-      String? input,
-      String? output,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    _i27.ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
-    _i18.FutureOr<void> Function(String)? onThoughtDelta,
-    _i18.FutureOr<void> Function(String)? onReasoningDelta,
+    _i19.FutureOr<void> Function(String)? onThoughtDelta,
+    _i19.FutureOr<void> Function(String)? onReasoningDelta,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#resumeStream, [], {
@@ -746,9 +737,9 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
               #onThoughtDelta: onThoughtDelta,
               #onReasoningDelta: onReasoningDelta,
             }),
-            returnValue: _i18.Stream<String>.empty(),
+            returnValue: _i19.Stream<String>.empty(),
           )
-          as _i18.Stream<String>);
+          as _i19.Stream<String>);
 
   @override
   void attachMetadataToLastAssistantMessage(Map<String, dynamic>? metadata) =>
@@ -758,24 +749,16 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
       );
 
   @override
-  _i18.Stream<String> resumeAfterToolCall({
+  _i19.Stream<String> resumeAfterToolCall({
     required String? toolCallId,
     required String? toolName,
     required Map<String, dynamic>? arguments,
     String? runtimeSystemPrompt,
     String? forcedOutput,
     bool? forcedIsError = false,
-    _i18.Future<void> Function({
-      required bool isError,
-      required bool isStart,
-      required String toolName,
-      String? input,
-      String? output,
-      String? toolRunId,
-    })?
-    onToolEvent,
-    _i18.FutureOr<void> Function(String)? onThoughtDelta,
-    _i18.FutureOr<void> Function(String)? onReasoningDelta,
+    _i27.ToolEventCallback? onToolEvent,
+    _i19.FutureOr<void> Function(String)? onThoughtDelta,
+    _i19.FutureOr<void> Function(String)? onReasoningDelta,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#resumeAfterToolCall, [], {
@@ -789,31 +772,31 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
               #onThoughtDelta: onThoughtDelta,
               #onReasoningDelta: onReasoningDelta,
             }),
-            returnValue: _i18.Stream<String>.empty(),
+            returnValue: _i19.Stream<String>.empty(),
           )
-          as _i18.Stream<String>);
+          as _i19.Stream<String>);
 
   @override
-  _i18.Future<List<_i9.Message>> debugPrepareProviderHistory({
+  _i19.Future<List<_i9.Message>> debugPrepareProviderHistory({
     String? runtimeSystemPrompt,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#debugPrepareProviderHistory, [], {
               #runtimeSystemPrompt: runtimeSystemPrompt,
             }),
-            returnValue: _i18.Future<List<_i9.Message>>.value(<_i9.Message>[]),
+            returnValue: _i19.Future<List<_i9.Message>>.value(<_i9.Message>[]),
           )
-          as _i18.Future<List<_i9.Message>>);
+          as _i19.Future<List<_i9.Message>>);
 
   @override
-  _i18.Future<_i10.CompactionProviderSeed> prepareCompactionProviderSeed({
+  _i19.Future<_i10.CompactionProviderSeed> prepareCompactionProviderSeed({
     String? runtimeSystemPrompt,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#prepareCompactionProviderSeed, [], {
               #runtimeSystemPrompt: runtimeSystemPrompt,
             }),
-            returnValue: _i18.Future<_i10.CompactionProviderSeed>.value(
+            returnValue: _i19.Future<_i10.CompactionProviderSeed>.value(
               _FakeCompactionProviderSeed_8(
                 this,
                 Invocation.method(#prepareCompactionProviderSeed, [], {
@@ -822,7 +805,7 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
               ),
             ),
           )
-          as _i18.Future<_i10.CompactionProviderSeed>);
+          as _i19.Future<_i10.CompactionProviderSeed>);
 
   @override
   void debugSaveCheckpointForTesting({
@@ -854,14 +837,14 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
   );
 
   @override
-  _i18.Future<bool> debugTryOverflowCompactionRecovery({
+  _i19.Future<bool> debugTryOverflowCompactionRecovery({
     required Object? error,
     required String? providerInstanceId,
     required String? modelId,
     bool? streamStarted = false,
     int? attempt = 0,
     List<_i9.Message>? failedProviderProjection,
-    List<_i26.ToolSchema>? failedProviderTools,
+    List<_i28.ToolSchema>? failedProviderTools,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#debugTryOverflowCompactionRecovery, [], {
@@ -873,9 +856,9 @@ class MockAgentRunner extends _i1.Mock implements _i10.AgentRunner {
               #failedProviderProjection: failedProviderProjection,
               #failedProviderTools: failedProviderTools,
             }),
-            returnValue: _i18.Future<bool>.value(false),
+            returnValue: _i19.Future<bool>.value(false),
           )
-          as _i18.Future<bool>);
+          as _i19.Future<bool>);
 }
 
 /// A class which mocks [SessionManager].
@@ -893,6 +876,22 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
             returnValue: _FakeSessionDB_10(this, Invocation.getter(#db)),
           )
           as _i12.SessionDB);
+
+  @override
+  int get historySnapshotCount =>
+      (super.noSuchMethod(
+            Invocation.getter(#historySnapshotCount),
+            returnValue: 0,
+          )
+          as int);
+
+  @override
+  bool hasHistorySnapshot(String? sessionId) =>
+      (super.noSuchMethod(
+            Invocation.method(#hasHistorySnapshot, [sessionId]),
+            returnValue: false,
+          )
+          as bool);
 
   @override
   void saveInFlightSnapshot(
@@ -938,13 +937,13 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
           as _i13.SessionState);
 
   @override
-  _i13.SessionState? getSession(String? sessionId) =>
-      (super.noSuchMethod(Invocation.method(#getSession, [sessionId]))
+  _i13.SessionState? getSessionRecord(String? sessionId) =>
+      (super.noSuchMethod(Invocation.method(#getSessionRecord, [sessionId]))
           as _i13.SessionState?);
 
   @override
-  _i13.SessionState? getSessionRecord(String? sessionId) =>
-      (super.noSuchMethod(Invocation.method(#getSessionRecord, [sessionId]))
+  _i13.SessionState? getSession(String? sessionId) =>
+      (super.noSuchMethod(Invocation.method(#getSession, [sessionId]))
           as _i13.SessionState?);
 
   @override
@@ -965,6 +964,17 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
             ),
           )
           as _i14.SessionQueryResult);
+
+  @override
+  _i15.SessionSearchResult searchSessions(_i15.SessionSearchRequest? request) =>
+      (super.noSuchMethod(
+            Invocation.method(#searchSessions, [request]),
+            returnValue: _FakeSessionSearchResult_13(
+              this,
+              Invocation.method(#searchSessions, [request]),
+            ),
+          )
+          as _i15.SessionSearchResult);
 
   @override
   void updateSessionTitle(String? sessionId, String? title) =>
@@ -1026,7 +1036,7 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
     String? providerId,
     String? model,
     String? thinkingMode,
-    bool clearThinkingMode = false,
+    bool? clearThinkingMode = false,
   }) => super.noSuchMethod(
     Invocation.method(
       #updateSessionModeling,
@@ -1049,10 +1059,24 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
       );
 
   @override
+  _i12.RootUserMessageCommit appendRootUserMessage(
+    String? sessionId,
+    _i9.Message? message,
+  ) =>
+      (super.noSuchMethod(
+            Invocation.method(#appendRootUserMessage, [sessionId, message]),
+            returnValue: _FakeRootUserMessageCommit_14(
+              this,
+              Invocation.method(#appendRootUserMessage, [sessionId, message]),
+            ),
+          )
+          as _i12.RootUserMessageCommit);
+
+  @override
   List<_i9.Message> saveSessionHistoryInTransaction(
     String? sessionId,
     List<_i9.Message>? messages,
-    _i27.AgentStateTransaction? transaction,
+    _i29.AgentStateTransaction? transaction,
   ) =>
       (super.noSuchMethod(
             Invocation.method(#saveSessionHistoryInTransaction, [
@@ -1099,7 +1123,7 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
               #targetMessageId: targetMessageId,
               #targetTurnId: targetTurnId,
             }),
-            returnValue: _FakeSessionForkCommit_13(
+            returnValue: _FakeSessionForkCommit_15(
               this,
               Invocation.method(#commitFork, [], {
                 #sourceSessionId: sourceSessionId,
@@ -1139,15 +1163,15 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
           as List<_i9.Message>);
 
   @override
-  List<_i28.PersistedMessage> getPersistedMessages(String? sessionId) =>
+  List<_i30.PersistedMessage> getPersistedMessages(String? sessionId) =>
       (super.noSuchMethod(
             Invocation.method(#getPersistedMessages, [sessionId]),
-            returnValue: <_i28.PersistedMessage>[],
+            returnValue: <_i30.PersistedMessage>[],
           )
-          as List<_i28.PersistedMessage>);
+          as List<_i30.PersistedMessage>);
 
   @override
-  _i15.SessionHistoryPage getPersistedMessagePage(
+  _i16.SessionHistoryPage getPersistedMessagePage(
     String? sessionId, {
     int? limit = 100,
     String? cursor,
@@ -1159,7 +1183,7 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
               [sessionId],
               {#limit: limit, #cursor: cursor, #anchorRowId: anchorRowId},
             ),
-            returnValue: _FakeSessionHistoryPage_14(
+            returnValue: _FakeSessionHistoryPage_16(
               this,
               Invocation.method(
                 #getPersistedMessagePage,
@@ -1168,7 +1192,7 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
               ),
             ),
           )
-          as _i15.SessionHistoryPage);
+          as _i16.SessionHistoryPage);
 
   @override
   void saveSessionMetadata(String? sessionId, Map<String, dynamic>? metadata) =>
@@ -1183,28 +1207,28 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
           as Map<String, dynamic>?);
 
   @override
-  void saveSuspendedCheckpoint(_i29.SuspendedCheckpoint? checkpoint) =>
+  void saveSuspendedCheckpoint(_i31.SuspendedCheckpoint? checkpoint) =>
       super.noSuchMethod(
         Invocation.method(#saveSuspendedCheckpoint, [checkpoint]),
         returnValueForMissingStub: null,
       );
 
   @override
-  _i29.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
+  _i31.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
     String? requestId,
   ) =>
       (super.noSuchMethod(
             Invocation.method(#getSuspendedCheckpointByRequestId, [requestId]),
           )
-          as _i29.SuspendedCheckpoint?);
+          as _i31.SuspendedCheckpoint?);
 
   @override
-  List<_i29.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
+  List<_i31.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
       (super.noSuchMethod(
             Invocation.method(#listSuspendedCheckpoints, [], {#status: status}),
-            returnValue: <_i29.SuspendedCheckpoint>[],
+            returnValue: <_i31.SuspendedCheckpoint>[],
           )
-          as List<_i29.SuspendedCheckpoint>);
+          as List<_i31.SuspendedCheckpoint>);
 
   @override
   void updateSuspendedCheckpointStatus({
@@ -1361,6 +1385,22 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
           as _i14.SessionQueryResult);
 
   @override
+  _i15.SessionSearchResult searchSessions(_i15.SessionSearchRequest? request) =>
+      (super.noSuchMethod(
+            Invocation.method(#searchSessions, [request]),
+            returnValue: _FakeSessionSearchResult_13(
+              this,
+              Invocation.method(#searchSessions, [request]),
+            ),
+          )
+          as _i15.SessionSearchResult);
+
+  @override
+  _i13.SessionState? getSessionRecord(String? sessionId) =>
+      (super.noSuchMethod(Invocation.method(#getSessionRecord, [sessionId]))
+          as _i13.SessionState?);
+
+  @override
   _i13.SessionState? getSession(String? sessionId) =>
       (super.noSuchMethod(Invocation.method(#getSession, [sessionId]))
           as _i13.SessionState?);
@@ -1439,6 +1479,20 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
           as Map<String, dynamic>?);
 
   @override
+  _i12.RootUserMessageCommit appendRootUserMessage(
+    String? sessionId,
+    _i9.Message? message,
+  ) =>
+      (super.noSuchMethod(
+            Invocation.method(#appendRootUserMessage, [sessionId, message]),
+            returnValue: _FakeRootUserMessageCommit_14(
+              this,
+              Invocation.method(#appendRootUserMessage, [sessionId, message]),
+            ),
+          )
+          as _i12.RootUserMessageCommit);
+
+  @override
   void replaceMessages(String? sessionId, List<_i9.Message>? messages) =>
       super.noSuchMethod(
         Invocation.method(#replaceMessages, [sessionId, messages]),
@@ -1449,7 +1503,7 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
   List<_i9.Message> replaceMessagesInTransaction(
     String? sessionId,
     List<_i9.Message>? messages,
-    _i27.AgentStateTransaction? transaction,
+    _i29.AgentStateTransaction? transaction,
   ) =>
       (super.noSuchMethod(
             Invocation.method(#replaceMessagesInTransaction, [
@@ -1498,7 +1552,7 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
           as List<_i9.Message>);
 
   @override
-  List<_i28.PersistedMessage> getPersistedMessages(
+  List<_i30.PersistedMessage> getPersistedMessages(
     String? sessionId, {
     bool? includeSuperseded = false,
   }) =>
@@ -1508,12 +1562,12 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
               [sessionId],
               {#includeSuperseded: includeSuperseded},
             ),
-            returnValue: <_i28.PersistedMessage>[],
+            returnValue: <_i30.PersistedMessage>[],
           )
-          as List<_i28.PersistedMessage>);
+          as List<_i30.PersistedMessage>);
 
   @override
-  _i15.SessionHistoryPage getPersistedMessagePage(
+  _i16.SessionHistoryPage getPersistedMessagePage(
     String? sessionId, {
     int? limit = 100,
     String? cursor,
@@ -1531,7 +1585,7 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
                 #maxPersistedBytes: maxPersistedBytes,
               },
             ),
-            returnValue: _FakeSessionHistoryPage_14(
+            returnValue: _FakeSessionHistoryPage_16(
               this,
               Invocation.method(
                 #getPersistedMessagePage,
@@ -1545,18 +1599,63 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
               ),
             ),
           )
-          as _i15.SessionHistoryPage);
+          as _i16.SessionHistoryPage);
+
+  @override
+  _i12.OriginatingToolCallContext? findOriginatingToolCall(
+    String? sessionId, {
+    required String? toolCallId,
+    String? turnId,
+  }) =>
+      (super.noSuchMethod(
+            Invocation.method(
+              #findOriginatingToolCall,
+              [sessionId],
+              {#toolCallId: toolCallId, #turnId: turnId},
+            ),
+          )
+          as _i12.OriginatingToolCallContext?);
 
   @override
   void saveScheduledTask(
     String? id,
     String? task,
-    DateTime? runAt,
-    String? sessionId,
-  ) => super.noSuchMethod(
-    Invocation.method(#saveScheduledTask, [id, task, runAt, sessionId]),
+    DateTime? nextRunAt,
+    String? sessionId, {
+    String? kind = 'once',
+    int? intervalMinutes,
+    String? atTime,
+    String? weekdays,
+    int? monthDay,
+    String? zone = 'local',
+    DateTime? updatedAt,
+    DateTime? lastRunAt,
+    String? lastStatus,
+    bool? enabled = true,
+  }) => super.noSuchMethod(
+    Invocation.method(
+      #saveScheduledTask,
+      [id, task, nextRunAt, sessionId],
+      {
+        #kind: kind,
+        #intervalMinutes: intervalMinutes,
+        #atTime: atTime,
+        #weekdays: weekdays,
+        #monthDay: monthDay,
+        #zone: zone,
+        #updatedAt: updatedAt,
+        #lastRunAt: lastRunAt,
+        #lastStatus: lastStatus,
+        #enabled: enabled,
+      },
+    ),
     returnValueForMissingStub: null,
   );
+
+  @override
+  Map<String, dynamic>? getScheduledTask(String? id) =>
+      (super.noSuchMethod(Invocation.method(#getScheduledTask, [id]))
+          as Map<String, dynamic>?);
 
   @override
   List<Map<String, dynamic>> getAllScheduledTasks() =>
@@ -1573,28 +1672,28 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
   );
 
   @override
-  void saveSuspendedCheckpoint(_i29.SuspendedCheckpoint? checkpoint) =>
+  void saveSuspendedCheckpoint(_i31.SuspendedCheckpoint? checkpoint) =>
       super.noSuchMethod(
         Invocation.method(#saveSuspendedCheckpoint, [checkpoint]),
         returnValueForMissingStub: null,
       );
 
   @override
-  _i29.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
+  _i31.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
     String? requestId,
   ) =>
       (super.noSuchMethod(
             Invocation.method(#getSuspendedCheckpointByRequestId, [requestId]),
           )
-          as _i29.SuspendedCheckpoint?);
+          as _i31.SuspendedCheckpoint?);
 
   @override
-  List<_i29.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
+  List<_i31.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
       (super.noSuchMethod(
             Invocation.method(#listSuspendedCheckpoints, [], {#status: status}),
-            returnValue: <_i29.SuspendedCheckpoint>[],
+            returnValue: <_i31.SuspendedCheckpoint>[],
           )
-          as List<_i29.SuspendedCheckpoint>);
+          as List<_i31.SuspendedCheckpoint>);
 
   @override
   void updateSuspendedCheckpointStatus({
@@ -1650,7 +1749,7 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
               #targetMessageId: targetMessageId,
               #targetTurnId: targetTurnId,
             }),
-            returnValue: _FakeSessionForkCommit_13(
+            returnValue: _FakeSessionForkCommit_15(
               this,
               Invocation.method(#commitFork, [], {
                 #sourceSessionId: sourceSessionId,
@@ -1666,18 +1765,18 @@ class MockSessionDB extends _i1.Mock implements _i12.SessionDB {
 /// A class which mocks [TitleService].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockTitleService extends _i1.Mock implements _i30.TitleService {
+class MockTitleService extends _i1.Mock implements _i32.TitleService {
   MockTitleService() {
     _i1.throwOnMissingStub(this);
   }
 
   @override
-  _i18.Future<String> generateTitle({
+  _i19.Future<String> generateTitle({
     required String? sessionId,
     required String? userMessage,
     required String? assistantResponse,
     String? modelOverride,
-    _i31.LLMRouteSnapshot? route,
+    _i33.LLMRouteSnapshot? route,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#generateTitle, [], {
@@ -1687,8 +1786,8 @@ class MockTitleService extends _i1.Mock implements _i30.TitleService {
               #modelOverride: modelOverride,
               #route: route,
             }),
-            returnValue: _i18.Future<String>.value(
-              _i17.dummyValue<String>(
+            returnValue: _i19.Future<String>.value(
+              _i18.dummyValue<String>(
                 this,
                 Invocation.method(#generateTitle, [], {
                   #sessionId: sessionId,
@@ -1700,13 +1799,13 @@ class MockTitleService extends _i1.Mock implements _i30.TitleService {
               ),
             ),
           )
-          as _i18.Future<String>);
+          as _i19.Future<String>);
 
   @override
-  _i18.Future<int> recoverPendingTitles() =>
+  _i19.Future<int> recoverPendingTitles() =>
       (super.noSuchMethod(
             Invocation.method(#recoverPendingTitles, []),
-            returnValue: _i18.Future<int>.value(0),
+            returnValue: _i19.Future<int>.value(0),
           )
-          as _i18.Future<int>);
+          as _i19.Future<int>);
 }

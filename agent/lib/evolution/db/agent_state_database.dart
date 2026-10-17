@@ -486,10 +486,25 @@ class AgentStateDatabase {
       CREATE TABLE IF NOT EXISTS scheduled_tasks (
         id TEXT PRIMARY KEY,
         task TEXT NOT NULL,
-        run_at TEXT NOT NULL,
         session_id TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        kind TEXT NOT NULL DEFAULT 'once',
+        interval_minutes INTEGER,
+        at_time TEXT,
+        weekdays TEXT,
+        month_day INTEGER,
+        zone TEXT NOT NULL DEFAULT 'local',
+        next_run_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_run_at TEXT,
+        last_status TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1
       );
+    ''');
+    _migrateScheduledTasks(db);
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run
+      ON scheduled_tasks(next_run_at ASC);
     ''');
 
     // ── workspaces ────────────────────────────────────────────────────────
@@ -1301,6 +1316,83 @@ class AgentStateDatabase {
       FROM user_attachments_v1;
     ''');
     db.execute('DROP TABLE user_attachments_v1');
+  }
+
+  @visibleForTesting
+  static void migrateScheduledTasks(Database db) => _migrateScheduledTasks(db);
+
+  static void _migrateScheduledTasks(Database db) {
+    if (!_tableExists(db, 'scheduled_tasks')) return;
+
+    if (!_columnExists(db, 'scheduled_tasks', 'next_run_at')) {
+      if (_columnExists(db, 'scheduled_tasks', 'run_at')) {
+        db.execute('ALTER TABLE scheduled_tasks RENAME COLUMN run_at TO next_run_at');
+      } else {
+        _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN next_run_at TEXT');
+      }
+    }
+
+    _safeAddColumn(
+      db,
+      "ALTER TABLE scheduled_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'once'",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN interval_minutes INTEGER',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN at_time TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN weekdays TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN month_day INTEGER',
+    );
+    _safeAddColumn(
+      db,
+      "ALTER TABLE scheduled_tasks ADD COLUMN zone TEXT NOT NULL DEFAULT 'local'",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN updated_at TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN last_run_at TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN last_status TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1',
+    );
+
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET kind = 'once'
+      WHERE kind IS NULL OR TRIM(kind) = '';
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET zone = 'local'
+      WHERE zone IS NULL OR TRIM(zone) = '';
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET enabled = 1
+      WHERE enabled IS NULL;
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET updated_at = created_at
+      WHERE updated_at IS NULL OR TRIM(updated_at) = '';
+    ''');
   }
 
   static void _safeAddColumn(Database db, String ddl) {

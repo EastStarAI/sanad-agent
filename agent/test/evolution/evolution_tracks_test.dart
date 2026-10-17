@@ -5,6 +5,7 @@ import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
 import 'package:sanad_agent/evolution/curator.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/delegate_task_tool.dart';
 import 'package:sanad_agent/capabilities/tools/schedule_task_tool.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
@@ -94,6 +95,7 @@ void main() {
       scheduler.scheduleTask(
         DateTime.now().add(const Duration(milliseconds: 1)),
         'Test Task',
+        sessionId: 'test-session',
       );
 
       expect(
@@ -108,12 +110,13 @@ void main() {
   group('ScheduleTaskTool Tests', () {
     test('execute schedules a task in CronScheduler', () async {
       final tool = ScheduleTaskTool();
+      final context = ToolContext(sessionId: 'test-session');
       final result = await tool.execute({
         'task': 'Auto Task',
         'time': 'in 60 seconds',
-      });
+      }, context: context);
 
-      expect(result, contains('Task scheduled successfully'));
+      expect(result, contains('created successfully'));
 
       // This test owns command-to-scheduler registration. Timer delivery is
       // covered separately by CronScheduler, so do not wait one real second.
@@ -127,25 +130,27 @@ void main() {
 
     test('execute returns error for null or empty task', () async {
       final tool = ScheduleTaskTool();
+      final context = ToolContext(sessionId: 'test-session');
 
-      final resultNull = await tool.execute({'time': 'in 1 seconds'});
+      final resultNull = await tool.execute({'time': 'in 1 seconds'}, context: context);
       expect(resultNull, contains('Error: "task" parameter is required'));
 
       final resultEmpty = await tool.execute({
         'task': '  ',
         'time': 'in 1 seconds',
-      });
+      }, context: context);
       expect(resultEmpty, contains('Error: "task" parameter is required'));
     });
 
     test('execute returns error for null or empty time', () async {
       final tool = ScheduleTaskTool();
+      final context = ToolContext(sessionId: 'test-session');
 
-      final resultNull = await tool.execute({'task': 'Some Task'});
-      expect(resultNull, contains('Error: "time" parameter is required'));
+      final resultNull = await tool.execute({'task': 'Some Task'}, context: context);
+      expect(resultNull, contains('Error:'));
 
-      final resultEmpty = await tool.execute({'task': 'Some Task', 'time': ''});
-      expect(resultEmpty, contains('Error: "time" parameter is required'));
+      final resultEmpty = await tool.execute({'task': 'Some Task', 'time': ''}, context: context);
+      expect(resultEmpty, contains('Error:'));
     });
   });
 
