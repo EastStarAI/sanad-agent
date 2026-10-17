@@ -176,7 +176,15 @@ credential paths, piping remote content to shells, encoded execution, exfiltrati
 destructive filesystem operations, permissive chmod, instruction overrides, and
 secret-harvesting phrasing; flagged packages are refused unless explicitly permitted
 via `--allow-flagged`, and the screening verdict (`clean` or `flagged`) is recorded
-in provenance.
+in provenance. Publishers may declare authorized remote hosts in `SKILL.md` frontmatter
+under `metadata.allowed_remote_exec`. For host-scoped rules (`remote-exec`, `encoded-exec`,
+`exfiltration`), findings are suppressed when all URL hosts on the matched line are covered
+by that file's declaration (exact domain and subdomain match, e.g. `example.com` covers
+`cdn.example.com`). Lookalike suffixes, userinfo tricks, IP literals, bare localhost,
+relative paths, and undeclared hosts remain blocked. Rules that are not host-scoped
+(credential paths, destructive filesystem commands, chmod 777, instruction overrides,
+secret harvesting) are never suppressed. Packages passing solely through declared host
+allowances record the distinct verdict `allowed` and their declared host list in provenance.
 
 ## Platform Tools
 

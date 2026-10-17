@@ -68,6 +68,7 @@ class InstalledSkillRecord {
     this.ref,
     this.subPath,
     this.scan,
+    this.allowedRemoteExec,
   });
 
   final String name;
@@ -79,6 +80,7 @@ class InstalledSkillRecord {
   final String? ref;
   final String? subPath;
   final String? scan;
+  final List<String>? allowedRemoteExec;
 
   Map<String, Object?> toJson() => {
     'source': source,
@@ -89,6 +91,8 @@ class InstalledSkillRecord {
     if (ref != null) 'ref': ref,
     if (subPath != null) 'subPath': subPath,
     if (scan != null) 'scan': scan,
+    if (allowedRemoteExec != null && allowedRemoteExec!.isNotEmpty)
+      'allowed_remote_exec': allowedRemoteExec,
   };
 
   factory InstalledSkillRecord.fromJson(
@@ -115,6 +119,9 @@ class InstalledSkillRecord {
       ref: json['ref'] as String?,
       subPath: json['subPath'] as String?,
       scan: json['scan'] as String?,
+      allowedRemoteExec: (json['allowed_remote_exec'] as List?)
+          ?.whereType<String>()
+          .toList(growable: false),
     );
   }
 }
@@ -200,7 +207,7 @@ class SkillInstallService {
 
     final scanner = const SkillScanner();
     final report = scanner.scan(plan.files);
-    if (!report.isClean && !allowFlagged) {
+    if (!report.isPassed && !allowFlagged) {
       throw SkillScanException(
         'Skill "${plan.name}" was flagged by security screening:\n'
         '${report.describe()}\n'
@@ -215,6 +222,7 @@ class SkillInstallService {
     final digest = digestOf(plan.files);
     await _writeAtomically(target, plan.files);
 
+    final declaredHosts = _extractDeclaredHosts(plan.files);
     records[plan.name] = InstalledSkillRecord(
       name: plan.name,
       source: source.recordedSource,
@@ -225,6 +233,7 @@ class SkillInstallService {
       ref: source.ref,
       subPath: source.subPath,
       scan: report.verdict,
+      allowedRemoteExec: declaredHosts.isNotEmpty ? declaredHosts : null,
     );
     _writeProvenance(records);
 
@@ -377,6 +386,7 @@ class SkillInstallService {
         ref: source.ref,
         subPath: source.subPath,
         scan: record.scan,
+        allowedRemoteExec: record.allowedRemoteExec,
       );
     }
 
@@ -673,5 +683,16 @@ class SkillInstallService {
         ..write('\n');
     }
     return sha256.convert(utf8.encode(buffer.toString())).toString();
+  }
+
+  static List<String> _extractDeclaredHosts(
+    Map<String, SkillArchiveEntry> files,
+  ) {
+    final skillFile = files['SKILL.md'];
+    if (skillFile == null) return const [];
+    final frontmatter = SkillFrontmatter.parse(
+      utf8.decode(skillFile.bytes, allowMalformed: true),
+    );
+    return frontmatter.allowedRemoteExec;
   }
 }
