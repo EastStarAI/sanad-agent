@@ -9,8 +9,70 @@ enum ReleaseChannel { rc, stable }
 
 typedef PlatformArtifactVerifier =
     Future<bool> Function(File file, String operatingSystem);
+typedef PlatformArtifactDetailedVerifier =
+    Future<PlatformTrustResult> Function(File file, String operatingSystem);
 typedef ReleaseProcessRunner =
     Future<ProcessResult> Function(String executable, List<String> arguments);
+
+class PlatformTrustResult {
+  const PlatformTrustResult({
+    required this.isTrusted,
+    this.stage,
+    this.exitCode,
+    this.detail,
+  });
+
+  const PlatformTrustResult.trusted()
+      : isTrusted = true,
+        stage = null,
+        exitCode = 0,
+        detail = null;
+
+  const PlatformTrustResult.untrusted({
+    required this.stage,
+    this.exitCode,
+    this.detail,
+  }) : isTrusted = false;
+
+  final bool isTrusted;
+  final String? stage;
+  final int? exitCode;
+  final String? detail;
+
+  String get summary {
+    if (isTrusted) return 'trusted';
+    final parts = <String>[];
+    if (stage != null && stage!.trim().isNotEmpty) {
+      parts.add('stage=${stage!.trim()}');
+    }
+    if (exitCode != null) {
+      parts.add('exit=$exitCode');
+    }
+    if (detail != null && detail!.trim().isNotEmpty) {
+      parts.add(detail!.trim());
+    }
+    return parts.join(': ');
+  }
+
+  @override
+  String toString() =>
+      'PlatformTrustResult(isTrusted: $isTrusted, stage: $stage, exitCode: $exitCode, detail: $detail)';
+}
+
+String sanitizePlatformVerifierOutput(String raw, {String? filePath}) {
+  var sanitized = raw.trim();
+  if (filePath != null && filePath.isNotEmpty) {
+    sanitized = sanitized.replaceAll(filePath, '<artifact>');
+  }
+  sanitized = sanitized
+      .replaceAll(RegExp(r'/Users/[^/\s:]+'), '/Users/<user>')
+      .replaceAll(RegExp(r'/home/[^/\s:]+'), '/home/<user>')
+      .replaceAll(RegExp(r'[A-Za-z]:\\[Uu]sers\\[^\\]+'), r'C:\Users\<user>');
+  if (sanitized.length > 500) {
+    sanitized = '${sanitized.substring(0, 497)}...';
+  }
+  return sanitized;
+}
 
 const macosAgentPublisherRequirement =
     '=anchor apple generic and '
@@ -382,25 +444,57 @@ Future<String> sha256OfFile(File file) async {
   return digest.toString();
 }
 
+Future<PlatformTrustResult> verifyReleaseArtifactTrustDetailed(
+  File file, {
+  required ReleaseArtifact artifact,
+  PlatformArtifactDetailedVerifier? detailedVerifier,
+  PlatformArtifactVerifier? platformVerifier,
+}) async {
+  try {
+    ReleaseArtifactTrustPolicy.validateMetadata(artifact);
+  } on FormatException catch (error) {
+    return PlatformTrustResult.untrusted(
+      stage: 'manifest_metadata',
+      detail: sanitizePlatformVerifierOutput(
+        error.message,
+        filePath: file.path,
+      ),
+    );
+  }
+  if (artifact.platform == 'macos') {
+    if (detailedVerifier != null) {
+      return detailedVerifier(file, artifact.platform);
+    }
+    if (platformVerifier != null) {
+      final ok = await platformVerifier(file, artifact.platform);
+      return ok
+          ? const PlatformTrustResult.trusted()
+          : const PlatformTrustResult.untrusted(
+              stage: 'platform_verifier',
+              detail: 'Platform code signature verifier rejected artifact.',
+            );
+    }
+    return verifyPlatformCodeSignatureDetailed(file, artifact.platform);
+  }
+  // Windows unsigned provenance and Linux GitHub attestations are proved by
+  // protected release CI. Runtime acceptance never claims to re-verify them.
+  return const PlatformTrustResult.trusted();
+}
+
 Future<bool> verifyReleaseArtifactTrust(
   File file, {
   required ReleaseArtifact artifact,
   PlatformArtifactVerifier platformVerifier = verifyPlatformCodeSignature,
 }) async {
-  try {
-    ReleaseArtifactTrustPolicy.validateMetadata(artifact);
-  } on FormatException {
-    return false;
-  }
-  if (artifact.platform == 'macos') {
-    return platformVerifier(file, artifact.platform);
-  }
-  // Windows unsigned provenance and Linux GitHub attestations are proved by
-  // protected release CI. Runtime acceptance never claims to re-verify them.
-  return true;
+  final result = await verifyReleaseArtifactTrustDetailed(
+    file,
+    artifact: artifact,
+    platformVerifier: platformVerifier,
+  );
+  return result.isTrusted;
 }
 
-Future<bool> verifyPlatformCodeSignature(
+Future<PlatformTrustResult> verifyPlatformCodeSignatureDetailed(
   File file,
   String operatingSystem, {
   ReleaseProcessRunner processRunner = _runReleaseProcess,
@@ -414,7 +508,21 @@ Future<bool> verifyPlatformCodeSignature(
       macosAgentPublisherRequirement,
       file.path,
     ]);
-    return verification.exitCode == 0;
+    if (verification.exitCode != 0) {
+      final rawError = '${verification.stderr}\n${verification.stdout}'.trim();
+      final sanitized = sanitizePlatformVerifierOutput(
+        rawError.isNotEmpty
+            ? rawError
+            : 'codesign verification rejected requirement.',
+        filePath: file.path,
+      );
+      return PlatformTrustResult.untrusted(
+        stage: 'codesign_publisher_requirement',
+        exitCode: verification.exitCode,
+        detail: sanitized,
+      );
+    }
+    return const PlatformTrustResult.trusted();
   }
   if (operatingSystem == 'windows') {
     final escaped = file.path.replaceAll("'", "''");
@@ -424,10 +532,36 @@ Future<bool> verifyPlatformCodeSignature(
       '-Command',
       "(Get-AuthenticodeSignature -LiteralPath '$escaped').Status -eq 'Valid'",
     ]);
-    return verification.exitCode == 0 &&
-        verification.stdout.toString().trim().toLowerCase() == 'true';
+    final output = verification.stdout.toString().trim().toLowerCase();
+    if (verification.exitCode != 0 || output != 'true') {
+      final rawError = '${verification.stderr}\n${verification.stdout}'.trim();
+      return PlatformTrustResult.untrusted(
+        stage: 'authenticode_signature',
+        exitCode: verification.exitCode,
+        detail: sanitizePlatformVerifierOutput(
+          rawError.isNotEmpty
+              ? rawError
+              : 'Authenticode signature status was not Valid.',
+          filePath: file.path,
+        ),
+      );
+    }
+    return const PlatformTrustResult.trusted();
   }
-  return true;
+  return const PlatformTrustResult.trusted();
+}
+
+Future<bool> verifyPlatformCodeSignature(
+  File file,
+  String operatingSystem, {
+  ReleaseProcessRunner processRunner = _runReleaseProcess,
+}) async {
+  final result = await verifyPlatformCodeSignatureDetailed(
+    file,
+    operatingSystem,
+    processRunner: processRunner,
+  );
+  return result.isTrusted;
 }
 
 String generateAppcastXml(ReleaseManifest manifest, DateTime publishedAt) {

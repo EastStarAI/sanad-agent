@@ -32,6 +32,15 @@ class UpdateCommand extends SanadCommand {
     if (result.availableVersion != null) {
       print('Available Version: ${result.availableVersion}');
     }
+    if (result.status == AgentUpdateStatus.trustFailed) {
+      print('');
+      print(
+        'If upgrading from a legacy installation (v1.0.0-v1.0.4) or encountering '
+        'platform trust failure, you can upgrade using the official installer:\n'
+        '  curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh && bash install.sh --no-login\n'
+        'Warning: Running the installer will briefly interrupt and restart the background service.',
+      );
+    }
     if (Platform.isWindows && result.stagedPath != null) {
       await service.scheduleWindowsReplacement(result);
       await Process.run(Platform.resolvedExecutable, ['service', 'stop']);

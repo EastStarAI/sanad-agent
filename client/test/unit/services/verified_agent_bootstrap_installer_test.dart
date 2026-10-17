@@ -179,6 +179,48 @@ void main() {
     final result = await installer.install(targetVersion: '1.1.0');
 
     expect(result.status, AgentBootstrapStatus.trustFailed);
+    expect(result.message, contains('stage=platform_verifier'));
+    expect(target.readAsStringSync(), 'existing');
+  });
+
+  test('macOS includes stage and sanitized details when detailed verifier fails', () async {
+    final bytes = utf8.encode('candidate');
+    final artifactFile = File('${temporaryDirectory.path}/candidate')..writeAsBytesSync(bytes);
+    final manifest = _manifest(
+      size: bytes.length,
+      digest: await sha256OfFile(artifactFile),
+    );
+    final artifact = (manifest['artifacts']! as List).single as Map<String, dynamic>;
+    artifact
+      ..['platform'] = 'macos'
+      ..['architecture'] = 'arm64'
+      ..['filename'] = 'sanad-agent-1.1.0-macos-arm64'
+      ..['url'] = 'https://github.com/EastStarAI/sanad-agent/releases/download/v1.1.0/sanad-agent-1.1.0-macos-arm64'
+      ..['signature_type'] = 'developer-id+notarization+github-attestation';
+    final target = File('${temporaryDirectory.path}/sanad')..writeAsStringSync('existing');
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: target.path,
+      operatingSystem: 'macos',
+      architecture: 'arm64',
+      detailedPlatformVerifier: (_, _) async => const PlatformTrustResult.untrusted(
+        stage: 'codesign_publisher_requirement',
+        exitCode: 1,
+        detail: 'untrusted publisher certificate',
+      ),
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('release-manifest.json')) {
+          return http.Response(jsonEncode(manifest), 200);
+        }
+        return http.Response.bytes(bytes, 200);
+      }),
+    );
+
+    final result = await installer.install(targetVersion: '1.1.0');
+
+    expect(result.status, AgentBootstrapStatus.trustFailed);
+    expect(result.message, contains('stage=codesign_publisher_requirement'));
+    expect(result.message, contains('exit=1'));
+    expect(result.message, contains('untrusted publisher certificate'));
     expect(target.readAsStringSync(), 'existing');
   });
 

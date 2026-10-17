@@ -35,11 +35,44 @@ class _ReadyDaemonController implements LocalDaemonController {
   Future<bool> startDaemon() async => true;
   @override
   Future<bool> stopDaemon() async => true;
+  String? updatedTargetVersion;
   @override
   Future<AgentLifecycleResult> updateDaemon({
     required String targetVersion,
     void Function(double progress)? onProgress,
-  }) async => const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
+  }) async {
+    updatedTargetVersion = targetVersion;
+    return const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
+  }
+  @override
+  Future<String?> getInstalledExecutableVersion() async => '1.0.0';
+  @override
+  Future<bool> validateServiceInstallCompatibility({
+    String? executablePath,
+    List<String>? arguments,
+  }) async => true;
+}
+
+class _StoppedAutoStartDaemonController extends _ReadyDaemonController {
+  @override
+  Future<bool> isDaemonRunning() async => false;
+  @override
+  Future<Map<String, dynamic>?> getDaemonHealth() async => null;
+  @override
+  bool get shouldAutoStart => true;
+  @override
+  bool isServiceInstalled() => true;
+}
+
+class _StoppedNoAutoStartDaemonController extends _ReadyDaemonController {
+  @override
+  Future<bool> isDaemonRunning() async => false;
+  @override
+  Future<Map<String, dynamic>?> getDaemonHealth() async => null;
+  @override
+  bool get shouldAutoStart => false;
+  @override
+  bool isServiceInstalled() => false;
 }
 
 void main() {
@@ -250,6 +283,76 @@ void main() {
     );
 
     expect(coordinator.expectedVersion, '2.0.0');
+
+    coordinator.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+  });
+
+  test('checkAndStartLocalDaemon auto-pairs by passing expectedVersion to updateDaemon', () async {
+    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final localSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final daemon = _ReadyDaemonController();
+    final coordinator = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'device-1',
+      daemonController: daemon,
+      expectedVersion: '1.2.3',
+    );
+
+    final success = await coordinator.checkAndStartLocalDaemon();
+
+    expect(success, isTrue);
+    expect(daemon.updatedTargetVersion, '1.2.3');
+
+    coordinator.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+  });
+
+  test('checkAndStartLocalDaemon calls updateDaemon when daemon is stopped and shouldAutoStart is true', () async {
+    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final localSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final daemon = _StoppedAutoStartDaemonController();
+    final coordinator = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'device-1',
+      daemonController: daemon,
+      expectedVersion: '1.2.3',
+    );
+
+    final success = await coordinator.checkAndStartLocalDaemon();
+
+    expect(success, isTrue);
+    expect(daemon.updatedTargetVersion, '1.2.3');
+
+    coordinator.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+  });
+
+  test('checkAndStartLocalDaemon does not auto-start when stopped and shouldAutoStart is false without force', () async {
+    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final localSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final daemon = _StoppedNoAutoStartDaemonController();
+    final coordinator = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'device-1',
+      daemonController: daemon,
+      expectedVersion: '1.2.3',
+    );
+
+    final success = await coordinator.checkAndStartLocalDaemon(force: false);
+
+    expect(success, isFalse);
+    expect(daemon.updatedTargetVersion, isNull);
+
+    final forcedSuccess = await coordinator.checkAndStartLocalDaemon(force: true);
+    expect(forcedSuccess, isTrue);
+    expect(daemon.updatedTargetVersion, '1.2.3');
 
     coordinator.dispose();
     cloudSocket.dispose();

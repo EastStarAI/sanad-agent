@@ -19,10 +19,56 @@ Sanad home binary directory, while launchd, systemd, or the Windows service
 adapter owns process persistence. Lifecycle actions target the registered
 service rather than an arbitrary process discovered by the UI.
 
-When the daemon is installed, update requests are delegated to its local
-`/update` endpoint so `AgentUpdateService` remains the only replacement owner.
-The client uses the shared verified bootstrap installer only when no standalone
-daemon executable exists yet. Later updates never use that bootstrap path.
+When the daemon is installed and running, update requests are delegated to its local
+`/update` endpoint so `AgentUpdateService` remains the replacement owner.
+When the daemon is stopped (`health == null`), `StandaloneDaemonController.updateDaemon`
+inspects the on-disk executable's version and capabilities. If the on-disk binary is
+outdated (`installedVersion < targetVersion`), unparseable, or lacks required service CLI
+options (such as `--user-scope` on Linux), the client updates the binary via the verified
+bootstrap installer before attempting service registration or startup. If the on-disk binary
+is newer than the target, the client rejects accidental downgrades (`downgradeRejected`). If
+the on-disk binary is compatible and matches the target version, re-downloading is skipped and
+the controller proceeds directly to idempotent service registration and daemon startup.
+
+### Running Daemon at the Target Version Without a Registered Service
+
+A daemon that is already running at `targetVersion` is not automatically
+"handled". Before reporting `upToDate`, the controller checks
+`isServiceInstalled()`; when no background service is registered (for example
+the daemon was started manually from a terminal with `sanad daemon`), it
+registers the service through the same validated `service install` path so
+auto-start survives a reboot. The healthy running daemon is not restarted by the
+client, and a registration failure surfaces
+`AgentLifecycleStatus.serviceRegistrationFailed` with the sanitized
+`ServiceRegistrationResult.failureMessage` instead of a false success.
+
+Note on ownership handoff: the Agent's own `service install` acquires the
+runtime-ownership lock for the active Sanad Home. When a daemon was started
+manually and a service is then registered for the same Home, the managed unit
+takes ownership of the runtime, so the manually started process exits and the
+systemd/launchd unit becomes the single owner. This takeover is Agent-owned
+behavior, not a client restart.
+
+### Pre-flight Capability Validation & Dynamic Help Detection
+
+On-disk version inspection has one caveat worth knowing: the Agent binary resolves
+the version it reports from the current working directory, so invoking it from
+inside a source checkout reports that checkout's version rather than the
+artifact's own. `getInstalledExecutableVersion()` inherits the client process's
+working directory, which is harmless for a packaged Client but means the version
+comparison must not be the only guard for a source-context run. Capability
+validation below is the authoritative check and is not affected by this.
+
+To prevent unrecognized CLI argument crashes (such as `Could not find an option named "--user-scope"`
+on older agent binaries like v1.0.15), `StandaloneDaemonController` provides dynamic capability
+detection via `validateServiceInstallCompatibility()`. Before registering or invoking service
+commands with specific CLI arguments, the controller queries `<executable> service install --help`
+(or the relevant subcommand `--help`) to dynamically inspect the recognized flags.
+
+If a required argument is not supported by the on-disk binary, capability validation returns
+false, preventing registration failure and signaling the coordinator to perform a verified
+bootstrap update to the compatible version. This avoids hardcoded version comparisons and
+ensures forward-compatibility with future CLI options across all supported platforms.
 
 ### Service Registration and Error Diagnostics
 

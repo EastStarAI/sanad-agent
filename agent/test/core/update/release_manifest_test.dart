@@ -138,6 +138,66 @@ void main() {
       );
     });
 
+    test('sanitizePlatformVerifierOutput strips file paths and user home paths', () {
+      final sanitized = sanitizePlatformVerifierOutput(
+        'error on /Users/alice/staged/sanad-agent: invalid requirement /home/bob/secret C:\\Users\\charlie\\file.exe',
+        filePath: '/Users/alice/staged/sanad-agent',
+      );
+
+      expect(sanitized, contains('<artifact>'));
+      expect(sanitized, contains('/home/<user>'));
+      expect(sanitized, contains(r'C:\Users\<user>'));
+      expect(sanitized, isNot(contains('alice')));
+      expect(sanitized, isNot(contains('bob')));
+      expect(sanitized, isNot(contains('charlie')));
+    });
+
+    test('sanitizePlatformVerifierOutput bounds output length', () {
+      final longOutput = 'a' * 800;
+      final sanitized = sanitizePlatformVerifierOutput(longOutput);
+
+      expect(sanitized.length, lessThanOrEqualTo(500));
+      expect(sanitized, endsWith('...'));
+    });
+
+    test('verifyReleaseArtifactTrustDetailed captures metadata and platform verification stages', () async {
+      final json = _manifestJson(bytes: [1, 2, 3]);
+      final artifactJson =
+          (json['artifacts']! as List).single as Map<String, dynamic>;
+      artifactJson
+        ..['platform'] = 'macos'
+        ..['signature_type'] = 'developer-id+notarization+github-attestation';
+      final artifact = ReleaseManifest.fromJson(json).artifacts.single;
+      final file = File('${Directory.systemTemp.path}/sanad-trust-detailed-test');
+      addTearDown(() async {
+        if (file.existsSync()) await file.delete();
+      });
+      await file.writeAsBytes([1, 2, 3]);
+
+      // Detailed verifier returning untrusted with stage
+      final failResult = await verifyReleaseArtifactTrustDetailed(
+        file,
+        artifact: artifact,
+        detailedVerifier: (f, os) async => const PlatformTrustResult.untrusted(
+          stage: 'codesign_publisher_requirement',
+          exitCode: 1,
+          detail: 'rejected publisher /Users/alice/app',
+        ),
+      );
+      expect(failResult.isTrusted, isFalse);
+      expect(failResult.stage, 'codesign_publisher_requirement');
+      expect(failResult.exitCode, 1);
+      expect(failResult.summary, contains('stage=codesign_publisher_requirement'));
+
+      // Backward compatible verifyReleaseArtifactTrust delegates cleanly
+      final boolResult = await verifyReleaseArtifactTrust(
+        file,
+        artifact: artifact,
+        platformVerifier: (f, os) async => false,
+      );
+      expect(boolResult, isFalse);
+    });
+
     test('generates deterministic platform-specific Appcast entries', () {
       final json = _manifestJson(bytes: [1, 2, 3]);
       json['artifacts'] = [
@@ -456,6 +516,52 @@ void main() {
       final result = await service.update();
 
       expect(result.status, AgentUpdateStatus.checksumFailed);
+      expect(executable.readAsStringSync(), 'old');
+    });
+
+    test('reports platform trust failure with stage and diagnostic', () async {
+      final executable = File('${temporaryDirectory.path}/sanad')
+        ..writeAsStringSync('old');
+      final expectedBytes = [1, 2, 3];
+      final artifactFile = File('${temporaryDirectory.path}/artifact')
+        ..writeAsBytesSync(expectedBytes);
+      final manifestJson = _manifestJson(bytes: expectedBytes);
+      final artifact = (manifestJson['artifacts']! as List).single as Map<String, dynamic>;
+      artifact
+        ..['platform'] = 'macos'
+        ..['filename'] = 'sanad-agent-1.1.0-macos-x64'
+        ..['url'] =
+            'https://github.com/EastStarAI/sanad-agent/releases/download/v1.1.0/sanad-agent-1.1.0-macos-x64'
+        ..['signature_type'] = 'developer-id+notarization+github-attestation'
+        ..['size'] = expectedBytes.length
+        ..['sha256'] = await sha256OfFile(artifactFile);
+      final manifest = jsonEncode(manifestJson);
+
+      final service = AgentUpdateService(
+        currentVersion: '1.0.0',
+        executablePath: executable.path,
+        isSourceManaged: false,
+        operatingSystem: 'macos',
+        architecture: 'x64',
+        detailedPlatformVerifier: (file, os) async => const PlatformTrustResult.untrusted(
+          stage: 'codesign_publisher_requirement',
+          exitCode: 1,
+          detail: 'publisher requirement failed',
+        ),
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('release-manifest.json')) {
+            return http.Response(manifest, 200);
+          }
+          return http.Response.bytes(expectedBytes, 200);
+        }),
+      );
+
+      final result = await service.update();
+
+      expect(result.status, AgentUpdateStatus.trustFailed);
+      expect(result.message, contains('stage=codesign_publisher_requirement'));
+      expect(result.message, contains('exit=1'));
+      expect(result.message, contains('publisher requirement failed'));
       expect(executable.readAsStringSync(), 'old');
     });
 

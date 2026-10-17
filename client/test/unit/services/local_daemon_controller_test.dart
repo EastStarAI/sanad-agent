@@ -317,12 +317,20 @@ Sanad Agent Service Status:
       final controller = StandaloneDaemonController(
         sanadHomePath: tempHome.path,
         platformOverride: 'linux',
-        processRunner: (executable, arguments) async => ProcessResult(
-          1,
-          1,
-          '',
-          'Service operation failed: The systemd user service manager is unavailable.',
-        ),
+        processRunner: (executable, arguments) async {
+          if (arguments.contains('--version')) {
+            return ProcessResult(0, 0, 'Version: 1.0.0', '');
+          }
+          if (arguments.contains('--help')) {
+            return ProcessResult(0, 0, '  --user-scope  user service', '');
+          }
+          return ProcessResult(
+            1,
+            1,
+            '',
+            'Service operation failed: The systemd user service manager is unavailable.',
+          );
+        },
       );
 
       final result = await controller.updateDaemon(targetVersion: '1.0.0');
@@ -345,7 +353,15 @@ Sanad Agent Service Status:
       final emptyController = StandaloneDaemonController(
         sanadHomePath: tempHome.path,
         platformOverride: 'linux',
-        processRunner: (executable, arguments) async => ProcessResult(1, 1, '', ''),
+        processRunner: (executable, arguments) async {
+          if (arguments.contains('--version')) {
+            return ProcessResult(0, 0, 'Version: 1.0.0', '');
+          }
+          if (arguments.contains('--help')) {
+            return ProcessResult(0, 0, '  --user-scope  user service', '');
+          }
+          return ProcessResult(1, 1, '', '');
+        },
       );
 
       final emptyResult = await emptyController.updateDaemon(targetVersion: '1.0.0');
@@ -363,12 +379,20 @@ Sanad Agent Service Status:
       final unsuitableController = StandaloneDaemonController(
         sanadHomePath: tempHome.path,
         platformOverride: 'linux',
-        processRunner: (executable, arguments) async => ProcessResult(
-          1,
-          1,
-          '',
-          'Unhandled exception:\n#0 main',
-        ),
+        processRunner: (executable, arguments) async {
+          if (arguments.contains('--version')) {
+            return ProcessResult(0, 0, 'Version: 1.0.0', '');
+          }
+          if (arguments.contains('--help')) {
+            return ProcessResult(0, 0, '  --user-scope  user service', '');
+          }
+          return ProcessResult(
+            1,
+            1,
+            '',
+            'Unhandled exception:\n#0 main',
+          );
+        },
       );
 
       final unsuitableResult = await unsuitableController.updateDaemon(targetVersion: '1.0.0');
@@ -397,12 +421,17 @@ Sanad Agent Service Status:
         final controller = StandaloneDaemonController(
           sanadHomePath: tempHome.path,
           platformOverride: 'linux',
-          processRunner: (executable, arguments) async => ProcessResult(
-            1,
-            1,
-            'RAW_STDOUT_TOKEN_SECRET_123',
-            'RAW_STDERR_PASSWORD_SECRET_456\nService operation failed: user bus is unavailable',
-          ),
+          processRunner: (executable, arguments) async {
+            if (arguments.contains('--help')) {
+              return ProcessResult(0, 0, '  --user-scope  user service', '');
+            }
+            return ProcessResult(
+              1,
+              1,
+              'RAW_STDOUT_TOKEN_SECRET_123',
+              'RAW_STDERR_PASSWORD_SECRET_456\nService operation failed: user bus is unavailable',
+            );
+          },
         );
 
         final result = await controller.registerService();

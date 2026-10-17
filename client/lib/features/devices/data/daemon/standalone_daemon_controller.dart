@@ -17,12 +17,18 @@ class StandaloneDaemonController implements LocalDaemonController {
     this.environment,
     this.processRunner,
     this.platformOverride,
+    this.bootstrapInstallerFactory,
+    this.healthProvider,
+    this.gatewayClient,
   });
 
   final String? sanadHomePath;
   final Map<String, String>? environment;
   final Future<ProcessResult> Function(String executable, List<String> arguments)? processRunner;
   final String? platformOverride;
+  final VerifiedAgentBootstrapInstaller Function(String targetPath)? bootstrapInstallerFactory;
+  final Future<Map<String, dynamic>?> Function()? healthProvider;
+  final LocalGatewayHttpClient? gatewayClient;
 
   bool get _isLinux => platformOverride == 'linux' || (platformOverride == null && Platform.isLinux);
 
@@ -36,10 +42,11 @@ class StandaloneDaemonController implements LocalDaemonController {
     if (_isLinux) '--user-scope',
   ];
 
-  LocalGatewayHttpClient get _gatewayClient => const LocalGatewayHttpClient();
+  LocalGatewayHttpClient get _gatewayClient => gatewayClient ?? const LocalGatewayHttpClient();
 
   VerifiedAgentBootstrapInstaller createBootstrapInstaller() {
-    return VerifiedAgentBootstrapInstaller(targetPath: getExecutablePath());
+    return bootstrapInstallerFactory?.call(getExecutablePath()) ??
+        VerifiedAgentBootstrapInstaller(targetPath: getExecutablePath());
   }
 
   String getHomeDirectory() {
@@ -94,6 +101,10 @@ class StandaloneDaemonController implements LocalDaemonController {
 
   @override
   Future<bool> isDaemonRunning() async {
+    if (healthProvider != null) {
+      final health = await healthProvider!();
+      return health != null;
+    }
     if (Platform.environment.containsKey('FLUTTER_TEST')) {
       return false;
     }
@@ -109,25 +120,15 @@ class StandaloneDaemonController implements LocalDaemonController {
 
   @override
   Future<String?> getDaemonVersion() async {
-    if (Platform.environment.containsKey('FLUTTER_TEST')) {
-      return null;
-    }
-    try {
-      final response = await _gatewayClient
-          .get(Uri.parse('${LocalDaemonController.defaultUrl}/health'))
-          .timeout(const Duration(milliseconds: 800));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data is Map) {
-          return data['version']?.toString();
-        }
-      }
-    } catch (_) {}
-    return null;
+    final health = await getDaemonHealth();
+    return health?['version']?.toString();
   }
 
   @override
   Future<Map<String, dynamic>?> getDaemonHealth() async {
+    if (healthProvider != null) {
+      return healthProvider!();
+    }
     if (Platform.environment.containsKey('FLUTTER_TEST')) {
       return null;
     }
@@ -143,6 +144,70 @@ class StandaloneDaemonController implements LocalDaemonController {
       }
     } catch (_) {}
     return null;
+  }
+
+  @override
+  Future<String?> getInstalledExecutableVersion({String? executablePath}) async {
+    final execPath = executablePath ?? getExecutablePath();
+    if (!File(execPath).existsSync()) return null;
+    try {
+      final runner = processRunner ?? Process.run;
+      final result = await runner(execPath, const ['--version']);
+      if (result.exitCode != 0) return null;
+      final stdout = result.stdout.toString();
+      final match = RegExp(
+        r'(?:version:?|sanad agent:?)\s*v?([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)',
+        caseSensitive: false,
+      ).firstMatch(stdout) ??
+      RegExp(
+        r'\bv?([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\b',
+      ).firstMatch(stdout);
+      if (match == null) return null;
+      final raw = match.group(1);
+      if (raw == null) return null;
+      final parsed = ReleaseVersion.parse(raw);
+      return parsed.marketingVersion;
+    } catch (e) {
+      _logger.fine('Could not inspect version of $execPath: $e');
+      return null;
+    }
+  }
+
+  @override
+  Future<bool> validateServiceInstallCompatibility({
+    String? executablePath,
+    List<String>? arguments,
+  }) async {
+    final execPath = executablePath ?? getExecutablePath();
+    if (!File(execPath).existsSync()) return false;
+    final args = arguments ?? serviceInstallArguments;
+    final requiredOptions = args
+        .where((arg) => arg.startsWith('--') && arg != '--help')
+        .toList();
+    if (requiredOptions.isEmpty) {
+      return true;
+    }
+
+    try {
+      final runner = processRunner ?? Process.run;
+      final subcommands = args.takeWhile((arg) => !arg.startsWith('-')).toList();
+      final helpArgs = [...subcommands, '--help'];
+      final helpResult = await runner(execPath, helpArgs);
+      if (helpResult.exitCode != 0) return false;
+      final helpText = '${helpResult.stdout}\n${helpResult.stderr}';
+      for (final option in requiredOptions) {
+        if (!helpText.contains(option)) {
+          _logger.warning(
+            'Executable at $execPath does not support required option "$option".',
+          );
+          return false;
+        }
+      }
+      return true;
+    } catch (e) {
+      _logger.warning('Failed to validate service install compatibility: $e');
+      return false;
+    }
   }
 
   @override
@@ -214,13 +279,10 @@ class StandaloneDaemonController implements LocalDaemonController {
         );
       }
       if (comparison == 0) {
-        return const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
-      }
-    }
-
-    if (health == null) {
-      final executableExists = File(getExecutablePath()).existsSync();
-      if (executableExists) {
+        // The running daemon already matches the target version, but it may
+        // have been started manually with no registered background service
+        // (e.g. `sanad daemon` from a terminal). Register the service so
+        // auto-start survives reboot instead of short-circuiting to upToDate.
         if (!isServiceInstalled()) {
           final registration = await registerService();
           if (!registration.succeeded) {
@@ -230,46 +292,76 @@ class StandaloneDaemonController implements LocalDaemonController {
             );
           }
         }
-        if (!await startDaemon()) {
-          return const AgentLifecycleResult(AgentLifecycleStatus.startFailed);
-        }
-        for (var attempt = 0; attempt < 10; attempt++) {
-          if (await getDaemonHealth() != null) {
-            return updateDaemon(
-              targetVersion: targetVersion,
-              onProgress: onProgress,
+        return const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
+      }
+    }
+
+    if (health == null) {
+      final execPath = getExecutablePath();
+      final executableExists = File(execPath).existsSync();
+
+      var needsBootstrap = !executableExists;
+
+      if (executableExists) {
+        final installedVersion = await getInstalledExecutableVersion();
+        if (installedVersion != null) {
+          final comparison = _compareVersions(installedVersion, targetVersion);
+          if (comparison > 0) {
+            return const AgentLifecycleResult(
+              AgentLifecycleStatus.downgradeRejected,
             );
           }
-          await Future<void>.delayed(
-            Duration(milliseconds: 300 + attempt * 200),
+          if (comparison == 0) {
+            final isCompatible = await validateServiceInstallCompatibility();
+            if (isCompatible) {
+              if (!isServiceInstalled() || _isWindows) {
+                final registration = await registerService();
+                if (!registration.succeeded) {
+                  return AgentLifecycleResult(
+                    AgentLifecycleStatus.serviceRegistrationFailed,
+                    message: registration.failureMessage,
+                  );
+                }
+              }
+              if (!await startDaemon()) {
+                return const AgentLifecycleResult(
+                  AgentLifecycleStatus.startFailed,
+                );
+              }
+              return _waitForTargetVersion(targetVersion);
+            }
+          }
+        }
+        // Incompatible or outdated binary on disk; update via bootstrap.
+        needsBootstrap = true;
+      }
+
+      if (needsBootstrap) {
+        try {
+          final bootstrap = await createBootstrapInstaller().install(
+            targetVersion: targetVersion,
+            onProgress: onProgress,
+          );
+          if (!bootstrap.isSuccess) return _bootstrapResult(bootstrap);
+          if (!isServiceInstalled() || _isWindows) {
+            final registration = await registerService();
+            if (!registration.succeeded) {
+              return AgentLifecycleResult(
+                AgentLifecycleStatus.serviceRegistrationFailed,
+                message: registration.failureMessage,
+              );
+            }
+          }
+          if (!await startDaemon()) {
+            return const AgentLifecycleResult(AgentLifecycleStatus.startFailed);
+          }
+        } catch (error) {
+          _logger.severe('Verified agent bootstrap failed: $error');
+          return AgentLifecycleResult(
+            AgentLifecycleStatus.replacementFailed,
+            message: 'Agent installation failed: $error',
           );
         }
-        return const AgentLifecycleResult(AgentLifecycleStatus.healthFailed);
-      }
-      try {
-        final bootstrap = await createBootstrapInstaller().install(
-          targetVersion: targetVersion,
-          onProgress: onProgress,
-        );
-        if (!bootstrap.isSuccess) return _bootstrapResult(bootstrap);
-        if (!isServiceInstalled() || _isWindows) {
-          final registration = await registerService();
-          if (!registration.succeeded) {
-            return AgentLifecycleResult(
-              AgentLifecycleStatus.serviceRegistrationFailed,
-              message: registration.failureMessage,
-            );
-          }
-        }
-        if (!await startDaemon()) {
-          return const AgentLifecycleResult(AgentLifecycleStatus.startFailed);
-        }
-      } catch (error) {
-        _logger.severe('Verified agent bootstrap failed: $error');
-        return AgentLifecycleResult(
-          AgentLifecycleStatus.replacementFailed,
-          message: 'Agent installation failed: $error',
-        );
       }
     } else {
       try {
@@ -305,6 +397,15 @@ class StandaloneDaemonController implements LocalDaemonController {
     final finalState = await _waitForTargetVersion(targetVersion);
     if (!finalState.isSuccess && health != null && await _restoreRollback()) {
       return const AgentLifecycleResult(AgentLifecycleStatus.rollbackCompleted);
+    }
+    if (finalState.isSuccess && (!isServiceInstalled() || _isWindows)) {
+      final registration = await registerService();
+      if (!registration.succeeded) {
+        return AgentLifecycleResult(
+          AgentLifecycleStatus.serviceRegistrationFailed,
+          message: registration.failureMessage,
+        );
+      }
     }
     return finalState;
   }
@@ -423,6 +524,19 @@ class StandaloneDaemonController implements LocalDaemonController {
         );
         return const ServiceRegistrationResult(succeeded: true);
       }
+      final isCompatible = await validateServiceInstallCompatibility(
+        executablePath: execPath,
+      );
+      if (!isCompatible) {
+        _logger.warning(
+          'Daemon service registration rejected: executable at $execPath is incompatible with service arguments.',
+        );
+        return const ServiceRegistrationResult(
+          succeeded: false,
+          diagnostic: 'The installed agent executable is incompatible with required service options.',
+        );
+      }
+
       final runner = processRunner ?? Process.run;
       final result = await runner(execPath, serviceInstallArguments);
       if (result.exitCode != 0) {
@@ -508,7 +622,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       return null;
     }
     if (RegExp(
-      r'(sudo\s|systemctl\s|rc-service\s|powershell|launchctl|install\s+-m|useradd\s|chown\s|chmod\s)',
+      r'(sudo\b|systemctl\b|rc-service\b|powershell|launchctl\b|loginctl\b|enable-linger\b|install\s+-m|useradd\s|chown\s|chmod\s)',
       caseSensitive: false,
     ).hasMatch(candidate)) {
       return null;
