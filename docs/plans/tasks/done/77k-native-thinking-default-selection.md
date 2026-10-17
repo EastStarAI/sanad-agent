@@ -1,7 +1,7 @@
 ---
 title: "77K — Native thinking auto-selection without a Default entry"
-status: "in_progress"
-current_gate: "Implementation independently verified and preserved; Web import blocker closed by 77L, owned runtime updated; same-session per-Client interactive retest active"
+status: "completed"
+current_gate: "Closed: implementation independently verified and preserved, Web import blocker closed by 77L, owned runtime updated, and the same-session per-Client interactive reports produced. Unreachable configuration-dependent cases remain recorded limitations rather than PASS."
 ---
 
 # Goal
@@ -49,7 +49,7 @@ This user-approved decision supersedes the synthetic Default-omission menu and `
 - [x] Return changed/new paths, behavioral explanation, tests/evidence, unexercised cases and any uncertainty in the external report. Preserve all unrelated work and leave no temporary probe in tracked scope.
 - [x] Principal independently reviews and verifies, preserves the result into delivery, creates the authorized local checkpoint and removes this completed worker worktree.
   Independent receipt: 180 focused tests passed in 7.76s, Flutter analysis passed in 7.62s, wiki passed in 1.11s, staged secret scan and diff checks passed. Commit `ba3eae7` preserves exact verified tree `44a2b55f3f93591c432c5da79079be56b71dc9ae`; delivery fast-forwarded identically and the completed worker worktree was removed. A native macOS rebuild regenerated the existing CocoaPods lock for the already-declared native dependency, with no manual dependency/version change. The Agent restart and macOS rebuild completed, but the Web hot restart exposed the upstream tray package's unconditional native FFI import. A scoped platform-import isolation repair is required before live testing; no thinking product requirement is changed by that repair.
-- [ ] Only after actual source handoff and completion of the owned runtime update, the existing tester conversation produces a fresh per-Client live report. Do not claim this gate from widget tests or old process ages.
+- [x] After the actual source handoff and owned runtime update, the existing tester conversation produced fresh per-Client live reports (preserved outside the repository). Within their stated evidence they confirm exact reversed native options, no synthetic Default row, the menu-only provider-default hint below the declared default option, explicit `Off` retention and conversation-scoped admission. Optional/configuration-dependent cases (selectable budget fixture, metadata-fetch failure, removed-option refresh) remain **NOT EXERCISED**, and no wire capture is claimed from UI-only evidence. The final `Default`-chip restoration of the blank Web draft was explicitly cancelled by the user as unimportant.
 
 ## Implementation record (delegated lane)
 

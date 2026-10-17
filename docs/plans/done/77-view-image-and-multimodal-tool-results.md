@@ -1,10 +1,10 @@
 ---
 title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
-status: "in_progress"
+status: "completed"
 priority: "high"
-current_gate: "77I5 — approved native choices, always-visible menu and Default/Off semantics; bounded gaps, final live/hosted acceptance and PR readiness"
-remaining_estimate: "Gate-based only; no current percentage or ETA. Accepted image/replay work stays closed absent a demonstrated regression."
+current_gate: "Closed by the Plan77 delivery pull request: current-main integration, exact-head CI, review-ready public/private PRs. Merge, deployment and legal acceptance remain maintainer gates."
+remaining_estimate: "Closed. Optional/config-dependent live fixtures and the unexercised refresh/failure cases remain recorded limitations, not PASS. Accepted image/replay work stays closed absent a demonstrated regression."
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -13,15 +13,21 @@ reference_grounding: "ready; resolve the owning evidence packet before each chil
 
 ## 1. الهدف والحالة
 
-التنفيذ الأساسي موجود؛ أُعيد فتح القبول الحي في [Task 77I](tasks/77i-live-image-preview-and-provider-projection-repair.md)، ثم جُمعت الإصلاحات والبوابات الحالية في [77I5](tasks/77i5-unified-provider-model-capabilities.md). هذه المهمة الأخيرة تملك حالة الإغلاق الحالية، بما فيها اكتشاف ونقل صور Ollama والتفكير وجاهزية الـPR. ينتج التنفيذ حد أداة typed، وأداة `view_image` محلية آمنة، ومرفقات صور تُرسل كبكسلات بعد admission والتحقق من التخزين ودعم النموذج عبر codec البروتوكول الفعلي، وعرضًا قابلًا للفتح للصور داخل المحادثة، مع تكافؤ محلي/بعيد واستعادة لا تعيد فتح الملف بعد اكتمال الأداة.
+التنفيذ الأساسي موجود؛ أُعيد فتح القبول الحي في [Task 77I](../tasks/done/77i-live-image-preview-and-provider-projection-repair.md)، ثم جُمعت الإصلاحات والبوابات الحالية في [77I5](../tasks/done/77i5-unified-provider-model-capabilities.md). هذه المهمة الأخيرة تملك حالة الإغلاق الحالية، بما فيها اكتشاف ونقل صور Ollama والتفكير وجاهزية الـPR. ينتج التنفيذ حد أداة typed، وأداة `view_image` محلية آمنة، ومرفقات صور تُرسل كبكسلات بعد admission والتحقق من التخزين ودعم النموذج عبر codec البروتوكول الفعلي، وعرضًا قابلًا للفتح للصور داخل المحادثة، مع تكافؤ محلي/بعيد واستعادة لا تعيد فتح الملف بعد اكتمال الأداة.
 
 يشمل النطاق: لصق الصور، السحب والإفلات، File Picker، زر `+` في يسار الـcomposer بجوار Permission Mode، صور وبطاقات الملفات داخل رسالة المستخدم، استعادة المرفقات في Edit & Retry، ونقل الملفات إلى وكيل بعيد عبر hosted capability متوافقة.
 
 خارج النطاق: URL/data URI كمسار يقدمه المستخدم، OCR، animated/multi-frame images، recursive remote-folder upload، thumbnails للمجلدات، تغيير `system_screenshot`، أو اختراع امتداد غير قياسي لـOpenAI Chat. إرسال صور المستخدم المتحقق منها مباشرةً على مسار يدعم الصور أصبح ضمن النطاق المعتمد في 77I5؛ لا يُستخدم نموذج مساعد أو إسقاط صامت للبكسلات.
 
+### Delivery closure — 2026-10-17
+
+The Plan77 work is complete and archived under `docs/plans/done/` and `docs/plans/tasks/done/`. The delivery pull request integrates the current upstream `main` (one merge, three conflict sites resolved by hand: the root localization law, the typed file-edit result that retains upstream's multi-chunk `editStartLines` payload, and the Web-safe tray split that retains upstream's single-icon/template-artwork fix), runs the full Agent and Client suites green on that merged candidate, and keeps the public/private repositories separate: cross-repository coordination lives only in the consuming repository.
+
+Coverage on the delivered candidate: Agent `2689` passed / `14` skipped, Client `1612` passed, both analyzers clean, deterministic hosted relay E2E `1/1` with `--concurrency=1`. **Recorded limits, not PASS:** provider budget/known-default selectable fixtures, metadata-fetch failure, and removed/changed-option refresh cases that need configuration this scope forbids; no wire capture is claimed from UI-only evidence; cross-Client session following and the observed persisted-value change remain UNKNOWN-cause observations. The blank Web draft's model restoration was cancelled by the user as unimportant.
+
 ### الإغلاق الحالي المعتمد — 2026-10-16
 
-المرجع التنفيذي الحالي هو قسم [القرارات المعتمدة والإغلاق المحدود](tasks/77i5-unified-provider-model-capabilities.md#latest-approved-decisions-and-bounded-closure--2026-10-16) في 77I5: خيارات النموذج الحقيقية دون سلم مصطنع أو تحويل صامت، منيو التفكير ظاهرة دائمًا مع فصل حالات التحميل والفشل وعدم المعرفة وعدم دعم التحكم، وفصل Default/إغفال المعامل عن Off وعن معلومة الافتراضي الأصلي. صياغة النصوص الجديدة بالعربية والإنجليزية تُراجع مع المستخدم قبل اعتمادها.
+المرجع التنفيذي الحالي هو قسم [القرارات المعتمدة والإغلاق المحدود](../tasks/done/77i5-unified-provider-model-capabilities.md#latest-approved-decisions-and-bounded-closure--2026-10-16) في 77I5: خيارات النموذج الحقيقية دون سلم مصطنع أو تحويل صامت، منيو التفكير ظاهرة دائمًا مع فصل حالات التحميل والفشل وعدم المعرفة وعدم دعم التحكم، وفصل Default/إغفال المعامل عن Off وعن معلومة الافتراضي الأصلي. صياغة النصوص الجديدة بالعربية والإنجليزية تُراجع مع المستخدم قبل اعتمادها.
 
 انتهى نطاق البحث وتطوير أداة الجرد؛ لا تُحوّل أمثلة مزودي المستخدم إلى قائمة قبول ثابتة، ولا تُستخدم البوابة المحلية مرجعًا لصحة النموذج. يُصلح التنفيذ الفجوات المثبتة فقط ويحافظ على المصادر الصحيحة والتغطية الآلية الحالية. المتبقي: عرض قائمة الإغلاق قبل التفويض، تنفيذ Agent وClient بالتوازي حيث لا تتعارض الملكية، مراجعة وتحقق مستقلان ثم تجميد وقبول حي للتفكير ودورة الإعدادات والقبول البعيد المتبقي، وأخيرًا تدقيق الأمن والوثائق والاستعادة وCI على commit التسليم وتجهيز PR للمراجعة. الصور والمرفقات وreplay والإصلاحات المقبولة لا تعاد بلا regression محدد. لا نسبة متبقية أو موعد مؤكد حاليًا، ولا تفويض للدمج أو النشر التشغيلي.
 
@@ -113,7 +119,7 @@ detail = low | auto | high | original
 
 - `LLMAdapter` يعلن القدرة الأصلية على نتائج الأدوات: Codex Responses وAnthropic تستخدمان `imageToolResults`. هذه القدرة تختلف عن قبول الصورة كسياق user في Chat Completions.
 - يشمل النطاق المعتمد الآن OpenAI-compatible Chat مع إسقاط صور نتائج الأدوات إلى رسالة user اصطناعية بعد مجموعة نتائج الأدوات كاملة، عندما يثبت catalog دعم الصور للمزود والنموذج الفعليين. التاريخ canonical لا يتغير؛ لا model-name inference أو endpoint probing.
-- دعم الصور intrinsic للنموذج نفسه، وليس مقيدًا باسم المزود أو عنوانه الرسمي: explicit model-only override ثم إعلان endpoint صالح للنموذج المحدد ثم exact trusted catalog evidence. أسماء discovery وحدها لا تنفي دليل catalog معروفًا، وunknown/unsupported يبقيان fail-closed. قبول Ollama native مستقل في [77I5](tasks/77i5-unified-provider-model-capabilities.md)، ولا يُستنتج من نجاح Chat في [77I2](tasks/77i2-openai-compatible-tool-image-projection.md).
+- دعم الصور intrinsic للنموذج نفسه، وليس مقيدًا باسم المزود أو عنوانه الرسمي: explicit model-only override ثم إعلان endpoint صالح للنموذج المحدد ثم exact trusted catalog evidence. أسماء discovery وحدها لا تنفي دليل catalog معروفًا، وunknown/unsupported يبقيان fail-closed. قبول Ollama native مستقل في [77I5](../tasks/done/77i5-unified-provider-model-capabilities.md)، ولا يُستنتج من نجاح Chat في [77I2](../tasks/done/77i2-openai-compatible-tool-image-projection.md).
 - Responses يستخدم `function_call_output.output` من `input_text`/`input_image`. Anthropic يستخدم nested text/image blocks داخل `tool_result`.
 - text-only adapter ترسل `displayText` ثم marker واحد: `[Image omitted: active provider does not accept image tool results.]` بلا retry أو mutation للتاريخ.
 - hosted attachment/media transport تستخدم capability الحالية `supports_attachments` مع wire events versioned؛ client يخفي أو يعطل remote attachment actions عند غياب الدعم ويفشل مغلقًا بدل تضمين bytes في `device_command`.
@@ -165,32 +171,32 @@ detail = low | auto | high | original
 
 ### 4.1 Task map
 
-1. [x] [77a1 — Core Result Model](tasks/77a1-core-tool-result-model.md)
-2. [x] [77a2 — Text Tool Migration A](tasks/77a2-text-tool-migration-a.md)
-3. [x] [77a3 — Text Tool Migration B](tasks/77a3-text-tool-migration-b.md)
-4. [x] [77a4 — Text Tool Migration C](tasks/77a4-text-tool-migration-c.md)
-5. [x] [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
-6. [x] [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
-7. [x] [77b2 — Secure View Image Catalog](tasks/77b2-secure-view-image-catalog.md)
-8. [x] [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
-9. [x] [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
-10. [x] [77d1 — Atomic Result Durability](tasks/77d1-atomic-tool-result-durability.md)
-11. [x] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
-12. [x] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
-13. [x] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
-14. [x] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
-15. [x] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
-16. [x] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
-17. [x] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
-18. [x] [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
-19. [x] [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
-20. [ ] [77g2 — Remote Attachment Integration QA](tasks/77g2-remote-attachment-integration-qa.md)
+1. [x] [77a1 — Core Result Model](../tasks/done/77a1-core-tool-result-model.md)
+2. [x] [77a2 — Text Tool Migration A](../tasks/done/77a2-text-tool-migration-a.md)
+3. [x] [77a3 — Text Tool Migration B](../tasks/done/77a3-text-tool-migration-b.md)
+4. [x] [77a4 — Text Tool Migration C](../tasks/done/77a4-text-tool-migration-c.md)
+5. [x] [77a5 — Coordinator and Message Integration](../tasks/done/77a5-tool-result-coordinator-integration.md)
+6. [x] [77b1 — Image Policy Worker](../tasks/done/77b1-image-policy-worker.md)
+7. [x] [77b2 — Secure View Image Catalog](../tasks/done/77b2-secure-view-image-catalog.md)
+8. [x] [77c1 — Rich Provider Codecs](../tasks/done/77c1-rich-provider-codecs.md)
+9. [x] [77c2 — Adapter Capability and Fallback](../tasks/done/77c2-adapter-capability-and-fallback.md)
+10. [x] [77d1 — Atomic Result Durability](../tasks/done/77d1-atomic-tool-result-durability.md)
+11. [x] [77d2 — Binary Redaction and Pruning](../tasks/done/77d2-binary-redaction-and-pruning.md)
+12. [x] [77d3 — Daemon-backed View Image QA](../tasks/done/77d3-view-image-integration-qa.md)
+13. [x] [77e1 — Attachment Model and Policy](../tasks/done/77e1-attachment-model-and-policy.md)
+14. [x] [77e2 — Agent Attachment Store](../tasks/done/77e2-agent-attachment-store.md)
+15. [x] [77e3 — Attachment Admission and Model Projection](../tasks/done/77e3-attachment-admission-and-model-projection.md)
+16. [x] [77f1 — Composer Attachment UX](../tasks/done/77f1-composer-attachment-ux.md)
+17. [x] [77f2 — User Message Attachment and Edit UX](../tasks/done/77f2-user-message-attachment-edit-ux.md)
+18. [x] [77f3 — View Image Timeline Media](../tasks/done/77f3-view-image-timeline-media.md)
+19. [x] [77g1 — Local Attachment Integration QA](../tasks/done/77g1-local-attachment-integration-qa.md)
+20. [x] [77g2 — Remote Attachment Integration QA](../tasks/done/77g2-remote-attachment-integration-qa.md)
 
 لا يعمل فرعان بالتوازي على Message أو coordinator أو conversation cache schema أو ملفات الخطة نفسها. `77g2` لا يبدأ قبل اكتمال hosted relay المقابل واختباره في المستودع المغلق.
 
 ## 5. بوابات القبول الكلية
 
-هذه مصالحة لبوابات الوظائف المثبتة بسجلات `77a1–77g1` و`77g2/G1–G2` و`77I/77I5`، وليست إغلاقًا للخطة: يبقى `77g2/G3` والتحقق النهائي وبوابات التفكير والتسليم في `77I5` مفتوحة حتى اكتمال أدلتها الحالية.
+هذه مصالحة لبوابات الوظائف المثبتة بسجلات `77a1–77g1` و`77g2/G1–G2` و`77I/77I5`؛ وقد أُغلقت بذلك `77g2/G3` والتحقق النهائي وبوابات التفكير والتسليم في `77I5` على المرشح المدمج، مع إبقاء القيود غير المنفذة مسجلة كقيود لا كناجحة.
 
 - [x] الأدوات النصية تحافظ على النص والأخطاء والـreplay الحالية بعد التحويل typed (`77a1–77a5`).
 - [x] `view_image` تطبق authorization قبل قراءة bytes وتعيد نتائج صورية للمزودات المدعومة (`77b2`, `77d3`, `77I5/G3`).
@@ -210,7 +216,7 @@ detail = low | auto | high | original
 - الحالات: `pending`, `in_progress`, `blocked`, `in_review`, `complete`.
 - يحل المنفذ evidence packet الخاصة بعائلة المهمة قبل Gate R0؛ `77e*` و`77f*` و`77g*` تستخدم packet `77e` حتى تنشأ packet أضيق.
 - لا تغلق مهمة بلا تحديث gate والأوامر والملفات والعقود المتأثرة ونسبة المتبقي.
-- لا تصبح الخطة `complete` قبل `77g2` وإثبات التكافؤ المحلي/البعيد والرؤية والاستعادة والتنقيح.
+- لا تصبح الخطة `complete` قبل `77g2` وإثبات التكافؤ المحلي/البعيد والرؤية والاستعادة والتنقيح. (مُستوفى: أُغلقت الخطة بعد هذه الإثباتات وقيودها المسجلة.)
 
 ```text
 Date:

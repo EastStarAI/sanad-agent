@@ -10,7 +10,7 @@ The user delegates final documentation consistency and Arabic wording acceptance
 
 # Owning decisions
 
-- `docs/plans/tasks/77k-native-thinking-default-selection.md` is the latest native-default UI decision; `docs/plans/tasks/77i5-unified-provider-model-capabilities.md` and `docs/plans/77-view-image-and-multimodal-tool-results.md` own broader scope.
+- `docs/plans/tasks/done/77k-native-thinking-default-selection.md` is the latest native-default UI decision; `docs/plans/tasks/done/77i5-unified-provider-model-capabilities.md` and `docs/plans/done/77-view-image-and-multimodal-tool-results.md` own broader scope.
 - Known valid native default auto-admits as its real option when there is no valid saved explicit choice. Preserve explicit Off/other options. Unknown default is not guessed. The technical Agent null/omission contract remains valid for callers lacking a declared default.
 - No synthetic Default menu row or provider-managed Default chip. The hint `Provider default` / `الافتراضي لدى المزوّد` appears only below the real default option in the expanded menu. Declared options are reversed for display only; IDs and wire values do not change.
 - Always-visible states distinguish loading/failure/unknown/no-control. Review English/Arabic meaning against existing source keys, not an invented universal tier ladder. Existing locale support must have one consistent owning contract.
