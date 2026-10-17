@@ -93,7 +93,8 @@ sanad skills add <source> --home "$SKL_HOME"
 | GitHub 404 | Exit 1 with the repository and ref named, plus `--ref` guidance. |
 | Network unreachable | Exit 1 with the transport error, nothing written. |
 | Corrupt `.sanad-skills.json` | `list` still shows skills; add/update report a parse error. |
-| `--project` install | Files land in `<workspace>/.sanad/skills`, user Home untouched. |
+| `--workspace <path>` install | Files land in `<path>/.sanad/skills`, Sanad Home untouched. |
+| `--workspace <missing path>` | Refused with a not-found message, nothing written. |
 | Interrupted install | No partial skill directory; only the temp directory is discarded. |
 
 ## Performance notes

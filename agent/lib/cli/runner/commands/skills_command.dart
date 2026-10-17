@@ -99,12 +99,6 @@ class SkillsAddCommand extends SanadCommand {
         'allow-flagged',
         negatable: false,
         help: 'Install a skill even if security screening flagged findings',
-      )
-      ..addFlag(
-        'project',
-        negatable: false,
-        help:
-            'Install into <workspace>/.sanad/skills instead of the Sanad Home',
       );
   }
 
@@ -121,14 +115,17 @@ class SkillsAddCommand extends SanadCommand {
     if (args.isEmpty) {
       stderrSink.writeln(
         'Usage: sanad skills add <owner/repo | github-url | local-path> '
-        '[--skill <name>] [--ref <ref>]',
+        '[--skill <name>] [--ref <ref>] [--workspace <path>]',
       );
       return _usageExit;
     }
 
-    final project = flagOf(this, 'project');
-    final workspace = project ? workspacePath(this) : null;
-    final service = _serviceFor(this, project: project, workspace: workspace);
+    final resolved = _workspaceOverride(this);
+    if (resolved.error != null) {
+      stderrSink.writeln(resolved.error);
+      return _usageExit;
+    }
+    final service = _serviceFor(this, workspace: resolved.path);
     try {
       final source = SkillSource.parse(
         args.first,
@@ -179,17 +176,11 @@ class SkillsAddCommand extends SanadCommand {
 class SkillsRemoveCommand extends SanadCommand {
   SkillsRemoveCommand({super.customAction}) {
     addCommonOptions(argParser);
-    argParser
-      ..addFlag(
-        'force',
-        negatable: false,
-        help: 'Delete a skill that this command did not install',
-      )
-      ..addFlag(
-        'project',
-        negatable: false,
-        help: 'Remove from <workspace>/.sanad/skills instead of the Sanad Home',
-      );
+    argParser.addFlag(
+      'force',
+      negatable: false,
+      help: 'Delete a skill that this command did not install',
+    );
   }
 
   @override
@@ -203,13 +194,18 @@ class SkillsRemoveCommand extends SanadCommand {
   Future<int> execute() async {
     final args = argResults?.rest ?? const <String>[];
     if (args.isEmpty) {
-      stderrSink.writeln('Usage: sanad skills remove <name> [--force]');
+      stderrSink.writeln(
+        'Usage: sanad skills remove <name> [--force] [--workspace <path>]',
+      );
       return _usageExit;
     }
 
-    final project = flagOf(this, 'project');
-    final workspace = project ? workspacePath(this) : null;
-    final service = _serviceFor(this, project: project, workspace: workspace);
+    final resolved = _workspaceOverride(this);
+    if (resolved.error != null) {
+      stderrSink.writeln(resolved.error);
+      return _usageExit;
+    }
+    final service = _serviceFor(this, workspace: resolved.path);
     try {
       service.remove(args.first, force: flagOf(this, 'force'));
       if (flagOf(this, 'json')) {
@@ -232,17 +228,11 @@ class SkillsRemoveCommand extends SanadCommand {
 class SkillsUpdateCommand extends SanadCommand {
   SkillsUpdateCommand({super.customAction}) {
     addCommonOptions(argParser);
-    argParser
-      ..addFlag(
-        'force',
-        negatable: false,
-        help: 'Overwrite locally modified skills with remote versions',
-      )
-      ..addFlag(
-        'project',
-        negatable: false,
-        help: 'Update skills in <workspace>/.sanad/skills',
-      );
+    argParser.addFlag(
+      'force',
+      negatable: false,
+      help: 'Overwrite locally modified skills with remote versions',
+    );
   }
 
   @override
@@ -255,9 +245,12 @@ class SkillsUpdateCommand extends SanadCommand {
   @override
   Future<int> execute() async {
     final args = argResults?.rest ?? const <String>[];
-    final project = flagOf(this, 'project');
-    final workspace = project ? workspacePath(this) : null;
-    final service = _serviceFor(this, project: project, workspace: workspace);
+    final resolved = _workspaceOverride(this);
+    if (resolved.error != null) {
+      stderrSink.writeln(resolved.error);
+      return _usageExit;
+    }
+    final service = _serviceFor(this, workspace: resolved.path);
     try {
       final outcomes = await service.update(
         name: args.isEmpty ? null : args.first,
@@ -375,20 +368,42 @@ Future<int> listSkills(SanadCommand command, {required bool json}) async {
 
 SkillInstallService _serviceFor(
   SanadCommand command, {
-  required bool project,
   required String? workspace,
 }) {
   _environmentFor(command);
-  if (!project) {
+  if (workspace == null) {
     return SkillInstallService(
       skillsRoot: Directory(p.join(getSanadHome(), 'skills')),
       scope: SkillScope.user,
     );
   }
   return SkillInstallService(
-    skillsRoot: Directory(p.join(workspace!, '.sanad', 'skills')),
-    scope: SkillScope.project,
+    skillsRoot: Directory(p.join(workspace, '.sanad', 'skills')),
+    scope: SkillScope.workspace,
   );
+}
+
+/// Resolves the shared `--workspace` option for a skills subcommand.
+///
+/// These commands run standalone and never open the daemon, so they accept an
+/// existing directory path rather than a registered workspace ID. Omitting the
+/// option means the Sanad Home scope.
+({String? path, String? error}) _workspaceOverride(SanadCommand command) {
+  final configured = command.getOption('workspace')?.trim();
+  if (configured == null || configured.isEmpty) {
+    return (path: null, error: null);
+  }
+  final directory = Directory(configured);
+  if (!directory.existsSync()) {
+    return (
+      path: null,
+      error:
+          'Workspace path not found: $configured\n'
+          'Pass an existing directory to --workspace, or omit it to use the '
+          'Sanad Home.',
+    );
+  }
+  return (path: directory.absolute.path, error: null);
 }
 
 List<Directory> _provenanceRoots(String workspace) => [

@@ -23,8 +23,8 @@ available to the agent without hand-copying folders or knowing where the Home li
   dependency added to `pubspec.yaml`.
 - **Skill discovery inside a source:** every `skills/*/SKILL.md` is one skill; a root `SKILL.md` is a
   single skill. A multi-skill source without `--skill` fails and prints the available names.
-- **Install target:** `<SANAD_HOME>/skills/<name>` by default; `--project` targets
-  `<workspace>/.sanad/skills/<name>`.
+- **Install target:** `<SANAD_HOME>/skills/<name>` by default; the shared `--workspace <path>` option
+  targets `<path>/.sanad/skills/<name>`.
 - **Provenance:** `<skills-root>/.sanad-skills.json` records
   `{name, source, ref, commit, installedAt, digest}` per installed skill. It is a separate file from
   the product-owned `.sanad-managed.json`, and user-installed ids are never reconciled, overwritten,
@@ -45,7 +45,7 @@ available to the agent without hand-copying folders or knowing where the Home li
 
 ### G1 — Command surface
 - [x] Split `skills_command.dart` into subcommands with `CommandRunner`-style nesting.
-- [x] Arg parsing: `--skill`, `--ref`, `--sub-path`, `--force`, `--project`, `--json`, `--home` (reused global).
+- [x] Arg parsing: `--skill`, `--ref`, `--sub-path`, `--force`, `--allow-flagged`, `--workspace <path>`, `--json`, `--home`.
 - [x] Help text and error messages that state the accepted source forms.
 
 ### G2 — Source resolution and fetch

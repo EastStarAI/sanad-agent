@@ -20,7 +20,7 @@ class SkillInstallException implements Exception {
   String toString() => message;
 }
 
-enum SkillScope { user, project }
+enum SkillScope { user, workspace }
 
 enum SkillInstallStatus { installed, updated, unchanged, skippedLocalEdits }
 
@@ -104,7 +104,9 @@ class InstalledSkillRecord {
       ),
       scope: SkillScope.values.firstWhere(
         (value) => value.name == json['scope'],
-        orElse: () => SkillScope.user,
+        // "project" was the pre-release name for the workspace scope.
+        orElse: () =>
+            json['scope'] == 'project' ? SkillScope.workspace : SkillScope.user,
       ),
       digest: (json['digest'] as String?) ?? '',
       installedAt:
@@ -121,7 +123,7 @@ class InstalledSkillRecord {
 /// directory into one skills root.
 ///
 /// The skills root is the directory the daemon already scans (`<SANAD_HOME>/skills`
-/// for user scope, `<workspace>/.sanad/skills` for project scope), so an installed
+/// for user scope, `<workspace>/.sanad/skills` for workspace scope), so an installed
 /// skill becomes available on the next turn without touching the daemon.
 class SkillInstallService {
   SkillInstallService({
