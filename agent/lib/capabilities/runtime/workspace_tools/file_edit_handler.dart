@@ -140,6 +140,7 @@ class FileEditHandler {
       'numReplacements': editResult.totalReplacements,
       'startLine': editResult.startLine,
       if (isMulti) 'numEdits': edits.length,
+      if (isMulti) 'editStartLines': editResult.editStartLines,
     });
   }
 
@@ -163,10 +164,12 @@ class FileEditHandler {
     bool isMulti,
   ) {
     final allMatches = <_MatchRange>[];
+    final editStartLines = <int>[];
 
     for (final edit in edits) {
       final matches = _findMatchesForEdit(content, edit, isMulti);
       allMatches.addAll(matches);
+      editStartLines.add(matches.isEmpty ? 1 : matches.first.startLine);
     }
 
     // Overlap detection: sort by startIndex ascending
@@ -202,6 +205,7 @@ class FileEditHandler {
       content: updated,
       startLine: firstStartLine,
       startLines: startLines,
+      editStartLines: editStartLines,
       totalReplacements: allMatches.length,
     );
   }
@@ -666,12 +670,14 @@ class _MultiEditResult {
   final String content;
   final int startLine;
   final List<int> startLines;
+  final List<int> editStartLines;
   final int totalReplacements;
 
   _MultiEditResult({
     required this.content,
     required this.startLine,
     this.startLines = const [],
+    this.editStartLines = const [],
     required this.totalReplacements,
   });
 }
