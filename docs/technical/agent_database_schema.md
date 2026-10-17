@@ -249,9 +249,9 @@ Tracks automation tasks and scheduled recurring loops that the daemon runs async
 | `next_run_at` | `TEXT` | Non-null | ISO8601 UTC timestamp of next scheduled execution (migrated from legacy `run_at`) |
 | `created_at` | `TEXT` | Non-null | ISO8601 UTC creation timestamp |
 | `updated_at` | `TEXT` | Non-null | ISO8601 UTC last update timestamp |
-| `last_run_at` | `TEXT` | Nullable | ISO8601 UTC timestamp of previous execution |
+| `last_run_at` | `TEXT` | Nullable | ISO8601 UTC timestamp of previous execution (preserved without change on skipped occurrences) |
 | `last_status` | `TEXT` | Nullable | Status of previous execution (`fired`, `skipped_missed`, `error`) |
-| `enabled` | `INTEGER` | Non-null DEFAULT `1` | 1 if schedule is active, 0 if paused |
+| `enabled` | `INTEGER` | Non-null DEFAULT `1` | 1 if schedule is active (pause/resume is out of scope in this release; reserved for future lifecycle control) |
 
 #### Migration Note (Task 112a)
 Pre-existing rows from earlier versions migrate automatically via an idempotent guarded migration:

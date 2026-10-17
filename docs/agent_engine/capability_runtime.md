@@ -29,8 +29,7 @@ instruction content, omits tool inventory prose, and applies head-plus-tail
 truncation under prompt budget. When no valid workspace is attached, the context
 instead states concisely that file and terminal tools are unavailable and directs
 workspace-dependent requests to the workspace control in the upper-left corner.
-Date/time belongs to the engine's volatile prompt tier rather than workspace
-context.
+Runtime context includes a date-and-zone awareness line (no clock time, byte-stable within a day) derived in the schedule's resolved timezone, while turn-specific execution timestamps belong to the engine's volatile prompt tier.
 
 ## Tools
 

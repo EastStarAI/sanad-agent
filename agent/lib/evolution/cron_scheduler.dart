@@ -59,7 +59,7 @@ class CronScheduler extends BasePlatform {
       );
     }
 
-    final taskId = id ?? 'task_${DateTime.now().millisecondsSinceEpoch}';
+    final taskId = id ?? 'task_${DateTime.now().microsecondsSinceEpoch}';
     final now = DateTime.now().toUtc();
     final nextRunAt = OccurrenceCalculator.computeNextOccurrence(
       definition,
@@ -221,9 +221,9 @@ class CronScheduler extends BasePlatform {
     return updated;
   }
 
-  void _scheduleInMemory(ScheduledTaskRecord record) {
-    final now = DateTime.now().toUtc();
-    final delay = record.nextRunAt.difference(now);
+  void _scheduleInMemory(ScheduledTaskRecord record, {DateTime? now}) {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+    final delay = record.nextRunAt.difference(effectiveNow);
 
     _logger.info(
       'Scheduling task: "${record.task}" at ${record.nextRunAt} (delay: $delay, id: ${record.id})',
@@ -236,46 +236,7 @@ class CronScheduler extends BasePlatform {
         _emitEvent(record.task, record.sessionId);
         return;
       } else {
-        // Recurring schedule in the past: compute next future occurrence
-        final nextRunAt = OccurrenceCalculator.computeNextOccurrence(
-          record.toDefinition(),
-          from: now,
-          previousRunAt: record.lastRunAt,
-        );
-        final advanced = ScheduledTaskRecord(
-          id: record.id,
-          task: record.task,
-          sessionId: record.sessionId,
-          kind: record.kind,
-          intervalMinutes: record.intervalMinutes,
-          atTime: record.atTime,
-          weekdays: record.weekdays,
-          monthDay: record.monthDay,
-          zone: record.zone,
-          nextRunAt: nextRunAt,
-          createdAt: record.createdAt,
-          updatedAt: DateTime.now().toUtc(),
-          lastRunAt: record.lastRunAt,
-          lastStatus: record.lastStatus,
-          enabled: record.enabled,
-        );
-        _sessionManager.db.saveScheduledTask(
-          advanced.id,
-          advanced.task,
-          advanced.nextRunAt,
-          advanced.sessionId,
-          kind: advanced.kind.name,
-          intervalMinutes: advanced.intervalMinutes,
-          atTime: advanced.atTime,
-          weekdays: advanced.weekdays,
-          monthDay: advanced.monthDay,
-          zone: advanced.zone,
-          updatedAt: advanced.updatedAt,
-          lastRunAt: advanced.lastRunAt,
-          lastStatus: advanced.lastStatus,
-          enabled: advanced.enabled,
-        );
-        _scheduleInMemory(advanced);
+        restoreRecurringSchedule(record, now: effectiveNow);
         return;
       }
     }
@@ -307,13 +268,17 @@ class CronScheduler extends BasePlatform {
     if (record.kind == ScheduleKind.once) {
       _tasks.removeWhere((t) => t.id == record.id);
       _sessionManager.db.deleteScheduledTask(record.id);
-      _emitEvent(record.task, record.sessionId);
+      try {
+        _emitEvent(record.task, record.sessionId);
+      } catch (e, stack) {
+        _logger.severe('Failed to dispatch once task ${record.id}: $e', e, stack);
+      }
     } else {
       final executionTime = DateTime.now().toUtc();
       final nextRunAt = OccurrenceCalculator.computeNextOccurrence(
         record.toDefinition(),
         from: executionTime,
-        previousRunAt: executionTime,
+        previousRunAt: record.lastRunAt ?? record.nextRunAt,
       );
 
       final nextRecord = ScheduledTaskRecord(
@@ -334,6 +299,7 @@ class CronScheduler extends BasePlatform {
         enabled: record.enabled,
       );
 
+      // Persist advanced instant and last_status before emitting (B-D1)
       _sessionManager.db.saveScheduledTask(
         nextRecord.id,
         nextRecord.task,
@@ -354,16 +320,39 @@ class CronScheduler extends BasePlatform {
       _tasks.removeWhere((t) => t.id == record.id);
       _scheduleInMemory(nextRecord);
 
-      _emitEvent(record.task, record.sessionId);
+      try {
+        _emitEvent(record.task, record.sessionId);
+      } catch (e, stack) {
+        _logger.severe('Failed to dispatch scheduled task ${record.id}: $e', e, stack);
+        // Record error status if dispatch failed (B-D6)
+        _sessionManager.db.saveScheduledTask(
+          nextRecord.id,
+          nextRecord.task,
+          nextRecord.nextRunAt,
+          nextRecord.sessionId,
+          kind: nextRecord.kind.name,
+          intervalMinutes: nextRecord.intervalMinutes,
+          atTime: nextRecord.atTime,
+          weekdays: nextRecord.weekdays,
+          monthDay: nextRecord.monthDay,
+          zone: nextRecord.zone,
+          updatedAt: DateTime.now().toUtc(),
+          lastRunAt: nextRecord.lastRunAt,
+          lastStatus: 'error',
+          enabled: nextRecord.enabled,
+        );
+      }
     }
   }
 
   void _cancelInMemory(String id) {
-    final idx = _tasks.indexWhere((t) => t.id == id);
-    if (idx != -1) {
-      _tasks[idx].timer.cancel();
-      _tasks.removeAt(idx);
-    }
+    _tasks.removeWhere((t) {
+      if (t.id == id) {
+        t.timer.cancel();
+        return true;
+      }
+      return false;
+    });
   }
 
   void _emitEvent(String task, String sessionId) {
@@ -386,8 +375,9 @@ class CronScheduler extends BasePlatform {
   }
 
   @override
-  Future<void> initialize() async {
-    _logger.info('CronScheduler initializing from DB...');
+  Future<void> initialize({DateTime? now}) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+    _logger.info('CronScheduler initializing from DB at $effectiveNow...');
     final dbTasks = _sessionManager.db.getAllScheduledTasks();
 
     for (var taskData in dbTasks) {
@@ -395,21 +385,164 @@ class CronScheduler extends BasePlatform {
       if (!record.enabled) continue;
 
       if (record.kind == ScheduleKind.once) {
-        // Grace period of 5 minutes for missed tasks during downtime
-        if (record.nextRunAt.isAfter(DateTime.now().subtract(const Duration(minutes: 5)))) {
-          _scheduleInMemory(record);
+        // B-D4: Grace period of 5 minutes for missed tasks during downtime
+        if (record.nextRunAt.isAfter(effectiveNow.subtract(const Duration(minutes: 5)))) {
+          _scheduleInMemory(record, now: effectiveNow);
         } else {
           _logger.warning('Skipping stale task: "${record.task}" scheduled for ${record.nextRunAt}');
           _sessionManager.db.deleteScheduledTask(record.id);
         }
       } else {
-        // Recurring task: restore and schedule next run
-        _scheduleInMemory(record);
+        // B-D2, B-D3, B-D6: Recurring schedule recovery and missed-occurrence policy
+        restoreRecurringSchedule(record, now: effectiveNow);
       }
     }
     _logger.info(
       'CronScheduler initialized with ${_tasks.length} active tasks.',
     );
+  }
+
+  /// Restores a recurring schedule on startup using the missed-occurrence policy (Decision B-D2).
+  @visibleForTesting
+  void restoreRecurringSchedule(ScheduledTaskRecord record, {DateTime? now}) {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    if (record.nextRunAt.isAfter(effectiveNow)) {
+      // Future instant: no missed occurrence
+      _scheduleInMemory(record, now: effectiveNow);
+      return;
+    }
+
+    final definition = record.toDefinition();
+    final graceWindow = RecurrenceGracePolicy.computeGraceWindow(definition);
+    final mostRecentMissed = OccurrenceCalculator.computeMostRecentDueInstant(
+      definition,
+      now: effectiveNow,
+      previousRunAt: record.lastRunAt,
+      nextRunAt: record.nextRunAt,
+    );
+
+    final missedBy = effectiveNow.difference(mostRecentMissed);
+    final isInsideGrace = !missedBy.isNegative && missedBy <= graceWindow;
+
+    final graceMinutes = graceWindow.inMinutes;
+    final missedStr = missedBy.inMinutes > 0
+        ? '${missedBy.inMinutes}m'
+        : '${missedBy.inSeconds}s';
+
+    final nextFutureRunAt = OccurrenceCalculator.computeNextOccurrence(
+      definition,
+      from: effectiveNow,
+      previousRunAt: record.lastRunAt ?? mostRecentMissed,
+    );
+
+    if (isInsideGrace) {
+      _logger.info(
+        'Missed recurring task "${record.task}" (id: ${record.id}) at $mostRecentMissed is within grace window of ${graceMinutes}m (missed by $missedStr). Firing once and advancing to $nextFutureRunAt.',
+      );
+
+      final advanced = ScheduledTaskRecord(
+        id: record.id,
+        task: record.task,
+        sessionId: record.sessionId,
+        kind: record.kind,
+        intervalMinutes: record.intervalMinutes,
+        atTime: record.atTime,
+        weekdays: record.weekdays,
+        monthDay: record.monthDay,
+        zone: record.zone,
+        nextRunAt: nextFutureRunAt,
+        createdAt: record.createdAt,
+        updatedAt: effectiveNow,
+        lastRunAt: effectiveNow,
+        lastStatus: 'fired',
+        enabled: record.enabled,
+      );
+
+      // Persist BEFORE emitting (B-D1)
+      _sessionManager.db.saveScheduledTask(
+        advanced.id,
+        advanced.task,
+        advanced.nextRunAt,
+        advanced.sessionId,
+        kind: advanced.kind.name,
+        intervalMinutes: advanced.intervalMinutes,
+        atTime: advanced.atTime,
+        weekdays: advanced.weekdays,
+        monthDay: advanced.monthDay,
+        zone: advanced.zone,
+        updatedAt: advanced.updatedAt,
+        lastRunAt: advanced.lastRunAt,
+        lastStatus: advanced.lastStatus,
+        enabled: advanced.enabled,
+      );
+
+      _scheduleInMemory(advanced, now: effectiveNow);
+
+      try {
+        _emitEvent(record.task, record.sessionId);
+      } catch (e, stack) {
+        _logger.severe('Failed to dispatch scheduled task ${record.id}: $e', e, stack);
+        _sessionManager.db.saveScheduledTask(
+          advanced.id,
+          advanced.task,
+          advanced.nextRunAt,
+          advanced.sessionId,
+          kind: advanced.kind.name,
+          intervalMinutes: advanced.intervalMinutes,
+          atTime: advanced.atTime,
+          weekdays: advanced.weekdays,
+          monthDay: advanced.monthDay,
+          zone: advanced.zone,
+          updatedAt: DateTime.now().toUtc(),
+          lastRunAt: advanced.lastRunAt,
+          lastStatus: 'error',
+          enabled: advanced.enabled,
+        );
+      }
+    } else {
+      _logger.warning(
+        'Skipping missed scheduled task "${record.task}" (id: ${record.id}): missed occurrence at $mostRecentMissed exceeded grace window of ${graceMinutes}m (missed by $missedStr). Advancing to $nextFutureRunAt.',
+      );
+
+      // S2: On a skipped occurrence, preserve previous lastRunAt (or null) so listings never imply a run that was skipped.
+      final advanced = ScheduledTaskRecord(
+        id: record.id,
+        task: record.task,
+        sessionId: record.sessionId,
+        kind: record.kind,
+        intervalMinutes: record.intervalMinutes,
+        atTime: record.atTime,
+        weekdays: record.weekdays,
+        monthDay: record.monthDay,
+        zone: record.zone,
+        nextRunAt: nextFutureRunAt,
+        createdAt: record.createdAt,
+        updatedAt: effectiveNow,
+        lastRunAt: record.lastRunAt,
+        lastStatus: 'skipped_missed',
+        enabled: record.enabled,
+      );
+
+      _sessionManager.db.saveScheduledTask(
+        advanced.id,
+        advanced.task,
+        advanced.nextRunAt,
+        advanced.sessionId,
+        kind: advanced.kind.name,
+        intervalMinutes: advanced.intervalMinutes,
+        atTime: advanced.atTime,
+        weekdays: advanced.weekdays,
+        monthDay: advanced.monthDay,
+        zone: advanced.zone,
+        updatedAt: advanced.updatedAt,
+        lastRunAt: advanced.lastRunAt,
+        lastStatus: advanced.lastStatus,
+        enabled: advanced.enabled,
+      );
+
+      _scheduleInMemory(advanced, now: effectiveNow);
+    }
   }
 
   @override

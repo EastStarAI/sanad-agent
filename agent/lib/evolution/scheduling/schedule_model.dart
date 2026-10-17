@@ -681,7 +681,14 @@ class OccurrenceCalculator {
       case ScheduleKind.interval:
         final duration = Duration(minutes: schedule.intervalMinutes!);
         if (previousRunAt != null) {
-          var candidate = previousRunAt.toUtc().add(duration);
+          final prevUtc = previousRunAt.toUtc();
+          if (fromUtc.isBefore(prevUtc)) {
+            return prevUtc.add(duration);
+          }
+          final diffUs = fromUtc.difference(prevUtc).inMicroseconds;
+          final stepUs = duration.inMicroseconds;
+          final steps = diffUs ~/ stepUs;
+          var candidate = prevUtc.add(Duration(microseconds: steps * stepUs));
           while (!candidate.isAfter(fromUtc)) {
             candidate = candidate.add(duration);
           }
@@ -802,6 +809,198 @@ class OccurrenceCalculator {
     }
 
     throw StateError('Could not compute next monthly occurrence');
+  }
+
+  /// Computes the most recent due instant on or before [now] that should have run (Decision B-D2).
+  ///
+  /// For [ScheduleKind.interval], steps forward from [nextRunAt] or [previousRunAt]
+  /// up to the latest slot on or before [now].
+  /// For calendar kinds (daily, weekly, monthly), searches backwards from [now] for the
+  /// most recent scheduled wall-clock slot.
+  /// If [nextRunAt] is provided and is strictly after the computed past candidate,
+  /// [nextRunAt] is returned (it had not been scheduled before that point).
+  static DateTime computeMostRecentDueInstant(
+    ScheduleDefinition schedule, {
+    required DateTime now,
+    DateTime? previousRunAt,
+    DateTime? nextRunAt,
+    @visibleForTesting ScheduleZone? zoneOverride,
+  }) {
+    final nowUtc = now.toUtc();
+    final zone = zoneOverride ?? ScheduleZone.parse(schedule.zone);
+
+    DateTime candidate;
+    switch (schedule.kind) {
+      case ScheduleKind.once:
+        return nextRunAt ?? (schedule.onceAt ?? nowUtc);
+
+      case ScheduleKind.interval:
+        final duration = Duration(minutes: schedule.intervalMinutes!);
+        final start = nextRunAt ??
+            (previousRunAt != null
+                ? previousRunAt.toUtc().add(duration)
+                : nowUtc);
+        if (start.isAfter(nowUtc)) {
+          return start;
+        }
+        final diffUs = nowUtc.difference(start).inMicroseconds;
+        final stepUs = duration.inMicroseconds;
+        final steps = diffUs ~/ stepUs;
+        var cur = start.add(Duration(microseconds: steps * stepUs));
+        while (!cur.add(duration).isAfter(nowUtc)) {
+          cur = cur.add(duration);
+        }
+        candidate = cur;
+
+      case ScheduleKind.daily:
+        candidate = _computePreviousDaily(schedule, nowUtc, zone);
+
+      case ScheduleKind.weekly:
+        candidate = _computePreviousWeekly(schedule, nowUtc, zone);
+
+      case ScheduleKind.monthly:
+        candidate = _computePreviousMonthly(schedule, nowUtc, zone);
+    }
+
+    if (nextRunAt != null && candidate.isBefore(nextRunAt.toUtc())) {
+      return nextRunAt.toUtc();
+    }
+    return candidate;
+  }
+
+  static DateTime _computePreviousDaily(
+    ScheduleDefinition schedule,
+    DateTime nowUtc,
+    ScheduleZone zone,
+  ) {
+    final parts = schedule.atTime!.split(':');
+    final targetHour = int.parse(parts[0]);
+    final targetMinute = int.parse(parts[1]);
+
+    final zonedNow = zone.toZoned(nowUtc);
+    final todayCandidate = zone.wallClockToUtc(
+      zonedNow.year,
+      zonedNow.month,
+      zonedNow.day,
+      targetHour,
+      targetMinute,
+    );
+
+    if (!todayCandidate.isAfter(nowUtc)) {
+      return todayCandidate;
+    }
+
+    final yesterdayDate =
+        DateTime.utc(zonedNow.year, zonedNow.month, zonedNow.day)
+            .subtract(const Duration(days: 1));
+    return zone.wallClockToUtc(
+      yesterdayDate.year,
+      yesterdayDate.month,
+      yesterdayDate.day,
+      targetHour,
+      targetMinute,
+    );
+  }
+
+  static DateTime _computePreviousWeekly(
+    ScheduleDefinition schedule,
+    DateTime nowUtc,
+    ScheduleZone zone,
+  ) {
+    final parts = schedule.atTime!.split(':');
+    final targetHour = int.parse(parts[0]);
+    final targetMinute = int.parse(parts[1]);
+
+    final targetWeekdays = schedule.weekdays!
+        .map((w) => _weekdayMap[w.toLowerCase()]!)
+        .toSet();
+
+    final zonedNow = zone.toZoned(nowUtc);
+    for (int offset = 0; offset <= 7; offset++) {
+      final checkDate =
+          DateTime.utc(zonedNow.year, zonedNow.month, zonedNow.day)
+              .subtract(Duration(days: offset));
+      if (targetWeekdays.contains(checkDate.weekday)) {
+        final candidateUtc = zone.wallClockToUtc(
+          checkDate.year,
+          checkDate.month,
+          checkDate.day,
+          targetHour,
+          targetMinute,
+        );
+        if (!candidateUtc.isAfter(nowUtc)) {
+          return candidateUtc;
+        }
+      }
+    }
+
+    throw StateError('Could not compute previous weekly occurrence');
+  }
+
+  static DateTime _computePreviousMonthly(
+    ScheduleDefinition schedule,
+    DateTime nowUtc,
+    ScheduleZone zone,
+  ) {
+    final parts = schedule.atTime!.split(':');
+    final targetHour = int.parse(parts[0]);
+    final targetMinute = int.parse(parts[1]);
+    final targetDay = schedule.monthDay!;
+
+    final zonedNow = zone.toZoned(nowUtc);
+    final totalMonths = zonedNow.year * 12 + (zonedNow.month - 1);
+
+    for (int m = 0; m < 48; m++) {
+      final monthIndex = totalMonths - m;
+      final checkYear = monthIndex ~/ 12;
+      final checkMonth = (monthIndex % 12) + 1;
+      final daysInMonth = DateTime.utc(checkYear, checkMonth + 1, 0).day;
+      if (daysInMonth >= targetDay) {
+        final candidateUtc = zone.wallClockToUtc(
+          checkYear,
+          checkMonth,
+          targetDay,
+          targetHour,
+          targetMinute,
+        );
+        if (!candidateUtc.isAfter(nowUtc)) {
+          return candidateUtc;
+        }
+      }
+    }
+
+    throw StateError('Could not compute previous monthly occurrence');
+  }
+}
+
+/// Policy for computing recurrence grace window and startup missed-occurrence policy (Decision B-D2).
+class RecurrenceGracePolicy {
+  static const Duration minGrace = Duration(seconds: 120);
+  static const Duration maxGrace = Duration(hours: 2);
+
+  /// Computes the grace window for a schedule definition.
+  ///
+  /// Grace is half the period clamped to [120s, 2h].
+  static Duration computeGraceWindow(ScheduleDefinition definition) {
+    Duration period;
+    switch (definition.kind) {
+      case ScheduleKind.once:
+        return const Duration(minutes: 5);
+      case ScheduleKind.interval:
+        period = Duration(minutes: definition.intervalMinutes ?? 1);
+      case ScheduleKind.daily:
+        period = const Duration(days: 1);
+      case ScheduleKind.weekly:
+        period = const Duration(days: 7);
+      case ScheduleKind.monthly:
+        period = const Duration(days: 30);
+    }
+    final halfPeriodSeconds = period.inSeconds ~/ 2;
+    final clampedSeconds = halfPeriodSeconds.clamp(
+      minGrace.inSeconds,
+      maxGrace.inSeconds,
+    );
+    return Duration(seconds: clampedSeconds);
   }
 }
 

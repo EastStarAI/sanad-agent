@@ -532,5 +532,145 @@ void main() {
         expect(next2, DateTime.utc(2026, 5, 31, 10, 0));
       });
     });
+
+    group('Recurrence Grace Policy (Decision B-D2)', () {
+      test('computes grace window for once and recurring kinds with clamping', () {
+        // Once schedule: legacy grace window of 5 minutes
+        final onceDef = ScheduleDefinition(
+          kind: ScheduleKind.once,
+          zone: 'local',
+          onceAt: DateTime.utc(2026, 10, 20, 12, 0),
+        );
+        expect(RecurrenceGracePolicy.computeGraceWindow(onceDef), const Duration(minutes: 5));
+
+        // Interval 2 min: half period is 60s -> clamped to minGrace (120s)
+        final intv2 = ScheduleDefinition(
+          kind: ScheduleKind.interval,
+          intervalMinutes: 2,
+          zone: 'local',
+        );
+        expect(RecurrenceGracePolicy.computeGraceWindow(intv2), const Duration(seconds: 120));
+
+        // Interval 10 min: half period is 5m (300s) -> within [120s, 7200s]
+        final intv10 = ScheduleDefinition(
+          kind: ScheduleKind.interval,
+          intervalMinutes: 10,
+          zone: 'local',
+        );
+        expect(RecurrenceGracePolicy.computeGraceWindow(intv10), const Duration(minutes: 5));
+
+        // Interval 1 hour: half period is 30m (1800s)
+        final intv60 = ScheduleDefinition(
+          kind: ScheduleKind.interval,
+          intervalMinutes: 60,
+          zone: 'local',
+        );
+        expect(RecurrenceGracePolicy.computeGraceWindow(intv60), const Duration(minutes: 30));
+
+        // Interval 6 hours: half period is 3h -> clamped to maxGrace (2 hours)
+        final intv360 = ScheduleDefinition(
+          kind: ScheduleKind.interval,
+          intervalMinutes: 360,
+          zone: 'local',
+        );
+        expect(RecurrenceGracePolicy.computeGraceWindow(intv360), const Duration(hours: 2));
+
+        // Daily: half period is 12h -> clamped to maxGrace (2 hours)
+        final daily = ScheduleDefinition(
+          kind: ScheduleKind.daily,
+          atTime: '08:00',
+          zone: 'local',
+        );
+        expect(RecurrenceGracePolicy.computeGraceWindow(daily), const Duration(hours: 2));
+
+        // Weekly: half period is 3.5 days -> clamped to maxGrace (2 hours)
+        final weekly = ScheduleDefinition(
+          kind: ScheduleKind.weekly,
+          weekdays: ['mon'],
+          atTime: '08:00',
+          zone: 'local',
+        );
+        expect(RecurrenceGracePolicy.computeGraceWindow(weekly), const Duration(hours: 2));
+
+        // Monthly: half period is ~15 days -> clamped to maxGrace (2 hours)
+        final monthly = ScheduleDefinition(
+          kind: ScheduleKind.monthly,
+          monthDay: 15,
+          atTime: '08:00',
+          zone: 'local',
+        );
+        expect(RecurrenceGracePolicy.computeGraceWindow(monthly), const Duration(hours: 2));
+      });
+    });
+
+    group('OccurrenceCalculator computeMostRecentDueInstant (Decision B-D2)', () {
+      test('computes most recent missed interval instant', () {
+        final def = ScheduleDefinition(
+          kind: ScheduleKind.interval,
+          intervalMinutes: 15,
+          zone: 'Z',
+        );
+
+        // Previous run at 10:00. Next was 10:15. Now is 10:35.
+        // Slots: 10:15, 10:30. Most recent on or before 10:35 is 10:30.
+        final mostRecent = OccurrenceCalculator.computeMostRecentDueInstant(
+          def,
+          now: DateTime.utc(2026, 10, 20, 10, 35),
+          previousRunAt: DateTime.utc(2026, 10, 20, 10, 0),
+          nextRunAt: DateTime.utc(2026, 10, 20, 10, 15),
+        );
+        expect(mostRecent, DateTime.utc(2026, 10, 20, 10, 30));
+      });
+
+      test('computes most recent missed daily instant', () {
+        final def = ScheduleDefinition(
+          kind: ScheduleKind.daily,
+          atTime: '10:00',
+          zone: 'Z',
+        );
+
+        // If now is 10:30 UTC on 2026-10-20, most recent is 10:00 today
+        final pastToday = OccurrenceCalculator.computeMostRecentDueInstant(
+          def,
+          now: DateTime.utc(2026, 10, 20, 10, 30),
+        );
+        expect(pastToday, DateTime.utc(2026, 10, 20, 10, 0));
+
+        // If now is 08:30 UTC on 2026-10-20, most recent is 10:00 yesterday
+        final pastYesterday = OccurrenceCalculator.computeMostRecentDueInstant(
+          def,
+          now: DateTime.utc(2026, 10, 20, 8, 30),
+        );
+        expect(pastYesterday, DateTime.utc(2026, 10, 19, 10, 0));
+      });
+
+      test('interval calculation terminates efficiently when last run is far in the past (S3)', () {
+        final def = ScheduleDefinition(
+          kind: ScheduleKind.interval,
+          intervalMinutes: 15,
+          zone: 'Z',
+        );
+
+        // Last run 5 years ago (2021-10-20 10:00)
+        final farPast = DateTime.utc(2021, 10, 20, 10, 0);
+        final now = DateTime.utc(2026, 10, 20, 10, 35);
+
+        // computeNextOccurrence must terminate instantly with next future slot (10:45)
+        final next = OccurrenceCalculator.computeNextOccurrence(
+          def,
+          from: now,
+          previousRunAt: farPast,
+        );
+        expect(next, DateTime.utc(2026, 10, 20, 10, 45));
+
+        // computeMostRecentDueInstant must terminate instantly with latest due slot on or before now (10:30)
+        final mostRecent = OccurrenceCalculator.computeMostRecentDueInstant(
+          def,
+          now: now,
+          previousRunAt: farPast,
+        );
+        expect(mostRecent, DateTime.utc(2026, 10, 20, 10, 30));
+      });
+    });
   });
 }
