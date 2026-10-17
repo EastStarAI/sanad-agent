@@ -4,7 +4,12 @@
 This contract applies to `client/lib/features/conversations/domain/`.
 
 ## Store Ownership
-- `ConversationCacheStore` is the sole in-memory owner of conversation cache, drafts, workspace expansion, pagination state, and per-device destinations.
+- `ConversationCacheStore` is the sole in-memory facade for conversation cache, drafts, workspace expansion, pagination state, and per-device destinations. Internally, responsibilities are decomposed across cohesive owners behind this facade:
+  - `CacheGenerationGuard` owns device, workspace, and section generations, and staleness rejection.
+  - `WorkspaceCacheProjection` owns workspace lifecycle mutations (creation, update, removal, refresh, error) and expansion projection.
+  - `SessionSectionCache` owns conversation sections, session collections, selection, loading and error flags, and viewport anchors.
+  - `ConversationDraftCache` owns draft read, write, recovery, and clear operations for existing sessions and New Conversation.
+  Owners receive dependencies through explicit constructor parameters or typed callbacks and never reach into another owner's private state; per-device context slices stay owned by `SessionSectionCache` and the other owners read or write them only through its context accessors.
 - `DeviceConversationStore` owns canonical timeline state; `ProcessingStore` and attention/execution registries own their respective authoritative projections. It owns independent older/newer history cursors for an anchored slice and may retain at most two recently visited timelines exhausted in both directions so same-runtime navigation does not discard pages the user explicitly loaded; this retention is not persisted cache authority.
 - Cubits and widgets must not create parallel cache maps, cursors, drafts, processing sets, or recovery stores.
 - `SessionCubit.agentSessions` is a compatibility projection from the cache store, not a second owner.
