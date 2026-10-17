@@ -384,7 +384,10 @@ void main() {
 
         stdoutBuffer.clear();
         expect(await runner.run(['skills']), 0);
-        expect(stdoutBuffer.toString(), contains('Skills:'));
+        expect(
+          stdoutBuffer.toString(),
+          anyOf(contains('Skills ('), contains('No skills found')),
+        );
 
         stdoutBuffer.clear();
         expect(await runner.run(['mcp', 'list']), 0);
