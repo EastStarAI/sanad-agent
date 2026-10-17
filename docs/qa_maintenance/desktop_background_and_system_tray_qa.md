@@ -19,6 +19,8 @@ Technical spec: `docs/technical/desktop_background_and_system_tray.md`
 | Linux behavior | Closing the window hides it, a real `StatusNotifierItem` is registered on the session bus, and the panel menu carries every action including `Show` | Linux exits on window close, advertises no item, or registers an icon with no menu |
 | Dependency compatibility | Linux desktop build succeeds on the supported toolchain baseline (GLib < 2.74 included) | Deferred tray dependency breaks the Linux build |
 | Explicit quit ownership | Only `Quit` destroys the app: tray, CLI endpoint, cache flush, state disposal, window destroy | Window close disposes sockets, CLI endpoint, or application state |
+| Tray restart invariant | After any Client hot restart the menu bar still shows exactly one tray icon, and the previous isolate's icon and callbacks are gone | A second tray icon appears per hot restart, or clicking a stale icon reaches a dead isolate |
+| Tray artwork | macOS shows the white background-free mark in the menu bar tint; Windows/Linux show the brand-blue mark; both come from `client/assets/tray/` | The icon draws the opaque app logo as a black square, or is tinted wrong for the platform |
 
 Automated owners:
 - `client/test/unit/infrastructure/platform/desktop_lifecycle_manager_test.dart`
@@ -83,6 +85,7 @@ complete:
 | Tray → `Start Agent` / `Restart Agent` | Existing controller action runs once; menu status refreshes |
 | Tray → `Client CLI` | Toggles the same setting as Settings → Client CLI |
 | Tray → Quit | Tray removed, CLI ownership released, cache flushed, process exits |
+| `sanad-dev restart client` (hot restart) with the tray icon visible | Menu bar still shows exactly one tray icon; its menu still acts on the live Client |
 | Linux control | Window close hides the window, the tray item and CLI endpoint stay alive, and `Quit` ends the process |
 
 ---
@@ -93,4 +96,21 @@ complete:
 cd client && fvm flutter analyze 2>&1 | tail -5
 cd client && fvm flutter test test/unit/infrastructure/platform/ 2>&1 | tail -5
 cd client && fvm flutter build linux --debug 2>&1 | tail -5
+```
+
+macOS tray-icon count per running Client process (one `statusItems` entry is expected;
+virtualization-free, no click required):
+
+```bash
+osascript -e 'tell application "System Events"
+set o to ""
+repeat with p in (every process whose name is "Sanad")
+set n to 0
+repeat with mb in (menu bars of p)
+set n to n + 1
+if n > 1 then set o to o & "pid " & (unix id of p) & " statusItems=" & (count of menu bar items of mb) & linefeed
+end repeat
+end repeat
+return o
+end tell'
 ```
