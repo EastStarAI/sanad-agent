@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
@@ -38,6 +37,8 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
     required String tooltip,
     required void Function() onTrayIconClick,
   }) async {
+    // Re-initialization must never leave a previously created native icon alive.
+    await destroy();
     try {
       final trayIcon = tm.TrayIcon.create();
       if (trayIcon == null) {
@@ -59,7 +60,11 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
         trayIcon.setContextMenuTrigger(tm.ContextMenuTrigger.rightClicked);
       } else {
         if (AppPlatform.isMacOS) {
-          trayIcon.iconSize = const Size(18, 18);
+          // The menu bar owns the tray colours: a template image is drawn as a
+          // monochrome glyph that follows the bar's appearance, so the icon is
+          // the background-free mark instead of the square app logo, and its
+          // size stays at the platform default (18x18 points).
+          trayIcon.isIconTemplate = true;
         }
         trayIcon.setContextMenuTrigger(tm.ContextMenuTrigger.clicked);
       }
@@ -192,15 +197,25 @@ class AppTrayService {
 
   bool get isInitialized => _isInitialized;
 
+  /// The tray icon asset per platform.
+  ///
+  /// macOS draws the tray icon as a monochrome template image, so it needs the
+  /// background-free white mark; every other platform draws the icon as-is and
+  /// gets the brand blue mark. Both assets are the tightly cropped renderings of
+  /// `docs/assets/brand/sanad-adaptive-foreground-source.svg`.
+  static String get defaultIconAssetPath => AppPlatform.isMacOS
+      ? 'assets/tray/sanad-tray-macos.png'
+      : 'assets/tray/sanad-tray-default.png';
+
   Future<void> initialize({
-    String iconAssetPath = 'assets/app-logo.png',
+    String? iconAssetPath,
     String tooltip = 'Sanad',
   }) async {
     if (_isInitialized) return;
     _isInitialized = true;
 
     await _adapter.initialize(
-      iconAssetPath: iconAssetPath,
+      iconAssetPath: iconAssetPath ?? defaultIconAssetPath,
       tooltip: tooltip,
       onTrayIconClick: () => _lifecycleManager.showWindow(),
     );
