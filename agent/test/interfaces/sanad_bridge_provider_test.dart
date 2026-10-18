@@ -537,10 +537,10 @@ OPENROUTER_API_KEY=sk-or-test
       getIt.registerSingleton<AgentRuntimeService>(runtimeService);
 
       final cacheService = ProviderModelCacheService(
-      repo,
-      runtimeService,
-      buildDefaultThinkingCapabilityAssembler(),
-    );
+        repo,
+        runtimeService,
+        buildDefaultThinkingCapabilityAssembler(),
+      );
       getIt.registerSingleton<ProviderModelCacheService>(cacheService);
 
       repo.createInstance(
@@ -614,10 +614,10 @@ OPENROUTER_API_KEY=sk-or-test
       getIt.registerSingleton<AgentRuntimeService>(runtimeService);
 
       final cacheService = ProviderModelCacheService(
-      repo,
-      runtimeService,
-      buildDefaultThinkingCapabilityAssembler(),
-    );
+        repo,
+        runtimeService,
+        buildDefaultThinkingCapabilityAssembler(),
+      );
       getIt.registerSingleton<ProviderModelCacheService>(cacheService);
 
       repo.createInstance(

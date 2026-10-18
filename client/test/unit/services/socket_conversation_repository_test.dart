@@ -20,6 +20,7 @@ import 'package:sanad_client/features/conversations/domain/models/device_workspa
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
+import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -76,6 +77,27 @@ void main() {
     expect(client.lastSetWorkspacePermissionModePath, '/path');
     expect(client.lastSetWorkspacePermissionModeMode, WorkspacePermissionMode.fullAccess);
   });
+
+  test('replayTurnWithAttachments forwards to client including empty message', () async {
+    final client = _TestConversationClient();
+    final repository = SocketConversationRepository(_TestConversationClientRegistry(client));
+
+    final result = await repository.replayTurnWithAttachments(
+      agent,
+      sessionId: 'session-1',
+      targetRequestId: 'req-1',
+      expectedHistoryRevision: 2,
+      action: TurnReplayAction.edit,
+      message: '',
+      attachmentEdits: [
+        {'name': 'test.png'},
+      ],
+    );
+
+    expect(result.outcome, 'accepted');
+    expect(client.lastReplayWithAttachments?['message'], '');
+    expect(client.lastReplayWithAttachments?['attachmentEdits'], hasLength(1));
+  });
 }
 
 class _TestConversationClientRegistry implements ConversationClientRegistry {
@@ -87,7 +109,7 @@ class _TestConversationClientRegistry implements ConversationClientRegistry {
   ConversationClient getOrCreateConversationClientForAgent(DeviceConfig config) => client;
 }
 
-class _TestConversationClient implements ConversationClient {
+class _TestConversationClient implements ConversationClient, AttachmentReplayClient {
   final _sessionsController = StreamController<List<Session>>.broadcast();
   final _policyController = StreamController<WorkspacePolicy>.broadcast();
   bool connected = false;
@@ -98,6 +120,40 @@ class _TestConversationClient implements ConversationClient {
   String? lastSetWorkspacePermissionModeId;
   String? lastSetWorkspacePermissionModePath;
   WorkspacePermissionMode? lastSetWorkspacePermissionModeMode;
+  Map<String, dynamic>? lastReplayWithAttachments;
+
+  @override
+  Future<TurnReplayResult> replayTurnWithAttachments({
+    required String sessionId,
+    required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    required int expectedHistoryRevision,
+    required TurnReplayAction action,
+    required String message,
+    required List<Map<String, dynamic>> attachmentEdits,
+    String? providerInstanceId,
+    String? modelId,
+    String? thinkingMode,
+    bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
+  }) async {
+    lastReplayWithAttachments = {
+      'sessionId': sessionId,
+      'targetRequestId': targetRequestId,
+      'targetMessageId': targetMessageId,
+      'targetTurnId': targetTurnId,
+      'expectedHistoryRevision': expectedHistoryRevision,
+      'action': action,
+      'message': message,
+      'attachmentEdits': attachmentEdits,
+    };
+    return const TurnReplayResult(
+      outcome: 'accepted',
+      safety: TurnReplaySafety.safe,
+      requiresConfirmation: false,
+    );
+  }
 
   void emitSessions(List<Session> sessions) {
     _sessionsController.add(sessions);

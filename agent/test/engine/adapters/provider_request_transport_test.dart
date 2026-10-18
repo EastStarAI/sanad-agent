@@ -59,6 +59,32 @@ void main() {
       await transport.dispose();
     });
 
+    test('adapterSharedClient is not closed on dispose when no scope is present', () async {
+      final client = _CloseAwareClient();
+      final transport = ProviderRequestTransport(
+        options: const LLMRequestOptions(),
+        adapterSharedClient: client,
+      );
+
+      await transport.dispose();
+
+      expect(client.isClosed, isFalse);
+    });
+
+    test('requestClientFactory creates fresh request-owned client closed on dispose', () async {
+      final client = _CloseAwareClient();
+      final transport = ProviderRequestTransport(
+        options: LLMRequestOptions(
+          cancellationScope: scope,
+          requestClientFactory: () => client,
+        ),
+      );
+
+      await transport.dispose();
+
+      expect(client.isClosed, isTrue);
+    });
+
     test('close without request completion reports cleanup timeout', () async {
       final client = _UnstoppableClient();
       final transport = ProviderRequestTransport(

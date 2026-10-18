@@ -1,3 +1,8 @@
+---
+title: "Remaining Hard-Coded UI Strings (Task 95)"
+description: "Living inventory of remaining hard-coded English UI literals in Client presentation and screens after Task 95, grouped by file with counts, as the canonical incremental-localization checklist."
+---
+
 # Remaining Hard-Coded UI Strings (Task 95)
 
 Scan of string literals inside `presentation/` and `screens/` files only.

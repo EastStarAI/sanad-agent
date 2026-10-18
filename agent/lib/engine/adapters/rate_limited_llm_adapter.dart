@@ -33,13 +33,18 @@ typedef RuntimeNoticeEmitter =
 ///
 /// `getAvailableModels` is also gated because some providers (e.g. NVIDIA NIM)
 /// bill `/models` against the same window.
-class RateLimitedLLMAdapter implements LLMAdapter {
+class RateLimitedLLMAdapter
+    implements LLMAdapter, ToolResultMediaCapabilityProvider {
   final LLMAdapter _inner;
 
   /// Provider adapter wrapped by this turn-scoped rate-limit/recovery layer.
   /// Background metadata calls may reuse the provider adapter, but must not
   /// retain this turn's cancellation token or runtime-notice callbacks.
   LLMAdapter get providerAdapter => _inner;
+
+  @override
+  ToolResultMediaCapability get toolResultMediaCapability =>
+      _inner.toolResultMediaCapability;
 
   final String providerInstanceId;
   final int requestsPerMinute;
@@ -105,7 +110,9 @@ class RateLimitedLLMAdapter implements LLMAdapter {
     );
   }
 
-  Future<void> _acquire([LLMRequestOptions options = const LLMRequestOptions()]) async {
+  Future<void> _acquire([
+    LLMRequestOptions options = const LLMRequestOptions(),
+  ]) async {
     final scope = options.cancellationScope;
     if (scope != null && !scope.isPublicationOpen) {
       throw ProviderRequestCancelledException(operation: 'rate_limit_wait');

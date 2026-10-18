@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
 import 'package:sanad_agent/core/sanad_home/runtime_ownership.dart';
@@ -15,6 +16,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
+import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
@@ -37,6 +39,11 @@ Future<void> main(List<String> args) async {
   print('--- Sanad Agent Daemon ---');
 
   await getIt<AuthManager>().initialize();
+  try {
+    await getIt<ModelsDevService>().ensureLoaded();
+  } catch (e) {
+    Logger('DaemonStartup').warning('Failed to hydrate models.dev catalog: $e');
+  }
   final gatewayManager = getIt<GatewayManager>();
 
   // Register platforms
@@ -67,6 +74,7 @@ Future<void> main(List<String> args) async {
       LocalDaemonServerPlatform(
         security: security,
         deliveryPresence: getIt<DeliveryPresenceController>(),
+        viewImageMediaHistoryLoader: getIt<SessionManager>().getMessages,
       ),
     );
   } else {

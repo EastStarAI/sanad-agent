@@ -46,4 +46,4 @@ All items share one `run_id`. The three assistant segments have distinct `model_
 - Client Stop fallback and live terminal ordering: `client/test/unit/services/device_conversation_event_handler_test.dart`
 - Client cancelled-state presentation: `client/test/widget/tool_group_tile_test.dart`
 - Client failure/retry presentation: `client/test/unit/bloc/session_cubit_test.dart`
-- Full local socket/runtime/history path: `client/e2e_test/local_dual_connection_e2e_test.dart`
+- Full local socket/runtime/history path: `client/e2e_test/local_dual_connection_e2e_test.dart` (validates session device binding against hardware identity, runtime notice recovery, pagination, and deterministic WebSocket conversation)

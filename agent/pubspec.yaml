@@ -1,6 +1,6 @@
 name: sanad_agent
 description: The local Sanad Agent runtime and CLI.
-version: 1.0.16
+version: 1.0.17
 publish_to: none
 # repository: https://github.com/my_org/my_repo
 
@@ -25,6 +25,7 @@ dependencies:
   uuid: ^4.5.1
   ffi: ^2.1.2
   intl: ^0.20.0
+  image: ^4.9.1
   sanad_release_contract:
     path: ../release/contract
   sanad_auth_lock:

@@ -22,12 +22,20 @@ import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/capabilities/models/tool_schema.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
 
 class _CountingAdapter implements LLMAdapter {
   int callCount = 0;
-  LLMRequestOptions? lastOptions;
+  final List<LLMRequestOptions> recordedOptions = [];
+  AgentResponse Function(int callCount, LLMRequestOptions options)? onGenerate;
+
+  LLMRequestOptions? get lastOptions =>
+      recordedOptions.isNotEmpty ? recordedOptions.last : null;
 
   @override
   Future<AgentResponse> generateResponse(
@@ -37,7 +45,10 @@ class _CountingAdapter implements LLMAdapter {
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
     callCount += 1;
-    lastOptions = options;
+    recordedOptions.add(options);
+    if (onGenerate != null) {
+      return onGenerate!(callCount, options);
+    }
     return AgentResponse(
       message: Message(role: MessageRole.assistant, content: 'ok'),
     );
@@ -63,6 +74,27 @@ class _CountingAdapter implements LLMAdapter {
 
   @override
   Future<List<ModelOption>> getAvailableModels() async => const [];
+}
+
+class _SimpleTestTool extends BaseTool {
+  @override
+  ToolSchema get schema => ToolSchema(
+    name: 'sample_tool',
+    description: 'Sample test tool',
+    parameters: {},
+  );
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text('tool result');
+
+  @override
+  Future<String> execute(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => 'tool result';
 }
 
 void main() {
@@ -259,6 +291,197 @@ void main() {
 
       expect(response.content, 'ok');
       expect(adapter.callCount, 1);
+      expect(
+        adapter.lastOptions?.thinkingDirective,
+        isA<OpenAiEffortDirective>(),
+      );
+      expect(
+        (adapter.lastOptions!.thinkingDirective! as OpenAiEffortDirective)
+            .effort,
+        'high',
+      );
+    },
+  );
+
+  test(
+    'thinking selection frozen across turn iterations despite mid-turn config and preference mutation',
+    () async {
+      registry.registerTool(_SimpleTestTool());
+
+      repo.upsertModelCache(
+        instanceId: 'inst-1',
+        cacheKey: 'models',
+        models: [
+          {
+            'value': 'o3',
+            'supports_reasoning_output': true,
+            'thinking_control': {
+              'status': 'supported',
+              'kind': 'effort',
+              'options': [
+                {'id': 'low', 'label': 'Low'},
+                {'id': 'medium', 'label': 'Medium'},
+                {'id': 'high', 'label': 'High'},
+              ],
+              'capability_revision': 'rev-supported',
+              'source': 'profile',
+            },
+          },
+        ],
+        fetchedAt: DateTime.now(),
+        source: 'live',
+        configRevision: 1,
+        credentialRevision: 1,
+      );
+
+      final adapter = _CountingAdapter();
+      adapter.onGenerate = (count, options) {
+        if (count == 1) {
+          // Mid-turn: modify cache/revisions to revoke thinking
+          repo.upsertModelCache(
+            instanceId: 'inst-1',
+            cacheKey: 'models',
+            models: [
+              {
+                'value': 'o3',
+                'thinking_control': {
+                  'status': 'unsupported',
+                  'capability_revision': 'rev-unsupported',
+                  'source': 'profile',
+                },
+              },
+            ],
+            fetchedAt: DateTime.now(),
+            source: 'live',
+            configRevision: 2,
+            credentialRevision: 1,
+          );
+
+          return AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: null,
+              toolCalls: [
+                ToolCall(id: 'call_1', name: 'sample_tool', arguments: {}),
+              ],
+            ),
+            isToolCall: true,
+          );
+        }
+        return AgentResponse(
+          message: Message(role: MessageRole.assistant, content: 'completed'),
+        );
+      };
+
+      final session = sessionManager.createSession(
+        'o3',
+        providerId: 'inst-1',
+        thinkingMode: 'high',
+      );
+      final runner = AgentRunner(
+        adapter,
+        registry,
+        sessionManager,
+        existingSessionId: session.sessionId,
+      );
+
+      final response = await runner.sendMessage(
+        'Run tool and reply',
+        providerId: 'inst-1',
+        model: 'o3',
+        thinkingMode: 'high',
+      );
+
+      expect(response.content, 'completed');
+      expect(adapter.callCount, 2);
+      expect(adapter.recordedOptions.length, 2);
+
+      // Both iterations MUST retain the admitted thinking directive and mode
+      expect(
+        adapter.recordedOptions[0].thinkingDirective,
+        isA<OpenAiEffortDirective>(),
+      );
+      expect(
+        (adapter.recordedOptions[0].thinkingDirective as OpenAiEffortDirective)
+            .effort,
+        'high',
+      );
+      expect(adapter.recordedOptions[0].thinkingMode, 'high');
+
+      expect(
+        adapter.recordedOptions[1].thinkingDirective,
+        isA<OpenAiEffortDirective>(),
+      );
+      expect(
+        (adapter.recordedOptions[1].thinkingDirective as OpenAiEffortDirective)
+            .effort,
+        'high',
+      );
+      expect(adapter.recordedOptions[1].thinkingMode, 'high');
+    },
+  );
+
+  test(
+    'declared endpoint thinking controls on custom provider resolve to proper native directives',
+    () async {
+      repo.createInstance(
+        ProviderInstance(
+          id: 'custom-inst',
+          templateId: kCustomProviderTemplateId,
+          displayName: 'Custom Provider',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          defaultModel: 'custom-reasoning-model',
+          status: InstanceStatus.ready,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      repo.upsertModelCache(
+        instanceId: 'custom-inst',
+        cacheKey: 'models',
+        models: [
+          {
+            'value': 'custom-reasoning-model',
+            'supports_reasoning_output': true,
+            'model_metadata': {
+              'thinking_control': {
+                'status': 'supported',
+                'wire': 'openai_chat_effort',
+                'options': {'low': 'low', 'high': 'high'},
+                'default_option_id': 'low',
+              },
+            },
+          },
+        ],
+        fetchedAt: DateTime.now(),
+        source: 'live',
+        configRevision: 1,
+        credentialRevision: 1,
+      );
+
+      final adapter = _CountingAdapter();
+      final session = sessionManager.createSession(
+        'custom-reasoning-model',
+        providerId: 'custom-inst',
+        thinkingMode: 'high',
+      );
+      final runner = AgentRunner(
+        adapter,
+        registry,
+        sessionManager,
+        existingSessionId: session.sessionId,
+      );
+
+      final response = await runner.sendMessage(
+        'Hello custom',
+        providerId: 'custom-inst',
+        model: 'custom-reasoning-model',
+        thinkingMode: 'high',
+      );
+
+      expect(response.content, 'ok');
       expect(
         adapter.lastOptions?.thinkingDirective,
         isA<OpenAiEffortDirective>(),

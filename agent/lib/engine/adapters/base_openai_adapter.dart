@@ -11,12 +11,21 @@ import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/provider_thinking/aggregator_thinking_wire_codec.dart';
+import '../../core/provider_thinking/deepseek_thinking_wire_codec.dart';
 import '../../core/provider_thinking/google_thinking_wire_codec.dart';
-import '../../core/provider_thinking/openai_thinking_wire_codec.dart';
+import '../../core/provider_thinking/native_thinking_directive.dart';
 import '../../core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
+import '../../core/provider_thinking/thinking_route_policy.dart';
+import '../../core/provider_thinking/thinking_wire_vocabulary.dart';
+import '../../core/provider_thinking/zai_thinking_wire_codec.dart';
 import '../../core/models/model_metadata.dart';
+import '../../core/di.dart';
+import '../../core/provider_runtime/provider_instance.dart';
+import '../../core/provider_runtime/provider_protocol_constants.dart';
+import '../../core/provider_runtime/provider_instance_repository.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
+import '../../core/provider_runtime/route_capability_resolver.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'models_dev_service.dart';
@@ -25,6 +34,7 @@ import 'opencode_session_affinity.dart';
 import 'llm_request_options.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
+import 'tool_result_wire_codec.dart';
 import '../llm_request_dumper.dart';
 
 class BaseOpenAIAdapter implements LLMAdapter {
@@ -32,11 +42,13 @@ class BaseOpenAIAdapter implements LLMAdapter {
   final Config config;
   final ProviderProfile profile;
   final http.Client? client;
+  final http.Client Function()? requestClientFactory;
   final ModelsDevService? modelsDevService;
   final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
   final String? apiKeyOverride;
   final String? defaultModelOverride;
+  final String? providerInstanceId;
   String _availableModelsSource = 'fallback';
   Object? _lastModelsException;
 
@@ -44,17 +56,23 @@ class BaseOpenAIAdapter implements LLMAdapter {
     this.config,
     this.profile, {
     this.client,
+    this.requestClientFactory,
     this.modelsDevService,
     this.modelContextLimitLookup,
     this.baseUrlOverride,
     this.apiKeyOverride,
     this.defaultModelOverride,
+    this.providerInstanceId,
   });
 
   String get _baseUrl => ProviderEndpointResolver.normalizeBaseUrl(
     baseUrlOverride ?? config.baseUrlFor(profile),
   );
   String get _apiKey => apiKeyOverride ?? config.apiKeyFor(profile);
+  Map<String, String> get _modelDiscoveryHeaders => {
+    if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
+    ...profile.defaultHeaders,
+  };
 
   // Public accessors for subclasses (Strategy Pattern)
   String get baseUrl => _baseUrl;
@@ -85,13 +103,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     }
     for (final url in candidates) {
       try {
-        final response = await _get(
-          url,
-          headers: {
-            if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
-            ...profile.defaultHeaders,
-          },
-        );
+        final response = await _get(url, headers: _modelDiscoveryHeaders);
         if (response.statusCode != 200) {
           _lastModelsException = LlmHttpException.fromResponse(
             response,
@@ -158,14 +170,26 @@ class BaseOpenAIAdapter implements LLMAdapter {
               provider: profile.name,
               contextWindow: contextLimit,
               supportsReasoning: supportsReasoning,
+              modelMetadata: item is Map
+                  ? Map<String, Object?>.from(
+                      item.map((key, value) => MapEntry(key.toString(), value)),
+                    )
+                  : const {},
             ),
           );
         }
         if (options.isNotEmpty) {
+          var resolvedOptions = options;
+          if (profile.name == 'lm-studio') {
+            resolvedOptions = await _withLmStudioNativeReasoning(options);
+          }
+          if (profile.name == 'openrouter') {
+            resolvedOptions = _withOpenRouterReasoning(resolvedOptions);
+          }
           _availableModelsSource = 'live';
           _lastModelsException = null;
           if (profile.fallbackModels.isNotEmpty) {
-            options.sort((a, b) {
+            resolvedOptions.sort((a, b) {
               var aId = a.value;
               var bId = b.value;
 
@@ -185,7 +209,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
               return 0;
             });
           }
-          return options;
+          return resolvedOptions;
         }
       } catch (e) {
         _logger.warning('Failed to fetch standard models from $url: $e');
@@ -346,7 +370,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     // 1. LM Studio local probe (reference-style)
     if (profile.name == 'lm-studio') {
       try {
-        final cleanBase = baseUrl.replaceAll('/v1', '').replaceAll('/v1/', '');
+        final cleanBase = _lmStudioNativeBase;
         final url = Uri.parse('$cleanBase/api/v1/models');
         final response = await _get(url, timeout: const Duration(seconds: 2));
         if (response.statusCode == 200) {
@@ -420,6 +444,343 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return ModelMetadata.unknownContextLimit;
   }
 
+  /// Verbatim native LM Studio reasoning declaration observed from
+  /// `GET /api/v1/models`. Kept as raw endpoint evidence, separate from the
+  /// derived declaration below and from any enriched descriptor.
+  static const lmStudioReasoningEvidenceKey = 'lm_studio_reasoning';
+
+  /// Documented aggregator gateway effort vocabulary in documented descending
+  /// effort order (`https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.md`).
+  ///
+  /// The wire member is `reasoning.supported_efforts`: a finite list of these
+  /// exact values, an explicit `null` documenting every gateway value, or an
+  /// omitted member documenting no effort selector at all. Membership is
+  /// validated against the shared `ThinkingWireVocabulary`, so discovery and the
+  /// typed declaration parser can never drift; this list only fixes the
+  /// documented order an explicit `null` (all values) declaration advertises.
+  static const _openRouterGatewayEfforts = <String>[
+    'max',
+    'xhigh',
+    'high',
+    'medium',
+    'low',
+    'minimal',
+    'none',
+  ];
+
+  /// Explicit route-control evidence published for a model whose discovery wire
+  /// documents `reasoning` but for which no trustworthy declaration can be
+  /// derived.
+  ///
+  /// The wire's own evidence owns the exact route's control state, so an
+  /// unusable declaration resolves that route to `unknown` instead of silently
+  /// adopting an unrelated intrinsic ladder. Model-owned image, reasoning-output,
+  /// context and other discovery facts stay untouched: only `thinking_control`
+  /// is published, and no documented value is copied, adapted or remapped.
+  static const _openRouterUnresolvedControl = <String, Object?>{
+    'status': 'unknown',
+  };
+
+  /// Documented native LM Studio public reasoning values for
+  /// `capabilities.reasoning.allowed_options` / `capabilities.reasoning.default`
+  /// (`https://lmstudio.ai/docs/developer/rest/list`).
+  static const _lmStudioNativeReasoningValues = <String>{
+    'off',
+    'on',
+    'low',
+    'medium',
+    'high',
+  };
+
+  /// Native values with a documented OpenAI-compatible Chat `reasoning_effort`
+  /// equivalent. Every advertised option keeps its exact native value, so
+  /// `low`/`medium`/`high` reach the wire unchanged.
+  static const _lmStudioChatEffortValues = <String>['low', 'medium', 'high'];
+
+  /// Native LM Studio REST base URL. The native API is served from the server
+  /// root while the OpenAI-compatible API lives under `/v1`.
+  String get _lmStudioNativeBase =>
+      _baseUrl.replaceAll('/v1', '').replaceAll('/v1/', '');
+
+  /// Enriches discovered LM Studio models with the finite reasoning declaration
+  /// served by the native `GET /api/v1/models` endpoint.
+  ///
+  /// Model identity is matched exactly: a native `key` or one of its
+  /// `loaded_instances[].id` identifiers must equal the discovered
+  /// compatibility id, and exactly one native entry may claim it. Absent,
+  /// failing, malformed or ambiguous evidence leaves the compatibility
+  /// discovery result untouched; no support is fabricated, no protocol is
+  /// switched and no unrelated metadata is reset.
+  Future<List<ModelOption>> _withLmStudioNativeReasoning(
+    List<ModelOption> options,
+  ) async {
+    if (options.isEmpty) return options;
+    try {
+      final nativeModels = await _fetchLmStudioNativeModels();
+      if (nativeModels == null || nativeModels.isEmpty) return options;
+
+      // Count distinct native entries, not aliases within the same entry.
+      final candidatesById = <String, Set<Map<String, Object?>>>{};
+      for (final model in nativeModels) {
+        final key = model['key'];
+        if (key is! String || key.isEmpty) continue;
+        candidatesById
+            .putIfAbsent(key, () => Set<Map<String, Object?>>.identity())
+            .add(model);
+
+        final instances = model['loaded_instances'];
+        if (instances is! List) continue;
+        for (final instance in instances) {
+          if (instance is! Map) continue;
+          final instanceId = instance['id'];
+          if (instanceId is! String || instanceId.isEmpty) continue;
+          candidatesById
+              .putIfAbsent(
+                instanceId,
+                () => Set<Map<String, Object?>>.identity(),
+              )
+              .add(model);
+        }
+      }
+
+      return options.map((option) {
+        // Native enrichment cannot replace the compatibility endpoint's own
+        // declaration (including a malformed one owned by that authority).
+        if (option.modelMetadata.containsKey('thinking_control')) return option;
+        final candidates = candidatesById[option.value];
+        if (candidates == null || candidates.length != 1) return option;
+
+        final capabilities = candidates.single['capabilities'];
+        final reasoning = capabilities is Map
+            ? capabilities['reasoning']
+            : null;
+        final declaration = _parseNativeReasoningDeclaration(reasoning);
+        if (declaration == null) return option;
+
+        final declaredControl = _declaredThinkingControlFromNative(declaration);
+        return option.copyWith(
+          modelMetadata: {
+            ...option.modelMetadata,
+            lmStudioReasoningEvidenceKey: reasoning,
+            'thinking_control': ?declaredControl,
+          },
+        );
+      }).toList();
+    } catch (e) {
+      _logger.warning(
+        'Failed to enrich LM Studio native reasoning metadata: $e',
+      );
+      return options;
+    }
+  }
+
+  Future<List<Map<String, Object?>>?> _fetchLmStudioNativeModels() async {
+    final response = await _get(
+      Uri.parse('$_lmStudioNativeBase/api/v1/models'),
+      headers: _modelDiscoveryHeaders,
+      timeout: const Duration(seconds: 2),
+    );
+    if (response.statusCode != 200) return null;
+    final data = jsonDecode(response.body);
+    if (data is! Map) return null;
+    final models = data['models'];
+    if (models is! List) return null;
+
+    final parsed = <Map<String, Object?>>[];
+    for (final model in models) {
+      final modelMap = _asStringMap(model);
+      if (modelMap != null) parsed.add(modelMap);
+    }
+    return parsed;
+  }
+
+  /// Strictly validates a native LM Studio `capabilities.reasoning` object.
+  ///
+  /// Returns `null` for absent, malformed, empty or non-finite declarations,
+  /// including a value outside the documented native vocabulary or a default
+  /// that is not one of the declared values. No default is ever inferred.
+  static ({Set<String> allowed, String defaultOption})?
+  _parseNativeReasoningDeclaration(Object? raw) {
+    if (raw is! Map) return null;
+
+    final allowedRaw = raw['allowed_options'];
+    if (allowedRaw is! List || allowedRaw.isEmpty) return null;
+    final allowed = <String>{};
+    for (final entry in allowedRaw) {
+      if (entry is! String) return null;
+      final value = entry.trim();
+      if (!_lmStudioNativeReasoningValues.contains(value)) return null;
+      allowed.add(value);
+    }
+
+    final defaultRaw = raw['default'];
+    if (defaultRaw is! String) return null;
+    final defaultOption = defaultRaw.trim();
+    if (!allowed.contains(defaultOption)) return null;
+
+    return (allowed: allowed, defaultOption: defaultOption);
+  }
+
+  /// Maps a validated native declaration onto the documented compatibility Chat
+  /// wire, or `null` when no declared value has an evidenced wire equivalent.
+  ///
+  /// Native-only values (`on`/`off`) are never mapped to another value, and an
+  /// unmappable native default stays unrepresentable so a real provider default
+  /// remains plain omission instead of an invented selectable level.
+  static Map<String, Object?>? _declaredThinkingControlFromNative(
+    ({Set<String> allowed, String defaultOption}) declaration,
+  ) {
+    final options = <String, dynamic>{
+      for (final value in _lmStudioChatEffortValues)
+        if (declaration.allowed.contains(value)) value: value,
+    };
+    if (options.isEmpty) return null;
+
+    return {
+      'status': 'supported',
+      'wire': 'openai_chat_effort',
+      'options': options,
+      if (options.containsKey(declaration.defaultOption))
+        'default_option': declaration.defaultOption,
+    };
+  }
+
+  /// Enriches discovered aggregator models with the finite thinking declaration
+  /// documented on each `GET /models` item.
+  ///
+  /// The discovery wire itself owns this schema: only the registered aggregator
+  /// provider identity consumes it, never a generic/local/custom Chat endpoint
+  /// and never a URL substring guess. Each option is read from its own exact
+  /// model item, so no cross-model, cross-case or cross-namespace inference is
+  /// possible; two items claiming one exact identity declare a control only when
+  /// their raw evidence agrees, and conflicting claims publish unresolved route
+  /// evidence instead of either claim.
+  ///
+  /// Raw endpoint evidence stays the verbatim item member (`reasoning`) while
+  /// the validated declaration is written separately to `thinking_control`. A
+  /// declaration already owned by the compatibility discovery wire is left
+  /// untouched: aggregator enrichment never replaces or competes with it.
+  ///
+  /// A model item that documents `reasoning` owns its route's control state:
+  /// when that documentation yields no trustworthy declaration — no effort
+  /// selector, malformed values or flags, a default inconsistent with the
+  /// documented set, a mixed or conflicting duplicate claim for one exact
+  /// identity — the option receives explicit `unknown` route-control evidence
+  /// rather than falling back to an unrelated intrinsic ladder. An identity whose
+  /// rows are all names-only publishes nothing, so existing authority and
+  /// intrinsic model knowledge stay intact, and every documented canonical effort
+  /// value is declared truthfully with its own exact value.
+  List<ModelOption> _withOpenRouterReasoning(List<ModelOption> options) {
+    if (options.isEmpty) return options;
+
+    final evidenceSignatures = <String, Set<String>>{};
+    for (final option in options) {
+      evidenceSignatures
+          .putIfAbsent(option.value, () => <String>{})
+          .add(
+            jsonEncode([
+              option.modelMetadata.containsKey('reasoning'),
+              option.modelMetadata['reasoning'],
+            ]),
+          );
+    }
+
+    return options.map((option) {
+      if (option.modelMetadata.containsKey('thinking_control')) return option;
+      final signatures = evidenceSignatures[option.value];
+      final ambiguous = signatures == null || signatures.length != 1;
+      if (!option.modelMetadata.containsKey('reasoning') && !ambiguous) {
+        return option;
+      }
+      final declaration = ambiguous
+          ? _openRouterUnresolvedControl
+          : _openRouterThinkingControl(option.modelMetadata['reasoning']) ??
+                _openRouterUnresolvedControl;
+      return option.copyWith(
+        modelMetadata: {
+          ...option.modelMetadata,
+          'thinking_control': declaration,
+        },
+      );
+    }).toList();
+  }
+
+  /// Strictly validates one discovered aggregator `reasoning` declaration.
+  ///
+  /// Returns the validated `openai_chat_effort` declaration, or `null` when the
+  /// presented documentation yields no trustworthy declaration. Every documented
+  /// canonical effort is admissible, so no documented set is reduced, clamped or
+  /// aliased; no default, budget choice, bound or effort value is ever invented.
+  static Map<String, Object?>? _openRouterThinkingControl(Object? raw) {
+    if (raw is! Map) return null;
+
+    final efforts = _openRouterDocumentedEfforts(raw);
+    if (efforts == null) return null;
+
+    final mandatoryRaw = raw['mandatory'];
+    if (raw.containsKey('mandatory') && mandatoryRaw is! bool) return null;
+    final defaultEnabled = raw['default_enabled'];
+    if (raw.containsKey('default_enabled') && defaultEnabled is! bool) {
+      return null;
+    }
+
+    final defaultEffortRaw = raw['default_effort'];
+    if (raw.containsKey('default_effort')) {
+      if (defaultEffortRaw is! String || !efforts.contains(defaultEffortRaw)) {
+        return null;
+      }
+    }
+
+    // A documented mandatory model has no Off option and rejects
+    // `effort: "none"`, so the disable value is never advertised for it.
+    final admissible = mandatoryRaw == true
+        ? efforts.where((effort) => effort != 'none').toList(growable: false)
+        : efforts;
+    if (admissible.isEmpty) return null;
+
+    String? defaultOption;
+    if (defaultEffortRaw is String) {
+      if (defaultEffortRaw != 'none' &&
+          defaultEnabled != false &&
+          admissible.contains(defaultEffortRaw)) {
+        defaultOption = defaultEffortRaw;
+      }
+    }
+
+    return {
+      'status': 'supported',
+      'wire': 'openai_chat_effort',
+      'options': {for (final effort in admissible) effort: effort},
+      'default_option': ?defaultOption,
+    };
+  }
+
+  /// The documented finite effort set for one aggregator model item, or `null`
+  /// when the member is omitted, malformed, duplicated or outside the documented
+  /// gateway vocabulary.
+  ///
+  /// An explicit `null` documents every gateway value; an omitted member
+  /// documents no effort selector at all. Admissibility comes from the shared
+  /// `ThinkingWireVocabulary` the typed declaration parser validates against, so
+  /// every documented canonical value (`max`, `xhigh`, `high`, `medium`, `low`,
+  /// `minimal`, `none`) is declarable here and none is rejected or remapped.
+  static List<String>? _openRouterDocumentedEfforts(Map<dynamic, dynamic> raw) {
+    if (!raw.containsKey('supported_efforts')) return null;
+
+    final rawEfforts = raw['supported_efforts'];
+    if (rawEfforts == null) return List<String>.of(_openRouterGatewayEfforts);
+    if (rawEfforts is! List || rawEfforts.isEmpty) return null;
+
+    final efforts = <String>[];
+    for (final entry in rawEfforts) {
+      if (entry is! String) return null;
+      if (!ThinkingWireVocabulary.isAdmittedEffort(entry)) return null;
+      if (efforts.contains(entry)) return null;
+      efforts.add(entry);
+    }
+    return efforts;
+  }
+
   String _resolveModel(String? override) {
     if (override == null || override.isEmpty) {
       return _fallbackModelId();
@@ -454,6 +815,8 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
+      requestClientFactory:
+          requestClientFactory ?? options.requestClientFactory,
     );
     late http.Response response;
     try {
@@ -534,6 +897,8 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
+      requestClientFactory:
+          requestClientFactory ?? options.requestClientFactory,
     );
     final request = http.Request('POST', url);
     request.headers.addAll(_requestHeaders(options));
@@ -888,38 +1253,97 @@ class BaseOpenAIAdapter implements LLMAdapter {
     List<ToolSchema>? tools,
     bool stream = false,
   }) async {
+    final hasImages = ToolResultWireCodec.hasImages(history);
+    bool supportsImages = false;
+    if (hasImages) {
+      final instanceId = options.providerInstanceId ?? providerInstanceId;
+      final overrideSnapshot =
+          options.routeCapabilityProfile?.rawOverride ??
+          options.routeCapabilitySnapshot;
+      final profileSnapshot =
+          options.routeCapabilityProfile ??
+          (overrideSnapshot != null
+              ? RouteCapabilityProfile(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  imageSupport: overrideSnapshot.supportsImageInput == true
+                      ? RouteImageSupport.supported
+                      : (overrideSnapshot.supportsImageInput == false
+                            ? RouteImageSupport.unsupported
+                            : RouteImageSupport.unknown),
+                  evidenceSource: 'snapshot',
+                  rawOverride: overrideSnapshot,
+                )
+              : RouteCapabilityResolver(
+                  instances: getIt.isRegistered<ProviderInstanceRepository>()
+                      ? getIt<ProviderInstanceRepository>()
+                      : null,
+                  config: config,
+                  modelsDevService: modelsDevService,
+                ).resolveSync(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  baseUrl: _baseUrl,
+                ));
+
+      if (profileSnapshot.imageSupport == RouteImageSupport.unsupported) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unsupported,
+        );
+      } else if (profileSnapshot.imageSupport == RouteImageSupport.unknown) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unknown,
+        );
+      }
+      supportsImages = true;
+    }
+    final verifiedAttachments =
+        await ToolResultWireCodec.loadVerifiedUserAttachments(
+          history,
+          attachmentStore: options.attachmentStore,
+        );
     final body = <String, dynamic>{
       'model': resolvedModel,
-      'messages': history
-          .map((message) => _messageToWire(message, options))
-          .toList(growable: false),
+      'messages': ToolResultWireCodec.chatMessages(
+        history,
+        messageToWire: (message) => _messageToWire(
+          message,
+          options,
+          verifiedAttachments: verifiedAttachments,
+        ),
+        supportsImageInput: supportsImages,
+      ),
       if (stream) 'stream': true,
       if (stream) 'stream_options': const {'include_usage': true},
       if (options.maxOutputTokens != null)
         'max_completion_tokens': options.maxOutputTokens,
     };
 
-    switch (profile.effectiveThinkingPolicyId) {
-      case 'aggregator_upstream':
-        AggregatorThinkingWireCodec.applyReasoning(
-          body,
-          options.thinkingDirective,
-        );
-      case 'google_thinking':
-        GoogleThinkingWireCodec.applyThinkingConfig(
-          body,
-          options.thinkingDirective,
-        );
-      case 'deepseek_thinking':
-        ToggleEffortThinkingWireCodec.applyChatCompletions(
-          body,
-          options.thinkingDirective,
-        );
-      default:
-        OpenAiThinkingWireCodec.applyChatCompletionsReasoning(
-          body,
-          options.thinkingDirective,
-        );
+    final directive = options.thinkingDirective;
+    if (directive != null && directive is! UseProviderDefault) {
+      final routeInstance = _toRouteInstance(
+        overrideInstanceId: options.providerInstanceId,
+      );
+      final effectivePolicyId = ThinkingRoutePolicy.policyIdFor(
+        routeInstance,
+        modelId: resolvedModel,
+      );
+
+      if (effectivePolicyId == 'aggregator_upstream') {
+        AggregatorThinkingWireCodec.applyReasoning(body, directive);
+      } else if (directive is GoogleBudgetDirective ||
+          directive is GoogleLevelDirective ||
+          effectivePolicyId == 'google_thinking') {
+        GoogleThinkingWireCodec.applyThinkingConfig(body, directive);
+      } else if (effectivePolicyId == 'deepseek_thinking') {
+        DeepSeekThinkingWireCodec.applyChatCompletions(body, directive);
+      } else if (effectivePolicyId == 'zai_thinking') {
+        ZaiThinkingWireCodec.applyChatCompletions(body, directive);
+      } else {
+        ToggleEffortThinkingWireCodec.applyChatCompletions(body, directive);
+      }
     }
 
     if (tools != null && tools.isNotEmpty) {
@@ -939,13 +1363,60 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return body;
   }
 
+  ProviderInstance _toRouteInstance({String? overrideInstanceId}) {
+    final effectiveId = overrideInstanceId ?? providerInstanceId;
+    if (effectiveId != null &&
+        getIt.isRegistered<ProviderInstanceRepository>()) {
+      final found = getIt<ProviderInstanceRepository>().findById(effectiveId);
+      if (found != null) return found;
+    }
+    return ProviderInstance(
+      id: effectiveId ?? profile.name,
+      templateId: profile.name,
+      displayName: profile.displayName,
+      protocol: profile.protocol ?? ProviderProtocol.openaiCompatible,
+      authMethod: profile.authMethods.isNotEmpty
+          ? profile.authMethods.first
+          : ProviderAuthMethod.apiKey,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+  }
+
   Map<String, dynamic> _messageToWire(
     Message message,
-    LLMRequestOptions options,
-  ) {
+    LLMRequestOptions options, {
+    Map<String, String>? verifiedAttachments,
+  }) {
+    dynamic content = message.role == MessageRole.tool
+        ? textOnlyToolResultContent(message)
+        : message.content ?? '';
+    if (message.role == MessageRole.user && message.attachments.isNotEmpty) {
+      final parts = <Map<String, dynamic>>[];
+      if (message.content != null && message.content!.isNotEmpty) {
+        parts.add({'type': 'text', 'text': message.content!});
+      }
+      for (final att in message.attachments) {
+        final b64 =
+            verifiedAttachments?[att.id] ??
+            ToolResultWireCodec.userAttachmentBase64(
+              att,
+              preloadedBase64: verifiedAttachments,
+            );
+        if (b64 != null) {
+          parts.add({
+            'type': 'image_url',
+            'image_url': {'url': 'data:${att.mimeType};base64,$b64'},
+          });
+        }
+      }
+      if (parts.isNotEmpty) {
+        content = parts;
+      }
+    }
     final data = <String, dynamic>{
       'role': _roleToString(message.role),
-      'content': message.content ?? '',
+      'content': content,
     };
     if (message.toolCalls != null) {
       data['tool_calls'] = message.toolCalls!

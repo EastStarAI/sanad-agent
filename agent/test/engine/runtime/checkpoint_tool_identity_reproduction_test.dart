@@ -6,6 +6,7 @@ import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
 import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
@@ -42,6 +43,12 @@ class _CountingMockTool extends BaseTool {
   );
 
   @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text(await execute(args, context: context));
+
+  @override
   Future<String> execute(
     Map<String, dynamic> args, {
     ToolContext? context,
@@ -51,7 +58,7 @@ class _CountingMockTool extends BaseTool {
   }
 }
 
-class _TestToolCallbacks implements ToolExecutionCallbacks {
+class _TestToolCallbacks extends ToolExecutionCallbacks {
   final Map<String, String> results = {};
   final List<String> receivedOutputs = [];
   int historySaveCount = 0;

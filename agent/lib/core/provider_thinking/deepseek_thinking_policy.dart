@@ -10,8 +10,10 @@ import 'thinking_policy_context.dart';
 class DeepSeekThinkingPolicy implements ProviderThinkingPolicy {
   const DeepSeekThinkingPolicy();
 
+  static const policyIdentifier = 'deepseek_thinking';
+
   @override
-  String get policyId => 'deepseek_thinking';
+  String get policyId => policyIdentifier;
 
   @override
   ThinkingControlDescriptor resolveCapability(ThinkingPolicyContext context) {
@@ -26,7 +28,7 @@ class DeepSeekThinkingPolicy implements ProviderThinkingPolicy {
           capabilityRevision: context.capabilityRevision,
           source: 'profile',
         ),
-      DeepSeekRouteThinkingKind.toggleEffort => ThinkingControlDescriptor(
+      DeepSeekRouteThinkingKind.toggle => ThinkingControlDescriptor(
         status: ThinkingCapabilityStatus.supported,
         kind: ThinkingControlKind.toggle,
         options: DeepSeekModelCatalog.optionIdsForModel(context.modelId)
@@ -35,9 +37,28 @@ class DeepSeekThinkingPolicy implements ProviderThinkingPolicy {
                 id: id,
                 label: DeepSeekModelCatalog.labelForOptionId(id),
                 isOff: id == 'off',
+                isProviderDefault: id == 'on',
               ),
             )
             .toList(growable: false),
+        defaultOptionId: 'on',
+        capabilityRevision: context.capabilityRevision,
+        source: 'profile',
+      ),
+      DeepSeekRouteThinkingKind.toggleEffort => ThinkingControlDescriptor(
+        status: ThinkingCapabilityStatus.supported,
+        kind: ThinkingControlKind.effort,
+        options: DeepSeekModelCatalog.optionIdsForModel(context.modelId)
+            .map(
+              (id) => ThinkingControlOption(
+                id: id,
+                label: DeepSeekModelCatalog.labelForOptionId(id),
+                isOff: id == 'off',
+                isProviderDefault: id == 'high',
+              ),
+            )
+            .toList(growable: false),
+        defaultOptionId: 'high',
         capabilityRevision: context.capabilityRevision,
         source: 'profile',
       ),
@@ -55,7 +76,8 @@ class DeepSeekThinkingPolicy implements ProviderThinkingPolicy {
     }
 
     final kind = DeepSeekModelCatalog.thinkingKindForModel(context.modelId);
-    if (kind != DeepSeekRouteThinkingKind.toggleEffort) {
+    if (kind == DeepSeekRouteThinkingKind.unknown ||
+        kind == DeepSeekRouteThinkingKind.unsupported) {
       return const UseProviderDefault();
     }
     if (!DeepSeekModelCatalog.allowsSelectionId(
@@ -66,6 +88,9 @@ class DeepSeekThinkingPolicy implements ProviderThinkingPolicy {
     }
     if (trimmed == 'off') {
       return const ThinkingToggleDirective(enabled: false);
+    }
+    if (trimmed == 'on') {
+      return const ThinkingToggleDirective(enabled: true);
     }
     return OpenAiEffortDirective(trimmed);
   }

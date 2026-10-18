@@ -1,3 +1,8 @@
+---
+title: "Sanad Delegate CLI Relay Specification"
+description: "Machine contract for the native `sanad run` relay: argument/workspace security boundaries, versioned result and event artifacts, exit codes, and supervisor lifecycle with event-first intervention."
+---
+
 # Sanad Delegate CLI Relay Specification
 
 ## 1. Overview
@@ -70,6 +75,21 @@ Every run must select at least one targeting mode:
 2. Use `--execution-root` alone for a one-run filesystem context. The Local Gateway flattens transported session metadata into `AgentTurnRequest.metadata`, where `execution_root` drives tools and context, survives suspended-decision recovery, and is never registered as a workspace.
 3. Use both for delegated development: `--workspace` retains the existing logical conversation owner while `--execution-root` independently drives tools and runtime context in the target worktree. The CLI validates and records both; the daemon preserves both identities.
 4. Neither mode creates, selects, or switches a workspace, and neither the CLI nor daemon mutates `Directory.current`.
+
+### 3.3. Runtime Attachment & Daemon Discovery Deadlines
+
+Without `--standalone`, a run resolves its runtime mode by probing the Local Gateway `/health` endpoint of the selected Sanad Home. That probe is the only evidence used to decide between attaching to the running daemon and starting an in-process runtime, so the CLI owns two distinct bounded deadlines:
+
+| Probe scope | Target | Deadline |
+|---|---|---|
+| Targeted | An explicitly supplied endpoint: `--gateway-url`, or a gateway URL/port from the environment (`SANAD_GATEWAY_URL`, `LOCAL_GATEWAY_URL`, `LOCAL_GATEWAY_PORT`) | 2 s |
+| Speculative | The default port and the worktree port scan, whose cost multiplies across the scanned range | 300 ms |
+
+An explicitly targeted endpoint is the only evidence that the requested gateway is served, so a healthy but busy daemon whose first health response is slower than the speculative bound still attaches instead of being mistaken for an absent daemon. The wider bound stays far below the WebSocket connect timeout, and an unreachable loopback endpoint still fails fast with a refused connection. Speculative probes keep the cheaper bound so that an absent daemon cannot turn discovery into a long startup delay.
+
+Discovery remains fail-closed and bounded in every other case. It never bypasses health, authentication or Home ownership, never rewrites the requested endpoint, and never starts another daemon, Home or runtime. An explicitly supplied probe deadline still overrides both scopes.
+
+Reaching the in-process standalone path without `--standalone` means no healthy daemon could be confirmed for that Home. When another runtime owns that Home, the run stops with exit code `78` and reports that the daemon endpoint for the Home could not be confirmed, rather than blaming a `--standalone` flag the caller never passed. `--standalone` stays an explicit guarded choice: a forced standalone run refuses a Home whose daemon is healthy, and the exclusive ownership lease remains the authoritative backstop.
 
 ---
 

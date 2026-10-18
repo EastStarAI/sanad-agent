@@ -18,17 +18,29 @@ import 'codex_responses_sse_accumulator.dart';
 import 'llm_http_exception.dart';
 import 'llm_adapter.dart';
 import 'llm_request_options.dart';
+import 'models_dev_service.dart';
 import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
 import 'provider_state_rejected_exception.dart';
+import '../../core/di.dart';
+import '../../core/provider_runtime/provider_instance_repository.dart';
+import '../../core/provider_runtime/route_capability_resolver.dart';
+import 'tool_result_wire_codec.dart';
 
 /// Stateless adapter for Responses-compatible Codex endpoints.
 ///
 /// Sync and stream share one request codec and one final response normalizer.
 class CodexResponsesAdapter extends BaseOpenAIAdapter
-    implements WireInputTokenEstimator, WireInputUsageMeasurer {
+    implements
+        WireInputTokenEstimator,
+        WireInputUsageMeasurer,
+        ToolResultMediaCapabilityProvider {
   final _modelsLogger = Logger('CodexResponsesAdapter');
   final CodexModelsService _modelsService;
+
+  @override
+  ToolResultMediaCapability get toolResultMediaCapability =>
+      ToolResultMediaCapability.imageToolResults;
 
   CodexResponsesAdapter(
     super.config,
@@ -39,6 +51,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     super.baseUrlOverride,
     super.apiKeyOverride,
     super.defaultModelOverride,
+    super.providerInstanceId,
     CodexModelsService? modelsService,
   }) : _modelsService = modelsService ?? CodexModelsService();
 
@@ -95,11 +108,17 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
+    final verifiedAttachments =
+        await ToolResultWireCodec.loadVerifiedUserAttachments(
+          history,
+          attachmentStore: options.attachmentStore,
+        );
     final body = _codec(options).buildRequest(
       history: history,
       model: resolveModel(modelOverride),
       options: options,
       tools: _policy.normalizeTools(tools),
+      preloadedAttachments: verifiedAttachments,
     );
     final measured = <String, dynamic>{
       'instructions': body['instructions'],
@@ -130,6 +149,16 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     // streaming request and consume the SSE events internally, returning one
     // complete AgentResponse — identical contract to a non-streaming call.
     final resolvedModel = resolveModel(modelOverride);
+    _validateImageSupportIfNeeded(
+      history,
+      resolvedModel: resolvedModel,
+      options: options,
+    );
+    final verifiedAttachments =
+        await ToolResultWireCodec.loadVerifiedUserAttachments(
+          history,
+          attachmentStore: options.attachmentStore,
+        );
     final provider = providerForModel(resolvedModel);
     final codec = _codec(options);
     final body = codec.buildRequest(
@@ -138,6 +167,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       options: options,
       tools: _policy.normalizeTools(tools),
       stream: true,
+      preloadedAttachments: verifiedAttachments,
     );
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
@@ -223,6 +253,16 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async* {
     final resolvedModel = resolveModel(modelOverride);
+    _validateImageSupportIfNeeded(
+      history,
+      resolvedModel: resolvedModel,
+      options: options,
+    );
+    final verifiedAttachments =
+        await ToolResultWireCodec.loadVerifiedUserAttachments(
+          history,
+          attachmentStore: options.attachmentStore,
+        );
     final provider = providerForModel(resolvedModel);
     final codec = _codec(options);
     final body = codec.buildRequest(
@@ -231,6 +271,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       options: options,
       tools: _policy.normalizeTools(tools),
       stream: true,
+      preloadedAttachments: verifiedAttachments,
     );
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
@@ -424,6 +465,68 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       return suffix.isEmpty ? null : suffix;
     }
     return null;
+  }
+
+  RouteCapabilityProfile _resolveRouteCapabilityProfile({
+    required String resolvedModel,
+    required LLMRequestOptions options,
+  }) {
+    final instanceId = options.providerInstanceId ?? providerInstanceId;
+    final overrideSnapshot =
+        options.routeCapabilityProfile?.rawOverride ??
+        options.routeCapabilitySnapshot;
+    return options.routeCapabilityProfile ??
+        (overrideSnapshot != null
+            ? RouteCapabilityProfile(
+                providerInstanceId: instanceId ?? profile.name,
+                modelId: resolvedModel,
+                imageSupport: overrideSnapshot.supportsImageInput == true
+                    ? RouteImageSupport.supported
+                    : (overrideSnapshot.supportsImageInput == false
+                          ? RouteImageSupport.unsupported
+                          : RouteImageSupport.unknown),
+                evidenceSource: 'snapshot',
+                rawOverride: overrideSnapshot,
+              )
+            : RouteCapabilityResolver(
+                instances: getIt.isRegistered<ProviderInstanceRepository>()
+                    ? getIt<ProviderInstanceRepository>()
+                    : null,
+                config: config,
+                modelsDevService: getIt.isRegistered<ModelsDevService>()
+                    ? getIt<ModelsDevService>()
+                    : null,
+              ).resolveSync(
+                providerInstanceId: instanceId ?? profile.name,
+                modelId: resolvedModel,
+                baseUrl: _normalizedBaseUrl(),
+              ));
+  }
+
+  void _validateImageSupportIfNeeded(
+    List<Message> history, {
+    required String resolvedModel,
+    required LLMRequestOptions options,
+  }) {
+    final hasImages = ToolResultWireCodec.hasImages(history);
+    if (!hasImages) return;
+
+    final profileSnapshot = _resolveRouteCapabilityProfile(
+      resolvedModel: resolvedModel,
+      options: options,
+    );
+
+    if (profileSnapshot.imageSupport == RouteImageSupport.unsupported) {
+      throw LocalImageCapabilityException(
+        modelId: resolvedModel,
+        imageSupport: RouteImageSupport.unsupported,
+      );
+    } else if (profileSnapshot.imageSupport == RouteImageSupport.unknown) {
+      throw LocalImageCapabilityException(
+        modelId: resolvedModel,
+        imageSupport: RouteImageSupport.unknown,
+      );
+    }
   }
 
   static Map<String, dynamic>? _map(dynamic raw) {

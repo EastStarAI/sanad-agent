@@ -38,12 +38,7 @@ class ToolPresentationHelper {
 
         String details = '';
         if (cleanTitle == 'Read') {
-          final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
-          String fileName = '';
-          if (path != null) {
-            fileName = path.toString().split(RegExp(r'[\\/]')).last;
-          }
-          details = fileName;
+          details = _extractTargetFileName(mapInput, mapOutput);
 
           int? startLine;
           int? endLine;
@@ -60,12 +55,7 @@ class ToolPresentationHelper {
             details += endLine != null ? '#L$startLine-$endLine' : '#L$startLine';
           }
         } else if (cleanTitle == 'Write') {
-          final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
-          String fileName = '';
-          if (path != null) {
-            fileName = path.toString().split(RegExp(r'[\\/]')).last;
-          }
-          details = fileName;
+          details = _extractTargetFileName(mapInput, mapOutput);
 
           final content = mapInput['content']?.toString();
           if (content != null) {
@@ -73,12 +63,7 @@ class ToolPresentationHelper {
             details += ' +$lineCount';
           }
         } else if (cleanTitle == 'Edit') {
-          final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
-          String fileName = '';
-          if (path != null) {
-            fileName = path.toString().split(RegExp(r'[\\/]')).last;
-          }
-          details = fileName;
+          details = _extractTargetFileName(mapInput, mapOutput);
 
           final patch = mapOutput['patch']?.toString();
           final oldString = mapInput['old_string']?.toString();
@@ -95,7 +80,9 @@ class ToolPresentationHelper {
               addedCount = '\n'.allMatches(newString).length + 1;
             }
           } else if (patch != null && patch.trim().isNotEmpty) {
-            if (patch.startsWith('-') && patch.contains('\n+')) {
+            if (patch.startsWith('-') &&
+                patch.contains('\n+') &&
+                !patch.contains('\n---')) {
               final parts = patch.split('\n+');
               if (parts.length >= 2) {
                 deletedCount = '\n'.allMatches(parts[0]).length + 1;
@@ -205,11 +192,7 @@ class ToolPresentationHelper {
 
     // Custom formatting for Read, Write, Edit
     if (cleanTitle == 'Read') {
-      final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
-      String fileName = '';
-      if (path != null) {
-        fileName = path.toString().split(RegExp(r'[\\/]')).last;
-      }
+      final fileName = _extractTargetFileName(mapInput, mapOutput);
 
       listSpans.add(
         TextSpan(
@@ -246,11 +229,7 @@ class ToolPresentationHelper {
         );
       }
     } else if (cleanTitle == 'Write') {
-      final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
-      String fileName = '';
-      if (path != null) {
-        fileName = path.toString().split(RegExp(r'[\\/]')).last;
-      }
+      final fileName = _extractTargetFileName(mapInput, mapOutput);
 
       listSpans.add(
         TextSpan(
@@ -276,11 +255,7 @@ class ToolPresentationHelper {
         );
       }
     } else if (cleanTitle == 'Edit') {
-      final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
-      String fileName = '';
-      if (path != null) {
-        fileName = path.toString().split(RegExp(r'[\\/]')).last;
-      }
+      final fileName = _extractTargetFileName(mapInput, mapOutput);
 
       listSpans.add(
         TextSpan(
@@ -404,6 +379,13 @@ class ToolPresentationHelper {
     );
   }
 
+  /// Returns the basename of the file targeted by a tool call, or '' when no path is present.
+  static String _extractTargetFileName(Map<String, dynamic> mapInput, Map<String, dynamic> mapOutput) {
+    final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
+    if (path == null) return '';
+    return path.toString().split(RegExp(r'[\\/]')).last;
+  }
+
   static String _toRelativePath(BuildContext context, String filePath) {
     try {
       final messagesCubit = context.read<SessionMessagesCubit>();
@@ -448,8 +430,12 @@ class ToolPresentationHelper {
 
     final cleanName = rawName.startsWith('mcp__filesystem__') ? rawName.replaceFirst('mcp__filesystem__', '') : rawName;
 
-    // 1. Check path (for read, write, edit, replace, patch) - return basename only
-    if (cleanName.contains('file') || cleanName == 'patch' || cleanName.contains('content')) {
+    // 1. Check path (for read, write, edit, replace, patch, view_image) - return basename only
+    if (cleanName.contains('file') ||
+        cleanName == 'patch' ||
+        cleanName.contains('content') ||
+        cleanName == 'view_image' ||
+        cleanName.contains('view_image')) {
       final path = mapInput['path'] ?? mapOutput['filePath'] ?? mapOutput['path'];
       if (path != null) {
         return path.toString().split(RegExp(r'[\\/]')).last;

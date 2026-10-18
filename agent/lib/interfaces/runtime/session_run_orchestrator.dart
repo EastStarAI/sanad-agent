@@ -86,13 +86,11 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   /// Optional durable store for suspended runs and queued messages. Wired by
   /// DI when `PersistedRuntimeStateRepository` is registered; null in tests
   /// that do not exercise persistence.
-  PersistedRuntimeStateRepository? _persistedState;
   PersistedRuntimeStateRepository? get persistedState {
-    if (_persistedState != null) return _persistedState;
     if (getIt.isRegistered<PersistedRuntimeStateRepository>()) {
-      _persistedState = getIt<PersistedRuntimeStateRepository>();
+      return getIt<PersistedRuntimeStateRepository>();
     }
-    return _persistedState;
+    return null;
   }
 
   SessionRunOrchestrator({

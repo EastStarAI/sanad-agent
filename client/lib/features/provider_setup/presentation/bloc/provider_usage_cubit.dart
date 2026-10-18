@@ -77,6 +77,11 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
   final Map<String, DateTime> _catalogRetryUntil = {};
   static const _catalogRetryCooldown = Duration(seconds: 30);
 
+  /// Tracks devices whose provider display-name catalog has been invalidated
+  /// so [ensureProviderDisplayNames] re-queries the agent instead of reusing
+  /// a cached non-empty map.
+  final Map<String, bool> _catalogInvalidated = {};
+
   String _seqKey(String deviceId, String instanceId) => '$deviceId\$$instanceId';
 
   String _loadKey(String deviceId, List<String> instanceIds) {
@@ -96,6 +101,19 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
   int _bumpRevision(String deviceId) {
     final n = (_deviceRevisions[deviceId] ?? 0) + 1;
     _deviceRevisions[deviceId] = n;
+    return n;
+  }
+
+  /// Per-device revision for the provider display-name catalog so catalog
+  /// mutations invalidate only pending in-flight catalog fetches without
+  /// dropping unrelated in-flight usage/support responses.
+  final Map<String, int> _catalogRevisions = {};
+
+  int _currentCatalogRevision(String deviceId) => _catalogRevisions[deviceId] ?? 0;
+
+  int _bumpCatalogRevision(String deviceId) {
+    final n = (_catalogRevisions[deviceId] ?? 0) + 1;
+    _catalogRevisions[deviceId] = n;
     return n;
   }
 
@@ -226,16 +244,24 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
   /// same in-flight request, and a resolved catalog is not re-fetched on
   /// rebuilds/remounts. An empty or failed catalog is bounded by a 30-second
   /// retry cooldown rather than hot-looping.
-  Future<void> ensureProviderDisplayNames({required DeviceConfig? agent}) {
+  Future<void> ensureProviderDisplayNames({
+    required DeviceConfig? agent,
+    bool force = false,
+  }) {
     final deviceId = _deviceId(agent);
+    final isInvalidated = _catalogInvalidated[deviceId] ?? false;
     final known = state.providerDisplayNames[deviceId];
-    if (known != null && known.isNotEmpty) return Future.value();
+    if (!force && !isInvalidated && known != null && known.isNotEmpty) {
+      return Future.value();
+    }
 
     final inFlight = _catalogLoadsInFlight[deviceId];
     if (inFlight != null) return inFlight;
 
     final retryAfter = _catalogRetryUntil[deviceId];
-    if (retryAfter != null && _now().isBefore(retryAfter)) return Future.value();
+    if (!force && !isInvalidated && retryAfter != null && _now().isBefore(retryAfter)) {
+      return Future.value();
+    }
 
     final future = _loadProviderDisplayNames(agent: agent, deviceId: deviceId);
     _catalogLoadsInFlight[deviceId] = future;
@@ -249,11 +275,61 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
     return future;
   }
 
+  /// Invalidates the cached provider display-name catalog for [agent]'s device.
+  ///
+  /// Bumps catalog revision so any pending pre-mutation catalog fetch is
+  /// dropped without invalidating unrelated usage/support fetches, cancels
+  /// in-flight catalog deduplication handles and retry cooldown, and marks
+  /// the catalog to be re-fetched on the next ensure call.
+  void invalidateProviderDisplayNames({DeviceConfig? agent}) {
+    final deviceId = _deviceId(agent);
+    _bumpCatalogRevision(deviceId);
+    _catalogInvalidated[deviceId] = true;
+    unawaited(_catalogLoadsInFlight.remove(deviceId));
+    _catalogRetryUntil.remove(deviceId);
+  }
+
+  /// Authoritatively updates the provider display-name catalog for [agent]'s
+  /// device, e.g. following provider creation, rename, or removal in setup.
+  ///
+  /// When names are unchanged and no fetch is in flight, this is a quiescent
+  /// no-op. However, if a catalog fetch is in flight or invalidated, this
+  /// authoritative snapshot neutralizes the pending fetch by advancing the
+  /// catalog generation so stale pre-mutation responses cannot overwrite state.
+  void updateProviderDisplayNames({
+    DeviceConfig? agent,
+    required Map<String, String> displayNames,
+  }) {
+    final deviceId = _deviceId(agent);
+    final previous = state.providerDisplayNames[deviceId] ?? const <String, String>{};
+    final bool sameNames = _sameDisplayNames(previous, displayNames);
+    final bool hasPendingFetch = _catalogLoadsInFlight.containsKey(deviceId);
+    final bool isInvalidated = _catalogInvalidated[deviceId] ?? false;
+
+    if (sameNames && !hasPendingFetch && !isInvalidated) return;
+
+    _bumpCatalogRevision(deviceId);
+    _catalogInvalidated[deviceId] = false;
+    unawaited(_catalogLoadsInFlight.remove(deviceId));
+    _catalogRetryUntil.remove(deviceId);
+
+    if (!sameNames || !state.providerDisplayNames.containsKey(deviceId)) {
+      emit(
+        state.copyWith(
+          providerDisplayNames: {
+            ...state.providerDisplayNames,
+            deviceId: Map.unmodifiable(Map<String, String>.from(displayNames)),
+          },
+        ),
+      );
+    }
+  }
+
   Future<void> _loadProviderDisplayNames({
     required DeviceConfig? agent,
     required String deviceId,
   }) async {
-    final revision = _currentRevision(deviceId);
+    final revision = _currentCatalogRevision(deviceId);
     final names = <String, String>{};
     try {
       final snapshot = await _client.modelSnapshot(agent: agent);
@@ -275,13 +351,15 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
       // Keep the chip functional; retry is cooldown-bounded below.
       names.clear();
     }
-    if (isClosed || revision != _currentRevision(deviceId)) return;
+    if (isClosed || revision != _currentCatalogRevision(deviceId)) return;
 
     if (names.isEmpty) {
       _catalogRetryUntil[deviceId] = _now().add(_catalogRetryCooldown);
+      _catalogInvalidated[deviceId] = false;
       return;
     }
     _catalogRetryUntil.remove(deviceId);
+    _catalogInvalidated[deviceId] = false;
 
     final previous = state.providerDisplayNames[deviceId] ?? const <String, String>{};
     if (_sameDisplayNames(previous, names)) return;
@@ -391,6 +469,7 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
   void clearDevice(DeviceConfig? agent) {
     final deviceId = _deviceId(agent);
     _bumpRevision(deviceId);
+    _bumpCatalogRevision(deviceId);
     _invalidateRequests(deviceId: deviceId);
     _usageFetchesInFlight.removeWhere(
       (key, _) => key.startsWith('$deviceId\$'),
@@ -402,6 +481,11 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
     // drop the cached one so the new owner re-fetches once, never sharing a
     // previous device's names (97h).
     _catalogRetryUntil.remove(deviceId);
+    _catalogInvalidated.remove(deviceId);
+    unawaited(_catalogLoadsInFlight.remove(deviceId));
+    // Note: Do not remove _catalogRevisions[deviceId]; monotonic generation
+    // authority must persist until close to prevent ABA stale-catalog races
+    // if an in-flight fetch started before clearDevice resolves later.
     var base = state.clearDevice(deviceId);
     if (base.providerDisplayNames.containsKey(deviceId)) {
       final next = Map<String, Map<String, String>>.from(
@@ -417,6 +501,8 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
   void onInstanceRemoved({DeviceConfig? agent, required String instanceId}) {
     final deviceId = _deviceId(agent);
     _bumpRevision(deviceId);
+    _bumpCatalogRevision(deviceId);
+    unawaited(_catalogLoadsInFlight.remove(deviceId));
     _nextSeq(deviceId, instanceId);
     unawaited(_usageFetchesInFlight.remove(_seqKey(deviceId, instanceId)));
     _resetIdempotencyKeys.remove(_seqKey(deviceId, instanceId));
@@ -667,9 +753,11 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
     _requestSequence.clear();
     _resetIdempotencyKeys.clear();
     _deviceRevisions.clear();
+    _catalogRevisions.clear();
     _instancesLoadsInFlight.clear();
     _catalogLoadsInFlight.clear();
     _catalogRetryUntil.clear();
+    _catalogInvalidated.clear();
     _usageFetchesInFlight.clear();
     return super.close();
   }

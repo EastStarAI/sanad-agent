@@ -11,6 +11,10 @@ enum WorkspaceScope { session, none }
 enum LocalToolRuntimeScope { workspace, device, none }
 
 class Capability {
+  static const int defaultAttachmentMaxFileBytes = 5 * 1024 * 1024;
+  static const int defaultAttachmentMaxFilesPerMessage = 4;
+  static const int defaultAttachmentMaxTotalBytesPerMessage = 20 * 1024 * 1024;
+
   final bool supportsModelChange;
   final bool supportsThinkingModeChange;
   final bool supportsVoiceMessage;
@@ -18,6 +22,9 @@ class Capability {
   final bool supportsStop;
   final bool supportsWorkplace;
   final bool supportsAttachments;
+  final int attachmentMaxFileBytes;
+  final int attachmentMaxFilesPerMessage;
+  final int attachmentMaxTotalBytesPerMessage;
   final bool supportsUpdateSessionName;
   final bool supportsDeleteSession;
   final bool supportsSlashCommands;
@@ -51,6 +58,9 @@ class Capability {
     this.supportsStop = false,
     this.supportsWorkplace = false,
     this.supportsAttachments = false,
+    this.attachmentMaxFileBytes = 0,
+    this.attachmentMaxFilesPerMessage = 0,
+    this.attachmentMaxTotalBytesPerMessage = 0,
     this.supportsUpdateSessionName = false,
     this.supportsDeleteSession = false,
     this.supportsSlashCommands = false,
@@ -78,11 +88,28 @@ class Capability {
 
   factory Capability.fromJson(Map<String, dynamic> json) {
     final caps = json['capabilities'] as Map<String, dynamic>? ?? json;
+    final attachmentMedia = caps['attachment_media_v1'];
+    final attachmentContract = attachmentMedia is Map
+        ? Map<String, dynamic>.from(attachmentMedia)
+        : const <String, dynamic>{};
+    final attachmentVersion = attachmentContract['version'];
+    final explicitAttachmentSupport = caps['supports_attachments'];
+    final supportsAttachmentMedia = explicitAttachmentSupport is bool
+        ? explicitAttachmentSupport
+        : attachmentVersion == 1 && attachmentContract['ordered_references'] == true;
+    final maxFileBytes = supportsAttachmentMedia
+        ? (attachmentContract['max_file_bytes'] as num?)?.toInt() ?? defaultAttachmentMaxFileBytes
+        : 0;
+    final maxFilesPerMessage = supportsAttachmentMedia
+        ? (attachmentContract['max_files_per_message'] as num?)?.toInt() ?? defaultAttachmentMaxFilesPerMessage
+        : 0;
+    final maxTotalBytesPerMessage = supportsAttachmentMedia
+        ? (attachmentContract['max_total_bytes_per_message'] as num?)?.toInt() ??
+              defaultAttachmentMaxTotalBytesPerMessage
+        : 0;
     final appearanceMap = json['appearance'] is Map
         ? Map<String, dynamic>.from(json['appearance'] as Map)
-        : (caps['appearance'] is Map
-            ? Map<String, dynamic>.from(caps['appearance'] as Map)
-            : null);
+        : (caps['appearance'] is Map ? Map<String, dynamic>.from(caps['appearance'] as Map) : null);
 
     return Capability(
       supportsModelChange: caps['supports_model_change'] ?? false,
@@ -91,7 +118,10 @@ class Capability {
       supportsVoiceCall: caps['supports_voice_call'] ?? false,
       supportsStop: caps['supports_stop'] ?? false,
       supportsWorkplace: caps['supports_workplace'] ?? false,
-      supportsAttachments: caps['supports_attachments'] ?? false,
+      supportsAttachments: supportsAttachmentMedia,
+      attachmentMaxFileBytes: maxFileBytes,
+      attachmentMaxFilesPerMessage: maxFilesPerMessage,
+      attachmentMaxTotalBytesPerMessage: maxTotalBytesPerMessage,
       supportsUpdateSessionName: caps['supports_update_session_name'] ?? false,
       supportsDeleteSession: caps['supports_delete_session'] ?? false,
       supportsSlashCommands: caps['supports_slash_commands'] ?? false,
@@ -134,6 +164,9 @@ class Capability {
         other.supportsStop == supportsStop &&
         other.supportsWorkplace == supportsWorkplace &&
         other.supportsAttachments == supportsAttachments &&
+        other.attachmentMaxFileBytes == attachmentMaxFileBytes &&
+        other.attachmentMaxFilesPerMessage == attachmentMaxFilesPerMessage &&
+        other.attachmentMaxTotalBytesPerMessage == attachmentMaxTotalBytesPerMessage &&
         other.supportsUpdateSessionName == supportsUpdateSessionName &&
         other.supportsDeleteSession == supportsDeleteSession &&
         other.supportsSlashCommands == supportsSlashCommands &&
@@ -167,6 +200,9 @@ class Capability {
     supportsStop,
     supportsWorkplace,
     supportsAttachments,
+    attachmentMaxFileBytes,
+    attachmentMaxFilesPerMessage,
+    attachmentMaxTotalBytesPerMessage,
     supportsUpdateSessionName,
     supportsDeleteSession,
     supportsSlashCommands,
@@ -241,8 +277,7 @@ class Capability {
   }
 
   /// Whether thinking options must come from the active model snapshot.
-  bool get usesModelThinkingControls =>
-      thinkingModeSource == ThinkingModeSource.model;
+  bool get usesModelThinkingControls => thinkingModeSource == ThinkingModeSource.model;
 
   static WorkspaceScope _parseWorkspaceScope(dynamic raw) {
     switch ((raw ?? '').toString().toLowerCase()) {

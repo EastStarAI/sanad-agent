@@ -60,6 +60,14 @@
   "account": "Account",
   "signOut": "Sign out",
   "deleteAccount": "Delete account",
+  "deleteAccountConfirmationTitle": "Delete Account",
+  "deleteAccountConfirmationMessage": "Are you sure you want to permanently delete your Sanad Cloud account? This will immediately sign out all phone, web, and desktop sessions, disconnect all registered agents from your account, and remove all cloud data and credits. This action cannot be undone.",
+  "deleteAccountLocalDataNotice": "Agent-owned local conversations and workspace files on your machines will remain intact.",
+  "deleteAccountAppleNotice": "Sign in with Apple Notice (Apple TN3194): We do not store Apple tokens on our servers. To revoke Sanad access, open your device Settings > Apple ID > Sign in with Apple > Sanad > Stop using Apple ID, or visit https://appleid.apple.com.",
+  "deleteAccountConfirmAction": "Delete Account",
+  "deleteAccountInProgress": "Deleting account…",
+  "deleteAccountPendingNotice": "Your account has been deleted. Background cleanup of active sessions and devices is completing.",
+  "deleteAccountError": "Failed to delete account. Please try again.",
   "confirm": "Confirm",
   "cancel": "Cancel",
   "save": "Save",
@@ -350,5 +358,52 @@
   "toolWritingFile": "Writing file...",
   "toolEditingFile": "Editing file...",
   "toolSearchingFiles": "Searching files...",
-  "toolExecuting": "Executing tool..."
+  "toolExecuting": "Executing tool...",
+  "clientCli": "Client CLI",
+  "clientCliDescription": "Allow command-line tools to relay Sanad commands to remote devices through this Client.",
+  "enableClientCli": "Enable Client CLI",
+  "clientCliPermissionMode": "Permission mode",
+  "clientCliDefaultMode": "Default",
+  "clientCliDefaultModeDesc": "Ask for confirmation before executing commands on remote devices.",
+  "clientCliFullAccessMode": "Full access",
+  "clientCliFullAccessModeDesc": "Execute commands directly on remote devices without asking for confirmation.",
+  "clientCliApprovalTitle": "Allow Sanad CLI to run remote command?",
+  "clientCliAllowOnce": "Yes, allow this time",
+  "clientCliAllowSession": "Yes, allow for this session",
+  "clientCliDeny": "No, deny",
+  "thinkingModeUnavailableLabel": "Unavailable",
+  "thinkingModeUnavailableTooltip": "Thinking mode selection is not available for this device.",
+  "thinkingModeLoadingLabel": "Loading...",
+  "thinkingModeRetryLabel": "Retry",
+  "thinkingModeFetchFailureTooltip": "Failed to load thinking options. Click to retry.",
+  "thinkingModeNoControlLabel": "No control",
+  "thinkingModeNoControlTooltip": "No selectable thinking level is reported for this model.",
+  "thinkingModeUnknownLabel": "Not reported",
+  "thinkingModeUnknownTooltip": "Thinking options are not reported for this model.",
+  "thinkingModeNotSelectedLabel": "Not selected",
+  "@thinkingModeNotSelectedLabel": {
+    "description": "Composer thinking chip shown only while a selectable route admits no selection: there is no valid explicit choice and the route declares no known native match, so the control stays honest instead of claiming a level or a provider default."
+  },
+  "thinkingModeTokenBudgetLabel": "Token budget",
+  "thinkingModeTokenBudgetAnnotation": "{tokens} tokens",
+  "@thinkingModeTokenBudgetAnnotation": {
+    "placeholders": {
+      "tokens": {
+        "type": "int"
+      }
+    }
+  },
+  "thinkingModeSelectTooltip": "Select Thinking Mode",
+  "thinkingModeSelectBudgetTooltip": "Select Thinking Mode · budget: {budget}",
+  "@thinkingModeSelectBudgetTooltip": {
+    "placeholders": {
+      "budget": {
+        "type": "String"
+      }
+    }
+  },
+  "thinkingModeProviderDefaultHint": "Provider default",
+  "@thinkingModeProviderDefaultHint": {
+    "description": "Hint shown inside the expanded thinking menu below the single option the Agent declared as this route's native default. A menu hint only: it never appears on the composer chip, in a synthetic Default row, or when the declared default is unknown."
+  }
 }

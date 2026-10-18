@@ -28,6 +28,10 @@ import 'package:sanad_agent/infrastructure/voice/voice_transport_channel.dart';
 import 'package:sanad_agent/interfaces/models/device_control.dart';
 import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
+
+import 'hosted_binary_relay.dart';
 
 class ServerSanadGatewayPlatform extends BasePlatform
     with SanadGatewayBehavior {
@@ -104,6 +108,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
   Future<void>? _registrationFuture;
   bool _registrationPending = false;
   String? _pendingRegistrationChallengeNonce;
+  HostedBinaryRelay? _binaryRelay;
+  io.Socket? _binaryRelaySocket;
 
   String? get registeredDeviceId => _registeredDeviceId;
 
@@ -159,6 +165,18 @@ class ServerSanadGatewayPlatform extends BasePlatform
       _socket =
           socketFactory?.call(gatewayUrl, options) ??
           io.io(gatewayUrl, options);
+    }
+
+    if (!identical(_binaryRelaySocket, _socket)) {
+      if (getIt.isRegistered<AttachmentStore>() &&
+          getIt.isRegistered<SessionManager>()) {
+        _binaryRelay ??= HostedBinaryRelay(
+          store: getIt<AttachmentStore>(),
+          historyLoader: getIt<SessionManager>().getMessages,
+        );
+        _binaryRelay!.bind(_socket!);
+        _binaryRelaySocket = _socket;
+      }
     }
 
     _socket!.onConnect((_) async {
@@ -318,6 +336,17 @@ class ServerSanadGatewayPlatform extends BasePlatform
           sessionId: sessionId,
           deviceId: deviceId,
           clientTag: clientTag,
+        );
+        return;
+      }
+
+      if (command == CanonicalEventTypes.deviceCliExecute ||
+          command == CanonicalEventTypes.deviceCliCancel) {
+        await handleIncomingCommand(
+          envelope: envelope,
+          runtimeBridge: getIt<PlatformRuntimeBridge>(),
+          onResponse: (responseEnvelope) =>
+              _emitAgentEvent(responseEnvelope, clientTag: clientTag),
         );
         return;
       }
@@ -491,6 +520,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
       _socket?.disconnect();
       _socket?.dispose();
       _socket = null;
+      // Socket.dispose() clears every listener and `io.io()` reuses the cached
+      // Socket for the same host, so the next initialize() may receive this very
+      // instance back with no listeners. Forget the binding here, otherwise the
+      // identity check in initialize() keeps the binary relay detached and the
+      // relay events are silently dropped for the life of the process.
+      _binaryRelaySocket = null;
       _logger.info('Cloud Gateway disconnected without Agent authorization.');
       return;
     }
@@ -941,5 +976,6 @@ class ServerSanadGatewayPlatform extends BasePlatform
     }
     _voiceEngines.clear();
     _socket?.dispose();
+    _binaryRelaySocket = null;
   }
 }

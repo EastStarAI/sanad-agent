@@ -95,6 +95,155 @@ class ModelsDevService {
     return result;
   }
 
+  /// Grounded exact aliases for models known under alternative identifiers or relay names.
+  /// Strictly same-generation aliases only; no cross-generation fallbacks.
+  static const Map<String, List<String>> groundedModelAliases = {
+    'claude-haiku-4.5': [
+      'claude-haiku-4-5',
+      'claude-haiku-4-5-20251001',
+    ],
+    'claude-haiku-4-5': [
+      'claude-haiku-4.5',
+      'claude-haiku-4-5-20251001',
+    ],
+    'claude-haiku-4-5-20251001': [
+      'claude-haiku-4.5',
+      'claude-haiku-4-5',
+    ],
+  };
+
+  /// Explicitly hydrates or refreshes the catalog cache from disk or network.
+  Future<void> ensureLoaded({bool forceRefresh = false}) async {
+    await _fetchRegistry(forceRefresh: forceRefresh);
+  }
+
+  /// Exact image-input evidence for the selected model.
+  /// Resolves canonical known models across vendors/providers.
+  Future<bool> supportsImageInput(String model) async {
+    await _fetchRegistry();
+    return supportsImageInputSync(model) ?? false;
+  }
+
+  /// Synchronous image-input check against existing memory cache without I/O.
+  /// Returns `null` if the registry cache has not been loaded yet or model capability is unknown.
+  bool? supportsImageInputSync(String model) {
+    _ensureDiskCacheLoadedSync();
+    if (_cache.isEmpty) return null;
+
+    // 1. If model is explicitly namespaced (e.g. "anthropic/claude-3-5-sonnet" or "openai/gpt-4o"), inspect only that namespace.
+    if (model.contains('/')) {
+      final slashIndex = model.indexOf('/');
+      final vendorPrefix = model.substring(0, slashIndex).trim();
+      final modelSuffix = model.substring(slashIndex + 1).trim();
+      if (vendorPrefix.isNotEmpty && modelSuffix.isNotEmpty) {
+        final vendorKey = providerToModelsDev[vendorPrefix.toLowerCase()] ??
+            vendorPrefix.toLowerCase();
+        final vendorData = _cache[vendorKey];
+        if (vendorData is Map) {
+          final res = _lookupInVendor(vendorData, modelSuffix);
+          if (res.hasValue) return res.value;
+        }
+      }
+      return null;
+    }
+
+    // 2. Bare model ID: resolve purely from model identity across all vendor namespaces.
+    // Provider instance, template, and endpoint must NOT select or hint intrinsic metadata.
+    final candidateResults = <bool>{};
+    for (final vendorEntry in _cache.entries) {
+      final vendorData = vendorEntry.value;
+      if (vendorData is! Map) continue;
+      final res = _lookupInVendor(vendorData, model);
+      if (res.isConflict) {
+        // Contradictory grounded model claims in a vendor: another publisher cannot erase ambiguity!
+        return null;
+      }
+      if (res.hasValue) {
+        candidateResults.add(res.value);
+      }
+      // Missing facts do not veto unambiguous known facts from other vendors.
+    }
+
+    // Return consensus if unambiguous; if conflicting (both true and false) or empty, return null (unknown).
+    if (candidateResults.length == 1) {
+      return candidateResults.first;
+    }
+    return null;
+  }
+
+  _VendorLookupResult _lookupInVendor(Map vendorData, String model) {
+    final models = vendorData['models'];
+    if (models is! Map) return _VendorLookupResult.missing;
+
+    // 1. If exact selected ID is present, it is authoritative.
+    if (models.containsKey(model)) {
+      final support = _extractImageSupport(models[model]);
+      if (support != null) {
+        return _VendorLookupResult.from(support);
+      }
+      return _VendorLookupResult.missing;
+    }
+
+    // 2. When exact selected ID is missing, check grounded aliases.
+    final aliases = groundedModelAliases[model];
+    if (aliases == null || aliases.isEmpty) return _VendorLookupResult.missing;
+
+    final aliasResults = <bool>{};
+    for (final alias in aliases) {
+      if (alias != model && models.containsKey(alias)) {
+        final support = _extractImageSupport(models[alias]);
+        if (support != null) {
+          aliasResults.add(support);
+        }
+      }
+    }
+
+    // Contradictory SAME-vendor alias candidates must indicate conflict.
+    if (aliasResults.length > 1) {
+      return _VendorLookupResult.conflict;
+    }
+    if (aliasResults.length == 1) {
+      return _VendorLookupResult.from(aliasResults.first);
+    }
+    return _VendorLookupResult.missing;
+  }
+
+  static bool? _extractImageSupport(dynamic modelEntry) {
+    if (modelEntry is! Map) return null;
+    final modalities = modelEntry['modalities'];
+    if (modalities is! Map) return null;
+    final input = modalities['input'];
+    if (input is List && input.every((v) => v is String)) {
+      return input.contains('image');
+    }
+    return null;
+  }
+
+  void _ensureDiskCacheLoadedSync() {
+    if (_cache.isNotEmpty) return;
+    try {
+      final diskFile = File(_cacheFilePath);
+      if (diskFile.existsSync()) {
+        final content = cacheFilePathOverride == null
+            ? utf8.decode(
+                SanadHomeBootstrap.identity().readSecretBytes(
+                  'models_dev_cache.json',
+                ),
+              )
+            : diskFile.readAsStringSync();
+        final decoded = jsonDecode(content);
+        if (decoded is Map<String, dynamic>) {
+          _cache = decoded;
+          final stat = diskFile.statSync();
+          final ageSeconds = DateTime.now().difference(stat.modified).inSeconds;
+          _lastFetchTime = DateTime.now().subtract(
+            Duration(seconds: ageSeconds >= 0 ? ageSeconds : 0),
+          );
+        }
+      }
+    } catch (_) {}
+  }
+
   /// Check if a model supports reasoning.
   Future<bool> supportsReasoning(String provider, String model) async {
     final mdata = await _getModelData(provider, model);
@@ -247,8 +396,8 @@ class ModelsDevService {
       _logger.warning('Failed to fetch models.dev registry from network: $e');
     }
 
-    // 4. Stale disk cache fallback
-    if (_cache.isEmpty && diskFile.existsSync()) {
+    // 4. Stale/updated disk cache fallback
+    if ((_cache.isEmpty || forceRefresh) && diskFile.existsSync()) {
       try {
         final content = cacheFilePathOverride == null
             ? utf8.decode(
@@ -274,4 +423,32 @@ class ModelsDevService {
 
     return _cache;
   }
+}
+
+sealed class _VendorLookupResult {
+  const _VendorLookupResult();
+  static const missing = _VendorMissingResult();
+  static const conflict = _VendorConflictResult();
+  static const supported = _VendorValueResult(true);
+  static const unsupported = _VendorValueResult(false);
+
+  static _VendorLookupResult from(bool val) =>
+      val ? supported : unsupported;
+
+  bool get isConflict => this is _VendorConflictResult;
+  bool get hasValue => this is _VendorValueResult;
+  bool get value => (this as _VendorValueResult).supported;
+}
+
+class _VendorMissingResult extends _VendorLookupResult {
+  const _VendorMissingResult();
+}
+
+class _VendorConflictResult extends _VendorLookupResult {
+  const _VendorConflictResult();
+}
+
+class _VendorValueResult extends _VendorLookupResult {
+  final bool supported;
+  const _VendorValueResult(this.supported);
 }

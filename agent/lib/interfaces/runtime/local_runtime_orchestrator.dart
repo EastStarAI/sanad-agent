@@ -2,8 +2,11 @@ import 'dart:async';
 
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
+import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
@@ -80,10 +83,29 @@ class LocalRuntimeOrchestrator {
   }) {
     agentRunner.setTurnRequestId(request.requestId);
     final receivedAt = _readReceivedAt(request);
+    final rawAttachmentIds = request.metadata['attachment_ids'];
+    final attachmentIds = rawAttachmentIds is List
+        ? rawAttachmentIds.whereType<String>().toList(growable: false)
+        : const <String>[];
+    if (attachmentIds.isNotEmpty &&
+        (request.requestId == null || request.requestId!.isEmpty)) {
+      throw StateError('Attachment admission requires a request identity.');
+    }
+    final attachments = attachmentIds.isEmpty
+        ? const <UserAttachment>[]
+        : getIt<AttachmentStore>().loadAdmission(
+            sessionId: request.sessionId,
+            admissionId: request.requestId!,
+            attachmentIds: attachmentIds,
+          );
+    agentRunner.configureUserAttachments(attachments);
     return Stream.fromFuture(
       _runtimeCatalog.buildTools(
         registry: agentRunner.registry,
         request: request,
+        pendingAttachmentIds: attachments
+            .map((attachment) => attachment.id)
+            .toList(growable: false),
       ),
     ).asyncExpand((tools) {
       agentRunner.registry.registerTools(tools);

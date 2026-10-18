@@ -846,13 +846,17 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     );
   }
 
-  Future<void> sendMessage(String text, {MessageDeliveryIntent intent = MessageDeliveryIntent.auto}) async {
+  Future<bool> sendMessage(
+    String text, {
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+    List<Map<String, dynamic>> attachments = const [],
+  }) async {
     final agent = _currentAgent;
-    if (agent == null) return;
+    if (agent == null) return false;
     final workspaceId = _selectedWorkspaceForAgent(agent)?.id;
     if (_requiresWorkspace(agent) && (workspaceId == null || workspaceId.isEmpty)) {
       emit(state.copyWith(error: 'Select a workspace before sending your first Sanad Agent message.'));
-      return;
+      return false;
     }
 
     try {
@@ -887,16 +891,35 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         emit(state.copyWith(activeSessionId: targetSessionId));
       }
 
-      final requestId = await conversationRepository.sendMessage(
-        agent,
-        text,
-        sessionId: targetSessionId,
-        workspaceId: workspaceId,
-        providerId: _effectiveProviderFor(agent, targetSessionId),
-        model: _effectiveModelFor(agent, targetSessionId),
-        thinkingMode: _nextMessageThinkingByAgentId[agent.id],
-        intent: intent,
-      );
+      final repository = conversationRepository;
+      final String? requestId;
+      if (attachments.isNotEmpty) {
+        if (repository is! AttachmentSendRepository) {
+          throw StateError('Attachment admission is unavailable.');
+        }
+        requestId = await (repository as AttachmentSendRepository).sendMessageWithAttachments(
+          agent,
+          text,
+          sessionId: targetSessionId,
+          workspaceId: workspaceId,
+          providerId: _effectiveProviderFor(agent, targetSessionId),
+          model: _effectiveModelFor(agent, targetSessionId),
+          thinkingMode: _nextMessageThinkingByAgentId[agent.id],
+          attachments: attachments,
+          intent: intent,
+        );
+      } else {
+        requestId = await repository.sendMessage(
+          agent,
+          text,
+          sessionId: targetSessionId,
+          workspaceId: workspaceId,
+          providerId: _effectiveProviderFor(agent, targetSessionId),
+          model: _effectiveModelFor(agent, targetSessionId),
+          thinkingMode: _nextMessageThinkingByAgentId[agent.id],
+          intent: intent,
+        );
+      }
       if (targetSessionId.isNotEmpty) {
         final currentThinking = _nextMessageThinkingByAgentId[agent.id];
         sessionCubit.applyThinkingMode(targetSessionId, currentThinking);
@@ -907,9 +930,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           targetSessionId,
           requestId,
         );
+        return true;
       }
+      return false;
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
+      return false;
     }
   }
 
@@ -1102,6 +1128,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
+    List<Map<String, dynamic>>? attachmentEdits,
     bool confirmedReplayUnsafe = false,
     bool confirmedDropSteers = false,
   }) async {
@@ -1114,21 +1141,50 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         requiresConfirmation: false,
       );
     }
-    final result = await conversationRepository.replayTurn(
-      agent,
-      sessionId: sessionId,
-      targetRequestId: targetRequestId,
-      targetMessageId: targetMessageId,
-      targetTurnId: targetTurnId,
-      expectedHistoryRevision: expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0,
-      action: action,
-      message: message,
-      providerInstanceId: state.nextMessageProviderId,
-      modelId: state.nextMessageModel,
-      thinkingMode: state.nextMessageThinkingMode,
-      confirmedReplayUnsafe: confirmedReplayUnsafe,
-      confirmedDropSteers: confirmedDropSteers,
-    );
+    final revision = expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0;
+    final repository = conversationRepository;
+    final TurnReplayResult result;
+    if (attachmentEdits != null) {
+      if (repository is! AttachmentReplayRepository) {
+        return const TurnReplayResult(
+          outcome: 'attachments_unsupported',
+          safety: TurnReplaySafety.unknown,
+          requiresConfirmation: false,
+        );
+      }
+      result = await (repository as AttachmentReplayRepository).replayTurnWithAttachments(
+        agent,
+        sessionId: sessionId,
+        targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: revision,
+        action: action,
+        message: message ?? '',
+        attachmentEdits: attachmentEdits,
+        providerInstanceId: state.nextMessageProviderId,
+        modelId: state.nextMessageModel,
+        thinkingMode: state.nextMessageThinkingMode,
+        confirmedReplayUnsafe: confirmedReplayUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
+      );
+    } else {
+      result = await repository.replayTurn(
+        agent,
+        sessionId: sessionId,
+        targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: revision,
+        action: action,
+        message: message,
+        providerInstanceId: state.nextMessageProviderId,
+        modelId: state.nextMessageModel,
+        thinkingMode: state.nextMessageThinkingMode,
+        confirmedReplayUnsafe: confirmedReplayUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
+      );
+    }
     final nextRevision = result.historyRevision;
     final selected = sessionCubit.state.selectedSession;
     if (nextRevision != null && selected != null && selected.id == sessionId) {

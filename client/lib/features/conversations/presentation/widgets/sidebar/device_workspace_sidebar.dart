@@ -92,7 +92,7 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
           return SidebarDeviceHeaderBar(
             devices: data.devices,
             activeDevice: data.active,
-            onDeviceSelected: (device) => context.read<DeviceCubit>().setActiveAgent(device.id),
+            onDeviceSelected: (device) => unawaited(_switchDevice(context, device)),
             onSettingsTapped: () => context.push(AppRoutes.settings),
             isDrawerMode: isDrawerMode,
             isLoadingFromBackend: data.isLoading,
@@ -173,6 +173,21 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Select a device as exactly one typed navigation.
+  ///
+  /// [SessionCubit.switchActiveDevice] switches the cache context and the active
+  /// agent and records the destination for the newly active device; this shell
+  /// only moves the route to that destination. Without the typed navigation the
+  /// URL and the history current destination keep describing the previous
+  /// device while the cache, sidebar, and selection already belong to the new
+  /// one.
+  static Future<void> _switchDevice(BuildContext context, DeviceConfig device) async {
+    final sessionCubit = context.read<SessionCubit>();
+    final destination = await sessionCubit.switchActiveDevice(device);
+    if (!context.mounted) return;
+    context.go(destination.routePath);
   }
 
   static ({List<DeviceConfig> devices, DeviceConfig? active}) _deviceSelector(DeviceState state) {
@@ -288,15 +303,12 @@ class _SidebarBody extends StatelessWidget {
     }
 
     Future<void> newConversationIn(String? workspaceId) async {
-      await sessionCubit.startNewChat(device, workspaceId: workspaceId);
+      // Route with the destination the intent actually resolved: rebuilding a
+      // location from the draft afterwards can disagree with the typed
+      // destination and split one New Conversation surface into two identities.
+      final destination = await sessionCubit.startNewChat(device, workspaceId: workspaceId);
       if (!context.mounted) return;
-      final targetWorkspaceId = cacheRepository.newConversationDraft(device.id).workspaceId;
-      context.go(
-        AppRoutes.newConversationLocation(
-          device.id,
-          workspaceId: targetWorkspaceId,
-        ),
-      );
+      context.go(destination.routePath);
       if (isDrawerMode && onClose != null) onClose!();
     }
 

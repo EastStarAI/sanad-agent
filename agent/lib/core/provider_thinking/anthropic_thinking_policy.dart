@@ -10,8 +10,10 @@ import 'thinking_policy_context.dart';
 class AnthropicThinkingPolicy implements ProviderThinkingPolicy {
   const AnthropicThinkingPolicy();
 
+  static const policyIdentifier = 'anthropic_thinking';
+
   @override
-  String get policyId => 'anthropic_thinking';
+  String get policyId => policyIdentifier;
 
   @override
   ThinkingControlDescriptor resolveCapability(ThinkingPolicyContext context) {
@@ -26,11 +28,7 @@ class AnthropicThinkingPolicy implements ProviderThinkingPolicy {
     final options = <ThinkingControlOption>[];
     if (AnthropicModelCatalog.supportsExplicitOff(context.modelId)) {
       options.add(
-        const ThinkingControlOption(
-          id: 'off',
-          label: 'Off',
-          isOff: true,
-        ),
+        const ThinkingControlOption(id: 'off', label: 'Off', isOff: true),
       );
     }
 
@@ -42,6 +40,12 @@ class AnthropicThinkingPolicy implements ProviderThinkingPolicy {
                 (id) => ThinkingControlOption(
                   id: id,
                   label: AnthropicModelCatalog.labelForOptionId(id),
+                  // Disclose the exact token count this route resolves for the
+                  // option, from the catalog's own budget authority.
+                  budgetTokens: AnthropicModelCatalog.budgetTokensForSelection(
+                    modelId: context.modelId,
+                    selectionId: id,
+                  ),
                 ),
               )
               .toList(growable: false),

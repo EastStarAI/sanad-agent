@@ -1,3 +1,14 @@
+import 'dart:ui' show SemanticsAction;
+
+import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/thinking_control.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
+import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
@@ -12,8 +23,11 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/utils/app_platform.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart' show kSupportedLocales;
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -57,13 +71,14 @@ void main() {
   ConversationInputSlice idleSlice({
     SessionExecutionSnapshot? executionSnapshot,
     bool isAwaitingMessageAcceptance = false,
+    DeviceWorkspace? selectedWorkspace,
   }) => ConversationInputSlice(
     isProcessing: false,
     nextMessageModel: null,
     nextMessageProviderId: null,
     nextMessageThinkingMode: null,
-    availableWorkspaces: [],
-    selectedWorkspace: null,
+    availableWorkspaces: selectedWorkspace == null ? [] : [selectedWorkspace],
+    selectedWorkspace: selectedWorkspace,
     isLoadingWorkspaces: false,
     requiresWorkspace: false,
     permissionMode: WorkspacePermissionMode.defaultMode,
@@ -81,14 +96,21 @@ void main() {
     required ConversationInputSlice inputSlice,
     required ConversationInputAgentSlice agentSlice,
     void Function({MessageDeliveryIntent intent})? onSendAttempt,
+    Future<List<XFile>> Function()? pickAttachmentFiles,
+    SessionCubit? sessionCubit,
+    ConversationInputCubit? inputCubit,
   }) {
     return tester.pumpWidget(
       MultiBlocProvider(
         providers: [
           BlocProvider<ComposerSlashCommandsCubit>.value(value: slashCubit),
           BlocProvider<VoiceStreamCubit>.value(value: voiceCubit),
+          if (sessionCubit != null) BlocProvider<SessionCubit>.value(value: sessionCubit),
+          if (inputCubit != null) BlocProvider<ConversationInputCubit>.value(value: inputCubit),
         ],
         child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: kSupportedLocales,
           home: Scaffold(
             body: ConversationInputComposer(
               chatController: chatController,
@@ -107,6 +129,7 @@ void main() {
               onConfirmFullAccess: () async => true,
               agentSelectorKey: GlobalKey<PopupMenuButtonState<String>>(),
               onPickAndCreateWorkspace: (_) async {},
+              pickAttachmentFiles: pickAttachmentFiles,
             ),
           ),
         ),
@@ -133,6 +156,42 @@ void main() {
     await tester.tapAt(Offset(rect.right - 12, rect.top + 12));
     await tester.pump();
 
+    expect(focusNode.hasFocus, isTrue);
+  });
+
+  testWidgets('attachment picker is accessible, invoked once, and preserves text focus', (tester) async {
+    var pickerCalls = 0;
+    const workspace = DeviceWorkspace(id: 'workspace-1', name: 'Project', path: '/project');
+    await pumpComposer(
+      tester,
+      capabilities: const Capability(
+        supportsAttachments: true,
+        attachmentMaxFileBytes: 5 * 1024 * 1024,
+        attachmentMaxFilesPerMessage: 4,
+        attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+        supportsToolPermissions: true,
+      ),
+      inputSlice: idleSlice(selectedWorkspace: workspace),
+      agentSlice: onlineAgentSlice,
+      pickAttachmentFiles: () async {
+        pickerCalls += 1;
+        return const <XFile>[];
+      },
+    );
+    await tester.enterText(find.byKey(const Key('chat_input')), 'keep this draft');
+    final addButton = find.byKey(const Key('composer_add_attachment'));
+    expect(addButton, findsOneWidget);
+    final semantics = tester.getSemantics(addButton);
+    expect(semantics.tooltip, 'Add attachments');
+    expect(semantics.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+    expect(semantics.getSemanticsData().flagsCollection.isButton, isTrue);
+    expect(tester.getCenter(addButton).dx, lessThan(tester.getCenter(find.text('Default')).dx));
+
+    await tester.tap(addButton);
+    await tester.pump();
+
+    expect(pickerCalls, 1);
+    expect(chatController.text, 'keep this draft');
     expect(focusNode.hasFocus, isTrue);
   });
 
@@ -646,8 +705,16 @@ void main() {
   testWidgets('bottom controls do not overflow on a narrow mobile width', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(280, 500));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    // A narrow viewport must drive layout and MediaQuery together, exactly as a
+    // real narrow device does; otherwise the composer keeps taking its wide
+    // branch while being laid out at mobile width. `setSurfaceSize` alone only
+    // changes the layout size.
+    tester.view.physicalSize = const Size(280, 500);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
 
     await pumpComposer(
       tester,
@@ -683,4 +750,154 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('send_message_btn')), findsOneWidget);
   });
+
+  testWidgets(
+    'narrow composer keeps the model-scoped thinking control bounded and selectable',
+    (tester) async {
+      tester.view.physicalSize = const Size(280, 500);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final snapshot = ModelCacheSnapshotDto(
+        instances: [
+          ModelCacheInstanceDto(
+            id: 'provider-1',
+            displayName: 'P1',
+            status: 'ready',
+            isDefault: true,
+            cacheStatus: 'fetched',
+            models: const [
+              ModelCacheModelDto(
+                id: 'model-narrow',
+                thinkingControl: ThinkingControlDescriptorDto(
+                  status: ThinkingCapabilityStatus.supported,
+                  kind: ThinkingControlKind.effort,
+                  defaultOptionId: 'medium',
+                  options: [
+                    ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                    ThinkingControlOptionDto(id: 'medium', label: 'Medium'),
+                    ThinkingControlOptionDto(id: 'high', label: 'High'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+        recent: const [],
+      );
+
+      getIt.registerSingleton<ProviderSetupClient>(
+        _StubProviderSetupClient(snapshot),
+      );
+      addTearDown(() async {
+        if (getIt.isRegistered<ProviderSetupClient>()) {
+          await getIt.unregister<ProviderSetupClient>();
+        }
+      });
+
+      final inputCubit = _StubConversationInputCubit();
+      addTearDown(inputCubit.close);
+      final sessionCubit = _StubSessionCubit(
+        Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-narrow',
+        ),
+      );
+      addTearDown(sessionCubit.close);
+
+      await pumpComposer(
+        tester,
+        capabilities: const Capability(
+          supportsThinkingModeChange: true,
+          thinkingModeSource: ThinkingModeSource.model,
+        ),
+        inputSlice: ConversationInputSlice(
+          isProcessing: false,
+          nextMessageModel: 'model-narrow',
+          nextMessageProviderId: 'provider-1',
+          nextMessageThinkingMode: null,
+          availableWorkspaces: const [],
+          selectedWorkspace: null,
+          isLoadingWorkspaces: false,
+          requiresWorkspace: false,
+          permissionMode: WorkspacePermissionMode.defaultMode,
+          isLoadingPermissionMode: false,
+          pendingSuspendedRequest: null,
+          runtimeNotice: null,
+          queuedMessages: const [],
+        ),
+        agentSlice: onlineAgentSlice,
+        sessionCubit: sessionCubit,
+        inputCubit: inputCubit,
+      );
+      await tester.pumpAndSettle();
+
+      // The real narrow composer embeds the resolved control without overflow,
+      // and the declared native default reaches the composer selection path.
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(const Key('route_thinking_mode_selector_button')),
+        findsOneWidget,
+      );
+      expect(inputCubit.selectCount, 1);
+      expect(inputCubit.selectedThinkingMode, 'medium');
+    },
+  );
+}
+
+/// Provides the trusted model snapshot the thinking control resolves its options
+/// from, mirroring the real `ProviderSetupClient` surface that control consumes.
+class _StubProviderSetupClient extends Fake implements ProviderSetupClient {
+  _StubProviderSetupClient(this.snapshot);
+
+  final ModelCacheSnapshotDto snapshot;
+
+  @override
+  Stream<ModelCacheUpdateEvent> get modelUpdates => const Stream<ModelCacheUpdateEvent>.empty();
+
+  @override
+  Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async => snapshot;
+}
+
+class _StubSessionCubit extends Cubit<SessionState> implements SessionCubit {
+  _StubSessionCubit(Session? session) : super(SessionState(selectedSession: session));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _StubConversationInputCubit extends Cubit<ConversationInputState> implements ConversationInputCubit {
+  _StubConversationInputCubit() : super(const ConversationInputState());
+
+  CapabilityValueScope? selectedScope;
+  String? selectedThinkingMode;
+  int selectCount = 0;
+
+  // The composer binds its draft scope on mount; this stub only needs the
+  // selection path the thinking control drives.
+  @override
+  void setDraftScope({required String? deviceId, required String? sessionId}) {}
+
+  @override
+  Future<void> setWorkspacePermissionMode(WorkspacePermissionMode mode) async {}
+
+  @override
+  Future<void> selectThinkingMode({
+    required CapabilityValueScope scope,
+    String? thinkingMode,
+  }) async {
+    selectedScope = scope;
+    selectedThinkingMode = thinkingMode;
+    selectCount++;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

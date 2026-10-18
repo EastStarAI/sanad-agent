@@ -23,3 +23,10 @@ This contract applies to `agent/lib/interfaces/models/`.
 - Workspace-control models carry managed-remote admission errors and mutation
   preview payloads. Do not treat a client path as the remote workspace root.
 - Extend delivery and origin types without coupling model definitions to concrete platform implementations.
+
+## Remote CLI Relay Models
+- `remote_cli.dart` owns the versioned request, cancellation, streamed event, and terminal result models of the `device.cli.*` command family. Every envelope carries `request_id`, and missing or unsupported protocol versions fail closed.
+- Admission bounds are model-enforced through `RemoteCliLimits` (argument count, argument length, standard input, brief content, total payload, and timeout range); reject with `invalid_request` or `payload_too_large` instead of truncating.
+- Terminal outcomes stay typed and distinct: `duplicate_request`, `timeout`, `cancelled`, `not_found`, and `wrong_device`. Cancellation always names an explicit `target_request_id`.
+- Command payloads, argv, standard input, and sensitive arguments never enter logs, error text, or durable state.
+- Keep these models aligned with `docs/technical/remote_cli_relay_protocol.md` and the canonical event types.

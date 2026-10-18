@@ -37,10 +37,10 @@ enum ThinkingControlKind {
     return switch (raw) {
       'effort' => ThinkingControlKind.effort,
       'toggle' => ThinkingControlKind.toggle,
-      'token_budget' => ThinkingControlKind.tokenBudget,
+      'token_budget' || 'tokenBudget' => ThinkingControlKind.tokenBudget,
       'level' => ThinkingControlKind.level,
       'adaptive' => ThinkingControlKind.adaptive,
-      'model_variant' => ThinkingControlKind.modelVariant,
+      'model_variant' || 'modelVariant' => ThinkingControlKind.modelVariant,
       _ => null,
     };
   }
@@ -66,14 +66,30 @@ class ThinkingControlOption {
   /// Whether this option explicitly disables thinking controls.
   final bool isOff;
 
-  /// Whether this option represents the provider/model default by omission.
+  /// Whether this option is the known native default of its model.
+  ///
+  /// It marks a concrete default *value* the provider applies when the control
+  /// is omitted, which is metadata only. It is not an omission selection:
+  /// omitting the control stays the separate provider-Default contract that
+  /// emits no request field at all, and this flag never dispatches by itself.
   final bool isProviderDefault;
+
+  /// Positive token count this option requests, or `null`.
+  ///
+  /// Present only for an option that is genuinely a token budget, and only
+  /// with the positive token count the route actually resolves for this
+  /// exact option id — taken from the owning policy's authoritative budget
+  /// resolution, never a duplicated table. It is absent for Off, for
+  /// effort/level/toggle options, and whenever the count is unknown, so a
+  /// client can disclose the effective budget without inventing one.
+  final int? budgetTokens;
 
   const ThinkingControlOption({
     required this.id,
     required this.label,
     this.isOff = false,
     this.isProviderDefault = false,
+    this.budgetTokens,
   });
 
   Map<String, dynamic> toMap() => {
@@ -81,6 +97,9 @@ class ThinkingControlOption {
     'label': label,
     'is_off': isOff,
     'is_provider_default': isProviderDefault,
+    // A budget option's token count is positive by contract; anything else is
+    // not a budget and stays absent instead of shipping a meaningless zero.
+    if (budgetTokens != null && budgetTokens! > 0) 'budget_tokens': budgetTokens,
   };
 
   factory ThinkingControlOption.fromMap(Map<String, dynamic> map) {
@@ -89,7 +108,21 @@ class ThinkingControlOption {
       label: map['label'] as String,
       isOff: map['is_off'] as bool? ?? false,
       isProviderDefault: map['is_provider_default'] as bool? ?? false,
+      budgetTokens: parseBudgetTokens(map['budget_tokens']),
     );
+  }
+
+  /// Parses a disclosed budget count: a whole positive token count, or `null`.
+  ///
+  /// A fractional, non-finite or non-positive count is not a budget, so it is
+  /// treated as unavailable rather than truncated, rounded or allowed to
+  /// throw. A malformed value from a peer therefore never becomes a fabricated
+  /// token count, and never fails a metadata round-trip.
+  static int? parseBudgetTokens(Object? raw) {
+    if (raw is! num || !raw.isFinite) return null;
+    if (raw is double && raw.truncateToDouble() != raw) return null;
+    final count = raw.toInt();
+    return count > 0 ? count : null;
   }
 
   @override
@@ -100,10 +133,12 @@ class ThinkingControlOption {
           id == other.id &&
           label == other.label &&
           isOff == other.isOff &&
-          isProviderDefault == other.isProviderDefault;
+          isProviderDefault == other.isProviderDefault &&
+          budgetTokens == other.budgetTokens;
 
   @override
-  int get hashCode => Object.hash(id, label, isOff, isProviderDefault);
+  int get hashCode =>
+      Object.hash(id, label, isOff, isProviderDefault, budgetTokens);
 }
 
 /// Per-model thinking capability descriptor shipped with model snapshots.
@@ -112,7 +147,11 @@ class ThinkingControlDescriptor {
   final ThinkingControlKind? kind;
   final List<ThinkingControlOption> options;
 
-  /// Null means provider/model default by omission.
+  /// Known native default option id, or `null` when no default is known.
+  ///
+  /// It names the option the provider applies when the control is omitted, as
+  /// truthful metadata; it is not an omission selection. Omitting the control
+  /// stays the separate provider-Default contract that emits no request field.
   final String? defaultOptionId;
   final String capabilityRevision;
   final String source;
@@ -173,22 +212,26 @@ class ThinkingControlDescriptor {
   static ThinkingControlDescriptor unknown({
     String capabilityRevision = 'unknown',
     String source = 'unknown',
+    DateTime? observedAt,
   }) {
     return ThinkingControlDescriptor(
       status: ThinkingCapabilityStatus.unknown,
       capabilityRevision: capabilityRevision,
       source: source,
+      observedAt: observedAt,
     );
   }
 
   static ThinkingControlDescriptor unsupported({
     String capabilityRevision = 'unsupported',
     String source = 'profile',
+    DateTime? observedAt,
   }) {
     return ThinkingControlDescriptor(
       status: ThinkingCapabilityStatus.unsupported,
       capabilityRevision: capabilityRevision,
       source: source,
+      observedAt: observedAt,
     );
   }
 

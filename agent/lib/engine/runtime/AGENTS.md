@@ -10,11 +10,14 @@ This contract applies to `agent/lib/engine/runtime/`.
 
 ## Tool Execution
 - `ToolExecutionCoordinator` executes batches, records per-tool completion, and delegates checkpoint persistence.
+- `ToolExecutionCallbacks.currentImageSupport()` provides the turn's frozen `RouteImageSupport` capability tri-state, passed through to `ToolContext.imageSupport` for early tool-level capability gating.
 - Parallelize only compatible independent tools.
 - Interactive tools, shell execution, and overlapping file paths force sequential execution.
 - Persist completion checkpoint after each tool needed for restart safety.
-- Bound every tool result before completion events, checkpoint persistence, or history insertion, and enforce an aggregate budget across each tool-call batch; this boundary includes built-in, workspace, MCP, platform, resumed, and future registered tools.
-- Preserve a structured tool result's `isError` or `is_error` classification across its completion event, checkpoint output record, and history metadata. A non-`Error` text prefix does not override an explicit structured failure.
+- Consume `ToolExecutionResult` from tools for sequential and parallel execution. Bound text blocks before completion events, checkpoint persistence, or history insertion, and enforce an aggregate text budget across each tool-call batch; image blocks retain order and never enter character counting or text previews.
+- Append one typed `Message.toolResult` for each tool-call id through rich runner callbacks. Events, plugins, legacy callbacks, and checkpoint previews receive bounded `displayText` and, where applicable, a byte-free media descriptor only; never binary blocks.
+- Publish `view_image` completion descriptors only after the final batch-guarded typed result is durable and the owning run still permits publication. Single-tool resumed image completion preserves the same persistence-before-publication boundary.
+- Preserve typed `isError` classification across completion events, checkpoint output records, and history metadata. Do not parse typed output strings or use implicit `toString()` to infer status; only explicitly normalized legacy recovery records may use their persisted error metadata.
 
 ## Continuation Checkpoints
 - `ContinuationCheckpointCoordinator` owns checkpoint schema and read/write orchestration for the active work item.
@@ -24,6 +27,9 @@ This contract applies to `agent/lib/engine/runtime/`.
 - A missing checkpoint may be repaired as `initial_model_request` only when the owned user message is durable and there is no provider-in-flight, executing-tool, completed-result, or deferred-result evidence. Persist the repair marker so retry cannot reinterpret an ambiguous boundary repeatedly.
 - Tools that support crash diagnostics may persist bounded, redacted execution progress under the active checkpoint. Progress is evidence for terminal recovery, never permission to replay an unsafe tool.
 - Persist sequential tool completion and executing-marker removal together.
+- Owner-bound rich completions use `completed_tool_results_v2` envelopes containing schema version plus session/work/run/generation/tool identity. Save the individually guarded typed result immediately, then replace it with the aggregate-guarded typed result before canonical history promotion.
+- Restore v2 snapshots without reopening tool source paths. Reject stale ownership; degrade a structurally corrupt rich payload to the deterministic text-only unavailable terminal instead of replaying the tool. Legacy/non-owned checkpoints remain text-only compatible.
+- Promote a v2 result through `SessionExecutionStateCoordinator` before the runner history callback; never append an owner-bound rich result only to volatile history.
 - A completed checkpoint tool result is reused only when its causal model step,
   tool name, and structured arguments match the invocation that recorded it (each
   persisted output record carries its owning `model_step_id`); a genuinely new

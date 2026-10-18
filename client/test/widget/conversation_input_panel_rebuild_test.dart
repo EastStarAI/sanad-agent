@@ -984,6 +984,86 @@ void main() {
     },
   );
 
+  testWidgets(
+    'real composer consumption: model chip updates provider display name immediately on cubit catalog update without client restart',
+    (tester) async {
+      final countingClient = _CountingProviderClient();
+      getIt.registerSingleton<ProviderSetupClient>(countingClient);
+      final usageCubit = ProviderUsageCubit(localDeviceId: 'hardware-1', client: countingClient);
+      getIt.registerSingleton<ProviderUsageCubit>(usageCubit);
+      addTearDown(usageCubit.close);
+
+      await sessionCubit.selectSession(
+        Session(
+          id: 'session-1',
+          title: 'Chat',
+          deviceId: agent.id,
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+          model: 'glm-5.2',
+          modelProvider: 'provider-1',
+        ),
+      );
+
+      Widget actions() => ConversationBottomActions(
+        activeAgent: agent,
+        inputSlice: const ConversationInputSlice(
+          isProcessing: false,
+          nextMessageModel: 'glm-5.2',
+          nextMessageProviderId: 'provider-1',
+          nextMessageThinkingMode: null,
+          availableWorkspaces: [],
+          selectedWorkspace: null,
+          isLoadingWorkspaces: false,
+          requiresWorkspace: false,
+          permissionMode: WorkspacePermissionMode.defaultMode,
+          isLoadingPermissionMode: false,
+          pendingSuspendedRequest: null,
+          runtimeNotice: null,
+          queuedMessages: [],
+        ),
+        capabilities: const Capability(supportsModelChange: true, supportsThinkingModeChange: true),
+        dimTextColor: Colors.black,
+        chipBgColor: Colors.white,
+        borderColor: Colors.black12,
+        onConfirmFullAccess: () async => true,
+      );
+
+      await pumpTestApp(
+        tester,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        child: actions(),
+      );
+      await tester.pumpAndSettle();
+
+      // Initially renders with catalog name from model.snapshot
+      expect(find.text('Z.AI Coding Plan | glm-5.2'), findsOneWidget);
+
+      // Mutate catalog display names (simulating a provider rename from setup flow)
+      usageCubit.updateProviderDisplayNames(
+        agent: agent,
+        displayNames: {'provider-1': 'Z.AI Pro Plan'},
+      );
+      await tester.pumpAndSettle();
+
+      // Composer immediately reflects renamed provider display name without restart
+      expect(find.text('Z.AI Pro Plan | glm-5.2'), findsOneWidget);
+      expect(find.text('Z.AI Coding Plan | glm-5.2'), findsNothing);
+
+      // Mutate catalog display names to empty (simulating provider removal)
+      usageCubit.updateProviderDisplayNames(
+        agent: agent,
+        displayNames: const {},
+      );
+      await tester.pumpAndSettle();
+
+      // Composer immediately drops custom display name and falls back without restart
+      expect(find.text('Provider 1 | glm-5.2'), findsOneWidget);
+      expect(find.text('Z.AI Pro Plan | glm-5.2'), findsNothing);
+    },
+  );
+
   testWidgets('appends dropped file paths to input field when files are dragged and dropped', (tester) async {
     socket.setConnected(true);
     agent = DeviceConfig(

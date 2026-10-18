@@ -22,7 +22,8 @@ import 'package:sanad_client/features/conversations/domain/models/session_fork_r
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
-class SocketConversationRepository implements ConversationRepository {
+class SocketConversationRepository
+    implements ConversationRepository, AttachmentSendRepository, AttachmentReplayRepository {
   final ConversationClientRegistry _clientRegistry;
 
   SocketConversationRepository(this._clientRegistry);
@@ -165,6 +166,36 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
+  Future<String?> sendMessageWithAttachments(
+    DeviceConfig agent,
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  }) {
+    final client = _clientFor(agent);
+    if (client is! AttachmentSendClient) {
+      throw StateError('Attachment admission is unavailable.');
+    }
+    return (client as AttachmentSendClient).sendMessageWithAttachments(
+      message,
+      sessionId: sessionId,
+      workspaceId: workspaceId,
+      context: context,
+      providerId: providerId,
+      model: model,
+      thinkingMode: thinkingMode,
+      attachments: attachments,
+      intent: intent,
+    );
+  }
+
+  @override
   Future<void> steerMessage(
     DeviceConfig agent,
     String message, {
@@ -257,6 +288,50 @@ class SocketConversationRepository implements ConversationRepository {
     confirmedReplayUnsafe: confirmedReplayUnsafe,
     confirmedDropSteers: confirmedDropSteers,
   );
+
+  @override
+  Future<TurnReplayResult> replayTurnWithAttachments(
+    DeviceConfig agent, {
+    required String sessionId,
+    required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    required int expectedHistoryRevision,
+    required TurnReplayAction action,
+    required String message,
+    required List<Map<String, dynamic>> attachmentEdits,
+    String? providerInstanceId,
+    String? modelId,
+    String? thinkingMode,
+    bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
+  }) {
+    final client = _clientFor(agent);
+    if (client is! AttachmentReplayClient) {
+      return Future.value(
+        const TurnReplayResult(
+          outcome: 'attachments_unsupported',
+          safety: TurnReplaySafety.unknown,
+          requiresConfirmation: false,
+        ),
+      );
+    }
+    return (client as AttachmentReplayClient).replayTurnWithAttachments(
+      sessionId: sessionId,
+      targetRequestId: targetRequestId,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+      expectedHistoryRevision: expectedHistoryRevision,
+      action: action,
+      message: message,
+      attachmentEdits: attachmentEdits,
+      providerInstanceId: providerInstanceId,
+      modelId: modelId,
+      thinkingMode: thinkingMode,
+      confirmedReplayUnsafe: confirmedReplayUnsafe,
+      confirmedDropSteers: confirmedDropSteers,
+    );
+  }
 
   @override
   Future<SessionForkResult> forkSession(

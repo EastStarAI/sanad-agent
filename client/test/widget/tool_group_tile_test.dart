@@ -1,8 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
+import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
@@ -419,6 +425,347 @@ void main() {
     expect(find.text('-3'), findsOneWidget);
     expect(find.text('1 file modified'), findsOneWidget);
   });
+
+  test('view-image metadata maps identically from live and history', () {
+    final media = _mediaJson('a');
+    final mapper = UnifiedDeviceMapper();
+    final live = mapper.mapLiveEvent({
+      'event': 'tool_result',
+      'payload': {
+        'session_id': 'session-1',
+        'tool_call_id': 'call-1',
+        'tool': 'view_image',
+        'output': 'Image Size: 1x1.',
+        'media': media,
+      },
+    });
+    final history = mapper.mapHistory([
+      {
+        'type': 'tool_result',
+        'session_id': 'session-1',
+        'tool_call_id': 'call-1',
+        'tool': 'view_image',
+        'output': 'Image Size: 1x1.',
+        'media': media,
+      },
+    ]).single;
+
+    expect(live?.viewImageMedia?.mediaId, history.viewImageMedia?.mediaId);
+    expect(live?.viewImageMedia?.name, 'view-image.png');
+  });
+
+  testWidgets('view-image manual collapse survives a rebuild', (tester) async {
+    final loader = _FakeMediaLoader.completed(_onePixelPng);
+    Widget fixture() => _app(
+      EventTile(
+        key: const ValueKey('manual-view-image'),
+        event: _viewImageEvent(),
+        viewImageMediaLoader: loader,
+      ),
+    );
+    await tester.pumpWidget(fixture());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_thumbnail')), findsOneWidget);
+    await tester.tap(find.textContaining('View Image', findRichText: true));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_thumbnail')), findsNothing);
+    await tester.pumpWidget(fixture());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_thumbnail')), findsNothing);
+  });
+
+  testWidgets('view-image thumbnail opens an accessible lightbox', (tester) async {
+    final loader = _FakeMediaLoader.completed(_onePixelPng);
+    await tester.pumpWidget(
+      _app(
+        EventTile(
+          event: _viewImageEvent(),
+          viewImageMediaLoader: loader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('View Image', findRichText: true), findsOneWidget);
+    expect(find.byKey(const Key('view_image_thumbnail')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('view_image_thumbnail')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_lightbox')), findsOneWidget);
+    expect(find.byTooltip('Close image preview'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('view_image_lightbox_close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_lightbox')), findsNothing);
+  });
+
+  testWidgets('view-image shows unavailable state and cancels hydration on disposal', (tester) async {
+    final unavailable = _viewImageEvent(availability: 'unavailable');
+    await tester.pumpWidget(
+      _app(EventTile(event: unavailable, isExpanded: true)),
+    );
+    expect(find.byKey(const Key('view_image_unavailable')), findsOneWidget);
+
+    final loader = _FakeMediaLoader.pending();
+    await tester.pumpWidget(
+      _app(
+        EventTile(
+          event: _viewImageEvent(),
+          isExpanded: true,
+          viewImageMediaLoader: loader,
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('view_image_loading')), findsOneWidget);
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    expect(loader.cancelled, isTrue);
+  });
+
+  testWidgets('view-image typed text-only failure renders explanation and target filename without media or assistant text', (
+    tester,
+  ) async {
+    final mapper = UnifiedDeviceMapper();
+    final toolUse = mapper.mapLiveEvent({
+      'event': 'tool_use',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_unsupported_1',
+        'input': {'path': '/workspace/test_chart.png', 'detail': 'auto'},
+        'status': 'running',
+      },
+    })!;
+
+    final toolResult = mapper.mapLiveEvent({
+      'event': 'tool_result',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_unsupported_1',
+        'output': 'Image inspection is not supported because the active model route does not support image input.',
+        'isError': true,
+        'status': 'error',
+        'toolResult': {
+          'schemaVersion': 1,
+          'blocks': [
+            {
+              'type': 'text',
+              'text': 'Image inspection is not supported because the active model route does not support image input.',
+            }
+          ],
+          'isError': true,
+          'errorCode': 'execution_failed',
+        },
+      },
+    })!;
+
+    final merged = toolUse.merge(toolResult);
+
+    await tester.pumpWidget(
+      _app(EventTile(event: merged, isExpanded: true)),
+    );
+
+    expect(
+      find.text('View Image: test_chart.png', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Image inspection is not supported because the active model route does not support image input.'),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.error_outline_rounded), findsWidgets);
+    expect(find.byKey(const Key('view_image_thumbnail')), findsNothing);
+    expect(find.byKey(const Key('view_image_unavailable')), findsNothing);
+  });
+
+  testWidgets('view-image typed failure for unknown capability displays truthful guidance', (
+    tester,
+  ) async {
+    final mapper = UnifiedDeviceMapper();
+    final toolUse = mapper.mapLiveEvent({
+      'event': 'tool_use',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_unknown_1',
+        'input': {'path': 'relative/sub/schema.png', 'detail': 'auto'},
+        'status': 'running',
+      },
+    })!;
+
+    final toolResult = mapper.mapLiveEvent({
+      'event': 'tool_result',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_unknown_1',
+        'output': 'Image inspection is unavailable because image input capability is unknown for the active model route. Specify supports_image_input in config.yaml under model_capabilities.',
+        'isError': true,
+        'status': 'error',
+      },
+    })!;
+
+    final merged = toolUse.merge(toolResult);
+
+    await tester.pumpWidget(
+      _app(EventTile(event: merged, isExpanded: true)),
+    );
+
+    expect(
+      find.text('View Image: schema.png', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Image inspection is unavailable because image input capability is unknown for the active model route. Specify supports_image_input in config.yaml under model_capabilities.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('view-image ordinary file error remains honestly visible', (
+    tester,
+  ) async {
+    final mapper = UnifiedDeviceMapper();
+    final event = mapper.mapLiveEvent({
+      'event': 'tool_result',
+      'payload': {
+        'tool': 'view_image',
+        'tool_call_id': 'call_view_not_found',
+        'input': {'path': 'missing_file.png'},
+        'output': 'Image file was not found.',
+        'isError': true,
+        'status': 'error',
+      },
+    })!;
+
+    await tester.pumpWidget(
+      _app(EventTile(event: event, isExpanded: true)),
+    );
+
+    expect(
+      find.text('View Image: missing_file.png', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Image file was not found.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('view-image history hydration parity with live event source', (
+    tester,
+  ) async {
+    final mapper = UnifiedDeviceMapper();
+    final history = mapper.mapHistory([
+      {
+        'id': 'msg-1',
+        'type': 'tool_use',
+        'tool': 'view_image',
+        'input': {'path': 'hydrated.png'},
+        'tool_call_id': 'call_hist_1',
+      },
+      {
+        'id': 'msg-2',
+        'type': 'tool_result',
+        'tool': 'view_image',
+        'output': 'Image inspection is not supported because the active model route does not support image input.',
+        'isError': true,
+        'status': 'error',
+        'tool_call_id': 'call_hist_1',
+      },
+    ]);
+
+    expect(history.length, 2);
+    final merged = history[0].merge(history[1]);
+
+    await tester.pumpWidget(
+      _app(EventTile(event: merged, isExpanded: true)),
+    );
+
+    expect(
+      find.text('View Image: hydrated.png', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Image inspection is not supported because the active model route does not support image input.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('view-image running state without media renders executing progress and no failure banner', (
+    tester,
+  ) async {
+    final runningEvent = CanonicalEvent(
+      id: 'tool_running_1',
+      kind: EventKind.toolCall,
+      status: EventStatus.running,
+      tool: {
+        'name': 'view_image',
+        'input': {'path': 'pending_chart.png'},
+      },
+      timestamp: DateTime.now(),
+    );
+
+    await tester.pumpWidget(
+      _app(EventTile(event: runningEvent, isExpanded: true)),
+    );
+
+    expect(find.byKey(const Key('view_image_error')), findsNothing);
+    expect(find.byKey(const Key('view_image_error_message')), findsNothing);
+    expect(find.text('Executing tool...'), findsOneWidget);
+    expect(find.textContaining('Failed'), findsNothing);
+  });
+
+  testWidgets('successful view_image with absent or ambiguous metadata is neutral and does not expose base64', (
+    tester,
+  ) async {
+    const rawBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    final ambiguousEvent = CanonicalEvent(
+      id: 'tool_success_no_media',
+      kind: EventKind.toolCall,
+      status: EventStatus.done,
+      tool: {
+        'name': 'view_image',
+        'input': {'path': 'photo.png'},
+        'output': {'type': 'image', 'data': rawBase64},
+        'isError': false,
+      },
+      timestamp: DateTime.now(),
+    );
+
+    await tester.pumpWidget(
+      _app(EventTile(event: ambiguousEvent, isExpanded: true)),
+    );
+
+    expect(find.byKey(const Key('view_image_error')), findsNothing);
+    expect(find.byKey(const Key('view_image_error_message')), findsNothing);
+    expect(find.byKey(const Key('view_image_unavailable')), findsOneWidget);
+    expect(find.text('Image unavailable'), findsOneWidget);
+    expect(find.textContaining('Failed'), findsNothing);
+    expect(find.textContaining(rawBase64), findsNothing);
+  });
+
+  test('view-image repository scopes requests and evicts its bounded cache', () async {
+    var requests = 0;
+    final repository = ViewImageMediaRepository(
+      baseUrl: 'http://127.0.0.1:58184',
+      hardwareId: 'hardware-1',
+      headerProvider: () async => {'x-sanad-local-token': 'test-token'},
+      maximumCacheEntries: 1,
+      clientFactory: () => MockClient((request) async {
+        requests++;
+        expect(request.headers['x-sanad-local-token'], 'test-token');
+        expect(request.url.queryParameters['session_id'], 'session-1');
+        expect(request.url.queryParameters['device_id'], 'hardware-1');
+        return http.Response.bytes(
+          _onePixelPng,
+          200,
+          headers: {'content-type': 'image/png'},
+        );
+      }),
+    );
+    final first = ViewImageMedia.fromJson(_mediaJson('a'))!;
+    final second = ViewImageMedia.fromJson(_mediaJson('b'))!;
+
+    await repository.load(media: first, sessionId: 'session-1').bytes;
+    await repository.load(media: first, sessionId: 'session-1').bytes;
+    await repository.load(media: second, sessionId: 'session-1').bytes;
+    await repository.load(media: first, sessionId: 'session-1').bytes;
+    expect(requests, 3);
+  });
 }
 
 Widget _app(Widget child, {double width = 800}) => MaterialApp(
@@ -477,3 +824,47 @@ CanonicalEvent _tool(
   },
   timestamp: DateTime.utc(2026, 8, 14),
 );
+
+Map<String, dynamic> _mediaJson(String character, {String availability = 'available'}) => {
+  'media_id': List.filled(64, character).join(),
+  'name': 'view-image.png',
+  'mime_type': 'image/png',
+  'width': 1,
+  'height': 1,
+  'availability': availability,
+};
+
+CanonicalEvent _viewImageEvent({String availability = 'available'}) => CanonicalEvent(
+  id: 'tool_view_image',
+  kind: EventKind.toolCall,
+  status: EventStatus.done,
+  sessionId: 'session-1',
+  tool: {
+    'name': 'view_image',
+    'output': 'Image Size: 1x1.',
+    'media': _mediaJson('a', availability: availability),
+  },
+  timestamp: DateTime.utc(2026, 9, 15),
+);
+
+final Uint8List _onePixelPng = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+);
+
+class _FakeMediaLoader implements ViewImageMediaLoader {
+  _FakeMediaLoader.completed(Uint8List bytes) : _completer = Completer<Uint8List>()..complete(bytes);
+
+  _FakeMediaLoader.pending() : _completer = Completer<Uint8List>();
+
+  final Completer<Uint8List> _completer;
+  bool cancelled = false;
+
+  @override
+  ViewImageMediaLoad load({
+    required ViewImageMedia media,
+    required String sessionId,
+  }) => ViewImageMediaLoad(
+    bytes: _completer.future,
+    cancel: () => cancelled = true,
+  );
+}

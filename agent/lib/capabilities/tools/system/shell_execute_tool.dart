@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_windows_path/windows_path.dart';
 
@@ -139,6 +140,15 @@ class ShellExecuteTool extends SpecBackedTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    final result = await executeResult(args, context: context);
+    return result.displayText;
+  }
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async {
     final stopwatch = Stopwatch()..start();
 
     if (_permissionManager != null && context != null) {
@@ -229,12 +239,13 @@ class ShellExecuteTool extends SpecBackedTool {
       return true;
     }
 
-    Future<String> finishWith({
+    ToolExecutionResult finishWith({
       required bool isError,
       required String output,
       ToolProcessCleanupReport? cleanup,
       String? terminalReason,
-    }) async {
+      ToolResultErrorCode? errorCode,
+    }) {
       final payload = <String, dynamic>{
         if (isError) 'isError': true,
         'output': output,
@@ -242,7 +253,13 @@ class ShellExecuteTool extends SpecBackedTool {
         'cleanup_outcome': ?cleanup?.outcome.name,
         'terminal_reason': ?terminalReason,
       };
-      return const JsonEncoder.withIndent('  ').convert(payload);
+      return ToolExecutionResult.text(
+        const JsonEncoder.withIndent('  ').convert(payload),
+        isError: isError,
+        errorCode: isError
+            ? errorCode ?? ToolResultErrorCode.executionFailed
+            : null,
+      );
     }
 
     try {
@@ -287,7 +304,7 @@ class ShellExecuteTool extends SpecBackedTool {
       if (scope != null && !scope.isPublicationOpen) {
         final cleanup = await tree.terminate(gracePeriod: _terminationGrace);
         final cancellation = _cancellationResult(scope.reason);
-        return await finishWith(
+        return finishWith(
           isError: true,
           output: cancellation.message,
           cleanup: cleanup,
@@ -348,7 +365,7 @@ class ShellExecuteTool extends SpecBackedTool {
           if (cleanupFailed) {
             output = '$output\nOwned process cleanup failed.';
           }
-          return await finishWith(
+          return finishWith(
             isError: exitCode != 0 || cleanupFailed,
             output: output,
             cleanup: cleanupFailed ? naturalCleanup : null,
@@ -360,7 +377,7 @@ class ShellExecuteTool extends SpecBackedTool {
             stdoutFuture,
             stderrFuture,
           );
-          return await finishWith(
+          return finishWith(
             isError: true,
             output: _appendTerminalMessage(
               partialOutput,
@@ -368,6 +385,7 @@ class ShellExecuteTool extends SpecBackedTool {
             ),
             cleanup: cleanup,
             terminalReason: 'timed_out',
+            errorCode: ToolResultErrorCode.timedOut,
           );
         case _ShellWaitCancelled():
           final cleanup = await tree.terminate(gracePeriod: _terminationGrace);
@@ -377,7 +395,7 @@ class ShellExecuteTool extends SpecBackedTool {
             stderrFuture,
           );
           final cancellation = _cancellationResult(scope?.reason);
-          return await finishWith(
+          return finishWith(
             isError: true,
             output: _appendTerminalMessage(partialOutput, cancellation.message),
             cleanup: cleanup,
@@ -390,10 +408,7 @@ class ShellExecuteTool extends SpecBackedTool {
       } else if (process != null && !terminalSet) {
         process.kill(ProcessSignal.sigkill);
       }
-      return await finishWith(
-        isError: true,
-        output: 'Failed to execute command: $e',
-      );
+      return finishWith(isError: true, output: 'Failed to execute command: $e');
     } finally {
       final cleanupDirectory = shell.cleanupDirectory;
       if (cleanupDirectory != null) {

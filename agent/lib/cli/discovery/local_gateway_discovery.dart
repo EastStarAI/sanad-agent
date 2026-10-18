@@ -62,6 +62,22 @@ class LocalGatewayDiscovery {
   static const int defaultPort = 58085;
   static const int maxScanPort = 58185;
 
+  /// Bounded deadline for the authoritative probe of an explicitly targeted
+  /// endpoint (an explicit URL or port override).
+  ///
+  /// A healthy daemon can answer a cold first health request slower than the
+  /// speculative deadline while it is busy, and this probe is the only
+  /// evidence that the requested endpoint is served, so it must not be
+  /// mistaken for an absent daemon. The bound stays far below the CLI's
+  /// WebSocket connect timeout, and an unreachable loopback endpoint still
+  /// fails fast with a refused connection.
+  static const Duration targetedProbeTimeout = Duration(seconds: 2);
+
+  /// Bounded deadline for speculative probes (the default port and the
+  /// worktree port scan) whose worst-case cost multiplies across the scanned
+  /// range.
+  static const Duration speculativeProbeTimeout = Duration(milliseconds: 300);
+
   /// Resolves the absolute path to the active Sanad Home directory.
   String resolveSanadHome() {
     final explicit = sanadHomeOverride?.trim();
@@ -137,7 +153,7 @@ class LocalGatewayDiscovery {
     required String host,
     required int port,
     required String token,
-    Duration timeout = const Duration(milliseconds: 300),
+    Duration timeout = speculativeProbeTimeout,
     http.Client? client,
   }) async {
     final closeClient = client == null;
@@ -175,11 +191,16 @@ class LocalGatewayDiscovery {
   }
 
   /// Discovers the active daemon port and credentials, with fallback support.
+  ///
+  /// [probeTimeout] overrides the deadline of every probe. When omitted,
+  /// probes of an explicitly targeted endpoint (an explicit URL or port
+  /// override) use [targetedProbeTimeout], while speculative probes (default
+  /// port and worktree port scan) use [speculativeProbeTimeout].
   Future<GatewayDiscoveryResult> discover({
     String? urlOverride,
     int? portOverride,
     String? tokenOverride,
-    Duration probeTimeout = const Duration(milliseconds: 300),
+    Duration? probeTimeout,
   }) async {
     final String token;
     if (tokenOverride != null && tokenOverride.trim().isNotEmpty) {
@@ -189,6 +210,12 @@ class LocalGatewayDiscovery {
     }
 
     final env = environment ?? Platform.environment;
+
+    // An explicit target is the only evidence that a specific endpoint is
+    // served, so it gets the wider targeted bound; speculative probes stay on
+    // the cheaper bound because their cost multiplies across the scan range.
+    final targetedProbe = probeTimeout ?? targetedProbeTimeout;
+    final speculativeProbe = probeTimeout ?? speculativeProbeTimeout;
 
     // 1. Explicit URL override
     final effectiveUrl =
@@ -216,7 +243,7 @@ class LocalGatewayDiscovery {
         host: host,
         port: port,
         token: token,
-        timeout: probeTimeout,
+        timeout: targetedProbe,
       );
 
       return GatewayDiscoveryResult(
@@ -240,7 +267,7 @@ class LocalGatewayDiscovery {
         host: defaultHost,
         port: candidatePort,
         token: token,
-        timeout: probeTimeout,
+        timeout: targetedProbe,
       );
 
       return GatewayDiscoveryResult(
@@ -259,7 +286,7 @@ class LocalGatewayDiscovery {
       host: defaultHost,
       port: defaultPort,
       token: token,
-      timeout: probeTimeout,
+      timeout: speculativeProbe,
     );
 
     if (defaultHealth != null) {
@@ -295,7 +322,7 @@ class LocalGatewayDiscovery {
               host: defaultHost,
               port: currentPort,
               token: token,
-              timeout: probeTimeout,
+              timeout: speculativeProbe,
               client: client,
             );
             return (port: currentPort, data: h);

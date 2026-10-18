@@ -1,3 +1,4 @@
+import '../../core/models/view_image_media_metadata.dart';
 import 'dart:async';
 
 import 'package:path/path.dart' as p;
@@ -256,6 +257,7 @@ class SuspendedResumeService {
               required String toolName,
               String? input,
               String? output,
+              ViewImageMediaMetadata? media,
               required bool isError,
               required bool isStart,
               String? toolRunId,
@@ -271,6 +273,8 @@ class SuspendedResumeService {
                     role: MessageRole.tool,
                     content: isStart ? input : output,
                     metadata: {
+                      if (!isStart && media != null)
+                        'media': media.toPublicJson(),
                       'started_at': ?startedAt?.toIso8601String(),
                       'terminal_at': ?terminalAt?.toIso8601String(),
                       'runtime_ms': ?runtimeMs,

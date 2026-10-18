@@ -114,7 +114,9 @@ Choose verification by blast radius:
 
 ## 5. UI Localization Constraint
 
-* **No Arabic Text in the User Interface:** All interface text, labels, buttons, tooltips, and dialogs in `client/` must remain strictly in English.
+* **Localized Interface Text:** The Client interface is multilingual (`en` and `ar` RTL). Every user-facing string is resolved through the Client localization system instead of being hard-coded in widget code, with `client/lib/l10n/app_en.arb` remaining the authored source locale. Handwritten Dart, widget and UI source in `client/` must never contain Arabic text as a literal; generated localization Dart (`lib/l10n/app_localizations*.dart`) naturally carries the translated strings and is not a source restriction.
+* **English-Only Non-Interface Artifacts:** Documentation, code, comments, logs, protocol payloads, and agent-facing output remain English-only.
+* **Owning Contract:** `client/AGENTS.md` owns locale mechanics and string ownership, and [docs/technical/client_multilanguage.md](docs/technical/client_multilanguage.md) owns the remaining-string coverage report; keep that detail there rather than duplicating it here.
 
 ---
 

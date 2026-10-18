@@ -15,6 +15,20 @@ class LintError {
   String toString() => '[$filePath] ERROR: $message';
 }
 
+/// True only for dependency link trees that Flutter's tooling generates inside
+/// the workspace: the Linux/Windows plugin tree (`ephemeral/.plugin_symlinks/`)
+/// and the macOS/iOS plugin tree (`ephemeral/.symlinks/`, for example
+/// `client/macos/Flutter/ephemeral/.symlinks/`).
+///
+/// Every file below those directories resolves into the pub cache and is
+/// gitignored, so an `AGENTS.md` found there is a third-party package contract,
+/// not this repository's. Real repository contracts remain discoverable
+/// anywhere else in the checkout.
+bool isGeneratedDependencyPath(String cleanPath) {
+  return cleanPath.contains('/.plugin_symlinks/') ||
+      cleanPath.contains('/ephemeral/.symlinks/');
+}
+
 void main() async {
   print('Running docs linter (scripts/lint_wiki.dart)...');
   
@@ -58,7 +72,8 @@ void main() async {
           !cleanPath.contains('docs/archive/') &&
           !cleanPath.contains('/refrence_projects/') &&
           !cleanPath.startsWith('refrence_projects/') &&
-          !cleanPath.contains('/node_modules/')) {
+          !cleanPath.contains('/node_modules/') &&
+          !isGeneratedDependencyPath(cleanPath)) {
         agentsFiles.add(entity);
       }
     }

@@ -84,7 +84,7 @@ current_gate: "Closed"
 
 - أعلى القائمة: Back/Forward ثم device selector وأيقونة settings.
 - device selector متاح دائمًا ويعرض حالة online/offline/local دون منع استعراض cache.
-- settings تفتح Device Management؛ Add Device يبقى داخلها، مع اختصار اختياري في dropdown.
+- settings تفتح الإعدادات؛ زر `+` بجوار عنوان Devices في قائمتها الجانبية يفتح Add Device.
 - عنوان Workspaces يملك زر `+` لإنشاء Workspace.
 - كل Workspace تملك زر `+` لفتح New Conversation preselected.
 - القسم الأخير `Conversations` للجلسات بلا Workspace.
@@ -147,7 +147,7 @@ current_gate: "Closed"
 - [x] لا تعرض sidebar كل الأجهزة كشجرة.
 - [x] كل قسم paginated ومستقل ويعمل من cache.
 - [x] الترتيب والanimation وحالة expansion صحيحة.
-- [x] الوصول إلى Device Management وإنشاء Workspace/New Conversation واضح.
+- [x] الوصول إلى Settings ثم زر `+` بجوار Devices لإضافة جهاز، وإنشاء Workspace/New Conversation واضح.
 - [x] السلوك متحقق على mobile وdesktop.
 
 ## سجل التقدم

@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'dart:isolate';
+
+import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
 
@@ -13,12 +15,78 @@ class FileEditHandler {
     String workspacePath, {
     String? authorizedExternalRoot,
   }) async {
+    final result = await executeResult(
+      arguments,
+      workspacePath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+    return result.displayText;
+  }
+
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> arguments,
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
     final path = arguments['path']?.toString() ?? '';
-    final oldString = arguments['old_string']?.toString() ?? '';
-    final newString = arguments['new_string']?.toString() ?? '';
+    final rawEdits = arguments['edits'];
+    final oldString = arguments['old_string']?.toString();
+    final newString = arguments['new_string']?.toString();
     final replaceAll = arguments['replace_all'] == true;
-    if (oldString.isEmpty) {
-      throw const FormatException('old_string is required.');
+
+    final List<_EditOperation> edits;
+    final bool isMulti;
+
+    if (rawEdits is List && rawEdits.isNotEmpty) {
+      isMulti = true;
+      edits = [];
+      for (var i = 0; i < rawEdits.length; i++) {
+        final item = rawEdits[i];
+        if (item is! Map) {
+          throw FormatException('Edit #${i + 1} must be an object.');
+        }
+        final oldStr = item['old_string']?.toString() ?? '';
+        final newStr = item['new_string']?.toString() ?? '';
+        final repAll = item['replace_all'] == true;
+        if (oldStr.isEmpty) {
+          throw FormatException('Edit #${i + 1}: old_string is required.');
+        }
+        if (oldStr == newStr) {
+          throw StateError(
+            'Edit #${i + 1}: No changes to apply: old_string and new_string are identical.',
+          );
+        }
+        edits.add(
+          _EditOperation(
+            oldString: oldStr,
+            newString: newStr,
+            replaceAll: repAll,
+            index: i + 1,
+          ),
+        );
+      }
+    } else if (oldString != null && newString != null) {
+      isMulti = false;
+      if (oldString.isEmpty) {
+        throw const FormatException('old_string is required.');
+      }
+      if (oldString == newString) {
+        throw StateError(
+          'No changes to apply: oldString and newString are identical.',
+        );
+      }
+      edits = [
+        _EditOperation(
+          oldString: oldString,
+          newString: newString,
+          replaceAll: replaceAll,
+          index: 1,
+        ),
+      ];
+    } else {
+      throw const FormatException(
+        'Either old_string and new_string, or edits list is required.',
+      );
     }
 
     final workspaceRoot = await _pathResolver.normalizeWorkspaceRootAsync(
@@ -34,14 +102,22 @@ class FileEditHandler {
 
     final hasCrLf = originalFile.contains('\r\n');
     final originalNormalized = originalFile.replaceAll('\r\n', '\n');
-    final oldNormalized = oldString.replaceAll('\r\n', '\n');
-    final newNormalized = newString.replaceAll('\r\n', '\n');
 
-    final editResult = await _smartReplaceAsync(
+    final normalizedEdits = edits
+        .map(
+          (e) => _EditOperation(
+            oldString: e.oldString.replaceAll('\r\n', '\n'),
+            newString: e.newString.replaceAll('\r\n', '\n'),
+            replaceAll: e.replaceAll,
+            index: e.index,
+          ),
+        )
+        .toList();
+
+    final editResult = await _applyEditsAsync(
       originalNormalized,
-      oldNormalized,
-      newNormalized,
-      replaceAll,
+      normalizedEdits,
+      isMulti,
     );
 
     final updatedFile = hasCrLf
@@ -50,67 +126,111 @@ class FileEditHandler {
 
     await file.writeAsString(updatedFile);
 
-    var matches = oldNormalized.allMatches(originalNormalized).length;
-    if (matches == 0) matches = 1;
-
     final patchBuffer = StringBuffer();
-
-    for (final line in oldNormalized.split('\n')) {
-      patchBuffer.writeln('- $line');
-    }
-    for (final line in newNormalized.split('\n')) {
-      patchBuffer.writeln('+ $line');
-    }
-
-    return WorkspaceToolsUtils.encode({
-      'filePath': _pathResolver.relativeToWorkspace(
-        workspaceRoot: workspaceRoot,
-        resolvedPath: resolvedPath,
-      ),
-      'oldString': oldString.length > 100
-          ? '${oldString.substring(0, 100)}...'
-          : oldString,
-      'newString': newString.length > 100
-          ? '${newString.substring(0, 100)}...'
-          : newString,
-      'patch': patchBuffer.toString().trimRight(),
-      'replaceAll': replaceAll,
-      'numReplacements': replaceAll ? matches : 1,
-      'startLine': editResult.startLine,
-    });
-  }
-
-  static Future<_EditResult> _smartReplaceAsync(
-    String content,
-    String oldString,
-    String newString,
-    bool replaceAll,
-  ) async {
-    if (content.length < 32768 && content.contains(oldString)) {
-      final firstIdx = content.indexOf(oldString);
-      final lastIdx = content.lastIndexOf(oldString);
-      if (replaceAll || firstIdx == lastIdx) {
-        return _smartReplace(content, oldString, newString, replaceAll);
+    for (var i = 0; i < normalizedEdits.length; i++) {
+      final edit = normalizedEdits[i];
+      if (i > 0) patchBuffer.writeln('---');
+      for (final line in edit.oldString.split('\n')) {
+        patchBuffer.writeln('- $line');
+      }
+      for (final line in edit.newString.split('\n')) {
+        patchBuffer.writeln('+ $line');
       }
     }
 
-    return Isolate.run(
-      () => _smartReplace(content, oldString, newString, replaceAll),
+    final firstEdit = edits.first;
+    return ToolExecutionResult.text(
+      WorkspaceToolsUtils.encode({
+        'filePath': _pathResolver.relativeToWorkspace(
+          workspaceRoot: workspaceRoot,
+          resolvedPath: resolvedPath,
+        ),
+        'oldString': firstEdit.oldString.length > 100
+            ? '${firstEdit.oldString.substring(0, 100)}...'
+            : firstEdit.oldString,
+        'newString': firstEdit.newString.length > 100
+            ? '${firstEdit.newString.substring(0, 100)}...'
+            : firstEdit.newString,
+        'patch': patchBuffer.toString().trimRight(),
+        'replaceAll': isMulti ? false : firstEdit.replaceAll,
+        'numReplacements': editResult.totalReplacements,
+        'startLine': editResult.startLine,
+        if (isMulti) 'numEdits': edits.length,
+        if (isMulti) 'editStartLines': editResult.editStartLines,
+      }),
     );
   }
 
-  static _EditResult _smartReplace(
+  static Future<_MultiEditResult> _applyEditsAsync(
     String content,
-    String oldString,
-    String newString,
-    bool replaceAll,
-  ) {
-    if (oldString == newString) {
-      throw StateError(
-        'No changes to apply: oldString and newString are identical.',
-      );
+    List<_EditOperation> edits,
+    bool isMulti,
+  ) async {
+    if (content.length < 32768) {
+      return _applyEdits(content, edits, isMulti);
     }
 
+    return Isolate.run(() => _applyEdits(content, edits, isMulti));
+  }
+
+  static _MultiEditResult _applyEdits(
+    String content,
+    List<_EditOperation> edits,
+    bool isMulti,
+  ) {
+    final allMatches = <_MatchRange>[];
+    final editStartLines = <int>[];
+
+    for (final edit in edits) {
+      final matches = _findMatchesForEdit(content, edit, isMulti);
+      allMatches.addAll(matches);
+      editStartLines.add(matches.isEmpty ? 1 : matches.first.startLine);
+    }
+
+    // Overlap detection: sort by startIndex ascending
+    allMatches.sort((a, b) => a.startIndex.compareTo(b.startIndex));
+
+    for (var i = 0; i < allMatches.length - 1; i++) {
+      final current = allMatches[i];
+      final next = allMatches[i + 1];
+      if (current.endIndex > next.startIndex) {
+        throw StateError(
+          'Overlapping edits detected in target file between '
+          'edit #${current.editIndex} and edit #${next.editIndex}. '
+          'Ensure all edits specify distinct, non-overlapping sections.',
+        );
+      }
+    }
+
+    // Apply from bottom to top (highest startIndex first)
+    final sortedDescending = List<_MatchRange>.from(allMatches)
+      ..sort((a, b) => b.startIndex.compareTo(a.startIndex));
+
+    var updated = content;
+    for (final match in sortedDescending) {
+      updated =
+          updated.substring(0, match.startIndex) +
+          match.newString +
+          updated.substring(match.endIndex);
+    }
+
+    final startLines = allMatches.map((m) => m.startLine).toList();
+    final firstStartLine = startLines.isNotEmpty ? startLines.first : 1;
+
+    return _MultiEditResult(
+      content: updated,
+      startLine: firstStartLine,
+      startLines: startLines,
+      editStartLines: editStartLines,
+      totalReplacements: allMatches.length,
+    );
+  }
+
+  static List<_MatchRange> _findMatchesForEdit(
+    String content,
+    _EditOperation edit,
+    bool isMulti,
+  ) {
     var notFound = true;
     final replacers = [
       _simpleReplacer,
@@ -125,7 +245,7 @@ class FileEditHandler {
     ];
 
     for (final replacer in replacers) {
-      final candidates = replacer(content, oldString).toList();
+      final candidates = replacer(content, edit.oldString).toList();
       if (candidates.isEmpty) continue;
 
       for (final search in candidates) {
@@ -133,45 +253,56 @@ class FileEditHandler {
         if (index == -1) continue;
         notFound = false;
 
-        final startLine =
-            '\n'.allMatches(content.substring(0, index)).length + 1;
-
-        if (replaceAll) {
-          final startLines = <int>[];
+        if (edit.replaceAll) {
+          final matches = <_MatchRange>[];
           var startIndex = 0;
           while (true) {
             final matchIndex = content.indexOf(search, startIndex);
             if (matchIndex == -1) break;
             final line =
                 '\n'.allMatches(content.substring(0, matchIndex)).length + 1;
-            startLines.add(line);
+            matches.add(
+              _MatchRange(
+                startIndex: matchIndex,
+                endIndex: matchIndex + search.length,
+                matchedText: search,
+                newString: edit.newString,
+                startLine: line,
+                editIndex: edit.index,
+              ),
+            );
             startIndex = matchIndex + search.length;
           }
-          return _EditResult(
-            content.replaceAll(search, newString),
-            startLines.isNotEmpty ? startLines.first : startLine,
-            startLines: startLines,
-          );
+          if (matches.isNotEmpty) {
+            return matches;
+          }
         }
 
         final lastIndex = content.lastIndexOf(search);
         if (index != lastIndex) continue;
 
-        final updated =
-            content.substring(0, index) +
-            newString +
-            content.substring(index + search.length);
-        return _EditResult(updated, startLine);
+        final line = '\n'.allMatches(content.substring(0, index)).length + 1;
+        return [
+          _MatchRange(
+            startIndex: index,
+            endIndex: index + search.length,
+            matchedText: search,
+            newString: edit.newString,
+            startLine: line,
+            editIndex: edit.index,
+          ),
+        ];
       }
     }
 
+    final prefix = isMulti ? 'Edit #${edit.index}: ' : '';
     if (notFound) {
       throw StateError(
-        'old_string was not found in the target file. It must match exactly, including whitespace, indentation, and line endings.',
+        '${prefix}old_string was not found in the target file. It must match exactly, including whitespace, indentation, and line endings.',
       );
     }
     throw StateError(
-      'Found multiple matches for old_string. Provide more surrounding context to make the match unique.',
+      '${prefix}Found multiple matches for old_string. Provide more surrounding context to make the match unique.',
     );
   }
 
@@ -519,9 +650,50 @@ class _CandidatePosition {
   _CandidatePosition(this.startLine, this.endLine);
 }
 
-class _EditResult {
+class _EditOperation {
+  final String oldString;
+  final String newString;
+  final bool replaceAll;
+  final int index;
+
+  const _EditOperation({
+    required this.oldString,
+    required this.newString,
+    this.replaceAll = false,
+    this.index = 1,
+  });
+}
+
+class _MatchRange {
+  final int startIndex;
+  final int endIndex;
+  final String matchedText;
+  final String newString;
+  final int startLine;
+  final int editIndex;
+
+  const _MatchRange({
+    required this.startIndex,
+    required this.endIndex,
+    required this.matchedText,
+    required this.newString,
+    required this.startLine,
+    required this.editIndex,
+  });
+}
+
+class _MultiEditResult {
   final String content;
   final int startLine;
   final List<int> startLines;
-  _EditResult(this.content, this.startLine, {this.startLines = const []});
+  final List<int> editStartLines;
+  final int totalReplacements;
+
+  _MultiEditResult({
+    required this.content,
+    required this.startLine,
+    this.startLines = const [],
+    this.editStartLines = const [],
+    required this.totalReplacements,
+  });
 }

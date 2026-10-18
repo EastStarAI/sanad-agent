@@ -64,6 +64,7 @@ class ProviderSetupState extends Equatable {
   final bool verificationLaunchAttempted;
   final bool verificationPageOpened;
   final String? verificationLaunchError;
+  final int snapshotGeneration;
 
   const ProviderSetupState({
     this.status = ProviderSetupStatus.initial,
@@ -93,6 +94,7 @@ class ProviderSetupState extends Equatable {
     this.verificationLaunchAttempted = false,
     this.verificationPageOpened = false,
     this.verificationLaunchError,
+    this.snapshotGeneration = 0,
   });
 
   bool get isLoading => status == ProviderSetupStatus.loading || status == ProviderSetupStatus.saving;
@@ -127,6 +129,7 @@ class ProviderSetupState extends Equatable {
     bool? verificationLaunchAttempted,
     bool? verificationPageOpened,
     Object? verificationLaunchError = _unset,
+    int? snapshotGeneration,
   }) {
     return ProviderSetupState(
       status: status ?? this.status,
@@ -160,6 +163,7 @@ class ProviderSetupState extends Equatable {
       verificationLaunchError: verificationLaunchError == _unset
           ? this.verificationLaunchError
           : verificationLaunchError as String?,
+      snapshotGeneration: snapshotGeneration ?? this.snapshotGeneration,
     );
   }
 
@@ -192,5 +196,6 @@ class ProviderSetupState extends Equatable {
     verificationLaunchAttempted,
     verificationPageOpened,
     verificationLaunchError,
+    snapshotGeneration,
   ];
 }

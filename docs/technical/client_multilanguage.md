@@ -1,5 +1,6 @@
 ---
 title: Client Multilingual Interface (English / Arabic)
+description: "English/Arabic localization architecture, `gen_l10n` scaffolding, locale ownership (`LocaleCubit`), RTL rules, and the remaining-string coverage report."
 area: technical
 status: current
 task: 95

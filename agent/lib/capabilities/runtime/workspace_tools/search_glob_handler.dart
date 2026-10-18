@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
 
@@ -9,6 +10,19 @@ class SearchGlobHandler {
   const SearchGlobHandler(this._pathResolver);
 
   Future<String> execute(
+    Map<String, dynamic> arguments,
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
+    final result = await executeResult(
+      arguments,
+      workspacePath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+    return result.displayText;
+  }
+
+  Future<ToolExecutionResult> executeResult(
     Map<String, dynamic> arguments,
     String workspacePath, {
     String? authorizedExternalRoot,
@@ -70,12 +84,14 @@ class SearchGlobHandler {
     }
 
     stopwatch.stop();
-    return WorkspaceToolsUtils.encode({
-      'durationMs': stopwatch.elapsedMilliseconds,
-      'numFiles': filenames.length,
-      'filenames': filenames,
-      'truncated': truncated,
-    });
+    return ToolExecutionResult.text(
+      WorkspaceToolsUtils.encode({
+        'durationMs': stopwatch.elapsedMilliseconds,
+        'numFiles': filenames.length,
+        'filenames': filenames,
+        'truncated': truncated,
+      }),
+    );
   }
 
   String _resolveSearchRoot({

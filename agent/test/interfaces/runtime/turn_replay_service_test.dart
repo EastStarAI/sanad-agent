@@ -1,6 +1,7 @@
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
@@ -598,6 +599,169 @@ void main() {
     expect(inspection.safety, TurnReplaySafety.unsafe);
     expect(inspection.requiresConfirmation, isTrue);
   });
+
+  test(
+    'root user turn with empty content but attachments is replay-eligible',
+    () {
+      final attachment = UserAttachment(
+        id: 'att-1',
+        mediaId: 'med-1',
+        safeName: 'photo.png',
+        mimeType: 'image/png',
+        sizeBytes: 100,
+        sha256: 'a' * 64,
+        kind: UserAttachmentKind.image,
+        agentLocalReference: 'rel/photo.png',
+      );
+      sessions.saveSessionHistory(sessionId, [
+        Message(
+          role: MessageRole.user,
+          content: '',
+          attachments: [attachment],
+          metadata: const {'request_id': 'root-empty-att'},
+        ),
+      ]);
+      final service = TurnReplayService(
+        sessionManager: sessions,
+        persistedState: runtime,
+      );
+
+      final inspection = service.inspect(
+        sessionId: sessionId,
+        targetRequestId: 'root-empty-att',
+      );
+
+      expect(inspection.canReplay, isTrue);
+      expect(inspection.failure, isNull);
+      expect(inspection.originalMessage, '');
+    },
+  );
+
+  test(
+    'admitReplacement preserves attachments and commits them in transaction',
+    () {
+      final attachment = UserAttachment(
+        id: 'att-1',
+        mediaId: 'med-1',
+        safeName: 'photo.png',
+        mimeType: 'image/png',
+        sizeBytes: 100,
+        sha256: 'a' * 64,
+        kind: UserAttachmentKind.image,
+        agentLocalReference: 'rel/photo.png',
+      );
+      sessions.saveSessionHistory(sessionId, [
+        Message(
+          role: MessageRole.user,
+          content: 'inspect this',
+          attachments: [attachment],
+          metadata: const {'request_id': 'root-with-att'},
+        ),
+        Message(role: MessageRole.assistant, content: 'done'),
+      ]);
+      final initialMessage = sessions.getMessages(sessionId).first;
+      state.db.execute(
+        '''
+      INSERT INTO user_attachments (
+        attachment_id, media_id, session_id, admission_id, message_id,
+        status, safe_name, mime_type, byte_size, sha256, kind,
+        relative_path, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'attached', ?, ?, ?, ?, 'image', ?, ?)
+      ''',
+        [
+          'att-1',
+          'med-1',
+          sessionId,
+          'root-with-att',
+          initialMessage.metadata?['message_id'],
+          'photo.png',
+          'image/png',
+          100,
+          'a' * 64,
+          'rel/photo.png',
+          DateTime.now().toIso8601String(),
+        ],
+      );
+
+      final service = TurnReplayService(
+        sessionManager: sessions,
+        persistedState: runtime,
+      );
+
+      final inspection = service.inspect(
+        sessionId: sessionId,
+        targetRequestId: 'root-with-att',
+      );
+      expect(inspection.canReplay, isTrue);
+      final admission = service.admitReplacement(
+        inspection: inspection,
+        replacementRequestId: 'cmd-rep-1',
+        replacementText: 'retry this',
+        action: 'retry',
+        attachments: [attachment],
+      );
+      expect(admission, isNotNull);
+      final active = sessions.getMessages(sessionId);
+      expect(active, hasLength(1));
+      expect(active.single.attachments, hasLength(1));
+      expect(active.single.attachments.single.id, 'att-1');
+    },
+  );
+
+  test(
+    'commitSoftRewindAdmission with unowned attachment rolls back and preserves history',
+    () {
+      final originalMessage = Message(
+        role: MessageRole.user,
+        content: 'original message',
+        metadata: const {
+          'request_id': 'root-unowned-att',
+          'message_id': 'msg-orig-1',
+          'turn_id': 'turn-orig-1',
+        },
+      );
+      sessions.saveSessionHistory(sessionId, [
+        originalMessage,
+        Message(role: MessageRole.assistant, content: 'done'),
+      ]);
+
+      final foreignAttachment = UserAttachment(
+        id: 'att-foreign',
+        mediaId: 'med-foreign',
+        safeName: 'foreign.png',
+        mimeType: 'image/png',
+        sizeBytes: 100,
+        sha256: 'b' * 64,
+        kind: UserAttachmentKind.image,
+        agentLocalReference: 'rel/foreign.png',
+      );
+
+      final rejected = sessions.commitSoftRewindAdmission(
+        sessionId: sessionId,
+        expectedHistoryRevision: 1,
+        targetMessageId: 'msg-orig-1',
+        targetTurnId: 'turn-orig-1',
+        targetRequestId: 'root-unowned-att',
+        replacement: Message(
+          role: MessageRole.user,
+          content: 'replacement text',
+          attachments: [foreignAttachment],
+          metadata: const {
+            'request_id': 'cmd-foreign-1',
+            'input_kind': MessageHistoryIdentity.rootTurn,
+            'history_status': MessageHistoryIdentity.active,
+          },
+        ),
+      );
+
+      expect(rejected, isNull);
+      expect(sessions.getSession(sessionId)!.historyRevision, 1);
+      final active = sessions.getMessages(sessionId);
+      expect(active, hasLength(2));
+      expect(active.first.content, 'original message');
+      expect(active.first.metadata?['message_id'], 'msg-orig-1');
+    },
+  );
 }
 
 void _insertCompletedCompaction(

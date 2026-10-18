@@ -81,9 +81,7 @@ class ModelCacheModelDto {
       name: json['name']?.toString() ?? json['label']?.toString(),
       ownedBy: json['owned_by']?.toString(),
       supportsReasoningOutput:
-          json['supports_reasoning_output'] as bool? ??
-          json['supports_reasoning'] as bool? ??
-          false,
+          json['supports_reasoning_output'] as bool? ?? json['supports_reasoning'] as bool? ?? false,
       thinkingControl: thinkingRaw is Map<String, dynamic>
           ? ThinkingControlDescriptorDto.fromJson(thinkingRaw)
           : thinkingRaw is Map
@@ -158,9 +156,7 @@ class ModelCacheSnapshotDto {
             .toList() ??
         const <ModelCacheInstanceDto>[];
     final recent =
-        (json['recent'] as List?)
-            ?.map((e) => RecentModelDto.fromJson(e as Map<String, dynamic>))
-            .toList() ??
+        (json['recent'] as List?)?.map((e) => RecentModelDto.fromJson(e as Map<String, dynamic>)).toList() ??
         const <RecentModelDto>[];
     return ModelCacheSnapshotDto(
       instances: instances,
@@ -173,5 +169,73 @@ class ModelCacheSnapshotDto {
     'instances': instances.map((e) => e.toJson()).toList(),
     'recent': recent.map((e) => e.toJson()).toList(),
     if (defaultInstanceId != null) 'default_instance_id': defaultInstanceId,
+  };
+}
+
+class ModelCacheUpdateEvent {
+  static const Set<String> validStatuses = {'started', 'updated', 'failed'};
+
+  final String providerInstanceId;
+  final String status;
+  final String? deviceId;
+
+  const ModelCacheUpdateEvent({
+    required this.providerInstanceId,
+    required this.status,
+    this.deviceId,
+  });
+
+  bool get isTerminal => status == 'updated' || status == 'failed';
+  bool get isUpdated => status == 'updated';
+  bool get isFailed => status == 'failed';
+
+  factory ModelCacheUpdateEvent.fromJson(Map<String, dynamic> json, {String? deviceId}) {
+    final rawPayload = json['payload'];
+    final payload = rawPayload is Map<String, dynamic>
+        ? rawPayload
+        : rawPayload is Map
+        ? Map<String, dynamic>.from(rawPayload)
+        : json;
+
+    final rawProvider = payload['provider_instance_id'];
+    if (rawProvider is! String || rawProvider.trim().isEmpty) {
+      throw const FormatException('Missing or invalid provider_instance_id');
+    }
+
+    final rawStatus = payload['status'];
+    if (rawStatus is! String || !validStatuses.contains(rawStatus.trim())) {
+      throw FormatException('Invalid or unknown status: $rawStatus');
+    }
+
+    final String? resolvedDeviceId;
+    if (deviceId != null && deviceId.trim().isNotEmpty) {
+      resolvedDeviceId = deviceId.trim();
+    } else if (json['device_id'] is String && (json['device_id'] as String).trim().isNotEmpty) {
+      resolvedDeviceId = (json['device_id'] as String).trim();
+    } else if (json['hardware_id'] is String && (json['hardware_id'] as String).trim().isNotEmpty) {
+      resolvedDeviceId = (json['hardware_id'] as String).trim();
+    } else {
+      resolvedDeviceId = null;
+    }
+
+    return ModelCacheUpdateEvent(
+      providerInstanceId: rawProvider.trim(),
+      status: rawStatus.trim(),
+      deviceId: resolvedDeviceId,
+    );
+  }
+
+  static ModelCacheUpdateEvent? tryParse(Map<String, dynamic> json, {String? deviceId}) {
+    try {
+      return ModelCacheUpdateEvent.fromJson(json, deviceId: deviceId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, dynamic> toJson() => {
+    'provider_instance_id': providerInstanceId,
+    'status': status,
+    if (deviceId != null) 'device_id': deviceId,
   };
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
 
@@ -14,6 +15,8 @@ class ToolGroupTile extends StatefulWidget {
     required this.onToggleExpanded,
     required this.expandedChildEventIds,
     required this.onChildToggleExpanded,
+    this.viewImageMediaLoader,
+    this.userAttachmentMediaLoader,
   });
 
   final ConversationTimelineItem item;
@@ -21,6 +24,8 @@ class ToolGroupTile extends StatefulWidget {
   final ValueChanged<bool> onToggleExpanded;
   final Set<String> expandedChildEventIds;
   final void Function(String eventId, bool expanded) onChildToggleExpanded;
+  final ViewImageMediaLoader? viewImageMediaLoader;
+  final UserAttachmentMediaLoader? userAttachmentMediaLoader;
 
   @override
   State<ToolGroupTile> createState() => _ToolGroupTileState();
@@ -200,6 +205,8 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
                                       'tool-group-child:${event.id}',
                                     ),
                                     event: event,
+                                    viewImageMediaLoader: widget.viewImageMediaLoader,
+                                    userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
                                     isExpanded: widget.expandedChildEventIds.contains(event.id),
                                     onToggleExpanded: (expanded) => widget.onChildToggleExpanded(
                                       event.id,

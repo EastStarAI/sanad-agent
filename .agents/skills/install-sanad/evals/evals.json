@@ -1,0 +1,43 @@
+{
+  "skill_name": "install-sanad",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I want Sanad running quickly on a free Google Cloud server. I'm on Windows, don't have gcloud, and haven't set up Google Cloud billing. I already use Sanad Web. Walk me through it and do what you can.",
+      "expected_output": "At most two initial questions, Windows-aware official CLI/SSH prerequisites, human-owned sign-in and payment, approved project and billing, explicit eligible e2-micro/pd-standard configuration, no source SDKs, just-in-time complete Add device request and built-in registration verification. No zero-cost guarantee or invented actions.",
+      "files": [],
+      "assertions": [
+        "Asks no more than two initial setup questions and does not request card details or durable credentials.",
+        "Checks or installs gcloud and SSH using OS-specific official guidance and approval.",
+        "Explains aggregate free limits, uses explicit pd-standard and an eligible region, and does not install Flutter/Dart/Docker.",
+        "Directs the user to Settings, then + beside Devices in the Settings sidebar to open Add device; requests the complete temporary command only when needed, without echoing or extracting its token.",
+        "Does not require routine reboot, budgets, billing report review, or model-provider requests for success."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use my existing project and eligible Ubuntu e2-micro VM to install Sanad. gcloud and SSH are ready. There may already be an installation from an interrupted attempt. Keep my other workloads and files untouched. I will send Add device when you need it.",
+      "expected_output": "Inspects and reuses the approved existing VM, checks actual service/installation state and prerequisites, resumes safely rather than creating a duplicate, accepts a fresh official complete command only as required, preserves Sanad Home and other workloads, and reports only verified success.",
+      "files": [],
+      "assertions": [
+        "Does not create another VM or repeat already answered generic setup questions.",
+        "Inspects actual installed state before reinstalling and preserves existing data.",
+        "Does not expose Agent ports or widen shared SSH firewall rules.",
+        "Handles expired pairing by requesting a fresh command rather than inventing or reconstructing credentials."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "My account already runs an e2-micro with a 30 GB standard disk all month. Test this skill on a second temporary server in the same project, without touching production. I approve a short potentially paid test after seeing an estimate, then delete the test resources even if setup fails. Do not create it until I'm ready to pair.",
+      "expected_output": "Explains that second VM hours/disk can be charged, estimates and confirms before creation, checks pairing readiness before starting paid resources, records exact test ownership, installs and verifies through builtin success, and deletes only test resources on success/failure. Does not claim real actions from a rehearsal.",
+      "files": [],
+      "assertions": [
+        "Does not describe the second VM as an independent free allowance or stop production to borrow capacity.",
+        "Confirms estimate and pairing readiness before creating the test VM.",
+        "Tracks exact newly created resources and cleans up on failure as well as success.",
+        "Checks auto-delete boot disk cleanup and does not delete preexisting resources.",
+        "Distinguishes rehearsal evidence from a real installation and delayed billing totals."
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show jsonEncode;
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -87,6 +88,11 @@ class WorkspaceListCommand extends _BaseWorkspaceSubcommand {
     final service = await getService();
     final workspaces = await service.listWorkspaces();
 
+    if (json && workspaces.isEmpty) {
+      stdoutSink.writeln(jsonEncode([]));
+      return 0;
+    }
+
     if (workspaces.isEmpty) {
       stdoutSink.writeln('No registered workspaces found.');
       stdoutSink.writeln(
@@ -117,6 +123,29 @@ class WorkspaceListCommand extends _BaseWorkspaceSubcommand {
       } catch (_) {
         policyModes[wsPath] = WorkspacePermissionMode.defaultMode.value;
       }
+    }
+
+    if (json) {
+      final items = <Map<String, dynamic>>[];
+      for (final ws in workspaces) {
+        final wsId = ws['id']?.toString() ?? '';
+        final name = (ws['name'] ?? ws['display_name'] ?? '').toString();
+        final path = ws['path']?.toString() ?? '';
+        final policy = policyModes[path] ?? 'default';
+        final isActive =
+            (activeId != null && activeId == wsId) ||
+            (activeWs != null && activeWs['path'] == path);
+
+        items.add({
+          'id': wsId,
+          'name': name,
+          'path': path,
+          'policy': policy,
+          'is_active': isActive,
+        });
+      }
+      stdoutSink.writeln(jsonEncode(items));
+      return 0;
     }
 
     stdoutSink.writeln('Registered Workspaces:');

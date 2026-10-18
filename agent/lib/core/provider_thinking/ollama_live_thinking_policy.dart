@@ -31,22 +31,62 @@ class OllamaLiveThinkingPolicy implements ProviderThinkingPolicy {
       );
     }
 
-    final optionIds = _optionIdsForModel(context);
-    return ThinkingControlDescriptor(
-      status: ThinkingCapabilityStatus.supported,
-      kind: ThinkingControlKind.effort,
-      options: optionIds
-          .map(
-            (id) => ThinkingControlOption(
-              id: id,
-              label: _labelForOptionId(id),
-              isOff: id == 'off',
-            ),
-          )
-          .toList(growable: false),
-      capabilityRevision: context.capabilityRevision,
-      source: 'live',
+    final declaration = OllamaThinkingProbe.parseThinkingDeclaration(
+      context.modelMetadata,
     );
+    if (declaration == null) {
+      // Absent or malformed native thinking declaration => fail closed to unknown.
+      return ThinkingControlDescriptor.unknown(
+        capabilityRevision: context.capabilityRevision,
+        source: 'live',
+      );
+    }
+
+    return switch (declaration) {
+      OllamaBooleanThinkingDeclaration(:final values, :final defaultValue) =>
+        ThinkingControlDescriptor(
+          status: ThinkingCapabilityStatus.supported,
+          kind: ThinkingControlKind.toggle,
+          options: [
+            if (values.contains(false))
+              ThinkingControlOption(
+                id: 'off',
+                label: 'Off',
+                isOff: true,
+                isProviderDefault: !defaultValue,
+              ),
+            if (values.contains(true))
+              ThinkingControlOption(
+                id: 'on',
+                label: 'On',
+                isOff: false,
+                isProviderDefault: defaultValue,
+              ),
+          ],
+          defaultOptionId: defaultValue ? 'on' : 'off',
+          capabilityRevision: context.capabilityRevision,
+          source: 'live',
+        ),
+      OllamaLevelThinkingDeclaration(:final values, :final defaultValue) =>
+        ThinkingControlDescriptor(
+          status: ThinkingCapabilityStatus.supported,
+          kind: ThinkingControlKind.effort,
+          options: values
+              .map(
+                (val) => ThinkingControlOption(
+                  id: val,
+                  label: _labelForOptionId(val),
+                  isOff: val == 'off' || val == 'none',
+                  isProviderDefault:
+                      defaultValue != null && val == defaultValue,
+                ),
+              )
+              .toList(growable: false),
+          defaultOptionId: defaultValue,
+          capabilityRevision: context.capabilityRevision,
+          source: 'live',
+        ),
+    };
   }
 
   @override
@@ -58,33 +98,44 @@ class OllamaLiveThinkingPolicy implements ProviderThinkingPolicy {
     if (trimmed == null || trimmed.isEmpty) {
       return const UseProviderDefault();
     }
-    if (trimmed == 'off') {
-      return const ThinkingToggleDirective(enabled: false);
-    }
-    if (!_optionIdsForModel(context).contains(trimmed)) {
+
+    final declaration = OllamaThinkingProbe.parseThinkingDeclaration(
+      context.modelMetadata,
+    );
+    if (declaration == null) {
       return const UseProviderDefault();
     }
-    return OllamaThinkLevelDirective(trimmed);
-  }
 
-  List<String> _optionIdsForModel(ThinkingPolicyContext context) {
-    if (OllamaThinkingProbe.requiresLevelOnly(
-      context.modelMetadata,
-      context.modelId,
-    )) {
-      return const ['low', 'medium', 'high'];
+    switch (declaration) {
+      case OllamaBooleanThinkingDeclaration(:final values):
+        if ((trimmed == 'off' || trimmed == 'false') &&
+            values.contains(false)) {
+          return const ThinkingToggleDirective(enabled: false);
+        }
+        if ((trimmed == 'on' || trimmed == 'true') && values.contains(true)) {
+          return const ThinkingToggleDirective(enabled: true);
+        }
+        return const UseProviderDefault();
+
+      case OllamaLevelThinkingDeclaration(:final values):
+        if (!values.contains(trimmed)) {
+          return const UseProviderDefault();
+        }
+        return OllamaThinkLevelDirective(trimmed);
     }
-    return const ['off', 'low', 'medium', 'high', 'max'];
   }
 
   String _labelForOptionId(String optionId) {
-    return switch (optionId) {
+    return switch (optionId.toLowerCase()) {
       'off' => 'Off',
       'low' => 'Low',
       'medium' => 'Medium',
       'high' => 'High',
       'max' => 'Max',
-      _ => optionId,
+      _ =>
+        optionId.isEmpty
+            ? optionId
+            : optionId[0].toUpperCase() + optionId.substring(1),
     };
   }
 }

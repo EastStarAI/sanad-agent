@@ -127,5 +127,157 @@ void main() {
         },
       );
     });
+
+    group('Multi-chunk Edits', () {
+      test('applies multiple non-contiguous edits in a single call', () async {
+        final testFile = File(p.join(tempDir.path, 'multi_edit.txt'));
+        final originalLines = List.generate(
+          25,
+          (i) => 'Line ${i + 1}: initial content',
+        );
+        await testFile.writeAsString(originalLines.join('\n'));
+
+        final resultRaw = await handler.execute({
+          'path': 'multi_edit.txt',
+          'edits': [
+            {
+              'old_string': 'Line 5: initial content',
+              'new_string': 'Line 5: updated content',
+            },
+            {
+              'old_string': 'Line 20: initial content',
+              'new_string': 'Line 20: updated content',
+            },
+          ],
+        }, tempDir.path);
+
+        final result = jsonDecode(resultRaw) as Map<String, dynamic>;
+        expect(result['numReplacements'], 2);
+        expect(result['numEdits'], 2);
+        expect(result['startLine'], 5);
+        expect(result['editStartLines'], [5, 20]);
+        expect(result['patch'], contains('- Line 5: initial content'));
+        expect(result['patch'], contains('+ Line 5: updated content'));
+        expect(result['patch'], contains('---'));
+        expect(result['patch'], contains('- Line 20: initial content'));
+        expect(result['patch'], contains('+ Line 20: updated content'));
+
+        final updatedContent = await testFile.readAsString();
+        final lines = updatedContent.split('\n');
+        expect(lines[4], 'Line 5: updated content');
+        expect(lines[19], 'Line 20: updated content');
+        expect(lines[0], 'Line 1: initial content');
+        expect(lines[24], 'Line 25: initial content');
+      });
+
+      test('atomic failure: file is untouched if any chunk fails to match', () async {
+        final testFile = File(p.join(tempDir.path, 'atomic_test.txt'));
+        const original = 'Line 1\nLine 5: target\nLine 10\nLine 20: target\n';
+        await testFile.writeAsString(original);
+
+        expect(
+          () => handler.execute({
+            'path': 'atomic_test.txt',
+            'edits': [
+              {
+                'old_string': 'Line 5: target',
+                'new_string': 'Line 5: MODIFIED',
+              },
+              {
+                'old_string': 'Line 999: non existent line',
+                'new_string': 'Line 999: replacement',
+              },
+            ],
+          }, tempDir.path),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('Edit #2'),
+                contains('old_string was not found in the target file'),
+              ),
+            ),
+          ),
+        );
+
+        // Entire file must remain unmodified!
+        expect(await testFile.readAsString(), original);
+      });
+
+      test('overlap detection: rejects overlapping edit ranges safely', () async {
+        final testFile = File(p.join(tempDir.path, 'overlap_test.txt'));
+        const original = 'line A\nline B\nline C\nline D\nline E\n';
+        await testFile.writeAsString(original);
+
+        expect(
+          () => handler.execute({
+            'path': 'overlap_test.txt',
+            'edits': [
+              {
+                'old_string': 'line B\nline C',
+                'new_string': 'line B updated\nline C updated',
+              },
+              {
+                'old_string': 'line C\nline D',
+                'new_string': 'line C overlap\nline D overlap',
+              },
+            ],
+          }, tempDir.path),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('Overlapping edits detected in target file'),
+            ),
+          ),
+        );
+
+        expect(await testFile.readAsString(), original);
+      });
+
+      test('preserves CRLF line endings across multiple edits', () async {
+        final testFile = File(p.join(tempDir.path, 'multi_crlf.txt'));
+        const original = 'line1\r\nline2\r\nline3\r\nline4\r\nline5\r\n';
+        await testFile.writeAsString(original);
+
+        await handler.execute({
+          'path': 'multi_crlf.txt',
+          'edits': [
+            {'old_string': 'line2', 'new_string': 'updated2'},
+            {'old_string': 'line4', 'new_string': 'updated4'},
+          ],
+        }, tempDir.path);
+
+        final result = await testFile.readAsString();
+        expect(result, 'line1\r\nupdated2\r\nline3\r\nupdated4\r\nline5\r\n');
+        expect(result.contains('\r\n'), isTrue);
+      });
+
+      test('rejects empty or identical edit chunks', () async {
+        final testFile = File(p.join(tempDir.path, 'validation_test.txt'));
+        await testFile.writeAsString('content');
+
+        expect(
+          () => handler.execute({
+            'path': 'validation_test.txt',
+            'edits': [
+              {'old_string': '', 'new_string': 'something'},
+            ],
+          }, tempDir.path),
+          throwsA(isA<FormatException>()),
+        );
+
+        expect(
+          () => handler.execute({
+            'path': 'validation_test.txt',
+            'edits': [
+              {'old_string': 'same', 'new_string': 'same'},
+            ],
+          }, tempDir.path),
+          throwsA(isA<StateError>()),
+        );
+      });
+    });
   });
 }

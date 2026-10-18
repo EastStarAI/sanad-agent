@@ -727,6 +727,82 @@ void main() {
         expect(result.gatewayWsUri.toString(), 'ws://127.0.0.1:59999/gateway');
       },
     );
+
+    test(
+      'targeted probe attaches when a healthy endpoint answers slower than the speculative deadline',
+      () async {
+        final tokenFile = File(
+          '${tempHome.path}/${LocalGatewayCredentials.relativePath}',
+        );
+        tokenFile.writeAsStringSync('test-token');
+
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final requests = server.listen((request) async {
+          // Healthy and authenticated, but deliberately slower than the
+          // speculative discovery deadline.
+          await Future<void>.delayed(const Duration(milliseconds: 450));
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write('{"status":"ok"}');
+          await request.response.close();
+        });
+
+        try {
+          final discovery = LocalGatewayDiscovery(
+            sanadHomeOverride: tempHome.path,
+          );
+          final result = await discovery.discover(portOverride: server.port);
+
+          expect(result.isDaemonRunning, isTrue);
+          expect(result.port, server.port);
+          expect(result.healthData?['status'], 'ok');
+        } finally {
+          await server.close(force: true);
+          await requests.cancel();
+        }
+      },
+    );
+
+    test(
+      'targeted probe stays bounded and fails closed when the endpoint never answers',
+      () async {
+        final tokenFile = File(
+          '${tempHome.path}/${LocalGatewayCredentials.relativePath}',
+        );
+        tokenFile.writeAsStringSync('test-token');
+
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        // Accepts the connection but never completes the health request.
+        final requests = server.listen((request) {});
+
+        try {
+          final discovery = LocalGatewayDiscovery(
+            sanadHomeOverride: tempHome.path,
+          );
+          final stopwatch = Stopwatch()..start();
+          final result = await discovery.discover(portOverride: server.port);
+          stopwatch.stop();
+
+          expect(result.isDaemonRunning, isFalse);
+          expect(result.healthData, isNull);
+          // The applied targeted deadline is bounded: it must be honored
+          // (not the legacy 300 ms speculative bound) and must not overrun it
+          // beyond a scheduling margin.
+          expect(
+            stopwatch.elapsed,
+            greaterThanOrEqualTo(const Duration(milliseconds: 1500)),
+          );
+          expect(
+            stopwatch.elapsed,
+            lessThan(const Duration(seconds: 4)),
+          );
+        } finally {
+          await server.close(force: true);
+          await requests.cancel();
+        }
+      },
+    );
   });
 
   group('StandaloneFallbackStrategy', () {
@@ -760,5 +836,43 @@ void main() {
         tempHome.deleteSync(recursive: true);
       }
     });
+
+    test(
+      'resolves gateway mode for a healthy daemon that answers slower than the speculative deadline',
+      () async {
+        final tempHome = Directory.systemTemp.createTempSync(
+          'sanad_standalone_slow_test_',
+        );
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final requests = server.listen((request) async {
+          await Future<void>.delayed(const Duration(milliseconds: 450));
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write('{"status":"ok"}');
+          await request.response.close();
+        });
+        try {
+          final tokenFile = File(
+            '${tempHome.path}/${LocalGatewayCredentials.relativePath}',
+          );
+          tokenFile.writeAsStringSync('test-token');
+
+          final discovery = LocalGatewayDiscovery(
+            sanadHomeOverride: tempHome.path,
+          );
+          final strategy = StandaloneFallbackStrategy(discovery: discovery);
+
+          // No probe override: production defaults must resolve the mode.
+          final mode = await strategy.resolveMode(portOverride: server.port);
+
+          expect(mode, CliRuntimeMode.gateway);
+        } finally {
+          await server.close(force: true);
+          await requests.cancel();
+          tempHome.deleteSync(recursive: true);
+        }
+      },
+    );
   });
 }

@@ -30,6 +30,7 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
   int _pollGeneration = 0;
   int? _activePollGeneration;
   int _modelDiscoveryGeneration = 0;
+  int _snapshotGeneration = 0;
   String? _draftDisplayName;
   String? _draftBaseUrl;
   String? _draftApiKey;
@@ -596,6 +597,7 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     emit(
       state.copyWith(
         status: ProviderSetupStatus.instancesList,
+        snapshotGeneration: ++_snapshotGeneration,
         templates: snapshot.templates,
         instances: snapshot.instances,
         providers: mappedProviders,
@@ -1081,6 +1083,7 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     emit(
       state.copyWith(
         status: status,
+        snapshotGeneration: ++_snapshotGeneration,
         templates: templates,
         instances: instances,
         providers: mappedProviders,
