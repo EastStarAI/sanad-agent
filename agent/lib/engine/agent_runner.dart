@@ -1753,6 +1753,9 @@ class AgentRunner {
         if (provider != null) {
           attemptsByProviderInstanceId[provider] = providerAttempt + 1;
         }
+        effectiveHistory = await _prepareProviderHistory(
+          runtimeSystemPrompt: runtimeSystemPrompt,
+        );
         final refreshedRouting = _turnRoute.resolveTurnRouting();
         model = refreshedRouting.model;
         provider = refreshedRouting.providerId;
@@ -2121,6 +2124,9 @@ class AgentRunner {
         if (provider != null) {
           attemptsByProviderInstanceId[provider] = providerAttempt + 1;
         }
+        effectiveHistory = await _prepareProviderHistory(
+          runtimeSystemPrompt: runtimeSystemPrompt,
+        );
         final refreshedRouting = _turnRoute.resolveTurnRouting();
         model = refreshedRouting.model;
         provider = refreshedRouting.providerId;

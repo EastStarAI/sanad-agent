@@ -18,11 +18,13 @@ import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/engine/adapters/e2e_fixture_adapter.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/session_db.dart';
 import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
+import 'package:sanad_agent/evolution/models/compaction_operation_record.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:test/test.dart';
@@ -521,70 +523,64 @@ void main() {
   );
 
   test(
-    'F.53.8 claimed-failure durable hydration preserves stage and cause over history',
+    'F.53.8 post-claim async failure from real command preserves stage and cause in history',
     () async {
       final h = await _CompactionHarness.create();
       try {
+        await h.enableThinkingSupportedFixture();
         final sessionId = 'plan53-claimed-fail-${_unique()}';
         await h.seedSession(
           sessionId: sessionId,
           providerInstanceId: h.providerInstanceId,
+          thinkingMode: 'high',
+          initialUserContent:
+              'goal: test ${E2eFixtureAdapter.summarizationFailurePrompt}',
+          fillerCount: 50,
+          fillerLength: 50,
         );
-
-        final compactionId = 'claimed-fail-${_unique()}';
-        final stateDb = AgentStateDatabase.atPath(h.sanadStateHome.path);
-        try {
-          final historyRepo = SessionHistoryRevisionRepository(stateDb);
-          final boundaries = CompactionBoundaryRepository(stateDb, historyRepo);
-          final sessions = SessionDB.fromState(stateDb);
-          final messages = sessions.getPersistedMessages(sessionId);
-          final count = messages.length;
-          final sourceRange = CompactionMessageRange(
-            start: CompactionMessageIdentity(messages[count - 30].rowId),
-            end: CompactionMessageIdentity(messages[count - 15].rowId),
-          );
-          final tailRange = CompactionMessageRange(
-            start: CompactionMessageIdentity(messages[count - 14].rowId),
-            end: CompactionMessageIdentity(messages[count - 1].rowId),
-          );
-          final claim = boundaries.tryClaim(
-            compactionId: compactionId,
-            sessionId: sessionId,
-            trigger: CompactionTrigger.manual,
-            sourceRange: sourceRange,
-            retainedTailRange: tailRange,
-            routeSignature: RouteSignature(
-              providerInstanceId: h.providerInstanceId,
-              templateId: _template,
-              protocol: _protocol,
-              normalizedBaseUrl: 'http://127.0.0.1:9/v1',
-              modelId: 'test-model',
-              configRevision: 1,
-              credentialRevision: 1,
-            ),
-            startedAt: DateTime.now().toUtc(),
-          );
-          expect(claim.outcome, CompactionClaimOutcome.claimed);
-
-          final failed = boundaries.failStarted(
-            compactionId: compactionId,
-            failureReason: CompactionFailureReason.summarizationFailed,
-            completedAt: DateTime.now().toUtc(),
-            failureDetail: const <String, dynamic>{
-              'stage': 'provider',
-              'cause': 'timeout',
-            },
-          );
-          expect(failed.outcome, CompactionTerminalOutcome.failed);
-        } finally {
-          stateDb.dispose();
-        }
 
         final client = await h.startDaemon();
         try {
+          final requestId = 'compact-fail-req-${_unique()}';
+          final execution = await client.executeCompact(
+            sessionId: sessionId,
+            requestId: requestId,
+            timeout: const Duration(seconds: 30),
+          );
+          expect(execution.result['outcome'], 'failed');
+          final compactionId = execution.result['compaction_id'] as String;
+          expect(compactionId, isNotEmpty);
+          expect(
+            execution.result['failure_reason'],
+            'summarization_failed',
+          );
+          expect(execution.result['failure_stage'], 'provider');
+          expect(execution.result['failure_cause'], 'timeout');
+          expect(execution.lifecycle, ['started', 'failed']);
+
+          final stateDb = AgentStateDatabase.atPath(h.sanadStateHome.path);
+          try {
+            final historyRepo = SessionHistoryRevisionRepository(stateDb);
+            final boundaries = CompactionBoundaryRepository(
+              stateDb,
+              historyRepo,
+            );
+            final record = boundaries.findById(compactionId);
+            expect(record, isNotNull);
+            expect(record!.status, CompactionStatus.failed);
+            expect(
+              record.failureReason,
+              CompactionFailureReason.summarizationFailed,
+            );
+            expect(record.failureStage, 'provider');
+            expect(record.failureCause, 'timeout');
+          } finally {
+            stateDb.dispose();
+          }
+
           final history = await client.loadSessionHistory(
             sessionId: sessionId,
-            requestId: 'history-claimed-fail-${_unique()}',
+            requestId: 'history-fail-${_unique()}',
             timeout: const Duration(seconds: 30),
           );
           final failedRows = (history['messages'] as List)
@@ -600,6 +596,17 @@ void main() {
           expect(failedRows.first['failure_reason'], 'summarization_failed');
           expect(failedRows.first['failure_stage'], 'provider');
           expect(failedRows.first['failure_cause'], 'timeout');
+
+          expect(await h.storedThinkingMode(sessionId), 'high');
+          expect(await h.findStartedCompaction(sessionId), isNull);
+
+          final usableAnswer = await client.executeThink(
+            sessionId: sessionId,
+            requestId: 'usable-req-${_unique()}',
+            message: 'verify session usable after failed compaction',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(usableAnswer['content'], 'e2e-success');
         } finally {
           await client.close();
         }
@@ -714,6 +721,127 @@ void main() {
           );
           expect(execution.result['compaction_id'], isNotEmpty);
           expect(execution.lifecycle, ['started', 'completed']);
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+  );
+
+  test(
+    'F.53.10 overflow rich-result and attachment compaction completes through real daemon',
+    () async {
+      final h = await _CompactionHarness.create();
+      try {
+        await h.enableThinkingSupportedFixture();
+        final sessionId = 'plan53-overflow-${_unique()}';
+        final siblingId = 'plan53-overflow-sibling-${_unique()}';
+        await h.seedSession(
+          sessionId: sessionId,
+          providerInstanceId: h.providerInstanceId,
+          thinkingMode: 'high',
+          withStructuredToolResult: true,
+          withAttachment: true,
+          fillerCount: 30,
+          fillerLength: 50,
+        );
+        await h.seedSession(
+          sessionId: siblingId,
+          providerInstanceId: h.providerInstanceId,
+          thinkingMode: 'high',
+          fillerCount: 10,
+          fillerLength: 50,
+        );
+
+        final client = await h.startDaemon();
+        try {
+          final execution = await client.executeAuto(
+            sessionId: sessionId,
+            requestId: 'overflow-${_unique()}',
+            message: E2eFixtureAdapter.overflowFailurePrompt,
+            timeout: const Duration(seconds: 30),
+          );
+          expect(execution.compactionIds, hasLength(1));
+          expect(execution.lifecycle, ['started', 'completed']);
+          expect(execution.finalAnswer['content'], 'e2e-success');
+
+          final history = await client.loadSessionHistory(
+            sessionId: sessionId,
+            requestId: 'history-overflow-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          final compactionRows = _compactionRows(history);
+          expect(compactionRows, hasLength(1));
+          expect(
+            compactionRows.first['compaction_id'],
+            execution.compactionIds.first,
+          );
+          expect(compactionRows.first['trigger'], 'overflow');
+          expect(compactionRows.first['status'], 'completed');
+
+          final messages = history['messages'] as List;
+          final userMsg = messages.firstWhere(
+            (row) =>
+                row is Map &&
+                row['attachments'] is List &&
+                (row['attachments'] as List).isNotEmpty,
+          ) as Map;
+          final attachments = userMsg['attachments'] as List;
+          expect(attachments, isNotEmpty);
+          expect((attachments.first as Map)['safeName'], 'fixture-sample.png');
+
+          final stateDb = AgentStateDatabase.atPath(h.sanadStateHome.path);
+          try {
+            final sessions = SessionDB.fromState(stateDb);
+            final toolMessage = sessions.getMessages(sessionId).firstWhere(
+              (message) => message.toolCallId == 'e2e-structured-tool-call',
+            );
+            final toolResult = toolMessage.toolResult;
+            expect(toolResult, isNotNull);
+            expect(toolResult!.blocks.whereType<ToolImageBlock>(), hasLength(1));
+            expect(
+              toolResult.blocks.whereType<ToolImageBlock>().single.dataBase64,
+              base64Encode(_structuredPngBytes),
+            );
+            expect(
+              toolResult.blocks.whereType<ToolTextBlock>().single.text,
+              'structured payload ${'y' * 1500}',
+            );
+            expect(toolMessage.content, toolResult.displayText);
+
+            final userMessage = sessions.getMessages(sessionId).firstWhere(
+              (message) => message.attachments.isNotEmpty,
+            );
+            final attachment = userMessage.attachments.first;
+            final payloadFile = File(
+              '${h.sanadStateHome.path}/attachments/${attachment.id}/payload',
+            );
+            expect(payloadFile.existsSync(), isTrue);
+            expect(await payloadFile.readAsBytes(), _structuredPngBytes);
+          } finally {
+            stateDb.dispose();
+          }
+
+          expect(await h.storedThinkingMode(sessionId), 'high');
+          expect(await h.findStartedCompaction(sessionId), isNull);
+
+          final nextAnswer = await client.executeThink(
+            sessionId: sessionId,
+            requestId: 'next-${_unique()}',
+            message: 'subsequent command on same session',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(nextAnswer['content'], 'e2e-success');
+
+          final siblingAnswer = await client.executeThink(
+            sessionId: siblingId,
+            requestId: 'sibling-${_unique()}',
+            message: 'subsequent command on sibling session',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(siblingAnswer['content'], 'e2e-success');
         } finally {
           await client.close();
         }
@@ -844,6 +972,9 @@ LOG_LEVEL=INFO
     String? thinkingMode,
     bool withStructuredToolResult = false,
     bool withAttachment = false,
+    int fillerCount = 500,
+    int fillerLength = 300,
+    String? initialUserContent,
   }) async {
     final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
     try {
@@ -907,7 +1038,7 @@ LOG_LEVEL=INFO
       sessions.replaceMessages(sessionId, [
         Message(
           role: MessageRole.user,
-          content: 'goal: daemon compaction e2e validation',
+          content: initialUserContent ?? 'goal: daemon compaction e2e validation',
           attachments: attachment == null ? const [] : [attachment],
         ),
         if (withStructuredToolResult) ...[
@@ -939,11 +1070,11 @@ LOG_LEVEL=INFO
             ),
           ),
         ],
-        for (var i = 0; i < 500; i++)
+        for (var i = 0; i < fillerCount; i++)
           Message(
             role: MessageRole.user,
-            content: 'filler $i ${'x' * 300}',
-            attachments: (withAttachment && i == 499 && attachment != null)
+            content: 'filler $i ${'x' * fillerLength}',
+            attachments: (withAttachment && i == fillerCount - 1 && attachment != null)
                 ? [attachment]
                 : const [],
           ),
@@ -987,6 +1118,48 @@ model_capabilities:
     }
   }
 
+  Future<void> enableThinkingSupportedFixture() async {
+    await File('${sanadHome.path}/config.yaml').writeAsString('''
+model_capabilities:
+  test-model:
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        high: high
+      default_option: high
+  e2e-model:
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        high: high
+      default_option: high
+''');
+    final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
+    try {
+      final repo = ProviderInstanceRepository(stateDb);
+      if (repo.findById('e2e-provider') == null) {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'e2e-provider',
+            templateId: _template,
+            authMethod: _authMethod,
+            protocol: _protocol,
+            baseUrl: 'http://127.0.0.1:9/v1',
+            displayName: 'Plan 53 E2E Synthetic Route',
+            defaultModel: 'e2e-model',
+            status: 'ready',
+            createdAt: DateTime.now().toUtc(),
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+      }
+    } finally {
+      stateDb.dispose();
+    }
+  }
+
   Future<String?> storedThinkingMode(String sessionId) async {
     final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
     try {
@@ -1002,6 +1175,19 @@ model_capabilities:
       final historyRepo = SessionHistoryRevisionRepository(stateDb);
       final boundaries = CompactionBoundaryRepository(stateDb, historyRepo);
       return boundaries.listLifecycleForSession(sessionId).length;
+    } finally {
+      stateDb.dispose();
+    }
+  }
+
+  Future<CompactionOperationRecord?> findStartedCompaction(
+    String sessionId,
+  ) async {
+    final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
+    try {
+      final historyRepo = SessionHistoryRevisionRepository(stateDb);
+      final boundaries = CompactionBoundaryRepository(stateDb, historyRepo);
+      return boundaries.findStartedForSession(sessionId);
     } finally {
       stateDb.dispose();
     }
@@ -1202,7 +1388,8 @@ class _CompactionClient {
       if (payload['session_id'] != sessionId) continue;
 
       if (eventName == CanonicalEventTypes.contextCompactionStarted ||
-          eventName == CanonicalEventTypes.contextCompactionCompleted) {
+          eventName == CanonicalEventTypes.contextCompactionCompleted ||
+          eventName == CanonicalEventTypes.contextCompactionFailed) {
         final compactionId = payload['compaction_id']?.toString();
         if (compactionId == null || compactionId.isEmpty) continue;
         final lifecycle = lifecycleById.putIfAbsent(
@@ -1210,9 +1397,11 @@ class _CompactionClient {
           () => <String>[],
         );
         lifecycle.add(
-          eventName == CanonicalEventTypes.contextCompactionStarted
-              ? 'started'
-              : 'completed',
+          switch (eventName) {
+            CanonicalEventTypes.contextCompactionStarted => 'started',
+            CanonicalEventTypes.contextCompactionCompleted => 'completed',
+            _ => 'failed',
+          },
         );
         continue;
       }
@@ -1328,6 +1517,7 @@ class _CompactionClient {
     required String sessionId,
     required String requestId,
     required Duration timeout,
+    String message = 'trigger automatic compaction',
   }) async {
     _send(<String, dynamic>{
       'type': 'execute_command',
@@ -1335,7 +1525,7 @@ class _CompactionClient {
       'payload': <String, dynamic>{
         'request_id': requestId,
         'session_id': sessionId,
-        'message': 'trigger automatic compaction',
+        'message': message,
         'provider_instance_id': 'e2e-provider',
         'model': 'e2e-model',
         'delivery_intent': 'auto',
@@ -1381,6 +1571,48 @@ class _CompactionClient {
     }
     throw TimeoutException(
       'Timed out waiting for auto compaction on $sessionId (lifecycle=$lifecycle)',
+      timeout,
+    );
+  }
+
+  Future<Map<String, dynamic>> executeThink({
+    required String sessionId,
+    required String requestId,
+    required String message,
+    required Duration timeout,
+  }) async {
+    _send(<String, dynamic>{
+      'type': 'execute_command',
+      'command': 'think',
+      'payload': <String, dynamic>{
+        'request_id': requestId,
+        'session_id': sessionId,
+        'message': message,
+        'provider_instance_id': 'e2e-provider',
+        'model': 'e2e-model',
+        'delivery_intent': 'auto',
+      },
+    });
+
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      final moved = await frames.moveNext().timeout(remaining);
+      if (!moved) break;
+      final frame =
+          jsonDecode(frames.current as String) as Map<String, dynamic>;
+      if (frame['type'] != 'device_event') continue;
+      final payload = frame['payload'] is Map
+          ? Map<String, dynamic>.from(frame['payload'] as Map)
+          : <String, dynamic>{};
+      if ((payload['session_id'] ?? frame['session_id']) != sessionId) continue;
+      final eventName = frame['event']?.toString();
+      if (eventName == CanonicalEventTypes.finalAnswer) {
+        return payload;
+      }
+    }
+    throw TimeoutException(
+      'Timed out waiting for finalAnswer on $sessionId',
       timeout,
     );
   }

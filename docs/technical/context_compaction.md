@@ -651,6 +651,11 @@ idle|running -> compacting (in-memory barrier + durable started row)
 | `auto` | Prospective pressure preflight at model boundaries |
 | `overflow` | Confirmed provider context-overflow before any durable/visible provider output; one retry only |
 
+A successful `overflow` compaction re-projects the provider history from the
+newly activated boundary before that single retry, so the retried request is the
+reduced projection instead of the failed request; one turn performs at most one
+overflow compaction and later tool-loop steps cannot repeat it.
+
 ### 9.3 Canonical command and events (D6)
 
 | Wire surface | Shape |
