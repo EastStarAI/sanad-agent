@@ -178,6 +178,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         url: url,
         headers: request.headers,
         body: body,
+        requestId: options.requestId,
       );
     }
 
@@ -228,7 +229,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
           'message': normalized.message.toJson(),
           'finish_reason': normalized.finishReason.name,
           'usage': ?normalized.usage,
-        });
+        }, requestId: options.requestId);
       }
 
       return normalized;
@@ -237,7 +238,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
           'error': error.toString(),
-        });
+        }, requestId: options.requestId);
       }
       rethrow;
     } finally {
@@ -282,6 +283,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         url: url,
         headers: request.headers,
         body: body,
+        requestId: options.requestId,
       );
     }
 
@@ -387,14 +389,14 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
           'message': normalized.message.toJson(),
           'finish_reason': normalized.finishReason.name,
           'usage': ?normalized.usage,
-        });
+        }, requestId: options.requestId);
       }
     } catch (error) {
       if (LLMRequestDumper.isEnabled) {
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
           'error': error.toString(),
-        });
+        }, requestId: options.requestId);
       }
       rethrow;
     } finally {

@@ -809,6 +809,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
         url: url,
         headers: headers,
         body: body,
+        requestId: options.requestId,
       );
     }
 
@@ -832,7 +833,10 @@ class BaseOpenAIAdapter implements LLMAdapter {
 
     _logger.info('LLM Response status: ${response.statusCode}');
     if (LLMRequestDumper.isEnabled) {
-      await LLMRequestDumper.dumpResponse(response.body);
+      await LLMRequestDumper.dumpResponse(
+        response.body,
+        requestId: options.requestId,
+      );
     }
 
     if (response.statusCode != 200) {
@@ -915,6 +919,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
         url: url,
         headers: request.headers,
         body: body,
+        requestId: options.requestId,
       );
     }
 
@@ -938,7 +943,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
             'error': errBody,
-          });
+          }, requestId: options.requestId);
         }
         throw LlmHttpException.fromStreamedResponse(
           response,
@@ -1203,7 +1208,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
             },
             'finish_reason': effectiveFinishReason.name,
             'usage': ?finalUsage,
-          });
+          }, requestId: options.requestId);
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
@@ -1235,7 +1240,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
                       .toList(),
               },
             'error': e.toString(),
-          });
+          }, requestId: options.requestId);
         }
         rethrow;
       }

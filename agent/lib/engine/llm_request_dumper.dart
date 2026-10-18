@@ -166,8 +166,12 @@ class LLMRequestDumper {
     required Uri url,
     required Map<String, String> headers,
     Object? body,
+    String? requestId,
   }) async {
     if (!isEnabled) return;
+    if (requestId != null && requestId.startsWith('compaction:')) {
+      return;
+    }
     final path = lastDumpFilePath;
     if (path == null) {
       return;
@@ -203,8 +207,14 @@ class LLMRequestDumper {
     }
   }
 
-  static Future<void> recordError(Object error) async {
+  static Future<void> recordError(
+    Object error, {
+    String? requestId,
+  }) async {
     if (!isEnabled) return;
+    if (requestId != null && requestId.startsWith('compaction:')) {
+      return;
+    }
     final path = lastDumpFilePath;
     if (path == null) {
       return;
@@ -232,11 +242,28 @@ class LLMRequestDumper {
   }
 
   /// Dumps the response payload to the last request dump file.
-  static Future<void> dumpResponse(dynamic responsePayload) async {
+  ///
+  /// For unpaired or auxiliary requests (such as compaction completion, where
+  /// [requestId] indicates an auxiliary compaction request or no prior request
+  /// dump was initiated), the missing dump file path is triaged as a non-fatal
+  /// diagnostic event at `fine` level rather than an operational warning, and
+  /// never dumps raw content or alters compaction behavior.
+  static Future<void> dumpResponse(
+    dynamic responsePayload, {
+    String? requestId,
+  }) async {
     if (!isEnabled) return;
+
+    if (requestId != null && requestId.startsWith('compaction:')) {
+      _logger.fine(
+        'Skipping LLM response dump for auxiliary compaction request ($requestId).',
+      );
+      return;
+    }
+
     final path = lastDumpFilePath;
     if (path == null) {
-      _logger.warning(
+      _logger.fine(
         'Attempted to dump LLM response, but lastDumpFilePath is null.',
       );
       return;

@@ -282,6 +282,7 @@ class BaseAnthropicAdapter
         url: url,
         headers: _anthropicHeaders(options: options),
         body: body,
+        requestId: options.requestId,
       );
     }
 
@@ -303,7 +304,10 @@ class BaseAnthropicAdapter
 
     _logger.info('LLM Response status: ${response.statusCode}');
     if (LLMRequestDumper.isEnabled) {
-      await LLMRequestDumper.dumpResponse(response.body);
+      await LLMRequestDumper.dumpResponse(
+        response.body,
+        requestId: options.requestId,
+      );
     }
 
     if (response.statusCode != 200) {
@@ -395,6 +399,7 @@ class BaseAnthropicAdapter
         url: url,
         headers: _anthropicHeaders(options: options),
         body: body,
+        requestId: options.requestId,
       );
     }
 
@@ -425,7 +430,7 @@ class BaseAnthropicAdapter
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
             'error': err,
-          });
+          }, requestId: options.requestId);
         }
         throw LlmHttpException.fromStreamedResponse(
           response,
@@ -671,7 +676,7 @@ class BaseAnthropicAdapter
             },
             'finish_reason': effectiveFinishReason.name,
             'usage': ?finalUsage,
-          });
+          }, requestId: options.requestId);
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
@@ -703,7 +708,7 @@ class BaseAnthropicAdapter
                       .toList(),
               },
             'error': e.toString(),
-          });
+          }, requestId: options.requestId);
         }
         rethrow;
       }

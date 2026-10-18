@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:logging/logging.dart';
 import 'package:test/test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/constants.dart';
@@ -359,6 +360,102 @@ void main() {
         expect(resp['message']['tool_calls'][0]['name'], 'search_web');
         expect(resp['finish_reason'], 'toolCalls');
         expect(resp['usage']['total_tokens'], 165);
+      },
+    );
+
+    test(
+      'dumpResponse for unpaired response with null lastDumpFilePath logs at fine level without warning',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+        LLMRequestDumper.lastDumpFilePath = null;
+
+        final prevLevel = Logger.root.level;
+        Logger.root.level = Level.ALL;
+        addTearDown(() => Logger.root.level = prevLevel);
+
+        final records = <LogRecord>[];
+        final subscription = Logger('LLMRequestDumper').onRecord.listen(records.add);
+        addTearDown(subscription.cancel);
+
+        await LLMRequestDumper.dumpResponse({
+          'choices': [
+            {
+              'message': {'role': 'assistant', 'content': 'unpaired'},
+            },
+          ],
+        });
+
+        // No operational warnings emitted for expected unpaired responses.
+        expect(
+          records.where((r) => r.level >= Level.WARNING),
+          isEmpty,
+          reason: 'Expected no warning or severe logs for unpaired response',
+        );
+
+        // Diagnostic fine log is recorded.
+        expect(
+          records.where(
+            (r) =>
+                r.level == Level.FINE &&
+                r.message.contains('lastDumpFilePath is null'),
+          ),
+          isNotEmpty,
+        );
+      },
+    );
+
+    test(
+      'dumpResponse for auxiliary compaction request skips dumping and preserves previous turn dump file',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        // Simulate an earlier turn that dumped its request.
+        final turn1Path = await LLMRequestDumper.dumpRequest(
+          sessionId: 'test-session-earlier-turn',
+          history: [Message(role: MessageRole.user, content: 'turn 1 question')],
+          tools: [],
+        );
+        expect(turn1Path, isNotNull);
+        final fileBefore = await File(turn1Path!).readAsString();
+
+        final prevLevel = Logger.root.level;
+        Logger.root.level = Level.ALL;
+        addTearDown(() => Logger.root.level = prevLevel);
+
+        final records = <LogRecord>[];
+        final subscription = Logger('LLMRequestDumper').onRecord.listen(records.add);
+        addTearDown(subscription.cancel);
+
+        // Auxiliary compaction completion response arrives with compaction request ID.
+        await LLMRequestDumper.dumpResponse(
+          {
+            'choices': [
+              {
+                'message': {
+                  'role': 'assistant',
+                  'content': 'compaction summary text should never dump into turn 1 file',
+                },
+              },
+            ],
+          },
+          requestId: 'compaction:uuid-12345',
+        );
+
+        // The earlier turn dump file was NOT modified by the auxiliary compaction.
+        final fileAfter = await File(turn1Path).readAsString();
+        expect(fileAfter, equals(fileBefore));
+        expect(fileAfter, isNot(contains('compaction summary text')));
+
+        // No operational warnings emitted.
+        expect(records.where((r) => r.level >= Level.WARNING), isEmpty);
+        expect(
+          records.where(
+            (r) =>
+                r.level == Level.FINE &&
+                r.message.contains('Skipping LLM response dump for auxiliary compaction request'),
+          ),
+          isNotEmpty,
+        );
       },
     );
   });

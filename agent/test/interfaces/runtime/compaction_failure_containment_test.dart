@@ -684,11 +684,14 @@ void main() {
           expect(combined, isNot(contains('provider body')));
           expect(combined, isNot(contains('StateError')));
 
-          // Bounded allowlisted diagnostics with correlation are still emitted.
+          // Bounded allowlisted diagnostics and presence metadata are emitted,
+          // without interpolating unconstrained transport identifiers.
           expect(logged, isNotEmpty);
           expect(combined, contains('unexpected_error'));
-          expect(combined, contains('session-log-fixture'));
-          expect(combined, contains('req-log-fixture'));
+          expect(combined, contains('has_session_id=true'));
+          expect(combined, contains('has_request_id=true'));
+          expect(combined, isNot(contains('session-log-fixture')));
+          expect(combined, isNot(contains('req-log-fixture')));
 
           // Containment: the bridge survives and keeps dispatching commands.
           final envelopes = <Map<String, dynamic>>[];
@@ -704,6 +707,79 @@ void main() {
             (envelope) async => envelopes.add(envelope),
           );
           expect(envelopes, hasLength(1));
+        },
+      );
+
+      test(
+        'sessionCompact containment protects against adversarial identifier injection and length expansion while keeping response correlation intact',
+        () async {
+          const adversarialSessionId = 'sk-injection-session-token-secret-999';
+          final adversarialRequestId =
+              'req-injection-${'X' * 4000}-bank-transfer-details';
+          getIt.registerSingleton<SessionRunOrchestrator>(
+            _StubCompactOrchestrator(),
+          );
+
+          final logged = <LogRecord>[];
+          final bridgeLogger = Logger('SanadProtocolBridge');
+          final subscription = bridgeLogger.onRecord.listen(logged.add);
+          addTearDown(subscription.cancel);
+
+          final bridge = SanadProtocolBridge();
+
+          // Trigger bridge containment via throwing emitEnvelope.
+          await bridge.handleProtocolEvent(
+            CanonicalEvent(
+              type: CanonicalEventTypes.sessionCompact,
+              sessionId: adversarialSessionId,
+              payload: {
+                'session_id': adversarialSessionId,
+                'request_id': adversarialRequestId,
+              },
+            ),
+            (envelope) async {
+              throw StateError('transport error during envelope emit');
+            },
+          );
+          await pumpEventQueue();
+
+          expect(logged, isNotEmpty);
+          final record = logged.single;
+          // Unconstrained transport identifiers must NEVER be interpolated into logs.
+          expect(record.message, isNot(contains('sk-injection')));
+          expect(record.message, isNot(contains('secret-999')));
+          expect(record.message, isNot(contains('bank-transfer')));
+          expect(record.message, isNot(contains('XXXX')));
+          // Length must remain strictly bounded regardless of input identifier length.
+          expect(record.message.length, lessThan(200));
+          // Contains bounded metadata plus allowlisted stage and cause only.
+          expect(record.message, contains('stage=provider'));
+          expect(record.message, contains('cause=unexpected_error'));
+          expect(record.message, contains('has_session_id=true'));
+          expect(record.message, contains('has_request_id=true'));
+
+          // Response correlation: when envelope emission does not throw, the
+          // response envelope correlates with the caller's adversarial identifiers intact.
+          final envelopes = <Map<String, dynamic>>[];
+          await bridge.handleProtocolEvent(
+            CanonicalEvent(
+              type: CanonicalEventTypes.sessionCompact,
+              sessionId: adversarialSessionId,
+              payload: {
+                'session_id': adversarialSessionId,
+                'request_id': adversarialRequestId,
+              },
+            ),
+            (envelope) async => envelopes.add(envelope),
+          );
+
+          expect(envelopes, hasLength(1));
+          final payload =
+              (envelopes.first['payload'] ??
+                      envelopes.first['event']?['payload'])
+                  as Map;
+          expect(payload['session_id'], adversarialSessionId);
+          expect(payload['request_id'], adversarialRequestId);
         },
       );
     });

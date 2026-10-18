@@ -1249,14 +1249,14 @@ class SanadProtocolBridge {
         } catch (error) {
           // Last-resort containment for the compaction command. Internal logs
           // are not exempt from the no-sensitive-payload rule: only allowlisted
-          // diagnostics and correlation identifiers may be logged, never raw
-          // exception values, stack traces, or payload content.
+          // diagnostics and bounded metadata may be logged, never raw
+          // exception values, stack traces, unconstrained transport identifiers, or payload content.
           final diagnostics = CompactionDiagnostics.classify(error);
           _logger.warning(
             'Contained sessionCompact failure '
-            '(session_id=${event.sessionId ?? 'unknown'}, '
-            'request_id=${event.payload['request_id'] ?? 'unknown'}, '
-            'stage=${diagnostics.stage}, cause=${diagnostics.cause})',
+            '(stage=${diagnostics.stage}, cause=${diagnostics.cause}, '
+            'has_session_id=${event.sessionId != null && event.sessionId!.isNotEmpty}, '
+            'has_request_id=${event.payload['request_id'] != null && event.payload['request_id'].toString().isNotEmpty})',
           );
         }
         return;

@@ -264,6 +264,27 @@ Terminal result visible to orchestrator and protocol mappers.
 - Model projection injects summary content through the projection builder into the ephemeral provider payload only.
 - Timeline shows compaction **events**, not summary text (Plan 53 §4.7).
 
+### 4.8 Target Ratio and Tail Budgeting Semantics
+
+Compaction policy declares two primary thresholds:
+- `threshold`: Context utilization ratio (default `0.90`) at which prospective request token estimation triggers automatic compaction.
+- `targetRatio`: Utilization ratio (default `0.10`) used to derive `targetRequestTokens = (effectiveInputWindow * targetRatio).round()`.
+
+#### Exact Semantics in Engine Selection
+1. **Retained-Tail Budget, Not Full-Request Cap:**
+   `ContextCompactionEngine.prepareSelection` uses `targetRequestTokens` specifically as the token budget for the **retained tail** (`tailTokenBudget`). It selects the most recent conversational turns that fit within this budget so the active conversation preserves recent context verbatim. The effective budget is capped at `targetRequestTokens` and can be smaller: a progress guard additionally caps it at 50% of the current history tokens (`progressCap`), whichever is lower.
+2. **Additive Non-Tail Overhead:**
+   The full prospective and confirmed request size after compaction comprises:
+   - System prompt and developer instructions
+   - Runtime context and memory injections
+   - Available tool schemas
+   - The generated compaction summary
+   - The retained tail messages
+3. **Full-Request Constraint Boundary:**
+   `buildCandidate` verifies the post-compaction request projection against the model's `effectiveInputBudget` (context window minus output token reservation), ensuring it safely fits within provider limits. It does *not* force the sum of tools, system prompt, summary, and tail into `targetRatio`. The retained tail itself is re-checked against `targetRequestTokens`: if either the full projection exceeds `effectiveInputBudget` or the tail exceeds the target, projection-only pruning runs once, and a candidate that still exceeds either bound fails with `projectionStillOverBudget` rather than activating an over-budget boundary.
+4. **Observed Confirmed Ratios:**
+   When `targetRatio = 0.10` and `threshold = 0.90`, an actual post-compaction request token utilization of ~18–20% (e.g. ~18.8% confirmed usage) is normal and mathematically expected behavior reflecting ~10% retained tail plus additive system prompt, tool schemas, and summary overhead.
+
 ## 5. Provider Wire Stripping (Gate A0)
 
 The following must never appear in provider request bodies or adapter-visible message lists:
