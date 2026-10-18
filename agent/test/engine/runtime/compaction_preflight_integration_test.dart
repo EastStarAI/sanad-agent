@@ -1,15 +1,23 @@
 import 'dart:io';
 
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
+import 'package:sanad_agent/engine/adapters/provider_profile.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
@@ -81,18 +89,19 @@ class _FakeRuntimeService extends AgentRuntimeService {
   _FakeRuntimeService(super.config, super.repo);
 
   LLMAdapter? turnAdapter;
+  RouteSignature signature = const RouteSignature(
+    providerInstanceId: 'provider-1',
+    templateId: 'openai',
+    protocol: 'openai_compatible',
+    normalizedBaseUrl: 'https://api.example.com/v1',
+    modelId: 'gpt-4o',
+    configRevision: 1,
+    credentialRevision: 1,
+  );
 
   @override
   RouteSignature resolveSignature({String? providerId, String? modelId}) {
-    return const RouteSignature(
-      providerInstanceId: 'provider-1',
-      templateId: 'openai',
-      protocol: 'openai_compatible',
-      normalizedBaseUrl: 'https://api.example.com/v1',
-      modelId: 'gpt-4o',
-      configRevision: 1,
-      credentialRevision: 1,
-    );
+    return signature;
   }
 
   @override
@@ -109,6 +118,97 @@ class _FakeRuntimeService extends AgentRuntimeService {
         requestId: requestId,
         runId: runId,
       );
+}
+
+/// Minimal adapter without wire measurement: it deliberately implements only
+/// [LLMAdapter] to stand in for routes whose adapter exposes no measurement
+/// interface. Production `BaseOpenAIAdapter` does implement
+/// `WireInputUsageMeasurer`/`WireInputTokenEstimator` since G11 R4, so these
+/// fixtures exist to prove the no-measurer fail-closed path, not production
+/// shape.
+class _GenericOpenAiCompatibleAdapter implements LLMAdapter {
+  _GenericOpenAiCompatibleAdapter({
+    this.contextLimit = 358_000,
+    this.responses = const [],
+  });
+
+  final int contextLimit;
+  final List<AgentResponse> responses;
+  int _calls = 0;
+
+  @override
+  Future<int> getContextLimit([String? modelOverride]) async => contextLimit;
+
+  @override
+  Future<List<ModelOption>> getAvailableModels() async => const [];
+
+  @override
+  Future<AgentResponse> generateResponse(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    if (_calls < responses.length) return responses[_calls++];
+    return AgentResponse(
+      message: Message(role: MessageRole.assistant, content: 'ok'),
+    );
+  }
+
+  @override
+  Stream<AgentResponse> generateStream(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async* {
+    yield await generateResponse(
+      history,
+      tools: tools,
+      modelOverride: modelOverride,
+      options: options,
+    );
+  }
+}
+
+/// Capability resolver that returns a fixed wire-visible thinking directive,
+/// so a request-option change can be exercised against the wire proof without
+/// a live provider route.
+class _DirectiveDriftResolver extends RouteCapabilityResolver {
+  _DirectiveDriftResolver();
+
+  NativeThinkingDirective? directive;
+
+  @override
+  RouteCapabilityProfile resolveSync({
+    required String providerInstanceId,
+    required String modelId,
+    String? thinkingMode,
+    String? baseUrl,
+  }) => RouteCapabilityProfile(
+    providerInstanceId: providerInstanceId,
+    modelId: modelId,
+    imageSupport: RouteImageSupport.unknown,
+    thinkingSelectionId: 'drift-selection',
+    thinkingDirective: directive,
+    evidenceSource: 'test',
+  );
+}
+
+/// Minimal schema-bearing tool used to prove that a tool-schema change after
+/// a restore invalidates the restored provider-usage baseline.
+class _SchemaDriftProbeTool extends BaseTool {
+  @override
+  ToolSchema get schema => ToolSchema(
+    name: 'schema_drift_probe',
+    description: 'schema drift probe',
+    parameters: const {'type': 'object', 'properties': <String, dynamic>{}},
+  );
+
+  @override
+  Future<String> execute(Map<String, dynamic> args, {ToolContext? context}) async {
+    return 'probe';
+  }
 }
 
 class _FailingSummarizer implements CompactionSummarizer {
@@ -473,6 +573,10 @@ void main() {
           ),
       ]);
       final usageRegistry = ToolsRegistry();
+      // The route's adapter exposes no wire measurement, so the in-memory
+      // provider-confirmed baseline is consumed through the legacy comparison.
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+          _GenericOpenAiCompatibleAdapter(contextLimit: 128_000);
       final usageRunner = AgentRunner(
         _PreflightAdapter(contextLimit: 10_000),
         usageRegistry,
@@ -544,8 +648,17 @@ void main() {
         inputItemFingerprints: ['measured-prefix', 'small-tool-suffix'],
       );
       final usageRegistry = ToolsRegistry();
+      // The turn adapter must be the measurer that owns [nextWire]; otherwise
+      // the preflight remeasures different wire material than the baseline
+      // extension this fixture asserts.
+      final preflightAdapter = _PreflightAdapter(
+        contextLimit: 400_000,
+        wireMeasurement: nextWire,
+      );
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+          preflightAdapter;
       final usageRunner = AgentRunner(
-        _PreflightAdapter(contextLimit: 400_000, wireMeasurement: nextWire),
+        preflightAdapter,
         usageRegistry,
         sessionManager,
         existingSessionId: 'session-provider-priority',
@@ -602,6 +715,24 @@ void main() {
           lastUserMessageAt: now,
         ),
       );
+      final prefixMeasurement = WireInputMeasurement(
+        estimatedTokens: 98_500,
+        stableMaterialFingerprint: 'stable-wire-material',
+        inputItemFingerprints: ['measured-prefix'],
+      );
+      final signature = RouteSignature(
+        providerInstanceId: 'provider-1',
+        templateId: 'openai',
+        protocol: 'openai_compatible',
+        normalizedBaseUrl: 'https://api.example.com/v1',
+        modelId: 'gpt-4o',
+        configRevision: 1,
+        credentialRevision: 1,
+      );
+      final wireProof = RequestPressureEvaluator.wireProof(
+        wireMeasurement: prefixMeasurement,
+        routeSignature: signature,
+      );
       sessions.replaceMessages('session-restored-provider-priority', [
         Message(role: MessageRole.user, content: 'measured prefix'),
         Message(
@@ -611,6 +742,12 @@ void main() {
             'model': 'gpt-4o',
             'provider': 'openai',
             'usage': {'input_tokens': 83_200},
+            'context_usage': {
+              'input_tokens': 83_200,
+              'provider_instance_id': 'provider-1',
+              'model_id': 'gpt-4o',
+              'wire_proof': wireProof,
+            },
           },
         ),
         Message(role: MessageRole.user, content: 'small resumed suffix'),
@@ -714,6 +851,1481 @@ void main() {
     expect(
       usageRunner.debugLastPreflightPressure?.measurementKind,
       CompactionMeasurementKind.estimated,
+    );
+  });
+
+  group('Generic OpenAI-compatible route (G11 R2 receipts)', () {
+    const routeProvider = 'opencode-go';
+    const routeModel = 'deepseek-v4.1-flash';
+
+    /// Canonical aggregate from the reviewer-session receipt:
+    /// 219 assistant rows / 9698 visible characters / 492742 reasoning
+    /// characters, 234 tool rows / 673218 characters, 3 user rows / 3125
+    /// characters. The reasoning metadata must never be priced, which is why
+    /// the character estimate stays far below the confirmed `371839` input.
+    List<Message> receiptHistory({Map<String, dynamic>? confirmedMetadata}) {
+      final messages = <Message>[
+        Message(role: MessageRole.user, content: 'goal ${'u' * 995}'),
+        Message(role: MessageRole.user, content: 'v' * 1000),
+        Message(role: MessageRole.user, content: 'w' * 1125),
+      ];
+      for (var index = 0; index < 234; index++) {
+        final callId = 'call_step_$index';
+        messages.add(
+          Message(
+            role: MessageRole.assistant,
+            content: 'assistant step $index ${'a' * 20}',
+            toolCalls: [
+              ToolCall(
+                id: callId,
+                name: 'read_file',
+                arguments: const {'path': 'fixture.txt'},
+              ),
+            ],
+            metadata: {'reasoning': 'z' * 2095},
+          ),
+        );
+        messages.add(
+          Message(
+            role: MessageRole.tool,
+            content: 'r' * 2877,
+            toolCallId: callId,
+          ),
+        );
+      }
+      messages.add(
+        Message(
+          role: MessageRole.assistant,
+          content: 'latest assistant step',
+          metadata: confirmedMetadata,
+        ),
+      );
+      return messages;
+    }
+
+    Map<String, dynamic> confirmedMetadata({
+      required int contextUsageInput,
+      int? genericUsageInput,
+    }) => {
+      'provider': routeProvider,
+      'model': routeModel,
+      if (genericUsageInput != null) 'usage': {'input_tokens': genericUsageInput},
+      'context_usage': {
+        'input_tokens': contextUsageInput,
+        'output_tokens': 282,
+        'total_tokens': contextUsageInput + 282,
+        'context_window_tokens': 358000,
+        'provider_instance_id': routeProvider,
+        'model_id': routeModel,
+      },
+    };
+
+    AgentRunner openAiRunner({
+      required String sessionId,
+      http.Client? client,
+      int contextLimit = 358_000,
+      String model = routeModel,
+      String providerId = routeProvider,
+    }) {
+      final adapter = BaseOpenAIAdapter(
+        getIt<Config>(),
+        const ProviderProfile(
+          name: 'openai',
+          displayName: 'OpenAI',
+          defaultBaseUrl: 'https://opencode.invalid/v1',
+        ),
+        client: client ??
+            MockClient(
+              (_) async => http.Response(
+                'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n',
+                200,
+                headers: {'content-type': 'text/event-stream'},
+              ),
+            ),
+        baseUrlOverride: 'https://opencode.invalid/v1',
+        apiKeyOverride: 'test-key',
+        defaultModelOverride: model,
+        providerInstanceId: providerId,
+        modelContextLimitLookup: (_) => contextLimit,
+      );
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService)
+        ..turnAdapter = adapter
+        ..signature = RouteSignature(
+          providerInstanceId: providerId,
+          templateId: 'openai',
+          protocol: 'openai_compatible',
+          normalizedBaseUrl: 'https://opencode.invalid/v1',
+          modelId: model,
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: providerId,
+          model: model,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      return AgentRunner(
+        adapter,
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: sessionId,
+      );
+    }
+
+    AgentRunner genericRunner({
+      required String sessionId,
+      required List<AgentResponse> responses,
+      String providerId = routeProvider,
+      String model = routeModel,
+    }) {
+      final adapter = _GenericOpenAiCompatibleAdapter(
+        contextLimit: 358_000,
+        responses: responses,
+      );
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService)
+        ..turnAdapter = adapter
+        ..signature = RouteSignature(
+          providerInstanceId: providerId,
+          templateId: 'openai',
+          protocol: 'openai_compatible',
+          normalizedBaseUrl: 'https://opencode.invalid/v1',
+          modelId: model,
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: providerId,
+          model: model,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      return AgentRunner(
+        adapter,
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: sessionId,
+      );
+    }
+
+    /// Binds the newest assistant row to a versioned wire proof in
+    /// `context_usage`, mirroring what the live producer persists.
+    List<Message> bindNewestAssistantRowWithProof({
+      required List<Message> history,
+      required String wireProof,
+    }) {
+      final bound = history.toList();
+      final index = bound.lastIndexWhere(
+        (message) => message.role == MessageRole.assistant,
+      );
+      final message = bound[index];
+      final metadata = Map<String, dynamic>.from(message.metadata ?? const {});
+      final contextUsage = Map<String, dynamic>.from(
+        metadata['context_usage'] as Map? ?? const {},
+      );
+      contextUsage['wire_proof'] = wireProof;
+      metadata['context_usage'] = contextUsage;
+      bound[index] = message.copyWith(metadata: metadata);
+      return bound;
+    }
+
+    /// Prepares history and computes the expected wire proof for the historical
+    /// prefix preceding the newest assistant row.
+    Future<String> wireProofForAssistantRow(
+      AgentRunner runner, {
+      String? runtimeSystemPrompt,
+    }) async {
+      final material = await runner.debugPrepareProviderHistory(
+        runtimeSystemPrompt: runtimeSystemPrompt,
+      );
+      final assistantIndex = material.lastIndexWhere(
+        (m) => m.role == MessageRole.assistant,
+      );
+      final measured = assistantIndex >= 0
+          ? material.sublist(0, assistantIndex)
+          : material;
+      final measurer = runner.adapter as WireInputUsageMeasurer;
+      final routing = (getIt<AgentRuntimeService>() as _FakeRuntimeService)
+          .resolveSignature(providerId: routeProvider, modelId: routeModel);
+      final measurement = await measurer.measureInput(
+        measured,
+        tools: runner.registry.allTools.map((t) => t.schema).toList(),
+        modelOverride: routeModel,
+        options: runner.debugRequestOptionsForTurn(routeProvider),
+      );
+      return RequestPressureEvaluator.wireProof(
+        wireMeasurement: measurement!,
+        routeSignature: routing,
+      );
+    }
+
+    test('BaseOpenAIAdapter implements WireInputUsageMeasurer and WireInputTokenEstimator', () async {
+      final adapter = BaseOpenAIAdapter(
+        getIt<Config>(),
+        const ProviderProfile(
+          name: 'openai',
+          displayName: 'OpenAI',
+          defaultBaseUrl: 'https://opencode.invalid/v1',
+        ),
+        baseUrlOverride: 'https://opencode.invalid/v1',
+        apiKeyOverride: 'test-key',
+        defaultModelOverride: routeModel,
+        providerInstanceId: routeProvider,
+        modelContextLimitLookup: (_) => 358_000,
+      );
+
+      expect(adapter, isA<WireInputUsageMeasurer>());
+      expect(adapter, isA<WireInputTokenEstimator>());
+
+      final messages = [
+        Message(role: MessageRole.system, content: 'You are an agent'),
+        Message(role: MessageRole.user, content: 'List files'),
+      ];
+      final tools = [
+        ToolSchema(
+          name: 'list_files',
+          description: 'lists files',
+          parameters: const {'type': 'object'},
+        ),
+      ];
+
+      final measurement = await adapter.measureInput(
+        messages,
+        tools: tools,
+        modelOverride: routeModel,
+      );
+      expect(measurement, isNotNull);
+      expect(measurement!.estimatedTokens, greaterThan(0));
+      expect(measurement.inputItemFingerprints.length, messages.length);
+      expect(measurement.stableMaterialFingerprint, isNotEmpty);
+
+      final tokens = await adapter.estimateInputTokens(
+        messages,
+        tools: tools,
+        modelOverride: routeModel,
+      );
+      expect(tokens, measurement.estimatedTokens);
+
+      // Verify opaque state excluded from wire estimation
+      final opaquePayload = {
+        'model': routeModel,
+        'messages': [
+          {'role': 'user', 'content': 'hello'},
+        ],
+        'encrypted_content': 'x' * 100000,
+      };
+      final estimatedWithOpaque = CompactionTokenEstimator.estimateWirePayload(
+        opaquePayload,
+        opaqueKeys: const {'encrypted_content'},
+      );
+      final estimatedWithoutOpaque = CompactionTokenEstimator.estimateWirePayload(
+        {
+          'model': routeModel,
+          'messages': [
+            {'role': 'user', 'content': 'hello'},
+          ],
+        },
+      );
+      expect(estimatedWithOpaque, estimatedWithoutOpaque);
+    });
+
+    test('wire proof binds complete ordered wire items, stable material and route signature', () {
+      final measurementA = WireInputMeasurement(
+        estimatedTokens: 100,
+        stableMaterialFingerprint: 'stable-mat-1',
+        inputItemFingerprints: ['item-1', 'item-2'],
+      );
+      final measurementB = WireInputMeasurement(
+        estimatedTokens: 100,
+        stableMaterialFingerprint: 'stable-mat-1',
+        inputItemFingerprints: ['item-2', 'item-1'], // order changed
+      );
+      final measurementC = WireInputMeasurement(
+        estimatedTokens: 100,
+        stableMaterialFingerprint: 'stable-mat-2', // material changed
+        inputItemFingerprints: ['item-1', 'item-2'],
+      );
+      final routeA = RouteSignature(
+        providerInstanceId: 'provider-1',
+        templateId: 'openai',
+        protocol: 'openai_compatible',
+        normalizedBaseUrl: 'https://api.example.com/v1',
+        modelId: 'gpt-4o',
+        configRevision: 1,
+        credentialRevision: 1,
+      );
+      final routeB = RouteSignature(
+        providerInstanceId: 'provider-1',
+        templateId: 'openai',
+        protocol: 'openai_compatible',
+        normalizedBaseUrl: 'https://api.example.com/v1',
+        modelId: 'gpt-4o-mini', // model changed
+        configRevision: 1,
+        credentialRevision: 1,
+      );
+
+      final proofA = RequestPressureEvaluator.wireProof(
+        wireMeasurement: measurementA,
+        routeSignature: routeA,
+      );
+      expect(proofA, startsWith('v1:'));
+      expect(RequestPressureEvaluator.isValidWireProof(proofA), isTrue);
+      expect(RequestPressureEvaluator.isValidWireProof('invalid'), isFalse);
+      expect(RequestPressureEvaluator.isValidWireProof('v2:${'a' * 64}'), isFalse);
+      expect(RequestPressureEvaluator.isValidWireProof('v1:short'), isFalse);
+
+      final proofB = RequestPressureEvaluator.wireProof(
+        wireMeasurement: measurementB,
+        routeSignature: routeA,
+      );
+      expect(proofB, isNot(proofA), reason: 'item order affects wire proof');
+
+      final proofC = RequestPressureEvaluator.wireProof(
+        wireMeasurement: measurementC,
+        routeSignature: routeA,
+      );
+      expect(proofC, isNot(proofA), reason: 'stable material affects wire proof');
+
+      final proofRouteB = RequestPressureEvaluator.wireProof(
+        wireMeasurement: measurementA,
+        routeSignature: routeB,
+      );
+      expect(proofRouteB, isNot(proofA), reason: 'route changes affect wire proof');
+    });
+
+    test(
+      'a legacy row without a persisted wire_proof never becomes a floor',
+      () async {
+        const sessionId = 'session-generic-legacy-unbound';
+        sessions.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            providerId: routeProvider,
+            model: routeModel,
+            thinkingMode: 'max',
+            createdAt: DateTime.utc(2026, 10, 18),
+            updatedAt: DateTime.utc(2026, 10, 18),
+            lastUserMessageAt: DateTime.utc(2026, 10, 18),
+          ),
+        );
+        sessions.replaceMessages(
+          sessionId,
+          [
+            ...receiptHistory(
+              confirmedMetadata: confirmedMetadata(
+                contextUsageInput: 371_839,
+                genericUsageInput: 92_337,
+              ),
+            ),
+            Message(role: MessageRole.tool, content: 'trailing tool output'),
+            Message(role: MessageRole.user, content: 'continue the review'),
+          ],
+        );
+        final runner = openAiRunner(sessionId: sessionId);
+
+        await runner.debugPrepareProviderHistory();
+
+        expect(
+          runner.debugConfirmedInputUsageBaseline,
+          isNull,
+          reason:
+              'usage recorded without a wire_proof is unproven and '
+              'must never be reused as a baseline',
+        );
+        expect(
+          runner.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+        expect(
+          runner.debugLastPreflightPressure?.confirmedInputTokens,
+          isNull,
+        );
+        expect(
+          runner.debugLastPreflightPressure?.exceedsThreshold,
+          isFalse,
+          reason:
+              'the unproven legacy row must not trigger automatic compaction',
+        );
+      },
+    );
+
+    test(
+      'an adapter lacking WireInputUsageMeasurer fails closed even if wire_proof is present',
+      () async {
+        const sessionId = 'session-generic-no-measurer';
+        sessions.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            providerId: routeProvider,
+            model: routeModel,
+            thinkingMode: 'max',
+            createdAt: DateTime.utc(2026, 10, 18),
+            updatedAt: DateTime.utc(2026, 10, 18),
+            lastUserMessageAt: DateTime.utc(2026, 10, 18),
+          ),
+        );
+        sessions.replaceMessages(sessionId, [
+          ...receiptHistory(
+            confirmedMetadata: {
+              'provider': routeProvider,
+              'model': routeModel,
+              'context_usage': {
+                'input_tokens': 371_839,
+                'provider_instance_id': routeProvider,
+                'model_id': routeModel,
+                'wire_proof': 'v1:${'a' * 64}',
+              },
+            },
+          ),
+          Message(role: MessageRole.tool, content: 'trailing tool output'),
+          Message(role: MessageRole.user, content: 'continue the review'),
+        ]);
+        final runner = genericRunner(
+          sessionId: sessionId,
+          responses: const [],
+        );
+
+        await runner.debugPrepareProviderHistory();
+
+        expect(
+          runner.debugConfirmedInputUsageBaseline,
+          isNull,
+          reason: 'adapters without WireInputUsageMeasurer must fail closed',
+        );
+        expect(
+          runner.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+        expect(
+          runner.debugLastPreflightPressure?.confirmedInputTokens,
+          isNull,
+        );
+      },
+    );
+
+    test(
+      'producer, persistence and restore preserve a bound confirmed baseline (cached input remains input)',
+      () async {
+        const sessionId = 'session-generic-producer-chain';
+        final summarizer = _CapturingProviderSummarizer();
+        getIt.registerSingleton<CompactionCoordinator>(
+          CompactionCoordinator(
+            engine: ContextCompactionEngine(summarizer: summarizer),
+            boundaries: boundaries,
+            activation: CompactionActivationService(
+              boundaries: boundaries,
+              projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+            ),
+            projectionBuilder: getIt<ModelProjectionBuilder>(),
+          ),
+        );
+        final client = MockClient((request) async {
+          final sseData = [
+            'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"acknowledged"},"finish_reason":null}]}',
+            '',
+            'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":371839,"completion_tokens":20,"total_tokens":371859,"prompt_tokens_details":{"cached_tokens":370816}}}',
+            '',
+            'data: [DONE]',
+            '',
+          ].join('\n\n');
+          return http.Response(
+            sseData,
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          );
+        });
+        final producer = openAiRunner(
+          sessionId: sessionId,
+          client: client,
+        );
+
+        await producer
+            .streamMessage(
+              'continue the review',
+              providerId: routeProvider,
+              model: routeModel,
+            )
+            .toList();
+
+        final snapshot = await producer.getContextUsageSnapshot();
+        expect(
+          snapshot,
+          isNotNull,
+          reason: 'the producer must project a context-usage snapshot',
+        );
+        expect(snapshot!['input_tokens'], 371_839);
+        expect(
+          snapshot['cached_tokens'],
+          370_816,
+          reason: 'the snapshot must carry the cached share, not a discount',
+        );
+        expect(
+          snapshot['wire_proof'],
+          isNotNull,
+          reason:
+              'the actual producer must bind its confirmed usage to the '
+              'request wire material it measured',
+        );
+        expect(
+          RequestPressureEvaluator.isValidWireProof(
+            snapshot['wire_proof']?.toString(),
+          ),
+          isTrue,
+        );
+
+        // Commit snapshot to the assistant row as SessionTurnExecutor does
+        producer.attachMetadataToLastAssistantMessage({
+          'provider': routeProvider,
+          'model': routeModel,
+          'context_usage': snapshot,
+        });
+
+        final restarted = openAiRunner(
+          sessionId: sessionId,
+          client: client,
+        );
+
+        await restarted.debugPrepareProviderHistory();
+
+        expect(
+          restarted.debugConfirmedInputUsageBaseline?.inputTokens,
+          371_839,
+          reason:
+              'the bound persisted usage must restore as a confirmed baseline',
+        );
+        expect(
+          restarted.debugLastPreflightPressure?.confirmedInputTokens,
+          371_839,
+        );
+        expect(
+          restarted.debugLastPreflightPressure?.estimatedRequestTokens,
+          greaterThanOrEqualTo(371_839),
+          reason:
+              'the full confirmed input decides admission, including the '
+              '370816 cached tokens',
+        );
+        expect(
+          restarted.debugLastPreflightPressure?.exceedsThreshold,
+          isTrue,
+        );
+        expect(
+          summarizer.request,
+          isNotNull,
+          reason: boundaries
+              .listLifecycleForSession(sessionId)
+              .map((operation) => '${operation.status}:${operation.failureReason}')
+              .join(', '),
+        );
+        expect(
+          boundaries.listLifecycleForSession(sessionId),
+          isNotEmpty,
+          reason: 'a durable automatic compaction attempt must be recorded',
+        );
+        expect(
+          sessions.getSessionRecord(sessionId)?.thinkingMode,
+          'max',
+          reason: 'automatic compaction must not change the stored choice',
+        );
+      },
+    );
+
+    test('warm live confirmed input is used for generic-route admission', () async {
+      const sessionId = 'session-generic-warm';
+      final client = MockClient((request) async {
+        final sseData = [
+          'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"acknowledged"},"finish_reason":null}]}',
+          '',
+          'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":371839,"completion_tokens":20,"total_tokens":371859,"prompt_tokens_details":{"cached_tokens":370816}}}',
+          '',
+          'data: [DONE]',
+          '',
+        ].join('\n\n');
+        return http.Response(
+          sseData,
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        );
+      });
+      final runner = openAiRunner(
+        sessionId: sessionId,
+        client: client,
+      );
+
+      await runner
+          .streamMessage(
+            'continue the review',
+            providerId: routeProvider,
+            model: routeModel,
+          )
+          .toList();
+
+      expect(
+        runner.debugConfirmedInputUsageBaseline?.inputTokens,
+        371_839,
+        reason: 'the live provider-confirmed input must become the baseline',
+      );
+      await runner.debugPrepareProviderHistory();
+      expect(
+        runner.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.mixed,
+      );
+      expect(
+        runner.debugLastPreflightPressure?.estimatedRequestTokens,
+        greaterThanOrEqualTo(371_839),
+      );
+      expect(
+        runner.debugLastPreflightPressure?.exceedsThreshold,
+        isTrue,
+      );
+    });
+
+
+    test(
+      'an unbound legacy receipt is not restored after an active boundary',
+      () async {
+        const sessionId = 'session-generic-pre-boundary';
+        getIt.registerSingleton<CompactionCoordinator>(
+          CompactionCoordinator(
+            engine: ContextCompactionEngine(
+              summarizer: StructuredCompactionSummarizer(),
+            ),
+            boundaries: boundaries,
+            activation: CompactionActivationService(
+              boundaries: boundaries,
+              projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+            ),
+            projectionBuilder: getIt<ModelProjectionBuilder>(),
+          ),
+        );
+        genericRunner(sessionId: sessionId, responses: const []);
+        sessions.replaceMessages(sessionId, [
+          ...receiptHistory(),
+          Message(
+            role: MessageRole.user,
+            content: 'الطلب الجاري الواجب تنفيذه',
+          ),
+        ]);
+        final revision = getIt<SessionHistoryRevisionRepository>().read(
+          sessionId,
+        )!;
+        final timeline = getIt<ModelProjectionBuilder>().loadCanonicalTimeline(
+          sessionId,
+        );
+        final outcome = await getIt<CompactionCoordinator>().runCompaction(
+          request: CompactionEngineRequest(
+            compactionId: 'cmp-pre-boundary',
+            sessionId: sessionId,
+            trigger: CompactionTrigger.auto,
+            sourceRevision: revision.toCompactionRevision(),
+            routeSignature: getIt<AgentRuntimeService>().resolveSignature(
+              providerId: routeProvider,
+              modelId: routeModel,
+            ),
+            contextWindowTokens: 358_000,
+            timeline: [
+              for (final entry in timeline.messages)
+                IndexedConversationMessage(
+                  rowId: entry.rowId,
+                  message: entry.message,
+                ),
+            ],
+            systemPrompt: 'system',
+            runtimeContext: '',
+            toolSchemas: const [],
+            targetRequestTokens: 35_288,
+          ),
+          force: true,
+        );
+        expect(
+          outcome?.status,
+          CompactionStatus.completed,
+          reason: boundaries
+              .listLifecycleForSession(sessionId)
+              .map(
+                (operation) =>
+                    '${operation.status}:${operation.failureReason}:${operation.failureStage}',
+              )
+              .join(', '),
+        );
+        expect(boundaries.findLatestCompletedForSession(sessionId), isNotNull);
+        expect(
+          getIt<ModelProjectionBuilder>().buildForSession(sessionId).activeBoundary,
+          isNotNull,
+          reason: 'a completed compaction must activate the projection boundary',
+        );
+
+        // A provider-confirmed row recorded before the boundary was activated
+        // measures the pre-compaction request base, so it must not become the
+        // prospective baseline for the projected request. Under the wire-proof
+        // gate that stale material is discarded by proof mismatch; this fixture
+        // exercises the no-proof/no-measurer half of the fail-closed rule.
+        sessions.replaceMessages(sessionId, [
+          ...sessions.getMessages(sessionId),
+          ...receiptHistory(
+            confirmedMetadata: {
+              'provider': routeProvider,
+              'model': routeModel,
+              'context_usage': {
+                'input_tokens': 371_839,
+                'context_window_tokens': 358_000,
+                'provider_instance_id': routeProvider,
+                'model_id': routeModel,
+                'observed_at': DateTime.utc(2020).toIso8601String(),
+              },
+            },
+          ),
+          Message(role: MessageRole.tool, content: 'trailing tool output'),
+          Message(role: MessageRole.user, content: 'continue the review'),
+        ]);
+        final runner = genericRunner(sessionId: sessionId, responses: const []);
+
+        await runner.debugPrepareProviderHistory();
+
+        expect(
+          getIt<ModelProjectionBuilder>()
+              .buildForSession(sessionId)
+              .activeBoundary,
+          isNotNull,
+          reason: 'the fixture must keep an active compaction boundary',
+        );
+        expect(runner.debugConfirmedInputUsageBaseline, isNull);
+        expect(
+          runner.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+      },
+    );
+
+    test(
+      'a foreign-route confirmed input is never carried onto the generic route',
+      () async {
+        const sessionId = 'session-generic-foreign';
+        sessions.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            providerId: routeProvider,
+            model: routeModel,
+            thinkingMode: 'max',
+            createdAt: DateTime.utc(2026, 10, 18),
+            updatedAt: DateTime.utc(2026, 10, 18),
+            lastUserMessageAt: DateTime.utc(2026, 10, 18),
+          ),
+        );
+        sessions.replaceMessages(
+          sessionId,
+          receiptHistory(
+            confirmedMetadata: {
+              'provider': 'ChatGPT',
+              'model': 'gpt-6.1-sol',
+              'usage': {'input_tokens': 207_084},
+              'context_usage': {
+                'input_tokens': 207_084,
+                'model_id': 'gpt-6.1-sol',
+                'provider_instance_id': 'openai-codex',
+              },
+            },
+          ),
+        );
+        final runner = genericRunner(sessionId: sessionId, responses: const []);
+
+        await runner.debugPrepareProviderHistory();
+
+        expect(runner.debugConfirmedInputUsageBaseline, isNull);
+        expect(
+          runner.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+      },
+    );
+
+    test(
+      'a mismatched authoritative context_usage provider is not overridden by a matching legacy provider',
+      () async {
+        const sessionId = 'session-generic-authoritative-provider';
+        sessions.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            providerId: routeProvider,
+            model: routeModel,
+            thinkingMode: 'max',
+            createdAt: DateTime.utc(2026, 10, 18),
+            updatedAt: DateTime.utc(2026, 10, 18),
+            lastUserMessageAt: DateTime.utc(2026, 10, 18),
+          ),
+        );
+        sessions.replaceMessages(sessionId, [
+          ...receiptHistory(
+            confirmedMetadata: {
+              // The mutable legacy identity matches the route, but the
+              // authoritative snapshot says a foreign provider measured this
+              // input, so the usage must not be restored.
+              'provider': routeProvider,
+              'model': routeModel,
+              'context_usage': {
+                'input_tokens': 371_839,
+                'provider_instance_id': 'openai-codex',
+                'model_id': routeModel,
+              },
+            },
+          ),
+          Message(role: MessageRole.tool, content: 'trailing tool output'),
+          Message(role: MessageRole.user, content: 'continue the review'),
+        ]);
+        final runner = genericRunner(sessionId: sessionId, responses: const []);
+
+        await runner.debugPrepareProviderHistory();
+
+        expect(
+          runner.debugConfirmedInputUsageBaseline,
+          isNull,
+          reason:
+              'a present authoritative context_usage identity must never be '
+              'overridden by a matching mutable legacy provider',
+        );
+        expect(
+          runner.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+        expect(runner.debugLastPreflightPressure?.confirmedInputTokens, isNull);
+      },
+    );
+
+    test('a matching authoritative context_usage identity wins over a mismatched legacy identity', () async {
+      const sessionId = 'session-generic-authoritative-match';
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: routeProvider,
+          model: routeModel,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      sessions.replaceMessages(sessionId, [
+        ...receiptHistory(
+          confirmedMetadata: {
+            // The mutable legacy identity is foreign, but the authoritative
+            // snapshot measured this same route, so the usage is restored.
+            'provider': 'ChatGPT',
+            'model': 'gpt-6.1-sol',
+            'context_usage': {
+              'input_tokens': 40_000,
+              'provider_instance_id': routeProvider,
+              'model_id': routeModel,
+            },
+          },
+        ),
+        Message(role: MessageRole.tool, content: 'trailing tool output'),
+        Message(role: MessageRole.user, content: 'continue the review'),
+      ]);
+      final runner = openAiRunner(sessionId: sessionId);
+      final proof = await wireProofForAssistantRow(runner);
+      sessions.replaceMessages(
+        sessionId,
+        bindNewestAssistantRowWithProof(
+          history: sessions.getMessages(sessionId),
+          wireProof: proof,
+        ),
+      );
+
+      await runner.debugPrepareProviderHistory();
+
+      expect(runner.debugConfirmedInputUsageBaseline?.inputTokens, 40_000);
+      expect(runner.debugLastPreflightPressure?.confirmedInputTokens, 40_000);
+    });
+
+    test('a row without any provider identity fails closed on the generic route', () async {
+      const sessionId = 'session-generic-absent-provider';
+      // No provider is set on the session, so the resolved turn routing has a
+      // null provider id and the candidate alias set must never contain it.
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          model: routeModel,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      sessions.replaceMessages(sessionId, [
+        ...receiptHistory(
+          confirmedMetadata: {
+            'model': routeModel,
+            'context_usage': {'input_tokens': 371_839, 'model_id': routeModel},
+          },
+        ),
+        Message(role: MessageRole.tool, content: 'trailing tool output'),
+        Message(role: MessageRole.user, content: 'continue the review'),
+      ]);
+      final adapter = _GenericOpenAiCompatibleAdapter(contextLimit: 358_000);
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService)
+        ..turnAdapter = adapter
+        ..signature = const RouteSignature(
+          providerInstanceId: routeProvider,
+          templateId: 'openai',
+          protocol: 'openai_compatible',
+          normalizedBaseUrl: 'https://opencode.invalid/v1',
+          modelId: routeModel,
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+      final runner = AgentRunner(
+        adapter,
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: sessionId,
+      );
+
+      await runner.debugPrepareProviderHistory();
+
+      expect(
+        runner.debugConfirmedInputUsageBaseline,
+        isNull,
+        reason:
+            'a row without any provider identity must not match a null '
+            'candidate alias',
+      );
+      expect(
+        runner.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.estimated,
+      );
+    });
+
+    test('changed prompt and prefix material after a restore invalidates the restored baseline', () async {
+      const sessionId = 'session-generic-material-drift';
+      // 40000 keeps the fixture below the auto threshold: these assertions are
+      // about baseline validity, not about triggering compaction.
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: routeProvider,
+          model: routeModel,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      sessions.replaceMessages(sessionId, [
+        ...receiptHistory(
+          confirmedMetadata: confirmedMetadata(contextUsageInput: 40_000),
+        ),
+        Message(role: MessageRole.tool, content: 'trailing tool output'),
+        Message(role: MessageRole.user, content: 'continue the review'),
+      ]);
+      final runner = openAiRunner(sessionId: sessionId);
+      final proof = await wireProofForAssistantRow(runner);
+      sessions.replaceMessages(
+        sessionId,
+        bindNewestAssistantRowWithProof(
+          history: sessions.getMessages(sessionId),
+          wireProof: proof,
+        ),
+      );
+
+      await runner.debugPrepareProviderHistory();
+      expect(runner.debugConfirmedInputUsageBaseline?.inputTokens, 40_000);
+      expect(runner.debugLastPreflightPressure?.confirmedInputTokens, 40_000);
+
+      // The assembled system prompt is the first projected message, so a
+      // changed runtime context after the restore must invalidate the baseline.
+      await runner.debugPrepareProviderHistory(
+        runtimeSystemPrompt: 'changed workspace context',
+      );
+      expect(
+        runner.debugLastPreflightPressure?.confirmedInputTokens,
+        isNull,
+        reason: 'changed prompt material must fail closed',
+      );
+      expect(
+        runner.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.estimated,
+      );
+
+      // A changed earlier message must invalidate it as well.
+      final messages = sessions.getMessages(sessionId).toList();
+      messages[1] = messages[1].copyWith(content: 'edited prompt material');
+      sessions.replaceMessages(sessionId, messages);
+      await runner.debugPrepareProviderHistory();
+      expect(runner.debugLastPreflightPressure?.confirmedInputTokens, isNull);
+      expect(
+        runner.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.estimated,
+      );
+    });
+
+    test('metadata-only bookkeeping change on an earlier message does not invalidate pressure', () async {
+      const sessionId = 'session-generic-metadata-resilience';
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: routeProvider,
+          model: routeModel,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      sessions.replaceMessages(sessionId, [
+        ...receiptHistory(
+          confirmedMetadata: confirmedMetadata(contextUsageInput: 40_000),
+        ),
+        Message(role: MessageRole.tool, content: 'trailing tool output'),
+        Message(role: MessageRole.user, content: 'continue the review'),
+      ]);
+      final runner = openAiRunner(sessionId: sessionId);
+      final proof = await wireProofForAssistantRow(runner);
+      sessions.replaceMessages(
+        sessionId,
+        bindNewestAssistantRowWithProof(
+          history: sessions.getMessages(sessionId),
+          wireProof: proof,
+        ),
+      );
+
+      await runner.debugPrepareProviderHistory();
+      expect(runner.debugConfirmedInputUsageBaseline?.inputTokens, 40_000);
+      expect(runner.debugLastPreflightPressure?.confirmedInputTokens, 40_000);
+
+      // Mutate only client-side metadata on an earlier message:
+      final history = sessions.getMessages(sessionId).toList();
+      final origMeta = history[1].metadata ?? const {};
+      history[1] = history[1].copyWith(
+        metadata: {
+          ...origMeta,
+          'client_sync_tag': 'v2-42',
+          'pinned': true,
+        },
+      );
+      sessions.replaceMessages(sessionId, history);
+
+      await runner.debugPrepareProviderHistory();
+      expect(
+        runner.debugConfirmedInputUsageBaseline?.inputTokens,
+        40_000,
+        reason: 'metadata-only changes must not invalidate wire-confirmed pressure',
+      );
+      expect(runner.debugLastPreflightPressure?.confirmedInputTokens, 40_000);
+      expect(
+        runner.debugLastPreflightPressure?.measurementKind,
+        isNot(CompactionMeasurementKind.estimated),
+      );
+    });
+
+    test('changed tool schemas after a restore invalidate the restored baseline', () async {
+      const sessionId = 'session-generic-schema-drift';
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: routeProvider,
+          model: routeModel,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      sessions.replaceMessages(sessionId, [
+        ...receiptHistory(
+          confirmedMetadata: confirmedMetadata(contextUsageInput: 40_000),
+        ),
+        Message(role: MessageRole.tool, content: 'trailing tool output'),
+        Message(role: MessageRole.user, content: 'continue the review'),
+      ]);
+      final runner = openAiRunner(sessionId: sessionId);
+      final proof = await wireProofForAssistantRow(runner);
+      sessions.replaceMessages(
+        sessionId,
+        bindNewestAssistantRowWithProof(
+          history: sessions.getMessages(sessionId),
+          wireProof: proof,
+        ),
+      );
+
+      await runner.debugPrepareProviderHistory();
+      expect(runner.debugLastPreflightPressure?.confirmedInputTokens, 40_000);
+
+      runner.registry.registerTool(_SchemaDriftProbeTool());
+      await runner.debugPrepareProviderHistory();
+      expect(
+        runner.debugLastPreflightPressure?.confirmedInputTokens,
+        isNull,
+        reason: 'changed tool schemas must fail closed',
+      );
+      expect(
+        runner.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.estimated,
+      );
+    });
+
+    test('a prompt change before the restore discards the bound floor', () async {
+      const sessionId = 'session-generic-prompt-drift-before-restore';
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: routeProvider,
+          model: routeModel,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      sessions.replaceMessages(sessionId, [
+        ...receiptHistory(
+          confirmedMetadata: confirmedMetadata(contextUsageInput: 40_000),
+        ),
+        Message(role: MessageRole.tool, content: 'trailing tool output'),
+        Message(role: MessageRole.user, content: 'continue the review'),
+      ]);
+
+      // Bind the receipt to the material as it exists now, then restart with a
+      // drifted prompt before any restore attempt can succeed.
+      final bounded = openAiRunner(sessionId: sessionId);
+      final proof = await wireProofForAssistantRow(bounded);
+      sessions.replaceMessages(
+        sessionId,
+        bindNewestAssistantRowWithProof(
+          history: sessions.getMessages(sessionId),
+          wireProof: proof,
+        ),
+      );
+      final restarted = openAiRunner(sessionId: sessionId);
+
+      await restarted.debugPrepareProviderHistory(
+        runtimeSystemPrompt: 'changed workspace context',
+      );
+
+      expect(
+        restarted.debugConfirmedInputUsageBaseline,
+        isNull,
+        reason:
+            'a persisted binding that no longer matches the current prompt '
+            'must fail closed',
+      );
+      expect(restarted.debugLastPreflightPressure?.confirmedInputTokens, isNull);
+      expect(
+        restarted.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.estimated,
+      );
+    });
+
+    test('a schema change before the restore discards the bound floor', () async {
+      const sessionId = 'session-generic-schema-drift-before-restore';
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: routeProvider,
+          model: routeModel,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      sessions.replaceMessages(sessionId, [
+        ...receiptHistory(
+          confirmedMetadata: confirmedMetadata(contextUsageInput: 40_000),
+        ),
+        Message(role: MessageRole.tool, content: 'trailing tool output'),
+        Message(role: MessageRole.user, content: 'continue the review'),
+      ]);
+
+      // The persisted binding was recorded for the empty tool set; the
+      // restarted route exposes a schema the producer never measured.
+      final bounded = openAiRunner(sessionId: sessionId);
+      final proof = await wireProofForAssistantRow(bounded);
+      sessions.replaceMessages(
+        sessionId,
+        bindNewestAssistantRowWithProof(
+          history: sessions.getMessages(sessionId),
+          wireProof: proof,
+        ),
+      );
+      final adapter = BaseOpenAIAdapter(
+        getIt<Config>(),
+        const ProviderProfile(
+          name: 'openai',
+          displayName: 'OpenAI',
+          defaultBaseUrl: 'https://opencode.invalid/v1',
+        ),
+        baseUrlOverride: 'https://opencode.invalid/v1',
+        apiKeyOverride: 'test-key',
+        defaultModelOverride: routeModel,
+        providerInstanceId: routeProvider,
+        modelContextLimitLookup: (_) => 358_000,
+      );
+      final registry = ToolsRegistry()..registerTool(_SchemaDriftProbeTool());
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService)
+        ..turnAdapter = adapter
+        ..signature = const RouteSignature(
+          providerInstanceId: routeProvider,
+          templateId: 'openai',
+          protocol: 'openai_compatible',
+          normalizedBaseUrl: 'https://opencode.invalid/v1',
+          modelId: routeModel,
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+      final restarted = AgentRunner(
+        adapter,
+        registry,
+        sessionManager,
+        existingSessionId: sessionId,
+      );
+
+      await restarted.debugPrepareProviderHistory();
+
+      expect(
+        restarted.debugConfirmedInputUsageBaseline,
+        isNull,
+        reason:
+            'a persisted binding that no longer matches the current tool '
+            'schemas must fail closed',
+      );
+      expect(restarted.debugLastPreflightPressure?.confirmedInputTokens, isNull);
+      expect(
+        restarted.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.estimated,
+      );
+    });
+
+    test('a route change before the restore discards the bound wire proof', () async {
+      const sessionId = 'session-generic-route-drift-before-restore';
+      sessions.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          providerId: routeProvider,
+          model: routeModel,
+          thinkingMode: 'max',
+          createdAt: DateTime.utc(2026, 10, 18),
+          updatedAt: DateTime.utc(2026, 10, 18),
+          lastUserMessageAt: DateTime.utc(2026, 10, 18),
+        ),
+      );
+      sessions.replaceMessages(sessionId, [
+        ...receiptHistory(
+          confirmedMetadata: confirmedMetadata(contextUsageInput: 40_000),
+        ),
+        Message(role: MessageRole.tool, content: 'trailing tool output'),
+        Message(role: MessageRole.user, content: 'continue the review'),
+      ]);
+
+      final bounded = openAiRunner(sessionId: sessionId);
+      final proof = await wireProofForAssistantRow(bounded);
+      sessions.replaceMessages(
+        sessionId,
+        bindNewestAssistantRowWithProof(
+          history: sessions.getMessages(sessionId),
+          wireProof: proof,
+        ),
+      );
+
+      // Route signature changed to a different model:
+      final restarted = openAiRunner(
+        sessionId: sessionId,
+        model: 'gpt-4o-mini',
+      );
+
+      await restarted.debugPrepareProviderHistory();
+
+      expect(
+        restarted.debugConfirmedInputUsageBaseline,
+        isNull,
+        reason:
+            'a persisted binding that was measured for a different route '
+            'must fail closed',
+      );
+      expect(restarted.debugLastPreflightPressure?.confirmedInputTokens, isNull);
+      expect(
+        restarted.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.estimated,
+      );
+    });
+
+    test(
+      'an edited historical message before the restore discards the bound wire proof',
+      () async {
+        const sessionId = 'session-generic-history-drift-before-restore';
+        sessions.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            providerId: routeProvider,
+            model: routeModel,
+            thinkingMode: 'max',
+            createdAt: DateTime.utc(2026, 10, 18),
+            updatedAt: DateTime.utc(2026, 10, 18),
+            lastUserMessageAt: DateTime.utc(2026, 10, 18),
+          ),
+        );
+        sessions.replaceMessages(sessionId, [
+          ...receiptHistory(
+            confirmedMetadata: confirmedMetadata(contextUsageInput: 40_000),
+          ),
+          Message(role: MessageRole.tool, content: 'trailing tool output'),
+          Message(role: MessageRole.user, content: 'continue the review'),
+        ]);
+
+        // Bind the receipt to the wire material as it exists now, then edit an
+        // earlier canonical message before any restore can read the binding.
+        final bounded = openAiRunner(sessionId: sessionId);
+        final proof = await wireProofForAssistantRow(bounded);
+        sessions.replaceMessages(
+          sessionId,
+          bindNewestAssistantRowWithProof(
+            history: sessions.getMessages(sessionId),
+            wireProof: proof,
+          ),
+        );
+        final messages = sessions.getMessages(sessionId).toList();
+        messages[2] = messages[2].copyWith(content: 'edited before the restore');
+        sessions.replaceMessages(sessionId, messages);
+
+        final restarted = openAiRunner(sessionId: sessionId);
+        await restarted.debugPrepareProviderHistory();
+
+        expect(
+          restarted.debugConfirmedInputUsageBaseline,
+          isNull,
+          reason:
+              'a persisted wire proof that no longer matches the historical '
+              'message material must fail closed',
+        );
+        expect(restarted.debugLastPreflightPressure?.confirmedInputTokens, isNull);
+        expect(
+          restarted.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+      },
+    );
+
+    test(
+      'a wire-visible request-option drift discards the bound proof and a restored baseline needs a live wire extension',
+      () async {
+        const sessionId = 'session-generic-options-drift';
+        final resolver = _DirectiveDriftResolver()
+          ..directive = const OpenAiEffortDirective('high');
+        getIt.registerSingleton<RouteCapabilityResolver>(resolver);
+
+        sessions.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            providerId: routeProvider,
+            model: routeModel,
+            thinkingMode: 'max',
+            createdAt: DateTime.utc(2026, 10, 18),
+            updatedAt: DateTime.utc(2026, 10, 18),
+            lastUserMessageAt: DateTime.utc(2026, 10, 18),
+          ),
+        );
+        sessions.replaceMessages(sessionId, [
+          ...receiptHistory(
+            confirmedMetadata: confirmedMetadata(contextUsageInput: 40_000),
+          ),
+          Message(role: MessageRole.tool, content: 'trailing tool output'),
+          Message(role: MessageRole.user, content: 'continue the review'),
+        ]);
+
+        final bounded = openAiRunner(sessionId: sessionId);
+
+        // Non-vacuity: the wire-visible option must reach the stable material
+        // the wire proof binds, otherwise this test proves nothing.
+        final material = await bounded.debugPrepareProviderHistory();
+        final measurer = bounded.adapter as WireInputUsageMeasurer;
+        final tools = bounded.registry.allTools
+            .map((tool) => tool.schema)
+            .toList();
+        final highMeasurement = await measurer.measureInput(
+          material,
+          tools: tools,
+          modelOverride: routeModel,
+          options: bounded.debugRequestOptionsForTurn(routeProvider),
+        );
+        resolver.directive = const OpenAiEffortDirective('low');
+        final lowMeasurement = await measurer.measureInput(
+          material,
+          tools: tools,
+          modelOverride: routeModel,
+          options: bounded.debugRequestOptionsForTurn(routeProvider),
+        );
+        expect(
+          lowMeasurement!.stableMaterialFingerprint,
+          isNot(highMeasurement!.stableMaterialFingerprint),
+          reason: 'the effort directive must be wire-visible for this route',
+        );
+        resolver.directive = const OpenAiEffortDirective('high');
+
+        final proof = await wireProofForAssistantRow(bounded);
+        sessions.replaceMessages(
+          sessionId,
+          bindNewestAssistantRowWithProof(
+            history: sessions.getMessages(sessionId),
+            wireProof: proof,
+          ),
+        );
+
+        // Control: unchanged wire-visible options restore the baseline.
+        final restored = openAiRunner(sessionId: sessionId);
+        await restored.debugPrepareProviderHistory();
+        expect(restored.debugConfirmedInputUsageBaseline?.inputTokens, 40_000);
+        expect(restored.debugLastPreflightPressure?.confirmedInputTokens, 40_000);
+
+        // A wire-visible option change after the restore cannot be consumed
+        // through the legacy in-memory comparison: without a live wire
+        // extension the confirmed value is an unproven floor and admission
+        // falls back to the explicit estimate.
+        resolver.directive = const OpenAiEffortDirective('low');
+        await restored.debugPrepareProviderHistory();
+        expect(
+          restored.debugConfirmedInputUsageBaseline,
+          isNotNull,
+          reason:
+              'the restored baseline stays held; it is simply not consumed '
+              'without a live extension proof',
+        );
+        expect(
+          restored.debugLastPreflightPressure?.confirmedInputTokens,
+          isNull,
+          reason:
+              'a wire-measured baseline must not be consumed without a live '
+              'extension proof',
+        );
+        expect(
+          restored.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+
+        // Drift before the restore: a fresh runner under the changed option
+        // fails the persisted proof at restore time.
+        final restarted = openAiRunner(sessionId: sessionId);
+        await restarted.debugPrepareProviderHistory();
+        expect(
+          restarted.debugConfirmedInputUsageBaseline,
+          isNull,
+          reason:
+              'a wire-visible request-option change before the restore must '
+              'fail closed',
+        );
+        expect(restarted.debugLastPreflightPressure?.confirmedInputTokens, isNull);
+        expect(
+          restarted.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+      },
     );
   });
 

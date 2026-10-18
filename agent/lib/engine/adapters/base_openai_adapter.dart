@@ -32,12 +32,16 @@ import 'models_dev_service.dart';
 import 'llm_http_exception.dart';
 import 'opencode_session_affinity.dart';
 import 'llm_request_options.dart';
+import 'package:crypto/crypto.dart';
+
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import 'tool_result_wire_codec.dart';
 import '../llm_request_dumper.dart';
+import '../context/compaction_token_estimator.dart';
 
-class BaseOpenAIAdapter implements LLMAdapter {
+class BaseOpenAIAdapter
+    implements LLMAdapter, WireInputTokenEstimator, WireInputUsageMeasurer {
   final _logger = Logger('BaseOpenAIAdapter');
   final Config config;
   final ProviderProfile profile;
@@ -89,6 +93,73 @@ class BaseOpenAIAdapter implements LLMAdapter {
   Map<String, dynamic>? tryDecodeToolArguments(String args) =>
       _tryDecodeToolArguments(args);
   String roleToString(MessageRole role) => _roleToString(role);
+
+  Future<Map<String, dynamic>> buildRequestBody(
+    List<Message> history, {
+    required String resolvedModel,
+    required LLMRequestOptions options,
+    List<ToolSchema>? tools,
+    bool stream = false,
+  }) => _buildRequestBody(
+    history,
+    resolvedModel: resolvedModel,
+    options: options,
+    tools: tools,
+    stream: stream,
+  );
+
+  @override
+  Future<int?> estimateInputTokens(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    return (await measureInput(
+      history,
+      tools: tools,
+      modelOverride: modelOverride,
+      options: options,
+    ))?.estimatedTokens;
+  }
+
+  @override
+  Future<WireInputMeasurement?> measureInput(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    final resolvedModel = resolveModel(modelOverride);
+    final body = await buildRequestBody(
+      history,
+      resolvedModel: resolvedModel,
+      options: options,
+      tools: tools,
+      stream: false,
+    );
+    final messages = (body['messages'] as List?) ?? const [];
+    final measured = <String, dynamic>{
+      'messages': messages,
+      if (body['tools'] != null) 'tools': body['tools'],
+    };
+    String fingerprint(Object? value) =>
+        sha256.convert(utf8.encode(jsonEncode(value))).toString();
+    final stablePayload = Map<String, dynamic>.from(body)
+      ..remove('messages')
+      ..remove('stream')
+      ..remove('stream_options');
+    return WireInputMeasurement(
+      estimatedTokens:
+          CompactionTokenEstimator.estimateWirePayload(
+            measured,
+            opaqueKeys: const {'encrypted_content'},
+          ) +
+          CompactionTokenEstimator.estimateMediaTokens(history),
+      stableMaterialFingerprint: fingerprint(stablePayload),
+      inputItemFingerprints: messages.map(fingerprint).toList(growable: false),
+    );
+  }
 
   @override
   Future<List<ModelOption>> getAvailableModels() async {
@@ -797,7 +868,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
   }) async {
     final url = Uri.parse('$_baseUrl/chat/completions');
     final resolvedModel = _resolveModel(modelOverride);
-    final body = await _buildRequestBody(
+    final body = await buildRequestBody(
       history,
       tools: tools,
       resolvedModel: resolvedModel,
@@ -906,7 +977,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     );
     final request = http.Request('POST', url);
     request.headers.addAll(_requestHeaders(options));
-    final body = await _buildRequestBody(
+    final body = await buildRequestBody(
       history,
       tools: tools,
       resolvedModel: resolvedModel,

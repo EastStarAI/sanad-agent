@@ -70,14 +70,71 @@ Removing `ContextEngine` does **not** alter these independent paths:
 - Prototype compression did not feed usage metrics; it only replaced message lists before the provider call.
 - Latest provider-reported input usage for the same route and measured request
   material is the authoritative pressure baseline. Adapter-owned wire
-  fingerprints prove a strict extension and only the appended wire suffix is
+  fingerprints prove the extension, and only the appended wire suffix is
   estimated; a rough full-request estimate must not override that confirmed
   value. Route, prompt, schema, or measured-prefix changes invalidate the
   baseline. After daemon restart, the runner may recover the latest persisted
-  assistant `usage.input_tokens` only by rebuilding and adapter-measuring the
-  exact request prefix that produced that assistant response. The normal
-  strict-extension proof still decides whether the recovered baseline applies
-  to the next request, so stale route or wire material fails closed.
+  assistant usage only by rebuilding the exact request prefix that produced that
+  assistant response. The timestamped per-model-step `context_usage` snapshot is
+  the authority there, because the generic `usage` map on the same row is a
+  mutable run value that can disagree with the frozen per-call snapshot;
+  `usage.input_tokens` remains a legacy fallback. Route identity follows
+  authority: a provider/model identity present in the `context_usage` snapshot
+  wins, so a matching mutable legacy `provider`/`model` value never overrides a
+  mismatched snapshot; a recorded identity that is absent or empty never
+  matches, and candidate aliases themselves are never null. Production
+  `BaseOpenAIAdapter` implements `WireInputUsageMeasurer` and
+  `WireInputTokenEstimator` by reusing its canonical request builder,
+  ensuring generic OpenAI-compatible routes participate in wire measurement
+  without alternate codecs or transport-counting discrepancies.
+- A baseline recovered from persisted usage requires a compact versioned
+  non-content proof (`wire_proof`, format `v1:<sha256>`) that binds the
+  confirmed input to the complete ordered wire items (`inputItemFingerprints`),
+  stable material (`stableMaterialFingerprint`), and safe route signature. The
+  live producer writes `wire_proof` into the frozen per-step `context_usage`
+  snapshot. On restore after restart, the active adapter remeasures the exact
+  historical request prefix preceding the assistant row; the baseline is
+  restored only if the adapter exposes `WireInputUsageMeasurer`, the row
+  carries a valid `wire_proof`, the persisted proof matches the remeasured
+  prefix and route signature, and the current request extends that
+  prefix on the same route (`extendsMeasurement`). Unsupported/no-measurer
+  adapters, legacy unbound rows without `wire_proof`, and any drift in route,
+  prompt, tool schemas, or historical message content fail closed to explicit
+  estimates. There is no unproven floor: prospective pressure is calculated
+  from the remeasured extension delta (`wireMeasurement.estimatedTokens -
+  baselineWire.estimatedTokens`), and a wire-measured baseline is consumed only
+  while the live remeasurement keeps proving that extension. If the proof stops
+  holding — for example a wire-visible request option such as a thinking
+  directive changes — admission falls back to the explicit estimate until a new
+  provider response supplies a fresh binding; the in-memory message comparison
+  remains only for routes whose adapter exposes no wire measurement at all.
+  Stale receipts recorded before an activated compaction boundary are discarded
+  by the same material proof, so no wall-clock recency heuristic is needed.
+  Metadata-only bookkeeping changes on earlier
+  messages do not alter the wire payload or item fingerprints and thus do not
+  falsely invalidate valid pressure. Cached input tokens remain part of the
+  confirmed input and are never discounted, and confirmed pressure that already
+  exceeds the threshold still triggers automatic compaction.
+- Adapter wire measurement prices only model-visible material: text uses the
+  text rate, and provider-owned opaque state — Codex reasoning
+  `encrypted_content` replay — is excluded entirely, because the provider prices
+  it under its own token models rather than as request text. Encoded media
+  transport (data URIs and long base64 blobs) is never priced as text; image
+  material is priced separately from its canonical, dimension-bearing history
+  (a base charge plus a tile charge per image after the model's edge and
+  minimum-short-side fit). Only `low` detail is charged the base rate: canonical
+  `ToolImageDetail.original` reaches the wire as `high` and is priced on the
+  tile grid. The fitted grid is clamped to the per-image ceiling, so a thin or
+  panorama image that would otherwise scale to an unbounded tile grid stays
+  bounded, and a fitted thin side that rounds to zero keeps one pixel instead
+  of producing a non-finite scale. An image without recorded dimensions is
+  bounded by the same per-image ceiling instead of its transport size, and
+  declared `media_bytes` keep byte-based accounting. The estimate therefore never charges
+  the serialized transport for opaque replay or encoded media, and confirmed
+  baseline deltas reuse that same basis. Ordering fingerprints are unchanged,
+  so a baseline measured on a different (for example pre-repair) pricing basis
+  yields a non-extending or negative delta and is discarded instead of mixing
+  stale usage into the prospective estimate.
 - Provider/model text injected into the volatile system tier comes from the
   resolved route identity, not response-metrics display state. A provider
   response therefore cannot mutate the next request prefix and invalidate an

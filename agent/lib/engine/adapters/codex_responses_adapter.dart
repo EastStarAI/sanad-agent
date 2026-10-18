@@ -10,6 +10,7 @@ import '../../core/models/agent_response.dart';
 import '../../core/models/message.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import '../llm_request_dumper.dart';
+import '../context/compaction_token_estimator.dart';
 import 'base_openai_adapter.dart';
 import 'codex_models_service.dart';
 import 'codex_responses_codec.dart';
@@ -129,7 +130,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         sha256.convert(utf8.encode(jsonEncode(value))).toString();
     final input = (body['input'] as List?) ?? const [];
     return WireInputMeasurement(
-      estimatedTokens: (jsonEncode(measured).length / 4).ceil(),
+      // Model-visible text is priced from the wire tree (opaque provider state
+      // excluded), while images are priced from their canonical dimensions in
+      // [history] instead of from the base64 transport that carries them.
+      estimatedTokens:
+          CompactionTokenEstimator.estimateWirePayload(
+            measured,
+            opaqueKeys: _opaqueWireKeys,
+          ) +
+          CompactionTokenEstimator.estimateMediaTokens(history),
       stableMaterialFingerprint: fingerprint({
         'instructions': body['instructions'],
         'tools': body['tools'],
@@ -403,6 +412,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       await transport.dispose();
     }
   }
+
+  /// Wire keys that carry provider-owned opaque state (encrypted reasoning
+  /// replay). The provider prices them under its own token models, so text
+  /// pricing must skip them instead of charging for the serialized transport.
+  static const _opaqueWireKeys = <String>{'encrypted_content'};
 
   CodexResponsesCodec _codec(LLMRequestOptions options) {
     final instance = options.providerInstanceId ?? profile.name;

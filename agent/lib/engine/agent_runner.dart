@@ -218,6 +218,12 @@ class AgentRunner {
   Future<Map<String, dynamic>?>? _contextUsageSnapshotFuture;
   ConfirmedInputUsageBaseline? _pendingInputUsageBaseline;
   ConfirmedInputUsageBaseline? _confirmedInputUsageBaseline;
+
+  /// Compact versioned non-content proof of the request wire material whose
+  /// provider-confirmed usage backs the current context-usage snapshot.
+  /// Persisted with the snapshot so a later restore can prove the historical
+  /// wire request prefix and route match before reusing confirmed usage.
+  String? _confirmedWireProof;
   RequestPressureSnapshot? _lastPreflightPressure;
   bool _autoCompactionBlockedForRun = false;
   String? currentModelStepId;
@@ -422,6 +428,11 @@ class AgentRunner {
       if (activeProvider != null) 'provider_instance_id': activeProvider,
       if (_authoritativeRunId != null) 'run_id': _authoritativeRunId,
       if (currentModelStepId != null) 'model_step_id': currentModelStepId,
+      // Binds this confirmed usage to the complete ordered wire material and
+      // route that produced it, so a restore can prove compatibility against
+      // adapter remeasurement rather than trusting unproven legacy rows.
+      if (_confirmedWireProof != null)
+        'wire_proof': _confirmedWireProof,
       'observed_at': DateTime.now().toUtc().toIso8601String(),
     };
   }
@@ -436,6 +447,12 @@ class AgentRunner {
     final inputTokens = LlmUsageSnapshot.fromProviderUsage(usage).inputTokens;
     if (inputTokens != null) {
       _confirmedInputUsageBaseline = pending.copyWithInputTokens(inputTokens);
+      _confirmedWireProof = pending.wireMeasurement != null
+          ? RequestPressureEvaluator.wireProof(
+              wireMeasurement: pending.wireMeasurement!,
+              routeSignature: pending.routeSignature,
+            )
+          : null;
       if (getIt.isRegistered<CompactionCoordinator>()) {
         getIt<CompactionCoordinator>().reconcileLatestProviderUsage(
           sessionId: sessionId,
@@ -486,55 +503,127 @@ class AgentRunner {
   static LLMAdapter _wireMeasurementAdapter(LLMAdapter adapter) =>
       adapter is RateLimitedLLMAdapter ? adapter.providerAdapter : adapter;
 
+  /// Restores one provider-confirmed input baseline for [routeSignature].
+  ///
+  /// The confirmed value always comes from the timestamped per-step
+  /// `context_usage` snapshot when present, because the generic `usage` map on
+  /// the same assistant row is a mutable last-run value that can disagree with
+  /// the frozen per-call snapshot. `usage` remains a legacy fallback.
+  ///
+  /// Route identity follows authority: a `context_usage` provider/model
+  /// identity is authoritative when present, so a matching mutable legacy
+  /// `provider`/`model` value can never override a mismatched snapshot; a
+  /// recorded identity that is absent or empty never matches a candidate
+  /// alias, and candidate aliases themselves are never null.
+  ///
+  /// Adapters must expose [WireInputUsageMeasurer]. Unsupported/no-measurer
+  /// adapters and legacy/unbound receipts fail closed to explicit estimate.
+  /// A valid restored baseline requires a versioned `wire_proof` in
+  /// `context_usage` that matches the active adapter's remeasurement of the
+  /// historical request prefix and route signature, and requires the current
+  /// request to extend that prefix. Stale receipts from before an activated
+  /// compaction boundary are discarded by the same material proof, so no
+  /// wall-clock recency heuristic is required.
   Future<void> _restoreConfirmedInputUsageBaseline({
     required List<Message> prospectiveHistory,
-    required WireInputUsageMeasurer measurer,
+    required WireInputUsageMeasurer? measurer,
     required RouteSignature routeSignature,
     required String? providerId,
     required String? modelId,
-    required WireInputMeasurement currentMeasurement,
+    required WireInputMeasurement? currentMeasurement,
   }) async {
     if (_confirmedInputUsageBaseline != null) return;
+    if (measurer == null) {
+      // Unsupported/no-measurer adapters fail closed to explicit estimate.
+      return;
+    }
+    // Candidate provider aliases exclude null and empty values: an absent
+    // recorded identity must fail closed, not match via a null alias.
+    final providerIds = <String>{
+      routeSignature.providerInstanceId,
+      routeSignature.templateId,
+      ?providerId,
+    }.where((value) => value.isNotEmpty).toSet();
 
     for (var index = prospectiveHistory.length - 1; index >= 0; index--) {
       final message = prospectiveHistory[index];
       if (message.role != MessageRole.assistant) continue;
+
       final metadata = message.metadata;
+      final contextUsage = metadata?['context_usage'];
       final usage = metadata?['usage'];
-      final inputTokens = usage is Map ? usage['input_tokens'] : null;
+      final contextInputTokens = contextUsage is Map
+          ? contextUsage['input_tokens']
+          : null;
+      final usageInputTokens = usage is Map ? usage['input_tokens'] : null;
+      final inputTokens = contextInputTokens is num && contextInputTokens > 0
+          ? contextInputTokens
+          : usageInputTokens;
       if (inputTokens is! num || inputTokens <= 0) continue;
 
-      final recordedModel = metadata?['model']?.toString();
-      final recordedProvider = metadata?['provider']?.toString();
-      final contextUsage = metadata?['context_usage'];
-      final recordedContextProvider = contextUsage is Map
+      final contextUsageProvider = contextUsage is Map
           ? contextUsage['provider_instance_id']?.toString()
           : null;
-      final providerMatches =
-          <String?>{
-            routeSignature.providerInstanceId,
-            routeSignature.templateId,
-            providerId,
-          }.contains(recordedProvider) ||
-          <String?>{
-            routeSignature.providerInstanceId,
-            routeSignature.templateId,
-            providerId,
-          }.contains(recordedContextProvider);
-      if (recordedModel != routeSignature.modelId || !providerMatches) {
+      final contextUsageModel = contextUsage is Map
+          ? contextUsage['model_id']?.toString()
+          : null;
+      final legacyProvider = metadata?['provider']?.toString();
+      final legacyModel = metadata?['model']?.toString();
+      // A present authoritative identity wins; the mutable legacy value is
+      // consulted only when the snapshot carries no identity at all.
+      final recordedProvider =
+          (contextUsageProvider == null || contextUsageProvider.isEmpty)
+          ? legacyProvider
+          : contextUsageProvider;
+      final recordedModel =
+          (contextUsageModel == null || contextUsageModel.isEmpty)
+          ? legacyModel
+          : contextUsageModel;
+      if (recordedProvider == null ||
+          recordedProvider.isEmpty ||
+          !providerIds.contains(recordedProvider) ||
+          recordedModel == null ||
+          recordedModel.isEmpty ||
+          recordedModel != routeSignature.modelId) {
+        continue;
+      }
+
+      final persistedProof = contextUsage is Map
+          ? contextUsage['wire_proof']?.toString()
+          : null;
+      if (persistedProof == null ||
+          persistedProof.isEmpty ||
+          !RequestPressureEvaluator.isValidWireProof(persistedProof)) {
+        // Missing, unbound legacy, or unknown-version proof fails closed.
         continue;
       }
 
       final measuredMessages = prospectiveHistory.sublist(0, index);
       final toolSchemas = registry.allTools.map((tool) => tool.schema).toList();
+
       final measurement = await measurer.measureInput(
         measuredMessages,
         tools: toolSchemas,
         modelOverride: modelId,
         options: _requestOptionsForTurn(providerId),
       );
-      if (measurement == null) return;
-      if (!currentMeasurement.extendsMeasurement(measurement)) return;
+      if (measurement == null) continue;
+
+      final expectedProof = RequestPressureEvaluator.wireProof(
+        wireMeasurement: measurement,
+        routeSignature: routeSignature,
+      );
+      if (persistedProof != expectedProof) {
+        // Historical wire material, tool schemas, prompt, or route mismatch:
+        // fails closed.
+        continue;
+      }
+
+      if (currentMeasurement == null ||
+          !currentMeasurement.extendsMeasurement(measurement)) {
+        return;
+      }
+
       _confirmedInputUsageBaseline = ConfirmedInputUsageBaseline(
         routeSignature: routeSignature,
         inputTokens: inputTokens.round(),
@@ -804,6 +893,7 @@ class AgentRunner {
     currentModelStepId = 'model_step_${const Uuid().v4()}';
     _metricsTracker?.beginInvocation();
     _contextUsageSnapshotFuture = null;
+    _confirmedWireProof = null;
   }
 
   @visibleForTesting
@@ -2584,8 +2674,11 @@ class AgentRunner {
         ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
         : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
     final turnAdapter = _wireMeasurementAdapter(_turnRoute.adapterForTurn());
-    final wireMeasurement = turnAdapter is WireInputUsageMeasurer
-        ? await (turnAdapter as WireInputUsageMeasurer).measureInput(
+    final measurementAdapter = turnAdapter is WireInputUsageMeasurer
+        ? turnAdapter as WireInputUsageMeasurer
+        : null;
+    final wireMeasurement = measurementAdapter != null
+        ? await measurementAdapter.measureInput(
             prospectiveHistory,
             tools: registry.allTools.map((tool) => tool.schema).toList(),
             modelOverride: routing.model,
@@ -2612,11 +2705,23 @@ class AgentRunner {
     if (turnAdapter is WireInputUsageMeasurer && wireMeasurement != null) {
       await _restoreConfirmedInputUsageBaseline(
         prospectiveHistory: prospectiveHistory,
-        measurer: turnAdapter as WireInputUsageMeasurer,
+        measurer: measurementAdapter,
         routeSignature: routeSignature,
         providerId: routing.providerId,
         modelId: routing.model,
         currentMeasurement: wireMeasurement,
+      );
+    } else {
+      // Generic OpenAI-compatible adapters expose no wire measurement, but
+      // their own provider-confirmed input must still drive admission instead
+      // of an underestimated character fallback.
+      await _restoreConfirmedInputUsageBaseline(
+        prospectiveHistory: prospectiveHistory,
+        measurer: null,
+        routeSignature: routeSignature,
+        providerId: routing.providerId,
+        modelId: routing.model,
+        currentMeasurement: null,
       );
     }
     final toolSchemas = registry.allTools
@@ -2747,6 +2852,12 @@ class AgentRunner {
     String? runtimeSystemPrompt,
   }) {
     return _prepareProviderHistory(runtimeSystemPrompt: runtimeSystemPrompt);
+  }
+
+  /// Test hook for Plan 53d request options resolution.
+  @visibleForTesting
+  LLMRequestOptions debugRequestOptionsForTurn([String? providerInstanceId]) {
+    return _requestOptionsForTurn(providerInstanceId);
   }
 
   /// Builds the same idle provider payload used by an ordinary next request,
