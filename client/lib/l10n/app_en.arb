@@ -405,5 +405,57 @@
   "thinkingModeProviderDefaultHint": "Provider default",
   "@thinkingModeProviderDefaultHint": {
     "description": "Hint shown inside the expanded thinking menu below the single option the Agent declared as this route's native default. A menu hint only: it never appears on the composer chip, in a synthetic Default row, or when the declared default is unknown."
+  },
+  "compactionFailureSessionBusy": "Session is busy.",
+  "compactionActionSessionBusy": "Try /compact again when idle.",
+  "compactionFailureCompactionInProgress": "Context compaction is already in progress.",
+  "compactionActionCompactionInProgress": "Wait for the current operation to finish before retrying.",
+  "compactionFailureThinkingUnsupported": "Selected thinking mode is not supported by the active model or route.",
+  "compactionActionThinkingUnsupported": "Select a supported thinking mode or route and try again.",
+  "compactionFailurePreparation": "Failed to prepare context compaction.",
+  "compactionActionPreparation": "Check session settings and try again.",
+  "compactionFailurePruning": "Structured tool results could not be pruned for summarization.",
+  "compactionActionPruning": "Send a new message or retry compaction.",
+  "compactionFailureBudget": "Context history remains over budget after pruning.",
+  "compactionActionBudget": "Shorten earlier messages or start a new session.",
+  "compactionFailureTimeout": "Provider timed out during context summarization.",
+  "compactionActionTimeout": "Check network connection or try again.",
+  "compactionFailureRateLimited": "Provider rate limit reached during summarization.",
+  "compactionActionRateLimited": "Wait a moment before retrying.",
+  "compactionFailureOverflow": "Conversation history exceeded the provider's context capacity.",
+  "compactionActionOverflow": "Shorten conversation history or switch to a higher capacity model.",
+  "compactionFailureInvalidResponse": "Provider returned an invalid or incomplete summary.",
+  "compactionActionInvalidResponse": "Try running compaction again.",
+  "compactionFailureNetwork": "Network connection error while contacting provider.",
+  "compactionActionNetwork": "Check network connection and try again.",
+  "compactionFailureSummarization": "Provider summarization failed.",
+  "compactionActionSummarization": "Try running compaction again.",
+  "compactionFailureContinuity": "Summary failed continuity verification.",
+  "compactionActionContinuity": "Retry compaction to generate a complete summary.",
+  "compactionFailureStaleRevision": "Conversation history changed during compaction.",
+  "compactionActionStaleRevision": "Try running compaction again with current history.",
+  "compactionFailureClaimLost": "Compaction claim was superseded by another operation.",
+  "compactionActionClaimLost": "Try running compaction again.",
+  "compactionFailureInterrupted": "Compaction was interrupted by daemon restart.",
+  "compactionActionInterrupted": "Try running compaction again.",
+  "compactionFailurePersistence": "Failed to persist compaction boundaries to storage.",
+  "compactionActionPersistence": "Ensure sufficient disk space and try again.",
+  "compactionFailureUnexpected": "Context compaction encountered an unexpected error.",
+  "compactionActionRetry": "Try running compaction again.",
+  "compactionFailurePrefix": "Failure: {explanation}",
+  "@compactionFailurePrefix": {
+    "placeholders": {
+      "explanation": {
+        "type": "String"
+      }
+    }
+  },
+  "compactionNextActionPrefix": "Next action: {action}",
+  "@compactionNextActionPrefix": {
+    "placeholders": {
+      "action": {
+        "type": "String"
+      }
+    }
   }
 }

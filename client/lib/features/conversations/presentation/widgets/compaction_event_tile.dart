@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/compaction_failure_formatter.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 class CompactionEventTile extends StatefulWidget {
   final CompactionEventSnapshot snapshot;
@@ -53,7 +55,7 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
                 button: true,
                 child: Tooltip(
                   key: _tooltipKey,
-                  message: _detailText(snapshot),
+                  message: _detailText(snapshot, context),
                   child: InkWell(
                     key: ValueKey('compaction-label-${snapshot.compactionId}'),
                     onTap: () => _tooltipKey.currentState?.ensureTooltipVisible(),
@@ -103,7 +105,7 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
     );
   }
 
-  String _detailText(CompactionEventSnapshot snapshot) {
+  String _detailText(CompactionEventSnapshot snapshot, [BuildContext? context]) {
     final lines = <String>[];
     final percentageBudget = snapshot.effectiveInputBudgetTokens ?? snapshot.contextWindowTokens;
     if (snapshot.estimatedRequestTokensBefore != null) {
@@ -165,8 +167,16 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
         'Context window: ${_formatTokens(snapshot.contextWindowTokens!)} tokens',
       );
     }
-    if (snapshot.failureReason != null) {
-      lines.add('Failure: ${snapshot.failureReason}');
+    if (snapshot.status == CompactionLifecycleStatus.failed ||
+        snapshot.failureReason != null ||
+        snapshot.failureStage != null ||
+        snapshot.failureCause != null) {
+      final l10n = context != null ? AppLocalizations.of(context) : null;
+      final failure = CompactionFailureFormatter.resolveForSnapshot(
+        snapshot,
+        l10n: l10n,
+      );
+      lines.addAll(failure.toDetailLines(l10n: l10n));
     }
     return lines.join('\n');
   }

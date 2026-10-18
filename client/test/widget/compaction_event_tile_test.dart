@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/compaction_event_tile.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 void main() {
   testWidgets('shows centered manual compacting label while started', (tester) async {
@@ -197,9 +198,12 @@ void main() {
         'Context reclaimed: 60,000 tokens (75.0%)\n'
         'Retained tail: ~5,000 tokens\n'
         'Context window: 100,000 tokens\n'
-        'Failure: projection_still_over_budget';
+        'Failure: Context history remains over budget after pruning.\n'
+        'Next action: Shorten earlier messages or start a new session.';
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: CompactionEventTile(
             snapshot: CompactionEventSnapshot(
@@ -374,5 +378,112 @@ void main() {
     expect(find.text('Auto context compaction failed'), findsOneWidget);
     expect(tester.takeException(), isNull);
     expect(tester.getSize(find.byType(InkWell)).height, greaterThanOrEqualTo(44));
+  });
+
+  testWidgets('displays thinking capability rejection with explanatory feedback', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: CompactionEventTile(
+            snapshot: const CompactionEventSnapshot(
+              sessionId: 'session-1',
+              compactionId: 'cmp-thinking-unsupported',
+              status: CompactionLifecycleStatus.failed,
+              trigger: CompactionTriggerKind.manual,
+              failureStage: 'preparation',
+              failureCause: 'thinking_capability_unsupported',
+              failureReason: 'summarization_failed',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+    expect(
+      find.text(
+        'Failure: Selected thinking mode is not supported by the active model or route.\n'
+        'Next action: Select a supported thinking mode or route and try again.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('displays provider timeout with actionable feedback', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: CompactionEventTile(
+            snapshot: const CompactionEventSnapshot(
+              sessionId: 'session-1',
+              compactionId: 'cmp-timeout',
+              status: CompactionLifecycleStatus.failed,
+              trigger: CompactionTriggerKind.auto,
+              failureStage: 'provider',
+              failureCause: 'timeout',
+              failureReason: 'summarization_failed',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+    expect(
+      find.text(
+        'Failure: Provider timed out during context summarization.\n'
+        'Next action: Check network connection or try again.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('displays Arabic localized failure and next action', (tester) async {
+    late AppLocalizations arabicL10n;
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('ar'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Builder(
+          builder: (context) {
+            arabicL10n = AppLocalizations.of(context)!;
+            return const Scaffold(
+              body: CompactionEventTile(
+                snapshot: CompactionEventSnapshot(
+                  sessionId: 'session-1',
+                  compactionId: 'cmp-ar',
+                  status: CompactionLifecycleStatus.failed,
+                  trigger: CompactionTriggerKind.manual,
+                  failureStage: 'preparation',
+                  failureCause: 'thinking_capability_unsupported',
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    expect(arabicL10n.localeName, 'ar');
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+    // Expectations derive from the localization system: the root contract
+    // forbids Arabic literals in handwritten Dart, including tests.
+    expect(
+      find.text(
+        '${arabicL10n.compactionFailurePrefix(arabicL10n.compactionFailureThinkingUnsupported)}\n'
+        '${arabicL10n.compactionNextActionPrefix(arabicL10n.compactionActionThinkingUnsupported)}',
+      ),
+      findsOneWidget,
+    );
   });
 }

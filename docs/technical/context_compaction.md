@@ -193,6 +193,26 @@ Allowlisted non-sensitive identifier strings representing exact failure modes wi
 - Persistence: `source_revision_stale`, `claim_lost`, `stale_operation`, `superseded`, `missing_message_rows`, `database_error`, `persistence_failed`, `interrupted`.
 - Fallback: `unexpected_error`.
 
+### 4.3.2 Client Explanatory Feedback & Safe Next Actions (Gate G9)
+
+Plan 106 Gate G9 maps allowlisted stage and cause diagnostics into user-actionable, localized feedback:
+1. **Reusable Resolution:** `CompactionFailureFormatter` in `client/lib/features/conversations/presentation/utils/compaction_failure_formatter.dart` normalizes wire fields (accepting both canonical `snake_case` and legacy `camelCase`) and resolves one `CompactionFailureExplanation` containing:
+   - `explanation`: Localized statement of what failed.
+   - `nextAction`: Localized guidance on safe next actions.
+   - `toToastMessage()`: Combined message used for manual `/compact` error toasts.
+   - `toDetailLines()`: Formatted `Failure:` and `Next action:` lines rendered in `CompactionEventTile` tooltips.
+   - Fallback authority: without an ambient localization the resolver reads the generated English localization (`AppLocalizationsEn`), so `app_en.arb` remains the single copy authority and no English failure copy is duplicated as Dart literals.
+2. **Failure Categorization:**
+   - **Preparation & Thinking Validation:** Distinguishes unsupported thinking modes (`thinking_capability_unsupported`, `thinking_capability_unknown`, etc.), busy sessions, duplicate in-progress operations, and invalid requests.
+   - **Pruning:** Distinguishes malformed tool results from unresolvable over-budget projections (`projection_still_over_budget`).
+   - **Provider:** Distinguishes timeouts, rate limits (HTTP 429), context overflow, invalid responses, network errors, and generic provider errors.
+   - **Validation:** Distinguishes continuity anchor failures (`continuity_validation_failed`).
+   - **Persistence:** Distinguishes stale revisions, superseded claims, daemon restarts (`interrupted`), and storage write errors.
+   - **Unclassified:** `unexpected_error` (and any unknown cause) renders the honest fallback explanation and retry action; it never inherits the provider default explanation, because the Agent defaults the stage to `provider` when no stage hint existed. A stage the Agent explicitly asserted keeps its stage-specific explanation.
+3. **Multilingual Parity:** English (`app_en.arb`) and Arabic RTL (`app_ar.arb`) keys provide natural translations without hardcoded widget literals. Widget and test expectations are resolved through the localization system — handwritten Dart carries no Arabic literals, including tests (root localization law), and the English timeline tile copy is locked through the localization delegates.
+4. **History & Live Parity:** `UnifiedDeviceMapper` parses `failure_stage` and `failure_cause` from both live `context_compaction.failed` envelopes and hydrated historical rows (`session.query`), ensuring reopening a conversation reproduces the exact same explanation as the original event.
+5. **Redaction & Safety:** Client feedback never renders raw exception messages, stack traces, file paths, or provider bodies.
+
 ### 4.4 `CompactionPressure`
 
 Input to the engine; produced by pressure evaluation only.

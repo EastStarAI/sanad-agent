@@ -31,6 +31,8 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_br
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:test/test.dart';
 
+import '../../support/memory_agent_secret_store.dart';
+
 RouteSignature _testRoute() => const RouteSignature(
   providerInstanceId: 'provider-test',
   templateId: 'openai',
@@ -223,7 +225,12 @@ void main() {
       getIt.registerSingleton<CompactionActivationService>(activationService);
       getIt.registerSingleton<ModelProjectionBuilder>(projBuilder);
       getIt.registerSingleton<SessionManager>(SessionManager());
-      getIt.registerSingleton<AuthManager>(AuthManager());
+      // Inject an in-memory vault: the default platform secret store derives
+      // its scope from a prepared Sanad Home, which a clean CI runner does not
+      // have. Tests must never reach the developer's real Home vault.
+      getIt.registerSingleton<AuthManager>(
+        AuthManager(secretStore: MemoryAgentSecretStore()),
+      );
 
       final coordinator = CompactionCoordinator(
         engine: ContextCompactionEngine(),

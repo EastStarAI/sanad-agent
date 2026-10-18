@@ -59,5 +59,39 @@ void main() {
       expect(result.accepted, isFalse);
       expect(result.failureReason, 'source_revision_stale');
     });
+
+    test('parses failure_stage and failure_cause in snake_case and camelCase', () {
+      final snake = SessionCompactResult.fromJson(const {
+        'outcome': 'failed',
+        'failure_reason': 'summarization_failed',
+        'failure_stage': 'preparation',
+        'failure_cause': 'thinking_capability_unsupported',
+      });
+      expect(snake.failureStage, 'preparation');
+      expect(snake.failureCause, 'thinking_capability_unsupported');
+
+      final camel = SessionCompactResult.fromJson(const {
+        'outcome': 'failed',
+        'failureReason': 'summarizationFailed',
+        'failureStage': 'pruning',
+        'failureCause': 'toolResultMalformed',
+      });
+      expect(camel.failureStage, 'pruning');
+      expect(camel.failureCause, 'toolResultMalformed');
+    });
+
+    test('detects busy and in_progress from failure_cause in claim rejections', () {
+      final busyCause = SessionCompactResult.fromJson(const {
+        'outcome': 'failed',
+        'failure_cause': 'session_busy',
+      });
+      expect(busyCause.sessionBusy, isTrue);
+
+      final progressCause = SessionCompactResult.fromJson(const {
+        'outcome': 'failed',
+        'failureCause': 'compactionInProgress',
+      });
+      expect(progressCause.compactionInProgress, isTrue);
+    });
   });
 }

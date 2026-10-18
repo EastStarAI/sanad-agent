@@ -126,7 +126,18 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'status': row['status'] ?? metadata['status'],
         'started_at': row['started_at'] ?? metadata['started_at'],
         'completed_at': row['completed_at'] ?? metadata['completed_at'],
-        'failure_reason': row['failure_reason'] ?? metadata['failure_reason'],
+        'failure_reason': row['failure_reason'] ??
+            row['failureReason'] ??
+            metadata['failure_reason'] ??
+            metadata['failureReason'],
+        'failure_stage': row['failure_stage'] ??
+            row['failureStage'] ??
+            metadata['failure_stage'] ??
+            metadata['failureStage'],
+        'failure_cause': row['failure_cause'] ??
+            row['failureCause'] ??
+            metadata['failure_cause'] ??
+            metadata['failureCause'],
         'context_window_tokens': row['context_window_tokens'] ?? metadata['context_window_tokens'],
         'estimated_request_tokens_before':
             row['estimated_request_tokens_before'] ?? metadata['estimated_request_tokens_before'],
@@ -607,6 +618,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         if (event['provider_instance_id'] != null) 'provider_instance_id': event['provider_instance_id'],
         if (event['model_id'] != null) 'model_id': event['model_id'],
         if (snapshot.failureReason != null) 'failure_reason': snapshot.failureReason,
+        if (snapshot.failureStage != null) 'failure_stage': snapshot.failureStage,
+        if (snapshot.failureCause != null) 'failure_cause': snapshot.failureCause,
         if (snapshot.contextWindowTokens != null) 'context_window_tokens': snapshot.contextWindowTokens,
         if (snapshot.effectiveInputBudgetTokens != null)
           'effective_input_budget_tokens': snapshot.effectiveInputBudgetTokens,
