@@ -19,6 +19,7 @@ import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/context/context.dart';
 import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
 import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
@@ -220,6 +221,11 @@ void main() {
     'overflow compaction reuses the exact failed provider projection',
     () async {
       final summarizer = _CapturingProviderSummarizer();
+      // Task 106 G7: the overflow path must carry the verified attachment
+      // store and the resolved route context without losing any option.
+      final attachmentStore = AttachmentStore(state, stateHome: sanadHome.path);
+      await attachmentStore.initialize();
+      getIt.registerSingleton<AttachmentStore>(attachmentStore);
       getIt.registerSingleton<CompactionCoordinator>(
         CompactionCoordinator(
           engine: ContextCompactionEngine(summarizer: summarizer),
@@ -257,6 +263,12 @@ void main() {
         ),
         isTrue,
       );
+      final options = summarizer.request!.options;
+      expect(options.sessionId, 'session-overflow');
+      expect(options.providerInstanceId, 'provider-1');
+      expect(options.requestId, startsWith('compaction:overflow:'));
+      expect(options.attachmentStore, same(attachmentStore));
+      expect(options.routeCapabilityProfile, isNotNull);
     },
   );
 

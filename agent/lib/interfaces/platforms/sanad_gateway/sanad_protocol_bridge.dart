@@ -25,6 +25,7 @@ import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
+import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -1243,7 +1244,21 @@ class SanadProtocolBridge {
         await _turnReplayHandler?.handle(event, emitEnvelope);
         return;
       case CanonicalEventTypes.sessionCompact:
-        await _compactHandler?.handle(event, emitEnvelope);
+        try {
+          await _compactHandler?.handle(event, emitEnvelope);
+        } catch (error) {
+          // Last-resort containment for the compaction command. Internal logs
+          // are not exempt from the no-sensitive-payload rule: only allowlisted
+          // diagnostics and correlation identifiers may be logged, never raw
+          // exception values, stack traces, or payload content.
+          final diagnostics = CompactionDiagnostics.classify(error);
+          _logger.warning(
+            'Contained sessionCompact failure '
+            '(session_id=${event.sessionId ?? 'unknown'}, '
+            'request_id=${event.payload['request_id'] ?? 'unknown'}, '
+            'stage=${diagnostics.stage}, cause=${diagnostics.cause})',
+          );
+        }
         return;
       case CanonicalEventTypes.sessionFork:
         await _forkHandler?.handle(event, emitEnvelope);

@@ -169,6 +169,30 @@ Typed, redactable failures for persistence and protocol. Initial set:
 | `persistenceFailed` | Boundary commit failed |
 | `interrupted` | Restart with non-terminal `started` row |
 
+### 4.3.1 Safe Diagnostics (`CompactionFailureStage` & `CompactionFailureCause`)
+
+Plan 106 Gate G8 introduces allowlisted, typed failure diagnostics carrying stage and cause across:
+1. Command Result (`SessionCompactResult` via `sessionCompactResult` envelope payload: `failure_stage`, `failure_cause`).
+2. Live Lifecycle Broadcast (`CompactionLifecycleEvent` via `contextCompactionFailed` canonical event: `failure_stage`, `failure_cause`).
+3. Historical Timeline Hydration (`SessionQueryHandler._compactionLifecycleHistoryRow`: `failure_stage`, `failure_cause` extracted from durable `failure_detail_json`).
+4. Durable Persistence (`session_compaction_operations.failure_detail_json`: `{"stage": stage, "cause": cause, ...}`).
+
+#### Allowlisted Stages (`CompactionFailureStage`)
+- `preparation`: Pre-claim validation, runner initialization, thinking selection validation, admission checks.
+- `pruning`: Message and tool-result pruning before summarization, including projection budget handling.
+- `provider`: Summarizer model invocation (timeouts, rate limits, network, provider HTTP codes).
+- `validation`: Continuity anchor validation.
+- `persistence`: Database commit, boundary CAS, or activation failure.
+
+#### Allowlisted Causes (`CompactionFailureCause`)
+Allowlisted non-sensitive identifier strings representing exact failure modes without leaking raw exception bodies, secrets, paths, user content, or HTTP payloads:
+- Preparation: `session_busy`, `compaction_in_progress`, `invalid_request`, `unavailable`, `session_not_found`, `thinking_capability_unsupported`, `thinking_capability_unknown`, `thinking_option_unavailable_for_route`, `thinking_route_instance_not_found`, `route_resolution_failed`, `preparation_failed`.
+- Pruning: `tool_result_malformed`, `pruning_failed`, `projection_still_over_budget`.
+- Provider: `timeout`, `rate_limited`, `overflow`, `invalid_response`, `network_error`, `provider_error`, `summarization_failed`.
+- Validation: `continuity_validation_failed`.
+- Persistence: `source_revision_stale`, `claim_lost`, `stale_operation`, `superseded`, `missing_message_rows`, `database_error`, `persistence_failed`, `interrupted`.
+- Fallback: `unexpected_error`.
+
 ### 4.4 `CompactionPressure`
 
 Input to the engine; produced by pressure evaluation only.
@@ -448,11 +472,30 @@ that the provider rejected before output; Manual uses the current idle
 projection without adding a synthetic conversation turn. The message and the
 provider response are never persisted as canonical messages.
 
-The request keeps the ordinary tool schemas, thinking mode, output setting,
-cancellation scope, and other request options. The prompt asks for approximately
-two pages but creates no compaction-only token, byte, or field-length limit. Its
-last line forbids tool calls and requires only the final JSON object. A tool-call
-response is never dispatched and receives one corrective attempt from the same
+The compaction request options are built through a single canonical derivation
+(`CompactionRequestFactory.buildCompactionRequestOptions`) shared across manual,
+automatic, and overflow triggers. Every `LLMRequestOptions` field is explicitly
+accounted for: active route signature, user-selected thinking mode, native thinking
+directive, route capability profile/snapshot, attachment store, and transport test seams
+(`requestClientFactory`) are preserved verbatim. Compaction correlation overrides
+`requestId: 'compaction:...'` and cancellation scopes are verified (clearing expired
+or cancelled scopes rather than blindly copying them). Stored thinking choices and wire
+directives are never lowered or substituted as an error fallback. User image attachments
+are verified through the request's `AttachmentStore` before transmission; missing, corrupt,
+or unauthorized media fails specifically before HTTP, preserving the storage jail.
+
+Before summarization, compressible head tool messages are pruned by `CompactionToolPruner`.
+For structured tool results (`Message.toolResult`), the pruner derives immutable replacement
+`ToolExecutionResult` blocks so `content == toolResult.displayText` strictly holds. Call
+identities (`toolCallId`), error flags/codes (`isError`, `errorCode`), schema version, and
+metadata are preserved. For summarizer input, media blocks (`ToolImageBlock`) are converted
+to text descriptions (`[media omitted for compaction summary: <bytes> bytes]`); for oversized
+retained-tail projection, valid image blocks remain untouched without creating invalid empty
+image blocks or inventing an unsanctioned image retention policy. Canonical records are never mutated.
+
+The prompt asks for approximately two pages but creates no compaction-only token, byte,
+or field-length limit. Its last line forbids tool calls and requires only the final JSON object.
+A tool-call response is never dispatched and receives one corrective attempt from the same
 immutable base; a second invalid response closes the operation as failed.
 
 The 16 registered provider templates resolve to four production wire families:

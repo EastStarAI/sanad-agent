@@ -73,6 +73,26 @@ class CompactionOperationRecord {
   bool get isAuthoritativeProjection =>
       status == CompactionStatus.completed && internalSummary != null;
 
+  String? get failureStage {
+    final raw = failureDetailJson;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return decoded['stage']?.toString();
+    } catch (_) {}
+    return null;
+  }
+
+  String? get failureCause {
+    final raw = failureDetailJson;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return decoded['cause']?.toString();
+    } catch (_) {}
+    return null;
+  }
+
   /// Converts a validated engine candidate into a completed durable row.
   factory CompactionOperationRecord.fromCandidate({
     required CompactionCandidate candidate,

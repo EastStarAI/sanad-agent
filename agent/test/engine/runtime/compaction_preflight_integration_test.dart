@@ -325,6 +325,18 @@ void main() {
         ],
         Message(role: MessageRole.user, content: 'الطلب الجاري الواجب تنفيذه'),
       ]);
+      // Task 106 G7: the user's admitted thinking selection exists for the
+      // auto path and must reach the compaction request unchanged.
+      sessions.saveSession(
+        SessionState(
+          sessionId: 'session-preflight',
+          model: 'gpt-4o',
+          thinkingMode: 'high',
+          createdAt: DateTime.utc(2026, 8, 29),
+          updatedAt: DateTime.utc(2026, 8, 29),
+          lastUserMessageAt: DateTime.utc(2026, 8, 29),
+        ),
+      );
       runner = AgentRunner(
         _PreflightAdapter(contextLimit: 3_000),
         ToolsRegistry(),
@@ -364,6 +376,19 @@ void main() {
         summarizer.request!.appendedProjection.last.content,
         endsWith('return only the final JSON object.'),
       );
+      // Task 106 G7: the auto path forwards canonical request options with the
+      // exact user thinking selection, resolved route context, and correlation
+      // id without any downgrade or substitution.
+      final options = summarizer.request!.options;
+      expect(options.sessionId, 'session-preflight');
+      expect(options.providerInstanceId, 'provider-1');
+      expect(options.requestId, startsWith('compaction:auto:'));
+      expect(options.thinkingMode, 'high');
+      expect(options.routeCapabilityProfile, isNotNull);
+      expect(
+        sessions.getSessionRecord('session-preflight')?.thinkingMode,
+        'high',
+      );
     },
   );
 
@@ -376,6 +401,18 @@ void main() {
           content: 'large request $index ${'x' * 1_000}',
         ),
     ]);
+    // Task 106 G7: a rejected/failed auto compaction must never rewrite the
+    // stored user thinking choice as error recovery.
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-preflight',
+        model: 'gpt-4o',
+        thinkingMode: 'high',
+        createdAt: DateTime.utc(2026, 8, 29),
+        updatedAt: DateTime.utc(2026, 8, 29),
+        lastUserMessageAt: DateTime.utc(2026, 8, 29),
+      ),
+    );
     var startedEvents = 0;
     getIt.registerSingleton<CompactionCoordinator>(
       CompactionCoordinator(
@@ -402,6 +439,11 @@ void main() {
           .listLifecycleForSession('session-preflight')
           .where((record) => record.status == CompactionStatus.failed),
       hasLength(1),
+    );
+    expect(
+      sessions.getSessionRecord('session-preflight')?.thinkingMode,
+      'high',
+      reason: 'provider failure must not lower or clear the user choice',
     );
   });
 

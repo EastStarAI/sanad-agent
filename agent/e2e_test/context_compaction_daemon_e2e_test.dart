@@ -11,10 +11,14 @@ import 'dart:math';
 
 import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/session_db.dart';
+import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:test/test.dart';
@@ -24,6 +28,27 @@ import 'support/local_gateway_test_support.dart';
 const _template = 'openai';
 const _authMethod = 'api_key';
 const _protocol = 'openai_compatible';
+
+/// Minimal but real PNG header fixture (magic + IHDR) used to seed a
+/// structured tool result through the real daemon without binary assets.
+const _structuredPngBytes = [
+  0x89,
+  0x50,
+  0x4E,
+  0x47,
+  0x0D,
+  0x0A,
+  0x1A,
+  0x0A,
+  0x00,
+  0x00,
+  0x00,
+  0x0D,
+  0x49,
+  0x48,
+  0x44,
+  0x52,
+];
 
 void main() {
   test(
@@ -277,6 +302,136 @@ void main() {
       }
     },
   );
+
+  test(
+    'F.53.5 structured tool-result compaction completes through the real daemon',
+    () async {
+      final h = await _CompactionHarness.create();
+      try {
+        final sessionId = 'plan53-structured-${_unique()}';
+        await h.seedSession(
+          sessionId: sessionId,
+          providerInstanceId: h.providerInstanceId,
+          withStructuredToolResult: true,
+        );
+
+        final client = await h.startDaemon();
+        try {
+          final execution = await client.executeCompact(
+            sessionId: sessionId,
+            requestId: 'compact-structured-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(
+            execution.result['outcome'],
+            'accepted',
+            reason:
+                'structured compaction failed: '
+                '${execution.result['failure_reason'] ?? execution.result}',
+          );
+          expect(execution.result['compaction_id'], isNotEmpty);
+          expect(execution.lifecycle, ['started', 'completed']);
+        } finally {
+          await client.close();
+        }
+
+        // The canonical structured record stays byte-equivalent after the
+        // engine prunes a derived summarizer copy.
+        final stateDb = AgentStateDatabase.atPath(h.sanadStateHome.path);
+        try {
+          final sessions = SessionDB.fromState(stateDb);
+          final toolMessage = sessions.getMessages(sessionId).firstWhere(
+            (message) => message.toolCallId == 'e2e-structured-tool-call',
+          );
+          final toolResult = toolMessage.toolResult;
+          expect(toolResult, isNotNull);
+          expect(toolResult!.blocks.whereType<ToolImageBlock>(), hasLength(1));
+          expect(
+            toolResult.blocks.whereType<ToolImageBlock>().single.dataBase64,
+            base64Encode(_structuredPngBytes),
+          );
+          expect(
+            toolResult.blocks.whereType<ToolTextBlock>().single.text,
+            'structured payload ${'y' * 1500}',
+          );
+          expect(toolMessage.content, toolResult.displayText);
+        } finally {
+          stateDb.dispose();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+  );
+
+  test(
+    'F.53.6 rejected thinking preparation leaves daemon, history and stored choice intact',
+    () async {
+      final h = await _CompactionHarness.create();
+      try {
+        final sessionId = 'plan53-thinking-${_unique()}';
+        final siblingId = 'plan53-thinking-sibling-${_unique()}';
+        await h.seedSession(
+          sessionId: sessionId,
+          providerInstanceId: h.providerInstanceId,
+          thinkingMode: 'high',
+        );
+        await h.seedSession(
+          sessionId: siblingId,
+          providerInstanceId: h.providerInstanceId,
+        );
+        await h.enableThinkingUnsupportedFixture();
+
+        final client = await h.startDaemon();
+        try {
+          final rejection = await client.sendCompact(
+            sessionId: sessionId,
+            requestId: 'compact-thinking-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(rejection['outcome'], 'failed');
+          expect(rejection['failure_reason'], 'summarization_failed');
+          expect(rejection['failure_stage'], 'preparation');
+          expect(
+            rejection['failure_cause'],
+            'thinking_capability_unsupported',
+          );
+
+          // The daemon stays responsive on the same session.
+          final history = await client.loadSessionHistory(
+            sessionId: sessionId,
+            requestId: 'history-thinking-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect((history['messages'] as List), isNotEmpty);
+
+          // A sibling session still compacts successfully.
+          final sibling = await client.sendCompact(
+            sessionId: siblingId,
+            requestId: 'compact-sibling-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(
+            sibling['outcome'],
+            'accepted',
+            reason:
+                'sibling compact failed: '
+                '${sibling['failure_reason'] ?? sibling}',
+          );
+        } finally {
+          await client.close();
+        }
+
+        expect(await h.daemonStillRunning(), isTrue);
+        // The stored user choice is never lowered or cleared by the failure.
+        expect(await h.storedThinkingMode(sessionId), 'high');
+        // The pre-claim rejection invents no started operation or history row.
+        expect(await h.compactionLifecycleRowCount(sessionId), 0);
+      } finally {
+        await h.dispose();
+      }
+    },
+  );
 }
 
 List<Map<String, dynamic>> _compactionRows(Map<String, dynamic> history) {
@@ -396,6 +551,8 @@ LOG_LEVEL=INFO
   Future<void> seedSession({
     required String sessionId,
     required String providerInstanceId,
+    String? thinkingMode,
+    bool withStructuredToolResult = false,
   }) async {
     final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
     try {
@@ -406,6 +563,7 @@ LOG_LEVEL=INFO
           sessionId: sessionId,
           model: 'test-model',
           providerId: providerInstanceId,
+          thinkingMode: thinkingMode,
           createdAt: now,
           updatedAt: now,
           lastUserMessageAt: now,
@@ -416,11 +574,105 @@ LOG_LEVEL=INFO
           role: MessageRole.user,
           content: 'goal: daemon compaction e2e validation',
         ),
+        if (withStructuredToolResult) ...[
+          Message(
+            role: MessageRole.assistant,
+            content: 'Calling view_image',
+            toolCalls: [
+              ToolCall(
+                id: 'e2e-structured-tool-call',
+                name: 'view_image',
+                arguments: const {'path': 'fixture.png'},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'e2e-structured-tool-call',
+            toolResult: ToolExecutionResult(
+              blocks: [
+                ToolTextBlock(text: 'structured payload ${'y' * 1500}'),
+                ToolImageBlock(
+                  dataBase64: base64Encode(_structuredPngBytes),
+                  mimeType: 'image/png',
+                  width: 1,
+                  height: 1,
+                  detail: ToolImageDetail.high,
+                ),
+              ],
+            ),
+          ),
+        ],
         for (var i = 0; i < 500; i++)
           Message(role: MessageRole.user, content: 'filler $i ${'x' * 300}'),
       ]);
     } finally {
       stateDb.dispose();
+    }
+  }
+
+  /// Declares thinking unsupported for the fixture route models and registers
+  /// the synthetic E2E provider so an explicit stored selection is rejected
+  /// during compaction preparation with `thinking_capability_unsupported`.
+  Future<void> enableThinkingUnsupportedFixture() async {
+    await File('${sanadHome.path}/config.yaml').writeAsString('''
+model_capabilities:
+  test-model:
+    thinking_control:
+      status: unsupported
+  e2e-model:
+    thinking_control:
+      status: unsupported
+''');
+    final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
+    try {
+      ProviderInstanceRepository(stateDb).createInstance(
+        ProviderInstance(
+          id: 'e2e-provider',
+          templateId: _template,
+          authMethod: _authMethod,
+          protocol: _protocol,
+          baseUrl: 'http://127.0.0.1:9/v1',
+          displayName: 'Plan 53 E2E Synthetic Route',
+          defaultModel: 'e2e-model',
+          status: 'ready',
+          createdAt: DateTime.now().toUtc(),
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+    } finally {
+      stateDb.dispose();
+    }
+  }
+
+  Future<String?> storedThinkingMode(String sessionId) async {
+    final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
+    try {
+      return SessionDB.fromState(stateDb).getSession(sessionId)?.thinkingMode;
+    } finally {
+      stateDb.dispose();
+    }
+  }
+
+  Future<int> compactionLifecycleRowCount(String sessionId) async {
+    final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
+    try {
+      final historyRepo = SessionHistoryRevisionRepository(stateDb);
+      final boundaries = CompactionBoundaryRepository(stateDb, historyRepo);
+      return boundaries.listLifecycleForSession(sessionId).length;
+    } finally {
+      stateDb.dispose();
+    }
+  }
+
+  Future<bool> daemonStillRunning() async {
+    final proc = _daemon;
+    if (proc == null) return false;
+    try {
+      await proc.exitCode.timeout(const Duration(milliseconds: 400));
+      return false;
+    } on TimeoutException {
+      return true;
     }
   }
 

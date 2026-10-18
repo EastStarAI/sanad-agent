@@ -137,10 +137,19 @@ class ContextCompactionEngine {
     final selection =
         preparedSelection ?? prepareSelection(request, force: force);
     if (selection == null) return null;
-    final prunedSource = _toolPruner.pruneSourceMessages(
-      selection.sourceMessages,
-      protectedTailStartRowId: selection.retainedTailRange.start.rowId,
-    );
+    final List<IndexedConversationMessage> prunedSource;
+    try {
+      prunedSource = _toolPruner.pruneSourceMessages(
+        selection.sourceMessages,
+        protectedTailStartRowId: selection.retainedTailRange.start.rowId,
+      );
+    } catch (_) {
+      throw CompactionEngineFailure(
+        CompactionFailureReason.summarizationFailed,
+        stage: CompactionFailureStage.pruning,
+        cause: CompactionFailureCause.toolResultMalformed,
+      );
+    }
     final anchors = _continuityValidator.extractAnchors(prunedSource);
     final generated = await _generateSummary(request, prunedSource, anchors);
     var summary = generated.summary;
@@ -148,6 +157,8 @@ class ContextCompactionEngine {
     if (!continuity.passed) {
       throw CompactionEngineFailure(
         CompactionFailureReason.continuityValidationFailed,
+        stage: CompactionFailureStage.validation,
+        cause: CompactionFailureCause.continuityValidationFailed,
         missingAnchors: continuity.missingAnchors,
         antiThrashing: CompactionAntiThrashingHints(
           repairAttempts: continuity.repairAttempts,
@@ -186,7 +197,15 @@ class ContextCompactionEngine {
     );
     if (afterTokens > effectiveInputBudget ||
         retainedTailTokens > request.targetRequestTokens) {
-      projectedTail = _toolPruner.pruneOversizedForProjection(projectedTail);
+      try {
+        projectedTail = _toolPruner.pruneOversizedForProjection(projectedTail);
+      } catch (_) {
+        throw CompactionEngineFailure(
+          CompactionFailureReason.summarizationFailed,
+          stage: CompactionFailureStage.pruning,
+          cause: CompactionFailureCause.pruningFailed,
+        );
+      }
       projectedMessages = <Message>[
         projectedSummary,
         ...projectedTail.map((entry) => entry.message),
@@ -212,6 +231,8 @@ class ContextCompactionEngine {
         retainedTailTokens > request.targetRequestTokens) {
       throw CompactionEngineFailure(
         CompactionFailureReason.projectionStillOverBudget,
+        stage: CompactionFailureStage.pruning,
+        cause: CompactionFailureCause.projectionStillOverBudget,
         estimatedAfterTokens: afterTokens,
       );
     }
@@ -226,6 +247,8 @@ class ContextCompactionEngine {
     if (afterTokens >= beforeTokens) {
       throw CompactionEngineFailure(
         CompactionFailureReason.projectionStillOverBudget,
+        stage: CompactionFailureStage.pruning,
+        cause: CompactionFailureCause.projectionStillOverBudget,
         estimatedAfterTokens: afterTokens,
       );
     }
@@ -295,6 +318,8 @@ class ContextCompactionEngine {
         } on CompactionRouteChanged {
           throw CompactionEngineFailure(
             CompactionFailureReason.sourceRevisionStale,
+            stage: CompactionFailureStage.persistence,
+            cause: CompactionFailureCause.sourceRevisionStale,
           );
         } on CompactionProviderOverflow {
           if (attempts == 0) {
@@ -307,6 +332,8 @@ class ContextCompactionEngine {
           }
           throw CompactionEngineFailure(
             CompactionFailureReason.summarizationFailed,
+            stage: CompactionFailureStage.provider,
+            cause: CompactionFailureCause.overflow,
           );
         } on CompactionInvalidProviderResponse catch (error) {
           totalDuration += error.duration ?? Duration.zero;
@@ -319,6 +346,8 @@ class ContextCompactionEngine {
           }
           throw CompactionEngineFailure(
             CompactionFailureReason.summarizationFailed,
+            stage: CompactionFailureStage.provider,
+            cause: CompactionFailureCause.invalidResponse,
           );
         }
         totalDuration += result.duration;
@@ -633,17 +662,22 @@ class _CompactionUsage {
 
 class CompactionEngineFailure implements Exception {
   final CompactionFailureReason reason;
+  final String? stage;
+  final String? cause;
   final List<String> missingAnchors;
   final int? estimatedAfterTokens;
   final CompactionAntiThrashingHints? antiThrashing;
 
   CompactionEngineFailure(
     this.reason, {
+    this.stage,
+    this.cause,
     this.missingAnchors = const [],
     this.estimatedAfterTokens,
     this.antiThrashing,
   });
 
   @override
-  String toString() => 'CompactionEngineFailure($reason)';
+  String toString() =>
+      'CompactionEngineFailure($reason, stage: $stage, cause: $cause)';
 }

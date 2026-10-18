@@ -360,7 +360,11 @@ void main() {
     final outcome = await pending;
     final persisted = boundaries.findById(outcome!.compactionId);
     expect(outcome.failureReason, CompactionFailureReason.persistenceFailed);
+    expect(outcome.failureStage, CompactionFailureStage.persistence);
+    expect(outcome.failureCause, CompactionFailureCause.sourceRevisionStale);
     expect(persisted?.failureDetailJson, contains('sourceRevisionStale'));
+    expect(persisted?.failureStage, CompactionFailureStage.persistence);
+    expect(persisted?.failureCause, CompactionFailureCause.sourceRevisionStale);
   });
 
   test('summarizer failure closes the early claim as typed failed', () async {

@@ -21,9 +21,12 @@ CompactionEngineRequest
 
 The coordinator selects immutable source/tail ranges synchronously, persists the
 exclusive started claim, and publishes the compacting barrier before the first
-summarizer await. `CompactionActivationService` activates only a validated
-candidate; summarizer, validation, or cancellation failure closes the claimed
-row as typed failed and never mutates canonical history.
+summarizer await. Pre-claim preparation and thinking selection errors are contained
+without creating a database claim or barrier. `CompactionActivationService` activates
+only a validated candidate; summarizer, pruning, validation, or cancellation failure
+closes the claimed row as typed failed with allowlisted safe stage and cause diagnostics
+(`failure_stage`, `failure_cause` stored in `failure_detail_json`) and never mutates
+canonical history. Stale non-null owners cannot clear newer compacting state or drain queues.
 
 ## Pressure and budgeting
 
@@ -76,6 +79,15 @@ row as typed failed and never mutates canonical history.
   tail; no middle gap is permitted.
 - Summarizer input describes media and truncates oversized tool results; protected
   tail rows stay verbatim for summarizer partitioning.
+- Structured tool results (`Message.toolResult`) are pruned coherently with their
+  string projection: `CompactionToolPruner` derives immutable replacement
+  `ToolExecutionResult` blocks so the invariant `content == toolResult.displayText`
+  is strictly preserved. Call identity (`toolCallId`), error flags/codes (`isError`,
+  `errorCode`), schema version, and metadata remain intact.
+- For summarizer input, media blocks (`ToolImageBlock`) are converted to clean text
+  descriptions (`[media omitted for compaction summary: <bytes> bytes]`). For oversized
+  retained-tail projection (`pruneOversizedForProjection`), `ToolImageBlock`s remain
+  unmodified without creating invalid empty image blocks or inventing a new image-retention policy.
 - When a single recent tool/media payload would keep the post-compaction request
   over budget, `CompactionToolPruner.pruneOversizedForProjection` shrinks
   projection-only copies so the engine can still emit a candidate. Canonical rows
@@ -114,6 +126,18 @@ eligible.
   provider-visible projection for the trigger. Auto includes the admitted user
   turn; overflow reuses the failed projection; manual uses the current idle
   projection without inventing a turn.
+- Request options are derived through a single canonical builder
+  (`CompactionRequestFactory.buildCompactionRequestOptions`) shared across manual,
+  automatic, and overflow paths. Every `LLMRequestOptions` field is explicitly accounted for:
+  the active route signature, user-selected thinking mode, native thinking directive,
+  capability profile and snapshot, attachment store, and transport test seams (`requestClientFactory`)
+  are preserved verbatim. Compaction overrides only correlation (`requestId: 'compaction:...'`)
+  and safely verifies cancellation scope lifecycle (clearing expired or cancelled scopes
+  rather than copying them blindly).
+- Exact thinking preservation is strict: the user's selected thinking mode and wire directive
+  are never lowered, cleared, defaulted, or substituted as error recovery.
+- Image attachments are verified against the request's `AttachmentStore` before transmission;
+  missing, corrupt, or unauthorized media fails specifically before HTTP, preserving the storage jail.
 - One ordinary ephemeral user message is appended. The normal tool list and
   request settings remain unchanged, but the final instruction line forbids
   tool calls and requires the final JSON object only. A returned tool call is

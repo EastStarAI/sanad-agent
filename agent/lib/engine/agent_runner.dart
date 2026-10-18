@@ -61,6 +61,7 @@ import '../evolution/db/session_projection_revision_repository.dart';
 import '../engine/compaction/compaction.dart';
 import 'context/context.dart';
 import 'runtime/compaction_coordinator.dart';
+import 'runtime/compaction_request_factory.dart';
 import 'runtime/turn_route_state.dart';
 import '../core/provider_runtime/provider_instance_repository.dart';
 import '../core/provider_runtime/route_capability_resolver.dart';
@@ -1345,37 +1346,39 @@ class AgentRunner {
             providerId: providerInstanceId,
             modelId: modelId,
           );
-          final request = CompactionEngineRequest(
-            compactionId: '',
-            sessionId: sessionId,
-            trigger: CompactionTrigger.overflow,
-            sourceRevision: revision.toCompactionRevision(),
-            routeSignature: routeSignature,
-            contextWindowTokens: contextWindow,
-            timeline: timeline,
-            systemPrompt: contextAssembler.assemble() ?? '',
-            runtimeContext: '',
-            toolSchemas: const [],
-            providerProjection: failedProviderProjection,
-            providerTools: failedProviderTools ?? const [],
-            providerRequestOptions: _compactionRequestOptions(
-              providerInstanceId,
-              compactionId: 'overflow',
-            ),
-            projectionRevision: projectionRevision,
-            previousSummary: activeBoundary?.internalSummary,
-            previousSourceRange: activeBoundary?.sourceRange,
-            targetRequestTokens: targetRequestTokens,
-            thresholdRatio: policy.threshold,
-          );
-          final outcome = await coordinator.runCompaction(
-            request: request,
-            force: true,
-          );
-          if (outcome?.status == CompactionStatus.completed) {
-            _refreshCanonicalHistoryAfterCompaction();
-            return true;
-          }
+          try {
+            final request = CompactionEngineRequest(
+              compactionId: '',
+              sessionId: sessionId,
+              trigger: CompactionTrigger.overflow,
+              sourceRevision: revision.toCompactionRevision(),
+              routeSignature: routeSignature,
+              contextWindowTokens: contextWindow,
+              timeline: timeline,
+              systemPrompt: contextAssembler.assemble() ?? '',
+              runtimeContext: '',
+              toolSchemas: const [],
+              providerProjection: failedProviderProjection,
+              providerTools: failedProviderTools ?? const [],
+              providerRequestOptions: _compactionRequestOptions(
+                providerInstanceId,
+                compactionId: 'overflow',
+              ),
+              projectionRevision: projectionRevision,
+              previousSummary: activeBoundary?.internalSummary,
+              previousSourceRange: activeBoundary?.sourceRange,
+              targetRequestTokens: targetRequestTokens,
+              thresholdRatio: policy.threshold,
+            );
+            final outcome = await coordinator.runCompaction(
+              request: request,
+              force: true,
+            );
+            if (outcome?.status == CompactionStatus.completed) {
+              _refreshCanonicalHistoryAfterCompaction();
+              return true;
+            }
+          } catch (_) {}
         }
       }
     }
@@ -2647,57 +2650,71 @@ class AgentRunner {
         return false;
       }
     }
-    final request = CompactionEngineRequest(
-      compactionId: '',
-      sessionId: sessionId,
-      trigger: CompactionTrigger.auto,
-      sourceRevision: revision.toCompactionRevision(),
-      routeSignature: routeSignature,
-      contextWindowTokens: contextWindow,
-      preflightPressure: preflightPressure,
-      timeline: timelineEntries,
-      systemPrompt: contextAssembler.assemble() ?? '',
-      runtimeContext: runtimeSystemPrompt ?? '',
-      toolSchemas: toolSchemas,
-      providerProjection: prospectiveHistory,
-      providerTools: registry.allTools.map((tool) => tool.schema).toList(),
-      providerRequestOptions: _compactionRequestOptions(
-        routing.providerId,
-        compactionId: 'auto',
-      ),
-      projectionRevision: _currentProjectionRevision(),
-      previousSummary: projection.activeBoundary?.internalSummary,
-      previousSourceRange: projection.activeBoundary?.sourceRange,
-      targetRequestTokens:
-          (_effectiveInputWindow(contextWindow) * policy.targetRatio).round(),
-      thresholdRatio: policy.threshold,
-    );
-    final outcome = await getIt<CompactionCoordinator>().runCompaction(
-      request: request,
-      force: true,
-    );
-    if (outcome?.status == CompactionStatus.completed) {
-      _lastCompactionCompletedAt = DateTime.now().toUtc();
-      _autoCompactionBlockedForRun = false;
-      _refreshCanonicalHistoryAfterCompaction();
-      return true;
-    }
-    if (outcome?.status == CompactionStatus.failed) {
+    try {
+      final request = CompactionEngineRequest(
+        compactionId: '',
+        sessionId: sessionId,
+        trigger: CompactionTrigger.auto,
+        sourceRevision: revision.toCompactionRevision(),
+        routeSignature: routeSignature,
+        contextWindowTokens: contextWindow,
+        preflightPressure: preflightPressure,
+        timeline: timelineEntries,
+        systemPrompt: contextAssembler.assemble() ?? '',
+        runtimeContext: runtimeSystemPrompt ?? '',
+        toolSchemas: toolSchemas,
+        providerProjection: prospectiveHistory,
+        providerTools: registry.allTools.map((tool) => tool.schema).toList(),
+        providerRequestOptions: _compactionRequestOptions(
+          routing.providerId,
+          compactionId: 'auto',
+        ),
+        projectionRevision: _currentProjectionRevision(),
+        previousSummary: projection.activeBoundary?.internalSummary,
+        previousSourceRange: projection.activeBoundary?.sourceRange,
+        targetRequestTokens:
+            (_effectiveInputWindow(contextWindow) * policy.targetRatio).round(),
+        thresholdRatio: policy.threshold,
+      );
+      final outcome = await getIt<CompactionCoordinator>().runCompaction(
+        request: request,
+        force: true,
+      );
+      if (outcome?.status == CompactionStatus.completed) {
+        _lastCompactionCompletedAt = DateTime.now().toUtc();
+        _autoCompactionBlockedForRun = false;
+        _refreshCanonicalHistoryAfterCompaction();
+        return true;
+      }
+      if (outcome?.status == CompactionStatus.failed) {
+        _autoCompactionBlockedForRun = true;
+      }
+      return false;
+    } catch (_) {
       _autoCompactionBlockedForRun = true;
+      return false;
     }
-    return false;
   }
 
   LLMRequestOptions _compactionRequestOptions(
     String? providerInstanceId, {
     required String compactionId,
   }) {
-    return LLMRequestOptions(
+    final base = _requestOptionsForTurn(providerInstanceId);
+    final routing = _turnRoute.resolveTurnRouting();
+    final route = getIt<AgentRuntimeService>().resolveSignature(
+      providerId: routing.providerId,
+      modelId: routing.model,
+    );
+    final uniqueCompactionId = compactionId.isEmpty
+        ? const Uuid().v4()
+        : '$compactionId:${const Uuid().v4()}';
+    return CompactionRequestFactory.buildCompactionRequestOptions(
       sessionId: sessionId,
-      requestId: 'compaction:$compactionId:${const Uuid().v4()}',
-      providerInstanceId: providerInstanceId,
-      thinkingMode: _turnRoute.effectiveThinkingMode,
-      cancellationScope: _cancellationScope,
+      compactionId: uniqueCompactionId,
+      routeSignature: route,
+      baseOptions: base,
+      fallbackThinkingMode: _turnRoute.effectiveThinkingMode,
     );
   }
 

@@ -16,6 +16,9 @@ class CompactionLifecycleEvent {
   final CompactionTrigger trigger;
   final CompactionStatus status;
   final CompactionFailureReason? failureReason;
+  final String? failureStage;
+  final String? failureCause;
+  final Map<String, dynamic>? failureDetail;
   final CompactionMetrics? metrics;
   final String? providerInstanceId;
   final String? modelId;
@@ -28,6 +31,9 @@ class CompactionLifecycleEvent {
     required this.trigger,
     required this.status,
     this.failureReason,
+    this.failureStage,
+    this.failureCause,
+    this.failureDetail,
     this.metrics,
     this.providerInstanceId,
     this.modelId,
@@ -199,21 +205,29 @@ class CompactionCoordinator {
           compactionId: compactionId,
           startedAt: startedAt,
           failureReason: CompactionFailureReason.summarizationFailed,
+          failureStage: CompactionFailureStage.provider,
+          failureCause: CompactionFailureCause.summarizationFailed,
         );
       }
       candidate = built;
     } on CompactionEngineFailure catch (error) {
+      final diagnostics = CompactionDiagnostics.classify(error);
       return _failClaimed(
         request: request,
         compactionId: compactionId,
         failureReason: error.reason,
+        failureStage: error.stage ?? diagnostics.stage,
+        failureCause: error.cause ?? diagnostics.cause,
         startedAt: startedAt,
       );
-    } catch (_) {
+    } catch (error) {
+      final diagnostics = CompactionDiagnostics.classify(error);
       return _failClaimed(
         request: request,
         compactionId: compactionId,
-        failureReason: CompactionFailureReason.summarizationFailed,
+        failureReason: diagnostics.failureReason,
+        failureStage: diagnostics.stage,
+        failureCause: diagnostics.cause,
         startedAt: startedAt,
       );
     }
@@ -224,6 +238,8 @@ class CompactionCoordinator {
         compactionId: compactionId,
         startedAt: startedAt,
         failureReason: CompactionFailureReason.sourceRevisionStale,
+        failureStage: CompactionFailureStage.persistence,
+        failureCause: CompactionFailureCause.sourceRevisionStale,
       );
     }
     final activation = _activation.activateCandidate(
@@ -232,11 +248,27 @@ class CompactionCoordinator {
       completedAt: DateTime.now().toUtc(),
     );
     if (activation.outcome != CompactionTerminalOutcome.completed) {
+      final cause = switch (activation.outcome) {
+        CompactionTerminalOutcome.sourceRevisionStale =>
+          CompactionFailureCause.sourceRevisionStale,
+        CompactionTerminalOutcome.staleOperation =>
+          CompactionFailureCause.staleOperation,
+        CompactionTerminalOutcome.supersededByNewerBoundary =>
+          CompactionFailureCause.superseded,
+        CompactionTerminalOutcome.missingMessageRows =>
+          CompactionFailureCause.missingMessageRows,
+        _ => CompactionFailureCause.persistenceFailed,
+      };
+      final detail = {
+        'stage': CompactionFailureStage.persistence,
+        'cause': cause,
+        'activation_outcome': activation.outcome.name,
+      };
       _activation.failOperation(
         compactionId: compactionId,
         failureReason: CompactionFailureReason.persistenceFailed,
         completedAt: DateTime.now().toUtc(),
-        failureDetail: {'activation_outcome': activation.outcome.name},
+        failureDetail: detail,
       );
       _emit(
         CompactionLifecycleEvent(
@@ -245,6 +277,9 @@ class CompactionCoordinator {
           trigger: request.trigger,
           status: CompactionStatus.failed,
           failureReason: CompactionFailureReason.persistenceFailed,
+          failureStage: CompactionFailureStage.persistence,
+          failureCause: cause,
+          failureDetail: detail,
           providerInstanceId: request.routeSignature.providerInstanceId,
           modelId: request.routeSignature.modelId,
           startedAt: startedAt,
@@ -255,6 +290,9 @@ class CompactionCoordinator {
         compactionId: compactionId,
         trigger: request.trigger,
         failureReason: CompactionFailureReason.persistenceFailed,
+        failureStage: CompactionFailureStage.persistence,
+        failureCause: cause,
+        failureDetail: detail,
       );
     }
 
@@ -306,12 +344,21 @@ class CompactionCoordinator {
     required String compactionId,
     required DateTime startedAt,
     required CompactionFailureReason failureReason,
+    String? failureStage,
+    String? failureCause,
+    Map<String, dynamic>? failureDetail,
   }) {
     final completedAt = DateTime.now().toUtc();
+    final detail = <String, dynamic>{
+      'stage': ?failureStage,
+      'cause': ?failureCause,
+      ...?failureDetail,
+    };
     _activation.failOperation(
       compactionId: compactionId,
       failureReason: failureReason,
       completedAt: completedAt,
+      failureDetail: detail.isNotEmpty ? detail : null,
     );
     _emit(
       CompactionLifecycleEvent(
@@ -320,6 +367,9 @@ class CompactionCoordinator {
         trigger: request.trigger,
         status: CompactionStatus.failed,
         failureReason: failureReason,
+        failureStage: failureStage,
+        failureCause: failureCause,
+        failureDetail: detail.isNotEmpty ? detail : null,
         providerInstanceId: request.routeSignature.providerInstanceId,
         modelId: request.routeSignature.modelId,
         startedAt: startedAt,
@@ -330,6 +380,9 @@ class CompactionCoordinator {
       compactionId: compactionId,
       trigger: request.trigger,
       failureReason: failureReason,
+      failureStage: failureStage,
+      failureCause: failureCause,
+      failureDetail: detail.isNotEmpty ? detail : null,
     );
   }
 }
