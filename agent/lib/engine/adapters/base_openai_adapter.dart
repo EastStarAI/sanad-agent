@@ -898,6 +898,14 @@ class BaseOpenAIAdapter
         body: jsonEncode(body),
         operation: 'generateResponse',
       );
+    } catch (error) {
+      if (LLMRequestDumper.isEnabled) {
+        await LLMRequestDumper.recordError(
+          error,
+          requestId: options.requestId,
+        );
+      }
+      rethrow;
     } finally {
       await transport.dispose();
     }
@@ -998,7 +1006,13 @@ class BaseOpenAIAdapter
     late http.StreamedResponse response;
     try {
       response = await transport.send(request, operation: 'generateStream');
-    } catch (_) {
+    } catch (error) {
+      if (LLMRequestDumper.isEnabled) {
+        await LLMRequestDumper.recordError(
+          error,
+          requestId: options.requestId,
+        );
+      }
       await transport.dispose();
       rethrow;
     }
@@ -1316,6 +1330,9 @@ class BaseOpenAIAdapter
         rethrow;
       }
     } finally {
+      if (LLMRequestDumper.isEnabled) {
+        LLMRequestDumper.cleanupActiveDump(requestId: options.requestId);
+      }
       await transport.dispose();
     }
   }

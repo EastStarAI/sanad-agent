@@ -2,7 +2,7 @@
 id: 106
 title: Context Compaction Resilience, Protocol Alignment, and Reference-Grounded Token Estimation
 status: in_progress
-gate: G10-live-acceptance-and-delivery
+gate: sequential-compaction-and-thinking-repair-checkpoints
 created: 2026-10-13
 branch: fix/106-compaction-resilience-and-token-estimation-repair
 evidence_id: 106
@@ -16,7 +16,197 @@ amendment_evidence_fingerprint: sha256:8aa804e28d73531802382ed043c3a20bb699b254c
 ## Goal
 Restore reliable manual, automatic, and overflow context compaction across structured tool results and image attachments without changing the user's thinking selection or losing conversation history. Contain failures and explain their actual stage/cause in durable state and the Client. Preserve the original work on orphan-claim recovery, protocol compatibility, wire-grounded token estimates, and mathematically consistent UI metrics.
 
-## Authorized Scope Amendment — 2026-10-18
+## Authorized Consolidated Repair Queue — 2026-10-19
+
+This section is the current task list and overrides older scheduling, runtime-target and scope exclusions below. Earlier receipts remain historical evidence, not acceptance of new source changes. The plan remains at its existing `done/` path for link stability, but its status is **in progress**, not complete.
+
+### Agreed Scope and Delivery
+
+- Task 106 now owns the combined compaction and provider-thinking repair campaign in `.agent/worktrees/106-compaction-resilience-and-token-estimation-repair`, branch `fix/106-compaction-resilience-and-token-estimation-repair`.
+- Tasks [115](docs/plans/tasks/115-post-201-provider-thinking-route-admission-regression.md) and [116](docs/plans/tasks/116-deepseek-reasoning-replay-across-tool-history.md) are subordinate work packages in that same worktree and existing Draft [PR 210](https://github.com/EastStarAI/sanad-agent/pull/210). Their earlier separate-worktree, after-Ready and out-of-scope scheduling is superseded. Their protocol/security requirements remain intact.
+- The user authorizes staged commit/push after each independently reviewed, automatically verified and live-accepted repair. Commit identity: `Sanad Agent <sanad-agent@eaststarai.com>`. Await successful CI for the exact checkpoint SHA before starting the next repair; no batch of unaccepted fixes or final-only live testing.
+- **Coordinator scope/resource constraint (user decision):** the principal, not subagents, owns avoiding unnecessary scope, elapsed time, effort and resource use. Dispatch only the smallest work that directly closes an agreed acceptance gap; reuse existing owners/tests and defer optional improvements. This is a decision gate for the coordinator, not another research/reporting assignment for workers. Required correctness, security, review and live acceptance are not waived to save effort.
+- **Reviewer designation (latest user authorization):** use AGY with the approved `gemini-3.8-flash-high` model for this106/PR210 repair cycle, in a fresh conversation distinct from each implementer. This supersedes the previous Sanad review designation and the intermediate permission to adjust one native review's thinking. Reviewers may repair findings inside the assigned scope after the implementer stops; principal live acceptance, staged commit/push and exact-SHA CI gates remain unchanged. Other plans' reviewer choices are not changed.
+- Implementation and repair tests remain delegated. The principal owns coordination, evidence triage, independent acceptance and checkpoint decisions. One source writer at a time, including reviewers performing repairs; a worker's completion claim is not acceptance.
+- The normal user runtime stays on `.agent/worktrees/recovery-pre201-compaction-recovery` at the pre-PR201 source. All candidate live acceptance uses a separately managed Agent/Client pair sourced from Task 106 and a separate test Home, referred to below as **Test Home** (the user-designated `.sanad-test` under the user home). No automatic source switch back, mutation of the normal Home, copying credentials, new provider or production rollout is inferred. Use existing authorized configured routes; unavailable test authentication/configuration is a visible blocker, not permission to clone the normal Home.
+- User-directed live verification is **daemon-backed CLI first** wherever supported: target the verified Test Home and explicit test session through the native Sanad CLI, exercising real orchestration, compaction, persistence and configured provider requests. Keep its matched Client open on the same session for user observation; use UI interaction only for Client-specific state/rendering/delivery assertions or a demonstrated CLI capability gap. CLI completion is not proof of UI correctness. Never replace daemon acceptance with standalone execution or accidentally target the normal Home.
+- PR 210 remains Draft during the sequence. Ready requires the final combined gate; merge and protected labels remain unauthorized. No independent PRs for 115/116.
+
+### Parallel Execution and First Repair Slice
+
+- User-directed parallelism: overlap independent scoped work when it reduces delivery time; never add work just to occupy workers. Separate worktrees are required for parallel product writers. Preparation/read-only readiness may overlap product work when they share no mutable ownership; independent review starts after its implementer stops. Dependency acceptance, staged checkpoint/CI and principal live gates remain sequential and mandatory.
+- First executable slice: preserve and verify the complete inherited dirty/new-file candidate before any shelving; keep coordination plans intact. Then repair only opt-in request-scoped compaction dump pairing and its normal-turn isolation, with focused tests and owning docs. Do not start the full-target/UI policy, reasoning/provider projection or a generic diagnostics framework in this slice. This is a component of stage1, not a claim that the whole diagnostic stage or inherited resilience candidate has passed. Coordinator review triage rejects speculative expansion: retain the existing `DUMP_REQUESTS` opt-in, remove the unused completed-dump cache/discovery APIs unless an actual current runtime consumer requires them, and prove real stream-subscription cancellation releases active mappings without overwriting successful captures. These are scoped acceptance corrections, not a new diagnostics subsystem.
+- In parallel, a read-only readiness worker checks Test Home startup/configured-route readiness and the supported daemon CLI commands for same-session sending, route changes, compaction and inspection. No provider requests, credentials inspection/copy, Home mutation, runtime start/stop or UI actions. The principal owns any subsequent managed runtime setup and live acceptance. A missing live dependency blocks live acceptance, not unrelated reversible source preparation.
+
+### First Slice Live Acceptance Bound
+
+Use one new synthetic-only Test Home session on its existing preferred OpenAI-compatible instance and configured model; no normal-session export, new provider or thinking override. Budget up to three ordinary requests plus at most two summary attempts, aiming below180000 aggregate reported input tokens; stop on an unexpected route, tool effect or budget overrun. Keep the matched Client open. Prefer CLI sends and inspection; manual compaction may use one keyed UI action because the existing REPL helper automatically resends after a query timeout, making an ambiguous manual request unsuitable for a one-shot acceptance phase. Do not add a new CLI framework to avoid that narrow gap. Verify original normal dumps are unchanged, summarization captures pair their actual wire request/response, post-boundary usage belongs to the first real call, and canonical continuity survives. This accepts capture isolation only, not the unimplemented full-target policy or the rest of stage1 diagnostics.
+
+#### First Slice Live Acceptance Receipt — 2026-10-19
+
+- Candidate: checkpoint `d455db2af27b5d9ac8e2ce631825283839d1a87a` (request-scoped compaction dump pairing and normal-turn isolation only). The full-request target policy and the remaining stage 1 diagnostics are still open and are not claimed by this receipt.
+- Route: Test Home `~/.sanad-test` running daemon (Local Gateway `ws://127.0.0.1:58096/ws`) with OpenCode Go / `deepseek-v4.1-flash`. Every send proved an `ESTABLISHED` TCP connection from the CLI process to the daemon port, so no standalone execution path was used. The resolved window is 1000000 tokens with effective input budget 994880 and automatic threshold 895392, so acceptance used one manual compaction through the product REPL `/compact` (daemon-dispatched `session.compact`, trigger `manual`) rather than waiting for the automatic trigger.
+- Synthetic session `fd8340bf-0dd2-4718-9d8a-7150acfd54fc` (data-only prompts, zero tool-boundary rows): head 21263, tail 26743 and post-compaction `after` 19182 provider-confirmed input tokens — three ordinary calls and one summarization attempt, inside the accepted budget.
+- Dump pairing: exactly one `compaction_dump_compaction_6d44b8bf-…` capture with `capture_state=completed` and a captured response whose usage 15162/854 equals operation row `6d44b8bf` (`summarization_input_tokens` 15162, `summarization_output_tokens` 854, `summarization_attempts` 1, `duration_ms` 6440).
+- Normal-turn isolation: the session's normal dumps stayed at two files, no new normal dump appeared during compaction, and the pre-compaction last dump kept its exact sha256, so compaction never touched `lastDumpFilePath`.
+- Continuity: after compaction the model still answered `case L106-P1; checkpoint orchid-271; pending task: verify capture pairing`, so the retained facts survived in the summary/tail.
+- Manual-request ambiguity: the REPL printed `outcome "accepted"` as a warning because its outcome whitelist accepts only `success`/`noop`/`completed`/`dispatched`. The printed outcome is therefore not a completion signal; this acceptance used the durable operation row plus the paired dump as the completion signal, without adding a CLI framework.
+- Findings carried into stage 1 / 3A: (a) the compaction dump records `provider`, `model` and `base_url` as null, so summarization-route attribution currently depends on the operation row; (b) `provider_confirmed_request_tokens_after` stayed null although a real provider-confirmed call followed the boundary; (c) `estimated_request_tokens_after` (7070) was far below the provider-confirmed 19182 because the estimate excludes fixed instruction and tool overhead — the measurement gap stage 3A must close.
+- Scalar evidence paths (outside the repository by design): `~/.sanad-delegate/runs/106-g10-final/live-pairing-ocg/{case.json,head-daemon-receipt.json,tail-daemon-receipt.json,compact-daemon/compact-receipt.json,after-daemon-receipt.json}`.
+
+### Corrected Evidence and Open Questions
+
+- Route identity for the current live and review route is `deepseek-v4.1-flash` on OpenCode Go. In this Test Home the provider lists only `deepseek-v4-pro` and `deepseek-v4.1-flash` for DeepSeek; the registered default `deepseek-v4-flash-vision-exp` no longer appears in the live list, and `deepseek-v4-flash` is neither listed nor resolvable. `sanad models --home` also ignores the documented `--home` value for provider inspection while `SANAD_HOME` is set, so provider/model inventory must read the state home actually in use.
+- Observation for later triage, not a scoped repair: `sanad doctor` reports `Daemon Status: Not running (standalone fallback active)` while a daemon of the same Home is actively serving the Local Gateway on 58096.
+- Execution blocker discovered during the first repair review: the user-designated OpenCode Go / DeepSeek review route rejects selected `max` with `thinking_option_unavailable_for_route` before review work starts. This is specific evidence of a reviewer-readiness dependency, not an accepted review or proof of a vendor's true capabilities. Keep the failure explicit as historical evidence. The user subsequently authorized replacing the106 reviewer with independent AGY; no native thinking change or normal-runtime patch is required to unblock code review. The first dump-pairing implementation independently passes analyzer and32 focused tests, but code review, scoped cleanup and live acceptance remain open. No commit/push or next dependent repair is accepted on that basis alone.
+
+- User report: after the source move to pre-PR201, automatic compaction ran immediately despite the displayed context being below the expected threshold; this compaction succeeded and the conversation continued. This is user-observed evidence pending correlation with the durable operation and actual preflight request.
+- It establishes a successful compaction on that source, not that every failure predates PR201 or that PR201 is innocent. The below-threshold trigger symptom is separately reported on the earlier source. Neither successful startup nor one successful summary proves pressure correctness or cause attribution.
+- Withdraw the earlier causal claim that a configured `358000` cap necessarily leaves no summarization output headroom. Invalid-summary validation and a provider timeout are observed failure classes; their root cause remains unproven without request/response evidence.
+- A UI percentage, last provider input, prospective next-request pressure, accumulated history and cached input are distinct measurements. Cached input still consumes context. Record which basis made the decision before labeling the automatic trigger erroneous.
+
+### Ordered Task List
+
+No stage below is complete solely because an earlier G6–G11 box is checked. Stop at a failing scoped gate; do not proceed while its review, live acceptance or exact-SHA CI is blocked. Stages 1–2 verify diagnostics/resilience only and report the existing target miss honestly; they do not claim or require the not-yet-implemented stage 3A total-target policy.
+
+| Order | Work package | Required acceptance before checkpoint |
+|---|---|---|
+| 0 | Reconcile the candidate and prepare representative isolated data | Inventory the uncommitted near-window candidate against accepted checkpoint `d455db2af27b5d9ac8e2ce631825283839d1a87a`; preserve a verified patch including new files before any scoped shelving needed to isolate the diagnostic checkpoint. Do not discard or commit an unreviewed inherited delta. Resolve reviewer readiness and the Test Home boundary; approve a selected-data manifest and prepare repeatable synthetic/real-history test cases below. The previous near-window reviewer is blocked, not passed. |
+| 1 | Lean durable diagnostics and request/response dumping | Add only missing pre/summary/post counters, trigger/time/estimate and safe pairing using existing persistence/dumper. Reuse focused tests, verify one representative live chain and restart retrieval; independently review, checkpoint and await green CI. No generic event/report platform. Keep inherited resilience edits isolated. |
+| 2 | Complete near-window summarization resilience and safe failure diagnostics | Restore the preserved candidate without overwriting accepted instrumentation; independently review timeout/invalid-response bounded fallback and mandatory continuity validation, using stage 1's durable records and representative Test Home data. Prove fallback-entry/attempt accounting and the clean valid-summary path; real-provider success/continuation and safely explained failure/rejection with measured effectiveness; then checkpoint and green CI. This repair is resilience, not proof of the historical root cause. |
+| 3A | Full-request target budget and public context metrics | Apply configured target ratio to the whole assembled post-compaction input using the full resolved context window, not the internal safety budget or tail. All public context-occupancy/target/threshold percentages use that same full-window basis; remove usable-input/reserve fields from Client UI while preserving internal protection. Prove feasible/infeasible targets, truthful metrics and preserved continuity, then confirm actual post-input on Test Home. Independent review, checkpoint, exact-SHA green CI. This stage owns the authorized target-semantics change, not a new value or silent user-runtime setting change. |
+| 3B | Repair unjustified automatic/repeated compaction, including restart behavior | Correlate the reported pre-PR201 startup operation with persisted trigger/usage/boundary evidence; reproduce the decisive pressure guard. Prove below-threshold no-trigger and genuine over-threshold trigger, restart restoration, cached input, route/options/prompt/schema drift, image/rich results and post-boundary non-repeat behavior at the runner/daemon boundary. Real-provider continuation on Test Home; then checkpoint and green CI. |
+| 4 | Task 115: truthful provider-specific thinking admission | Moonshot `kimi-for-coding` and OpenCode Go `gpt-6-luna` legitimate messages complete; ChatGPT/Codex `gpt-6-luna` stays working. Distinguish unknown/no-control metadata from explicit invalid selection; prove actual wire directives and unchanged stored choices, with independent review and live route-specific acceptance; then checkpoint and green CI. |
+| 5 | Task 116: per-request provider-compatible conversation projection | Project one canonical conversation for each selected destination across all supported adapter/protocol families and distinct route policies; DeepSeek reasoning replay is one mandatory regression. Prove X→Y→X in the same session, tools/results, media where supported, zero/absent reasoning, issuer isolation and post-compaction/restart continuation. No fabricated thinking, foreign opaque-state replay, silent history loss or provider substitution. Wire fixtures cover supported families; CLI live acceptance covers existing authorized configured routes with the matched Client open, separating live evidence from fixture-only gaps; then checkpoint and green CI. |
+| 6 | Final combined regression and PR readiness | Verify all checkpoints remain valid at final head; cross-route/provider-switch/tool-history/compaction/restart matrix, rich-result/image success and explained rejection, affected analyzers and required frozen fast/daemon/Client suites. Record exact-head CI, docs and limitations; update PR 210 scope/body and assess Ready without merge. |
+
+### Lean Diagnostics and Total-Request Target — 2026-10-19
+
+Latest user steering narrows the earlier diagnostic proposal: diagnosis supports repair, not a separate observability project. Keep the small required record and existing test infrastructure; no new event store, dashboard, generic reporting framework, exhaustive catalog or broad schema redesign. The queued inventory is capped at one page, existing/missing owners and minimal tests, then stops. Existing safe storage/JSON and request dumper are preferred; migrate only for a demonstrated persistence need. This amendment authorizes planning a **full-request target** policy, superseding historical no-target-semantics-change restrictions for that specific repair, not other configuration or thinking changes.
+
+#### Minimal Durable Diagnostic Record
+
+Reuse the operation row and request-scoped dump. Required evidence is deliberately limited:
+
+| Evidence group | Required persistent facts |
+|---|---|
+| Identity and time | Compaction/session/request ids, provider/model, start/end/duration, manual/auto/overflow trigger and safe failure stage/cause; no fabricated claim for pre-start rejection. |
+| Decision snapshot | Resolved context capacity, effective input budget, auto threshold, target ratio and target scope/denominator, prospective full-request tokens and measurement kind. Capacity and occupancy are different values. |
+| Last ordinary call before compaction | Exact request/step identity, observed time and provider-confirmed input/cache usage; state whether applicable to the current route/material, not mutable run totals. |
+| Summarization calls | Correlated request id/pass/attempt, duration/outcome, provider-reported input/cache/output/reasoning when supplied, safe validation/fallback reason and link to opt-in paired request/response dump. Keep attempts distinguishable; aggregates are work/cost, not one context size. |
+| Candidate | Reuse existing source/tail/boundary identities and continuity outcome; estimated complete post-compaction request and summary/tail/overhead components only where already measurable. |
+| First actual post-boundary call | Exact request/boundary/route identity, provider-confirmed input/cache and observation time; pending/missing confirmation is explicit. Never substitute a later grown request for an unmeasured first one. |
+| Acceptance | Separate lifecycle completion from confirmed target met/not met/unknown, with actual post-input ratio and safe reason. Keep these values queryable after restart using existing inspection or a simple read-only query. |
+
+Usage semantics:
+
+- Provider-confirmed means values actually reported for that exact call. Missing/unsupported usage stays null with a reason, never becomes zero or an estimate labeled confirmed. If an HTTP error does not report token usage, do not infer it from request length or another call.
+- Cached input is a subset of input under the normalized provider contract, not a context discount. Preserve original known usage semantics without double counting cache/reasoning/output. A sum across summary attempts is processing cost, **not** the context occupancy of one request; show per-call usage and aggregate work separately.
+- The last pre-compaction ordinary call, summarization call(s) and first post-boundary ordinary call are three distinct measurement groups. Summary-call input is not post-compaction conversation usage. Provider-reported usage does not itself establish the model's true maximum capacity; label configured and advertised capacity separately.
+- Bind post-compaction reconciliation to the request that actually used that boundary and its route, not merely the latest completed operation in the session. Cover late/out-of-order replies, repeated compactions before a reply, retries, interruption/restart, route changes and duplicate events; never overwrite an accepted first-call receipt with later growth.
+- Keep bounded numeric evidence independent of opt-in payload dumping. Missing diagnostics cannot corrupt history, terminate the daemon or change thinking/policy. Existing focused/daemon suites cover binding and persistence; add only discriminating regressions for changed owners.
+
+#### Locked Provider-First Measurement Rule — 2026-10-19
+
+This decision specializes the existing confirmed-baseline law in `agent/lib/engine/AGENTS.md`; it does not authorize a replacement estimator or a new observability system.
+
+- Acquire and use available, semantically understood provider token measurements rather than override them with local estimates: exact-request total input, cached/output/reasoning where reported, and component attribution such as instructions, tool definitions and conversation/replay input where supported. Missing component attribution remains unknown; not every provider exposes the same fields. Input occupancy is not maximum context capacity.
+- Bind every measurement to its actual request/step, route/model, observed time and measured material. For the identical request, provider-confirmed total wins even when a local estimate differs substantially. Preserve component scopes and original semantics; components are not extra tokens to add on top of their already inclusive input total. A grouping discrepancy remains explicit rather than being force-balanced.
+- For a proven unchanged historical wire prefix, prospective input is **confirmed prefix input + estimated wire suffix**, not a fresh estimate of all history and not a rescaling of the confirmed prefix. The suffix includes all newly transmitted material, including assistant/tool/replay material as applicable, not only the latest user message. Label this result mixed, never provider-confirmed current input. With zero suffix the matching baseline remains the confirmed value.
+- Use provider-observed component measurements as reusable baselines only when their route, rendered material and attribution scope still match. Changed instructions/tools/schema or an unproven prefix, compaction, media pruning, route transition or incompatible replay invalidates the affected reuse. Preserve the historical receipt; explicitly estimate the changed projection until a new applicable response arrives. Reconcile to each newly bound provider response; stale/out-of-order responses cannot replace newer measurements for unrelated requests. Restart restoration must revalidate applicability through the existing G11 wire-proof path.
+- A whole-request words-to-tokens ratio is not a tokenizer: instructions, multilingual prose, code, schemas, images and opaque continuation material have different token behavior. The accepted principle is anchoring to observed provider usage; retain existing wire-aware suffix measurement rather than introducing a blanket multiplier. Any future calibration requires bounded evidence for comparable content and must never rewrite a confirmed baseline.
+- Verification reuses existing producer → persistence → restore coverage and adds only missing discriminating cases: a confirmed 200,000-token unchanged prefix stays 200,000, a suffix changes only the estimated addition, changed material cannot reuse a stale receipt, component attribution is used when supported and remains unknown otherwise, and the next applicable response replaces the forecast with its actual measurement. The gap inventory identifies missing owners/tests without claiming implementation or live acceptance.
+
+#### Compaction Request Dumper Contract
+
+- Reuse existing opt-in dumping, redaction, filesystem protection and media truncation. Pair the **actual adapter wire request** with the actual response/error/timeout for each full/repair/chunk/reduce call using compaction id plus unique request id. Include safe route/options, timing, status and response-shape/finish metadata; never print bodies to ordinary logs or the principal's tool output.
+- Capture response fields needed to diagnose parsing and content-vs-reasoning shape, under the same local private-dump controls; no reasoning/body copy into public logs, task reports or normal diagnostic DB fields. Redaction/truncation boundaries must be explicit so an incomplete capture is not mistaken for the complete provider response.
+- Compaction traffic must not steal normal-turn `lastDumpFilePath` or cross-pair concurrent turns/operations. Cover disabled dumping, missing dump target, cancellation, provider errors, failed/empty responses, multiple attempts, cleanup of completed mappings and restart. No dump path retains FINE-only behavior; disabled payload dumping still retains the numeric ledger.
+- Make captures discoverable by operation/request id with safe relative references and capture-state metadata; retain a durable scalar report after deleting temporary payload captures. No unbounded request-id map or payload accumulation. Payload retention/cleanup does not erase diagnostic history.
+
+#### Full-Request Target and Acceptance
+
+- User decision: the configured target ratio (currently 0.10) is to constrain the **complete assembled input request after compaction**, including summary, retained tail, system/runtime instructions, tool schemas, media and any protocol replay material. This is a requested policy change, not the existing retained-tail behavior. Prior source receipts describe the old implementation only.
+- Success does not depend on starting at 50% or 90%. It requires preserved continuity and confirmed post-compaction input within the target ceiling plus the agreed tolerance; a 50% result fails the 10% target even if the turn continues. Lower-than-target input is not a failure. Operation completion and target satisfaction stay distinct.
+- User clarification: tolerance is in **percentage points**, not relative percent. For the current 10% target, a total of 12–13% is acceptable; use 13% as the clarified example upper acceptance bound (target + up to 3 percentage points), still aiming for 10% rather than deliberately filling the tolerance. Do not silently create a new configuration key or generalize this example to every target without an explicit policy decision.
+- **Locked user decision:** the denominator is the full configured/resolved context window `W`, never the internal usable-input/safety budget `U`. For `W=258000`, the 10% complete-request target is `25800`; the example acceptance ceiling at13% is `33540`. Public context occupancy, before/after/retained-tail percentages, configured target and nominal auto-threshold percentages share `W`. At90%, the nominal threshold is `232200`. Keep the internal safety ceiling/reserve enforced but never expose a usable-input/reserve field in the Client or use `U` as the basis of user-facing context values. Do not disable protection or disguise an earlier safety intervention as reaching the configured nominal threshold; reconcile this in stage3B. Historical receipts retain their original measurement basis instead of being rewritten. A separately labeled reclaimed fraction may still divide reclaimed tokens by pre-compaction input; it must not use `U` or be confused with window occupancy. Cover this public/internal separation with focused engine and localized Client tests; update only owning design/QA docs when implementing.
+- User clarification: **tail selection is the adjustable budget**, not tool/system removal or summary truncation. Generate the normal continuity-validated summary, measure actual system/runtime instructions, tools, that intact summary and other required request material, then select the newest complete connected tail that fits the remainder. Reassemble and remeasure the whole wire request and shrink only at safe tail/turn boundaries if needed. Do not trim required summary sections, lower summary output limits to force fit, drop tools or change thinking. Every message excluded from the final tail must be covered by the summary source. Shrinking a tail after summarization must not silently lose formerly protected messages: either the original summary input already covered them or a bounded regeneration is required for coverage, not arbitrary text shortening. No iterative rewrite campaign or unbounded provider calls.
+- System/tools/runtime overhead, protected connected tool chains or mandatory summary content may alone exceed the target. Return an explicit unattainable/target-not-met outcome with measured reason; preserve canonical history and thinking. Do not hide the miss by enlarging the window, lowering thinking, discarding required tool state or marking resumed execution as target success.
+- An estimator cannot guarantee exact provider tokenization or future additions before the next call. Validate against the first actual provider-confirmed post-boundary input; pending/absent usage means target unconfirmed. Attribute material added after the candidate snapshot separately; no false claim that later unrelated growth measures the original candidate. Cached input counts in full.
+- Target acceptance uses provider-confirmed **total input**, not inferred provider-exact tail components. Preserve usage bindings and the minimal pre/summary/post receipt; reclaimed-before percentage is optional context, not the success criterion. No new observability platform is needed.
+- Reference check is deliberately bounded: existing pinned local sources/tests show recent-tail budgets and separate summary allowances; there is no established universal full-request-ratio convention. Adapt budgeting principles, not foreign defaults; do not launch multiple broad studies. Detailed source-specific notes stay in ignored evidence. Production implementation still needs a minimal source-neutral design and focused red/green/live proof.
+- Add one separate target-policy checkpoint (stage 3A) after lean diagnostics/resilience; stage 3B covers premature/repeat trigger decisions. Each has its own review, representative Test Home live acceptance, commit/push and exact-SHA green CI. No retroactive acceptance of old tail-only freezes.
+
+#### Image and Attachment Clarification — Existing Behavior, Not New Scope
+
+- Separate file storage, canonical conversation history and the current model-facing projection. The budget covers whatever actually reaches that request, not every file ever attached to the conversation.
+- In the Task 106 source, supported user image attachments present in projected history are verified and serialized again by each full Chat request builder. A cached provider prefix is not evidence of zero image/context input. Non-image file references use text/path metadata, not automatic upload of every file's bytes; explicit file-reading tools may put their results into history.
+- Completed compaction projects summary + retained tail + later messages. Old user attachments outside that projection are not automatically included on every subsequent request. Attachments within the retained tail still participate normally. Compaction itself does not delete their stored files or canonical attachment references; exact-session permissions remain required for later access.
+- Tool-produced image blocks are a separate source from user attachments. Existing `HistoryImagePruner` in 106 protects the current incomplete loop and normally preserves the latest three completed turns, subject to its 24 MiB cap; older tool-image payloads become a marker in canonical history and may no longer be viewable from that inline snapshot. This separate existing pruning must not be confused with compaction deleting user-uploaded files or original workspace files.
+- Do not claim a textual summary preserves all old visual detail. It retains only captured facts; an image no longer in the active projection may require an explicit authorized read/view when detail is needed again. Required protocol replay material means provider-owned continuation/reasoning/tool-call state, not a rule to resend all attachments.
+- These source findings concern the Task 106 candidate. The normal conversation runtime remains on the older pre-PR201 source; do not assume its media codecs/retention are identical. Reference media policies differ; use narrow source checks, not a new multi-agent research task or an unapproved media-retention redesign.
+
+#### Representative Test Home Dataset — No Blind Home Clone
+
+A fresh Test Home has no long conversations. Short fresh-session success is insufficient acceptance. Reuse existing fixture seeding/export capabilities; do not build a general import platform. Use two complementary datasets; fixtures are never presented as live vendor success.
+
+1. **Deterministic synthetic corpus:** create large provider-shaped canonical histories with user/assistant/tool chains, structured errors/rich results, dimension-bearing images, known critical facts and pending asks. Include same-route and provider-transition histories. Size for the actual unchanged window/threshold using production measurement and verify actual provider usage in live runs; repetition/character count is not assumed to equal tokens. Seed only isolated test histories, not expected terminal compaction outcomes, and never manufacture provider-confirmed usage or a valid historical wire proof in live acceptance.
+2. **Selected real-history reproduction:** use a consistent read-only snapshot/export of specifically approved sessions from the normal Home, imported as isolated copies on Test Home. Do not copy the whole Home or overwrite a live destination DB. First present a manifest: selected session ids, snapshot revision/time, related history/boundaries/tool chains/provider-state/media dependencies, approximate size and privacy/security treatment; obtain approval for those exact sessions before copying private history or making provider calls with it. The user's question about copying is not blanket export authorization.
+
+Import acceptance and isolation:
+
+- Source is read-only; obtain a SQLite-consistent snapshot that includes committed WAL data, not a raw live-file copy that may miss it. Confirm source history remains unchanged by the import; no writes, compactions or destructive cleanup against the original session.
+- Export only required session dependencies. Preserve ordered messages, tool call/result identities, structured-result invariants, relevant compaction boundaries and necessary media integrity. Preserve a source-to-test mapping and hash/count manifest; conflicts are resolved in the destination, never by mutating source ids. Canonical content may contain private data even if no credential table is copied.
+- Do not import authentication tokens, keys, provider credentials, installation/device identity, unrelated sessions, scheduled jobs, pending approvals, running turns, queues, MCP automations or executable background state. Imported sessions start idle; use a sandbox/test workspace and no real tool side effects. Provider-required tool continuation uses safe tools or recorded inert outputs, not arbitrary historical shell execution.
+- Provider continuation state is sensitive and issuer-bound, not ordinary display text. Inspect/minimize it separately; preserve genuine same-issuer replay where legitimately needed and approved, never copy credentials or relabel foreign opaque state as local. Provider configuration/authentication on Test Home is prepared through its supported independent setup; remapped instance ids require explicit binding validation, not identifier forgery to force replay.
+- Imported historical usage is labeled imported evidence with its original route/request/snapshot provenance; it is not a new live confirmation. Do not edit timestamps or fabricate proof to obtain a trigger. Test restart restoration with actual producer→persisted receipt→fresh runner on Test Home; immutable historical proof is usable only if the real compatibility checks still validate it.
+- Keep one pristine imported/synthetic baseline and reset only disposable Test Home scenario copies between runs. Record candidate revision, dataset fingerprint, scenario, selected provider/thinking and before/after projection for reproducibility. Never reset or overwrite the normal Home, or another runtime's data; confirm destination ownership before any reset.
+- Define a bounded live-run budget (calls/expected input and duration) before expensive 300k+ cases. Prefer fixture red/green for exhaustive failure injection and a minimal number of representative real-provider runs; unavailable quota/authentication is a blocked live gate, not permission to change models or thresholds.
+
+#### Scenario Matrix and Evidence Level
+
+| Scenario | Deterministic/daemon proof | Principal real-provider Test Home acceptance |
+|---|---|---|
+| Manual, automatic and overflow | Actual command/preflight/provider-classified overflow producers; durable trigger/timing/ledger and request-pair assertions | Representative large-history manual and threshold-driven auto; one controlled genuine overflow case if safe within the approved call budget, otherwise explicitly blocked rather than claimed live |
+| Premature trigger / restart / repeated pressure | Below-threshold no-compaction; genuine threshold crossing; cached input included; legacy/missing proof and drift invalidate; restart and post-boundary no-repeat | Same measured history at unchanged settings before/after restart, record displayed usage and actual decision basis |
+| Invalid, empty, reasoning-only, truncated or timed-out summary | HTTP-wire fixtures for each shape, all retries/chunks/reduce, failed validation, bounded fallback and safe terminal ownership | Real successful summary plus controlled safe rejection; do not deliberately cause expensive upstream timeout to substitute for deterministic fault coverage |
+| Completed but low/no benefit | Comparable high remaining occupancy, negative/zero reduction, non-comparable route/material, pending/missing usage and wrong late receipt; report never claims unproven target compliance | A large representative conversation: actual pre/summary/post usage, critical-fact/pending-ask continuity, useful headroom and continued tool turn; inspect any high remaining occupancy explicitly |
+| Rich results, images and provider transitions | Canonical immutability, protected tail/tool connectivity, exact thinking and strict opaque-state issuer checks; task 115/116 wire matrix | Existing configured route matrix, image/rich-result success, provider-switch/DeepSeek retained-history cases as their stages activate; preserve selected thinking |
+| Persistence, concurrency and interruption | Legacy schema, migration, failed-before-claim vs failed-after-claim, restart survival, duplicate/out-of-order events and distinct operations sharing session/provider | Retrieve the same scalar report after managed Test Home restart; normal runtime remains unaffected |
+| Dumping and privacy | Enabled/disabled/missing-path/redaction/truncation/error pairing, no normal-turn contamination and bounded diagnostic overhead | Inspect one local correlated request/response series and scalar report without printing private bodies; delete temporary captures and confirm numeric history persists |
+
+Stage 1 diagnostic DoD: the minimal known pre/summary/post measurements and trigger/estimate are queryable and correctly attributed; unknowns are explicit; one representative live chain, existing normal dumper and restart retrieval are verified. Reuse existing tests, add only missing discriminating cases and keep live runs bounded; the matrix is a coverage map, not a new exhaustive test project. Stage 3A adds feasible full-target cases, fixed-overhead/protected-tail infeasibility, tolerance boundaries and provider-confirmed total-input acceptance. Label evidence `fixture`, `daemon`, `live`, `blocked` or `not_run`.
+
+### Per-Stage Acceptance Record
+
+Each repair's task-list entry records separately:
+
+1. Reproduced symptom, expected invariant and smallest owning-boundary design; causal claims labeled verified or hypothetical.
+2. Red/green regression evidence and changed-file hashes; relevant analyzers/focused tests and necessary real-daemon coverage. Full fast suites follow shared-surface blast radius; name invalidation before rerunning a frozen candidate.
+3. Independent review verdict and repairs. A blocked reviewer is an execution blocker to resolve with the user-designated reviewer route, not permission to substitute a provider or waive review. If Task 115/116 is proven to block earlier acceptance, explicitly revise this queue and dependencies before beginning that repair.
+4. Principal live receipt on Test Home: candidate SHA plus uncommitted fingerprint if applicable, source/Home isolation, provider/model/selected thinking, scenario, durable outcome, continued conversation and safe failure feedback. Preserve provider choices and canonical history. Never claim all models/providers passed from one route; mark unavailable routes blocked, not passed.
+5. Scoped commit SHA, pushed SHA, exact-head CI outcome, remaining work and only then permission to advance. A code change after acceptance invalidates affected evidence and requires re-verification.
+
+Raw request/response dumps remain local and opt-in, with existing redaction, bounded media handling and normal file protections. They can contain private conversation material even after secret redaction; no raw bodies, reasoning, stack traces or credentials in logs, UI, task receipts or PR text. Keep scalar findings and remove temporary live captures after analysis.
+
+### Active Progress Checklist
+
+- [x] User approved one-worktree/one-PR ownership for 106, 115 and 116 and a sequential review/test/live/checkpoint/CI workflow.
+- [x] Transfer the full intake plans for 115 and 116 into Task 106's worktree; remove their stale separate-delivery activation rules.
+- [x] Record successful pre-PR201 compaction and the separately reported below-threshold automatic-trigger symptom without inferring root cause.
+- [x] Record diagnostic-first ordering, durable before/summary/after evidence and a representative-data/Test Home scenario strategy; no dataset copy or new implementation is claimed.
+- [x] Stage 1 first repair slice: request-scoped compaction dump pairing plus normal-turn `lastDumpFilePath` isolation implemented and independently reviewed, checkpoint `d455db2af27b5d9ac8e2ce631825283839d1a87a` pushed with green CI, and live daemon acceptance (pairing, isolation, post-boundary usage and continuity) recorded above.
+- [ ] Stage 0: reconcile/preserve candidate, resolve reviewer blocker, prepare Test Home and approve selected-session manifest or synthetic corpus.
+- [ ] Stage 1: diagnostic ledger, report access and compaction request/response dumping accepted on representative data, checkpoint pushed, exact-SHA CI green.
+- [ ] Stage 2: near-window resilience accepted live using stage 1 diagnostics, checkpoint pushed, exact-SHA CI green.
+- [ ] Stage 3A: full-request target semantics, denominator and tolerance locked; feasible/infeasible behavior and actual post-input accepted live; checkpoint/CI green.
+- [ ] Stage 3B: automatic/restart/repeat-pressure decisions accepted live, checkpoint pushed, exact-SHA CI green.
+- [ ] Stage 4 / Task 115: provider-specific admission accepted live, checkpoint pushed, exact-SHA CI green.
+- [ ] Stage 5 / Task 116: DeepSeek replay accepted live, checkpoint pushed, exact-SHA CI green.
+- [ ] Stage 6: final combined head verified and PR readiness assessed; no merge.
+
+## Authorized Scope Amendment — 2026-10-18 (Historical Scheduling)
+
 
 Task 106 is reopened for a bounded post-merge compaction regression. Its existing Draft PR is not merged. The historical G1–G5 checkmarks below describe earlier work only; they do not establish acceptance of this amendment. The current file location is retained pending the research-to-plan reconciliation.
 
@@ -309,7 +499,7 @@ Budget investigation remains read-only: the implemented retained-tail meaning da
 
 ## Definition of Done — Active Amendment
 
-- [ ] G6–G11 completed with acceptance evidence, not merely authored code; original G1–G5 regressions remain green.
+- [ ] G6–G11 and all stages of the 2026-10-19 consolidated repair queue, including Tasks 115/116, completed with independent, automated and live acceptance evidence; original G1–G5 regressions remain green.
 - [ ] Required analyzers, focused/full-fast and daemon-backed suites pass with bounded output, retained exit status, logs and timing evidence.
 - [ ] Actual thinking directives and stored user choices are unchanged; failures preserve history and cannot terminate the daemon.
 - [ ] Toast and timeline show safe, localized stage/cause explanations live and after history hydration.
@@ -318,3 +508,42 @@ Budget investigation remains read-only: the implemented retained-tail meaning da
 - [ ] Existing Draft PR is the single delivery vehicle if later authorized; no new numbered task or duplicate PR is created for this amendment.
 
 Execution checkpoint: implementation and automated verification proceed in ordered waves with native Sanad review. The principal's source handoff is conditionally authorized after readiness, and delivery through the existing PR to a verified Ready-to-merge state is authorized. Preserve actual merge/protected-label boundaries, frozen-candidate evidence and primary runtime safety.
+
+## Live Acceptance Command Reference (Worktree 106) — 2026-10-19
+
+Verified, reusable method for every later stage's live acceptance. All commands run from the 106 worktree root; `~` in the paths below is the operating user's home, not a repository path.
+
+### Discovery through the running worktree CLI
+
+- Root and per-command contracts: `fvm dart run agent/bin/sanad_agent.dart -h`, `… help run`, `… help models`, `… help <command>`.
+- Provider and model inventory: `SANAD_HOME=~/.sanad-test fvm dart run agent/bin/sanad_agent.dart models` (and `providers`).
+- The root `--home` option does not redirect provider/model inventory, so set `SANAD_HOME` to the Home actually in use for discovery; `--home` remains correct for `run`/`chat` sends.
+- Route identity check before sending: the chosen `--model` must appear in that Home's model list for the chosen provider. Current live route: `OpenCode Go` (instance `96ce96b5-9d30-4c53-b6be-0e306c346881`, template `opencode-go`) with `deepseek-v4.1-flash`.
+- `sanad doctor` is not authoritative for daemon liveness here: it printed `Daemon Status: Not running (standalone fallback active)` while the same Home's daemon was serving the Local Gateway. Confirm liveness with the listener/`lsof` check below.
+
+### Sending a one-shot turn through the daemon
+
+```bash
+cd .agent/worktrees/106-compaction-resilience-and-token-estimation-repair
+fvm dart run agent/bin/sanad_agent.dart run \
+  --brief-file <local-case-dir>/<phase>.txt \
+  --execution-root "$PWD" \
+  --session <synthetic-session-uuid> \
+  --provider "OpenCode Go" --model deepseek-v4.1-flash \
+  --home ~/.sanad-test \
+  --gateway-url ws://127.0.0.1:58096/ws \
+  --out-dir <local-case-dir>/<phase>-daemon \
+  --quiet --timeout 240
+```
+
+- Never pass `--standalone`; standalone fallback is not acceptance evidence.
+- Prove daemon transport while the send is in flight: `lsof -nP -p <cli-pid> -iTCP` must show `ESTABLISHED … ->127.0.0.1:58096`.
+- Send keeps prompts in a brief file so no payload enters the terminal or logs; reads stay scalar.
+
+### Inspection and completion signals
+
+- Provider-confirmed usage for the newest answer: read-only `sqlite3 -readonly ~/.sanad-test/state.db` query of the session's latest assistant message `context_usage.input_tokens`, `output_tokens`, `provider_instance_id`, `model_id`. The recorded route field may carry the template id (`opencode-go`) rather than the instance UUID, so compare against both.
+- Normal captures: `~/.sanad-test/request_dumps/request_dump_<session>_*.json`; compaction captures: `compaction_dump_compaction_<compactionId>_<requestId>_*.json` carrying `compaction_id`, `request_id`, `capture_state` and the paired `response.usage`.
+- Manual compaction through the product: run `… chat --session <uuid> --home ~/.sanad-test --gateway-url ws://127.0.0.1:58096/ws --quiet` and type `/compact`. Its printed outcome (`accepted` is currently shown as a warning) is not a completion signal; read durability from `session_compaction_operations` (status, trigger, token counters, `provider_confirmed_request_tokens_after`) and from the paired dump.
+- Orchestrator drivers that implement this reference: `temp/106-implementation/live-pairing-driver.mjs` and `temp/106-implementation/live-compaction-driver.mjs` (git-ignored; scalar receipts only).
+- Raw captures stay local and opt-in; record scalar findings in this plan and remove temporary live captures after analysis.

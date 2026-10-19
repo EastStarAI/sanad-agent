@@ -20,8 +20,99 @@ class LLMRequestDumper {
   /// Internal environment override for unit testing
   static Map<String, String>? environmentOverride;
 
-  /// The path of the last dumped request.
+  /// The path of the last dumped normal-turn request.
+  ///
+  /// Invariant: Compaction requests NEVER modify or read this path.
   static String? lastDumpFilePath;
+
+  /// Active normal-turn dump file paths keyed by requestId.
+  static final Map<String, String> _activeNormalDumps = {};
+
+  /// Active compaction dump file paths keyed by canonical compaction key.
+  static final Map<String, String> _activeCompactionDumps = {};
+
+  /// Resets internal dump file tracking state for test isolation.
+  static void resetForTesting() {
+    lastDumpFilePath = null;
+    environmentOverride = null;
+    _activeNormalDumps.clear();
+    _activeCompactionDumps.clear();
+  }
+
+  /// Whether an in-flight request dump is currently tracked in active maps.
+  static bool hasActiveDump({String? compactionId, String? requestId}) {
+    final key = compactionKey(compactionId: compactionId, requestId: requestId);
+    if (key.isNotEmpty && _activeCompactionDumps.containsKey(key)) {
+      return true;
+    }
+    if (requestId != null && _activeNormalDumps.containsKey(requestId)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Returns whether the given parameters identify a compaction request.
+  static bool isCompactionRequest({String? compactionId, String? requestId}) {
+    if (compactionId != null && compactionId.isNotEmpty) return true;
+    if (requestId != null && requestId.startsWith('compaction:')) return true;
+    return false;
+  }
+
+  /// Builds a canonical compaction key from compactionId and/or requestId.
+  ///
+  /// Canonical examples:
+  /// - compactionId: 'c1', requestId: 'r1' -> 'compaction:c1:r1'
+  /// - compactionId: 'c1', requestId: 'compaction:c1:r1' -> 'compaction:c1:r1'
+  /// - requestId: 'compaction:c1:r1' -> 'compaction:c1:r1'
+  /// - compactionId: 'c1', requestId: null -> 'compaction:c1'
+  static String compactionKey({String? compactionId, String? requestId}) {
+    if (compactionId != null && compactionId.isNotEmpty) {
+      final cleanComp = compactionId.startsWith('compaction:')
+          ? compactionId.substring('compaction:'.length)
+          : compactionId;
+      if (requestId != null && requestId.isNotEmpty) {
+        final cleanReq = requestId.startsWith('compaction:')
+            ? requestId.substring('compaction:'.length)
+            : requestId;
+        if (cleanReq == cleanComp || cleanReq.startsWith('$cleanComp:')) {
+          return 'compaction:$cleanReq';
+        }
+        return 'compaction:$cleanComp:$cleanReq';
+      }
+      return 'compaction:$cleanComp';
+    }
+    if (requestId != null && requestId.startsWith('compaction:')) {
+      return requestId;
+    }
+    return '';
+  }
+
+  /// Extracts a clean compaction ID from a canonical key.
+  static String? extractCompactionId(String key) {
+    if (!key.startsWith('compaction:')) return null;
+    final parts = key.split(':');
+    if (parts.length >= 2 && parts[1].isNotEmpty) {
+      return parts[1];
+    }
+    return null;
+  }
+
+  /// Explicitly cleans up an in-flight compaction mapping if abandoned or cancelled.
+  static void cleanupActiveDump({String? compactionId, String? requestId}) {
+    final key = compactionKey(compactionId: compactionId, requestId: requestId);
+    if (key.isNotEmpty) {
+      _activeCompactionDumps.remove(key);
+    }
+    if (requestId != null && requestId.isNotEmpty) {
+      _activeNormalDumps.remove(requestId);
+    }
+  }
+
+  static String _formatTimestamp(DateTime now) {
+    return '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_'
+        '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}_'
+        '${now.millisecond.toString().padLeft(2, '0')}';
+  }
 
   /// Check if the request dumper is enabled via the `DUMP_REQUESTS` environment variable.
   static bool get isEnabled {
@@ -69,6 +160,7 @@ class LLMRequestDumper {
 
   /// Dumps the LLM request payload (history and tools) to a file.
   /// If [error] is provided, captures error details.
+  /// Compaction requests are keyed by compactionId:requestId and NEVER touch [lastDumpFilePath].
   static Future<String?> dumpRequest({
     required String sessionId,
     required List<Message> history,
@@ -79,34 +171,51 @@ class LLMRequestDumper {
     String? apiKey,
     Map<String, dynamic>? customMetadata,
     Object? error,
+    String? requestId,
+    String? compactionId,
   }) async {
     if (!isEnabled) return null;
 
     try {
       final now = DateTime.now();
-      // Format timestamp as YYYYMMDD_HHMMSS_MS to prevent filesystem collisions
-      final timestamp =
-          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_'
-          '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}_'
-          '${now.millisecond.toString().padLeft(2, '0')}';
-
-      final safeSessionId = sessionId.replaceAll(
-        RegExp(r'[^A-Za-z0-9_-]'),
-        '_',
+      final timestamp = _formatTimestamp(now);
+      final isCompaction = isCompactionRequest(
+        compactionId: compactionId,
+        requestId: requestId,
       );
-      final fileName = 'request_dump_${safeSessionId}_$timestamp.json';
-      final relativePath = p.join('request_dumps', fileName);
-      final boundary = SanadHomeBootstrap.state();
 
-      // Build the raw payload map
-      final rawPayload = {
+      final boundary = SanadHomeBootstrap.state();
+      final String fileName;
+      final String relativePath;
+      String? key;
+
+      if (isCompaction) {
+        key = compactionKey(compactionId: compactionId, requestId: requestId);
+        final safeCompactionKey = key.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+        fileName = 'compaction_dump_${safeCompactionKey}_$timestamp.json';
+        relativePath = p.join('request_dumps', fileName);
+      } else {
+        final safeSessionId = sessionId.replaceAll(
+          RegExp(r'[^A-Za-z0-9_-]'),
+          '_',
+        );
+        fileName = 'request_dump_${safeSessionId}_$timestamp.json';
+        relativePath = p.join('request_dumps', fileName);
+      }
+
+      final rawPayload = <String, dynamic>{
         'timestamp': now.toIso8601String(),
         'session_id': sessionId,
+        if (isCompaction) ...{
+          'compaction_id': ?(compactionId ?? (key != null ? extractCompactionId(key) : null)),
+          'request_id': ?requestId,
+        },
         'model': model,
         'provider': provider,
         'base_url': baseUrl,
         'api_key': _maskApiKey(apiKey),
         'metadata': customMetadata,
+        'capture_state': 'initialized',
         'request': {
           'method': 'POST',
           'url': baseUrl != null
@@ -133,25 +242,35 @@ class LLMRequestDumper {
         if (error != null) 'error': _serializeError(error),
       };
 
-      // Recursively sanitize the payload to redact secrets and truncate large base64 strings
       final sanitizedPayload = _sanitizePayload(rawPayload);
-
-      final jsonString = const JsonEncoder.withIndent(
-        '  ',
-      ).convert(sanitizedPayload);
+      final jsonString = const JsonEncoder.withIndent('  ').convert(sanitizedPayload);
       await boundary.writeConfigText(relativePath, jsonString);
 
-      _logger.info('LLM request debug dump written.');
+      _logger.info(
+        isCompaction
+            ? 'Compaction LLM request debug dump written ($key).'
+            : 'LLM request debug dump written.',
+      );
 
       if (isStdoutEnabled) {
-        // Print formatted json payload directly to stdout
         stdout.writeln('\n--- DUMP_REQUESTS START ---');
         stdout.writeln(jsonString);
         stdout.writeln('--- DUMP_REQUESTS END ---\n');
       }
 
-      lastDumpFilePath = boundary.child(relativePath);
-      return lastDumpFilePath;
+      final fullPath = boundary.child(relativePath);
+      if (isCompaction) {
+        if (key != null && key.isNotEmpty) {
+          _activeCompactionDumps[key] = fullPath;
+        }
+      } else {
+        lastDumpFilePath = fullPath;
+        if (requestId != null && requestId.isNotEmpty) {
+          _activeNormalDumps[requestId] = fullPath;
+        }
+      }
+
+      return fullPath;
     } catch (e, stackTrace) {
       _logger.warning(
         'Failed to dump LLM request debug payload: $e',
@@ -162,26 +281,76 @@ class LLMRequestDumper {
     }
   }
 
-  static Future<void> recordActualRequest({
+
+  static Future<String?> recordActualRequest({
     required Uri url,
     required Map<String, String> headers,
     Object? body,
     String? requestId,
+    String? compactionId,
   }) async {
-    if (!isEnabled) return;
-    if (requestId != null && requestId.startsWith('compaction:')) {
-      return;
-    }
-    final path = lastDumpFilePath;
-    if (path == null) {
-      return;
+    if (!isEnabled) return null;
+
+    final isCompaction = isCompactionRequest(
+      compactionId: compactionId,
+      requestId: requestId,
+    );
+
+    final boundary = SanadHomeBootstrap.state();
+    String? targetPath;
+    String? key;
+
+    if (isCompaction) {
+      key = compactionKey(compactionId: compactionId, requestId: requestId);
+      targetPath = _activeCompactionDumps[key];
+
+      if (targetPath == null) {
+        // Auto-create dump file on actual request if no preceding dumpRequest call
+        final now = DateTime.now();
+        final timestamp = _formatTimestamp(now);
+        final safeCompactionKey = key.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+        final fileName = 'compaction_dump_${safeCompactionKey}_$timestamp.json';
+        final relativePath = p.join('request_dumps', fileName);
+
+        final rawPayload = <String, dynamic>{
+          'timestamp': now.toIso8601String(),
+          'compaction_id': ?(compactionId ?? extractCompactionId(key)),
+          'request_id': ?requestId,
+          'capture_state': 'request_sent',
+          'request': {
+            'method': 'POST',
+            'url': url.toString(),
+            'headers': headers,
+            'body': ?body,
+          },
+        };
+
+        final sanitizedPayload = _sanitizePayload(rawPayload);
+        final jsonString = const JsonEncoder.withIndent('  ').convert(sanitizedPayload);
+        await boundary.writeConfigText(relativePath, jsonString);
+
+        targetPath = boundary.child(relativePath);
+        _activeCompactionDumps[key] = targetPath;
+        return targetPath;
+      }
+    } else {
+      if (requestId != null && _activeNormalDumps.containsKey(requestId)) {
+        targetPath = _activeNormalDumps[requestId];
+      } else {
+        targetPath = lastDumpFilePath;
+      }
+      if (targetPath == null) {
+        return null;
+      }
+      if (requestId != null && requestId.isNotEmpty) {
+        _activeNormalDumps[requestId] = targetPath;
+      }
     }
 
     try {
-      final boundary = SanadHomeBootstrap.state();
-      final relativePath = p.join('request_dumps', p.basename(path));
+      final relativePath = p.join('request_dumps', p.basename(targetPath));
       if (!boundary.fileExists(relativePath)) {
-        return;
+        return null;
       }
 
       final content = utf8.decode(boundary.readSecretBytes(relativePath));
@@ -195,86 +364,137 @@ class LLMRequestDumper {
         request['body'] = body;
       }
       data['request'] = _sanitizePayload(request);
+      data['capture_state'] = 'request_sent';
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
       await boundary.writeConfigText(relativePath, jsonString);
+      return targetPath;
     } catch (e, stackTrace) {
       _logger.warning(
         'Failed to update LLM request dump transport: $e',
         e,
         stackTrace,
       );
+      return null;
     }
   }
 
-  static Future<void> recordError(
+  static Future<String?> recordError(
     Object error, {
     String? requestId,
+    String? compactionId,
   }) async {
-    if (!isEnabled) return;
-    if (requestId != null && requestId.startsWith('compaction:')) {
-      return;
-    }
-    final path = lastDumpFilePath;
-    if (path == null) {
-      return;
+    if (!isEnabled) return null;
+
+    final isCompaction = isCompactionRequest(
+      compactionId: compactionId,
+      requestId: requestId,
+    );
+
+    String? targetPath;
+    String? key;
+
+    if (isCompaction) {
+      key = compactionKey(compactionId: compactionId, requestId: requestId);
+      targetPath = _activeCompactionDumps[key];
+      if (targetPath == null) {
+        _logger.fine(
+          'Skipping error dump for unmatched compaction request ($key).',
+        );
+        return null;
+      }
+    } else {
+      if (requestId != null && _activeNormalDumps.containsKey(requestId)) {
+        targetPath = _activeNormalDumps[requestId];
+      } else {
+        targetPath = lastDumpFilePath;
+      }
+      if (targetPath == null) {
+        return null;
+      }
     }
 
     try {
       final boundary = SanadHomeBootstrap.state();
-      final relativePath = p.join('request_dumps', p.basename(path));
+      final relativePath = p.join('request_dumps', p.basename(targetPath));
       if (!boundary.fileExists(relativePath)) {
-        return;
+        return null;
       }
 
       final content = utf8.decode(boundary.readSecretBytes(relativePath));
       final Map<String, dynamic> data = jsonDecode(content);
       data['error'] = _sanitizePayload(_serializeError(error));
+      data['capture_state'] = 'error';
+
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
       await boundary.writeConfigText(relativePath, jsonString);
+
+      if (isCompaction && key != null) {
+        _activeCompactionDumps.remove(key);
+      } else if (requestId != null) {
+        _activeNormalDumps.remove(requestId);
+      }
+
+      return targetPath;
     } catch (e, stackTrace) {
       _logger.warning(
         'Failed to append LLM request error details: $e',
         e,
         stackTrace,
       );
+      return null;
     }
   }
 
-  /// Dumps the response payload to the last request dump file.
+  /// Dumps the response payload to the matching dump file.
   ///
-  /// For unpaired or auxiliary requests (such as compaction completion, where
-  /// [requestId] indicates an auxiliary compaction request or no prior request
-  /// dump was initiated), the missing dump file path is triaged as a non-fatal
-  /// diagnostic event at `fine` level rather than an operational warning, and
-  /// never dumps raw content or alters compaction behavior.
-  static Future<void> dumpResponse(
+  /// For compaction requests, pairs by compactionKey and never modifies or reads
+  /// [lastDumpFilePath]. For unmatched auxiliary compaction requests, logs at fine
+  /// level without error.
+  static Future<String?> dumpResponse(
     dynamic responsePayload, {
     String? requestId,
+    String? compactionId,
   }) async {
-    if (!isEnabled) return;
+    if (!isEnabled) return null;
 
-    if (requestId != null && requestId.startsWith('compaction:')) {
-      _logger.fine(
-        'Skipping LLM response dump for auxiliary compaction request ($requestId).',
-      );
-      return;
-    }
+    final isCompaction = isCompactionRequest(
+      compactionId: compactionId,
+      requestId: requestId,
+    );
 
-    final path = lastDumpFilePath;
-    if (path == null) {
-      _logger.fine(
-        'Attempted to dump LLM response, but lastDumpFilePath is null.',
-      );
-      return;
+    String? targetPath;
+    String? key;
+
+    if (isCompaction) {
+      key = compactionKey(compactionId: compactionId, requestId: requestId);
+      targetPath = _activeCompactionDumps[key];
+      if (targetPath == null) {
+        _logger.fine(
+          'Skipping LLM response dump for auxiliary compaction request ($key).',
+        );
+        return null;
+      }
+    } else {
+      if (requestId != null && _activeNormalDumps.containsKey(requestId)) {
+        targetPath = _activeNormalDumps[requestId];
+      } else {
+        targetPath = lastDumpFilePath;
+      }
+      if (targetPath == null) {
+        _logger.fine(
+          'Attempted to dump LLM response, but lastDumpFilePath is null.',
+        );
+        return null;
+      }
     }
 
     try {
       final boundary = SanadHomeBootstrap.state();
-      final relativePath = p.join('request_dumps', p.basename(path));
+      final relativePath = p.join('request_dumps', p.basename(targetPath));
       if (!boundary.fileExists(relativePath)) {
         _logger.warning('Request dump file not found.');
-        return;
+        return null;
       }
 
       final content = utf8.decode(boundary.readSecretBytes(relativePath));
@@ -299,19 +519,34 @@ class LLMRequestDumper {
       }
 
       data['response'] = _sanitizePayload(sanitizedResponse);
+      data['capture_state'] = 'completed';
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
       await boundary.writeConfigText(relativePath, jsonString);
 
-      _logger.info('LLM response added to request dump.');
+      _logger.info(
+        isCompaction
+            ? 'Compaction LLM response added to request dump ($key).'
+            : 'LLM response added to request dump.',
+      );
 
       if (isStdoutEnabled) {
         stdout.writeln('\n--- DUMP_RESPONSE START ---');
         stdout.writeln(jsonString);
         stdout.writeln('--- DUMP_RESPONSE END ---\n');
       }
+
+      // Cleanup active mapping on completion to prevent unbounded accumulation
+      if (isCompaction && key != null) {
+        _activeCompactionDumps.remove(key);
+      } else if (requestId != null) {
+        _activeNormalDumps.remove(requestId);
+      }
+
+      return targetPath;
     } catch (e, stackTrace) {
       _logger.warning('Failed to dump LLM response: $e', e, stackTrace);
+      return null;
     }
   }
 

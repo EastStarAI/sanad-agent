@@ -691,3 +691,28 @@ Live lifecycle delivery is session-scoped. The client accepts a
 `context_compaction.started|completed|failed` timeline update only when its
 explicit `session_id` matches the active conversation; compaction in a
 background conversation must not mutate the visible timeline.
+
+## 10. Compaction LLM Request Dumper Pairing and Isolation
+
+Diagnostic capture of auxiliary compaction exchanges is owned by `LLMRequestDumper` and production provider adapters (`BaseOpenAIAdapter`, `BaseAnthropicAdapter`, `CodexResponsesAdapter`).
+
+### 10.1 Opt-in Activation
+
+Compaction request dumping reuses the standard `DUMP_REQUESTS` environment variable (or `Config.dumpRequests`). When disabled, all dumper calls return immediately with zero I/O or state modification.
+
+### 10.2 Canonical Keying & Pairing
+
+Compaction calls carry an explicit `compaction:`-prefixed `requestId` or `compactionId`. The dumper canonicalizes these through `LLMRequestDumper.compactionKey(compactionId: ..., requestId: ...)`, producing keys formatted as `compaction:<compactionId>:<requestId>` (or `compaction:<compactionId>`).
+
+- **Preflight/Initial dump:** `dumpRequest` with compaction parameters initializes a dedicated dump file `request_dumps/compaction_dump_<safeKey>_<timestamp>.json` with `capture_state: 'initialized'`.
+- **Wire dispatch:** `recordActualRequest` updates the dump with resolved wire headers and serialized body, transitioning `capture_state: 'request_sent'`. If an adapter dispatches without a preceding initial dump, `recordActualRequest` auto-creates the compaction dump file.
+- **Completion:** `dumpResponse` attaches the sanitized response payload, sets `capture_state: 'completed'`, and clears the active in-flight map.
+- **Failure:** Transport errors (socket drop, HTTP error, timeout) caught in adapters invoke `recordError`, writing the sanitized error message and type, marking `capture_state: 'error'`, and removing the in-flight key.
+- **Cancellation:** Streaming subscription cancellations execute adapter `finally` blocks invoking `cleanupActiveDump`, immediately removing in-flight tracking from `_activeCompactionDumps` without leaking active map state.
+
+### 10.3 Strict Normal-Turn Isolation
+
+Compaction requests are strictly decoupled from normal turn exchanges:
+- Compaction operations **never** read, write, or overwrite the static `lastDumpFilePath`.
+- Normal-turn dumps continue using `lastDumpFilePath` and `_activeNormalDumps` without risk of concurrent compaction preflight or summarizer calls overwriting, stealing, or appending to normal turn dump files.
+- Active in-flight mappings are tracked only during active execution and cleared upon completion, error, or stream cancellation, preserving hermetic state without speculative memory caches.

@@ -14,15 +14,18 @@
 /// acceptance claim, and a temporary Sanad Home.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:logging/logging.dart';
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
@@ -349,6 +352,226 @@ void main() {
           },
         );
         expect(thrown, isNotNull, reason: 'the fixture dispatch must fail');
+      },
+    );
+  });
+
+  group('Streaming subscription cancellation active-map cleanup', () {
+    test(
+      'openai-compatible streaming subscription cancellation cleans up active dump without active-map leak',
+      () async {
+        final controller = StreamController<List<int>>();
+        final adapter = BaseOpenAIAdapter(
+          config(),
+          const ProviderProfile(name: 'openai', apiMode: 'chat'),
+          baseUrlOverride: 'https://dump.invalid/v1',
+          apiKeyOverride: 'fixture-key',
+          defaultModelOverride: 'dump-model',
+          client: MockClient.streaming(
+            (request, _) async => http.StreamedResponse(controller.stream, 200),
+          ),
+        );
+
+        final options = compactionOptions(
+          providerInstanceId: 'dump-openai-provider',
+          modelId: 'dump-model',
+        );
+
+        controller.add(
+          utf8.encode('data: {"choices":[{"delta":{"content":"first chunk"}}]}\n\n'),
+        );
+
+        final stream = adapter.generateStream(
+          [Message(role: MessageRole.user, content: _compactionInstruction)],
+          options: options,
+        );
+
+        final completer = Completer<void>();
+        late StreamSubscription<AgentResponse> sub;
+        sub = stream.listen((chunk) async {
+          expect(
+            LLMRequestDumper.hasActiveDump(requestId: options.requestId),
+            isTrue,
+            reason: 'in-flight dump mapping must exist during active streaming',
+          );
+          await sub.cancel();
+          await controller.close();
+          completer.complete();
+        });
+
+        await completer.future;
+
+        expect(
+          LLMRequestDumper.hasActiveDump(requestId: options.requestId),
+          isFalse,
+          reason: 'subscription cancellation must clean up the active dump mapping',
+        );
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+      },
+    );
+
+    test(
+      'anthropic-compatible streaming subscription cancellation cleans up active dump without active-map leak',
+      () async {
+        final controller = StreamController<List<int>>();
+        final adapter = BaseAnthropicAdapter(
+          config(),
+          _anthropicProfile,
+          providerInstanceId: 'dump-anthropic-provider',
+          baseUrlOverride: 'https://dump.invalid/v1',
+          apiKeyOverride: 'fixture-key',
+          client: MockClient.streaming(
+            (request, _) async => http.StreamedResponse(controller.stream, 200),
+          ),
+        );
+
+        final options = compactionOptions(
+          providerInstanceId: 'dump-anthropic-provider',
+          modelId: 'dump-model',
+        );
+
+        controller.add(
+          utf8.encode(
+            'event: content_block_delta\n'
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"chunk"}}\n\n',
+          ),
+        );
+
+        final stream = adapter.generateStream(
+          [Message(role: MessageRole.user, content: _compactionInstruction)],
+          options: options,
+        );
+
+        final completer = Completer<void>();
+        late StreamSubscription<AgentResponse> sub;
+        sub = stream.listen((chunk) async {
+          expect(
+            LLMRequestDumper.hasActiveDump(requestId: options.requestId),
+            isTrue,
+            reason: 'in-flight dump mapping must exist during active streaming',
+          );
+          await sub.cancel();
+          await controller.close();
+          completer.complete();
+        });
+
+        await completer.future;
+
+        expect(
+          LLMRequestDumper.hasActiveDump(requestId: options.requestId),
+          isFalse,
+          reason: 'subscription cancellation must clean up the active dump mapping',
+        );
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+      },
+    );
+
+    test(
+      'codex responses streaming subscription cancellation cleans up active dump without active-map leak',
+      () async {
+        final controller = StreamController<List<int>>();
+        final adapter = CodexResponsesAdapter(
+          codexConfig(),
+          _codexProfile,
+          providerInstanceId: 'dump-codex-provider',
+          baseUrlOverride: 'https://dump.invalid/v1',
+          apiKeyOverride: 'fixture-key',
+          client: MockClient.streaming(
+            (request, _) async => http.StreamedResponse(controller.stream, 200),
+          ),
+        );
+
+        final options = compactionOptions(
+          providerInstanceId: 'dump-codex-provider',
+          modelId: 'gpt-5.4',
+        );
+
+        controller.add(
+          utf8.encode(
+            'data: {"type":"response.output_text.delta","delta":"codex chunk"}\n\n',
+          ),
+        );
+
+        final stream = adapter.generateStream(
+          [Message(role: MessageRole.user, content: _compactionInstruction)],
+          options: options,
+        );
+
+        final completer = Completer<void>();
+        late StreamSubscription<AgentResponse> sub;
+        sub = stream.listen((chunk) async {
+          expect(
+            LLMRequestDumper.hasActiveDump(requestId: options.requestId),
+            isTrue,
+            reason: 'in-flight dump mapping must exist during active streaming',
+          );
+          await sub.cancel();
+          await controller.close();
+          completer.complete();
+        });
+
+        await completer.future;
+
+        expect(
+          LLMRequestDumper.hasActiveDump(requestId: options.requestId),
+          isFalse,
+          reason: 'subscription cancellation must clean up the active dump mapping',
+        );
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+      },
+    );
+
+    test(
+      'streaming completion preserves capture_state completed and cleans up active dump',
+      () async {
+        final adapter = BaseOpenAIAdapter(
+          config(),
+          const ProviderProfile(name: 'openai', apiMode: 'chat'),
+          baseUrlOverride: 'https://dump.invalid/v1',
+          apiKeyOverride: 'fixture-key',
+          defaultModelOverride: 'dump-model',
+          client: MockClient.streaming(
+            (request, _) async => http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  'data: {"choices":[{"delta":{"content":"full summary"},"finish_reason":"stop"}]}\n\n'
+                  'data: [DONE]\n\n',
+                ),
+              ),
+              200,
+            ),
+          ),
+        );
+
+        final options = compactionOptions(
+          providerInstanceId: 'dump-openai-provider',
+          modelId: 'dump-model',
+        );
+
+        final responses = await adapter.generateStream(
+          [Message(role: MessageRole.user, content: _compactionInstruction)],
+          options: options,
+        ).toList();
+
+        expect(responses, isNotEmpty);
+        expect(
+          LLMRequestDumper.hasActiveDump(requestId: options.requestId),
+          isFalse,
+          reason: 'completed stream must have cleaned up the active dump mapping',
+        );
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+
+        // Verify dump file written to disk has capture_state: 'completed'
+        final dumpDir = Directory(p.join(scratch.path, 'request_dumps'));
+        final dumpFiles = dumpDir.listSync().whereType<File>().toList();
+        expect(dumpFiles, isNotEmpty);
+        final dumpContent =
+            jsonDecode(await dumpFiles.first.readAsString()) as Map<String, dynamic>;
+        expect(dumpContent['capture_state'], equals('completed'));
+        expect(
+          dumpContent['response']['message']['content'],
+          equals('full summary'),
+        );
       },
     );
   });

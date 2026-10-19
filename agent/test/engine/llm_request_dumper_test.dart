@@ -13,12 +13,12 @@ void main() {
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('sanadagent_dumper_test_');
     setSanadHomeOverride(tempDir.path);
-    LLMRequestDumper.environmentOverride = null;
+    LLMRequestDumper.resetForTesting();
   });
 
   tearDown(() {
     setSanadHomeOverride(null);
-    LLMRequestDumper.environmentOverride = null;
+    LLMRequestDumper.resetForTesting();
     if (tempDir.existsSync()) {
       tempDir.deleteSync(recursive: true);
     }
@@ -943,6 +943,381 @@ void main() {
 
         expect(content, isNot(contains(shortPngBase64)));
         expect(content, isNot(contains(largeJpegBase64.substring(0, 30))));
+      },
+    );
+  });
+
+  group('Compaction Request Dumper Pairing and Isolation', () {
+    test('hasActiveDump tracks in-flight mappings and cleanupActiveDump clears them', () async {
+      LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+      const compactionId = 'active-test-c1';
+      const requestId = 'compaction:active-test-c1:req-1';
+
+      expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: requestId), isFalse);
+
+      final path = await LLMRequestDumper.dumpRequest(
+        compactionId: compactionId,
+        requestId: requestId,
+        sessionId: 'test-session',
+        history: [],
+        tools: const [],
+      );
+      expect(path, isNotNull);
+      expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: requestId), isTrue);
+
+      LLMRequestDumper.cleanupActiveDump(compactionId: compactionId, requestId: requestId);
+      expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: requestId), isFalse);
+    });
+
+    test(
+      'compactionKey normalizes and canonicalizes compaction and request identifiers',
+      () {
+        expect(
+          LLMRequestDumper.compactionKey(
+            compactionId: 'op-1',
+            requestId: 'req-1',
+          ),
+          equals('compaction:op-1:req-1'),
+        );
+        expect(
+          LLMRequestDumper.compactionKey(
+            compactionId: 'op-1',
+            requestId: 'compaction:op-1:req-1',
+          ),
+          equals('compaction:op-1:req-1'),
+        );
+        expect(
+          LLMRequestDumper.compactionKey(
+            requestId: 'compaction:auto-1:attempt-1',
+          ),
+          equals('compaction:auto-1:attempt-1'),
+        );
+        expect(
+          LLMRequestDumper.compactionKey(compactionId: 'op-1'),
+          equals('compaction:op-1'),
+        );
+        expect(
+          LLMRequestDumper.extractCompactionId('compaction:op-1:attempt-1'),
+          equals('op-1'),
+        );
+      },
+    );
+
+    test(
+      'pairs compaction request, actual request, and response under compactionId:requestId without touching lastDumpFilePath',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        const compactionId = 'test-compaction-uuid-1';
+        const requestId = 'compaction:test-compaction-uuid-1:attempt-1';
+
+        final dumpPath = await LLMRequestDumper.dumpRequest(
+          compactionId: compactionId,
+          requestId: requestId,
+          sessionId: 'session-compaction-test',
+          history: [
+            Message(role: MessageRole.user, content: 'Summarize previous turns'),
+          ],
+          tools: const [],
+          model: 'summary-model',
+          provider: 'openai',
+        );
+
+        expect(dumpPath, isNotNull);
+        expect(dumpPath, contains('compaction_dump_'));
+        // Invariant: Compaction requests NEVER set or overwrite lastDumpFilePath
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+
+        final initialFile = File(dumpPath!);
+        expect(initialFile.existsSync(), isTrue);
+        var content =
+            jsonDecode(await initialFile.readAsString()) as Map<String, dynamic>;
+        expect(content['capture_state'], equals('initialized'));
+        expect(content['compaction_id'], equals(compactionId));
+        expect(content['request_id'], equals(requestId));
+
+        // Record wire request via adapter hook
+        final actualRecorded = await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.openai.com/v1/chat/completions'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer test-secret-token',
+          },
+          body: {
+            'model': 'summary-model',
+            'messages': [
+              {'role': 'user', 'content': 'Summarize'},
+            ],
+          },
+          compactionId: compactionId,
+          requestId: requestId,
+        );
+        expect(actualRecorded, equals(dumpPath));
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+
+        content =
+            jsonDecode(await initialFile.readAsString()) as Map<String, dynamic>;
+        expect(content['capture_state'], equals('request_sent'));
+        expect(
+          content['request']['url'],
+          equals('https://api.openai.com/v1/chat/completions'),
+        );
+
+        // Complete response via adapter hook
+        final responseRecorded = await LLMRequestDumper.dumpResponse(
+          {
+            'status_code': 200,
+            'summary': 'This is the compressed summary.',
+          },
+          requestId: requestId,
+        );
+        expect(responseRecorded, equals(dumpPath));
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+
+        content =
+            jsonDecode(await initialFile.readAsString()) as Map<String, dynamic>;
+        expect(content['capture_state'], equals('completed'));
+        expect(
+          content['response']['summary'],
+          equals('This is the compressed summary.'),
+        );
+
+        // Proves in-flight map is cleanly removed on completion
+        expect(
+          LLMRequestDumper.hasActiveDump(
+            compactionId: compactionId,
+            requestId: requestId,
+          ),
+          isFalse,
+        );
+      },
+    );
+
+    test(
+      'pairs compaction error and marks capture_state as error without touching lastDumpFilePath',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        const compactionId = 'test-compaction-uuid-err';
+        const requestId = 'compaction:test-compaction-uuid-err:attempt-1';
+
+        final dumpPath = await LLMRequestDumper.dumpRequest(
+          compactionId: compactionId,
+          requestId: requestId,
+          sessionId: 'session-err',
+          history: [],
+          tools: const [],
+        );
+        expect(dumpPath, isNotNull);
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+        expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: requestId), isTrue);
+
+        final recordedError = await LLMRequestDumper.recordError(
+          HttpException(
+            'Compaction endpoint unreachable with secret sk-proj-12345678901234567890',
+          ),
+          requestId: requestId,
+          compactionId: compactionId,
+        );
+        expect(recordedError, equals(dumpPath));
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+        expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: requestId), isFalse);
+
+        final content =
+            jsonDecode(await File(dumpPath!).readAsString()) as Map<String, dynamic>;
+        expect(content['capture_state'], equals('error'));
+        expect(content['error']['type'], equals('HttpException'));
+        expect(content['error']['message'], contains('unreachable'));
+        expect(
+          content['error']['message'],
+          isNot(contains('12345678901234567890')),
+        );
+      },
+    );
+
+    test(
+      'normal-turn and compaction requests concurrently execute with strict lastDumpFilePath isolation',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        // 1. Normal turn begins
+        final normalPath = await LLMRequestDumper.dumpRequest(
+          sessionId: 'normal-session-1',
+          history: [
+            Message(role: MessageRole.user, content: 'Normal user turn message'),
+          ],
+          tools: const [],
+          requestId: 'normal-req-1',
+        );
+        expect(normalPath, isNotNull);
+        expect(LLMRequestDumper.lastDumpFilePath, equals(normalPath));
+
+        // 2. Compaction request begins in background / preflight
+        const compactionId = 'compaction-op-concurrent';
+        const compactionRequestId =
+            'compaction:compaction-op-concurrent:attempt-1';
+        final compactionPath = await LLMRequestDumper.dumpRequest(
+          compactionId: compactionId,
+          requestId: compactionRequestId,
+          sessionId: 'normal-session-1',
+          history: [
+            Message(role: MessageRole.system, content: 'Summarize context'),
+          ],
+          tools: const [],
+        );
+        expect(compactionPath, isNotNull);
+        expect(compactionPath, isNot(equals(normalPath)));
+        // Invariant: lastDumpFilePath MUST NOT be overwritten by compaction
+        expect(LLMRequestDumper.lastDumpFilePath, equals(normalPath));
+
+        // 3. Compaction records actual request
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.openai.com/v1/chat/completions'),
+          headers: {'Content-Type': 'application/json'},
+          body: {'summary_prompt': 'compress context payload'},
+          requestId: compactionRequestId,
+        );
+        expect(LLMRequestDumper.lastDumpFilePath, equals(normalPath));
+
+        // 4. Normal turn records actual request
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.openai.com/v1/chat/completions'),
+          headers: {'Content-Type': 'application/json'},
+          body: {'user_prompt': 'Normal user turn message'},
+          requestId: 'normal-req-1',
+        );
+        expect(LLMRequestDumper.lastDumpFilePath, equals(normalPath));
+
+        // 5. Compaction finishes first and dumps response
+        await LLMRequestDumper.dumpResponse(
+          {'summary_output': 'Compact state achieved'},
+          requestId: compactionRequestId,
+        );
+        expect(LLMRequestDumper.lastDumpFilePath, equals(normalPath));
+
+        // 6. Normal turn dumps response
+        await LLMRequestDumper.dumpResponse(
+          {'reply': 'Normal assistant answer'},
+          requestId: 'normal-req-1',
+        );
+        expect(LLMRequestDumper.lastDumpFilePath, equals(normalPath));
+
+        // Verify normal file content: contains normal turn, NEVER contains compaction data
+        final normalContent = await File(normalPath!).readAsString();
+        expect(normalContent, contains('Normal user turn message'));
+        expect(normalContent, contains('Normal assistant answer'));
+        expect(normalContent, isNot(contains('compress context payload')));
+        expect(normalContent, isNot(contains('Compact state achieved')));
+
+        // Verify compaction file content: contains compaction turn, NEVER contains normal data
+        final compactionContent = await File(compactionPath!).readAsString();
+        expect(compactionContent, contains('compress context payload'));
+        expect(compactionContent, contains('Compact state achieved'));
+        expect(compactionContent, isNot(contains('Normal assistant answer')));
+        expect(compactionContent, isNot(contains('Normal user turn message')));
+      },
+    );
+
+    test(
+      'auto-creates compaction dump file on wire recordActualRequest without preceding dumpRequest',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        const requestId = 'compaction:raw-adapter-uuid:attempt-1';
+        final actualDump = await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.openai.com/v1/chat/completions'),
+          headers: {'Content-Type': 'application/json'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'Wire compaction test'},
+            ],
+          },
+          requestId: requestId,
+        );
+
+        expect(actualDump, isNotNull);
+        expect(actualDump, contains('compaction_dump_'));
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+
+        final initial =
+            jsonDecode(await File(actualDump!).readAsString())
+                as Map<String, dynamic>;
+        expect(initial['capture_state'], equals('request_sent'));
+        expect(initial['compaction_id'], equals('raw-adapter-uuid'));
+        expect(initial['request_id'], equals(requestId));
+
+        // Completing response attaches to the auto-created dump
+        final responseRecorded = await LLMRequestDumper.dumpResponse(
+          {'output': 'wire completion ok'},
+          requestId: requestId,
+        );
+        expect(responseRecorded, equals(actualDump));
+        expect(LLMRequestDumper.lastDumpFilePath, isNull);
+
+        final completed =
+            jsonDecode(await File(actualDump).readAsString())
+                as Map<String, dynamic>;
+        expect(completed['capture_state'], equals('completed'));
+        expect(completed['response']['output'], equals('wire completion ok'));
+      },
+    );
+
+    test(
+      'isolates distinct compaction attempts under the same compactionId',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        const compactionId = 'multi-attempt-op';
+        const req1 = 'compaction:multi-attempt-op:attempt-1';
+        const req2 = 'compaction:multi-attempt-op:attempt-2';
+
+        // Attempt 1 fails
+        final dump1 = await LLMRequestDumper.dumpRequest(
+          compactionId: compactionId,
+          requestId: req1,
+          sessionId: 'session-multi',
+          history: [],
+          tools: const [],
+        );
+        expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: req1), isTrue);
+
+        await LLMRequestDumper.recordError(
+          HttpException('Attempt 1 timeout'),
+          requestId: req1,
+          compactionId: compactionId,
+        );
+        expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: req1), isFalse);
+
+        // Attempt 2 succeeds
+        final dump2 = await LLMRequestDumper.dumpRequest(
+          compactionId: compactionId,
+          requestId: req2,
+          sessionId: 'session-multi',
+          history: [],
+          tools: const [],
+        );
+        expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: req2), isTrue);
+
+        await LLMRequestDumper.dumpResponse(
+          {'success': true},
+          requestId: req2,
+          compactionId: compactionId,
+        );
+        expect(LLMRequestDumper.hasActiveDump(compactionId: compactionId, requestId: req2), isFalse);
+
+        expect(dump1, isNot(equals(dump2)));
+        final content1 =
+            jsonDecode(await File(dump1!).readAsString())
+                as Map<String, dynamic>;
+        final content2 =
+            jsonDecode(await File(dump2!).readAsString())
+                as Map<String, dynamic>;
+
+        expect(content1['capture_state'], equals('error'));
+        expect(content1['request_id'], equals(req1));
+        expect(content2['capture_state'], equals('completed'));
+        expect(content2['request_id'], equals(req2));
       },
     );
   });
