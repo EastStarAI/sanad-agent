@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 
 import 'compaction_token_estimator.dart';
 import 'compaction_tail_selector.dart';
@@ -52,22 +53,14 @@ class CompactionToolPruner {
   }
 
   Message _pruneMessage(Message message, {required bool forSummarizer}) {
-    if (message.role == MessageRole.tool ||
-        message.role == MessageRole.user ||
+    if (message.role == MessageRole.tool) {
+      return _pruneToolMessage(message, forSummarizer: forSummarizer);
+    }
+    if (message.role == MessageRole.user ||
         message.role == MessageRole.assistant) {
-      final content = message.content ?? '';
       final mediaDescription = _mediaDescription(message);
       if (mediaDescription != null && forSummarizer) {
         return message.copyWith(content: mediaDescription);
-      }
-      if (message.role == MessageRole.tool &&
-          content.length > maxToolResultChars) {
-        final prefix = content.substring(0, maxToolResultChars);
-        final status = _toolStatusHint(content);
-        return message.copyWith(
-          content:
-              '$prefix… [truncated for compaction; tool_call_id=${message.toolCallId ?? 'unknown'}; $status]',
-        );
       }
     }
     if (message.role == MessageRole.assistant &&
@@ -94,6 +87,114 @@ class CompactionToolPruner {
     return message;
   }
 
+  Message _pruneToolMessage(Message message, {required bool forSummarizer}) {
+    if (message.toolResult == null) {
+      final content = message.content ?? '';
+      final mediaDescription = _mediaDescription(message);
+      if (mediaDescription != null && forSummarizer) {
+        return message.copyWith(content: mediaDescription);
+      }
+      if (content.length > maxToolResultChars) {
+        final prefix = content.substring(0, maxToolResultChars);
+        final status = _toolStatusHint(content);
+        return message.copyWith(
+          content:
+              '$prefix… [truncated for compaction; tool_call_id=${message.toolCallId ?? 'unknown'}; $status]',
+        );
+      }
+      return message;
+    }
+
+    final originalResult = message.toolResult!;
+    var blocks = originalResult.blocks;
+    var changed = false;
+
+    if (forSummarizer) {
+      final hasImageBlock = blocks.any((b) => b is ToolImageBlock);
+      final mediaDesc = _mediaDescription(message);
+      if (hasImageBlock) {
+        blocks = blocks.map<ToolResultBlock>((block) {
+          if (block is ToolImageBlock) {
+            changed = true;
+            final bytes = _decodedBytes(block.dataBase64);
+            return ToolTextBlock(
+              text: '[media omitted for compaction summary: $bytes bytes]',
+            );
+          }
+          return block;
+        }).toList();
+      } else if (mediaDesc != null) {
+        changed = true;
+        blocks = [ToolTextBlock(text: mediaDesc)];
+      }
+    }
+
+    final currentDisplayText = blocks
+        .whereType<ToolTextBlock>()
+        .map((b) => b.text)
+        .join('\n');
+
+    if (currentDisplayText.length > maxToolResultChars) {
+      final prefix = currentDisplayText.substring(0, maxToolResultChars);
+      final status = _toolStatusHint(
+        currentDisplayText,
+        isError: originalResult.isError,
+      );
+      final truncatedText =
+          '$prefix… [truncated for compaction; tool_call_id=${message.toolCallId ?? 'unknown'}; $status]';
+      changed = true;
+
+      if (forSummarizer) {
+        blocks = [ToolTextBlock(text: truncatedText)];
+      } else {
+        if (blocks.any((b) => b is ToolImageBlock)) {
+          var textReplaced = false;
+          final newBlocks = <ToolResultBlock>[];
+          for (final block in blocks) {
+            if (block is ToolTextBlock) {
+              if (!textReplaced) {
+                newBlocks.add(ToolTextBlock(text: truncatedText));
+                textReplaced = true;
+              }
+            } else {
+              newBlocks.add(block);
+            }
+          }
+          if (!textReplaced) {
+            newBlocks.insert(0, ToolTextBlock(text: truncatedText));
+          }
+          blocks = newBlocks;
+        } else {
+          blocks = [ToolTextBlock(text: truncatedText)];
+        }
+      }
+    }
+
+    if (changed) {
+      final derivedResult = ToolExecutionResult(
+        schemaVersion: originalResult.schemaVersion,
+        blocks: blocks,
+        isError: originalResult.isError,
+        errorCode: originalResult.errorCode,
+      );
+      return message.copyWith(
+        content: derivedResult.displayText,
+        toolResult: derivedResult,
+      );
+    }
+
+    return message;
+  }
+
+  static int _decodedBytes(String base64) {
+    final padding = base64.endsWith('==')
+        ? 2
+        : base64.endsWith('=')
+        ? 1
+        : 0;
+    return (base64.length * 3 ~/ 4) - padding;
+  }
+
   String? _mediaDescription(Message message) {
     final content = message.content ?? '';
     final mediaBytes = message.metadata?['media_bytes'];
@@ -110,7 +211,8 @@ class CompactionToolPruner {
     return null;
   }
 
-  String _toolStatusHint(String content) {
+  String _toolStatusHint(String content, {bool isError = false}) {
+    if (isError) return 'status=error';
     final lower = content.toLowerCase();
     if (lower.contains('error') || lower.contains('failed')) {
       return 'status=error';

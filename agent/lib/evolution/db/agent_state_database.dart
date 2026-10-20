@@ -894,6 +894,7 @@ class AgentStateDatabase {
         internal_summary_json TEXT,
         failure_reason TEXT,
         failure_detail_json TEXT,
+        diagnostics_json TEXT,
         started_at TEXT NOT NULL,
         completed_at TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE,
@@ -940,6 +941,10 @@ class AgentStateDatabase {
     _safeAddColumn(
       db,
       'ALTER TABLE session_compaction_operations ADD COLUMN summarization_attempts INTEGER NOT NULL DEFAULT 0 CHECK (summarization_attempts >= 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN diagnostics_json TEXT',
     );
     db.execute('''
       CREATE UNIQUE INDEX IF NOT EXISTS idx_session_compaction_one_started

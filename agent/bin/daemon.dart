@@ -18,6 +18,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_cre
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 
 import 'package:sanad_agent/core/utils/logger.dart';
@@ -161,6 +162,23 @@ Future<void> _restoreDurableStateSafely(
   SessionRunOrchestrator orchestrator,
 ) async {
   final logger = Logger('DaemonStartup');
+  if (getIt.isRegistered<CompactionBoundaryRepository>()) {
+    try {
+      final recovered = getIt<CompactionBoundaryRepository>()
+          .reconcileOrphanedStartedOperations();
+      if (recovered > 0) {
+        logger.info(
+          'Reconciled $recovered orphaned compaction operation(s) on startup.',
+        );
+      }
+    } catch (error, stack) {
+      logger.warning(
+        'Failed to reconcile orphaned compaction operations on startup; continuing.',
+        error,
+        stack,
+      );
+    }
+  }
   try {
     await orchestrator.restorePersistedState();
     logger.info('Durable state restored from session_work_items.');

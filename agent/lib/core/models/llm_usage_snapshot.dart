@@ -70,6 +70,7 @@ class LlmUsageSnapshot {
             'cache_read_input_tokens',
             'cacheReadInputTokens',
             'cached_tokens',
+            'cached_input_tokens',
           ]) ??
           nestedNumeric('prompt_tokens_details', const [
             'cached_tokens',

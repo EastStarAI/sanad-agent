@@ -682,6 +682,7 @@ void main() {
         await fakeClient.turnDispatched.future.timeout(
           const Duration(seconds: 5),
         );
+        expect(fakeClient.dispatchedRequest?.metadata['allow_all_tools'], isTrue);
 
         // 1. Emit ordinary tool permission -> auto approved
         fakeClient.emitToolPermission(

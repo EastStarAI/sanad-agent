@@ -83,5 +83,31 @@ void main() {
       expect(withSavings.reclaimedTokens, 60_000);
       expect(noSavings.reclaimedTokens, isNull);
     });
+
+    test('parses failureStage and failureCause in snake_case and camelCase', () {
+      final snake = CompactionEventSnapshot.fromJson(const {
+        'session_id': 'session-1',
+        'compaction_id': 'cmp-1',
+        'status': 'failed',
+        'failure_reason': 'summarization_failed',
+        'failure_stage': 'preparation',
+        'failure_cause': 'thinking_capability_unsupported',
+      });
+      expect(snake.failureStage, 'preparation');
+      expect(snake.failureCause, 'thinking_capability_unsupported');
+      expect(snake.failureReason, 'summarization_failed');
+
+      final camel = CompactionEventSnapshot.fromJson(const {
+        'session_id': 'session-1',
+        'compaction_id': 'cmp-2',
+        'status': 'failed',
+        'failureReason': 'summarizationFailed',
+        'failureStage': 'provider',
+        'failureCause': 'timeout',
+      });
+      expect(camel.failureStage, 'provider');
+      expect(camel.failureCause, 'timeout');
+      expect(camel.failureReason, 'summarizationFailed');
+    });
   });
 }

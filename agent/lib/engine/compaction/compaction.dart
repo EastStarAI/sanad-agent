@@ -6,6 +6,7 @@
 library;
 
 export 'compaction_candidate.dart';
+export 'compaction_diagnostics.dart';
 export 'compaction_enums.dart';
 export 'compaction_identities.dart';
 export 'compaction_metrics.dart';

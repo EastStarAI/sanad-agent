@@ -13,6 +13,7 @@ import 'package:sanad_client/features/devices/data/device_connection_coordinator
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
+import 'package:sanad_client/l10n/app_localizations_ar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -416,7 +417,7 @@ void main() {
     expect(conversationRepository.compactSessionCalls, 1);
     expect(
       validationError,
-      'Context compaction is already in progress.',
+      'Context compaction is already in progress. Wait for the current operation to finish before retrying.',
     );
     expect(find.text('/compact'), findsNothing);
     expect(
@@ -428,7 +429,7 @@ void main() {
   });
 
   testWidgets(
-    'terminal compact failure consumes command and reports the typed reason',
+    'terminal compact failure consumes command and reports localized explanation with next action',
     (tester) async {
       conversationRepository.compactSessionResult = const SessionCompactResult(
         outcome: 'failed',
@@ -459,12 +460,141 @@ void main() {
       expect(conversationRepository.compactSessionCalls, 1);
       expect(
         validationError,
-        'Context compaction failed: continuityValidationFailed',
+        'Summary failed continuity verification. Retry compaction to generate a complete summary.',
       );
       expect(find.text('/compact'), findsNothing);
       expect(
         find.byKey(const Key('slash_suggestion_runtime_action_compact')),
         findsNothing,
+      );
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
+
+  testWidgets(
+    'thinking capability rejection feedback explains thinking unsupported with actionable advice',
+    (tester) async {
+      conversationRepository.compactSessionResult = const SessionCompactResult(
+        outcome: 'failed',
+        failureReason: 'summarization_failed',
+        failureStage: 'preparation',
+        failureCause: 'thinking_capability_unsupported',
+      );
+      String? validationError;
+      ConversationInputPanel.debugOnValidationError = (message) {
+        validationError = message;
+      };
+
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        child: ConversationInputPanel(
+          sessionId: 'session-compact',
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+
+      await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_message_btn')));
+      await tester.pumpAndSettle();
+
+      expect(conversationRepository.compactSessionCalls, 1);
+      expect(
+        validationError,
+        'Selected thinking mode is not supported by the active model or route. '
+        'Select a supported thinking mode or route and try again.',
+      );
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
+
+  testWidgets(
+    'provider timeout rejection feedback explains timeout with safe next action',
+    (tester) async {
+      conversationRepository.compactSessionResult = const SessionCompactResult(
+        outcome: 'failed',
+        failureReason: 'summarization_failed',
+        failureStage: 'provider',
+        failureCause: 'timeout',
+      );
+      String? validationError;
+      ConversationInputPanel.debugOnValidationError = (message) {
+        validationError = message;
+      };
+
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        child: ConversationInputPanel(
+          sessionId: 'session-compact',
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+
+      await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_message_btn')));
+      await tester.pumpAndSettle();
+
+      expect(conversationRepository.compactSessionCalls, 1);
+      expect(
+        validationError,
+        'Provider timed out during context summarization. Check network connection or try again.',
+      );
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
+
+  testWidgets(
+    'Arabic locale delivers the localized toast explanation with next action',
+    (tester) async {
+      conversationRepository.compactSessionResult = const SessionCompactResult(
+        outcome: 'failed',
+        failureReason: 'summarization_failed',
+        failureStage: 'preparation',
+        failureCause: 'thinking_capability_unsupported',
+      );
+      String? validationError;
+      ConversationInputPanel.debugOnValidationError = (message) {
+        validationError = message;
+      };
+
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        locale: const Locale('ar'),
+        child: ConversationInputPanel(
+          sessionId: 'session-compact',
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+
+      await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_message_btn')));
+      await tester.pumpAndSettle();
+
+      // Expectations derive from the localization system: the root contract
+      // forbids Arabic literals in handwritten Dart, including tests.
+      final arabic = AppLocalizationsAr();
+      expect(conversationRepository.compactSessionCalls, 1);
+      expect(
+        validationError,
+        '${arabic.compactionFailureThinkingUnsupported} '
+        '${arabic.compactionActionThinkingUnsupported}',
       );
       await tester.pump(ToastUtils.defaultDuration);
       await tester.pump(const Duration(milliseconds: 500));

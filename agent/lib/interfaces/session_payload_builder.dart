@@ -11,22 +11,40 @@ Map<String, dynamic> buildSessionPayload({
       ? <String, dynamic>{}
       : Map<String, dynamic>.from(sessionMetadata);
   final mergedMetadata = {...persistedMetadata, ...?metadataOverrides};
+  if (mergedMetadata['allow_all_tools'] == true) {
+    mergedMetadata['permission_mode'] ??= 'full_access';
+  } else if (mergedMetadata['permission_mode'] == 'full_access') {
+    mergedMetadata['permission_mode'] = 'default_mode';
+  }
   final workspace = persistedMetadata['workspace'];
   final workspaceMap = workspace is Map
       ? Map<String, dynamic>.from(workspace)
       : null;
+  final executionRoot = persistedMetadata['execution_root']?.toString().trim();
   final workspaceId = session.workspaceId?.trim().isNotEmpty == true
       ? session.workspaceId!.trim()
-      : persistedMetadata['workspace_id']?.toString();
+      : (persistedMetadata['workspace_id']?.toString() ??
+            (executionRoot?.isNotEmpty == true
+                ? 'exec_root:$executionRoot'
+                : null));
   final workspaceName =
       workspaceMap?['name']?.toString() ??
-      persistedMetadata['workspace_name']?.toString();
+      persistedMetadata['workspace_name']?.toString() ??
+      (executionRoot?.isNotEmpty == true
+          ? (executionRoot!
+                    .split(RegExp(r'[/\\]'))
+                    .where((s) => s.isNotEmpty)
+                    .lastOrNull ??
+                'Workspace')
+          : null);
   final workspacePath =
       workspaceMap?['path']?.toString() ??
-      persistedMetadata['workspace_path']?.toString();
+      persistedMetadata['workspace_path']?.toString() ??
+      (executionRoot?.isNotEmpty == true ? executionRoot : null);
   final workspaceTrustState =
       workspaceMap?['trust_state']?.toString() ??
-      persistedMetadata['workspace_trust_state']?.toString();
+      persistedMetadata['workspace_trust_state']?.toString() ??
+      (executionRoot?.isNotEmpty == true ? 'untrusted' : null);
 
   final provider = session.providerId?.trim().isNotEmpty == true
       ? session.providerId!.trim()

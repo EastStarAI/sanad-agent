@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:path/path.dart' as p;
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
@@ -62,6 +63,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   final Map<String, DeviceWorkspace> _selectedWorkspaceByAgentId = {};
   final Set<String> _loadingWorkspaceAgentIds = {};
   final Map<String, WorkspacePermissionMode> _permissionModesByWorkspaceId = {};
+  final Set<String> _downgradedSessionIds = {};
   final Set<String> _loadingPermissionModeWorkspaceIds = {};
   final Map<String, int> _workspacePolicyLoadIds = {};
   final Set<String> _freshSessionIdsAwaitingFirstTurn = {};
@@ -161,10 +163,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   void _handleSessionStateChange(SessionState sessionState) {
     final selectedSession = sessionState.selectedSession;
     final nextSessionId = selectedSession?.id;
-    final routeChangedForActiveSession =
-        nextSessionId != null && nextSessionId == _selectedSessionId && _syncConfirmedRouteFromSession(selectedSession);
     if (nextSessionId == _selectedSessionId) {
-      if (routeChangedForActiveSession) {
+      final routeChangedForActiveSession = nextSessionId != null && _syncConfirmedRouteFromSession(selectedSession);
+      final currentWorkspace = _currentAgent == null ? null : _selectedWorkspaceForAgent(_currentAgent!);
+      final newPermissionMode = _permissionModeForWorkspace(currentWorkspace);
+      final permissionChanged = state.permissionMode != newPermissionMode;
+      final workspaceChanged = state.selectedWorkspace?.id != currentWorkspace?.id;
+      if (routeChangedForActiveSession || permissionChanged || workspaceChanged) {
         _emitCurrentState();
       }
       return;
@@ -220,7 +225,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       return;
     }
 
-    if (selectedSession?.deviceId != _currentAgent?.id) {
+    if (!_sessionMatchesAgent(selectedSession, _currentAgent)) {
       _scheduleDelayedLoading(nextSessionId);
       emit(
         state.copyWith(
@@ -307,6 +312,8 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           isHistoryLoading: true,
           showDelayedLoading: false,
           clearHistoryLoadError: true,
+          selectedWorkspace: _selectedWorkspaceForAgent(agent),
+          clearSelectedWorkspace: _selectedWorkspaceForAgent(agent) == null,
         ),
       );
 
@@ -632,7 +639,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       unawaited(_ensureWorkspacesForAgent(agent));
       final selectedSession = sessionCubit.state.selectedSession;
       final shouldLoadSelectedSession =
-          selectedSession?.id == _selectedSessionId && selectedSession?.deviceId == agent.id;
+          selectedSession?.id == _selectedSessionId && _sessionMatchesAgent(selectedSession, agent);
       final sessionWorkspace = shouldLoadSelectedSession ? _workspaceFromSession(selectedSession) : null;
       if (sessionWorkspace != null) {
         _selectedWorkspaceByAgentId[agent.id] = sessionWorkspace;
@@ -715,6 +722,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
                 nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
                 availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
                 selectedWorkspace: _selectedWorkspaceForAgent(agent),
+                clearSelectedWorkspace: _selectedWorkspaceForAgent(agent) == null,
                 isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
                 requiresWorkspace: _requiresWorkspace(agent),
                 permissionMode: _permissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
@@ -803,7 +811,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   bool _selectedSessionBelongsToCurrentClient() {
     final selectedSession = sessionCubit.state.selectedSession;
-    return selectedSession?.id == _selectedSessionId && selectedSession?.deviceId == _currentAgent?.id;
+    return selectedSession?.id == _selectedSessionId && _sessionMatchesAgent(selectedSession, _currentAgent);
   }
 
   String? _resolvedActiveSessionId() {
@@ -1634,7 +1642,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   bool _syncConfirmedRouteFromSession(Session? session) {
     final agent = _currentAgent;
-    if (agent == null || session == null || session.deviceId != agent.id) {
+    if (agent == null || session == null || !_sessionMatchesAgent(session, agent)) {
       return false;
     }
     var changed = false;
@@ -1901,6 +1909,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
 
     _workspacePolicyLoadIds[workspace.id] = (_workspacePolicyLoadIds[workspace.id] ?? 0) + 1;
+    if (_selectedSessionId != null) {
+      if (permissionMode == WorkspacePermissionMode.defaultMode) {
+        _downgradedSessionIds.add(_selectedSessionId!);
+      } else if (permissionMode == WorkspacePermissionMode.fullAccess) {
+        _downgradedSessionIds.remove(_selectedSessionId!);
+      }
+    }
     emit(state.copyWith(isLoadingPermissionMode: true));
     try {
       final updatedPolicy = await conversationRepository.setWorkspacePermissionMode(
@@ -1928,9 +1943,17 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
   }
 
+  bool _sessionMatchesAgent(Session? session, DeviceConfig? agent) {
+    if (session == null || agent == null) return false;
+    if (session.deviceId == agent.id) return true;
+    if (session.deviceId != null && agent.representsDeviceId(session.deviceId!)) return true;
+    if (session.deviceId == null && agent.isLocalInventoryDevice) return true;
+    return false;
+  }
+
   DeviceWorkspace? _selectedWorkspaceForAgent(DeviceConfig agent) {
     final selectedSession = sessionCubit.state.selectedSession;
-    if (selectedSession?.deviceId == agent.id) {
+    if (_sessionMatchesAgent(selectedSession, agent)) {
       final sessionWorkspace = _workspaceFromSession(selectedSession);
       if (sessionWorkspace != null) {
         return sessionWorkspace;
@@ -1941,18 +1964,37 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   DeviceWorkspace? _workspaceFromSession(Session? session) {
     final workspaceId = session?.workspaceId?.trim();
+    final execRoot =
+        session?.metadata?['execution_root']?.toString().trim() ??
+        (session?.workspacePath?.trim().isNotEmpty == true ? session?.workspacePath!.trim() : null);
+
     if (workspaceId == null || workspaceId.isEmpty) {
+      if (execRoot != null && execRoot.isNotEmpty) {
+        final folderName = p.basename(execRoot);
+        return DeviceWorkspace(
+          id: 'exec_root:$execRoot',
+          name: folderName.isNotEmpty ? folderName : 'Workspace',
+          path: execRoot,
+          trustState: 'untrusted',
+        );
+      }
       return null;
     }
+
     for (final workspaces in _workspacesByAgentId.values) {
       for (final workspace in workspaces) {
         if (workspace.id == workspaceId) return workspace;
       }
     }
+
+    final folderName = session?.workspaceName?.trim().isNotEmpty == true
+        ? session!.workspaceName!.trim()
+        : (execRoot != null && execRoot.isNotEmpty ? p.basename(execRoot) : workspaceId);
+
     return DeviceWorkspace(
       id: workspaceId,
-      name: session?.workspaceName?.trim().isNotEmpty == true ? session!.workspaceName!.trim() : workspaceId,
-      path: session?.workspacePath?.trim() ?? '',
+      name: folderName,
+      path: session?.workspacePath?.trim() ?? (execRoot ?? ''),
       trustState: session?.workspaceTrustState?.trim().isNotEmpty == true
           ? session!.workspaceTrustState!.trim()
           : 'untrusted',
@@ -1967,6 +2009,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   WorkspacePermissionMode _permissionModeForWorkspace(DeviceWorkspace? workspace) {
     if (workspace == null) {
       return WorkspacePermissionMode.defaultMode;
+    }
+    final selectedSession = sessionCubit.state.selectedSession;
+    final isExplicitlyDowngraded = selectedSession != null && _downgradedSessionIds.contains(selectedSession.id);
+    if (!isExplicitlyDowngraded &&
+        selectedSession != null &&
+        (selectedSession.metadata?['allow_all_tools'] == true ||
+            selectedSession.metadata?['permission_mode'] == 'full_access')) {
+      return WorkspacePermissionMode.fullAccess;
     }
     return _permissionModesByWorkspaceId[workspace.id] ?? WorkspacePermissionMode.defaultMode;
   }

@@ -79,10 +79,23 @@ abstract final class CompactionOperationCodec {
     CompactionFailureReason? failureReason;
     final failureWire = row['failure_reason'] as String?;
     if (failureWire != null) {
-      failureReason = CompactionFailureReason.values.firstWhere(
-        (value) => value.wireValue == failureWire,
-      );
+      failureReason = CompactionFailureReason.fromWire(failureWire);
     }
+    CompactionDurableDiagnostics? diagnostics;
+    String? diagnosticsJson;
+    try {
+      diagnosticsJson = row['diagnostics_json'] as String?;
+      if (diagnosticsJson != null && diagnosticsJson.isNotEmpty) {
+        final decoded = jsonDecode(diagnosticsJson);
+        if (decoded is Map<String, dynamic>) {
+          diagnostics = CompactionDurableDiagnostics.fromJson(decoded);
+        } else if (decoded is Map) {
+          diagnostics = CompactionDurableDiagnostics.fromJson(
+            Map<String, dynamic>.from(decoded),
+          );
+        }
+      }
+    } catch (_) {}
     return CompactionOperationRecord(
       compactionId: row['compaction_id'] as String,
       sessionId: row['session_id'] as String,
@@ -100,6 +113,8 @@ abstract final class CompactionOperationCodec {
       internalSummary: summary,
       failureReason: failureReason,
       failureDetailJson: row['failure_detail_json'] as String?,
+      diagnostics: diagnostics,
+      diagnosticsJson: diagnosticsJson,
       startedAt: DateTime.parse(row['started_at'] as String),
       completedAt: row['completed_at'] == null
           ? null

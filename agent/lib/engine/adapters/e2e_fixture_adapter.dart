@@ -10,8 +10,10 @@ import '../../core/models/agent_response.dart';
 import '../../core/models/message.dart';
 import '../../core/models/user_attachment.dart';
 import '../../core/models/tool_call.dart';
+import '../../evolution/compaction/compaction_summary_projection.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'llm_adapter.dart';
+import 'llm_http_exception.dart';
 import 'llm_request_options.dart';
 
 /// Deterministic provider used only by daemon-backed E2E tests.
@@ -61,6 +63,9 @@ class E2eFixtureAdapter
   static const viewImageInvalidResponseText = 'INVALID_IMAGE_RESULT';
   static const delayedResponsePromptPrefix = '__SANAD_E2E_DELAY__';
   static const runtimeFailurePrompt = '__SANAD_E2E_RUNTIME_FAILURE__';
+  static const overflowFailurePrompt = '__SANAD_E2E_OVERFLOW_FAILURE__';
+  static const summarizationFailurePrompt =
+      '__SANAD_E2E_SUMMARIZATION_FAILURE__';
 
   @override
   final ToolResultMediaCapability toolResultMediaCapability;
@@ -81,6 +86,12 @@ class E2eFixtureAdapter
       }
     }
     if (latestUserContent?.contains('The JSON schema version is 1') ?? false) {
+      if (history.any(
+        (message) =>
+            message.content?.contains(summarizationFailurePrompt) ?? false,
+      )) {
+        throw TimeoutException('deterministic compaction summarization timeout');
+      }
       var latestRequest = 'Continue the current task';
       String? explicitGoal;
       for (final message in history.take(history.length - 1)) {
@@ -118,6 +129,37 @@ class E2eFixtureAdapter
           'cached_input_tokens': 900,
           'completion_tokens': 180,
         },
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+    final isOverflowScenario =
+        latestUserContent?.contains(overflowFailurePrompt) ?? false;
+    if (isOverflowScenario) {
+      final hasCompactedHistory = history.any(
+        (message) =>
+            message.metadata?[CompactionSummaryProjection.projectionMetadataKey] ==
+                true ||
+            (message.content?.contains(
+                  'Internal conversation summary (projection only; not user input):',
+                ) ??
+                false),
+      );
+      if (!hasCompactedHistory) {
+        throw const LlmHttpException(
+          statusCode: 400,
+          body:
+              '{"error": {"message": "context length exceeded", "code": "context_length_exceeded"}}',
+          headers: {},
+          operation: 'chat',
+        );
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: responseText,
+        ),
         model: modelId,
         provider: providerId,
         finishReason: LLMFinishReason.stop,

@@ -155,4 +155,84 @@ void main() {
     expect(event.contextUsage?.inputTokens, 8977);
     expect(event.contextUsage?.contextWindowTokens, 128000);
   });
+
+  test('maps live failure event with failure_stage and failure_cause', () {
+    final live = mapper.mapLiveEvent({
+      'event': 'context_compaction.failed',
+      'payload': {
+        'session_id': 'session-1',
+        'compaction_id': 'cmp-failed-live',
+        'trigger': 'manual',
+        'status': 'failed',
+        'failure_reason': 'summarization_failed',
+        'failure_stage': 'preparation',
+        'failure_cause': 'thinking_capability_unsupported',
+        'started_at': '2026-08-29T05:00:00.000Z',
+        'completed_at': '2026-08-29T05:00:01.000Z',
+      },
+    });
+
+    expect(live, isNotNull);
+    expect(live!.status, EventStatus.error);
+    expect(live.metadata?['failure_reason'], 'summarization_failed');
+    expect(live.metadata?['failure_stage'], 'preparation');
+    expect(live.metadata?['failure_cause'], 'thinking_capability_unsupported');
+  });
+
+  test('history hydration and live mapping preserve failure_stage and failure_cause with parity', () {
+    final payload = {
+      'session_id': 'session-1',
+      'compaction_id': 'cmp-parity',
+      'event_id': 'context_compaction:cmp-parity:failed',
+      'trigger': 'auto',
+      'status': 'failed',
+      'failure_reason': 'summarization_failed',
+      'failure_stage': 'provider',
+      'failure_cause': 'timeout',
+      'started_at': '2026-08-29T06:00:00.000Z',
+      'completed_at': '2026-08-29T06:00:05.000Z',
+    };
+
+    final live = mapper.mapLiveEvent({
+      'event': 'context_compaction.failed',
+      'payload': payload,
+    });
+    final history = mapper.mapHistory([
+      {
+        'type': 'context_compaction.failed',
+        'created_at': '2026-08-29T06:00:05.000Z',
+        ...payload,
+      },
+    ]).single;
+
+    expect(live!.id, history.id);
+    expect(live.eventId, history.eventId);
+    expect(live.metadata?['failure_stage'], history.metadata?['failure_stage']);
+    expect(live.metadata?['failure_cause'], history.metadata?['failure_cause']);
+    expect(live.metadata?['failure_reason'], history.metadata?['failure_reason']);
+    expect(history.metadata?['failure_stage'], 'provider');
+    expect(history.metadata?['failure_cause'], 'timeout');
+  });
+
+  test('history hydration decodes camelCase failureStage and failureCause', () {
+    final event = mapper.mapHistory([
+      {
+        'id': 'context_compaction:cmp-camel:failed',
+        'type': 'context_compaction.failed',
+        'session_id': 'session-1',
+        'compaction_id': 'cmp-camel',
+        'trigger': 'overflow',
+        'status': 'failed',
+        'failureReason': 'summarizationFailed',
+        'failureStage': 'pruning',
+        'failureCause': 'toolResultMalformed',
+        'completed_at': '2026-08-29T07:00:00.000Z',
+        'created_at': '2026-08-29T07:00:00.000Z',
+      },
+    ]).single;
+
+    expect(event.metadata?['failure_stage'], 'pruning');
+    expect(event.metadata?['failure_cause'], 'toolResultMalformed');
+    expect(event.metadata?['failure_reason'], 'summarizationFailed');
+  });
 }

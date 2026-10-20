@@ -1186,15 +1186,18 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       case DeliveryScope.platformFamily:
         // Fan out locally first. Only successful sends may be excluded later
         // from this event's Cloud copy.
+        final sessionClient = _sessionClients[response.sessionId];
         final deliveredInstances = <String>{};
         for (final client in _clients.toList()) {
           try {
+            final isSessionClient = identical(client, sessionClient);
             await _sendToSocket(
               client,
               _withSocketIdentity(
                 envelope,
                 client,
-                preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
+                preserveEnvelopeDeviceId:
+                    isSessionClient && deviceId?.isNotEmpty == true,
               ),
             );
             final instanceId = _clientInstances[client];

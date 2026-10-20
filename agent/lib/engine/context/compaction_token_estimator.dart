@@ -1,12 +1,16 @@
 import 'dart:convert';
 
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
 
 /// Conservative token estimator for compaction preflight (Plan 53c C0).
 ///
-/// Text uses a fixed chars-per-token heuristic. Media payloads (data URIs,
-/// long base64 blobs, or declared `media_bytes`) use byte-based accounting
-/// instead of treating encoded media as ordinary text.
+/// Text uses a fixed chars-per-token heuristic. Model-facing image material is
+/// priced from its dimensions (tiles) rather than from the compressed or
+/// base64-encoded transport that carries it, because the transport size of an
+/// image has no relationship to what the provider charges for it. Declared
+/// `media_bytes` and other encoded payloads keep byte-based accounting.
 abstract final class CompactionTokenEstimator {
   CompactionTokenEstimator._();
 
@@ -14,6 +18,23 @@ abstract final class CompactionTokenEstimator {
 
   /// Conservative tokens per ~1 KiB of media payload (image/audio/file bytes).
   static const int tokensPerKiBMedia = 85;
+
+  /// Model-facing image accounting (tile class used by OpenAI-compatible
+  /// vision pricing): a base charge per image plus a charge per 512x512 tile
+  /// after the image is fitted to the model's maximum edge and its shortest
+  /// side is scaled to the model's minimum short side.
+  static const int imageBaseTokens = 85;
+  static const int imageTileTokens = 170;
+  static const int imageTileEdge = 512;
+  static const int imageMaxEdge = 2048;
+  static const int imageMinShortSide = 768;
+
+  /// Upper bound for one image whose dimensions are not known: the largest
+  /// supported model-facing image (2048x2048) at the high-detail tile grid.
+  /// Used instead of transport bytes so encoding size can never inflate an
+  /// estimate the provider would never charge.
+  static const int maxImageTokensPerImage =
+      imageBaseTokens + imageTileTokens * 16;
 
   static final RegExp _dataUriPattern = RegExp(
     r'data:[^;]+;base64,([A-Za-z0-9+/=\s]+)',
@@ -28,6 +49,58 @@ abstract final class CompactionTokenEstimator {
     return (text.length / charsPerToken).ceil();
   }
 
+  /// Model-facing cost of one image at the requested detail.
+  ///
+  /// `low` detail is charged the base rate only. Every other detail —
+  /// including canonical `ToolImageDetail.original`, which the tool-result
+  /// wire codec maps to wire `high` — charges the tile grid. The fitted tile
+  /// grid is bounded by [maxImageTokensPerImage], so a thin image that only
+  /// reaches the minimum short side through an extreme upscale can never
+  /// demand hundreds of thousands of tokens. This is a deliberate, bounded
+  /// estimate of model-facing image material and never claims exact vendor
+  /// pricing.
+  static int estimateImageTokens({
+    required int width,
+    required int height,
+    bool lowDetail = false,
+  }) {
+    if (width <= 0 || height <= 0) {
+      return 0;
+    }
+    if (lowDetail) {
+      return imageBaseTokens;
+    }
+    var scaledWidth = width;
+    var scaledHeight = height;
+    final longest = width > height ? width : height;
+    if (longest > imageMaxEdge) {
+      final scale = imageMaxEdge / longest;
+      scaledWidth = _scaledPixels(width * scale);
+      scaledHeight = _scaledPixels(height * scale);
+    }
+    final shortest = scaledWidth < scaledHeight ? scaledWidth : scaledHeight;
+    if (shortest < imageMinShortSide) {
+      // [shortest] is at least one pixel, so this division stays finite.
+      final scale = imageMinShortSide / shortest;
+      scaledWidth = _scaledPixels(scaledWidth * scale);
+      scaledHeight = _scaledPixels(scaledHeight * scale);
+    }
+    final tilesWide = (scaledWidth / imageTileEdge).ceil();
+    final tilesHigh = (scaledHeight / imageTileEdge).ceil();
+    final tiled = imageBaseTokens + imageTileTokens * tilesWide * tilesHigh;
+    return tiled > maxImageTokensPerImage ? maxImageTokensPerImage : tiled;
+  }
+
+  /// Rounds one fitted image dimension, never to a zero or negative pixel.
+  ///
+  /// A thin positive image (for example `1x10000`) rounds its fitted short
+  /// side to zero before the minimum-short-side scale; keeping at least one
+  /// pixel keeps that division finite instead of producing `NaN`/infinity.
+  static int _scaledPixels(double value) {
+    final rounded = value.round();
+    return rounded < 1 ? 1 : rounded;
+  }
+
   static int estimateMessage(Message message) {
     var total = 0;
     final content = message.content;
@@ -36,17 +109,21 @@ abstract final class CompactionTokenEstimator {
         total += estimateText(content);
       }
     }
-    total += estimateText(message.thought);
-    total += estimateText(message.reasoning);
     if (message.toolCalls != null) {
       for (final call in message.toolCalls!) {
         total += estimateText(call.name);
         total += estimateText(jsonEncode(call.arguments));
+        if (call.id.isNotEmpty) {
+          total += estimateText(call.id);
+        }
       }
     }
-    if (message.providerState != null) {
-      total += estimateText(jsonEncode(message.providerState!.toJson()));
+    if (message.toolCallId != null && message.toolCallId!.isNotEmpty) {
+      total += estimateText(message.toolCallId);
     }
+    // Wire shadowing: reasoning, thought, and opaque providerState do not
+    // reach the model request wire as input context and are deliberately
+    // excluded from wire token estimates.
     return total;
   }
 
@@ -61,10 +138,98 @@ abstract final class CompactionTokenEstimator {
     );
   }
 
-  /// Byte-aware media accounting; never treats base64 as chars/4 text.
+  /// Prices a provider wire payload tree for request measurement.
+  ///
+  /// Text nodes use the text rate. Encoded media strings (data URIs and long
+  /// base64 blobs) are charged nothing here because they are transport for
+  /// media that the owning request measures from its canonical, dimension-
+  /// bearing history through [estimateMediaTokens]; pricing the encoding
+  /// instead would charge hundreds of thousands of tokens for one image. Keys
+  /// listed in [opaqueKeys] carry provider-owned state (for example Codex
+  /// `encrypted_content` reasoning replay) that the provider prices under its
+  /// own token models and are excluded from the text estimate.
+  static int estimateWirePayload(
+    Object? value, {
+    Set<String> opaqueKeys = const <String>{},
+  }) {
+    if (value is Map) {
+      var total = 0;
+      for (final entry in value.entries) {
+        if (opaqueKeys.contains(entry.key.toString())) continue;
+        total += estimateWirePayload(entry.value, opaqueKeys: opaqueKeys);
+      }
+      return total;
+    }
+    if (value is List) {
+      var total = 0;
+      for (final item in value) {
+        total += estimateWirePayload(item, opaqueKeys: opaqueKeys);
+      }
+      return total;
+    }
+    if (value is String) {
+      if (value.isEmpty) {
+        return 0;
+      }
+      return _isEncodedMediaPayload(value) ? 0 : estimateText(value);
+    }
+    if (value is num || value is bool) {
+      return estimateText(value.toString());
+    }
+    return 0;
+  }
+
+  /// True for strings that carry encoded media transport rather than text.
+  static bool _isEncodedMediaPayload(String value) {
+    if (_dataUriPattern.hasMatch(value)) {
+      return true;
+    }
+    return _isEncodedMediaBlob(value);
+  }
+
+  /// Byte-aware pricing for an encoded media payload string, or null for text.
+  static int? _encodedMediaBytes(String value) {
+    final dataUri = _dataUriPattern.firstMatch(value);
+    if (dataUri != null) {
+      final encoded = dataUri.group(1)!.replaceAll(RegExp(r'\s'), '');
+      return _tokensForMediaBytes((encoded.length * 3) ~/ 4);
+    }
+    if (_isEncodedMediaBlob(value)) {
+      final encoded = value.replaceAll(RegExp(r'\s'), '');
+      return _tokensForMediaBytes((encoded.length * 3) ~/ 4);
+    }
+    return null;
+  }
+
+  /// Model-facing media accounting for one request.
+  ///
+  /// Tool-result images are priced from their observed dimensions, image
+  /// attachments without recorded dimensions use the bounded per-image ceiling,
+  /// declared `media_bytes` keep byte-based accounting, and encoded media left
+  /// in message content is priced as bytes rather than as ordinary text.
   static int estimateMediaTokens(Iterable<Message> messages) {
     var total = 0;
     for (final message in messages) {
+      final toolResult = message.toolResult;
+      if (toolResult != null) {
+        for (final block in toolResult.blocks) {
+          if (block is ToolImageBlock) {
+            total += estimateImageTokens(
+              width: block.width,
+              height: block.height,
+              lowDetail: block.detail == ToolImageDetail.low,
+            );
+          }
+        }
+      }
+      for (final attachment in message.attachments) {
+        final isImage =
+            attachment.kind == UserAttachmentKind.image ||
+            attachment.mimeType.toLowerCase().startsWith('image/');
+        if (isImage) {
+          total += maxImageTokensPerImage;
+        }
+      }
       final metadata = message.metadata;
       final mediaBytes = metadata?['media_bytes'];
       if (mediaBytes is int && mediaBytes > 0) {
@@ -75,16 +240,7 @@ abstract final class CompactionTokenEstimator {
       if (content == null || content.isEmpty) {
         continue;
       }
-      final fromDataUri = _dataUriPattern.firstMatch(content);
-      if (fromDataUri != null) {
-        final encoded = fromDataUri.group(1)!.replaceAll(RegExp(r'\s'), '');
-        total += _tokensForMediaBytes((encoded.length * 3) ~/ 4);
-        continue;
-      }
-      if (_isEncodedMediaBlob(content)) {
-        final encoded = content.replaceAll(RegExp(r'\s'), '');
-        total += _tokensForMediaBytes((encoded.length * 3) ~/ 4);
-      }
+      total += _encodedMediaBytes(content) ?? 0;
     }
     return total;
   }

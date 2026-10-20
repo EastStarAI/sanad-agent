@@ -1,3 +1,4 @@
+import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 
@@ -27,22 +28,40 @@ class SessionCompactCommandHandler {
         sessionId: sessionId,
         requestId: requestId,
         outcome: 'invalid_request',
+        failureReason: 'invalid_request',
+        failureStage: CompactionFailureStage.preparation,
+        failureCause: CompactionFailureCause.invalidRequest,
       );
       return;
     }
 
-    final result = await _orchestrator.handleCompactCommand(
-      sessionId: sessionId,
-      requestId: requestId,
-    );
-    await _emitResult(
-      emitEnvelope,
-      sessionId: sessionId,
-      requestId: requestId,
-      outcome: result['outcome']?.toString() ?? 'failed',
-      failureReason: result['failure_reason']?.toString(),
-      compactionId: result['compaction_id']?.toString(),
-    );
+    try {
+      final result = await _orchestrator.handleCompactCommand(
+        sessionId: sessionId,
+        requestId: requestId,
+      );
+      await _emitResult(
+        emitEnvelope,
+        sessionId: sessionId,
+        requestId: requestId,
+        outcome: result['outcome']?.toString() ?? 'failed',
+        failureReason: result['failure_reason']?.toString(),
+        compactionId: result['compaction_id']?.toString(),
+        failureStage: result['failure_stage']?.toString(),
+        failureCause: result['failure_cause']?.toString(),
+      );
+    } catch (error) {
+      final diagnostics = CompactionDiagnostics.classify(error);
+      await _emitResult(
+        emitEnvelope,
+        sessionId: sessionId,
+        requestId: requestId,
+        outcome: 'failed',
+        failureReason: diagnostics.failureReason.wireValue,
+        failureStage: diagnostics.stage,
+        failureCause: diagnostics.cause,
+      );
+    }
   }
 
   Future<void> _emitResult(
@@ -52,6 +71,8 @@ class SessionCompactCommandHandler {
     required String outcome,
     String? failureReason,
     String? compactionId,
+    String? failureStage,
+    String? failureCause,
   }) {
     return emitEnvelope(
       _bridge.buildAgentEventEnvelope(
@@ -64,6 +85,8 @@ class SessionCompactCommandHandler {
             'outcome': outcome,
             'failure_reason': ?failureReason,
             'compaction_id': ?compactionId,
+            'failure_stage': ?failureStage,
+            'failure_cause': ?failureCause,
           },
         ),
       ),

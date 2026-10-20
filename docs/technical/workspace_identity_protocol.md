@@ -34,3 +34,16 @@ The Workspace Settings overview owns `Rename Workspace` and `Change Path`. Local
 ## Legacy Cache Reconciliation
 
 When a client cache still uses path ids and the daemon returns UUID workspaces, the cache matches the same stored path and remaps workspace pages, expansion state, New Conversation draft scope, and New Conversation destination to the UUID before removing stale keys.
+
+## Execution Root Synthetic Workspaces and Permission Isolation
+
+When a CLI execution runs with a temporary directory context via `--execution-root`, the runtime synthesizes an ephemeral workspace identifier with the prefix `exec_root:<normalized_path>`. The following isolation and security rules apply:
+
+1. **Path Validation and Policy Writes:** Updating permission mode via `workspace.set_permission_mode` for an `exec_root:` target strictly validates and normalizes the target path using `WorkspacePathResolver.validateAndNormalizeExecutionRoot`. Non-existent paths, invalid entities, and traversal attempts are rejected immediately, preventing arbitrary policy files from being written to disk.
+2. **Explicit Workspace Precedence:** Turn requests specifying an explicit named `workspace_id` take absolute precedence over stale `execution_root` attributes stored in session metadata. A prior CLI execution root in session history never shadows an explicitly selected workspace.
+3. **Turn-Scoped `allow_all_tools` Provenance:** Automatic tool approval flags (`allow_all_tools: true`) are evaluated on a per-turn basis from the originating request. They are not persisted into session metadata to silently escalate permissions on subsequent turns.
+4. **Authoritative Workspace Deny Rules:** Explicit `deny` entries in workspace policy remain authoritative and take precedence over `allow_all_tools` and `full_access` session overrides.
+5. **Safe Default Trust State:** Ephemeral execution root workspaces and unconfigured workspace trust states default safely to `untrusted` rather than granting blanket trust.
+6. **Client Localization:** Permission mode selectors and tooltips in the Client UI are localized using `AppLocalizations` (`workspacePermissionModeDefault`, `workspacePermissionModeFullAccess`, `workspacePermissionModeTooltip`, `workspacePermissionModeTooltipWithRoot`), preventing hardcoded English literals in presentation widgets.
+7. **Multi-turn Producer-to-Payload Propagation & Downgrade:** When a session previously executed with `allow_all_tools: true`, subsequent turns with an omitted flag or explicit `false` revoke the grant immediately and reset derived `permission_mode` from `full_access` back to `default_mode`. Stale execution roots from previous turns do not leak into the payload when an explicit workspace is selected.
+8. **Client Workspace Cache Authority Isolation & In-Place Session Revocation:** In `SessionMessagesCubit`, per-turn `allow_all_tools` grants inspect the active session metadata directly rather than polluting the workspace-level `_permissionModesByWorkspaceId` cache, preventing other sessions sharing the workspace from inheriting unauthorized `fullAccess`. In-place session metadata updates (grant revocation or expiration) on the active session re-evaluate permission modes and workspace mappings immediately and emit updated state.

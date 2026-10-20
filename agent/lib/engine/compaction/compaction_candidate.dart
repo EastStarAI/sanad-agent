@@ -1,6 +1,7 @@
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 
+import 'compaction_diagnostics.dart';
 import 'compaction_enums.dart';
 import 'compaction_identities.dart';
 import 'compaction_metrics.dart';
@@ -19,6 +20,7 @@ class CompactionCandidate {
   final CompactionContinuityResult continuityResult;
   final CompactionMetrics metrics;
   final RouteSignature routeSignature;
+  final CompactionDurableDiagnostics? diagnostics;
 
   CompactionCandidate({
     required this.compactionId,
@@ -31,6 +33,7 @@ class CompactionCandidate {
     required this.continuityResult,
     required this.metrics,
     required this.routeSignature,
+    this.diagnostics,
   }) : assert(compactionId.isNotEmpty, 'compactionId must be non-empty'),
        assert(sessionId.isNotEmpty, 'sessionId must be non-empty'),
        assert(
@@ -56,7 +59,8 @@ class CompactionCandidate {
           internalSummary == other.internalSummary &&
           continuityResult == other.continuityResult &&
           metrics == other.metrics &&
-          routeSignature == other.routeSignature;
+          routeSignature == other.routeSignature &&
+          diagnostics == other.diagnostics;
 
   @override
   int get hashCode => Object.hash(
@@ -70,5 +74,6 @@ class CompactionCandidate {
     continuityResult,
     metrics,
     routeSignature,
+    diagnostics,
   );
 }

@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:get_it/get_it.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:test/test.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
@@ -130,6 +132,17 @@ class NoopCheckpointStore extends SuspendedCheckpointStore {
   Future<void> deleteByRequestId(String requestId) async {}
 }
 
+class _FakeSessionManager implements SessionManager {
+  final Map<String, Map<String, dynamic>> sessionMetas = {};
+
+  @override
+  Map<String, dynamic>? getSessionMetadata(String sessionId) =>
+      sessionMetas[sessionId];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   group('LocalRuntimeCatalog', () {
     late Directory tempDir;
@@ -142,8 +155,14 @@ void main() {
     late NoopCheckpointStore checkpointStore;
     late List<String> admittedAttachmentPaths;
     late LocalRuntimeCatalog catalog;
+    late _FakeSessionManager fakeSessionManager;
 
     setUp(() async {
+      fakeSessionManager = _FakeSessionManager();
+      if (GetIt.instance.isRegistered<SessionManager>()) {
+        GetIt.instance.unregister<SessionManager>();
+      }
+      GetIt.instance.registerSingleton<SessionManager>(fakeSessionManager);
       final rawTemp = await Directory.systemTemp.createTemp(
         'runtime-catalog-test',
       );
@@ -190,6 +209,9 @@ Use the review skill.''');
     });
 
     tearDown(() async {
+      if (GetIt.instance.isRegistered<SessionManager>()) {
+        GetIt.instance.unregister<SessionManager>();
+      }
       try {
         await tempDir.delete(recursive: true);
       } catch (_) {}
@@ -591,6 +613,42 @@ Use the review skill.''');
         expect(File(createdFile).readAsStringSync(), equals('private content'));
       },
     );
+
+    test('builds workspace tools when workspaceId has exec_root: prefix', () async {
+      final tools = await catalog.buildTools(
+        registry: registry,
+        request: AgentTurnRequest(
+          sessionId: 'thread-exec-root',
+          message: 'Work in execution root',
+          workspaceId: 'exec_root:${workspaceDir.path}',
+        ),
+      );
+      final names = tools.map((t) => t.schema.name).toList();
+      expect(names, contains('shell_execute'));
+      expect(names, contains('file_read'));
+      expect(names, contains('file_edit'));
+    });
+
+    test('explicit workspaceId on request takes precedence over stale session execution_root', () async {
+      final otherDir = Directory(p.join(tempDir.path, 'other-exec-root'))
+        ..createSync(recursive: true);
+      fakeSessionManager.sessionMetas['session-stale-root'] = {
+        'execution_root': otherDir.path,
+      };
+
+      final tools = await catalog.buildTools(
+        registry: registry,
+        request: AgentTurnRequest(
+          sessionId: 'session-stale-root',
+          message: 'Work in explicit workspace',
+          workspaceId: workspaceDir.path,
+        ),
+      );
+      final names = tools.map((t) => t.schema.name).toList();
+      expect(names, contains('shell_execute'));
+      expect(names, contains('file_read'));
+      expect(names, contains('file_edit'));
+    });
 
     test('full_access executes an external path without prompting', () async {
       final externalFile = File(p.join(tempDir.path, 'full-access.txt'))
