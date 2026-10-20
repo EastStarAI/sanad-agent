@@ -26,6 +26,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/translators/agent
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:test/test.dart';
 
+import '../../../support/ephemeral_loopback_port.dart';
 import '../../../support/memory_agent_secret_store.dart';
 
 class _TransportTestConfig extends Config {
@@ -98,13 +99,6 @@ class _ObservedDeliveryPresenceController extends DeliveryPresenceController {
   }
 }
 
-Future<int> _reserveFreePort() async {
-  final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-  final port = socket.port;
-  await socket.close();
-  return port;
-}
-
 void main() {
   const token = LocalGatewayCredential('transport-test-token');
   late LocalDaemonServerPlatform platform;
@@ -115,19 +109,7 @@ void main() {
   Future<void> Function()? upgradeHook;
 
   setUp(() async {
-    await getIt.reset();
     upgradeHook = null;
-    port = await _reserveFreePort();
-    getIt.registerSingleton<Config>(_TransportTestConfig(port));
-    authManager = _ExchangeAuthManager()
-      ..cloudDeviceCredential = 'vault-only-device-credential';
-    getIt.registerSingleton<AuthManager>(
-      authManager,
-      dispose: (manager) => authManager.close(),
-    );
-    getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
-    getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
-    deliveryPresence = _ObservedDeliveryPresenceController();
     final imageResult = ToolExecutionResult(
       blocks: [
         ToolTextBlock(text: 'Image loaded (2×1, image/png, auto).'),
@@ -154,29 +136,51 @@ void main() {
       ),
       _attachmentMediaMessage('/unavailable'),
     ];
-    platform = LocalDaemonServerPlatform(
-      deliveryPresence: deliveryPresence,
-      authCoupling: ColocatedAuthCoupling(
-        authManager: authManager,
-        authorizationClient: DeviceAuthorizationClient(
-          portalUrl: 'https://portal.test',
+    await bindOnReservedLoopbackPort((candidatePort) async {
+      await getIt.reset();
+      port = candidatePort;
+      getIt.registerSingleton<Config>(_TransportTestConfig(candidatePort));
+      authManager = _ExchangeAuthManager()
+        ..cloudDeviceCredential = 'vault-only-device-credential';
+      getIt.registerSingleton<AuthManager>(
+        authManager,
+        dispose: (manager) => authManager.close(),
+      );
+      getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
+      getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
+      deliveryPresence = _ObservedDeliveryPresenceController();
+      platform = LocalDaemonServerPlatform(
+        deliveryPresence: deliveryPresence,
+        authCoupling: ColocatedAuthCoupling(
           authManager: authManager,
+          authorizationClient: DeviceAuthorizationClient(
+            portalUrl: 'https://portal.test',
+            authManager: authManager,
+          ),
         ),
-      ),
-      security: LocalGatewaySecurity(
-        config: LocalGatewaySecurityConfig(
-          allowedPort: port,
-          preauthBudgetPerPeer: 1,
+        security: LocalGatewaySecurity(
+          config: LocalGatewaySecurityConfig(
+            allowedPort: candidatePort,
+            preauthBudgetPerPeer: 1,
+          ),
+          expectedToken: token,
         ),
-        expectedToken: token,
-      ),
-      beforeUpgradeAuthentication: () async {
-        await upgradeHook?.call();
-      },
-      viewImageMediaHistoryLoader: (sessionId) =>
-          sessionId == 'session-1' ? mediaMessages : const [],
-    );
-    await platform.initialize();
+        beforeUpgradeAuthentication: () async {
+          await upgradeHook?.call();
+        },
+        viewImageMediaHistoryLoader: (sessionId) =>
+            sessionId == 'session-1' ? mediaMessages : const [],
+      );
+      try {
+        await platform.initialize();
+      } on SocketException {
+        // Another suite won this reservation between probe and bind: release
+        // the partial start so the retry can claim a fresh ephemeral port.
+        await platform.dispose();
+        await getIt.reset();
+        rethrow;
+      }
+    });
   });
 
   tearDown(() async {

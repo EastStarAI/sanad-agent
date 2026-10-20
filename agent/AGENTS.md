@@ -86,6 +86,7 @@ This contract applies to `agent/`.
 - Require daemon-backed E2E only when mocks cannot validate the boundary: local/cloud socket contracts, daemon bootstrap/lifecycle, persistent runtime state and restart recovery, provider readiness/model execution, worktree runtime isolation, or end-to-end session execution.
 - When interface/runtime ownership changes affect the local daemon contract, add or update real daemon-backed coverage rather than relying only on mocks.
 - Unit tests for retry, polling, scheduling, or asynchronous delivery inject deterministic wait/control seams or await the exact emitted event; they must not sleep through production backoff, polling intervals, or padded settling windows.
+- A local loopback harness never treats a released probe port as owned: it binds each attempt on a freshly reserved ephemeral port and re-reserves on an address-in-use collision, so a concurrent suite can never fail it and no fixed port is acceptable.
 - Every spawned test daemon uses a unique temporary `SANAD_STATE_HOME`, cleans it after shutdown, and preserves the normal shared identity/configuration boundary.
 - Daemon-backed tests use the deterministic E2E provider and must never inherit the live agent database, invoke the user's configured provider, or mutate user runtime state.
 - Documentation-only contract changes require documentation generation/lint integrity but do not require Dart analysis or runtime tests unless source code also changes.
