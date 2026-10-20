@@ -110,9 +110,7 @@ before downloading, installing, replacing, registering, starting, or restarting.
    matching local Agent; a Sanad account and pairing token are not required.
 5. Verify that the Client can reach the local Agent before declaring success.
 
-For Android, iOS, and Web, follow the availability stated in the current
-release notes. These platforms provide the interface but do not host the native
-Agent service.
+For Android, install Sanad Client only through its Google Play listing. For iOS\nand Web, follow the availability stated in the current release notes. These\nplatforms provide the interface but do not host the native Agent service.
 
 ### Install an Agent on Another Computer or Server
 

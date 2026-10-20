@@ -56,8 +56,8 @@ protected deployment is `release-publication`.
 | Client | macOS universal | GitHub Release | Developer ID, notarization, Sparkle EdDSA |
 | Client | Linux x64 `.deb` and portable `tar.gz` | GitHub Release | SHA-256 plus GitHub attestation |
 | Client | Windows x64 | GitHub Release | Temporarily unsigned Windows build for every release; WinSparkle DSA plus canonical manifest/URL/size/SHA-256 and protected GitHub provenance |
-| Client | Android universal APK | GitHub Release | Android release signature |
-| Client | Android AAB | Private release handoff | Android release signature |
+| Client | Android universal APK | GitHub Release | Android release signature; not a supported user install channel |
+| Client | Android AAB | Google Play (`com.eaststarai.sanad`) | Android upload signature plus Play App Signing |
 | Client | iOS | Internal TestFlight only | Apple Distribution and provisioning profile |
 | Client | Web | EastStar AI server | Manifest checksum and atomic deployment |
 
@@ -145,6 +145,33 @@ because the shorter product names were unavailable; this does not change the
 installed display name. Internal TestFlight is the only iOS distribution
 channel for the first release; external testing and App Store review are a
 separate future decision.
+
+## Google Play publisher
+
+Android is published only through Google Play under the package identity
+`com.eaststarai.sanad`. The store display name is `Sanad Remote` because the
+shorter product names were unavailable; the installed product is still Sanad
+Client.
+
+- **Signing boundary:** Play App Signing is enabled, so Google owns the app
+  signing key and every upload must be signed by the registered upload
+  certificate. The release keystore remains the upload key; it must keep
+  matching the certificate enrolled in Play Console.
+- **App Links:** Production `assetlinks.json` must list the Play app-signing
+  certificate fingerprints together with the upload certificate fingerprint.
+  Dropping either set silently breaks the OAuth callback association.
+- **Version identity:** `versionCode` must strictly increase per upload and is
+  never reused. A rejected or superseded upload still consumes its
+  `versionCode`, so the pubspec build number always moves forward.
+- **Promotion:** internal test track first, then closed testing, then the
+  production track with a staged rollout. Each promotion to production requires
+  explicit owner approval; no workflow may promote to production on its own.
+- **Publication scope:** the AAB is a build output and handoff artifact only. It
+  is not attached to public releases and is not a user install source.
+- **Automation:** uploading from CI is permitted only as an approval-gated job
+  that enters a protected Environment holding the Play service-account
+  credential. Automatic production publishing is not part of the release
+  contract.
 
 ## Atomic publication and rollback
 
