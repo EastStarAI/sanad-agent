@@ -42,6 +42,14 @@ Future<bool> _launchPortalAuthorization(Uri uri) async {
   if (kIsWeb) {
     return WebAuthPopupService.instance.openAuthPopup(uri.toString());
   }
+  if (AppPlatform.isMobile) {
+    try {
+      final inApp = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+      if (inApp) return true;
+    } catch (_) {
+      // Fall through to external application if custom tab is unavailable
+    }
+  }
   return launchUrl(uri, mode: LaunchMode.externalApplication);
 }
 
@@ -102,8 +110,8 @@ class AuthService {
   }) : _dio =
            dio ??
            (Dio()
-             ..options.connectTimeout = const Duration(seconds: 3)
-             ..options.receiveTimeout = const Duration(seconds: 3)),
+             ..options.connectTimeout = const Duration(seconds: 15)
+             ..options.receiveTimeout = const Duration(seconds: 15)),
        _settingsStore = settingsStore ?? const SanadSettingsStore(),
        _prefs = prefs,
        _portalAuth = portalAuth ?? PortalAuthClient(),
@@ -438,6 +446,11 @@ class AuthService {
       final result = await callback.waitForResult(
         Duration(seconds: transaction.expiresIn),
       );
+      if (AppPlatform.isMobile) {
+        try {
+          await closeInAppWebView();
+        } catch (_) {}
+      }
       _ensureActiveLoginAttempt(attempt);
       if (result.state != transaction.transactionId) {
         throw StateError('Authentication callback state mismatch.');
