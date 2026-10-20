@@ -108,7 +108,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
 | Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
 | Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
-| Client Android APK/AAB | signed local APK/AAB, package identity and keystore fingerprint | signed hosted build, clean install/upgrade |
+| Client Android | signed APK/AAB, package identity, keystore fingerprint, and increasing `versionCode` | signed hosted build, Google Play internal-track install, production-track promotion, and in-place store update |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | analyzer, startup contract test, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
 
@@ -422,6 +422,18 @@ the release workflow.
 The local Android release produced signed APK and AAB files for
 `com.eaststarai.sanad` version `1.0.0`; the APK certificate fingerprint matched
 the external `sanad-release` keystore and the AAB JAR signature verified.
+
+### Google Play publication gate
+
+Android is a store-distributed target. A release is verified for Android only
+when the AAB signed by the enrolled upload key installs from the Google Play
+internal track on a clean device, the listing version matches the intended
+`versionCode`, and the OAuth callback returns through the App Links association
+after installation from the store. Promoting to the production track requires
+explicit owner approval plus a staged rollout; a release that only exists as a
+workflow artifact is not published. Verify after every upload that Production
+`assetlinks.json` still lists both the upload certificate and the Play
+app-signing certificates.
 
 The Windows workflow and installer produce the approved unsigned `1.0.0`
 artifacts without a PFX requirement, retain WinSparkle DSA for client updates,
