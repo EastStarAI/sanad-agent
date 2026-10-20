@@ -55,6 +55,7 @@ import 'runtime/steer_coordinator.dart' as steer_lib;
 import 'runtime/tool_execution_coordinator.dart';
 import 'runtime/run_cancellation_scope.dart';
 import '../evolution/compaction/model_projection_builder.dart';
+import '../evolution/models/compaction_operation_record.dart';
 import '../core/agent_runtime_service.dart';
 import '../evolution/db/session_history_revision_repository.dart';
 import '../evolution/db/session_projection_revision_repository.dart';
@@ -218,6 +219,7 @@ class AgentRunner {
   Future<Map<String, dynamic>?>? _contextUsageSnapshotFuture;
   ConfirmedInputUsageBaseline? _pendingInputUsageBaseline;
   ConfirmedInputUsageBaseline? _confirmedInputUsageBaseline;
+  CompactionOperationRecord? _activeProjectionBoundary;
 
   /// Compact versioned non-content proof of the request wire material whose
   /// provider-confirmed usage backs the current context-usage snapshot.
@@ -443,9 +445,22 @@ class AgentRunner {
     _metricsTracker?.updateMetrics(response);
     final usage = response.usage;
     final pending = _pendingInputUsageBaseline;
-    if (usage == null || pending == null) return;
-    final inputTokens = LlmUsageSnapshot.fromProviderUsage(usage).inputTokens;
-    if (inputTokens != null) {
+    final activeBoundary = _activeProjectionBoundary;
+    final turnRequestId = _turnRoute.turnRequestId ?? '';
+    final now = DateTime.now().toUtc();
+
+    if (usage == null) {
+      return;
+    }
+
+    final snapshot = LlmUsageSnapshot.fromProviderUsage(usage);
+    final inputTokens = snapshot.inputTokens;
+
+    if (inputTokens == null) {
+      return;
+    }
+
+    if (pending != null) {
       _confirmedInputUsageBaseline = pending.copyWithInputTokens(inputTokens);
       _confirmedWireProof = pending.wireMeasurement != null
           ? RequestPressureEvaluator.wireProof(
@@ -453,13 +468,23 @@ class AgentRunner {
               routeSignature: pending.routeSignature,
             )
           : null;
-      if (getIt.isRegistered<CompactionCoordinator>()) {
-        getIt<CompactionCoordinator>().reconcileLatestProviderUsage(
-          sessionId: sessionId,
-          routeSignature: pending.routeSignature,
-          inputTokens: inputTokens,
-        );
-      }
+    }
+
+    if (activeBoundary != null &&
+        pending?.routeSignature != null &&
+        getIt.isRegistered<CompactionCoordinator>()) {
+      final stepRequestId =
+          currentModelStepId != null && currentModelStepId!.isNotEmpty
+              ? '$turnRequestId:$currentModelStepId'
+              : turnRequestId;
+      getIt<CompactionCoordinator>().reconcilePostBoundaryUsage(
+        compactionId: activeBoundary.compactionId,
+        requestId: stepRequestId,
+        observedAt: now,
+        inputTokens: inputTokens,
+        cachedTokens: snapshot.cachedTokens,
+        routeSignature: pending!.routeSignature,
+      );
     }
   }
 
@@ -1459,6 +1484,7 @@ class AgentRunner {
               previousSourceRange: activeBoundary?.sourceRange,
               targetRequestTokens: targetRequestTokens,
               thresholdRatio: policy.threshold,
+              targetRatio: policy.targetRatio,
             );
             final outcome = await coordinator.runCompaction(
               request: request,
@@ -1696,6 +1722,12 @@ class AgentRunner {
             apiKey: apiKey,
           );
         }
+        final turnRequestId = _turnRoute.turnRequestId ?? '';
+        final stepRequestId =
+            currentModelStepId != null && currentModelStepId!.isNotEmpty
+                ? '$turnRequestId:$currentModelStepId'
+                : turnRequestId;
+        final activeBoundary = _activeProjectionBoundary;
         try {
           await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
@@ -1703,12 +1735,37 @@ class AgentRunner {
             providerId: provider,
             modelId: model,
           );
+          final pending = _pendingInputUsageBaseline;
+          if (activeBoundary != null &&
+              pending?.routeSignature != null &&
+              getIt.isRegistered<CompactionCoordinator>()) {
+            getIt<CompactionCoordinator>().reservePostBoundaryDispatch(
+              compactionId: activeBoundary.compactionId,
+              requestId: stepRequestId,
+              routeSignature: pending!.routeSignature,
+              dispatchedAt: DateTime.now().toUtc(),
+            );
+          }
           response = await route.adapter.generateResponse(
             effectiveHistory,
             tools: tools,
             modelOverride: route.modelOverride,
             options: _requestOptionsForTurn(provider),
           );
+        } catch (e) {
+          final pending = _pendingInputUsageBaseline;
+          if (activeBoundary != null &&
+              pending?.routeSignature != null &&
+              getIt.isRegistered<CompactionCoordinator>()) {
+            getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+              compactionId: activeBoundary.compactionId,
+              requestId: stepRequestId,
+              observedAt: DateTime.now().toUtc(),
+              missingReason: 'no_provider_usage',
+              routeSignature: pending!.routeSignature,
+            );
+          }
+          rethrow;
         } finally {
           if (_stopRequested) _providerRequestInFlight = false;
         }
@@ -1765,6 +1822,32 @@ class AgentRunner {
     }
     _turnRoute.invalidateResolvedRoute();
     _updateMetrics(response);
+    final activeBoundary = _activeProjectionBoundary;
+    final pending = _pendingInputUsageBaseline;
+    if (activeBoundary != null &&
+        pending?.routeSignature != null &&
+        getIt.isRegistered<CompactionCoordinator>()) {
+      final responseUsage = response.usage;
+      final snapshot = responseUsage != null
+          ? LlmUsageSnapshot.fromProviderUsage(responseUsage)
+          : null;
+      if (snapshot?.inputTokens == null) {
+        final turnRequestId = _turnRoute.turnRequestId ?? '';
+        final stepRequestId =
+            currentModelStepId != null && currentModelStepId!.isNotEmpty
+                ? '$turnRequestId:$currentModelStepId'
+                : turnRequestId;
+        getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+          compactionId: activeBoundary.compactionId,
+          requestId: stepRequestId,
+          observedAt: DateTime.now().toUtc(),
+          missingReason: response.usage == null
+              ? 'no_provider_usage'
+              : 'missing_input_tokens',
+          routeSignature: pending!.routeSignature,
+        );
+      }
+    }
     final responseMessage = response.message.copyWith(
       finishReason: response.finishReason == LLMFinishReason.unknown
           ? response.message.finishReason
@@ -2023,6 +2106,13 @@ class AgentRunner {
             apiKey: apiKey,
           );
         }
+        final turnRequestId = _turnRoute.turnRequestId ?? '';
+        final stepRequestId =
+            currentModelStepId != null && currentModelStepId!.isNotEmpty
+                ? '$turnRequestId:$currentModelStepId'
+                : turnRequestId;
+        final activeBoundary = _activeProjectionBoundary;
+        var callRecordedUsage = false;
         try {
           await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
@@ -2030,55 +2120,102 @@ class AgentRunner {
             providerId: provider,
             modelId: model,
           );
-          await for (final response in route.adapter.generateStream(
-            effectiveHistory,
-            tools: tools,
-            modelOverride: route.modelOverride,
-            options: _requestOptionsForTurn(provider),
-          )) {
-            if (_stopRequested) return;
-            _clearResumingOnProviderProgress();
-            // Any provider event makes a transparent retry unsafe: reasoning,
-            // metadata, or a partial tool call may already be visible or carry
-            // state even when no final-content text has arrived yet.
-            streamStarted = true;
-            _updateMetrics(response);
-            lastMessage = response.message;
-            if (response.finishReason != LLMFinishReason.unknown) {
-              finishReason = response.finishReason;
-            }
-            if (response.message.toolCalls?.isNotEmpty ?? false) {
-              isToolCall = true;
-              accumulatedToolCalls ??= [];
-              accumulatedToolCalls.addAll(response.message.toolCalls!);
-            }
+          final pending = _pendingInputUsageBaseline;
+          if (activeBoundary != null &&
+              pending?.routeSignature != null &&
+              getIt.isRegistered<CompactionCoordinator>()) {
+            getIt<CompactionCoordinator>().reservePostBoundaryDispatch(
+              compactionId: activeBoundary.compactionId,
+              requestId: stepRequestId,
+              routeSignature: pending!.routeSignature,
+              dispatchedAt: DateTime.now().toUtc(),
+            );
+          }
+          try {
+            await for (final response in route.adapter.generateStream(
+              effectiveHistory,
+              tools: tools,
+              modelOverride: route.modelOverride,
+              options: _requestOptionsForTurn(provider),
+            )) {
+              if (_stopRequested) return;
+              _clearResumingOnProviderProgress();
+              // Any provider event makes a transparent retry unsafe: reasoning,
+              // metadata, or a partial tool call may already be visible or carry
+              // state even when no final-content text has arrived yet.
+              streamStarted = true;
+              final responseUsage = response.usage;
+              if (responseUsage != null) {
+                final snapshot =
+                    LlmUsageSnapshot.fromProviderUsage(responseUsage);
+                if (snapshot.inputTokens != null) {
+                  callRecordedUsage = true;
+                }
+              }
+              _updateMetrics(response);
+              lastMessage = response.message;
+              if (response.finishReason != LLMFinishReason.unknown) {
+                finishReason = response.finishReason;
+              }
+              if (response.message.toolCalls?.isNotEmpty ?? false) {
+                isToolCall = true;
+                accumulatedToolCalls ??= [];
+                accumulatedToolCalls.addAll(response.message.toolCalls!);
+              }
 
-            if (response.message.thought != null) {
-              final thoughtDelta = response.message.thought!;
-              thought = (thought ?? '') + thoughtDelta;
-              if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
-                await onThoughtDelta(thoughtDelta);
+              if (response.message.thought != null) {
+                final thoughtDelta = response.message.thought!;
+                thought = (thought ?? '') + thoughtDelta;
+                if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
+                  await onThoughtDelta(thoughtDelta);
+                }
+              }
+              if (response.message.reasoning != null) {
+                final reasoningDelta = response.message.reasoning!;
+                reasoning = (reasoning ?? '') + reasoningDelta;
+                if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
+                  await onReasoningDelta(reasoningDelta);
+                }
+              }
+              if (response.message.providerState != null) {
+                providerState = response.message.providerState;
+              }
+              if (response.message.metadata != null) {
+                accumulatedMessageMetadata.addAll(response.message.metadata!);
+              }
+
+              final chunk = response.message.content ?? '';
+              fullContent += chunk;
+              if (chunk.isNotEmpty) {
+                yield chunk;
               }
             }
-            if (response.message.reasoning != null) {
-              final reasoningDelta = response.message.reasoning!;
-              reasoning = (reasoning ?? '') + reasoningDelta;
-              if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
-                await onReasoningDelta(reasoningDelta);
-              }
+            if (!callRecordedUsage &&
+                activeBoundary != null &&
+                pending?.routeSignature != null &&
+                getIt.isRegistered<CompactionCoordinator>()) {
+              getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+                compactionId: activeBoundary.compactionId,
+                requestId: stepRequestId,
+                observedAt: DateTime.now().toUtc(),
+                missingReason: 'no_provider_usage',
+                routeSignature: pending!.routeSignature,
+              );
             }
-            if (response.message.providerState != null) {
-              providerState = response.message.providerState;
+          } catch (e) {
+            if (!callRecordedUsage &&
+                activeBoundary != null &&
+                pending?.routeSignature != null &&
+                getIt.isRegistered<CompactionCoordinator>()) {
+              getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+                compactionId: activeBoundary.compactionId,
+                requestId: stepRequestId,
+                observedAt: DateTime.now().toUtc(),
+                missingReason: 'no_provider_usage',
+                routeSignature: pending!.routeSignature,
+              );
             }
-            if (response.message.metadata != null) {
-              accumulatedMessageMetadata.addAll(response.message.metadata!);
-            }
-
-            final chunk = response.message.content ?? '';
-            fullContent += chunk;
-            if (chunk.isNotEmpty) {
-              yield chunk;
-            }
+            rethrow;
           }
         } finally {
           if (_stopRequested) _providerRequestInFlight = false;
@@ -2470,15 +2607,17 @@ class AgentRunner {
   List<Message> _providerConversationMessages() {
     if (getIt.isRegistered<ModelProjectionBuilder>()) {
       try {
-        return getIt<ModelProjectionBuilder>()
-            .buildForSession(sessionId)
-            .conversationMessages;
+        final projection = getIt<ModelProjectionBuilder>()
+            .buildForSession(sessionId);
+        _activeProjectionBoundary = projection.activeBoundary;
+        return projection.conversationMessages;
       } catch (error) {
         _logger.warning(
           'Compaction projection unavailable for $sessionId: $error',
         );
       }
     }
+    _activeProjectionBoundary = null;
     return history;
   }
 
@@ -2786,6 +2925,7 @@ class AgentRunner {
         targetRequestTokens:
             (_effectiveInputWindow(contextWindow) * policy.targetRatio).round(),
         thresholdRatio: policy.threshold,
+        targetRatio: policy.targetRatio,
       );
       final outcome = await getIt<CompactionCoordinator>().runCompaction(
         request: request,

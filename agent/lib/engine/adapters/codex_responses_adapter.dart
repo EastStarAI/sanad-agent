@@ -178,6 +178,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       stream: true,
       preloadedAttachments: verifiedAttachments,
     );
+    final stopwatch = Stopwatch()..start();
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
       ..headers.addAll(_headers(options))
@@ -188,6 +189,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         headers: request.headers,
         body: body,
         requestId: options.requestId,
+        provider: provider,
+        model: resolvedModel,
+        baseUrl: _normalizedBaseUrl(),
+        protocol: profile.effectiveProtocol,
+        stream: false,
+        safeOptions: options.toSafeDumpOptions(
+          stream: false,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -203,6 +213,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         await LLMRequestDumper.recordError(
           error,
           requestId: options.requestId,
+          duration: stopwatch.elapsed,
         );
       }
       await transport.dispose();
@@ -244,7 +255,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
           'message': normalized.message.toJson(),
           'finish_reason': normalized.finishReason.name,
           'usage': ?normalized.usage,
-        }, requestId: options.requestId);
+        }, requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: normalized.finishReason.name,
+        );
       }
 
       return normalized;
@@ -253,7 +268,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
           'error': error.toString(),
-        }, requestId: options.requestId);
+        }, requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: 'incomplete',
+        );
       }
       rethrow;
     } finally {
@@ -289,6 +308,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       stream: true,
       preloadedAttachments: verifiedAttachments,
     );
+    final stopwatch = Stopwatch()..start();
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
       ..headers.addAll(_headers(options))
@@ -299,6 +319,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         headers: request.headers,
         body: body,
         requestId: options.requestId,
+        provider: provider,
+        model: resolvedModel,
+        baseUrl: _normalizedBaseUrl(),
+        protocol: profile.effectiveProtocol,
+        stream: true,
+        safeOptions: options.toSafeDumpOptions(
+          stream: true,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -314,6 +343,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         await LLMRequestDumper.recordError(
           error,
           requestId: options.requestId,
+          duration: stopwatch.elapsed,
         );
       }
       await transport.dispose();
@@ -410,14 +440,22 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
           'message': normalized.message.toJson(),
           'finish_reason': normalized.finishReason.name,
           'usage': ?normalized.usage,
-        }, requestId: options.requestId);
+        }, requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: normalized.finishReason.name,
+        );
       }
     } catch (error) {
       if (LLMRequestDumper.isEnabled) {
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
           'error': error.toString(),
-        }, requestId: options.requestId);
+        }, requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: 'incomplete',
+        );
       }
       rethrow;
     } finally {

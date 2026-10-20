@@ -652,9 +652,13 @@ class LocalGatewayCliClient implements CliTurnClient {
   }
 
   /// Dispatches a `session.compact` command to compact the active session context.
+  ///
+  /// When [resendOnTimeout] is false, a query timeout is not followed by a second
+  /// fire-and-forget dispatch attempt and the timeout exception is rethrown directly.
   Future<Map<String, dynamic>> compactSession({
     required String sessionId,
     Duration? timeout,
+    bool resendOnTimeout = true,
   }) async {
     try {
       final result = await query(
@@ -671,7 +675,10 @@ class LocalGatewayCliClient implements CliTurnClient {
       return result;
     } catch (e) {
       // If query timed out or failed to correlate, attempt fire-and-forget fallback
-      if (e is CliClientException && e.code == 'query_timeout') {
+      // only when resendOnTimeout is true.
+      if (resendOnTimeout &&
+          e is CliClientException &&
+          e.code == 'query_timeout') {
         await sendCommand(
           command: 'session.compact',
           payload: {'session_id': sessionId},

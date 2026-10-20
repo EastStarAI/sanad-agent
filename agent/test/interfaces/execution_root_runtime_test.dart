@@ -14,6 +14,7 @@ import 'package:sanad_agent/capabilities/tools/system/shell_execute_tool.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
@@ -23,6 +24,7 @@ import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.d
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_resume_service.dart';
+import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 import 'package:test/test.dart';
 
 import 'interfaces_test.mocks.dart';
@@ -107,6 +109,125 @@ void main() {
         expect(metadata, containsPair('execution_root', executionRootDir.path));
         expect(metadata['workspace_id'], isNotNull);
         expect(metadata['workspace_path'], equals(logicalWorkspaceDir.path));
+      },
+    );
+
+    test(
+      'multi-turn producer-to-payload propagation revokes allow_all_tools grant and preserves explicit workspace precedence',
+      () async {
+        await getIt.reset();
+        final mockSessionManager = MockSessionManager();
+        getIt.registerSingleton<SessionManager>(mockSessionManager);
+
+        const sessionId = 'sess-multi-turn-safety';
+        when(mockSessionManager.getSessionMetadata(sessionId)).thenReturn(null);
+        SessionState makeSession({String? workspaceId}) => SessionState(
+          sessionId: sessionId,
+          model: 'test-model',
+          workspaceId: workspaceId,
+          createdAt: DateTime.utc(2026, 10, 20),
+          updatedAt: DateTime.utc(2026, 10, 20),
+        );
+
+        // Turn 1: request with execution_root and allow_all_tools = true
+        final turn1Request = AgentTurnRequest(
+          sessionId: sessionId,
+          message: 'turn 1 with temporary root and full access',
+          metadata: {
+            'execution_root': executionRootDir.path,
+            'allow_all_tools': true,
+            'permission_mode': 'full_access',
+          },
+        );
+
+        final turn1Metadata = await orchestrator.buildSessionMetadata(
+          turn1Request,
+        );
+        expect(turn1Metadata['execution_root'], equals(executionRootDir.path));
+        expect(turn1Metadata['allow_all_tools'], isTrue);
+        expect(turn1Metadata['permission_mode'], equals('full_access'));
+
+        // Feed producer metadata directly into payload builder
+        final payload1 = buildSessionPayload(
+          session: makeSession(),
+          sessionMetadata: turn1Metadata,
+        );
+        expect(
+          payload1['workspace_id'],
+          equals('exec_root:${executionRootDir.path}'),
+        );
+        expect(payload1['workspace_path'], equals(executionRootDir.path));
+        expect(payload1['metadata']['allow_all_tools'], isTrue);
+        expect(payload1['metadata']['permission_mode'], equals('full_access'));
+
+        // Simulate session manager persisting Turn 1 metadata
+        when(
+          mockSessionManager.getSessionMetadata(sessionId),
+        ).thenReturn(turn1Metadata);
+
+        // Turn 2: omitted allow_all_tools flag, explicit registered workspace (no executionRoot)
+        final turn2Request = AgentTurnRequest(
+          sessionId: sessionId,
+          message: 'turn 2 switching to registered workspace without grant',
+          workspaceId: logicalWorkspaceDir.path,
+          metadata: const {}, // flag omitted
+        );
+
+        final turn2Metadata = await orchestrator.buildSessionMetadata(
+          turn2Request,
+        );
+        expect(turn2Metadata['allow_all_tools'], isFalse);
+        expect(turn2Metadata['permission_mode'], isNot(equals('full_access')));
+        // Explicit workspace takes precedence: stale execution_root from Turn 1 is NOT retained
+        expect(turn2Metadata['execution_root'], isNull);
+        expect(
+          turn2Metadata['workspace_path'],
+          equals(logicalWorkspaceDir.path),
+        );
+
+        // Feed producer metadata into payload builder for Turn 2
+        final payload2 = buildSessionPayload(
+          session: makeSession(
+            workspaceId: turn2Metadata['workspace_id']?.toString(),
+          ),
+          sessionMetadata: turn2Metadata,
+        );
+        expect(payload2['workspace_id'], equals(turn2Metadata['workspace_id']));
+        expect(payload2['workspace_path'], equals(logicalWorkspaceDir.path));
+        expect(payload2['metadata']['allow_all_tools'], isFalse);
+        expect(
+          payload2['metadata']['permission_mode'],
+          isNot(equals('full_access')),
+        );
+
+        // Turn 3: explicit false for allow_all_tools with lingering full_access in request metadata
+        final turn3Request = AgentTurnRequest(
+          sessionId: sessionId,
+          message:
+              'turn 3 explicit false with lingering full_access in request',
+          workspaceId: logicalWorkspaceDir.path,
+          metadata: const {
+            'allow_all_tools': false,
+            'permission_mode': 'full_access',
+          },
+        );
+
+        final turn3Metadata = await orchestrator.buildSessionMetadata(
+          turn3Request,
+        );
+        expect(turn3Metadata['allow_all_tools'], isFalse);
+        expect(turn3Metadata['permission_mode'], equals('default_mode'));
+
+        final payload3 = buildSessionPayload(
+          session: makeSession(
+            workspaceId: turn3Metadata['workspace_id']?.toString(),
+          ),
+          sessionMetadata: turn3Metadata,
+        );
+        expect(payload3['metadata']['allow_all_tools'], isFalse);
+        expect(payload3['metadata']['permission_mode'], equals('default_mode'));
+
+        await getIt.reset();
       },
     );
 

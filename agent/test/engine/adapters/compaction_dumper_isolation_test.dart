@@ -574,5 +574,70 @@ void main() {
         );
       },
     );
+
+    test(
+      'adapter calls populate route metadata, status_code, duration_ms, and finish_reason in compaction dump',
+      () async {
+        final adapter = BaseOpenAIAdapter(
+          config(),
+          const ProviderProfile(
+            name: 'opencode-go',
+            displayName: 'OpenCode Go',
+            description: 'OpenCode Go Provider',
+            defaultBaseUrl: 'https://api.opencode.ai/v1',
+            authType: 'api_key',
+            protocol: ProviderProtocol.openaiCompatible,
+          ),
+          baseUrlOverride: 'https://api.opencode.ai/v1',
+          apiKeyOverride: 'test-key',
+          defaultModelOverride: 'deepseek-v4.1-flash',
+          client: MockClient((request) async {
+            return http.Response(
+              jsonEncode({
+                'id': 'chatcmpl-1',
+                'object': 'chat.completion',
+                'choices': [
+                  {
+                    'index': 0,
+                    'message': {'role': 'assistant', 'content': 'summary text'},
+                    'finish_reason': 'stop',
+                  }
+                ],
+                'usage': {'prompt_tokens': 150, 'completion_tokens': 50, 'total_tokens': 200},
+              }),
+              200,
+            );
+          }),
+        );
+
+        final options = compactionOptions(
+          providerInstanceId: 'inst-opencode-go',
+          modelId: 'deepseek-v4.1-flash',
+        );
+
+        final response = await adapter.generateResponse(
+          [Message(role: MessageRole.user, content: _compactionInstruction)],
+          options: options,
+        );
+
+        expect(response.message.content, equals('summary text'));
+
+        final relPath = LLMRequestDumper.getRelativeDumpPath(
+          requestId: options.requestId,
+        );
+        expect(relPath, isNotNull);
+        final dumpFile = File(p.join(scratch.path, relPath!));
+        expect(dumpFile.existsSync(), isTrue);
+
+        final dump = jsonDecode(await dumpFile.readAsString()) as Map<String, dynamic>;
+        expect(dump['provider'], equals('opencode-go'));
+        expect(dump['model'], equals('deepseek-v4.1-flash'));
+        expect(dump['base_url'], equals('https://api.opencode.ai/v1'));
+        expect(dump['status_code'], equals(200));
+        expect(dump['duration_ms'], isA<int>());
+        expect(dump['finish_reason'], equals('stop'));
+        expect(dump['capture_state'], equals('completed'));
+      },
+    );
   });
 }

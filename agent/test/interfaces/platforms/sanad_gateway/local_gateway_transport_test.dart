@@ -966,6 +966,110 @@ void main() {
       await socket.close();
     },
   );
+
+  test(
+    'platform-family broadcast preserves recipient device identity when session originated from cli_client',
+    () async {
+      final cliSocket = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws',
+        headers: {LocalGatewayCredentials.headerName: token.value},
+      );
+      addTearDown(() => cliSocket.close());
+      final cliFrames = StreamIterator<dynamic>(cliSocket);
+      expect(await cliFrames.moveNext(), isTrue); // register_success
+
+      cliSocket.add(
+        jsonEncode({
+          'type': 'execute_command',
+          'command': 'test_command',
+          'device_id': 'cli_client',
+          'payload': {'session_id': 'session-cli-1'},
+        }),
+      );
+      // Deterministically ensure execute_command was received and registered
+      cliSocket.add(
+        jsonEncode({
+          'type': 'client.hello',
+          'protocol': 'sanad.identity_presence',
+          'version': 1,
+          'client_instance_id': '00000000-0000-4000-8000-000000000001',
+        }),
+      );
+      expect(await cliFrames.moveNext(), isTrue);
+      expect(
+        jsonDecode(cliFrames.current as String)['type'],
+        'client.hello_ack',
+      );
+
+      final clientSocket = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws',
+        headers: {LocalGatewayCredentials.headerName: token.value},
+      );
+      addTearDown(() => clientSocket.close());
+      final clientFrames = StreamIterator<dynamic>(clientSocket);
+      expect(await clientFrames.moveNext(), isTrue); // register_success
+
+      final peerSocket = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws',
+        headers: {LocalGatewayCredentials.headerName: token.value},
+      );
+      addTearDown(() => peerSocket.close());
+      final peerFrames = StreamIterator<dynamic>(peerSocket);
+      expect(await peerFrames.moveNext(), isTrue); // register_success
+
+      peerSocket.add(
+        jsonEncode({
+          'type': 'execute_command',
+          'command': 'test_command',
+          'device_id': 'peer_desktop_client',
+          'payload': {'session_id': 'session-peer-1'},
+        }),
+      );
+      peerSocket.add(
+        jsonEncode({
+          'type': 'client.hello',
+          'protocol': 'sanad.identity_presence',
+          'version': 1,
+          'client_instance_id': '00000000-0000-4000-8000-000000000002',
+        }),
+      );
+      expect(await peerFrames.moveNext(), isTrue);
+      expect(
+        jsonDecode(peerFrames.current as String)['type'],
+        'client.hello_ack',
+      );
+
+      await platform.sendResponse(
+        GatewayResponse(
+          sessionId: 'session-cli-1',
+          eventId: 'event-cli-1',
+          isSessionCreated: true,
+          message: Message(role: MessageRole.assistant, content: 'Chat 1'),
+        ),
+      );
+
+      expect(await clientFrames.moveNext(), isTrue);
+      final clientEvent = jsonDecode(clientFrames.current as String);
+      expect(clientEvent['event'], 'session_created');
+      expect(clientEvent['device_id'], authManager.hardwareId);
+      expect(clientEvent['device_id'], isNot('cli_client'));
+
+      expect(await peerFrames.moveNext(), isTrue);
+      final peerEvent = jsonDecode(peerFrames.current as String);
+      expect(peerEvent['event'], 'session_created');
+      expect(peerEvent['device_id'], 'peer_desktop_client');
+      expect(peerEvent['device_id'], isNot('cli_client'));
+
+      expect(await cliFrames.moveNext(), isTrue);
+      final cliEvent = jsonDecode(cliFrames.current as String);
+      expect(cliEvent['event'], 'session_created');
+      expect(cliEvent['device_id'], 'cli_client');
+
+      await cliFrames.cancel();
+      await clientFrames.cancel();
+      await peerFrames.cancel();
+    },
+  );
 }
 
 Message _attachmentMediaMessage(String path) => Message(

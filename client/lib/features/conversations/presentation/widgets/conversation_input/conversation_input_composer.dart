@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
@@ -709,6 +710,7 @@ class _UnifiedComposerContainer extends StatelessWidget {
                   chipBgColor: chipBgColor,
                   borderColor: borderColor,
                   onConfirmFullAccess: onConfirmFullAccess,
+                  workspacePath: inputSlice.selectedWorkspace?.path,
                 ),
               ],
             ],
@@ -805,6 +807,7 @@ class _PermissionModeChip extends StatelessWidget {
   final Color chipBgColor;
   final Color borderColor;
   final Future<bool> Function() onConfirmFullAccess;
+  final String? workspacePath;
 
   const _PermissionModeChip({
     required this.permissionMode,
@@ -813,14 +816,28 @@ class _PermissionModeChip extends StatelessWidget {
     required this.chipBgColor,
     required this.borderColor,
     required this.onConfirmFullAccess,
+    this.workspacePath,
   });
 
   @override
   Widget build(BuildContext context) {
-    final label = isLoadingPermissionMode ? 'Loading...' : _modeLabel(permissionMode);
+    final l10n = AppLocalizations.of(context);
+    final label = isLoadingPermissionMode
+        ? (l10n?.loading ?? 'Loading…')
+        : (l10n != null ? _modeLabel(permissionMode, l10n) : permissionMode.value);
+    final path = workspacePath?.trim();
+    final tooltipText = path != null && path.isNotEmpty
+        ? (l10n != null
+              ? l10n.workspacePermissionModeTooltipWithRoot(
+                  _modeLabel(permissionMode, l10n),
+                  path,
+                )
+              : 'Permission: ${permissionMode.value}\nExecution Root: $path')
+        : (l10n?.workspacePermissionModeTooltip ?? 'Select Permission Mode');
 
     return PopupMenuButton<WorkspacePermissionMode>(
-      tooltip: 'Select Permission Mode',
+      key: const Key('permission_mode_selector_button'),
+      tooltip: tooltipText,
       enabled: !isLoadingPermissionMode,
       child: _buildChip(context, label),
       itemBuilder: (context) => WorkspacePermissionMode.values
@@ -836,7 +853,10 @@ class _PermissionModeChip extends StatelessWidget {
                     color: permissionMode == mode ? Theme.of(context).colorScheme.primary : dimTextColor,
                   ),
                   const SizedBox(width: 8),
-                  Text(_modeLabel(mode), style: const TextStyle(fontSize: 12)),
+                  Text(
+                    l10n != null ? _modeLabel(mode, l10n) : mode.value,
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ],
               ),
             ),
@@ -854,12 +874,15 @@ class _PermissionModeChip extends StatelessWidget {
     );
   }
 
-  String _modeLabel(WorkspacePermissionMode mode) {
+  String _modeLabel(
+    WorkspacePermissionMode mode,
+    AppLocalizations l10n,
+  ) {
     switch (mode) {
       case WorkspacePermissionMode.defaultMode:
-        return 'Default';
+        return l10n.workspacePermissionModeDefault;
       case WorkspacePermissionMode.fullAccess:
-        return 'Full Access';
+        return l10n.workspacePermissionModeFullAccess;
     }
   }
 

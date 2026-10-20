@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/cli/client/local_gateway_cli_client.dart';
+import 'package:sanad_agent/cli/runner/commands/session_command.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
 import 'package:test/test.dart';
 
@@ -25,10 +26,41 @@ class FakeSessionGatewayClient extends LocalGatewayCliClient {
   String? lastPermissionDecision;
   String? lastPermissionScope;
   String? lastPermissionComment;
+  String? lastCompactSessionId;
+  Duration? lastCompactTimeout;
+  bool? lastCompactResendOnTimeout;
+  Map<String, dynamic>? compactResultToReturn;
+  int compactCallCount = 0;
+  bool isDisposed = false;
   Object? errorToThrow;
 
   FakeSessionGatewayClient()
     : super(gatewayUri: Uri.parse('ws://127.0.0.1:58085'), token: 'fake-token');
+
+  @override
+  Future<Map<String, dynamic>> compactSession({
+    required String sessionId,
+    Duration? timeout,
+    bool resendOnTimeout = true,
+  }) async {
+    compactCallCount++;
+    lastCompactSessionId = sessionId;
+    lastCompactTimeout = timeout;
+    lastCompactResendOnTimeout = resendOnTimeout;
+    if (errorToThrow != null) throw errorToThrow!;
+    return compactResultToReturn ??
+        {
+          'session_id': sessionId,
+          'outcome': 'accepted',
+          'compaction_id': 'cmp-fake-123',
+        };
+  }
+
+  @override
+  Future<void> dispose() async {
+    isDisposed = true;
+    await super.dispose();
+  }
 
   @override
   Future<List<Map<String, dynamic>>> getSessions({Duration? timeout}) async {
@@ -424,6 +456,334 @@ void main() {
         final exitCode = await runner.run(['session', 'stop']);
         expect(exitCode, equals(1));
         expect(stderrBuf.toString(), contains('Session ID is required'));
+      });
+    });
+
+    group('session compact', () {
+      test('subcommand is registered in session command and prints help cleanly', () async {
+        final runner = buildRunner();
+        final sessionCmd = runner.commands['session'] as SessionCommand;
+        expect(sessionCmd.subcommands.containsKey('compact'), isTrue);
+        expect(sessionCmd.usage, contains('compact'));
+        expect(
+          sessionCmd.usage,
+          contains('Request context compaction admission for a specific session'),
+        );
+
+        final exitCode = await runner.run(['session', '--help']);
+        expect(exitCode, equals(0));
+      });
+
+      test('routes compact subcommand metadata and handles --help flag cleanly', () async {
+        final runner = buildRunner();
+        final sessionCmd = runner.commands['session'] as SessionCommand;
+        final compactCmd = sessionCmd.subcommands['compact'] as SessionCompactCommand;
+        expect(compactCmd.name, equals('compact'));
+        expect(
+          compactCmd.description,
+          contains('Request context compaction admission for a specific session'),
+        );
+        expect(compactCmd.invocation, equals('sanad session compact <session-id>'));
+        expect(
+          compactCmd.usage,
+          contains('Request context compaction admission for a specific session'),
+        );
+        expect(compactCmd.usage, contains('sanad session compact <session-id>'));
+        expect(compactCmd.argParser.options.keys, contains('timeout'));
+        expect(compactCmd.argParser.options.keys, contains('json'));
+
+        final exitCode = await runner.run(['session', 'compact', '--help']);
+        expect(exitCode, equals(0));
+      });
+
+      test('requires explicit session ID (fails when missing)', () async {
+        final runner = buildRunner();
+        final exitCode = await runner.run(['session', 'compact']);
+        expect(exitCode, equals(1));
+        expect(stderrBuf.toString(), contains('Session ID is required'));
+        expect(client.compactCallCount, equals(0));
+      });
+
+      test('requires explicit session ID in --json mode (returns JSON error)', () async {
+        final runner = buildRunner();
+        final exitCode = await runner.run(['session', 'compact', '--json']);
+        expect(exitCode, equals(1));
+        expect(stderrBuf.toString(), contains('Session ID is required'));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['exit_code'], equals(1));
+        expect(decoded['error'], contains('Session ID is required'));
+        expect(client.compactCallCount, equals(0));
+      });
+
+      test('compacts session by positional ID and returns admission message', () async {
+        final runner = buildRunner();
+        final exitCode = await runner.run(['session', 'compact', 'sess-pos-1']);
+        expect(exitCode, equals(0));
+        expect(client.lastCompactSessionId, equals('sess-pos-1'));
+        expect(client.lastCompactResendOnTimeout, isFalse);
+        expect(
+          stdoutBuf.toString(),
+          contains(
+            'Compaction request accepted for session sess-pos-1 (compaction_id: cmp-fake-123).',
+          ),
+        );
+      });
+
+      test('compacts session via --session option', () async {
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          '--session',
+          'sess-opt-1',
+        ]);
+        expect(exitCode, equals(0));
+        expect(client.lastCompactSessionId, equals('sess-opt-1'));
+        expect(client.lastCompactResendOnTimeout, isFalse);
+      });
+
+      test('returns structured JSON in --json mode for accepted admission', () async {
+        client.compactResultToReturn = {
+          'session_id': 'sess-accepted-1',
+          'request_id': 'req-cmp-1',
+          'outcome': 'accepted',
+          'compaction_id': 'cmp-999',
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-accepted-1',
+          '--json',
+        ]);
+        expect(exitCode, equals(0));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['session_id'], equals('sess-accepted-1'));
+        expect(decoded['request_id'], equals('req-cmp-1'));
+        expect(decoded['outcome'], equals('accepted'));
+        expect(decoded['compaction_id'], equals('cmp-999'));
+      });
+
+      test('returns structured JSON in --json mode for dispatched admission', () async {
+        client.compactResultToReturn = {
+          'session_id': 'sess-disp-1',
+          'outcome': 'dispatched',
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-disp-1',
+          '--json',
+        ]);
+        expect(exitCode, equals(0));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['session_id'], equals('sess-disp-1'));
+        expect(decoded['outcome'], equals('dispatched'));
+      });
+
+      test('handles no_op outcome with exit code 0', () async {
+        client.compactResultToReturn = {
+          'session_id': 'sess-noop-1',
+          'outcome': 'no_op',
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-noop-1',
+        ]);
+        expect(exitCode, equals(0));
+        expect(
+          stdoutBuf.toString(),
+          contains('No compaction needed for session sess-noop-1.'),
+        );
+      });
+
+      test('returns structured JSON and exit code 1 for failed outcome', () async {
+        client.compactResultToReturn = {
+          'session_id': 'sess-fail-1',
+          'outcome': 'failed',
+          'failure_reason': 'session_busy',
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-fail-1',
+          '--json',
+        ]);
+        expect(exitCode, equals(1));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['session_id'], equals('sess-fail-1'));
+        expect(decoded['outcome'], equals('failed'));
+        expect(decoded['failure_reason'], equals('session_busy'));
+        expect(decoded['exit_code'], equals(1));
+      });
+
+      test('propagates --timeout option as Duration', () async {
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-timeout-1',
+          '--timeout',
+          '15',
+        ]);
+        expect(exitCode, equals(0));
+        expect(client.lastCompactTimeout, equals(const Duration(seconds: 15)));
+        expect(client.lastCompactResendOnTimeout, isFalse);
+      });
+
+      test('handles gateway error with exit code 1 and error JSON', () async {
+        client.errorToThrow = const CliClientException(
+          'Gateway connection failed',
+          code: 'gateway_error',
+        );
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-err-1',
+          '--json',
+        ]);
+        expect(exitCode, equals(1));
+        expect(stderrBuf.toString(), contains('Gateway connection failed'));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['session_id'], equals('sess-err-1'));
+        expect(decoded['exit_code'], equals(1));
+        expect(decoded['error'], contains('Gateway connection failed'));
+      });
+
+      test('handles missing or malformed outcome with failed outcome and exit code 1', () async {
+        client.compactResultToReturn = <String, dynamic>{};
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-malformed-1',
+          '--json',
+        ]);
+        expect(exitCode, equals(1));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['session_id'], equals('sess-malformed-1'));
+        expect(decoded['outcome'], equals('failed'));
+        expect(decoded['failure_reason'], equals('missing_outcome'));
+        expect(decoded['exit_code'], equals(1));
+      });
+
+      test('handles real daemon outcome session_busy with exit code 1', () async {
+        client.compactResultToReturn = {
+          'session_id': 'sess-busy-1',
+          'outcome': 'session_busy',
+          'failure_reason': 'session_busy',
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-busy-1',
+          '--json',
+        ]);
+        expect(exitCode, equals(1));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['session_id'], equals('sess-busy-1'));
+        expect(decoded['outcome'], equals('session_busy'));
+        expect(decoded['failure_reason'], equals('session_busy'));
+        expect(decoded['exit_code'], equals(1));
+      });
+
+      test('handles real daemon outcome compaction_in_progress with exit code 1', () async {
+        client.compactResultToReturn = {
+          'session_id': 'sess-in-prog-1',
+          'outcome': 'compaction_in_progress',
+          'failure_reason': 'compaction_in_progress',
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-in-prog-1',
+          '--json',
+        ]);
+        expect(exitCode, equals(1));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['session_id'], equals('sess-in-prog-1'));
+        expect(decoded['outcome'], equals('compaction_in_progress'));
+        expect(decoded['failure_reason'], equals('compaction_in_progress'));
+        expect(decoded['exit_code'], equals(1));
+      });
+
+      test('handles query timeout with exit code 1, single dispatch and error JSON', () async {
+        client.errorToThrow = const CliClientException(
+          'Query timed out waiting for response to session.compact (5s)',
+          code: 'query_timeout',
+        );
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-timeout-err-1',
+          '--json',
+        ]);
+        expect(exitCode, equals(1));
+        expect(client.compactCallCount, equals(1));
+        expect(client.lastCompactResendOnTimeout, isFalse);
+        expect(stderrBuf.toString(), contains('Query timed out'));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['session_id'], equals('sess-timeout-err-1'));
+        expect(decoded['exit_code'], equals(1));
+        expect(decoded['error'], contains('Query timed out'));
+      });
+
+      test('propagates --home and --gateway-url overrides and disposes client', () async {
+        String? capturedUrl;
+        String? capturedHome;
+        final factoryClient = FakeSessionGatewayClient();
+
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+          clientFactory: ({urlOverride, sanadHomeOverride}) async {
+            capturedUrl = urlOverride;
+            capturedHome = sanadHomeOverride;
+            return factoryClient;
+          },
+        );
+
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-prop-1',
+          '--home',
+          '/custom/sanad/home',
+          '--gateway-url',
+          'ws://127.0.0.1:59999/ws',
+        ]);
+
+        expect(exitCode, equals(0));
+        expect(capturedUrl, equals('ws://127.0.0.1:59999/ws'));
+        expect(capturedHome, equals('/custom/sanad/home'));
+        expect(factoryClient.lastCompactSessionId, equals('sess-prop-1'));
+        expect(factoryClient.isDisposed, isTrue);
       });
     });
 

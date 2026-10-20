@@ -45,6 +45,25 @@ class _ThrowingSummarizer implements CompactionSummarizer {
   }
 }
 
+class _ThrowingProviderSummarizer
+    implements CompactionSummarizer, ProviderProjectionCompactionSummarizer {
+  @override
+  Future<String> summarize({required String prompt}) async {
+    throw StateError('synthetic summarizer failure');
+  }
+
+  @override
+  Future<CompactionProviderResult> summarizeProvider(
+    CompactionProviderRequest request,
+  ) async {
+    throw const CompactionInvalidProviderResponse(
+      'invalid_json_syntax',
+      usage: {'input_tokens': 1200, 'output_tokens': 40},
+      duration: Duration(milliseconds: 250),
+    );
+  }
+}
+
 List<IndexedConversationMessage> _heavyTimeline() {
   return [
     IndexedConversationMessage(
@@ -70,6 +89,7 @@ void main() {
   late SessionDB sessions;
   late CompactionBoundaryRepository boundaries;
   late SessionHistoryRevisionRepository revisions;
+  late CompactionActivationService activation;
   late CompactionCoordinator coordinator;
   late List<CompactionLifecycleEvent> lifecycle;
 
@@ -79,10 +99,12 @@ void main() {
     CompactionTrigger trigger = CompactionTrigger.auto,
     int contextWindowTokens = 3_000,
     int targetRequestTokens = 2_000,
+    String? compactionId,
+    List<Message>? providerProjection,
   }) {
     final revision = revisions.read(sessionId)!;
     return CompactionEngineRequest(
-      compactionId: 'cmp-coordinator',
+      compactionId: compactionId ?? 'cmp-coordinator',
       sessionId: sessionId,
       trigger: trigger,
       sourceRevision: revision.toCompactionRevision(),
@@ -93,6 +115,7 @@ void main() {
       runtimeContext: 'runtime',
       toolSchemas: const [],
       targetRequestTokens: targetRequestTokens,
+      providerProjection: providerProjection,
     );
   }
 
@@ -105,7 +128,7 @@ void main() {
     );
     revisions = SessionHistoryRevisionRepository(state);
     final projectionRevisions = SessionProjectionRevisionRepository(state);
-    final activation = CompactionActivationService(
+    activation = CompactionActivationService(
       boundaries: boundaries,
       projectionRevisions: projectionRevisions,
     );
@@ -474,5 +497,407 @@ void main() {
     expect(boundaries.findLatestCompletedForSession('session-a'), isNotNull);
     expect(boundaries.findLatestCompletedForSession('session-b'), isNull);
     expect(boundaries.findStartedForSession('session-b'), isNull);
+  });
+
+  test('exact post-boundary binding binds to exact compactionId and preserves receipt against later growth', () async {
+    sessions.replaceMessages(
+      'session-a',
+      _heavyTimeline().map((entry) => entry.message).toList(),
+    );
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-a');
+    final outcome = await coordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-a',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.manual,
+        contextWindowTokens: 100_000,
+      ),
+      force: true,
+    );
+    expect(outcome?.status, CompactionStatus.completed);
+
+    final observedAt = DateTime.utc(2026, 8, 29, 3, 0);
+
+    // Unreserved attempt fails closed
+    final unreserved = coordinator.reconcilePostBoundaryUsage(
+      compactionId: outcome!.compactionId,
+      requestId: 'req-first-call',
+      observedAt: observedAt,
+      inputTokens: 1_250,
+      cachedTokens: 300,
+      routeSignature: _route(),
+    );
+    expect(unreserved, isFalse);
+
+    // Reserve first dispatched call
+    final reserved = coordinator.reservePostBoundaryDispatch(
+      compactionId: outcome.compactionId,
+      requestId: 'req-first-call',
+      routeSignature: _route(),
+      dispatchedAt: observedAt,
+    );
+    expect(reserved, isTrue);
+
+    // Exact reconciliation succeeds
+    final ok = coordinator.reconcilePostBoundaryUsage(
+      compactionId: outcome.compactionId,
+      requestId: 'req-first-call',
+      observedAt: observedAt,
+      inputTokens: 1_250,
+      cachedTokens: 300,
+      routeSignature: _route(),
+    );
+    expect(ok, isTrue);
+
+    final record = boundaries.findById(outcome.compactionId);
+    expect(record?.metrics?.providerConfirmedRequestTokensAfter, 1_250);
+    expect(record?.diagnostics?.postBoundary.status, 'confirmed');
+    expect(record?.diagnostics?.postBoundary.targetOutcome, TargetOutcome.unknown);
+    expect(record?.diagnostics?.postBoundary.requestId, 'req-first-call');
+    expect(record?.diagnostics?.postBoundary.cachedTokens, 300);
+
+    // Later growth turn must NOT overwrite the first-call receipt
+    coordinator.reconcilePostBoundaryUsage(
+      compactionId: outcome.compactionId,
+      requestId: 'req-later-grown-turn',
+      observedAt: DateTime.utc(2026, 8, 29, 3, 5),
+      inputTokens: 45_000,
+      cachedTokens: 1_000,
+      routeSignature: _route(),
+    );
+
+    final recordAfterGrowth = boundaries.findById(outcome.compactionId);
+    expect(recordAfterGrowth?.metrics?.providerConfirmedRequestTokensAfter, 1_250);
+    expect(recordAfterGrowth?.diagnostics?.postBoundary.requestId, 'req-first-call');
+  });
+
+  test('recordPostBoundaryMissingUsage marks status missing on exact compactionId', () async {
+    sessions.replaceMessages(
+      'session-a',
+      _heavyTimeline().map((entry) => entry.message).toList(),
+    );
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-a');
+    final outcome = await coordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-a',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.manual,
+      ),
+      force: true,
+    );
+    expect(outcome?.status, CompactionStatus.completed);
+
+    final observedAt = DateTime.utc(2026, 8, 29, 3, 0);
+
+    // Unreserved call fails closed
+    final unreserved = coordinator.recordPostBoundaryMissingUsage(
+      compactionId: outcome!.compactionId,
+      requestId: 'req-missing-provider',
+      observedAt: observedAt,
+      missingReason: 'no_provider_usage',
+      routeSignature: _route(),
+    );
+    expect(unreserved, isFalse);
+
+    // Reserve dispatch
+    final reserved = coordinator.reservePostBoundaryDispatch(
+      compactionId: outcome.compactionId,
+      requestId: 'req-missing-provider',
+      routeSignature: _route(),
+      dispatchedAt: observedAt,
+    );
+    expect(reserved, isTrue);
+
+    final ok = coordinator.recordPostBoundaryMissingUsage(
+      compactionId: outcome.compactionId,
+      requestId: 'req-missing-provider',
+      observedAt: observedAt,
+      missingReason: 'no_provider_usage',
+      routeSignature: _route(),
+    );
+    expect(ok, isTrue);
+
+    final record = boundaries.findById(outcome.compactionId);
+    expect(record?.metrics?.providerConfirmedRequestTokensAfter, isNull);
+    expect(record?.diagnostics?.postBoundary.status, 'missing');
+    expect(record?.diagnostics?.postBoundary.missingReason, 'no_provider_usage');
+    expect(record?.diagnostics?.postBoundary.targetOutcome, TargetOutcome.unknown);
+  });
+
+  test('exact post-boundary binding binds strictly to targeted compactionId and prevents unsafe opportunistic scan across multiple compactions', () async {
+    final now = DateTime.utc(2026, 8, 29);
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-multi',
+        model: 'gpt-4o',
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      ),
+    );
+    sessions.replaceMessages(
+      'session-multi',
+      _heavyTimeline().map((entry) => entry.message).toList(),
+    );
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-multi');
+
+    // Run first compaction (older)
+    final outcome1 = await coordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-multi',
+        compactionId: 'cmp-multi-1',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.manual,
+        contextWindowTokens: 100_000,
+      ),
+      force: true,
+    );
+    expect(outcome1?.status, CompactionStatus.completed);
+
+    sessions.replaceMessages('session-multi', [
+      ..._heavyTimeline().map((entry) => entry.message),
+      Message(role: MessageRole.user, content: 'continuation 1: ${"x" * 2000}'),
+      Message(role: MessageRole.assistant, content: 'continuation 2: ${"y" * 2000}'),
+    ]);
+    final canonical2 = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-multi');
+
+    // Run second compaction (newer)
+    final outcome2 = await coordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-multi',
+        compactionId: 'cmp-multi-2',
+        timeline: [
+          for (final entry in canonical2.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.manual,
+        contextWindowTokens: 100_000,
+      ),
+      force: true,
+    );
+    expect(outcome2?.status, CompactionStatus.completed);
+
+    // Both compactions exist and have pending post-boundary status
+    final initial1 = boundaries.findById(outcome1!.compactionId);
+    final initial2 = boundaries.findById(outcome2!.compactionId);
+    expect(initial1?.metrics?.providerConfirmedRequestTokensAfter, isNull);
+    expect(initial2?.metrics?.providerConfirmedRequestTokensAfter, isNull);
+    expect(initial1?.diagnostics?.postBoundary.status, 'pending');
+    expect(initial2?.diagnostics?.postBoundary.status, 'pending');
+
+    // Exact post-boundary call targeting outcome2 with 19182 provider-confirmed tokens
+    final reserved = coordinator.reservePostBoundaryDispatch(
+      compactionId: outcome2.compactionId,
+      requestId: 'req-multi-continuation',
+      routeSignature: _route(),
+      dispatchedAt: DateTime.utc(2026, 8, 29, 3, 30),
+    );
+    expect(reserved, isTrue);
+
+    final ok = coordinator.reconcilePostBoundaryUsage(
+      compactionId: outcome2.compactionId,
+      requestId: 'req-multi-continuation',
+      observedAt: DateTime.utc(2026, 8, 29, 3, 30),
+      inputTokens: 19_182,
+      cachedTokens: 2_500,
+      routeSignature: _route(),
+    );
+    expect(ok, isTrue);
+
+    // outcome2 is confirmed with 19182
+    final record2 = boundaries.findById(outcome2.compactionId);
+    expect(record2?.metrics?.providerConfirmedRequestTokensAfter, 19_182);
+    expect(record2?.diagnostics?.postBoundary.status, 'confirmed');
+    expect(record2?.diagnostics?.postBoundary.requestId, 'req-multi-continuation');
+
+    // outcome1 remains strictly pending — NOT opportunistically stolen by first-null route scan
+    final record1 = boundaries.findById(outcome1.compactionId);
+    expect(record1?.metrics?.providerConfirmedRequestTokensAfter, isNull);
+    expect(record1?.diagnostics?.postBoundary.status, 'pending');
+  });
+
+  test('coordinator reserves dispatch and prevents subsequent steps from overwriting reservation', () async {
+    final now = DateTime.utc(2026, 8, 29);
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-dispatch-reserve',
+        model: 'gpt-4o',
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      ),
+    );
+    sessions.replaceMessages(
+      'session-dispatch-reserve',
+      [
+        ..._heavyTimeline().map((entry) => entry.message),
+      ],
+    );
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-dispatch-reserve');
+    final outcome = await coordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-dispatch-reserve',
+        compactionId: 'cmp-dispatch-reserve',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.auto,
+        contextWindowTokens: 100_000,
+      ),
+      force: true,
+    );
+    expect(outcome?.status, CompactionStatus.completed);
+
+    final reserved = coordinator.reservePostBoundaryDispatch(
+      compactionId: outcome!.compactionId,
+      requestId: 'turn-reserve:step-1',
+      routeSignature: _route(),
+      dispatchedAt: DateTime.utc(2026, 8, 29, 3, 1),
+    );
+    expect(reserved, isTrue);
+
+    final boundaryRecord = boundaries.findById(outcome.compactionId);
+    expect(boundaryRecord?.diagnostics?.postBoundary.status, 'reserved');
+    expect(boundaryRecord?.diagnostics?.postBoundary.requestId, 'turn-reserve:step-1');
+
+    // A second dispatch on step-2 is reserved (retaining the first reservation)
+    final secondReserved = coordinator.reservePostBoundaryDispatch(
+      compactionId: outcome.compactionId,
+      requestId: 'turn-reserve:step-2',
+      routeSignature: _route(),
+      dispatchedAt: DateTime.utc(2026, 8, 29, 3, 2),
+    );
+    expect(secondReserved, isTrue);
+    final boundaryRecordAfterSecond = boundaries.findById(outcome.compactionId);
+    expect(boundaryRecordAfterSecond?.diagnostics?.postBoundary.requestId, 'turn-reserve:step-1');
+
+    // Arriving usage for step-2 cannot overwrite reserved step-1
+    final step2Reconcile = coordinator.reconcilePostBoundaryUsage(
+      compactionId: outcome.compactionId,
+      requestId: 'turn-reserve:step-2',
+      observedAt: DateTime.utc(2026, 8, 29, 3, 3),
+      inputTokens: 25_000,
+      routeSignature: _route(),
+    );
+    expect(step2Reconcile, isFalse);
+
+    // Arriving usage for step-1 successfully reconciles
+    final step1Reconcile = coordinator.reconcilePostBoundaryUsage(
+      compactionId: outcome.compactionId,
+      requestId: 'turn-reserve:step-1',
+      observedAt: DateTime.utc(2026, 8, 29, 3, 4),
+      inputTokens: 12_500,
+      routeSignature: _route(),
+    );
+    expect(step1Reconcile, isTrue);
+    final confirmedRecord = boundaries.findById(outcome.compactionId);
+    expect(confirmedRecord?.diagnostics?.postBoundary.status, 'confirmed');
+    expect(confirmedRecord?.metrics?.providerConfirmedRequestTokensAfter, 12_500);
+  });
+
+  test('failed compaction run preserves attempt ledger and decision snapshot into session_compaction_operations', () async {
+    final failingEngine = ContextCompactionEngine(
+      summarizer: _ThrowingProviderSummarizer(),
+    );
+    final failingCoordinator = CompactionCoordinator(
+      engine: failingEngine,
+      boundaries: boundaries,
+      activation: activation,
+      projectionBuilder: ModelProjectionBuilder(
+        sessions: sessions,
+        boundaries: boundaries,
+      ),
+    );
+
+    final now = DateTime.utc(2026, 8, 29);
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-fail-durability',
+        model: 'gpt-4o',
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      ),
+    );
+    sessions.replaceMessages(
+      'session-fail-durability',
+      [
+        ..._heavyTimeline().map((entry) => entry.message),
+      ],
+    );
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-fail-durability');
+    final outcome = await failingCoordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-fail-durability',
+        compactionId: 'cmp-fail-durability-test',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.auto,
+        contextWindowTokens: 100_000,
+        providerProjection: [
+          for (final entry in canonical.messages) entry.message,
+        ],
+      ),
+      force: true,
+    );
+    expect(outcome?.status, CompactionStatus.failed);
+
+    final record = boundaries.findById('cmp-fail-durability-test');
+    expect(record, isNotNull);
+    expect(record!.status, CompactionStatus.failed);
+    expect(record.diagnostics, isNotNull);
+    expect(record.diagnostics!.attempts, isNotEmpty);
+    expect(record.diagnostics!.attempts.first.outcome, 'invalid_response');
+    expect(record.diagnostics!.attempts.first.inputTokens, 1200);
+    expect(record.diagnostics!.decisionSnapshot?['target_scope'], 'usable_budget');
+    expect(record.diagnostics!.decisionSnapshot?['context_window'], 100_000);
   });
 }

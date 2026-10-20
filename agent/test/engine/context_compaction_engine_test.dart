@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -57,6 +58,7 @@ CompactionEngineRequest _request({
   required List<IndexedConversationMessage> timeline,
   CompactionInternalSummary? previousSummary,
   CompactionMessageRange? previousSourceRange,
+  List<Message>? providerProjection,
 }) {
   return CompactionEngineRequest(
     compactionId: 'cmp-engine',
@@ -69,6 +71,7 @@ CompactionEngineRequest _request({
     systemPrompt: 'system prompt',
     runtimeContext: 'runtime',
     toolSchemas: const [],
+    providerProjection: providerProjection,
     previousSummary: previousSummary,
     previousSourceRange: previousSourceRange,
     targetRequestTokens: 500,
@@ -1053,6 +1056,108 @@ void main() {
           );
         },
       );
+
+      test(
+        'per-attempt summarization ledger records per-call usage, duration, pass kind, and outcome separately from aggregate',
+        () async {
+          final summarizer = _TestProviderSummarizer([
+            (req) => CompactionProviderResult(
+              content: jsonEncode(
+                CompactionSummaryPrompt.toJsonMap(
+                  const CompactionInternalSummary(
+                    currentGoal: 'unrelated',
+                    latestUserRequest: 'acknowledge',
+                    activeState: 'running',
+                    criticalContext: 'some context',
+                    remainingWork: 'do stuff',
+                  ),
+                ),
+              ),
+              usage: const {
+                'input_tokens': 1500,
+                'cached_input_tokens': 500,
+                'output_tokens': 80,
+                'reasoning_tokens': 20,
+              },
+              duration: const Duration(milliseconds: 250),
+            ),
+            (req) => CompactionProviderResult(
+              content: jsonEncode(
+                CompactionSummaryPrompt.toJsonMap(
+                  const CompactionInternalSummary(
+                    currentGoal: 'ship compaction safely',
+                    latestUserRequest: 'acknowledge',
+                    activeState: 'running',
+                    criticalContext: 'some context',
+                    remainingWork: 'verify ledger',
+                  ),
+                ),
+              ),
+              usage: const {
+                'input_tokens': 1200,
+                'cached_input_tokens': 600,
+                'output_tokens': 90,
+                'reasoning_tokens': 30,
+              },
+              duration: const Duration(milliseconds: 300),
+            ),
+          ]);
+
+          final engine = ContextCompactionEngine(summarizer: summarizer);
+          final timeline = _timeline();
+          final projection = [
+            Message(role: MessageRole.system, content: 'system prompt'),
+            for (final item in timeline) item.message,
+          ];
+
+          final candidate = await engine.buildCandidate(
+            _request(
+              timeline: timeline,
+              providerProjection: projection,
+            ),
+          );
+
+          expect(candidate, isNotNull);
+          expect(candidate!.metrics.summarizationAttempts, 2);
+          // Legacy aggregate semantics: CompactionMetrics records aggregate processing cost
+          expect(candidate.metrics.summarizationInputTokens, 2700);
+          expect(candidate.metrics.summarizationCachedInputTokens, 1100);
+          expect(candidate.metrics.summarizationOutputTokens, 170);
+          expect(candidate.metrics.summarizationReasoningTokens, 50);
+
+          // Aggregate work is recorded separately in diagnostics
+          final diag = candidate.diagnostics;
+          expect(diag, isNotNull);
+          expect(diag!.aggregateUsage['input_tokens'], 2700);
+          expect(diag.aggregateUsage['cached_input_tokens'], 1100);
+          expect(diag.aggregateUsage['output_tokens'], 170);
+          expect(diag.aggregateUsage['reasoning_tokens'], 50);
+
+          // Ledger has distinguishable per-attempt entries
+          expect(diag.attempts, hasLength(2));
+          final attempt0 = diag.attempts[0];
+          expect(attempt0.passKind, 'full');
+          expect(attempt0.requestId, 'compaction:cmp-engine:full:0');
+          expect(attempt0.duration, const Duration(milliseconds: 250));
+          expect(attempt0.inputTokens, 1500);
+          expect(attempt0.cachedInputTokens, 500);
+          expect(attempt0.outputTokens, 80);
+          expect(attempt0.reasoningTokens, 20);
+          expect(attempt0.outcome, 'validation_failed');
+          expect(attempt0.failureReason, isNotNull);
+
+          final attempt1 = diag.attempts[1];
+          expect(attempt1.passKind, 'repair');
+          expect(attempt1.requestId, 'compaction:cmp-engine:repair:1');
+          expect(attempt1.duration, const Duration(milliseconds: 300));
+          expect(attempt1.inputTokens, 1200);
+          expect(attempt1.cachedInputTokens, 600);
+          expect(attempt1.outputTokens, 90);
+          expect(attempt1.reasoningTokens, 30);
+          expect(attempt1.outcome, 'success');
+          expect(attempt1.failureReason, isNull);
+        },
+      );
     });
   });
 }
@@ -1087,5 +1192,30 @@ class _EmptySummarySummarizer implements CompactionSummarizer {
 Current Goal and Success Criteria:
 Remaining Work and Safest Next Action:
 ''';
+  }
+}
+
+class _TestProviderSummarizer
+    implements CompactionSummarizer, ProviderProjectionCompactionSummarizer {
+  final List<CompactionProviderResult Function(CompactionProviderRequest)>
+  handlers;
+  int callIndex = 0;
+  final List<CompactionProviderRequest> recordedRequests = [];
+
+  _TestProviderSummarizer(this.handlers);
+
+  @override
+  Future<String> summarize({required String prompt}) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<CompactionProviderResult> summarizeProvider(
+    CompactionProviderRequest request,
+  ) async {
+    recordedRequests.add(request);
+    if (callIndex < handlers.length) {
+      return handlers[callIndex++](request);
+    }
+    throw StateError('Unexpected call $callIndex');
   }
 }

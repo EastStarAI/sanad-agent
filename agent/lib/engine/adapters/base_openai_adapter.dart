@@ -868,6 +868,7 @@ class BaseOpenAIAdapter
   }) async {
     final url = Uri.parse('$_baseUrl/chat/completions');
     final resolvedModel = _resolveModel(modelOverride);
+    final stopwatch = Stopwatch()..start();
     final body = await buildRequestBody(
       history,
       tools: tools,
@@ -881,6 +882,15 @@ class BaseOpenAIAdapter
         headers: headers,
         body: body,
         requestId: options.requestId,
+        provider: _providerForModel(resolvedModel),
+        model: resolvedModel,
+        baseUrl: _baseUrl,
+        protocol: profile.effectiveProtocol,
+        stream: false,
+        safeOptions: options.toSafeDumpOptions(
+          stream: false,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -903,6 +913,7 @@ class BaseOpenAIAdapter
         await LLMRequestDumper.recordError(
           error,
           requestId: options.requestId,
+          duration: stopwatch.elapsed,
         );
       }
       rethrow;
@@ -912,9 +923,23 @@ class BaseOpenAIAdapter
 
     _logger.info('LLM Response status: ${response.statusCode}');
     if (LLMRequestDumper.isEnabled) {
+      String? finishReason;
+      if (response.statusCode == 200) {
+        try {
+          final data = _asStringMap(jsonDecode(response.body));
+          final choices = data?['choices'];
+          if (choices is List && choices.isNotEmpty) {
+            final choiceEnvelope = _asStringMap(choices.first);
+            finishReason = choiceEnvelope?['finish_reason']?.toString();
+          }
+        } catch (_) {}
+      }
       await LLMRequestDumper.dumpResponse(
         response.body,
         requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: finishReason,
       );
     }
 
@@ -977,6 +1002,7 @@ class BaseOpenAIAdapter
   }) async* {
     final url = Uri.parse('$_baseUrl/chat/completions');
     final resolvedModel = _resolveModel(modelOverride);
+    final stopwatch = Stopwatch()..start();
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
@@ -999,6 +1025,15 @@ class BaseOpenAIAdapter
         headers: request.headers,
         body: body,
         requestId: options.requestId,
+        provider: _providerForModel(resolvedModel),
+        model: resolvedModel,
+        baseUrl: _baseUrl,
+        protocol: profile.effectiveProtocol,
+        stream: true,
+        safeOptions: options.toSafeDumpOptions(
+          stream: true,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -1011,6 +1046,7 @@ class BaseOpenAIAdapter
         await LLMRequestDumper.recordError(
           error,
           requestId: options.requestId,
+          duration: stopwatch.elapsed,
         );
       }
       await transport.dispose();
@@ -1028,7 +1064,10 @@ class BaseOpenAIAdapter
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
             'error': errBody,
-          }, requestId: options.requestId);
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          );
         }
         throw LlmHttpException.fromStreamedResponse(
           response,
@@ -1293,7 +1332,11 @@ class BaseOpenAIAdapter
             },
             'finish_reason': effectiveFinishReason.name,
             'usage': ?finalUsage,
-          }, requestId: options.requestId);
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          finishReason: effectiveFinishReason.name,
+          );
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
@@ -1325,7 +1368,11 @@ class BaseOpenAIAdapter
                       .toList(),
               },
             'error': e.toString(),
-          }, requestId: options.requestId);
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          finishReason: 'incomplete',
+          );
         }
         rethrow;
       }

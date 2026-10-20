@@ -251,3 +251,243 @@ class CompactionDiagnostics {
     );
   }
 }
+
+/// Durable per-attempt summarization ledger entry (Task 106).
+@immutable
+class CompactionSummarizationAttemptRecord {
+  final String passKind; // 'full', 'repair', 'chunk', 'reduce'
+  final String requestId;
+  final Duration duration;
+  final int? inputTokens;
+  final int? cachedInputTokens;
+  final int? cacheWriteTokens;
+  final int? outputTokens;
+  final int? reasoningTokens;
+  final String outcome; // 'success', 'validation_failed', 'invalid_response', 'overflow', 'error'
+  final String? failureReason;
+  final String? relativeDumpPath;
+
+  const CompactionSummarizationAttemptRecord({
+    required this.passKind,
+    required this.requestId,
+    required this.duration,
+    this.inputTokens,
+    this.cachedInputTokens,
+    this.cacheWriteTokens,
+    this.outputTokens,
+    this.reasoningTokens,
+    required this.outcome,
+    this.failureReason,
+    this.relativeDumpPath,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'pass_kind': passKind,
+    'request_id': requestId,
+    'duration_ms': duration.inMilliseconds,
+    'input_tokens': ?inputTokens,
+    'cached_input_tokens': ?cachedInputTokens,
+    'cache_write_tokens': ?cacheWriteTokens,
+    'output_tokens': ?outputTokens,
+    'reasoning_tokens': ?reasoningTokens,
+    'outcome': outcome,
+    'failure_reason': ?failureReason,
+    'relative_dump_path': ?relativeDumpPath,
+  };
+
+  factory CompactionSummarizationAttemptRecord.fromJson(Map<String, dynamic> json) {
+    return CompactionSummarizationAttemptRecord(
+      passKind: json['pass_kind'] as String? ?? 'full',
+      requestId: json['request_id'] as String? ?? '',
+      duration: Duration(milliseconds: (json['duration_ms'] as num?)?.toInt() ?? 0),
+      inputTokens: (json['input_tokens'] as num?)?.toInt(),
+      cachedInputTokens: (json['cached_input_tokens'] as num?)?.toInt(),
+      cacheWriteTokens: (json['cache_write_tokens'] as num?)?.toInt(),
+      outputTokens: (json['output_tokens'] as num?)?.toInt(),
+      reasoningTokens: (json['reasoning_tokens'] as num?)?.toInt(),
+      outcome: json['outcome'] as String? ?? 'success',
+      failureReason: json['failure_reason'] as String?,
+      relativeDumpPath: json['relative_dump_path'] as String?,
+    );
+  }
+}
+
+/// Durable post-boundary confirmation status and target outcome (Task 106).
+@immutable
+class CompactionPostBoundaryStatus {
+  final String status; // 'pending', 'confirmed', 'missing', 'rejected'
+  final String? requestId;
+  final DateTime? observedAt;
+  final int? inputTokens;
+  final int? cachedTokens;
+  final String? missingReason;
+  final TargetOutcome targetOutcome;
+  final double? postInputRatio;
+
+  const CompactionPostBoundaryStatus({
+    required this.status,
+    this.requestId,
+    this.observedAt,
+    this.inputTokens,
+    this.cachedTokens,
+    this.missingReason,
+    this.targetOutcome = TargetOutcome.unknown,
+    this.postInputRatio,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'status': status,
+    'request_id': ?requestId,
+    'observed_at': ?observedAt?.toUtc().toIso8601String(),
+    'input_tokens': ?inputTokens,
+    'cached_tokens': ?cachedTokens,
+    'missing_reason': ?missingReason,
+    'target_outcome': targetOutcome.wireValue,
+    'post_input_ratio': ?postInputRatio,
+  };
+
+  factory CompactionPostBoundaryStatus.fromJson(Map<String, dynamic> json) {
+    return CompactionPostBoundaryStatus(
+      status: json['status'] as String? ?? 'pending',
+      requestId: json['request_id'] as String?,
+      observedAt: json['observed_at'] != null
+          ? DateTime.tryParse(json['observed_at'] as String)
+          : null,
+      inputTokens: (json['input_tokens'] as num?)?.toInt(),
+      cachedTokens: (json['cached_tokens'] as num?)?.toInt(),
+      missingReason: json['missing_reason'] as String?,
+      targetOutcome: TargetOutcome.fromWire(json['target_outcome'] as String?),
+      postInputRatio: (json['post_input_ratio'] as num?)?.toDouble(),
+    );
+  }
+
+  CompactionPostBoundaryStatus copyWithReserved({
+    required String requestId,
+    required DateTime observedAt,
+  }) {
+    return CompactionPostBoundaryStatus(
+      status: 'reserved',
+      requestId: requestId,
+      observedAt: observedAt,
+      targetOutcome: TargetOutcome.unknown,
+    );
+  }
+
+  CompactionPostBoundaryStatus copyWithConfirmed({
+    required String requestId,
+    required DateTime observedAt,
+    required int inputTokens,
+    int? cachedTokens,
+    required TargetOutcome targetOutcome,
+    required double postInputRatio,
+  }) {
+    return CompactionPostBoundaryStatus(
+      status: 'confirmed',
+      requestId: requestId,
+      observedAt: observedAt,
+      inputTokens: inputTokens,
+      cachedTokens: cachedTokens,
+      targetOutcome: targetOutcome,
+      postInputRatio: postInputRatio,
+    );
+  }
+
+  CompactionPostBoundaryStatus copyWithMissing({
+    required String requestId,
+    required DateTime observedAt,
+    required String missingReason,
+  }) {
+    return CompactionPostBoundaryStatus(
+      status: 'missing',
+      requestId: requestId,
+      observedAt: observedAt,
+      missingReason: missingReason,
+      targetOutcome: TargetOutcome.unknown,
+    );
+  }
+}
+
+/// Durable diagnostics record stored as JSON in session_compaction_operations (Task 106).
+@immutable
+class CompactionDurableDiagnostics {
+  final String? relativeDumpPath;
+  final List<CompactionSummarizationAttemptRecord> attempts;
+  final Map<String, int?> aggregateUsage;
+  final Map<String, dynamic>? decisionSnapshot;
+  final Map<String, dynamic>? lastPreCompactionCall;
+  final CompactionPostBoundaryStatus postBoundary;
+
+  const CompactionDurableDiagnostics({
+    this.relativeDumpPath,
+    this.attempts = const [],
+    this.aggregateUsage = const {},
+    this.decisionSnapshot,
+    this.lastPreCompactionCall,
+    this.postBoundary = const CompactionPostBoundaryStatus(status: 'pending'),
+  });
+
+  Map<String, dynamic> toJson() => {
+    'relative_dump_path': ?relativeDumpPath,
+    'attempts': attempts.map((a) => a.toJson()).toList(),
+    'aggregate_usage': aggregateUsage,
+    'decision_snapshot': ?decisionSnapshot,
+    'last_pre_compaction_call': ?lastPreCompactionCall,
+    'post_boundary': postBoundary.toJson(),
+  };
+
+  factory CompactionDurableDiagnostics.fromJson(Map<String, dynamic> json) {
+    return CompactionDurableDiagnostics(
+      relativeDumpPath: json['relative_dump_path'] as String?,
+      attempts: (json['attempts'] as List?)
+              ?.map((a) => CompactionSummarizationAttemptRecord.fromJson(
+                    Map<String, dynamic>.from(a as Map),
+                  ))
+              .toList() ??
+          const [],
+      aggregateUsage: (json['aggregate_usage'] as Map?)?.cast<String, int?>() ??
+          const {},
+      decisionSnapshot: json['decision_snapshot'] != null
+          ? Map<String, dynamic>.from(json['decision_snapshot'] as Map)
+          : null,
+      lastPreCompactionCall: json['last_pre_compaction_call'] != null
+          ? Map<String, dynamic>.from(json['last_pre_compaction_call'] as Map)
+          : null,
+      postBoundary: json['post_boundary'] != null
+          ? CompactionPostBoundaryStatus.fromJson(
+              Map<String, dynamic>.from(json['post_boundary'] as Map),
+            )
+          : const CompactionPostBoundaryStatus(status: 'pending'),
+    );
+  }
+
+  CompactionDurableDiagnostics copyWith({
+    String? relativeDumpPath,
+    List<CompactionSummarizationAttemptRecord>? attempts,
+    Map<String, int?>? aggregateUsage,
+    Map<String, dynamic>? decisionSnapshot,
+    Map<String, dynamic>? lastPreCompactionCall,
+    CompactionPostBoundaryStatus? postBoundary,
+  }) {
+    return CompactionDurableDiagnostics(
+      relativeDumpPath: relativeDumpPath ?? this.relativeDumpPath,
+      attempts: attempts ?? this.attempts,
+      aggregateUsage: aggregateUsage ?? this.aggregateUsage,
+      decisionSnapshot: decisionSnapshot ?? this.decisionSnapshot,
+      lastPreCompactionCall: lastPreCompactionCall ?? this.lastPreCompactionCall,
+      postBoundary: postBoundary ?? this.postBoundary,
+    );
+  }
+
+  CompactionDurableDiagnostics copyWithPostBoundary(
+    CompactionPostBoundaryStatus postBoundary,
+  ) {
+    return CompactionDurableDiagnostics(
+      relativeDumpPath: relativeDumpPath,
+      attempts: attempts,
+      aggregateUsage: aggregateUsage,
+      decisionSnapshot: decisionSnapshot,
+      lastPreCompactionCall: lastPreCompactionCall,
+      postBoundary: postBoundary,
+    );
+  }
+}

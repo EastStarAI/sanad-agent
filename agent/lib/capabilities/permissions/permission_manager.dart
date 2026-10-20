@@ -73,8 +73,9 @@ class PermissionManager {
     Map<String, dynamic>? permissionDisplayArguments,
   }) async {
     final sessionMetadata = context.metadata;
-    final workspace = sessionMetadata['workspace'] is Map<String, dynamic>
-        ? sessionMetadata['workspace'] as Map<String, dynamic>
+    final rawWorkspace = sessionMetadata['workspace'];
+    final workspace = rawWorkspace is Map
+        ? rawWorkspace.cast<String, dynamic>()
         : null;
     final workspacePath = workspace?['path']?.toString();
     final workspaceId = workspace?['id']?.toString();
@@ -86,6 +87,9 @@ class PermissionManager {
     WorkspacePolicy? workspacePolicy;
     if (workspacePath != null && workspacePath.isNotEmpty) {
       workspacePolicy = await _policyStore.readPolicy(workspacePath);
+      if (workspacePolicy.permissions.deny.contains(approvalKey)) {
+        throw Exception('Tool ${tool.name} is denied by workspace policy.');
+      }
       if (workspacePolicy.permissionMode ==
           WorkspacePermissionMode.fullAccess) {
         return;
@@ -94,10 +98,14 @@ class PermissionManager {
       if (workspacePolicy.permissions.allow.contains(approvalKey)) {
         return;
       }
+    }
 
-      if (workspacePolicy.permissions.deny.contains(approvalKey)) {
-        throw Exception('Tool ${tool.name} is denied by workspace policy.');
-      }
+    final isBypassed =
+        sessionMetadata['allow_all_tools'] == true ||
+        sessionMetadata['allow_all_tools'] == 'true' ||
+        sessionMetadata['permission_mode'] == 'full_access';
+    if (isBypassed) {
+      return;
     }
 
     if (_sessionAllow[context.sessionId]?.contains(approvalKey) ?? false) {

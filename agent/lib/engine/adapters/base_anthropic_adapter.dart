@@ -269,6 +269,7 @@ class BaseAnthropicAdapter
       profile.effectiveProtocol,
     );
     final resolvedModel = _resolveModel(modelOverride);
+    final stopwatch = Stopwatch()..start();
 
     final body = await _buildRequestBody(
       history,
@@ -283,6 +284,15 @@ class BaseAnthropicAdapter
         headers: _anthropicHeaders(options: options),
         body: body,
         requestId: options.requestId,
+        provider: profile.name,
+        model: resolvedModel,
+        baseUrl: _baseUrl,
+        protocol: profile.effectiveProtocol,
+        stream: false,
+        safeOptions: options.toSafeDumpOptions(
+          stream: false,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -303,6 +313,7 @@ class BaseAnthropicAdapter
         await LLMRequestDumper.recordError(
           error,
           requestId: options.requestId,
+          duration: stopwatch.elapsed,
         );
       }
       rethrow;
@@ -312,9 +323,19 @@ class BaseAnthropicAdapter
 
     _logger.info('LLM Response status: ${response.statusCode}');
     if (LLMRequestDumper.isEnabled) {
+      String? finishReason;
+      if (response.statusCode == 200) {
+        try {
+          final data = jsonDecode(response.body);
+          finishReason = data['stop_reason']?.toString();
+        } catch (_) {}
+      }
       await LLMRequestDumper.dumpResponse(
         response.body,
         requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: finishReason,
       );
     }
 
@@ -393,6 +414,7 @@ class BaseAnthropicAdapter
       profile.effectiveProtocol,
     );
     final resolvedModel = _resolveModel(modelOverride);
+    final stopwatch = Stopwatch()..start();
 
     final body = await _buildRequestBody(
       history,
@@ -408,6 +430,15 @@ class BaseAnthropicAdapter
         headers: _anthropicHeaders(options: options),
         body: body,
         requestId: options.requestId,
+        provider: profile.name,
+        model: resolvedModel,
+        baseUrl: _baseUrl,
+        protocol: profile.effectiveProtocol,
+        stream: true,
+        safeOptions: options.toSafeDumpOptions(
+          stream: true,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -427,6 +458,7 @@ class BaseAnthropicAdapter
         await LLMRequestDumper.recordError(
           error,
           requestId: options.requestId,
+          duration: stopwatch.elapsed,
         );
       }
       await transport.dispose();
@@ -444,7 +476,10 @@ class BaseAnthropicAdapter
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
             'error': err,
-          }, requestId: options.requestId);
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          );
         }
         throw LlmHttpException.fromStreamedResponse(
           response,
@@ -690,7 +725,11 @@ class BaseAnthropicAdapter
             },
             'finish_reason': effectiveFinishReason.name,
             'usage': ?finalUsage,
-          }, requestId: options.requestId);
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          finishReason: effectiveFinishReason.name,
+          );
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
@@ -722,7 +761,11 @@ class BaseAnthropicAdapter
                       .toList(),
               },
             'error': e.toString(),
-          }, requestId: options.requestId);
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          finishReason: 'incomplete',
+          );
         }
         rethrow;
       }

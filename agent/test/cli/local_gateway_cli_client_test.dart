@@ -576,6 +576,97 @@ void main() {
       },
     );
 
+    test('compactSession dispatches query and returns payload on success', () async {
+      final client = createClient();
+      await client.connect();
+
+      final compactFuture = client.compactSession(
+        sessionId: 'sess-compact-1',
+        resendOnTimeout: false,
+      );
+
+      expect(mockSocket.sentMessages.length, 1);
+      final sent =
+          jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+      expect(sent['command'], equals('session.compact'));
+      expect(sent['payload']['session_id'], equals('sess-compact-1'));
+
+      final reqId = sent['request_id'] as String;
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'event',
+          'event': 'session.compact_result',
+          'request_id': reqId,
+          'payload': {
+            'session_id': 'sess-compact-1',
+            'outcome': 'accepted',
+            'compaction_id': 'cmp-100',
+          },
+        }),
+      );
+
+      final result = await compactFuture;
+      expect(result['outcome'], equals('accepted'));
+      expect(result['compaction_id'], equals('cmp-100'));
+
+      await client.dispose();
+    });
+
+    test('compactSession with resendOnTimeout: false rethrows query_timeout and does not resend', () async {
+      final client = createClient();
+      await client.connect();
+
+      final compactFuture = client.compactSession(
+        sessionId: 'sess-compact-timeout',
+        timeout: const Duration(milliseconds: 20),
+        resendOnTimeout: false,
+      );
+
+      expect(mockSocket.sentMessages.length, 1);
+      final initialSent =
+          jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+      expect(initialSent['command'], equals('session.compact'));
+
+      await expectLater(
+        compactFuture,
+        throwsA(
+          isA<CliClientException>().having(
+            (e) => e.code,
+            'code',
+            equals('query_timeout'),
+          ),
+        ),
+      );
+
+      // Verify no second fire-and-forget message was dispatched
+      expect(mockSocket.sentMessages.length, 1);
+
+      await client.dispose();
+    });
+
+    test('compactSession with resendOnTimeout: true sends fire-and-forget fallback on query_timeout', () async {
+      final client = createClient();
+      await client.connect();
+
+      final compactFuture = client.compactSession(
+        sessionId: 'sess-compact-resend',
+        timeout: const Duration(milliseconds: 20),
+        resendOnTimeout: true,
+      );
+
+      final result = await compactFuture;
+      expect(result['outcome'], equals('dispatched'));
+
+      // Verify both query and fire-and-forget fallback were dispatched
+      expect(mockSocket.sentMessages.length, 2);
+      final secondSent =
+          jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
+      expect(secondSent['command'], equals('session.compact'));
+      expect(secondSent['payload']['session_id'], equals('sess-compact-resend'));
+
+      await client.dispose();
+    });
+
     test('query correlates responses by request_id', () async {
       final client = createClient();
       await client.connect();

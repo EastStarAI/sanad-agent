@@ -31,12 +31,76 @@ class LLMRequestDumper {
   /// Active compaction dump file paths keyed by canonical compaction key.
   static final Map<String, String> _activeCompactionDumps = {};
 
+  /// Completed compaction dump file paths (bounded FIFO) keyed by canonical compaction key.
+  static final Map<String, String> _completedCompactionDumps = {};
+  static const int _maxCompletedCompactionDumps = 50;
+
   /// Resets internal dump file tracking state for test isolation.
   static void resetForTesting() {
     lastDumpFilePath = null;
     environmentOverride = null;
     _activeNormalDumps.clear();
     _activeCompactionDumps.clear();
+    _completedCompactionDumps.clear();
+  }
+
+  /// Returns the relative dump path from full file path.
+  static String? toRelativeDumpPath(String? fullPath) {
+    if (fullPath == null || fullPath.isEmpty) return null;
+    return p.join('request_dumps', p.basename(fullPath));
+  }
+
+  /// Gets the relative dump path for an active or completed compaction key.
+  static String? getRelativeDumpPath({
+    String? compactionId,
+    String? requestId,
+  }) {
+    final key = compactionKey(compactionId: compactionId, requestId: requestId);
+    if (key.isEmpty) return null;
+    final cached = _activeCompactionDumps[key] ?? _completedCompactionDumps[key];
+    if (cached != null) {
+      return toRelativeDumpPath(cached);
+    }
+    final cleanComp = compactionId != null && compactionId.isNotEmpty
+        ? (compactionId.startsWith('compaction:')
+            ? compactionId.substring('compaction:'.length)
+            : compactionId)
+        : null;
+    if (requestId == null && cleanComp != null && cleanComp.isNotEmpty) {
+      for (final entry in _activeCompactionDumps.entries) {
+        if (entry.key.contains(cleanComp)) {
+          return toRelativeDumpPath(entry.value);
+        }
+      }
+      for (final entry in _completedCompactionDumps.entries) {
+        if (entry.key.contains(cleanComp)) {
+          return toRelativeDumpPath(entry.value);
+        }
+      }
+    }
+    try {
+      final boundary = SanadHomeBootstrap.state();
+      final dumpsDir = Directory(boundary.child('request_dumps'));
+      if (dumpsDir.existsSync()) {
+        final safeKey = key.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+        final prefix = 'compaction_dump_${safeKey}_';
+        final cleanCompSafe =
+            cleanComp?.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+        for (final entity in dumpsDir.listSync()) {
+          if (entity is File) {
+            final name = p.basename(entity.path);
+            if (name.startsWith(prefix) ||
+                (cleanCompSafe != null &&
+                    cleanCompSafe.isNotEmpty &&
+                    name.startsWith('compaction_dump_') &&
+                    name.contains(cleanCompSafe))) {
+              return toRelativeDumpPath(entity.path);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Whether an in-flight request dump is currently tracked in active maps.
@@ -74,7 +138,12 @@ class LLMRequestDumper {
         final cleanReq = requestId.startsWith('compaction:')
             ? requestId.substring('compaction:'.length)
             : requestId;
-        if (cleanReq == cleanComp || cleanReq.startsWith('$cleanComp:')) {
+        if (cleanReq == cleanComp ||
+            cleanReq.startsWith('$cleanComp:') ||
+            cleanReq.startsWith('auto:') ||
+            cleanReq.startsWith('overflow:') ||
+            cleanReq.startsWith('manual:') ||
+            cleanReq.contains(cleanComp)) {
           return 'compaction:$cleanReq';
         }
         return 'compaction:$cleanComp:$cleanReq';
@@ -91,6 +160,11 @@ class LLMRequestDumper {
   static String? extractCompactionId(String key) {
     if (!key.startsWith('compaction:')) return null;
     final parts = key.split(':');
+    if (parts.length >= 3 &&
+        (parts[1] == 'auto' || parts[1] == 'overflow' || parts[1] == 'manual') &&
+        parts[2].isNotEmpty) {
+      return parts[2];
+    }
     if (parts.length >= 2 && parts[1].isNotEmpty) {
       return parts[1];
     }
@@ -173,6 +247,9 @@ class LLMRequestDumper {
     Object? error,
     String? requestId,
     String? compactionId,
+    String? protocol,
+    bool? stream,
+    Map<String, dynamic>? safeOptions,
   }) async {
     if (!isEnabled) return null;
 
@@ -213,6 +290,9 @@ class LLMRequestDumper {
         'model': model,
         'provider': provider,
         'base_url': baseUrl,
+        'protocol': ?protocol,
+        'stream': ?stream,
+        'options': ?safeOptions,
         'api_key': _maskApiKey(apiKey),
         'metadata': customMetadata,
         'capture_state': 'initialized',
@@ -288,6 +368,12 @@ class LLMRequestDumper {
     Object? body,
     String? requestId,
     String? compactionId,
+    String? provider,
+    String? model,
+    String? baseUrl,
+    String? protocol,
+    bool? stream,
+    Map<String, dynamic>? safeOptions,
   }) async {
     if (!isEnabled) return null;
 
@@ -316,6 +402,12 @@ class LLMRequestDumper {
           'timestamp': now.toIso8601String(),
           'compaction_id': ?(compactionId ?? extractCompactionId(key)),
           'request_id': ?requestId,
+          'provider': ?provider,
+          'model': ?model,
+          'base_url': baseUrl ?? url.origin,
+          'protocol': ?protocol,
+          'stream': ?stream,
+          'options': ?safeOptions,
           'capture_state': 'request_sent',
           'request': {
             'method': 'POST',
@@ -365,6 +457,18 @@ class LLMRequestDumper {
       }
       data['request'] = _sanitizePayload(request);
       data['capture_state'] = 'request_sent';
+      if (provider != null) data['provider'] = provider;
+      if (model != null) data['model'] = model;
+      if (baseUrl != null) {
+        data['base_url'] = baseUrl;
+      } else if (data['base_url'] == null) {
+        data['base_url'] = url.origin;
+      }
+      if (protocol != null) data['protocol'] = protocol;
+      if (stream != null) data['stream'] = stream;
+      if (safeOptions != null && safeOptions.isNotEmpty) {
+        data['options'] = _sanitizePayload(safeOptions);
+      }
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
       await boundary.writeConfigText(relativePath, jsonString);
@@ -383,6 +487,8 @@ class LLMRequestDumper {
     Object error, {
     String? requestId,
     String? compactionId,
+    int? statusCode,
+    Duration? duration,
   }) async {
     if (!isEnabled) return null;
 
@@ -425,12 +531,18 @@ class LLMRequestDumper {
       final Map<String, dynamic> data = jsonDecode(content);
       data['error'] = _sanitizePayload(_serializeError(error));
       data['capture_state'] = 'error';
+      if (statusCode != null) data['status_code'] = statusCode;
+      if (duration != null) data['duration_ms'] = duration.inMilliseconds;
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
       await boundary.writeConfigText(relativePath, jsonString);
 
       if (isCompaction && key != null) {
         _activeCompactionDumps.remove(key);
+        _completedCompactionDumps[key] = targetPath;
+        if (_completedCompactionDumps.length > _maxCompletedCompactionDumps) {
+          _completedCompactionDumps.remove(_completedCompactionDumps.keys.first);
+        }
       } else if (requestId != null) {
         _activeNormalDumps.remove(requestId);
       }
@@ -455,6 +567,9 @@ class LLMRequestDumper {
     dynamic responsePayload, {
     String? requestId,
     String? compactionId,
+    int? statusCode,
+    Duration? duration,
+    String? finishReason,
   }) async {
     if (!isEnabled) return null;
 
@@ -519,7 +634,24 @@ class LLMRequestDumper {
       }
 
       data['response'] = _sanitizePayload(sanitizedResponse);
-      data['capture_state'] = 'completed';
+      if (statusCode != null) data['status_code'] = statusCode;
+      if (duration != null) data['duration_ms'] = duration.inMilliseconds;
+      if (finishReason != null) data['finish_reason'] = finishReason;
+
+      final isTruncated = finishReason == 'length' ||
+          finishReason == 'incomplete' ||
+          (responsePayload is Map && responsePayload['partial_message'] != null);
+      final isError = (statusCode != null && statusCode != 200) ||
+          (responsePayload is Map && responsePayload['error'] != null);
+
+      if (isError) {
+        data['capture_state'] = 'error';
+      } else if (isTruncated) {
+        data['capture_state'] = 'truncated';
+        data['truncated'] = true;
+      } else {
+        data['capture_state'] = 'completed';
+      }
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
       await boundary.writeConfigText(relativePath, jsonString);
@@ -539,6 +671,10 @@ class LLMRequestDumper {
       // Cleanup active mapping on completion to prevent unbounded accumulation
       if (isCompaction && key != null) {
         _activeCompactionDumps.remove(key);
+        _completedCompactionDumps[key] = targetPath;
+        if (_completedCompactionDumps.length > _maxCompletedCompactionDumps) {
+          _completedCompactionDumps.remove(_completedCompactionDumps.keys.first);
+        }
       } else if (requestId != null) {
         _activeNormalDumps.remove(requestId);
       }

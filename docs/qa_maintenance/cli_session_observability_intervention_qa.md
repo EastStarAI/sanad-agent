@@ -67,7 +67,20 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 ---
 
-## 6. Concurrency & Idempotency (First-Writer-Wins)
+## 6. Manual Session Compaction (`session compact`)
+
+| Scenario | CLI Command | Expected Runtime Behavior | Exit Code |
+|---|---|---|---|
+| Request compaction for session | `sanad session compact <session-id>` | Daemon receives `session.compact` query and emits admission message (`Compaction request accepted for session <session-id>`). Single dispatch, no retry on timeout. | 0 |
+| Request compaction in JSON mode | `sanad session compact <session-id> --json` | Outputs JSON object containing `session_id`, `outcome` (`accepted` / `dispatched` / `no_op` / `failed`), and correlated IDs (`compaction_id`, `request_id`). | 0 |
+| Compaction request rejected or busy | `sanad session compact <session-id> --json` | Returns JSON object with failure outcome (`failed`, `session_busy`, `compaction_in_progress`), `failure_reason`, and `exit_code: 1`. | 1 |
+| Query timeout or connection failure | `sanad session compact <session-id> --json` | Fails closed after single dispatch attempt without retrying; returns JSON error with `exit_code: 1`. | 1 |
+| Missing or malformed daemon response | `sanad session compact <session-id> --json` | Rejects malformed payload; returns `outcome: failed`, `failure_reason: missing_outcome`, and `exit_code: 1`. | 1 |
+| Compact session missing argument | `sanad session compact` | Error message `Error: Session ID is required.` and usage instructions. | 1 |
+
+---
+
+## 7. Concurrency & Idempotency (First-Writer-Wins)
 
 | Scenario | Initial State | Concurrency Trigger | Expected Result |
 |---|---|---|---|
@@ -77,7 +90,7 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 ---
 
-## 7. Automated One-Shot Intervention Readiness (In-Process Coverage)
+## 8. Automated One-Shot Intervention Readiness (In-Process Coverage)
 
 `agent/test/cli/run_delegation_test.dart` locks the Section 4 policy without a daemon. Turn events are emitted only after the run dispatched the turn (`await client.turnDispatched.future`), because the initial `running` artifact is recorded before the runner subscribes to the client's event streams. The readiness contract is owned by Section 8.1 of `docs/technical/sanad_cli_architecture.md`.
 

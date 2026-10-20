@@ -72,3 +72,29 @@ enum CompactionMeasurementKind {
 
   String get wireValue => name;
 }
+
+/// Target outcome for complete-request compaction budget (Task 106).
+enum TargetOutcome {
+  met,
+  notMet,
+  unknown;
+
+  String get wireValue {
+    switch (this) {
+      case TargetOutcome.met:
+        return 'met';
+      case TargetOutcome.notMet:
+        return 'not_met';
+      case TargetOutcome.unknown:
+        return 'unknown';
+    }
+  }
+
+  static TargetOutcome fromWire(String? value) {
+    if (value == null) return TargetOutcome.unknown;
+    for (final v in values) {
+      if (v.wireValue == value || v.name == value) return v;
+    }
+    return TargetOutcome.unknown;
+  }
+}

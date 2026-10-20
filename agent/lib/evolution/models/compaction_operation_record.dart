@@ -24,6 +24,8 @@ class CompactionOperationRecord {
   final CompactionInternalSummary? internalSummary;
   final CompactionFailureReason? failureReason;
   final String? failureDetailJson;
+  final CompactionDurableDiagnostics? diagnostics;
+  final String? diagnosticsJson;
   final DateTime startedAt;
   final DateTime? completedAt;
 
@@ -42,6 +44,8 @@ class CompactionOperationRecord {
     this.internalSummary,
     this.failureReason,
     this.failureDetailJson,
+    this.diagnostics,
+    this.diagnosticsJson,
     required this.startedAt,
     this.completedAt,
   }) : assert(compactionId.isNotEmpty),
@@ -110,6 +114,10 @@ class CompactionOperationRecord {
       routeSignature: candidate.routeSignature,
       metrics: candidate.metrics,
       internalSummary: candidate.internalSummary,
+      diagnostics: candidate.diagnostics,
+      diagnosticsJson: candidate.diagnostics != null
+          ? jsonEncode(candidate.diagnostics!.toJson())
+          : null,
       startedAt: startedAt,
       completedAt: completedAt,
     );
@@ -134,6 +142,8 @@ class CompactionOperationRecord {
       routeSignature: routeSignature,
       failureReason: failureReason,
       failureDetailJson: failureDetailJson,
+      diagnostics: diagnostics,
+      diagnosticsJson: diagnosticsJson,
       startedAt: startedAt,
       completedAt: completedAt,
     );

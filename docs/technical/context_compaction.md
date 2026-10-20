@@ -716,3 +716,48 @@ Compaction requests are strictly decoupled from normal turn exchanges:
 - Compaction operations **never** read, write, or overwrite the static `lastDumpFilePath`.
 - Normal-turn dumps continue using `lastDumpFilePath` and `_activeNormalDumps` without risk of concurrent compaction preflight or summarizer calls overwriting, stealing, or appending to normal turn dump files.
 - Active in-flight mappings are tracked only during active execution and cleared upon completion, error, or stream cancellation, preserving hermetic state without speculative memory caches.
+
+### 10.4 Route Metadata, Safe Options, and Durable Dump References
+
+For compaction exchanges, the dump captures the exact route and safe options used for the wire call:
+- **Route Metadata:** `provider`, `model`, `base_url`, `protocol`, and `stream` are recorded at initial dump and confirmed upon wire dispatch.
+- **Safe Options:** Options are sanitized via `toSafeDumpOptions()`, preserving `thinking_mode`, `thinking_directive`, `timeout_ms`, and `max_output_tokens` without exposing credentials or internal state.
+- **Timing and Status:** Dispatches and responses record `status_code`, `duration_ms`, and provider `finish_reason`.
+- **Capture Completeness:** Dumper tracks `capture_state` through `initialized` → `request_sent` → `completed` (or `error`). Responses marked incomplete or truncated due to length limits explicitly set `capture_state: 'truncated'`.
+- **Durable Link:** Completed compaction dumps cache their repository-relative path (e.g., `request_dumps/compaction_dump_<key>_<timestamp>.json`), which is persisted directly into the compaction operation record via `diagnostics_json` (`relative_dump_path`). Captures are discoverable by operation and request ID without reading payload bodies.
+
+## 11. Minimal Durable Compaction Diagnostics & Post-Boundary Binding
+
+Task 106 Stage 1 Slice 2 introduces minimal durable diagnostics on `session_compaction_operations`, isolating single-request context occupancy from aggregate execution cost and binding provider-confirmed post-compaction usage to the exact first request using the newly activated boundary.
+
+### 11.1 Additive Persistence (`diagnostics_json`)
+
+Compaction diagnostics are persisted in SQLite on `session_compaction_operations.diagnostics_json` as additive JSON (`CompactionDurableDiagnostics`). This preserves schema backward compatibility without requiring separate event stores or schema migrations. Diagnostics survive daemon restart and database re-open.
+
+The durable record contains:
+- `relative_dump_path`: safe relative path to the associated compaction LLM request dump.
+- `attempts`: ordered per-attempt summarization ledger entries.
+- `aggregate_usage`: total token consumption across all summarization attempts.
+- `post_boundary`: exact post-boundary confirmation status and usage receipt.
+
+### 11.2 Per-Attempt Summarization Ledger
+
+When summarization executes (including single-shot, recovery chunk/reduce, or corrective retry passes), each attempt is recorded in the ledger as a `CompactionSummarizationAttemptRecord`:
+- **Attempt Identification:** `pass_kind` (`full`, `repair`, `chunk`, `reduce`) and distinct `request_id` formatted as `compaction:[<trigger>:]<compactionId>:<passKind>:<attempt>` (e.g. `compaction:overflow:<compactionId>:full:0`).
+- **Timing:** `duration_ms` for that specific attempt.
+- **Provider Usage:** `input_tokens`, `cached_input_tokens`, `cache_write_tokens`, `output_tokens`, and `reasoning_tokens` reported for that call. Missing or unsupported usage stays `null`.
+- **Outcome and Failure Cause:** `outcome` (`success`, `validation_failed`, `invalid_response`, `overflow`, `error`) and typed `failure_reason`.
+
+**Preservation of Legacy Aggregate Semantics & Granular Per-Attempt Attribution:**
+- `CompactionMetrics.summarizationInputTokens` (and `session_compaction_operations.summarization_input_tokens`) preserves legacy aggregate semantics, recording the total input tokens consumed across all summarization attempts (aggregate processing cost).
+- `diagnostics.aggregateUsage` captures the aggregate breakdown (`input_tokens`, `output_tokens`, `cached_input_tokens`, etc.), while `diagnostics.attempts` provides granular per-attempt attribution and outcome history.
+
+### 11.3 Exact Post-Boundary Binding
+
+Post-compaction usage reconciliation binds immutably to the exact first request and step dispatched against the newly activated compaction boundary:
+- **Dispatch Reservation:** `AgentRunner` records the active compaction boundary (`_activeProjectionBoundary`) during prompt projection assembly (`ModelProjectionBuilder.buildForSession`). At dispatch time, before calling the model adapter, `AgentRunner` invokes `CompactionCoordinator.reservePostBoundaryDispatch` using `$turnRequestId:$currentModelStepId` and the active staged request's `routeSignature`. Unrelated replies across restart, retries, subsequent model steps in a multi-step turn, route changes, or repeated boundaries cannot steal or replace this reservation. Route applicability is never invented from the boundary's own signature when the actual request route is unavailable.
+- **Completion-Boundary Missing Usage Finalization:** Intermediate streaming chunks and finish-reason chunks with null usage do not trigger missing status, preserving OpenAI-compatible streams that emit a finish chunk before a trailing usage chunk. Arriving usage (including trailing stream chunks) reconciles the boundary. If the provider call or stream terminates without reporting token usage, missing usage is finalized at the runner completion boundary (`no_provider_usage` or `missing_input_tokens`).
+- **Receipt Immutability:** Once post-boundary usage is confirmed or marked missing, subsequent calls with grown history or alternate steps are rejected (`null`) and cannot replace or overwrite the first call's status.
+- **Route Mismatch Rejection:** If the dispatched post-boundary request is on a different route than the compaction operation's `routeSignature`, reconciliation is rejected (`null`) and the status remains unchanged.
+- **Truthful Target Outcome (Stage 1):** In Stage 1, `targetOutcome` evaluates explicitly to `TargetOutcome.unknown` rather than applying unauthorized diagnostic arithmetic (such as blanket 13% ceilings or generalized `+0.03` tolerance formulas). The observed post-boundary occupancy ratio is truthfully recorded as `post_input_ratio = inputTokens / W`, and `decisionSnapshot` captures the configured `target_ratio`, `target_scope: 'usable_budget'`, and context capacity. Target outcome comparison policy and denominator alignment are deferred to Stage 3A.
+- **Legacy Provenance & Unreserved Fail-Closed Protection:** Operations created prior to diagnostic instrumentation (`diagnostics_json == NULL`) fail closed for dispatch reservation, missing usage recording, and post-upgrade reconciliation attempts; subsequent post-upgrade calls are never synthesized or misattributed as the first post-boundary call. Historical confirmed scalars (e.g. 19,182 tokens) remain immutable without synthesizing diagnostics. Unsolicited replies arriving without prior matching dispatch reservation fail closed (`null`) and leave the post-boundary status in its existing pending state.

@@ -371,6 +371,30 @@
   "clientCliAllowOnce": "Yes, allow this time",
   "clientCliAllowSession": "Yes, allow for this session",
   "clientCliDeny": "No, deny",
+  "workspacePermissionModeTooltip": "Select Permission Mode",
+  "@workspacePermissionModeTooltip": {
+    "description": "Tooltip for selecting workspace permission mode"
+  },
+  "workspacePermissionModeTooltipWithRoot": "Permission: {permissionMode}\nExecution Root: {executionRoot}",
+  "@workspacePermissionModeTooltipWithRoot": {
+    "description": "Tooltip showing permission mode and execution root path",
+    "placeholders": {
+      "permissionMode": {
+        "type": "String"
+      },
+      "executionRoot": {
+        "type": "String"
+      }
+    }
+  },
+  "workspacePermissionModeDefault": "Default",
+  "@workspacePermissionModeDefault": {
+    "description": "Label for default workspace permission mode"
+  },
+  "workspacePermissionModeFullAccess": "Full Access",
+  "@workspacePermissionModeFullAccess": {
+    "description": "Label for full access workspace permission mode"
+  },
   "thinkingModeUnavailableLabel": "Unavailable",
   "thinkingModeUnavailableTooltip": "Thinking mode selection is not available for this device.",
   "thinkingModeLoadingLabel": "Loading...",

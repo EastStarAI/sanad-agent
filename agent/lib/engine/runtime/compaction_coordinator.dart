@@ -106,6 +106,79 @@ class CompactionCoordinator {
     return true;
   }
 
+  /// Binds the confirmed post-boundary usage to the exact compaction boundary
+  /// and turn request that used it, enforcing route matching and first-call immutability.
+  bool reconcilePostBoundaryUsage({
+    required String compactionId,
+    required String requestId,
+    required DateTime observedAt,
+    required int inputTokens,
+    int? cachedTokens,
+    required RouteSignature routeSignature,
+  }) {
+    final record = _boundaries.reconcilePostBoundaryUsage(
+      compactionId: compactionId,
+      requestId: requestId,
+      observedAt: observedAt,
+      inputTokens: inputTokens,
+      cachedTokens: cachedTokens,
+      routeSignature: routeSignature,
+    );
+    if (record == null ||
+        record.metrics == null ||
+        record.completedAt == null) {
+      return false;
+    }
+    _emit(
+      CompactionLifecycleEvent(
+        compactionId: record.compactionId,
+        sessionId: record.sessionId,
+        trigger: record.trigger,
+        status: CompactionStatus.completed,
+        metrics: record.metrics,
+        providerInstanceId: record.routeSignature.providerInstanceId,
+        modelId: record.routeSignature.modelId,
+        startedAt: record.startedAt,
+        completedAt: record.completedAt,
+      ),
+    );
+    return true;
+  }
+
+  /// Explicitly records that provider usage was missing on the post-boundary call.
+  /// Immutably reserves the exact first dispatched request/step for post-boundary reconciliation.
+  bool reservePostBoundaryDispatch({
+    required String compactionId,
+    required String requestId,
+    required RouteSignature routeSignature,
+    required DateTime dispatchedAt,
+  }) {
+    final record = _boundaries.reservePostBoundaryDispatch(
+      compactionId: compactionId,
+      requestId: requestId,
+      routeSignature: routeSignature,
+      dispatchedAt: dispatchedAt,
+    );
+    return record != null;
+  }
+
+  bool recordPostBoundaryMissingUsage({
+    required String compactionId,
+    required String requestId,
+    required DateTime observedAt,
+    required String missingReason,
+    required RouteSignature routeSignature,
+  }) {
+    final record = _boundaries.recordPostBoundaryMissingUsage(
+      compactionId: compactionId,
+      requestId: requestId,
+      observedAt: observedAt,
+      missingReason: missingReason,
+      routeSignature: routeSignature,
+    );
+    return record != null;
+  }
+
   bool reconcileLatestProviderUsage({
     required String sessionId,
     required RouteSignature routeSignature,
@@ -116,9 +189,19 @@ class CompactionCoordinator {
       if (record.routeSignature == routeSignature &&
           metrics != null &&
           metrics.providerConfirmedRequestTokensAfter == null) {
-        return reconcileProviderUsage(
+        final now = DateTime.now().toUtc();
+        _boundaries.reservePostBoundaryDispatch(
           compactionId: record.compactionId,
+          requestId: 'reconcile_latest',
+          routeSignature: routeSignature,
+          dispatchedAt: now,
+        );
+        return reconcilePostBoundaryUsage(
+          compactionId: record.compactionId,
+          requestId: 'reconcile_latest',
+          observedAt: now,
           inputTokens: inputTokens,
+          routeSignature: routeSignature,
         );
       }
     }
@@ -154,6 +237,7 @@ class CompactionCoordinator {
       previousSourceRange: request.previousSourceRange,
       targetRequestTokens: request.targetRequestTokens,
       thresholdRatio: request.thresholdRatio,
+      targetRatio: request.targetRatio,
     );
 
     final selection = _engine.prepareSelection(engineRequest, force: force);
@@ -219,6 +303,7 @@ class CompactionCoordinator {
         failureStage: error.stage ?? diagnostics.stage,
         failureCause: error.cause ?? diagnostics.cause,
         startedAt: startedAt,
+        diagnostics: error.diagnostics,
       );
     } catch (error) {
       final diagnostics = CompactionDiagnostics.classify(error);
@@ -347,6 +432,7 @@ class CompactionCoordinator {
     String? failureStage,
     String? failureCause,
     Map<String, dynamic>? failureDetail,
+    CompactionDurableDiagnostics? diagnostics,
   }) {
     final completedAt = DateTime.now().toUtc();
     final detail = <String, dynamic>{
@@ -359,6 +445,7 @@ class CompactionCoordinator {
       failureReason: failureReason,
       completedAt: completedAt,
       failureDetail: detail.isNotEmpty ? detail : null,
+      diagnostics: diagnostics,
     );
     _emit(
       CompactionLifecycleEvent(
@@ -400,6 +487,7 @@ extension on CompactionCandidate {
       continuityResult: continuityResult,
       metrics: metrics,
       routeSignature: routeSignature,
+      diagnostics: diagnostics,
     );
   }
 }

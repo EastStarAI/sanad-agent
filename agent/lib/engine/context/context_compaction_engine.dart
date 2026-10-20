@@ -6,6 +6,7 @@ import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/engine/llm_request_dumper.dart';
 
 import 'compaction_continuity_validator.dart';
 import 'compaction_summary_prompt.dart';
@@ -39,6 +40,7 @@ class CompactionEngineRequest {
   final CompactionMessageRange? previousSourceRange;
   final int targetRequestTokens;
   final double thresholdRatio;
+  final double? targetRatio;
 
   const CompactionEngineRequest({
     required this.compactionId,
@@ -62,6 +64,7 @@ class CompactionEngineRequest {
     this.previousSourceRange,
     required this.targetRequestTokens,
     this.thresholdRatio = 0.90,
+    this.targetRatio,
   });
 }
 
@@ -151,7 +154,46 @@ class ContextCompactionEngine {
       );
     }
     final anchors = _continuityValidator.extractAnchors(prunedSource);
-    final generated = await _generateSummary(request, prunedSource, anchors);
+    final generated =
+        await _generateSummary(request, prunedSource, anchors, pressure);
+    final candidateDiagnostics = CompactionDurableDiagnostics(
+      relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+        compactionId: request.compactionId,
+        requestId: generated.ledger.isNotEmpty
+            ? generated.ledger.last.requestId
+            : null,
+      ),
+      attempts: generated.ledger,
+      aggregateUsage: {
+        if (generated.aggregateUsage.inputTokens != null)
+          'input_tokens': generated.aggregateUsage.inputTokens,
+        if (generated.aggregateUsage.cachedInputTokens != null)
+          'cached_input_tokens': generated.aggregateUsage.cachedInputTokens,
+        if (generated.aggregateUsage.cacheWriteTokens != null)
+          'cache_write_tokens': generated.aggregateUsage.cacheWriteTokens,
+        if (generated.aggregateUsage.outputTokens != null)
+          'output_tokens': generated.aggregateUsage.outputTokens,
+        if (generated.aggregateUsage.reasoningTokens != null)
+          'reasoning_tokens': generated.aggregateUsage.reasoningTokens,
+        if (generated.duration != null)
+          'duration_ms': generated.duration!.inMilliseconds,
+      },
+      decisionSnapshot: {
+        'context_window': request.contextWindowTokens,
+        'effective_input_budget': pressure.effectiveInputBudget,
+        'auto_threshold_tokens': pressure.thresholdTokens,
+        'target_request_tokens': request.targetRequestTokens,
+        if (request.targetRatio != null) 'target_ratio': request.targetRatio,
+        'target_scope': 'usable_budget',
+        if (request.thresholdRatio > 0)
+          'threshold_ratio': request.thresholdRatio,
+      },
+      postBoundary: const CompactionPostBoundaryStatus(
+        status: 'pending',
+        targetOutcome: TargetOutcome.unknown,
+      ),
+    );
+
     var summary = generated.summary;
     var continuity = generated.continuity;
     if (!continuity.passed) {
@@ -164,6 +206,7 @@ class ContextCompactionEngine {
           repairAttempts: continuity.repairAttempts,
           noProgress: true,
         ),
+        diagnostics: candidateDiagnostics,
       );
     }
 
@@ -204,6 +247,7 @@ class ContextCompactionEngine {
           CompactionFailureReason.summarizationFailed,
           stage: CompactionFailureStage.pruning,
           cause: CompactionFailureCause.pruningFailed,
+          diagnostics: candidateDiagnostics,
         );
       }
       projectedMessages = <Message>[
@@ -234,6 +278,7 @@ class ContextCompactionEngine {
         stage: CompactionFailureStage.pruning,
         cause: CompactionFailureCause.projectionStillOverBudget,
         estimatedAfterTokens: afterTokens,
+        diagnostics: candidateDiagnostics,
       );
     }
 
@@ -250,6 +295,7 @@ class ContextCompactionEngine {
         stage: CompactionFailureStage.pruning,
         cause: CompactionFailureCause.projectionStillOverBudget,
         estimatedAfterTokens: afterTokens,
+        diagnostics: candidateDiagnostics,
       );
     }
 
@@ -270,15 +316,19 @@ class ContextCompactionEngine {
         estimatedRequestTokensAfter: afterTokens,
         beforeMeasurementKind: pressure.measurementKind,
         retainedTailTokens: retainedTailTokens,
-        summarizationInputTokens: generated.usage.inputTokens,
-        summarizationCachedInputTokens: generated.usage.cachedInputTokens,
-        summarizationCacheWriteTokens: generated.usage.cacheWriteTokens,
-        summarizationOutputTokens: generated.usage.outputTokens,
-        summarizationReasoningTokens: generated.usage.reasoningTokens,
+        summarizationInputTokens: generated.aggregateUsage.inputTokens,
+        summarizationCachedInputTokens:
+            generated.aggregateUsage.cachedInputTokens,
+        summarizationCacheWriteTokens:
+            generated.aggregateUsage.cacheWriteTokens,
+        summarizationOutputTokens: generated.aggregateUsage.outputTokens,
+        summarizationReasoningTokens:
+            generated.aggregateUsage.reasoningTokens,
         summarizationAttempts: generated.attempts,
         duration: generated.duration,
       ),
       routeSignature: request.routeSignature,
+      diagnostics: candidateDiagnostics,
     );
   }
 
@@ -286,7 +336,43 @@ class ContextCompactionEngine {
     CompactionEngineRequest request,
     List<IndexedConversationMessage> prunedSource,
     List<CompactionContinuityAnchor> anchors,
+    RequestPressureSnapshot pressure,
   ) async {
+    final ledger = <CompactionSummarizationAttemptRecord>[];
+    CompactionDurableDiagnostics failureDiagnostics({
+      _CompactionUsage? usage,
+    }) {
+      final effUsage = usage ?? const _CompactionUsage();
+      return CompactionDurableDiagnostics(
+        relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+          compactionId: request.compactionId,
+          requestId: ledger.isNotEmpty ? ledger.last.requestId : null,
+        ),
+        attempts: List.unmodifiable(ledger),
+        aggregateUsage: {
+          if (effUsage.inputTokens != null) 'input_tokens': effUsage.inputTokens,
+          if (effUsage.cachedInputTokens != null)
+            'cached_input_tokens': effUsage.cachedInputTokens,
+          if (effUsage.cacheWriteTokens != null)
+            'cache_write_tokens': effUsage.cacheWriteTokens,
+          if (effUsage.outputTokens != null)
+            'output_tokens': effUsage.outputTokens,
+          if (effUsage.reasoningTokens != null)
+            'reasoning_tokens': effUsage.reasoningTokens,
+        },
+        decisionSnapshot: {
+          'context_window': request.contextWindowTokens,
+          'effective_input_budget': pressure.effectiveInputBudget,
+          'auto_threshold_tokens': pressure.thresholdTokens,
+          'target_request_tokens': request.targetRequestTokens,
+          if (request.targetRatio != null) 'target_ratio': request.targetRatio,
+          'target_scope': 'usable_budget',
+          if (request.thresholdRatio > 0)
+            'threshold_ratio': request.thresholdRatio,
+        },
+      );
+    }
+
     final providerSummarizer = _summarizer;
     if (providerSummarizer is ProviderProjectionCompactionSummarizer) {
       final provider =
@@ -295,15 +381,26 @@ class ContextCompactionEngine {
       if (base == null || base.isEmpty) {
         throw CompactionEngineFailure(
           CompactionFailureReason.summarizationFailed,
+          diagnostics: failureDiagnostics(),
         );
       }
       final immutableBase = List<Message>.unmodifiable(base);
       var instruction = CompactionSummaryPrompt.buildJsonInstruction();
       var attempts = 0;
       var totalDuration = Duration.zero;
-      _CompactionUsage usage = const _CompactionUsage();
+      _CompactionUsage aggregateUsage = const _CompactionUsage();
+      _CompactionUsage acceptedUsage = const _CompactionUsage();
       CompactionContinuityResult? lastContinuity;
       for (; attempts < 2; attempts++) {
+        final passKind = attempts == 0 ? 'full' : 'repair';
+        final attemptRequestId = _buildAttemptRequestId(
+          request: request,
+          passKind: passKind,
+          attempt: attempts,
+        );
+        final attemptOptions = request.providerRequestOptions.copyWith(
+          requestId: attemptRequestId,
+        );
         CompactionProviderResult result;
         try {
           result = await provider.summarizeProvider(
@@ -311,33 +408,77 @@ class ContextCompactionEngine {
               baseProjection: immutableBase,
               tools: request.providerTools,
               routeSignature: request.routeSignature,
-              options: request.providerRequestOptions,
+              options: attemptOptions,
               instruction: instruction,
             ),
           );
         } on CompactionRouteChanged {
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: passKind,
+            requestId: attemptRequestId,
+            duration: Duration.zero,
+            outcome: 'error',
+            failureReason: 'route_changed',
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
           throw CompactionEngineFailure(
             CompactionFailureReason.sourceRevisionStale,
             stage: CompactionFailureStage.persistence,
             cause: CompactionFailureCause.sourceRevisionStale,
+            diagnostics: failureDiagnostics(usage: aggregateUsage),
           );
         } on CompactionProviderOverflow {
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: passKind,
+            requestId: attemptRequestId,
+            duration: Duration.zero,
+            outcome: 'overflow',
+            failureReason: 'context_overflow',
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
           if (attempts == 0) {
             return _generateRecoverySummary(
               request: request,
               provider: provider,
               source: prunedSource,
               anchors: anchors,
+              initialLedger: ledger,
+              pressure: pressure,
             );
           }
           throw CompactionEngineFailure(
             CompactionFailureReason.summarizationFailed,
             stage: CompactionFailureStage.provider,
             cause: CompactionFailureCause.overflow,
+            diagnostics: failureDiagnostics(usage: aggregateUsage),
           );
         } on CompactionInvalidProviderResponse catch (error) {
-          totalDuration += error.duration ?? Duration.zero;
-          usage = usage + _CompactionUsage.fromProvider(error.usage);
+          final errorUsage = _CompactionUsage.fromProvider(error.usage);
+          aggregateUsage = aggregateUsage + errorUsage;
+          final attemptDuration = error.duration ?? Duration.zero;
+          totalDuration += attemptDuration;
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: passKind,
+            requestId: attemptRequestId,
+            duration: attemptDuration,
+            inputTokens: errorUsage.inputTokens,
+            cachedInputTokens: errorUsage.cachedInputTokens,
+            cacheWriteTokens: errorUsage.cacheWriteTokens,
+            outputTokens: errorUsage.outputTokens,
+            reasoningTokens: errorUsage.reasoningTokens,
+            outcome: 'invalid_response',
+            failureReason: error.reason,
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
           if (attempts == 0) {
             instruction = CompactionSummaryPrompt.buildJsonInstruction(
               missingFields: ['valid JSON only; ${error.reason}'],
@@ -348,10 +489,14 @@ class ContextCompactionEngine {
             CompactionFailureReason.summarizationFailed,
             stage: CompactionFailureStage.provider,
             cause: CompactionFailureCause.invalidResponse,
+            diagnostics: failureDiagnostics(usage: aggregateUsage),
           );
         }
+
+        final passUsage = _CompactionUsage.fromProvider(result.usage);
+        aggregateUsage = aggregateUsage + passUsage;
         totalDuration += result.duration;
-        usage = usage + _CompactionUsage.fromProvider(result.usage);
+
         try {
           final parsed = _continuityValidator.redactSummary(
             CompactionSummaryParser.parse(result.content),
@@ -363,18 +508,68 @@ class ContextCompactionEngine {
           );
           lastContinuity = continuity;
           if (continuity.passed) {
+            acceptedUsage = passUsage;
+            ledger.add(CompactionSummarizationAttemptRecord(
+              passKind: passKind,
+              requestId: attemptRequestId,
+              duration: result.duration,
+              inputTokens: passUsage.inputTokens,
+              cachedInputTokens: passUsage.cachedInputTokens,
+              cacheWriteTokens: passUsage.cacheWriteTokens,
+              outputTokens: passUsage.outputTokens,
+              reasoningTokens: passUsage.reasoningTokens,
+              outcome: 'success',
+              relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+                compactionId: request.compactionId,
+                requestId: attemptRequestId,
+              ),
+            ));
             return _GeneratedSummary(
               summary: parsed,
               continuity: continuity,
-              usage: usage,
+              acceptedUsage: acceptedUsage,
+              aggregateUsage: aggregateUsage,
               attempts: attempts + 1,
               duration: totalDuration,
+              ledger: ledger,
             );
           }
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: passKind,
+            requestId: attemptRequestId,
+            duration: result.duration,
+            inputTokens: passUsage.inputTokens,
+            cachedInputTokens: passUsage.cachedInputTokens,
+            cacheWriteTokens: passUsage.cacheWriteTokens,
+            outputTokens: passUsage.outputTokens,
+            reasoningTokens: passUsage.reasoningTokens,
+            outcome: 'validation_failed',
+            failureReason: continuity.missingAnchors.join(', '),
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
           instruction = CompactionSummaryPrompt.buildJsonInstruction(
             missingFields: continuity.missingAnchors,
           );
-        } on FormatException {
+        } on FormatException catch (e) {
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: passKind,
+            requestId: attemptRequestId,
+            duration: result.duration,
+            inputTokens: passUsage.inputTokens,
+            cachedInputTokens: passUsage.cachedInputTokens,
+            cacheWriteTokens: passUsage.cacheWriteTokens,
+            outputTokens: passUsage.outputTokens,
+            reasoningTokens: passUsage.reasoningTokens,
+            outcome: 'invalid_response',
+            failureReason: 'format_error: $e',
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
           instruction = CompactionSummaryPrompt.buildJsonInstruction(
             missingFields: CompactionInternalSummary.requiredSectionKeys,
           );
@@ -389,6 +584,7 @@ class ContextCompactionEngine {
           repairAttempts: 1,
           noProgress: true,
         ),
+        diagnostics: failureDiagnostics(usage: aggregateUsage),
       );
     }
 
@@ -407,6 +603,22 @@ class ContextCompactionEngine {
       summary: summary,
       anchors: anchors,
     );
+    final fullRequestId = _buildAttemptRequestId(
+      request: request,
+      passKind: 'full',
+      attempt: 0,
+    );
+    ledger.add(CompactionSummarizationAttemptRecord(
+      passKind: 'full',
+      requestId: fullRequestId,
+      duration: Duration.zero,
+      outcome: continuity.passed ? 'success' : 'validation_failed',
+      failureReason: continuity.passed ? null : continuity.missingAnchors.join(', '),
+      relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+        compactionId: request.compactionId,
+        requestId: fullRequestId,
+      ),
+    ));
     if (!continuity.passed) {
       final repaired = _continuityValidator.redactSummary(
         CompactionSummaryParser.parseLegacy(
@@ -421,14 +633,32 @@ class ContextCompactionEngine {
         anchors: anchors,
         repairAttempts: 1,
       );
+      final repairRequestId = _buildAttemptRequestId(
+        request: request,
+        passKind: 'repair',
+        attempt: 1,
+      );
+      ledger.add(CompactionSummarizationAttemptRecord(
+        passKind: 'repair',
+        requestId: repairRequestId,
+        duration: Duration.zero,
+        outcome: continuity.passed ? 'success' : 'validation_failed',
+        failureReason: continuity.passed ? null : continuity.missingAnchors.join(', '),
+        relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+          compactionId: request.compactionId,
+          requestId: repairRequestId,
+        ),
+      ));
       if (continuity.passed) summary = repaired;
     }
     return _GeneratedSummary(
       summary: summary,
       continuity: continuity,
-      usage: const _CompactionUsage(),
+      acceptedUsage: const _CompactionUsage(),
+      aggregateUsage: const _CompactionUsage(),
       attempts: continuity.repairAttempts + 1,
       duration: null,
+      ledger: ledger,
     );
   }
 
@@ -437,21 +667,59 @@ class ContextCompactionEngine {
     required ProviderProjectionCompactionSummarizer provider,
     required List<IndexedConversationMessage> source,
     required List<CompactionContinuityAnchor> anchors,
+    List<CompactionSummarizationAttemptRecord> initialLedger = const [],
+    required RequestPressureSnapshot pressure,
   }) async {
+    final ledger = List<CompactionSummarizationAttemptRecord>.from(initialLedger);
+    CompactionDurableDiagnostics failureDiagnostics({
+      _CompactionUsage? usage,
+    }) {
+      final effUsage = usage ?? const _CompactionUsage();
+      return CompactionDurableDiagnostics(
+        relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+          compactionId: request.compactionId,
+        ),
+        attempts: List.unmodifiable(ledger),
+        aggregateUsage: {
+          if (effUsage.inputTokens != null) 'input_tokens': effUsage.inputTokens,
+          if (effUsage.cachedInputTokens != null)
+            'cached_input_tokens': effUsage.cachedInputTokens,
+          if (effUsage.cacheWriteTokens != null)
+            'cache_write_tokens': effUsage.cacheWriteTokens,
+          if (effUsage.outputTokens != null)
+            'output_tokens': effUsage.outputTokens,
+          if (effUsage.reasoningTokens != null)
+            'reasoning_tokens': effUsage.reasoningTokens,
+        },
+        decisionSnapshot: {
+          'context_window': request.contextWindowTokens,
+          'effective_input_budget': pressure.effectiveInputBudget,
+          'auto_threshold_tokens': pressure.thresholdTokens,
+          'target_request_tokens': request.targetRequestTokens,
+          if (request.targetRatio != null) 'target_ratio': request.targetRatio,
+          'target_scope': 'usable_budget',
+          if (request.thresholdRatio > 0)
+            'threshold_ratio': request.thresholdRatio,
+        },
+      );
+    }
+
     final chunks = _boundedSafeChunks(source, maximumChunks: 4);
     if (chunks.isEmpty) {
       throw CompactionEngineFailure(
         CompactionFailureReason.summarizationFailed,
+        diagnostics: failureDiagnostics(),
       );
     }
     final stableSystem = request.providerProjection!
         .where((message) => message.role == MessageRole.system)
         .toList(growable: false);
     final partials = <CompactionInternalSummary>[];
-    var usage = const _CompactionUsage();
+    var aggregateUsage = const _CompactionUsage();
     var duration = Duration.zero;
     var attempts = 0;
-    for (final chunk in chunks) {
+    for (var i = 0; i < chunks.length; i++) {
+      final chunk = chunks[i];
       final generated = await _recoveryPass(
         request: request,
         provider: provider,
@@ -462,9 +730,13 @@ class ContextCompactionEngine {
         instruction: CompactionSummaryPrompt.buildJsonInstruction(
           partial: true,
         ),
+        passKind: 'chunk',
+        chunkIndex: i,
+        ledger: ledger,
+        failureDiagnostics: failureDiagnostics,
       );
       partials.add(generated.summary);
-      usage = usage + generated.usage;
+      aggregateUsage = aggregateUsage + generated.aggregateUsage;
       duration += generated.duration ?? Duration.zero;
       attempts += generated.attempts;
     }
@@ -485,13 +757,18 @@ class ContextCompactionEngine {
       baseProjection: reduceBase,
       instruction: CompactionSummaryPrompt.buildJsonInstruction(),
       anchors: anchors,
+      passKind: 'reduce',
+      ledger: ledger,
+      failureDiagnostics: failureDiagnostics,
     );
     return _GeneratedSummary(
       summary: reduced.summary,
       continuity: reduced.continuity,
-      usage: usage + reduced.usage,
+      acceptedUsage: reduced.acceptedUsage,
+      aggregateUsage: aggregateUsage + reduced.aggregateUsage,
       attempts: attempts + reduced.attempts,
       duration: duration + (reduced.duration ?? Duration.zero),
+      ledger: ledger,
     );
   }
 
@@ -501,23 +778,39 @@ class ContextCompactionEngine {
     required List<Message> baseProjection,
     required String instruction,
     List<CompactionContinuityAnchor> anchors = const [],
+    required String passKind,
+    int? chunkIndex,
+    required List<CompactionSummarizationAttemptRecord> ledger,
+    required CompactionDurableDiagnostics Function({_CompactionUsage? usage})
+        failureDiagnostics,
   }) async {
     final immutableBase = List<Message>.unmodifiable(baseProjection);
     CompactionContinuityResult? lastContinuity;
-    var usage = const _CompactionUsage();
+    var aggregateUsage = const _CompactionUsage();
     var duration = Duration.zero;
     for (var attempt = 0; attempt < 2; attempt++) {
+      final effectivePassKind = attempt == 0 ? passKind : 'repair';
+      final attemptRequestId = _buildAttemptRequestId(
+        request: request,
+        passKind: effectivePassKind,
+        attempt: attempt,
+        chunkIndex: chunkIndex,
+      );
+      final attemptOptions = request.providerRequestOptions.copyWith(
+        requestId: attemptRequestId,
+      );
       try {
         final result = await provider.summarizeProvider(
           CompactionProviderRequest(
             baseProjection: immutableBase,
             tools: request.providerTools,
             routeSignature: request.routeSignature,
-            options: request.providerRequestOptions,
+            options: attemptOptions,
             instruction: instruction,
           ),
         );
-        usage = usage + _CompactionUsage.fromProvider(result.usage);
+        final passUsage = _CompactionUsage.fromProvider(result.usage);
+        aggregateUsage = aggregateUsage + passUsage;
         duration += result.duration;
         final summary = _continuityValidator.redactSummary(
           CompactionSummaryParser.parse(result.content),
@@ -529,34 +822,120 @@ class ContextCompactionEngine {
         );
         lastContinuity = continuity;
         if (continuity.passed) {
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: effectivePassKind,
+            requestId: attemptRequestId,
+            duration: result.duration,
+            inputTokens: passUsage.inputTokens,
+            cachedInputTokens: passUsage.cachedInputTokens,
+            cacheWriteTokens: passUsage.cacheWriteTokens,
+            outputTokens: passUsage.outputTokens,
+            reasoningTokens: passUsage.reasoningTokens,
+            outcome: 'success',
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
           return _GeneratedSummary(
             summary: summary,
             continuity: continuity,
-            usage: usage,
+            acceptedUsage: passUsage,
+            aggregateUsage: aggregateUsage,
             attempts: attempt + 1,
             duration: duration,
+            ledger: ledger,
           );
         }
+        ledger.add(CompactionSummarizationAttemptRecord(
+          passKind: effectivePassKind,
+          requestId: attemptRequestId,
+          duration: result.duration,
+          inputTokens: passUsage.inputTokens,
+          cachedInputTokens: passUsage.cachedInputTokens,
+          cacheWriteTokens: passUsage.cacheWriteTokens,
+          outputTokens: passUsage.outputTokens,
+          reasoningTokens: passUsage.reasoningTokens,
+          outcome: 'validation_failed',
+          failureReason: continuity.missingAnchors.join(', '),
+          relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+            compactionId: request.compactionId,
+            requestId: attemptRequestId,
+          ),
+        ));
         instruction = CompactionSummaryPrompt.buildJsonInstruction(
           missingFields: continuity.missingAnchors,
           partial: anchors.isEmpty,
         );
       } on CompactionRouteChanged {
+        ledger.add(CompactionSummarizationAttemptRecord(
+          passKind: effectivePassKind,
+          requestId: attemptRequestId,
+          duration: Duration.zero,
+          outcome: 'error',
+          failureReason: 'route_changed',
+          relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+            compactionId: request.compactionId,
+            requestId: attemptRequestId,
+          ),
+        ));
         throw CompactionEngineFailure(
           CompactionFailureReason.sourceRevisionStale,
+          diagnostics: failureDiagnostics(usage: aggregateUsage),
         );
       } on CompactionProviderOverflow {
+        ledger.add(CompactionSummarizationAttemptRecord(
+          passKind: effectivePassKind,
+          requestId: attemptRequestId,
+          duration: Duration.zero,
+          outcome: 'overflow',
+          failureReason: 'context_overflow',
+          relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+            compactionId: request.compactionId,
+            requestId: attemptRequestId,
+          ),
+        ));
         throw CompactionEngineFailure(
           CompactionFailureReason.summarizationFailed,
+          diagnostics: failureDiagnostics(usage: aggregateUsage),
         );
       } on CompactionInvalidProviderResponse catch (error) {
-        usage = usage + _CompactionUsage.fromProvider(error.usage);
-        duration += error.duration ?? Duration.zero;
+        final errorUsage = _CompactionUsage.fromProvider(error.usage);
+        aggregateUsage = aggregateUsage + errorUsage;
+        final attemptDuration = error.duration ?? Duration.zero;
+        duration += attemptDuration;
+        ledger.add(CompactionSummarizationAttemptRecord(
+          passKind: effectivePassKind,
+          requestId: attemptRequestId,
+          duration: attemptDuration,
+          inputTokens: errorUsage.inputTokens,
+          cachedInputTokens: errorUsage.cachedInputTokens,
+          cacheWriteTokens: errorUsage.cacheWriteTokens,
+          outputTokens: errorUsage.outputTokens,
+          reasoningTokens: errorUsage.reasoningTokens,
+          outcome: 'invalid_response',
+          failureReason: error.reason,
+          relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+            compactionId: request.compactionId,
+            requestId: attemptRequestId,
+          ),
+        ));
         instruction = CompactionSummaryPrompt.buildJsonInstruction(
           missingFields: ['valid JSON only; ${error.reason}'],
           partial: anchors.isEmpty,
         );
-      } on FormatException {
+      } on FormatException catch (e) {
+        ledger.add(CompactionSummarizationAttemptRecord(
+          passKind: effectivePassKind,
+          requestId: attemptRequestId,
+          duration: Duration.zero,
+          outcome: 'invalid_response',
+          failureReason: 'format_error: $e',
+          relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+            compactionId: request.compactionId,
+            requestId: attemptRequestId,
+          ),
+        ));
         instruction = CompactionSummaryPrompt.buildJsonInstruction(
           missingFields: CompactionInternalSummary.requiredSectionKeys,
           partial: anchors.isEmpty,
@@ -568,6 +947,7 @@ class ContextCompactionEngine {
       missingAnchors:
           lastContinuity?.missingAnchors ??
           CompactionInternalSummary.requiredSectionKeys,
+      diagnostics: failureDiagnostics(usage: aggregateUsage),
     );
   }
 
@@ -601,20 +981,54 @@ class ContextCompactionEngine {
     }
     return chunks;
   }
+
+  static String _buildAttemptRequestId({
+    required CompactionEngineRequest request,
+    required String passKind,
+    required int attempt,
+    int? chunkIndex,
+  }) {
+    final rawBase = request.providerRequestOptions.requestId?.trim();
+    String? baseId = rawBase;
+    if (baseId != null && baseId.isNotEmpty) {
+      baseId = baseId.replaceAll(
+        RegExp(r':(full|repair|chunk|reduce):\d+(_\d+)?$'),
+        '',
+      );
+    }
+    final String prefix;
+    if (baseId != null && baseId.isNotEmpty) {
+      prefix = baseId.startsWith('compaction:') ? baseId : 'compaction:$baseId';
+    } else {
+      final compId = request.compactionId.trim();
+      prefix = compId.startsWith('compaction:')
+          ? compId
+          : 'compaction:$compId';
+    }
+    if (chunkIndex != null) {
+      return '$prefix:$passKind:${chunkIndex}_$attempt';
+    }
+    return '$prefix:$passKind:$attempt';
+  }
 }
 
 class _GeneratedSummary {
   final CompactionInternalSummary summary;
   final CompactionContinuityResult continuity;
-  final _CompactionUsage usage;
+  final _CompactionUsage acceptedUsage;
+  final _CompactionUsage aggregateUsage;
   final int attempts;
   final Duration? duration;
+  final List<CompactionSummarizationAttemptRecord> ledger;
+
   const _GeneratedSummary({
     required this.summary,
     required this.continuity,
-    required this.usage,
+    required this.acceptedUsage,
+    required this.aggregateUsage,
     required this.attempts,
     required this.duration,
+    this.ledger = const [],
   });
 }
 
@@ -667,6 +1081,7 @@ class CompactionEngineFailure implements Exception {
   final List<String> missingAnchors;
   final int? estimatedAfterTokens;
   final CompactionAntiThrashingHints? antiThrashing;
+  final CompactionDurableDiagnostics? diagnostics;
 
   CompactionEngineFailure(
     this.reason, {
@@ -675,6 +1090,7 @@ class CompactionEngineFailure implements Exception {
     this.missingAnchors = const [],
     this.estimatedAfterTokens,
     this.antiThrashing,
+    this.diagnostics,
   });
 
   @override

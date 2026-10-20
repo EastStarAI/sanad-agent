@@ -1320,6 +1320,119 @@ void main() {
         expect(content2['request_id'], equals(req2));
       },
     );
+
+    test(
+      'compaction dump records route, model, base_url, protocol, and safe options',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        const compactionId = 'route-test-compaction';
+        const requestId = 'compaction:route-test-compaction:full:0';
+        final url = Uri.parse('https://api.opencode.ai/v1/chat/completions');
+
+        final dumpPath = await LLMRequestDumper.recordActualRequest(
+          url: url,
+          headers: {'Authorization': 'Bearer secret-key-12345678'},
+          body: {'messages': []},
+          compactionId: compactionId,
+          requestId: requestId,
+          provider: 'opencode-go',
+          model: 'deepseek-v4.1-flash',
+          baseUrl: 'https://api.opencode.ai/v1',
+          protocol: 'openai_compatible',
+          stream: false,
+          safeOptions: const {
+            'thinking_mode': 'max',
+            'timeout_ms': 60000,
+          },
+        );
+
+        expect(dumpPath, isNotNull);
+        final file = File(dumpPath!);
+        expect(file.existsSync(), isTrue);
+
+        final content = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        expect(content['provider'], equals('opencode-go'));
+        expect(content['model'], equals('deepseek-v4.1-flash'));
+        expect(content['base_url'], equals('https://api.opencode.ai/v1'));
+        expect(content['protocol'], equals('openai_compatible'));
+        expect(content['stream'], isFalse);
+        expect(content['options'], equals({
+          'thinking_mode': 'max',
+          'timeout_ms': 60000,
+        }));
+        expect(content['capture_state'], equals('request_sent'));
+
+        // Relative path can be retrieved while in flight
+        final relativePath = LLMRequestDumper.getRelativeDumpPath(
+          compactionId: compactionId,
+          requestId: requestId,
+        );
+        expect(relativePath, isNotNull);
+        expect(relativePath, startsWith('request_dumps/'));
+        expect(relativePath, equals(p.join('request_dumps', p.basename(dumpPath))));
+
+        // dumpResponse attaches status, duration, finishReason
+        await LLMRequestDumper.dumpResponse(
+          {'choices': [{'message': {'role': 'assistant', 'content': 'ok'}, 'finish_reason': 'stop'}]},
+          compactionId: compactionId,
+          requestId: requestId,
+          statusCode: 200,
+          duration: const Duration(milliseconds: 450),
+          finishReason: 'stop',
+        );
+
+        final completedContent = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        expect(completedContent['capture_state'], equals('completed'));
+        expect(completedContent['status_code'], equals(200));
+        expect(completedContent['duration_ms'], equals(450));
+        expect(completedContent['finish_reason'], equals('stop'));
+
+        // Relative path persists and is discoverable even after completion
+        final completedRelativePath = LLMRequestDumper.getRelativeDumpPath(
+          compactionId: compactionId,
+          requestId: requestId,
+        );
+        expect(completedRelativePath, equals(relativePath));
+      },
+    );
+
+    test(
+      'compaction dump marks truncated capture_state explicitly for incomplete or length-limited response',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        const compactionId = 'truncation-test-compaction';
+        const requestId = 'compaction:truncation-test-compaction:full:0';
+        final url = Uri.parse('https://api.openai.com/v1/chat/completions');
+
+        final dumpPath = await LLMRequestDumper.recordActualRequest(
+          url: url,
+          headers: {},
+          body: {},
+          compactionId: compactionId,
+          requestId: requestId,
+          provider: 'openai',
+          model: 'gpt-4o',
+          baseUrl: 'https://api.openai.com/v1',
+        );
+        expect(dumpPath, isNotNull);
+
+        await LLMRequestDumper.dumpResponse(
+          {'choices': [{'message': {'role': 'assistant', 'content': 'partial'}, 'finish_reason': 'length'}]},
+          compactionId: compactionId,
+          requestId: requestId,
+          statusCode: 200,
+          duration: const Duration(milliseconds: 320),
+          finishReason: 'length',
+        );
+
+        final content = jsonDecode(await File(dumpPath!).readAsString()) as Map<String, dynamic>;
+        expect(content['capture_state'], equals('truncated'));
+        expect(content['truncated'], isTrue);
+        expect(content['finish_reason'], equals('length'));
+      },
+    );
   });
 }
 
