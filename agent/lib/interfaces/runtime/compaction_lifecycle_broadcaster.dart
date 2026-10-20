@@ -39,6 +39,10 @@ class CompactionLifecycleBroadcaster {
               if (event.modelId != null) 'model_id': event.modelId,
               if (event.failureReason != null)
                 'failure_reason': event.failureReason!.wireValue,
+              if (event.failureStage != null)
+                'failure_stage': event.failureStage,
+              if (event.failureCause != null)
+                'failure_cause': event.failureCause,
               if (metrics != null) ...{
                 'context_window_tokens': metrics.contextWindowTokens,
                 if (metrics.effectiveInputBudgetTokens != null)

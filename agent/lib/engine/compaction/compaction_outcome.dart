@@ -10,6 +10,9 @@ class CompactionOutcome {
   final CompactionStatus status;
   final CompactionTrigger trigger;
   final CompactionFailureReason? failureReason;
+  final String? failureStage;
+  final String? failureCause;
+  final Map<String, dynamic>? failureDetail;
   final CompactionCandidate? candidate;
   final int queuedMessagesAccepted;
 
@@ -18,6 +21,9 @@ class CompactionOutcome {
     required this.status,
     required this.trigger,
     this.failureReason,
+    this.failureStage,
+    this.failureCause,
+    this.failureDetail,
     this.candidate,
     this.queuedMessagesAccepted = 0,
   }) : assert(compactionId.isNotEmpty, 'compactionId must be non-empty'),
@@ -56,6 +62,9 @@ class CompactionOutcome {
     required String compactionId,
     required CompactionTrigger trigger,
     required CompactionFailureReason failureReason,
+    String? failureStage,
+    String? failureCause,
+    Map<String, dynamic>? failureDetail,
     int queuedMessagesAccepted = 0,
   }) {
     return CompactionOutcome(
@@ -63,6 +72,9 @@ class CompactionOutcome {
       status: CompactionStatus.failed,
       trigger: trigger,
       failureReason: failureReason,
+      failureStage: failureStage,
+      failureCause: failureCause,
+      failureDetail: failureDetail,
       queuedMessagesAccepted: queuedMessagesAccepted,
     );
   }
@@ -76,6 +88,8 @@ class CompactionOutcome {
           status == other.status &&
           trigger == other.trigger &&
           failureReason == other.failureReason &&
+          failureStage == other.failureStage &&
+          failureCause == other.failureCause &&
           candidate == other.candidate &&
           queuedMessagesAccepted == other.queuedMessagesAccepted;
 
@@ -85,6 +99,8 @@ class CompactionOutcome {
     status,
     trigger,
     failureReason,
+    failureStage,
+    failureCause,
     candidate,
     queuedMessagesAccepted,
   );

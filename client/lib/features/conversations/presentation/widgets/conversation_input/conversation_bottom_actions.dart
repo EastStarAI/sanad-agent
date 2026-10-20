@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
@@ -293,11 +294,25 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
   }
 
   Widget _buildPermissionModeSelector(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final isLoading = widget.inputSlice.isLoadingPermissionMode;
-    final label = isLoading ? 'Loading...' : _permissionModeLabel(widget.inputSlice.permissionMode);
+    final label = isLoading
+        ? (l10n?.loading ?? 'Loading…')
+        : (l10n != null
+              ? _permissionModeLabel(widget.inputSlice.permissionMode, l10n)
+              : widget.inputSlice.permissionMode.value);
+    final workspacePath = widget.inputSlice.selectedWorkspace?.path.trim();
+    final tooltipText = workspacePath != null && workspacePath.isNotEmpty
+        ? (l10n != null
+              ? l10n.workspacePermissionModeTooltipWithRoot(
+                  _permissionModeLabel(widget.inputSlice.permissionMode, l10n),
+                  workspacePath,
+                )
+              : 'Permission: ${widget.inputSlice.permissionMode.value}\nExecution Root: $workspacePath')
+        : (l10n?.workspacePermissionModeTooltip ?? 'Select Permission Mode');
 
     return PopupMenuButton<WorkspacePermissionMode>(
-      tooltip: 'Select Permission Mode',
+      tooltip: tooltipText,
       enabled: !isLoading,
       child: _buildActionText(label),
       itemBuilder: (context) => WorkspacePermissionMode.values
@@ -315,7 +330,10 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
                         : widget.dimTextColor,
                   ),
                   const SizedBox(width: 8),
-                  Text(_permissionModeLabel(mode), style: const TextStyle(fontSize: 12)),
+                  Text(
+                    l10n != null ? _permissionModeLabel(mode, l10n) : mode.value,
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ],
               ),
             ),
@@ -407,12 +425,15 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
     return 'Select model';
   }
 
-  String _permissionModeLabel(WorkspacePermissionMode mode) {
+  String _permissionModeLabel(
+    WorkspacePermissionMode mode,
+    AppLocalizations l10n,
+  ) {
     switch (mode) {
       case WorkspacePermissionMode.defaultMode:
-        return 'Default';
+        return l10n.workspacePermissionModeDefault;
       case WorkspacePermissionMode.fullAccess:
-        return 'Full Access';
+        return l10n.workspacePermissionModeFullAccess;
     }
   }
 

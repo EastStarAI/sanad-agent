@@ -32,6 +32,7 @@ import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_resume_service.dart';
 import 'package:test/test.dart';
 
+import '../../../support/ephemeral_loopback_port.dart';
 import '../../../support/isolated_sanad_test_home.dart';
 import '../../../support/memory_agent_secret_store.dart';
 
@@ -137,13 +138,6 @@ class _E2EFakeSuspendedResumeService extends SuspendedResumeService {
   }
 }
 
-Future<int> _reserveFreePort() async {
-  final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-  final port = socket.port;
-  await socket.close();
-  return port;
-}
-
 void main() {
   useIsolatedSanadTestHome();
 
@@ -158,7 +152,6 @@ void main() {
     late PlatformRuntimeBridge runtimeBridge;
     late _E2EFakeSuspendedResumeService resumeService;
     late LocalGatewayCliClient client;
-    late int port;
 
     void seedSession(
       String sessionId, {
@@ -179,69 +172,91 @@ void main() {
     }
 
     setUp(() async {
-      await getIt.reset();
       SessionManager.resetForTesting();
+      await bindOnReservedLoopbackPort((candidatePort) async {
+        await getIt.reset();
+        SessionManager.resetForTesting();
 
-      stateDb = AgentStateDatabase.inMemory();
-      getIt.registerSingleton<AgentStateDatabase>(stateDb);
+        stateDb = AgentStateDatabase.inMemory();
+        getIt.registerSingleton<AgentStateDatabase>(stateDb);
 
-      sessionDb = SessionDB.fromState(stateDb);
-      sessionManager = SessionManager();
-      getIt.registerSingleton<SessionManager>(sessionManager);
+        sessionDb = SessionDB.fromState(stateDb);
+        sessionManager = SessionManager();
+        getIt.registerSingleton<SessionManager>(sessionManager);
 
-      final checkpointStore = SuspendedCheckpointStore(
-        sessionManager: sessionManager,
-      );
-      getIt.registerSingleton<SuspendedCheckpointStore>(checkpointStore);
+        final checkpointStore = SuspendedCheckpointStore(
+          sessionManager: sessionManager,
+        );
+        getIt.registerSingleton<SuspendedCheckpointStore>(checkpointStore);
 
-      port = await _reserveFreePort();
-      getIt.registerSingleton<Config>(_TestConfig(port));
+        getIt.registerSingleton<Config>(_TestConfig(candidatePort));
 
-      authManager = _TestAuthManager()
-        ..cloudDeviceCredential = 'credential-e2e-test';
-      getIt.registerSingleton<AuthManager>(
-        authManager,
-        dispose: (manager) => authManager.close(),
-      );
+        authManager = _TestAuthManager()
+          ..cloudDeviceCredential = 'credential-e2e-test';
+        getIt.registerSingleton<AuthManager>(
+          authManager,
+          dispose: (manager) => authManager.close(),
+        );
 
-      runtimeBridge = PlatformRuntimeBridge();
-      getIt.registerSingleton<PlatformRuntimeBridge>(runtimeBridge);
+        runtimeBridge = PlatformRuntimeBridge();
+        getIt.registerSingleton<PlatformRuntimeBridge>(runtimeBridge);
 
-      resumeService = _E2EFakeSuspendedResumeService();
-      getIt.registerSingleton<SuspendedResumeService>(resumeService);
+        resumeService = _E2EFakeSuspendedResumeService();
+        getIt.registerSingleton<SuspendedResumeService>(resumeService);
 
-      final protocolBridge = SanadProtocolBridge();
-      getIt.registerSingleton<SanadProtocolBridge>(protocolBridge);
+        final protocolBridge = SanadProtocolBridge();
+        getIt.registerSingleton<SanadProtocolBridge>(protocolBridge);
 
-      deliveryPresence = DeliveryPresenceController();
+        deliveryPresence = DeliveryPresenceController();
 
-      platform = LocalDaemonServerPlatform(
-        deliveryPresence: deliveryPresence,
-        authCoupling: ColocatedAuthCoupling(
-          authManager: authManager,
-          authorizationClient: DeviceAuthorizationClient(
-            portalUrl: 'https://portal.test',
+        platform = LocalDaemonServerPlatform(
+          deliveryPresence: deliveryPresence,
+          authCoupling: ColocatedAuthCoupling(
             authManager: authManager,
+            authorizationClient: DeviceAuthorizationClient(
+              portalUrl: 'https://portal.test',
+              authManager: authManager,
+            ),
           ),
-        ),
-        platformRuntimeBridge: runtimeBridge,
-        security: LocalGatewaySecurity(
-          config: LocalGatewaySecurityConfig(
-            allowedPort: port,
-            preauthBudgetPerPeer: 1,
+          platformRuntimeBridge: runtimeBridge,
+          security: LocalGatewaySecurity(
+            config: LocalGatewaySecurityConfig(
+              allowedPort: candidatePort,
+              preauthBudgetPerPeer: 1,
+            ),
+            expectedToken: token,
           ),
-          expectedToken: token,
-        ),
-      );
-      await platform.initialize();
+        );
+        try {
+          await platform.initialize();
+        } on SocketException {
+          // Another suite won this reservation between probe and bind: release
+          // the partial start so the retry can claim a fresh ephemeral port.
+          await platform.dispose();
+          stateDb.dispose();
+          await getIt.reset();
+          SessionManager.resetForTesting();
+          rethrow;
+        }
 
-      client = LocalGatewayCliClient(
-        gatewayUri: Uri.parse('ws://127.0.0.1:$port/gateway'),
-        token: token.value,
-        deviceId: 'cli-e2e-tester',
-        autoReconnect: false,
-      );
-      await client.connect();
+        final pendingClient = LocalGatewayCliClient(
+          gatewayUri: Uri.parse('ws://127.0.0.1:$candidatePort/gateway'),
+          token: token.value,
+          deviceId: 'cli-e2e-tester',
+          autoReconnect: false,
+        );
+        try {
+          await pendingClient.connect();
+        } on Object {
+          await pendingClient.dispose();
+          await platform.dispose();
+          stateDb.dispose();
+          await getIt.reset();
+          SessionManager.resetForTesting();
+          rethrow;
+        }
+        client = pendingClient;
+      });
     });
 
     tearDown(() async {

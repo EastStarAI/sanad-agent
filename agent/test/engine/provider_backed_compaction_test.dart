@@ -712,6 +712,12 @@ void main() {
         );
         expect(candidate!.metrics.summarizationAttempts, 2);
         expect(candidate.metrics.summarizationInputTokens, 20);
+        expect(candidate.diagnostics?.aggregateUsage['input_tokens'], 20);
+        expect(candidate.diagnostics?.attempts.length, 2);
+        expect(candidate.diagnostics?.attempts[0].outcome, 'invalid_response');
+        expect(candidate.diagnostics?.attempts[0].inputTokens, 10);
+        expect(candidate.diagnostics?.attempts[1].outcome, 'success');
+        expect(candidate.diagnostics?.attempts[1].inputTokens, 10);
         expect(
           adapter.generatedHistory!.last.content,
           endsWith('return only the final JSON object.'),

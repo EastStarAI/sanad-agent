@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -60,6 +61,7 @@ class RequestPressureEvaluator {
       toolSchemaTokens: schemaTokens,
       mediaTokens: mediaTokens,
     );
+    final explicitEstimate = wireEstimatedInputTokens ?? components.total;
     final baselineDelta = _baselineDeltaTokens(
       baseline: confirmedInputUsage,
       routeSignature: routeSignature,
@@ -73,7 +75,7 @@ class RequestPressureEvaluator {
         ? null
         : confirmedInputUsage!.inputTokens;
     final estimated = baselineDelta == null
-        ? wireEstimatedInputTokens ?? components.total
+        ? explicitEstimate
         : confirmedInputTokens! + baselineDelta;
     final measurementKind = confirmedInputTokens == null
         ? CompactionMeasurementKind.estimated
@@ -115,6 +117,45 @@ class RequestPressureEvaluator {
     );
   }
 
+  /// Version tag for the compact non-content wire proof persisted with a
+  /// provider-confirmed usage.
+  static const String wireProofVersion = 'v1';
+
+  /// Computes a compact versioned non-content proof binding [wireMeasurement]
+  /// (its stable material and ordered wire items) to [routeSignature].
+  ///
+  /// The proof stores no raw content: the stable material and every ordered
+  /// wire item are already content-addressed digests, and the payload below
+  /// adds only the version and safe route identity. A changed prompt, tool
+  /// schema, message, or route therefore yields a different proof, so a
+  /// restore can verify a persisted binding by remeasuring the historical
+  /// request prefix with the active adapter.
+  static String wireProof({
+    required WireInputMeasurement wireMeasurement,
+    required RouteSignature routeSignature,
+  }) {
+    final payload = <String, Object>{
+      'v': wireProofVersion,
+      'provider_instance_id': routeSignature.providerInstanceId,
+      'model_id': routeSignature.modelId,
+      'protocol': routeSignature.protocol,
+      'base_url': routeSignature.normalizedBaseUrl,
+      'stable': wireMeasurement.stableMaterialFingerprint,
+      'items': wireMeasurement.inputItemFingerprints,
+    };
+    final digest = sha256.convert(utf8.encode(jsonEncode(payload))).toString();
+    return '$wireProofVersion:$digest';
+  }
+
+  /// Returns true if [proof] is a recognized versioned wire proof format.
+  static bool isValidWireProof(String? proof) {
+    if (proof == null || proof.isEmpty) return false;
+    final prefix = '$wireProofVersion:';
+    if (!proof.startsWith(prefix)) return false;
+    final hash = proof.substring(prefix.length);
+    return hash.length == 64 && RegExp(r'^[0-9a-f]{64}$').hasMatch(hash);
+  }
+
   static String _toolSchemaCacheKey(
     RouteSignature route,
     List<Map<String, dynamic>> toolSchemas,
@@ -139,18 +180,25 @@ class RequestPressureEvaluator {
     required List<Map<String, dynamic>> toolSchemas,
     required WireInputMeasurement? wireMeasurement,
   }) {
-    final baselineWire = baseline?.wireMeasurement;
-    if (baseline != null &&
-        baseline.routeSignature == routeSignature &&
-        baselineWire != null &&
-        wireMeasurement != null &&
-        wireMeasurement.extendsMeasurement(baselineWire)) {
+    if (baseline == null || baseline.routeSignature != routeSignature) {
+      return null;
+    }
+    final baselineWire = baseline.wireMeasurement;
+    if (baselineWire != null) {
+      // A wire-measured baseline is consumed only through the live wire
+      // extension proof: the current request must remeasure as an extension of
+      // the exact material the provider measured. Anything else would reuse a
+      // confirmed value against material that was never proven to match it, so
+      // admission falls back to the explicit estimate instead.
+      if (wireMeasurement == null ||
+          !wireMeasurement.extendsMeasurement(baselineWire)) {
+        return null;
+      }
       final delta =
           wireMeasurement.estimatedTokens - baselineWire.estimatedTokens;
       return delta < 0 ? null : delta;
     }
-    if (baseline == null ||
-        baseline.routeSignature != routeSignature ||
+    if (wireMeasurement != null ||
         baseline.systemPrompt != systemPrompt ||
         baseline.runtimeContext != runtimeContext ||
         jsonEncode(baseline.toolSchemas) != jsonEncode(toolSchemas) ||

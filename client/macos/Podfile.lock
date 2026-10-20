@@ -6,8 +6,6 @@ PODS:
   - auto_updater_macos (0.0.1):
     - FlutterMacOS
     - Sparkle
-  - cnativeapi (0.1.3):
-    - FlutterMacOS
   - desktop_drop (0.0.1):
     - FlutterMacOS
   - device_info_plus (0.0.1):
@@ -42,7 +40,6 @@ DEPENDENCIES:
   - app_links (from `Flutter/ephemeral/.symlinks/plugins/app_links/macos`)
   - audio_session (from `Flutter/ephemeral/.symlinks/plugins/audio_session/macos`)
   - auto_updater_macos (from `Flutter/ephemeral/.symlinks/plugins/auto_updater_macos/macos`)
-  - cnativeapi (from `Flutter/ephemeral/.symlinks/plugins/cnativeapi/macos`)
   - desktop_drop (from `Flutter/ephemeral/.symlinks/plugins/desktop_drop/macos`)
   - device_info_plus (from `Flutter/ephemeral/.symlinks/plugins/device_info_plus/macos`)
   - file_selector_macos (from `Flutter/ephemeral/.symlinks/plugins/file_selector_macos/macos`)
@@ -69,8 +66,6 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/audio_session/macos
   auto_updater_macos:
     :path: Flutter/ephemeral/.symlinks/plugins/auto_updater_macos/macos
-  cnativeapi:
-    :path: Flutter/ephemeral/.symlinks/plugins/cnativeapi/macos
   desktop_drop:
     :path: Flutter/ephemeral/.symlinks/plugins/desktop_drop/macos
   device_info_plus:
@@ -104,7 +99,6 @@ SPEC CHECKSUMS:
   app_links: c3185399a5cabc2e610ee5ad52fb7269b84ff869
   audio_session: 728ae3823d914f809c485d390274861a24b0904e
   auto_updater_macos: 3e3462c418fe4e731917eacd8d28eef7af84086d
-  cnativeapi: d13e5ca6610ce435a5124ba73f9c3ccf2e04f13c
   desktop_drop: 1eeeb9484299585770b6461e4f3d60950e99efa2
   device_info_plus: 1b14eed9bf95428983aed283a8d51cce3d8c4215
   file_selector_macos: 3e56eaea051180007b900eacb006686fd54da150

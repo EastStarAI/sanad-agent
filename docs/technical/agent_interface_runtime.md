@@ -158,6 +158,16 @@ server whose port is runtime configuration. Both use the same protocol bridge
 and preserve device, hardware, session, request, run, model-step, tool-call, and
 event identities.
 
+In the local daemon server adapter, `DeliveryScope.platformFamily` fan-out broadcasts
+gateway responses across connected local client sockets. When an envelope originated
+from a specific session client (such as a CLI execution carrying `cli_client`), that
+envelope device identity is preserved exclusively on the originating session socket.
+All other connected peer client sockets receive the envelope stamped with their own
+registered socket device identity (or fallback to the daemon local hardware identity),
+preventing peer desktop or mobile clients from inheriting the CLI client device identity.
+Local delivery presence tracking (`recordLocalDelivery`), deduplication instances, and
+transport authentication remain unaffected.
+
 The CLI adapter is an origin-scoped platform. New adapters implement the common
 platform lifecycle, event stream, descriptor, and response delivery boundary
 without adding semantic family branches to `GatewayManager`.

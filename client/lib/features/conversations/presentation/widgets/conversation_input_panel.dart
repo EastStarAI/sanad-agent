@@ -14,7 +14,9 @@ import 'package:sanad_client/features/conversations/presentation/bloc/composer_s
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/compaction_failure_formatter.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/composer_text_editing.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/skill_composer_utils.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
@@ -325,19 +327,12 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     if (result.accepted) {
       return;
     }
-    if (result.sessionBusy) {
-      _showValidationError('Session is busy. Try /compact again when idle.');
-      return;
-    }
-    if (result.compactionInProgress) {
-      _showValidationError('Context compaction is already in progress.');
-      return;
-    }
-    _showValidationError(
-      result.failureReason == null
-          ? 'Context compaction could not start.'
-          : 'Context compaction failed: ${result.failureReason}',
+    final l10n = AppLocalizations.of(context);
+    final failure = CompactionFailureFormatter.resolveForResult(
+      result,
+      l10n: l10n,
     );
+    _showValidationError(failure.toToastMessage());
   }
 
   void _selectSlashSuggestion(SlashCommandEntry entry) {

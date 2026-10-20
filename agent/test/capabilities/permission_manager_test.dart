@@ -571,6 +571,101 @@ void main() {
       expect(bridge.requestCount, equals(0));
     });
 
+    test(
+      'bypasses permission prompt when allow_all_tools is true in session metadata',
+      () async {
+        final context = ToolContext(
+          sessionId: 'thread-allow-all',
+          toolCallId: 'call-allow-all',
+          metadata: {
+            'allow_all_tools': true,
+            'workspace': {
+              'id': workspaceDir.path,
+              'name': 'workspace',
+              'path': workspaceDir.path,
+            },
+          },
+        );
+
+        await manager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {'command': 'pwd'},
+          context: context,
+        );
+
+        expect(bridge.requestCount, equals(0));
+      },
+    );
+
+    test(
+      'explicit workspace policy deny rule takes precedence over allow_all_tools bypass',
+      () async {
+        await store.savePolicy(
+          workspaceDir.path,
+          const WorkspacePolicy(
+            permissionMode: WorkspacePermissionMode.defaultMode,
+            permissions: WorkspaceToolPermissions(
+              allow: [],
+              deny: ['shell_execute::pwd'],
+            ),
+          ),
+        );
+        final context = ToolContext(
+          sessionId: 'thread-deny-precedence',
+          toolCallId: 'call-deny-precedence',
+          metadata: {
+            'allow_all_tools': true,
+            'workspace': {
+              'id': workspaceDir.path,
+              'name': 'workspace',
+              'path': workspaceDir.path,
+            },
+          },
+        );
+
+        expect(
+          () => manager.ensureAuthorized(
+            tool: shellTool,
+            arguments: {'command': 'pwd'},
+            context: context,
+          ),
+          throwsA(
+            isA<Exception>().having(
+              (e) => e.toString(),
+              'message',
+              contains('is denied by workspace policy'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'bypasses permission prompt when permission_mode is full_access in session metadata',
+      () async {
+        final context = ToolContext(
+          sessionId: 'thread-full-access-meta',
+          toolCallId: 'call-full-access-meta',
+          metadata: {
+            'permission_mode': 'full_access',
+            'workspace': {
+              'id': workspaceDir.path,
+              'name': 'workspace',
+              'path': workspaceDir.path,
+            },
+          },
+        );
+
+        await manager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {'command': 'pwd'},
+          context: context,
+        );
+
+        expect(bridge.requestCount, equals(0));
+      },
+    );
+
     test('applies resumed once-scope approvals as one-shot bypasses', () async {
       final context = ToolContext(
         sessionId: 'session-4',

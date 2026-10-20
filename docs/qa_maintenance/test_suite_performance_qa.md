@@ -42,7 +42,11 @@ and dry-run discovery without starting a runtime or changing source ownership.
   settling sleeps are prohibited.
 - Wrapper, subprocess, filesystem-permission, and loopback-port tests remain
   narrow integration coverage. They are not converted into mocks when the OS
-  boundary itself is the contract.
+  boundary itself is the contract. A loopback harness cannot keep its
+  reservation once the probe socket closes, so it binds each attempt on a
+  freshly reserved ephemeral port and re-reserves on an address-in-use
+  collision (`agent/test/support/ephemeral_loopback_port.dart`); a released
+  probe port is never treated as owned, and a fixed port is never acceptable.
 
 ## Performance regression gates
 

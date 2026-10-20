@@ -67,5 +67,6 @@ This contract applies to `agent/lib/engine/`.
 - Provider-backed summaries use a strict versioned JSON contract, are redacted before persistence, and inherit the ordinary provider output limit. A valid JSON result is not rejected by a compaction-only token, byte, or field-length cap.
 - When the ordinary provider request itself overflows, recovery uses at most four contiguous source chunks plus one typed reduce pass and preserves tool-call/result groups.
 - The coordinator prepares immutable source/tail ranges, persists the exclusive started claim, and publishes the compacting barrier before awaiting any summarizer pass; every post-claim error must close that row as a typed terminal failure.
+- Post-compaction usage reconciliation reserves the exact first dispatched model step against the active boundary; trailing streaming chunks or completion errors reconcile or finalize missing usage once, rejecting out-of-order, later-grown, or route-mismatched requests.
 - Oversized retained-tail tool/media payloads may be pruned in projection-only copies for re-measurement; canonical history is never mutated.
 - Design detail: `docs/agent_engine/context_compaction_design.md`.

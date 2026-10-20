@@ -244,7 +244,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         trigger: CompactionTriggerKind.fromWire(
           metadata['compaction_trigger'] ?? 'manual',
         ),
-        failureReason: metadata['failure_reason']?.toString(),
+        failureReason: metadata['failure_reason']?.toString() ??
+            metadata['failureReason']?.toString(),
+        failureStage: metadata['failure_stage']?.toString() ??
+            metadata['failureStage']?.toString(),
+        failureCause: metadata['failure_cause']?.toString() ??
+            metadata['failureCause']?.toString(),
         contextWindowTokens: metadata['context_window_tokens'] as int?,
         effectiveInputBudgetTokens: metadata['effective_input_budget_tokens'] as int?,
         autoThresholdTokens: metadata['auto_threshold_tokens'] as int?,

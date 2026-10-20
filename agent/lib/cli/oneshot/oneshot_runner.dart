@@ -820,7 +820,10 @@ class OneshotRunner {
         providerInstanceId: resolvedProviderId,
         providerId: resolvedProviderId,
         thinkingMode: effectiveThinkingMode,
-        metadata: {'execution_root': ?effectiveExecutionRoot},
+        metadata: {
+          'execution_root': ?effectiveExecutionRoot,
+          if (automaticallyApproveTools) 'allow_all_tools': true,
+        },
       );
 
       if (!json && !quiet) {
