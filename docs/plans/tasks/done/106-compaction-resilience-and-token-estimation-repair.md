@@ -51,6 +51,17 @@ The same independent reviewer accepted the13-file intake with safety repairs, lo
 - Repair (delegated Sanad worker, `oneshot-bb5d1ecd-e6af-4b16-9b23-8b6484448c46`): the case now prepares and deletes its own temporary Home with `setSanadHomeOverride`/`setSanadStateHomeOverride` and unchanged assertions, and `.gitleaks.toml` gained only the exact path `^agent/test/engine/adapters/codex_wire_pressure_regression_test\.dart$`. Coordinator re-verified independently: Agent analysis clean (3 s), the owning repository suite 26/26 (3 s), and gitleaks `no leaks found` (exit 0, 2 s).
 - Final checkpoint `080f022b4f92188415825b3a34ccd88872189d2e`; the `security-reviewed` label was applied under explicit user authorization, and Public CI `39357226643` succeeded with 14/14 jobs for that exact SHA. PR 210 stays Draft; no merge, no source handoff.
 
+#### User-Authorized Direct CLI Compaction — 2026-10-20
+
+Goal and locked scope (moved here from the isolated CLI worktree before its removal):
+
+- Expose the existing daemon-backed manual compaction command as `sanad session compact <session-id>` with structured `--json` output, without interactive REPL input or a new compaction framework.
+- Reuse existing session subcommand, client-discovery, Home/gateway, disposal and exit conventions. Require an explicit valid target session; no standalone fallback and no credential or Home substitution.
+- The existing `compactSession` helper retries a timed-out query. The direct command sends exactly once through a narrow backwards-compatible opt-out; no completion waiter and no change to engine, thinking, target ratio or transport fan-out.
+- Report `accepted`/`dispatched` only as admission, never as completed compaction.
+
+Gates: subcommand plus helper opt-out implemented; focused regressions cover argument/help routing, explicit Home/gateway propagation, JSON admission, controlled errors and timeout-without-second-dispatch; analyzers and focused suites pass with bounded timed logs; guidance and graph updated. Delivered under explicit Home/gateway with the six-file transfer into 106 (hashes preserved), independently reviewed (`5136a091`), and proven live by the delegated Sanad single-dispatch check above. Merge and protected-label changes stayed outside the worker's authority; the `security-reviewed` label was applied later by the coordinator under explicit user authorization.
+
 ## Authorized Consolidated Repair Queue — 2026-10-19
 
 This section is the current task list and overrides older scheduling, runtime-target and scope exclusions below. Earlier receipts remain historical evidence, not acceptance of new source changes. The plan remains at its existing `done/` path for link stability, but its status is **in progress**, not complete.
