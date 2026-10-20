@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/llm_request_dumper.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
@@ -1301,7 +1303,14 @@ void main() {
 
   test('completeStarted and failStarted automatically discover and persist relativeDumpPath from dumper', () async {
     LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+    final dumpHome = Directory.systemTemp.createTempSync(
+      'compaction_boundary_dump_',
+    );
     try {
+      setSanadHomeOverride(dumpHome.path);
+      setSanadStateHomeOverride(dumpHome.path);
+      await SanadHomeBootstrap.prepareAll();
+
       // 1. Success case: dump created in-flight, completeStarted called without explicit dump path
       const compIdSuccess = 'cmp-auto-dump-success';
       await LLMRequestDumper.recordActualRequest(
@@ -1388,7 +1397,10 @@ void main() {
         startsWith('request_dumps/compaction_dump_compaction_cmp-auto-dump-failure_'),
       );
     } finally {
-      LLMRequestDumper.environmentOverride = null;
+      LLMRequestDumper.resetForTesting();
+      setSanadHomeOverride(null);
+      setSanadStateHomeOverride(null);
+      if (dumpHome.existsSync()) dumpHome.deleteSync(recursive: true);
     }
   });
 
