@@ -1324,6 +1324,10 @@ class SessionQueryHandler {
       },
       if (operation.failureReason != null)
         'failure_reason': operation.failureReason!.wireValue,
+      if (operation.failureStage != null)
+        'failure_stage': operation.failureStage,
+      if (operation.failureCause != null)
+        'failure_cause': operation.failureCause,
       'created_at': (operation.completedAt ?? operation.startedAt)
           .toUtc()
           .toIso8601String(),

@@ -18,6 +18,7 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 
 import 'web_search/web_fetch_service.dart';
@@ -220,7 +221,34 @@ class LocalRuntimeCatalog {
     if (execRoot != null && execRoot.isNotEmpty) {
       return _pathResolver.validateAndNormalizeExecutionRoot(execRoot);
     }
-    return _resolveWorkspacePath(request.effectiveWorkspaceId);
+
+    final effectiveId = request.effectiveWorkspaceId;
+    if (effectiveId != null && effectiveId.startsWith('exec_root:')) {
+      final path = effectiveId.substring('exec_root:'.length);
+      return _pathResolver.validateAndNormalizeExecutionRoot(path);
+    }
+
+    if (effectiveId != null && effectiveId.isNotEmpty) {
+      final workspacePath = await _resolveWorkspacePath(effectiveId);
+      if (workspacePath != null && workspacePath.isNotEmpty) {
+        return workspacePath;
+      }
+    }
+
+    if (getIt.isRegistered<SessionManager>()) {
+      final sessionMeta = getIt<SessionManager>().getSessionMetadata(
+        request.sessionId,
+      );
+      final sessionExecRoot = sessionMeta?['execution_root']?.toString();
+      if (sessionExecRoot != null && sessionExecRoot.isNotEmpty) {
+        return _pathResolver.validateAndNormalizeExecutionRoot(sessionExecRoot);
+      }
+      final sessionWorkspacePath = sessionMeta?['workspace_path']?.toString();
+      if (sessionWorkspacePath != null && sessionWorkspacePath.isNotEmpty) {
+        return sessionWorkspacePath;
+      }
+    }
+    return null;
   }
 
   Future<String?> _resolveWorkspacePath(String? workspaceId) async {

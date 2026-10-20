@@ -10,6 +10,7 @@ import '../../core/models/agent_response.dart';
 import '../../core/models/message.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import '../llm_request_dumper.dart';
+import '../context/compaction_token_estimator.dart';
 import 'base_openai_adapter.dart';
 import 'codex_models_service.dart';
 import 'codex_responses_codec.dart';
@@ -129,7 +130,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         sha256.convert(utf8.encode(jsonEncode(value))).toString();
     final input = (body['input'] as List?) ?? const [];
     return WireInputMeasurement(
-      estimatedTokens: (jsonEncode(measured).length / 4).ceil(),
+      // Model-visible text is priced from the wire tree (opaque provider state
+      // excluded), while images are priced from their canonical dimensions in
+      // [history] instead of from the base64 transport that carries them.
+      estimatedTokens:
+          CompactionTokenEstimator.estimateWirePayload(
+            measured,
+            opaqueKeys: _opaqueWireKeys,
+          ) +
+          CompactionTokenEstimator.estimateMediaTokens(history),
       stableMaterialFingerprint: fingerprint({
         'instructions': body['instructions'],
         'tools': body['tools'],
@@ -169,6 +178,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       stream: true,
       preloadedAttachments: verifiedAttachments,
     );
+    final stopwatch = Stopwatch()..start();
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
       ..headers.addAll(_headers(options))
@@ -178,6 +188,16 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         url: url,
         headers: request.headers,
         body: body,
+        requestId: options.requestId,
+        provider: provider,
+        model: resolvedModel,
+        baseUrl: _normalizedBaseUrl(),
+        protocol: profile.effectiveProtocol,
+        stream: false,
+        safeOptions: options.toSafeDumpOptions(
+          stream: false,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -188,7 +208,14 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     late http.StreamedResponse response;
     try {
       response = await transport.send(request, operation: 'generateResponse');
-    } catch (_) {
+    } catch (error) {
+      if (LLMRequestDumper.isEnabled) {
+        await LLMRequestDumper.recordError(
+          error,
+          requestId: options.requestId,
+          duration: stopwatch.elapsed,
+        );
+      }
       await transport.dispose();
       rethrow;
     }
@@ -228,7 +255,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
           'message': normalized.message.toJson(),
           'finish_reason': normalized.finishReason.name,
           'usage': ?normalized.usage,
-        });
+        }, requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: normalized.finishReason.name,
+        );
       }
 
       return normalized;
@@ -237,7 +268,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
           'error': error.toString(),
-        });
+        }, requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: 'incomplete',
+        );
       }
       rethrow;
     } finally {
@@ -273,6 +308,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       stream: true,
       preloadedAttachments: verifiedAttachments,
     );
+    final stopwatch = Stopwatch()..start();
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
       ..headers.addAll(_headers(options))
@@ -282,6 +318,16 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         url: url,
         headers: request.headers,
         body: body,
+        requestId: options.requestId,
+        provider: provider,
+        model: resolvedModel,
+        baseUrl: _normalizedBaseUrl(),
+        protocol: profile.effectiveProtocol,
+        stream: true,
+        safeOptions: options.toSafeDumpOptions(
+          stream: true,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -292,7 +338,14 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     late http.StreamedResponse response;
     try {
       response = await transport.send(request, operation: 'generateStream');
-    } catch (_) {
+    } catch (error) {
+      if (LLMRequestDumper.isEnabled) {
+        await LLMRequestDumper.recordError(
+          error,
+          requestId: options.requestId,
+          duration: stopwatch.elapsed,
+        );
+      }
       await transport.dispose();
       rethrow;
     }
@@ -387,20 +440,36 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
           'message': normalized.message.toJson(),
           'finish_reason': normalized.finishReason.name,
           'usage': ?normalized.usage,
-        });
+        }, requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: normalized.finishReason.name,
+        );
       }
     } catch (error) {
       if (LLMRequestDumper.isEnabled) {
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
           'error': error.toString(),
-        });
+        }, requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: 'incomplete',
+        );
       }
       rethrow;
     } finally {
+      if (LLMRequestDumper.isEnabled) {
+        LLMRequestDumper.cleanupActiveDump(requestId: options.requestId);
+      }
       await transport.dispose();
     }
   }
+
+  /// Wire keys that carry provider-owned opaque state (encrypted reasoning
+  /// replay). The provider prices them under its own token models, so text
+  /// pricing must skip them instead of charging for the serialized transport.
+  static const _opaqueWireKeys = <String>{'encrypted_content'};
 
   CodexResponsesCodec _codec(LLMRequestOptions options) {
     final instance = options.providerInstanceId ?? profile.name;

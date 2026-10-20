@@ -9,6 +9,7 @@ import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 
 import 'local_workspace_runtime_service.dart';
@@ -34,15 +35,53 @@ class LocalRuntimeOrchestrator {
     AgentTurnRequest request,
   ) async {
     final metadata = Map<String, dynamic>.from(request.toMetadata());
+    final existingSessionMetadata = getIt.isRegistered<SessionManager>()
+        ? getIt<SessionManager>().getSessionMetadata(request.sessionId)
+        : null;
+
     final execRoot = request.executionRoot;
+    final workspaceId = request.effectiveWorkspaceId;
     if (execRoot != null && execRoot.isNotEmpty) {
       final normalized = _runtimeContextBuilder.pathResolver
           .validateAndNormalizeExecutionRoot(execRoot);
       if (normalized != null) {
         metadata['execution_root'] = normalized;
       }
+    } else if (workspaceId != null && workspaceId.startsWith('exec_root:')) {
+      final path = workspaceId.substring('exec_root:'.length);
+      final normalized = _runtimeContextBuilder.pathResolver
+          .validateAndNormalizeExecutionRoot(path);
+      if (normalized != null) {
+        metadata['execution_root'] = normalized;
+      }
+    } else if ((workspaceId == null || workspaceId.isEmpty) &&
+        metadata['execution_root'] == null &&
+        existingSessionMetadata?['execution_root'] != null) {
+      final normalized = _runtimeContextBuilder.pathResolver
+          .validateAndNormalizeExecutionRoot(
+            existingSessionMetadata!['execution_root']?.toString(),
+          );
+      if (normalized != null) {
+        metadata['execution_root'] = normalized;
+      }
     }
-    final workspaceId = request.effectiveWorkspaceId;
+
+    if (request.metadata.containsKey('allow_all_tools')) {
+      metadata['allow_all_tools'] =
+          request.metadata['allow_all_tools'] == true ||
+          request.metadata['allow_all_tools'] == 'true';
+    } else {
+      metadata['allow_all_tools'] = false;
+    }
+    if (metadata['allow_all_tools'] != true &&
+        metadata['permission_mode'] == 'full_access') {
+      metadata['permission_mode'] = 'default_mode';
+    }
+
+    if (workspaceId != null && workspaceId.startsWith('exec_root:')) {
+      return metadata;
+    }
+
     if (workspaceId == null || workspaceId.isEmpty) {
       return metadata;
     }

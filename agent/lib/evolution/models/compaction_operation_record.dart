@@ -24,6 +24,8 @@ class CompactionOperationRecord {
   final CompactionInternalSummary? internalSummary;
   final CompactionFailureReason? failureReason;
   final String? failureDetailJson;
+  final CompactionDurableDiagnostics? diagnostics;
+  final String? diagnosticsJson;
   final DateTime startedAt;
   final DateTime? completedAt;
 
@@ -42,6 +44,8 @@ class CompactionOperationRecord {
     this.internalSummary,
     this.failureReason,
     this.failureDetailJson,
+    this.diagnostics,
+    this.diagnosticsJson,
     required this.startedAt,
     this.completedAt,
   }) : assert(compactionId.isNotEmpty),
@@ -73,6 +77,26 @@ class CompactionOperationRecord {
   bool get isAuthoritativeProjection =>
       status == CompactionStatus.completed && internalSummary != null;
 
+  String? get failureStage {
+    final raw = failureDetailJson;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return decoded['stage']?.toString();
+    } catch (_) {}
+    return null;
+  }
+
+  String? get failureCause {
+    final raw = failureDetailJson;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return decoded['cause']?.toString();
+    } catch (_) {}
+    return null;
+  }
+
   /// Converts a validated engine candidate into a completed durable row.
   factory CompactionOperationRecord.fromCandidate({
     required CompactionCandidate candidate,
@@ -90,6 +114,10 @@ class CompactionOperationRecord {
       routeSignature: candidate.routeSignature,
       metrics: candidate.metrics,
       internalSummary: candidate.internalSummary,
+      diagnostics: candidate.diagnostics,
+      diagnosticsJson: candidate.diagnostics != null
+          ? jsonEncode(candidate.diagnostics!.toJson())
+          : null,
       startedAt: startedAt,
       completedAt: completedAt,
     );
@@ -114,6 +142,8 @@ class CompactionOperationRecord {
       routeSignature: routeSignature,
       failureReason: failureReason,
       failureDetailJson: failureDetailJson,
+      diagnostics: diagnostics,
+      diagnosticsJson: diagnosticsJson,
       startedAt: startedAt,
       completedAt: completedAt,
     );

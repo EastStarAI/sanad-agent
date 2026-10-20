@@ -523,9 +523,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
                 return Scaffold(
                   key: _scaffoldKey,
                   backgroundColor: Colors.transparent,
-                  drawer: isDesktop
-                      ? null
-                      : const _SidebarDrawer(),
+                  drawer: isDesktop ? null : const _SidebarDrawer(),
                   body: Column(
                     children: [
                       Expanded(
@@ -716,11 +714,36 @@ class _MainContent extends StatelessWidget {
   }
 
   DeviceWorkspace? _workspaceFromSession(Session? session) {
-    if (session == null || session.workspaceId == null) return null;
+    if (session == null) return null;
+    final workspaceId = session.workspaceId?.trim();
+    final execRoot =
+        session.metadata?['execution_root']?.toString().trim() ??
+        (session.workspacePath?.trim().isNotEmpty == true ? session.workspacePath!.trim() : null);
+
+    if (workspaceId == null || workspaceId.isEmpty) {
+      if (execRoot != null && execRoot.isNotEmpty) {
+        final folderName = execRoot.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty).lastOrNull ?? 'Workspace';
+        return DeviceWorkspace(
+          id: 'exec_root:$execRoot',
+          name: folderName,
+          path: execRoot,
+          trustState: 'untrusted',
+        );
+      }
+      return null;
+    }
+
+    final folderName = session.workspaceName?.trim().isNotEmpty == true
+        ? session.workspaceName!.trim()
+        : (execRoot != null && execRoot.isNotEmpty
+              ? execRoot.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty).lastOrNull ?? 'Workspace'
+              : workspaceId);
+
     return DeviceWorkspace(
-      id: session.workspaceId!,
-      name: session.workspaceName ?? 'Workspace',
-      path: session.workspacePath ?? '',
+      id: workspaceId,
+      name: folderName,
+      path: session.workspacePath ?? (execRoot ?? ''),
+      trustState: session.workspaceTrustState ?? 'untrusted',
     );
   }
 

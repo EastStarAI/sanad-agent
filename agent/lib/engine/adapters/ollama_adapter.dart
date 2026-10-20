@@ -229,6 +229,28 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     return ModelMetadata.unknownContextLimit;
   }
 
+  @override
+  Future<Map<String, dynamic>> buildRequestBody(
+    List<Message> history, {
+    required String resolvedModel,
+    required LLMRequestOptions options,
+    List<ToolSchema>? tools,
+    bool stream = false,
+  }) async {
+    final messages = await _prepareMessages(
+      history,
+      resolvedModel: resolvedModel,
+      options: options,
+    );
+    return _buildChatBody(
+      resolvedModel: resolvedModel,
+      messages: messages,
+      options: options,
+      tools: tools,
+      stream: stream,
+    );
+  }
+
   Map<String, dynamic> _buildChatBody({
     required String resolvedModel,
     required List<Map<String, dynamic>> messages,

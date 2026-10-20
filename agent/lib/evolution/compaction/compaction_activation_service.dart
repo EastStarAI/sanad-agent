@@ -54,12 +54,14 @@ class CompactionActivationService {
     required CompactionFailureReason failureReason,
     required DateTime completedAt,
     Map<String, dynamic>? failureDetail,
+    CompactionDurableDiagnostics? diagnostics,
   }) {
     final result = _boundaries.failStarted(
       compactionId: compactionId,
       failureReason: failureReason,
       completedAt: completedAt,
       failureDetail: failureDetail,
+      diagnostics: diagnostics,
     );
     if (result.outcome == CompactionTerminalOutcome.failed &&
         result.record != null) {

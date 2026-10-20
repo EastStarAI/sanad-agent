@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/interfaces/models/device_control.dart';
@@ -39,6 +40,7 @@ void main() {
     );
     handler = WorkspaceCommandHandler(
       runtimeService: runtime,
+      policyStore: const WorkspacePolicyStore(),
       bridge: SanadProtocolBridge(),
       admission: admission,
     );
@@ -278,6 +280,43 @@ void main() {
     final servers = (snapshot['global'] as Map)['servers'] as List;
     expect(servers, hasLength(1));
     expect((servers.first as Map)['name'], 'other');
+  });
+
+  test('rejects set_permission_mode when exec_root path does not exist', () async {
+    final envelope = await handler.buildWorkspaceSetPermissionModeEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.workspaceSetPermissionMode,
+        payload: {
+          'request_id': 'req-invalid-exec-root',
+          'workspace_id': 'exec_root:/nonexistent/directory/path/here',
+          'permission_mode': 'full_access',
+        },
+      ),
+      (_) async {},
+    );
+
+    expect(envelope['event'], 'error');
+    final payload = Map<String, dynamic>.from(envelope['payload'] as Map);
+    expect(payload['message'], contains('Execution root directory does not exist'));
+  });
+
+  test('validates and updates policy when exec_root path is a valid directory', () async {
+    final validDir = Directory('${tempDir.path}/valid_root')..createSync();
+    final envelope = await handler.buildWorkspaceSetPermissionModeEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.workspaceSetPermissionMode,
+        payload: {
+          'request_id': 'req-valid-exec-root',
+          'workspace_id': 'exec_root:${validDir.path}',
+          'permission_mode': 'full_access',
+        },
+      ),
+      (_) async {},
+    );
+
+    expect(envelope['event'], CanonicalEventTypes.workspaceSetPermissionMode);
+    final payload = Map<String, dynamic>.from(envelope['payload'] as Map);
+    expect(payload['permissionMode'], 'full_access');
   });
 }
 

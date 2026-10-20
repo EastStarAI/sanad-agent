@@ -55,12 +55,14 @@ import 'runtime/steer_coordinator.dart' as steer_lib;
 import 'runtime/tool_execution_coordinator.dart';
 import 'runtime/run_cancellation_scope.dart';
 import '../evolution/compaction/model_projection_builder.dart';
+import '../evolution/models/compaction_operation_record.dart';
 import '../core/agent_runtime_service.dart';
 import '../evolution/db/session_history_revision_repository.dart';
 import '../evolution/db/session_projection_revision_repository.dart';
 import '../engine/compaction/compaction.dart';
 import 'context/context.dart';
 import 'runtime/compaction_coordinator.dart';
+import 'runtime/compaction_request_factory.dart';
 import 'runtime/turn_route_state.dart';
 import '../core/provider_runtime/provider_instance_repository.dart';
 import '../core/provider_runtime/route_capability_resolver.dart';
@@ -217,6 +219,13 @@ class AgentRunner {
   Future<Map<String, dynamic>?>? _contextUsageSnapshotFuture;
   ConfirmedInputUsageBaseline? _pendingInputUsageBaseline;
   ConfirmedInputUsageBaseline? _confirmedInputUsageBaseline;
+  CompactionOperationRecord? _activeProjectionBoundary;
+
+  /// Compact versioned non-content proof of the request wire material whose
+  /// provider-confirmed usage backs the current context-usage snapshot.
+  /// Persisted with the snapshot so a later restore can prove the historical
+  /// wire request prefix and route match before reusing confirmed usage.
+  String? _confirmedWireProof;
   RequestPressureSnapshot? _lastPreflightPressure;
   bool _autoCompactionBlockedForRun = false;
   String? currentModelStepId;
@@ -421,6 +430,11 @@ class AgentRunner {
       if (activeProvider != null) 'provider_instance_id': activeProvider,
       if (_authoritativeRunId != null) 'run_id': _authoritativeRunId,
       if (currentModelStepId != null) 'model_step_id': currentModelStepId,
+      // Binds this confirmed usage to the complete ordered wire material and
+      // route that produced it, so a restore can prove compatibility against
+      // adapter remeasurement rather than trusting unproven legacy rows.
+      if (_confirmedWireProof != null)
+        'wire_proof': _confirmedWireProof,
       'observed_at': DateTime.now().toUtc().toIso8601String(),
     };
   }
@@ -431,17 +445,46 @@ class AgentRunner {
     _metricsTracker?.updateMetrics(response);
     final usage = response.usage;
     final pending = _pendingInputUsageBaseline;
-    if (usage == null || pending == null) return;
-    final inputTokens = LlmUsageSnapshot.fromProviderUsage(usage).inputTokens;
-    if (inputTokens != null) {
+    final activeBoundary = _activeProjectionBoundary;
+    final turnRequestId = _turnRoute.turnRequestId ?? '';
+    final now = DateTime.now().toUtc();
+
+    if (usage == null) {
+      return;
+    }
+
+    final snapshot = LlmUsageSnapshot.fromProviderUsage(usage);
+    final inputTokens = snapshot.inputTokens;
+
+    if (inputTokens == null) {
+      return;
+    }
+
+    if (pending != null) {
       _confirmedInputUsageBaseline = pending.copyWithInputTokens(inputTokens);
-      if (getIt.isRegistered<CompactionCoordinator>()) {
-        getIt<CompactionCoordinator>().reconcileLatestProviderUsage(
-          sessionId: sessionId,
-          routeSignature: pending.routeSignature,
-          inputTokens: inputTokens,
-        );
-      }
+      _confirmedWireProof = pending.wireMeasurement != null
+          ? RequestPressureEvaluator.wireProof(
+              wireMeasurement: pending.wireMeasurement!,
+              routeSignature: pending.routeSignature,
+            )
+          : null;
+    }
+
+    if (activeBoundary != null &&
+        pending?.routeSignature != null &&
+        getIt.isRegistered<CompactionCoordinator>()) {
+      final stepRequestId =
+          currentModelStepId != null && currentModelStepId!.isNotEmpty
+              ? '$turnRequestId:$currentModelStepId'
+              : turnRequestId;
+      getIt<CompactionCoordinator>().reconcilePostBoundaryUsage(
+        compactionId: activeBoundary.compactionId,
+        requestId: stepRequestId,
+        observedAt: now,
+        inputTokens: inputTokens,
+        cachedTokens: snapshot.cachedTokens,
+        routeSignature: pending!.routeSignature,
+      );
     }
   }
 
@@ -485,55 +528,127 @@ class AgentRunner {
   static LLMAdapter _wireMeasurementAdapter(LLMAdapter adapter) =>
       adapter is RateLimitedLLMAdapter ? adapter.providerAdapter : adapter;
 
+  /// Restores one provider-confirmed input baseline for [routeSignature].
+  ///
+  /// The confirmed value always comes from the timestamped per-step
+  /// `context_usage` snapshot when present, because the generic `usage` map on
+  /// the same assistant row is a mutable last-run value that can disagree with
+  /// the frozen per-call snapshot. `usage` remains a legacy fallback.
+  ///
+  /// Route identity follows authority: a `context_usage` provider/model
+  /// identity is authoritative when present, so a matching mutable legacy
+  /// `provider`/`model` value can never override a mismatched snapshot; a
+  /// recorded identity that is absent or empty never matches a candidate
+  /// alias, and candidate aliases themselves are never null.
+  ///
+  /// Adapters must expose [WireInputUsageMeasurer]. Unsupported/no-measurer
+  /// adapters and legacy/unbound receipts fail closed to explicit estimate.
+  /// A valid restored baseline requires a versioned `wire_proof` in
+  /// `context_usage` that matches the active adapter's remeasurement of the
+  /// historical request prefix and route signature, and requires the current
+  /// request to extend that prefix. Stale receipts from before an activated
+  /// compaction boundary are discarded by the same material proof, so no
+  /// wall-clock recency heuristic is required.
   Future<void> _restoreConfirmedInputUsageBaseline({
     required List<Message> prospectiveHistory,
-    required WireInputUsageMeasurer measurer,
+    required WireInputUsageMeasurer? measurer,
     required RouteSignature routeSignature,
     required String? providerId,
     required String? modelId,
-    required WireInputMeasurement currentMeasurement,
+    required WireInputMeasurement? currentMeasurement,
   }) async {
     if (_confirmedInputUsageBaseline != null) return;
+    if (measurer == null) {
+      // Unsupported/no-measurer adapters fail closed to explicit estimate.
+      return;
+    }
+    // Candidate provider aliases exclude null and empty values: an absent
+    // recorded identity must fail closed, not match via a null alias.
+    final providerIds = <String>{
+      routeSignature.providerInstanceId,
+      routeSignature.templateId,
+      ?providerId,
+    }.where((value) => value.isNotEmpty).toSet();
 
     for (var index = prospectiveHistory.length - 1; index >= 0; index--) {
       final message = prospectiveHistory[index];
       if (message.role != MessageRole.assistant) continue;
+
       final metadata = message.metadata;
+      final contextUsage = metadata?['context_usage'];
       final usage = metadata?['usage'];
-      final inputTokens = usage is Map ? usage['input_tokens'] : null;
+      final contextInputTokens = contextUsage is Map
+          ? contextUsage['input_tokens']
+          : null;
+      final usageInputTokens = usage is Map ? usage['input_tokens'] : null;
+      final inputTokens = contextInputTokens is num && contextInputTokens > 0
+          ? contextInputTokens
+          : usageInputTokens;
       if (inputTokens is! num || inputTokens <= 0) continue;
 
-      final recordedModel = metadata?['model']?.toString();
-      final recordedProvider = metadata?['provider']?.toString();
-      final contextUsage = metadata?['context_usage'];
-      final recordedContextProvider = contextUsage is Map
+      final contextUsageProvider = contextUsage is Map
           ? contextUsage['provider_instance_id']?.toString()
           : null;
-      final providerMatches =
-          <String?>{
-            routeSignature.providerInstanceId,
-            routeSignature.templateId,
-            providerId,
-          }.contains(recordedProvider) ||
-          <String?>{
-            routeSignature.providerInstanceId,
-            routeSignature.templateId,
-            providerId,
-          }.contains(recordedContextProvider);
-      if (recordedModel != routeSignature.modelId || !providerMatches) {
+      final contextUsageModel = contextUsage is Map
+          ? contextUsage['model_id']?.toString()
+          : null;
+      final legacyProvider = metadata?['provider']?.toString();
+      final legacyModel = metadata?['model']?.toString();
+      // A present authoritative identity wins; the mutable legacy value is
+      // consulted only when the snapshot carries no identity at all.
+      final recordedProvider =
+          (contextUsageProvider == null || contextUsageProvider.isEmpty)
+          ? legacyProvider
+          : contextUsageProvider;
+      final recordedModel =
+          (contextUsageModel == null || contextUsageModel.isEmpty)
+          ? legacyModel
+          : contextUsageModel;
+      if (recordedProvider == null ||
+          recordedProvider.isEmpty ||
+          !providerIds.contains(recordedProvider) ||
+          recordedModel == null ||
+          recordedModel.isEmpty ||
+          recordedModel != routeSignature.modelId) {
+        continue;
+      }
+
+      final persistedProof = contextUsage is Map
+          ? contextUsage['wire_proof']?.toString()
+          : null;
+      if (persistedProof == null ||
+          persistedProof.isEmpty ||
+          !RequestPressureEvaluator.isValidWireProof(persistedProof)) {
+        // Missing, unbound legacy, or unknown-version proof fails closed.
         continue;
       }
 
       final measuredMessages = prospectiveHistory.sublist(0, index);
       final toolSchemas = registry.allTools.map((tool) => tool.schema).toList();
+
       final measurement = await measurer.measureInput(
         measuredMessages,
         tools: toolSchemas,
         modelOverride: modelId,
         options: _requestOptionsForTurn(providerId),
       );
-      if (measurement == null) return;
-      if (!currentMeasurement.extendsMeasurement(measurement)) return;
+      if (measurement == null) continue;
+
+      final expectedProof = RequestPressureEvaluator.wireProof(
+        wireMeasurement: measurement,
+        routeSignature: routeSignature,
+      );
+      if (persistedProof != expectedProof) {
+        // Historical wire material, tool schemas, prompt, or route mismatch:
+        // fails closed.
+        continue;
+      }
+
+      if (currentMeasurement == null ||
+          !currentMeasurement.extendsMeasurement(measurement)) {
+        return;
+      }
+
       _confirmedInputUsageBaseline = ConfirmedInputUsageBaseline(
         routeSignature: routeSignature,
         inputTokens: inputTokens.round(),
@@ -803,6 +918,7 @@ class AgentRunner {
     currentModelStepId = 'model_step_${const Uuid().v4()}';
     _metricsTracker?.beginInvocation();
     _contextUsageSnapshotFuture = null;
+    _confirmedWireProof = null;
   }
 
   @visibleForTesting
@@ -1345,37 +1461,40 @@ class AgentRunner {
             providerId: providerInstanceId,
             modelId: modelId,
           );
-          final request = CompactionEngineRequest(
-            compactionId: '',
-            sessionId: sessionId,
-            trigger: CompactionTrigger.overflow,
-            sourceRevision: revision.toCompactionRevision(),
-            routeSignature: routeSignature,
-            contextWindowTokens: contextWindow,
-            timeline: timeline,
-            systemPrompt: contextAssembler.assemble() ?? '',
-            runtimeContext: '',
-            toolSchemas: const [],
-            providerProjection: failedProviderProjection,
-            providerTools: failedProviderTools ?? const [],
-            providerRequestOptions: _compactionRequestOptions(
-              providerInstanceId,
-              compactionId: 'overflow',
-            ),
-            projectionRevision: projectionRevision,
-            previousSummary: activeBoundary?.internalSummary,
-            previousSourceRange: activeBoundary?.sourceRange,
-            targetRequestTokens: targetRequestTokens,
-            thresholdRatio: policy.threshold,
-          );
-          final outcome = await coordinator.runCompaction(
-            request: request,
-            force: true,
-          );
-          if (outcome?.status == CompactionStatus.completed) {
-            _refreshCanonicalHistoryAfterCompaction();
-            return true;
-          }
+          try {
+            final request = CompactionEngineRequest(
+              compactionId: '',
+              sessionId: sessionId,
+              trigger: CompactionTrigger.overflow,
+              sourceRevision: revision.toCompactionRevision(),
+              routeSignature: routeSignature,
+              contextWindowTokens: contextWindow,
+              timeline: timeline,
+              systemPrompt: contextAssembler.assemble() ?? '',
+              runtimeContext: '',
+              toolSchemas: const [],
+              providerProjection: failedProviderProjection,
+              providerTools: failedProviderTools ?? const [],
+              providerRequestOptions: _compactionRequestOptions(
+                providerInstanceId,
+                compactionId: 'overflow',
+              ),
+              projectionRevision: projectionRevision,
+              previousSummary: activeBoundary?.internalSummary,
+              previousSourceRange: activeBoundary?.sourceRange,
+              targetRequestTokens: targetRequestTokens,
+              thresholdRatio: policy.threshold,
+              targetRatio: policy.targetRatio,
+            );
+            final outcome = await coordinator.runCompaction(
+              request: request,
+              force: true,
+            );
+            if (outcome?.status == CompactionStatus.completed) {
+              _refreshCanonicalHistoryAfterCompaction();
+              return true;
+            }
+          } catch (_) {}
         }
       }
     }
@@ -1603,6 +1722,12 @@ class AgentRunner {
             apiKey: apiKey,
           );
         }
+        final turnRequestId = _turnRoute.turnRequestId ?? '';
+        final stepRequestId =
+            currentModelStepId != null && currentModelStepId!.isNotEmpty
+                ? '$turnRequestId:$currentModelStepId'
+                : turnRequestId;
+        final activeBoundary = _activeProjectionBoundary;
         try {
           await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
@@ -1610,12 +1735,37 @@ class AgentRunner {
             providerId: provider,
             modelId: model,
           );
+          final pending = _pendingInputUsageBaseline;
+          if (activeBoundary != null &&
+              pending?.routeSignature != null &&
+              getIt.isRegistered<CompactionCoordinator>()) {
+            getIt<CompactionCoordinator>().reservePostBoundaryDispatch(
+              compactionId: activeBoundary.compactionId,
+              requestId: stepRequestId,
+              routeSignature: pending!.routeSignature,
+              dispatchedAt: DateTime.now().toUtc(),
+            );
+          }
           response = await route.adapter.generateResponse(
             effectiveHistory,
             tools: tools,
             modelOverride: route.modelOverride,
             options: _requestOptionsForTurn(provider),
           );
+        } catch (e) {
+          final pending = _pendingInputUsageBaseline;
+          if (activeBoundary != null &&
+              pending?.routeSignature != null &&
+              getIt.isRegistered<CompactionCoordinator>()) {
+            getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+              compactionId: activeBoundary.compactionId,
+              requestId: stepRequestId,
+              observedAt: DateTime.now().toUtc(),
+              missingReason: 'no_provider_usage',
+              routeSignature: pending!.routeSignature,
+            );
+          }
+          rethrow;
         } finally {
           if (_stopRequested) _providerRequestInFlight = false;
         }
@@ -1660,6 +1810,9 @@ class AgentRunner {
         if (provider != null) {
           attemptsByProviderInstanceId[provider] = providerAttempt + 1;
         }
+        effectiveHistory = await _prepareProviderHistory(
+          runtimeSystemPrompt: runtimeSystemPrompt,
+        );
         final refreshedRouting = _turnRoute.resolveTurnRouting();
         model = refreshedRouting.model;
         provider = refreshedRouting.providerId;
@@ -1669,6 +1822,32 @@ class AgentRunner {
     }
     _turnRoute.invalidateResolvedRoute();
     _updateMetrics(response);
+    final activeBoundary = _activeProjectionBoundary;
+    final pending = _pendingInputUsageBaseline;
+    if (activeBoundary != null &&
+        pending?.routeSignature != null &&
+        getIt.isRegistered<CompactionCoordinator>()) {
+      final responseUsage = response.usage;
+      final snapshot = responseUsage != null
+          ? LlmUsageSnapshot.fromProviderUsage(responseUsage)
+          : null;
+      if (snapshot?.inputTokens == null) {
+        final turnRequestId = _turnRoute.turnRequestId ?? '';
+        final stepRequestId =
+            currentModelStepId != null && currentModelStepId!.isNotEmpty
+                ? '$turnRequestId:$currentModelStepId'
+                : turnRequestId;
+        getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+          compactionId: activeBoundary.compactionId,
+          requestId: stepRequestId,
+          observedAt: DateTime.now().toUtc(),
+          missingReason: response.usage == null
+              ? 'no_provider_usage'
+              : 'missing_input_tokens',
+          routeSignature: pending!.routeSignature,
+        );
+      }
+    }
     final responseMessage = response.message.copyWith(
       finishReason: response.finishReason == LLMFinishReason.unknown
           ? response.message.finishReason
@@ -1927,6 +2106,13 @@ class AgentRunner {
             apiKey: apiKey,
           );
         }
+        final turnRequestId = _turnRoute.turnRequestId ?? '';
+        final stepRequestId =
+            currentModelStepId != null && currentModelStepId!.isNotEmpty
+                ? '$turnRequestId:$currentModelStepId'
+                : turnRequestId;
+        final activeBoundary = _activeProjectionBoundary;
+        var callRecordedUsage = false;
         try {
           await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
@@ -1934,55 +2120,102 @@ class AgentRunner {
             providerId: provider,
             modelId: model,
           );
-          await for (final response in route.adapter.generateStream(
-            effectiveHistory,
-            tools: tools,
-            modelOverride: route.modelOverride,
-            options: _requestOptionsForTurn(provider),
-          )) {
-            if (_stopRequested) return;
-            _clearResumingOnProviderProgress();
-            // Any provider event makes a transparent retry unsafe: reasoning,
-            // metadata, or a partial tool call may already be visible or carry
-            // state even when no final-content text has arrived yet.
-            streamStarted = true;
-            _updateMetrics(response);
-            lastMessage = response.message;
-            if (response.finishReason != LLMFinishReason.unknown) {
-              finishReason = response.finishReason;
-            }
-            if (response.message.toolCalls?.isNotEmpty ?? false) {
-              isToolCall = true;
-              accumulatedToolCalls ??= [];
-              accumulatedToolCalls.addAll(response.message.toolCalls!);
-            }
+          final pending = _pendingInputUsageBaseline;
+          if (activeBoundary != null &&
+              pending?.routeSignature != null &&
+              getIt.isRegistered<CompactionCoordinator>()) {
+            getIt<CompactionCoordinator>().reservePostBoundaryDispatch(
+              compactionId: activeBoundary.compactionId,
+              requestId: stepRequestId,
+              routeSignature: pending!.routeSignature,
+              dispatchedAt: DateTime.now().toUtc(),
+            );
+          }
+          try {
+            await for (final response in route.adapter.generateStream(
+              effectiveHistory,
+              tools: tools,
+              modelOverride: route.modelOverride,
+              options: _requestOptionsForTurn(provider),
+            )) {
+              if (_stopRequested) return;
+              _clearResumingOnProviderProgress();
+              // Any provider event makes a transparent retry unsafe: reasoning,
+              // metadata, or a partial tool call may already be visible or carry
+              // state even when no final-content text has arrived yet.
+              streamStarted = true;
+              final responseUsage = response.usage;
+              if (responseUsage != null) {
+                final snapshot =
+                    LlmUsageSnapshot.fromProviderUsage(responseUsage);
+                if (snapshot.inputTokens != null) {
+                  callRecordedUsage = true;
+                }
+              }
+              _updateMetrics(response);
+              lastMessage = response.message;
+              if (response.finishReason != LLMFinishReason.unknown) {
+                finishReason = response.finishReason;
+              }
+              if (response.message.toolCalls?.isNotEmpty ?? false) {
+                isToolCall = true;
+                accumulatedToolCalls ??= [];
+                accumulatedToolCalls.addAll(response.message.toolCalls!);
+              }
 
-            if (response.message.thought != null) {
-              final thoughtDelta = response.message.thought!;
-              thought = (thought ?? '') + thoughtDelta;
-              if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
-                await onThoughtDelta(thoughtDelta);
+              if (response.message.thought != null) {
+                final thoughtDelta = response.message.thought!;
+                thought = (thought ?? '') + thoughtDelta;
+                if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
+                  await onThoughtDelta(thoughtDelta);
+                }
+              }
+              if (response.message.reasoning != null) {
+                final reasoningDelta = response.message.reasoning!;
+                reasoning = (reasoning ?? '') + reasoningDelta;
+                if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
+                  await onReasoningDelta(reasoningDelta);
+                }
+              }
+              if (response.message.providerState != null) {
+                providerState = response.message.providerState;
+              }
+              if (response.message.metadata != null) {
+                accumulatedMessageMetadata.addAll(response.message.metadata!);
+              }
+
+              final chunk = response.message.content ?? '';
+              fullContent += chunk;
+              if (chunk.isNotEmpty) {
+                yield chunk;
               }
             }
-            if (response.message.reasoning != null) {
-              final reasoningDelta = response.message.reasoning!;
-              reasoning = (reasoning ?? '') + reasoningDelta;
-              if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
-                await onReasoningDelta(reasoningDelta);
-              }
+            if (!callRecordedUsage &&
+                activeBoundary != null &&
+                pending?.routeSignature != null &&
+                getIt.isRegistered<CompactionCoordinator>()) {
+              getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+                compactionId: activeBoundary.compactionId,
+                requestId: stepRequestId,
+                observedAt: DateTime.now().toUtc(),
+                missingReason: 'no_provider_usage',
+                routeSignature: pending!.routeSignature,
+              );
             }
-            if (response.message.providerState != null) {
-              providerState = response.message.providerState;
+          } catch (e) {
+            if (!callRecordedUsage &&
+                activeBoundary != null &&
+                pending?.routeSignature != null &&
+                getIt.isRegistered<CompactionCoordinator>()) {
+              getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+                compactionId: activeBoundary.compactionId,
+                requestId: stepRequestId,
+                observedAt: DateTime.now().toUtc(),
+                missingReason: 'no_provider_usage',
+                routeSignature: pending!.routeSignature,
+              );
             }
-            if (response.message.metadata != null) {
-              accumulatedMessageMetadata.addAll(response.message.metadata!);
-            }
-
-            final chunk = response.message.content ?? '';
-            fullContent += chunk;
-            if (chunk.isNotEmpty) {
-              yield chunk;
-            }
+            rethrow;
           }
         } finally {
           if (_stopRequested) _providerRequestInFlight = false;
@@ -2028,6 +2261,9 @@ class AgentRunner {
         if (provider != null) {
           attemptsByProviderInstanceId[provider] = providerAttempt + 1;
         }
+        effectiveHistory = await _prepareProviderHistory(
+          runtimeSystemPrompt: runtimeSystemPrompt,
+        );
         final refreshedRouting = _turnRoute.resolveTurnRouting();
         model = refreshedRouting.model;
         provider = refreshedRouting.providerId;
@@ -2371,15 +2607,17 @@ class AgentRunner {
   List<Message> _providerConversationMessages() {
     if (getIt.isRegistered<ModelProjectionBuilder>()) {
       try {
-        return getIt<ModelProjectionBuilder>()
-            .buildForSession(sessionId)
-            .conversationMessages;
+        final projection = getIt<ModelProjectionBuilder>()
+            .buildForSession(sessionId);
+        _activeProjectionBoundary = projection.activeBoundary;
+        return projection.conversationMessages;
       } catch (error) {
         _logger.warning(
           'Compaction projection unavailable for $sessionId: $error',
         );
       }
     }
+    _activeProjectionBoundary = null;
     return history;
   }
 
@@ -2581,8 +2819,11 @@ class AgentRunner {
         ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
         : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
     final turnAdapter = _wireMeasurementAdapter(_turnRoute.adapterForTurn());
-    final wireMeasurement = turnAdapter is WireInputUsageMeasurer
-        ? await (turnAdapter as WireInputUsageMeasurer).measureInput(
+    final measurementAdapter = turnAdapter is WireInputUsageMeasurer
+        ? turnAdapter as WireInputUsageMeasurer
+        : null;
+    final wireMeasurement = measurementAdapter != null
+        ? await measurementAdapter.measureInput(
             prospectiveHistory,
             tools: registry.allTools.map((tool) => tool.schema).toList(),
             modelOverride: routing.model,
@@ -2609,11 +2850,23 @@ class AgentRunner {
     if (turnAdapter is WireInputUsageMeasurer && wireMeasurement != null) {
       await _restoreConfirmedInputUsageBaseline(
         prospectiveHistory: prospectiveHistory,
-        measurer: turnAdapter as WireInputUsageMeasurer,
+        measurer: measurementAdapter,
         routeSignature: routeSignature,
         providerId: routing.providerId,
         modelId: routing.model,
         currentMeasurement: wireMeasurement,
+      );
+    } else {
+      // Generic OpenAI-compatible adapters expose no wire measurement, but
+      // their own provider-confirmed input must still drive admission instead
+      // of an underestimated character fallback.
+      await _restoreConfirmedInputUsageBaseline(
+        prospectiveHistory: prospectiveHistory,
+        measurer: null,
+        routeSignature: routeSignature,
+        providerId: routing.providerId,
+        modelId: routing.model,
+        currentMeasurement: null,
       );
     }
     final toolSchemas = registry.allTools
@@ -2647,57 +2900,72 @@ class AgentRunner {
         return false;
       }
     }
-    final request = CompactionEngineRequest(
-      compactionId: '',
-      sessionId: sessionId,
-      trigger: CompactionTrigger.auto,
-      sourceRevision: revision.toCompactionRevision(),
-      routeSignature: routeSignature,
-      contextWindowTokens: contextWindow,
-      preflightPressure: preflightPressure,
-      timeline: timelineEntries,
-      systemPrompt: contextAssembler.assemble() ?? '',
-      runtimeContext: runtimeSystemPrompt ?? '',
-      toolSchemas: toolSchemas,
-      providerProjection: prospectiveHistory,
-      providerTools: registry.allTools.map((tool) => tool.schema).toList(),
-      providerRequestOptions: _compactionRequestOptions(
-        routing.providerId,
-        compactionId: 'auto',
-      ),
-      projectionRevision: _currentProjectionRevision(),
-      previousSummary: projection.activeBoundary?.internalSummary,
-      previousSourceRange: projection.activeBoundary?.sourceRange,
-      targetRequestTokens:
-          (_effectiveInputWindow(contextWindow) * policy.targetRatio).round(),
-      thresholdRatio: policy.threshold,
-    );
-    final outcome = await getIt<CompactionCoordinator>().runCompaction(
-      request: request,
-      force: true,
-    );
-    if (outcome?.status == CompactionStatus.completed) {
-      _lastCompactionCompletedAt = DateTime.now().toUtc();
-      _autoCompactionBlockedForRun = false;
-      _refreshCanonicalHistoryAfterCompaction();
-      return true;
-    }
-    if (outcome?.status == CompactionStatus.failed) {
+    try {
+      final request = CompactionEngineRequest(
+        compactionId: '',
+        sessionId: sessionId,
+        trigger: CompactionTrigger.auto,
+        sourceRevision: revision.toCompactionRevision(),
+        routeSignature: routeSignature,
+        contextWindowTokens: contextWindow,
+        preflightPressure: preflightPressure,
+        timeline: timelineEntries,
+        systemPrompt: contextAssembler.assemble() ?? '',
+        runtimeContext: runtimeSystemPrompt ?? '',
+        toolSchemas: toolSchemas,
+        providerProjection: prospectiveHistory,
+        providerTools: registry.allTools.map((tool) => tool.schema).toList(),
+        providerRequestOptions: _compactionRequestOptions(
+          routing.providerId,
+          compactionId: 'auto',
+        ),
+        projectionRevision: _currentProjectionRevision(),
+        previousSummary: projection.activeBoundary?.internalSummary,
+        previousSourceRange: projection.activeBoundary?.sourceRange,
+        targetRequestTokens:
+            (_effectiveInputWindow(contextWindow) * policy.targetRatio).round(),
+        thresholdRatio: policy.threshold,
+        targetRatio: policy.targetRatio,
+      );
+      final outcome = await getIt<CompactionCoordinator>().runCompaction(
+        request: request,
+        force: true,
+      );
+      if (outcome?.status == CompactionStatus.completed) {
+        _lastCompactionCompletedAt = DateTime.now().toUtc();
+        _autoCompactionBlockedForRun = false;
+        _refreshCanonicalHistoryAfterCompaction();
+        return true;
+      }
+      if (outcome?.status == CompactionStatus.failed) {
+        _autoCompactionBlockedForRun = true;
+      }
+      return false;
+    } catch (_) {
       _autoCompactionBlockedForRun = true;
+      return false;
     }
-    return false;
   }
 
   LLMRequestOptions _compactionRequestOptions(
     String? providerInstanceId, {
     required String compactionId,
   }) {
-    return LLMRequestOptions(
+    final base = _requestOptionsForTurn(providerInstanceId);
+    final routing = _turnRoute.resolveTurnRouting();
+    final route = getIt<AgentRuntimeService>().resolveSignature(
+      providerId: routing.providerId,
+      modelId: routing.model,
+    );
+    final uniqueCompactionId = compactionId.isEmpty
+        ? const Uuid().v4()
+        : '$compactionId:${const Uuid().v4()}';
+    return CompactionRequestFactory.buildCompactionRequestOptions(
       sessionId: sessionId,
-      requestId: 'compaction:$compactionId:${const Uuid().v4()}',
-      providerInstanceId: providerInstanceId,
-      thinkingMode: _turnRoute.effectiveThinkingMode,
-      cancellationScope: _cancellationScope,
+      compactionId: uniqueCompactionId,
+      routeSignature: route,
+      baseOptions: base,
+      fallbackThinkingMode: _turnRoute.effectiveThinkingMode,
     );
   }
 
@@ -2730,6 +2998,12 @@ class AgentRunner {
     String? runtimeSystemPrompt,
   }) {
     return _prepareProviderHistory(runtimeSystemPrompt: runtimeSystemPrompt);
+  }
+
+  /// Test hook for Plan 53d request options resolution.
+  @visibleForTesting
+  LLMRequestOptions debugRequestOptionsForTurn([String? providerInstanceId]) {
+    return _requestOptionsForTurn(providerInstanceId);
   }
 
   /// Builds the same idle provider payload used by an ordinary next request,
