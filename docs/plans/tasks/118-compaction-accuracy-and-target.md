@@ -124,6 +124,34 @@ Findings reported, not changed:
 
 Still remaining: independent review and the Stage3A live acceptance on the Test Home.
 
+### Round 3 — 118b writer, live r1 findings, 2026-10-21 (on `a80a59f2`, then merged with `origin/main` `4fa4dd72`)
+
+Input: 118b live r1 on Test Home 1, route OpenCode Go `deepseek-v4.1-flash`, which resolves `W` = 1,000,000.
+
+What passed:
+
+- A manual compaction met the target: the first confirmed post-input was 63,687, 6.37% of `W`.
+- The small-session no-op.
+- The Client tile shows `W`.
+- Restart and below-threshold, but neither could discriminate at `W` = 1M.
+
+Auto compaction was budget-blocked: crossing 90% of a 1M window costs over 900k input per call.
+
+| Finding | Result | Red → green evidence |
+|---|---|---|
+| D1. Fixed overhead under-measured on the manual path | Cause: `handleCompactCommand` seeded from a fresh session runner without the per-turn tool catalog or the runtime context. The measured overhead (1125) therefore missed the runtime system context and the 13 tools the follow-up carried (about 3863 by chars/4), and the summary pass lacked the ordinary tool list. `LocalRuntimeOrchestrator.prepareIdleRequest` now registers the same catalog and builds the same runtime context as an ordinary request; the idle request shape is shared with suspended resume. A runner-level check confirms the seed's instructions and tools equal the ordinary request's for the same inputs. The rest of the under-estimate (63,687 confirmed versus 54,800 estimated) is only partly overhead: about 2,700 is the overhead gap and about 6,100 (11%) is the summary and tail estimate. The retained tail was `estimated` (`proven_receipts=0`, since the imported receipts came from another instance and model), so the chars/4 rate applied. A same-route receipt inside the tail moves it to `mixed`. | `r2-d1-red.log` (runtime orchestrator never consulted), `r2-d1-green.log` |
+| D2. "Auto threshold" missing from the tile after restart and reopen | Cause: the Client history-row mapper dropped `auto_threshold_tokens`. Live events already carried it. This predates 118b (absent at `66e21c47`). | `r2-d2-red.log`, `r2-d2-green.log` |
+| G2. Pressure decision not observable on a turn that does not compact | Every automatic pressure decision now logs one fine-level scalar line: `auto_pressure basis=… estimated=… confirmed=…\|none threshold=… window=… capped=… decision=below_threshold\|cooldown\|compact`. | `r2-g2-red.log` (no record), `r2-g2-green.log` |
+
+Gates after the merge:
+
+- Agent `fvm dart analyze` clean; full agent suite +3251 ~14 (`r2-final-agent-suite.log`).
+- Daemon E2E 11/11 with `--concurrency=1` (`r2-final-daemon-e2e.log`).
+- Client `fvm flutter analyze` clean; full Client suite +1927 ~1 (`r2-final-client-suite-rerun.log`). The first run's two MCP test files failed to load ("Unable to connect to flutter_tester process"), then passed alone and in the full rerun.
+- Wiki lint passes.
+
+For a smaller-window live route (for example `W` ≈ 128k): the threshold is 115,200 and the target 12,800. With Sanad's fixed overhead (about 4k), a 2048 summary reservation and a summary of about 2k, the tail budget is about 6.7k, so the target is attainable only with a short tail. `target_feasibility` should still read `feasible`. Auto compaction records `before_measurement_kind` `mixed` or `confirmed` from the route's own receipts, and `retained_tail_cost_kind` `mixed` when the tail contains same-route receipts. Set `LOG_LEVEL=FINE` to see `auto_pressure` lines.
+
 ## Delivery Split
 
 Task 118 is delivered in two PRs. This file stays in `docs/plans/tasks/` until 118b lands.
