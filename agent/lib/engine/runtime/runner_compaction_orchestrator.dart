@@ -1,10 +1,13 @@
 import 'dart:async';
 
+import 'package:logging/logging.dart';
+
 import '../../capabilities/models/tool_schema.dart';
 import '../../capabilities/registry/tools_registry.dart';
 import '../../core/agent_runtime_service.dart';
 import '../../core/config.dart';
 import '../../core/di.dart';
+import '../../core/models/llm_finish_reason.dart';
 import '../../core/models/llm_usage_snapshot.dart';
 import '../../core/models/message.dart';
 import '../../evolution/compaction/model_projection_builder.dart';
@@ -75,6 +78,25 @@ abstract class RunnerCompactionHost {
 /// idle compaction provider seed.
 class RunnerCompactionOrchestrator {
   static const Duration compactionCooldown = Duration(seconds: 30);
+  static final Logger _logger = Logger('RunnerCompactionOrchestrator');
+
+  /// Fine-level scalar record of one automatic pressure decision (Task 118b),
+  /// so a turn that does not compact still shows whether admission used a
+  /// provider receipt or the estimate. No session, content or route identity.
+  static void _logPressureDecision(
+    RequestPressureSnapshot pressure,
+    String decision,
+  ) {
+    _logger.fine(
+      'auto_pressure basis=${pressure.measurementKind.wireValue} '
+      'estimated=${pressure.estimatedRequestTokens} '
+      'confirmed=${pressure.confirmedInputTokens ?? 'none'} '
+      'threshold=${pressure.thresholdTokens} '
+      'window=${pressure.windowTokens} '
+      'capped=${pressure.thresholdCappedByUsableBudget} '
+      'decision=$decision',
+    );
+  }
 
   final RunnerCompactionHost host;
 
@@ -161,19 +183,25 @@ class RunnerCompactionOrchestrator {
   /// A response without usage or without input tokens leaves the pending
   /// baseline staged, so a stream whose usage arrives only in a later chunk
   /// still confirms it.
-  void confirmInputUsageBaseline(Map<String, dynamic>? usage) {
+  ///
+  /// Usage that cannot be trusted never calibrates (Task 118b): a response
+  /// that failed or was cancelled, and a zero (unavailable) input count.
+  void confirmInputUsageBaseline(
+    Map<String, dynamic>? usage, {
+    LLMFinishReason finishReason = LLMFinishReason.unknown,
+  }) {
     final pending = pendingInputUsageBaseline;
     final activeBoundary = host.activeProjectionBoundary;
     final now = DateTime.now().toUtc();
 
-    if (usage == null) {
+    if (usage == null || !isCalibrationUsable(finishReason)) {
       return;
     }
 
     final snapshot = LlmUsageSnapshot.fromProviderUsage(usage);
     final inputTokens = snapshot.inputTokens;
 
-    if (inputTokens == null) {
+    if (inputTokens == null || inputTokens <= 0) {
       return;
     }
 
@@ -200,6 +228,12 @@ class RunnerCompactionOrchestrator {
       );
     }
   }
+
+  /// Whether usage from a response with [finishReason] may calibrate pressure:
+  /// never from a failed or cancelled response.
+  static bool isCalibrationUsable(LLMFinishReason finishReason) =>
+      finishReason != LLMFinishReason.failed &&
+      finishReason != LLMFinishReason.cancelled;
 
   /// Reserves the post-boundary dispatch of the current step when a compaction
   /// boundary is active and the pending baseline carries a route. Returns the
@@ -310,66 +344,13 @@ class RunnerCompactionOrchestrator {
       // Unsupported/no-measurer adapters fail closed to explicit estimate.
       return;
     }
-    // Candidate provider aliases exclude null and empty values: an absent
-    // recorded identity must fail closed, not match via a null alias.
-    final providerIds = <String>{
-      routeSignature.providerInstanceId,
-      routeSignature.templateId,
-      ?providerId,
-    }.where((value) => value.isNotEmpty).toSet();
-
     for (var index = prospectiveHistory.length - 1; index >= 0; index--) {
-      final message = prospectiveHistory[index];
-      if (message.role != MessageRole.assistant) continue;
-
-      final metadata = message.metadata;
-      final contextUsage = metadata?['context_usage'];
-      final usage = metadata?['usage'];
-      final contextInputTokens = contextUsage is Map
-          ? contextUsage['input_tokens']
-          : null;
-      final usageInputTokens = usage is Map ? usage['input_tokens'] : null;
-      final inputTokens = contextInputTokens is num && contextInputTokens > 0
-          ? contextInputTokens
-          : usageInputTokens;
-      if (inputTokens is! num || inputTokens <= 0) continue;
-
-      final contextUsageProvider = contextUsage is Map
-          ? contextUsage['provider_instance_id']?.toString()
-          : null;
-      final contextUsageModel = contextUsage is Map
-          ? contextUsage['model_id']?.toString()
-          : null;
-      final legacyProvider = metadata?['provider']?.toString();
-      final legacyModel = metadata?['model']?.toString();
-      // A present authoritative identity wins; the mutable legacy value is
-      // consulted only when the snapshot carries no identity at all.
-      final recordedProvider =
-          (contextUsageProvider == null || contextUsageProvider.isEmpty)
-          ? legacyProvider
-          : contextUsageProvider;
-      final recordedModel =
-          (contextUsageModel == null || contextUsageModel.isEmpty)
-          ? legacyModel
-          : contextUsageModel;
-      if (recordedProvider == null ||
-          recordedProvider.isEmpty ||
-          !providerIds.contains(recordedProvider) ||
-          recordedModel == null ||
-          recordedModel.isEmpty ||
-          recordedModel != routeSignature.modelId) {
-        continue;
-      }
-
-      final persistedProof = contextUsage is Map
-          ? contextUsage['wire_proof']?.toString()
-          : null;
-      if (persistedProof == null ||
-          persistedProof.isEmpty ||
-          !RequestPressureEvaluator.isValidWireProof(persistedProof)) {
-        // Missing, unbound legacy, or unknown-version proof fails closed.
-        continue;
-      }
+      final receipt = ConfirmedUsageReceipt.read(
+        prospectiveHistory[index],
+        routeSignature: routeSignature,
+        providerAlias: providerId,
+      );
+      if (receipt == null) continue;
 
       final measuredMessages = prospectiveHistory.sublist(0, index);
       final toolSchemas = host.registry.allTools
@@ -384,11 +365,7 @@ class RunnerCompactionOrchestrator {
       );
       if (measurement == null) continue;
 
-      final expectedProof = RequestPressureEvaluator.wireProof(
-        wireMeasurement: measurement,
-        routeSignature: routeSignature,
-      );
-      if (persistedProof != expectedProof) {
+      if (!receipt.provenBy(measurement, routeSignature)) {
         // Historical wire material, tool schemas, prompt, or route mismatch:
         // fails closed.
         continue;
@@ -401,7 +378,7 @@ class RunnerCompactionOrchestrator {
 
       confirmedInputUsageBaseline = ConfirmedInputUsageBaseline(
         routeSignature: routeSignature,
-        inputTokens: inputTokens.round(),
+        inputTokens: receipt.inputTokens,
         conversationMessages: measuredMessages,
         systemPrompt: '',
         runtimeContext: '',
@@ -514,6 +491,7 @@ class RunnerCompactionOrchestrator {
       preflightPressure = pressure;
       lastPreflightPressure = pressure;
       if (!pressure.exceedsThreshold) {
+        _logPressureDecision(pressure, 'below_threshold');
         return false;
       }
       final withinCooldown =
@@ -522,8 +500,10 @@ class RunnerCompactionOrchestrator {
               compactionCooldown;
       if (withinCooldown &&
           pressure.estimatedRequestTokens <= pressure.effectiveInputBudget) {
+        _logPressureDecision(pressure, 'cooldown');
         return false;
       }
+      _logPressureDecision(pressure, 'compact');
     }
     try {
       final request = CompactionEngineRequest(
@@ -549,9 +529,10 @@ class RunnerCompactionOrchestrator {
         projectionRevision: currentProjectionRevision(),
         previousSummary: projection.activeBoundary?.internalSummary,
         previousSourceRange: projection.activeBoundary?.sourceRange,
-        targetRequestTokens:
-            (calculateEffectiveInputWindow(contextWindow) * policy.targetRatio)
-                .round(),
+        targetRequestTokens: CompactionTargetPolicy.targetRequestTokens(
+          windowTokens: contextWindow,
+          ratio: policy.targetRatio,
+        ),
         thresholdRatio: policy.threshold,
         targetRatio: policy.targetRatio,
       );

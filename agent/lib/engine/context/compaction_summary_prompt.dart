@@ -32,9 +32,14 @@ abstract final class CompactionSummaryPrompt {
   /// The only semantic input appended to the ordinary provider projection.
   static String buildJsonInstruction({
     List<String> missingFields = const [],
+    List<CompactionSummaryFieldMismatch> typeMismatches = const [],
     bool partial = false,
   }) {
-    final repair = missingFields.isEmpty
+    // A type mismatch names only allowlisted keys and JSON type names, never
+    // provider text (Task 118b D3).
+    final repair = typeMismatches.isNotEmpty
+        ? ' Your previous attempt was invalid: ${[for (final m in typeMismatches) 'the value of ${m.field} must be a JSON string, not a JSON ${m.actualType}'].join('; ')}. Put that whole content into one string (for example, list items separated by commas) without dropping any of it, and keep every other key unchanged.'
+        : missingFields.isEmpty
         ? ''
         : ' Your previous attempt was invalid. Ensure these fields are present and non-empty: ${missingFields.join(', ')}.';
     final scope = partial
@@ -43,7 +48,7 @@ abstract final class CompactionSummaryPrompt {
     return '''
 $scope Preserve the conversation's primary language. Preserve paths, URLs, UUIDs, hashes, ports, numbers, error text, tool outcomes, active constraints, and pending asks literally when needed for continuation. Do not use any tool calls even though the normal tool list remains available. Return only the final JSON object, with no Markdown, reasoning, or surrounding text. Keep it within about two pages of reading.$repair
 
-The JSON schema version is ${CompactionInternalSummary.schemaVersion}. Use exactly these keys; every value except schemaVersion must be a string:
+The JSON schema version is ${CompactionInternalSummary.schemaVersion}. Use exactly these keys. Every value except schemaVersion is a single JSON string, never an object or an array: write lists as separate lines inside that string, for example "filesAndPaths": "agent/lib/a.dart\\nagent/lib/b.dart".
 ${jsonEncode({'schemaVersion': CompactionInternalSummary.schemaVersion, 'currentGoal': 'goal being pursued now', 'latestUserRequest': 'latest user request that still requires continuation', 'successCriteria': 'observable success criteria, or none', 'constraints': 'active constraints and user preferences, or none', 'completedWork': 'completed work and verified results, or none', 'activeState': 'current state and in-progress work', 'criticalContext': 'facts that must not be lost', 'decisions': 'key decisions and rationale, or none', 'blockers': 'blockers, errors, and unresolved questions, or none', 'filesAndPaths': 'relevant files, symbols, identifiers, and external state, or none', 'pendingAsks': 'pending user asks, or none', 'remainingWork': 'remaining work and safest next action'})}
 FINAL REQUIREMENT: Do not use any tool calls; return only the final JSON object.
 '''
@@ -187,11 +192,15 @@ abstract final class CompactionSummaryParser {
     if (decoded['schemaVersion'] != CompactionInternalSummary.schemaVersion) {
       throw const FormatException('unsupported compaction summary schema');
     }
-    String value(String key) {
-      final raw = decoded[key];
-      if (raw is! String) throw FormatException('$key must be a string');
-      return raw.trim();
+    final mismatches = <CompactionSummaryFieldMismatch>[
+      for (final key in CompactionSummaryPrompt.allowedKeys)
+        if (key != 'schemaVersion' && decoded[key] is! String)
+          CompactionSummaryFieldMismatch(key, _jsonTypeName(decoded[key])),
+    ];
+    if (mismatches.isNotEmpty) {
+      throw CompactionSummarySchemaMismatch(mismatches);
     }
+    String value(String key) => (decoded[key] as String).trim();
 
     return CompactionInternalSummary(
       currentGoal: value('currentGoal'),
@@ -208,6 +217,15 @@ abstract final class CompactionSummaryParser {
       remainingWork: value('remainingWork'),
     );
   }
+
+  static String _jsonTypeName(Object? value) => switch (value) {
+    null => 'null',
+    Map() => 'object',
+    List() => 'array',
+    num() => 'number',
+    bool() => 'boolean',
+    _ => 'value',
+  };
 
   /// Compatibility parser used only by the deterministic test summarizer.
   static CompactionInternalSummary parseLegacy(String response) {
@@ -295,4 +313,24 @@ abstract final class CompactionSummaryParser {
       }
     }
   }
+}
+
+/// One summary field whose JSON type is not the required string.
+class CompactionSummaryFieldMismatch {
+  /// An allowlisted summary key; never provider text.
+  final String field;
+
+  /// The JSON type found: `object`, `array`, `number`, `boolean` or `null`.
+  final String actualType;
+
+  const CompactionSummaryFieldMismatch(this.field, this.actualType);
+}
+
+/// Valid JSON whose fields do not match the summary schema's types
+/// (Task 118b D3): a distinct shape from unparseable JSON.
+class CompactionSummarySchemaMismatch extends FormatException {
+  final List<CompactionSummaryFieldMismatch> fields;
+
+  CompactionSummarySchemaMismatch(this.fields)
+    : super('compaction summary fields have the wrong JSON type');
 }

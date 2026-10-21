@@ -107,7 +107,10 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
 
   String _detailText(CompactionEventSnapshot snapshot, [BuildContext? context]) {
     final lines = <String>[];
-    final percentageBudget = snapshot.effectiveInputBudgetTokens ?? snapshot.contextWindowTokens;
+    // Task 118: every public percentage uses the full resolved window W, the
+    // same denominator as the daemon's threshold and complete-request target.
+    // The internal usable-input budget is a safeguard, not a public metric.
+    final percentageBudget = snapshot.contextWindowTokens;
     if (snapshot.estimatedRequestTokensBefore != null) {
       final beforeTokens = snapshot.estimatedRequestTokensBefore!;
       final isOverBudget = percentageBudget != null && beforeTokens > percentageBudget;
@@ -153,14 +156,10 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
       );
     }
     final threshold = snapshot.autoThresholdTokens;
-    final usableInput = snapshot.effectiveInputBudgetTokens;
     if (threshold != null) {
       lines.add(
-        _tokenLine('Auto threshold', threshold, usableInput),
+        _tokenLine('Auto threshold', threshold, percentageBudget),
       );
-    }
-    if (usableInput != null) {
-      lines.add('Usable input: ${_formatTokens(usableInput)} tokens');
     }
     if (snapshot.contextWindowTokens != null) {
       lines.add(

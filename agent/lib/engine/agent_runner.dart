@@ -460,7 +460,10 @@ class AgentRunner
 
   void _updateMetrics(AgentResponse response) {
     _metricsTracker?.updateMetrics(response);
-    _compactionOrchestrator.confirmInputUsageBaseline(response.usage);
+    _compactionOrchestrator.confirmInputUsageBaseline(
+      response.usage,
+      finishReason: response.finishReason,
+    );
   }
 
   Future<void> _stageInputUsageBaseline({

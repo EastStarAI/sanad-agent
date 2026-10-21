@@ -185,17 +185,19 @@ void main() {
       chunks,
       inInclusiveRange(2, CompactionRecoveryPolicy.defaults.maxChunks),
     );
-    // Only the doomed ordinary pass overflowed.
-    expect(provider.overflowed, hasLength(1));
-    for (final sent in provider.requests.skip(1)) {
+    // Task 118b: the doomed ordinary pass is skipped before sending, so no
+    // request overflowed.
+    expect(decision['full_pass_skipped'], 'presend_over_window');
+    expect(provider.overflowed, isEmpty);
+    for (final sent in provider.requests) {
       expect(_requestTokens(sent), lessThanOrEqualTo(budget));
     }
-    // ordinary pass + one call per chunk + reduce batches + final reduce
+    // one call per chunk + reduce batches + final reduce
     expect(
       provider.requests.length,
-      1 + chunks + (decision['recovery_reduce_batches'] as int) + 1,
+      chunks + (decision['recovery_reduce_batches'] as int) + 1,
     );
-    expect(decision['recovery_provider_calls'], provider.requests.length - 1);
+    expect(decision['recovery_provider_calls'], provider.requests.length);
     expect(decision['recovery_pass_budget_tokens'], lessThan(budget));
   });
 
@@ -245,8 +247,9 @@ void main() {
       expect(failure, isNotNull);
       expect(failure!.cause, CompactionFailureCause.recoveryCapacityExceeded);
       expect(failure.stage, CompactionFailureStage.pruning);
-      // The ordinary pass only; no recovery request was sent.
-      expect(provider.requests, hasLength(1));
+      // Task 118b: the doomed ordinary pass is skipped before sending and no
+      // recovery request was sent: zero provider calls.
+      expect(provider.requests, isEmpty);
       final decision = failure.diagnostics!.decisionSnapshot!;
       expect(decision['recovery_chunk_count'], greaterThan(3));
       expect(decision['recovery_max_chunks'], 3);
@@ -307,8 +310,8 @@ void main() {
       isNotEmpty,
     );
     expect(ids.last, endsWith(':reduce:0'));
-    expect(provider.overflowed, hasLength(1));
-    for (final sent in provider.requests.skip(1)) {
+    expect(provider.overflowed, isEmpty);
+    for (final sent in provider.requests) {
       expect(_requestTokens(sent), lessThanOrEqualTo(budget));
     }
   });
@@ -350,8 +353,9 @@ void main() {
 
       expect(failure, isNotNull);
       expect(failure!.cause, CompactionFailureCause.overflow);
-      // ordinary pass + first chunk + its first half (which overflows again)
-      expect(provider.requests, hasLength(3));
+      // first chunk + its first half (which overflows again); the doomed
+      // ordinary pass is skipped before sending (Task 118b)
+      expect(provider.requests, hasLength(2));
     },
   );
 }

@@ -113,6 +113,30 @@ class RequestPressureSnapshot {
     this.thresholdRatio = 1.0,
   });
 
+  /// The same snapshot with a better measurement of the complete request,
+  /// for example the route's wire measurement of the active projection.
+  RequestPressureSnapshot withRequestTokens(
+    int requestTokens,
+    CompactionMeasurementKind kind, {
+    int? confirmedInputTokens,
+  }) {
+    return RequestPressureSnapshot(
+      routeSignature: routeSignature,
+      contextWindowTokens: contextWindowTokens,
+      inputLimitTokens: inputLimitTokens,
+      outputReservationTokens: outputReservationTokens,
+      safetyBufferTokens: safetyBufferTokens,
+      components: components,
+      estimatedRequestTokens: requestTokens,
+      confirmedInputTokens: confirmedInputTokens,
+      measurementKind: kind,
+      thresholdRatio: thresholdRatio,
+    );
+  }
+
+  /// The full resolved window `W`: the public denominator (Task 118).
+  int get windowTokens => inputLimitTokens ?? contextWindowTokens;
+
   int get effectiveInputBudget {
     final window = inputLimitTokens ?? contextWindowTokens;
     return calculateEffectiveInputWindow(

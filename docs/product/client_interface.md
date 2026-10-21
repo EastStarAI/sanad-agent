@@ -390,9 +390,13 @@ pixels and opens the same redacted multiline metrics through desktop hover,
 touch/click, or keyboard focus. Hovering or clicking the divider space does
 nothing; narrow layouts may wrap the label but must not overflow.
 The flat detail card omits lifecycle `Type`, `Trigger`, and `Status` rows. It
-shows before, after, reclaimed context, retained tail, automatic threshold,
-usable input, and full window. Before/after percentages use the daemon-owned
-usable input budget; reclaimed percentage uses the before value. Once provider
+shows before, after, reclaimed context, retained tail, automatic threshold
+and full window. Before, after and threshold percentages use the full window
+`W`, the daemon's public denominator for the threshold and the complete-request
+target (Task 118); the internal usable input budget is not shown. A before
+value above `W` is labelled as history. Reclaimed percentage uses the before
+value. A `/compact` that finds nothing to compact shows a neutral notice, not a
+failure. Once provider
 reconciliation arrives, after uses the confirmed value, marks it `Confirmed`,
 suppresses the superseded estimate, and recomputes reclaimed context from it.
 Persistence may retain the provisional estimate for bounded diagnostics.

@@ -108,7 +108,7 @@ void main() {
     await tester.tap(find.byType(InkWell));
     await tester.pump();
     expect(
-      find.textContaining('After compaction: 34,922 tokens (8.8%) ✓ Confirmed'),
+      find.textContaining('After compaction: 34,922 tokens (8.7%) ✓ Confirmed'),
       findsOneWidget,
     );
     expect(find.textContaining('57,630'), findsNothing);
@@ -116,10 +116,12 @@ void main() {
       find.textContaining('Context reclaimed: 283,144 tokens (89.0%)'),
       findsOneWidget,
     );
-    expect(find.textContaining('Before compaction: 318,066 tokens (80.5%)'), findsOneWidget);
+    expect(find.textContaining('Before compaction: 318,066 tokens (79.5%)'), findsOneWidget);
     expect(find.textContaining('Retained tail: ~34,922 tokens'), findsOneWidget);
-    expect(find.textContaining('Auto threshold: 315,904 tokens (80.0%)'), findsOneWidget);
-    expect(find.textContaining('Usable input: 394,880 tokens'), findsOneWidget);
+    expect(find.textContaining('Auto threshold: 315,904 tokens (79.0%)'), findsOneWidget);
+    // Task 118: every public percentage uses the full window W; the internal
+    // usable-input budget is not shown.
+    expect(find.textContaining('Usable input'), findsNothing);
     expect(find.textContaining('Context window: 400,000 tokens'), findsOneWidget);
     expect(find.textContaining('Trigger:'), findsNothing);
     expect(find.textContaining('Status:'), findsNothing);
@@ -154,7 +156,7 @@ void main() {
 
     // After compaction confirmed
     expect(
-      find.textContaining('After compaction: 19,363 tokens (16.1%) ✓ Confirmed'),
+      find.textContaining('After compaction: 19,363 tokens (15.1%) ✓ Confirmed'),
       findsOneWidget,
     );
     // Retained tail must be clamped to after compaction tokens (19,363), not 44,156
@@ -162,7 +164,7 @@ void main() {
     expect(find.textContaining('44,156'), findsNothing);
     // Over budget before compaction labeled with (history)
     expect(
-      find.textContaining('Before compaction (history): 150,000 tokens (125.0%)'),
+      find.textContaining('Before compaction (history): 150,000 tokens (117.2%)'),
       findsOneWidget,
     );
   });

@@ -84,7 +84,6 @@ abstract final class CompactionRequestFactory {
           runtime.adapterFor(route).getContextLimit(route.modelId),
       estimatedRequestTokens: estimatedRequestTokens,
     );
-    final effectiveWindow = calculateEffectiveInputWindow(window);
 
     return CompactionEngineRequest(
       compactionId: compactionId,
@@ -124,9 +123,10 @@ abstract final class CompactionRequestFactory {
       projectionRevision: projectionRevision.value,
       previousSummary: activeBoundary?.internalSummary,
       previousSourceRange: activeBoundary?.sourceRange,
-      targetRequestTokens:
-          (effectiveWindow * (targetRatio ?? policy?.targetRatio ?? 0.10))
-              .round(),
+      targetRequestTokens: CompactionTargetPolicy.targetRequestTokens(
+        windowTokens: window,
+        ratio: targetRatio ?? policy?.targetRatio ?? 0.10,
+      ),
       thresholdRatio: policy?.threshold ?? 0.90,
       targetRatio: targetRatio ?? policy?.targetRatio,
     );

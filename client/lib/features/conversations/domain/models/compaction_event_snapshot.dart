@@ -243,6 +243,10 @@ class SessionCompactResult extends Equatable {
 
   bool get accepted => outcome == 'accepted';
 
+  /// The daemon found nothing to compact, for example a conversation already
+  /// within the compaction target. A neutral outcome, never a failure.
+  bool get noOp => outcome == 'no_op';
+
   bool get pending => outcome == pendingOutcome;
 
   bool get unconfirmed => outcome == unconfirmedOutcome;

@@ -377,9 +377,10 @@ class RunnerRecoveryCoordinator {
               ? getIt<Config>().compactionPolicyForModel(modelId ?? '')
               : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
           final targetRequestTokens =
-              (calculateEffectiveInputWindow(contextWindow) *
-                      policy.targetRatio)
-                  .round();
+              CompactionTargetPolicy.targetRequestTokens(
+                windowTokens: contextWindow,
+                ratio: policy.targetRatio,
+              );
           final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
             providerId: providerInstanceId,
             modelId: modelId,

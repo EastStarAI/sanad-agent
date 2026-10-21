@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
+import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/di.dart';
@@ -28,6 +30,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/session_
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/session_query_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
+import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:test/test.dart';
 
@@ -61,6 +64,69 @@ List<IndexedConversationMessage> _heavyTimeline() {
         ),
       ),
   ];
+}
+
+/// Session-scoped runner that records how its idle compaction seed was
+/// prepared (Task 118b D1).
+class _RecordingSeedRunner implements AgentRunner {
+  _RecordingSeedRunner(this.sessionId);
+
+  @override
+  final String sessionId;
+  @override
+  final ToolsRegistry registry = ToolsRegistry();
+  String? seedRuntimeSystemPrompt;
+  List<String>? seedToolNames;
+
+  @override
+  Future<CompactionProviderSeed> prepareCompactionProviderSeed({
+    String? runtimeSystemPrompt,
+  }) async {
+    seedRuntimeSystemPrompt = runtimeSystemPrompt;
+    seedToolNames = [for (final tool in registry.allTools) tool.schema.name];
+    return CompactionProviderSeed(
+      projection: [
+        Message(role: MessageRole.system, content: 'system $runtimeSystemPrompt'),
+        Message(role: MessageRole.user, content: 'small'),
+      ],
+      tools: [for (final tool in registry.allTools) tool.schema],
+      options: LLMRequestOptions(sessionId: sessionId),
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _CatalogTool extends BaseTool {
+  @override
+  ToolSchema get schema => ToolSchema(
+    name: 'catalog_workspace_tool',
+    description: 'per-turn catalog tool',
+    parameters: const {'type': 'object', 'properties': <String, dynamic>{}},
+  );
+
+  @override
+  Future<String> execute(Map<String, dynamic> args, {ToolContext? context}) async => '';
+}
+
+/// Runtime orchestrator that prepares the ordinary per-turn tools and
+/// runtime context, as an ordinary request of the session would.
+class _RecordingRuntimeOrchestrator implements LocalRuntimeOrchestrator {
+  final preparedSessions = <String>[];
+
+  @override
+  Future<String?> prepareIdleRequest({
+    required AgentRunner agentRunner,
+    required String sessionId,
+  }) async {
+    preparedSessions.add(sessionId);
+    agentRunner.registry.registerTools([_CatalogTool()]);
+    return 'runtime workspace context';
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _MockRunnerWithThinkingError implements AgentRunner {
@@ -104,8 +170,12 @@ class _MockRunnerWithSeed implements AgentRunner {
     String? runtimeSystemPrompt,
   }) async {
     return CompactionProviderSeed(
+      // The seed is the active projection the request is measured on; it is
+      // above the complete-request target so manual compaction has work
+      // (Task 118 small-session no-op).
       projection: [
         Message(role: MessageRole.user, content: 'goal: ship compaction safely'),
+        Message(role: MessageRole.assistant, content: 'progress ${'x' * 80000}'),
       ],
       tools: const <ToolSchema>[],
       options: LLMRequestOptions(
@@ -266,10 +336,12 @@ void main() {
           lastUserMessageAt: now,
         ),
       );
-      sessionDb.replaceMessages(
-        'session-alpha',
-        _heavyTimeline().map((e) => e.message).toList(),
-      );
+      // Above the complete-request target of the resolved window, so a
+      // manual compaction has work (Task 118 small-session no-op).
+      sessionDb.replaceMessages('session-alpha', [
+        ..._heavyTimeline().map((e) => e.message),
+        Message(role: MessageRole.assistant, content: 'progress ${'x' * 80000}'),
+      ]);
       sessionDb.replaceMessages('session-beta', [
         Message(role: MessageRole.user, content: 'Beta user ask'),
         Message(role: MessageRole.assistant, content: 'Beta reply'),
@@ -281,6 +353,27 @@ void main() {
       await getIt.reset();
       stateDb.dispose();
     });
+
+    test(
+      'Task 118b D1: manual compaction seeds the same tools and runtime context as an ordinary request',
+      () async {
+        final runner = _RecordingSeedRunner('session-beta');
+        final runtime = _RecordingRuntimeOrchestrator();
+        getIt.registerFactoryParam<AgentRunner, String, void>(
+          (sessionId, _) => runner,
+        );
+        getIt.registerSingleton<LocalRuntimeOrchestrator>(runtime);
+
+        await orchestrator.handleCompactCommand(
+          sessionId: 'session-beta',
+          requestId: 'req-parity',
+        );
+
+        expect(runtime.preparedSessions, ['session-beta']);
+        expect(runner.seedRuntimeSystemPrompt, 'runtime workspace context');
+        expect(runner.seedToolNames, contains('catalog_workspace_tool'));
+      },
+    );
 
     group('Pre-claim preparation failure containment', () {
       test('unsupported thinking selection in runner preparation is contained without creating claim', () async {
@@ -403,7 +496,8 @@ void main() {
             runtimeContext: '',
             toolSchemas: const [],
             projectionRevision: 1,
-            targetRequestTokens: 10_000,
+            // Above the complete-request target (Task 118 small-session no-op).
+            targetRequestTokens: 100,
             thresholdRatio: 0.9,
           ),
           force: true,
@@ -479,7 +573,8 @@ void main() {
             runtimeContext: '',
             toolSchemas: const [],
             projectionRevision: 1,
-            targetRequestTokens: 10_000,
+            // Above the complete-request target (Task 118 small-session no-op).
+            targetRequestTokens: 100,
             thresholdRatio: 0.9,
           ),
           force: true,
