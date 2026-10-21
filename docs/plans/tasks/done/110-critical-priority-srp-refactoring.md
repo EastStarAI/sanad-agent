@@ -332,6 +332,35 @@ against the original extraction's behaviour.
   The fixes above close every behaviour difference it found, except the cosmetic socket disposal order
   recorded in the 113a plan.
 
+### Round 2: equivalence-review fixes (r2)
+
+A second read-only review found one teardown difference and five hygiene risks. The r2 fixes:
+
+| Finding | Fix |
+|---|---|
+| 1. `SessionMessagesCubit.close()` no longer awaited the workspace-policy cancel | `SessionWorkspaceCoordinator.dispose()` returns the cancel future and `close()` awaits it, as on `6a832396`; `cancelPolicySubscription()` stays unawaited, as before |
+| 2. The runtime contract claimed overflow compaction uses the per-run breaker | `agent/lib/engine/runtime/AGENTS.md` now states the overflow path does not yet read or open it; the `autoCompactionBlockedForRun` and `markCompactionFailure` host hooks stay for Task 118a, which activates them |
+| 3. `WorkspaceMcpCoordinator` built an undisposed fallback manager and OAuth service | both are required; the host injects and owns them, as before |
+| 4. Restart and stop timeouts were declared in three places | `SessionRestartCheckpointManager` owns the restart checkpoint, poll and provider-cancellation timeouts, `SessionStopCoordinator.defaultRunStopCleanupTimeout` owns the run-stop cleanup timeout, and the orchestrator statics alias them; values unchanged |
+| 5. Nullable `ConversationDraftCache` callbacks silently skipped draft writes | `getContext`, `updateContext` and `ensureDeviceContext` are required and non-nullable |
+| Test gap: no `emitWithResponse` timeout after a reconnect | `socket_service_decomposition_test.dart` pins that a late timeout cleans up on the live socket and keeps another event's listener; mutation-checked against the call-time socket capture that 327805d2 removed |
+
+Not changed: finding 6 (test fakes overriding facade getters) and the nits.
+
+Pre-existing on `6a832396`, kept unchanged: a late timeout calls `off(event)` on the live socket, which
+also removes a newer same-event listener registered after the reconnect. A probe ran the three reconnect
+scenarios against `6a832396`'s socket service: live-socket cleanup and the other-event listener pass,
+the same-event listener fails exactly as on the port. The port records that case as a skipped test.
+
+r2 verification (logs under `temp/srp/r2-*`):
+
+- `fvm dart analyze` (agent): no issues (`r2-agent-analyze.log`).
+- `fvm flutter analyze` (client): no issues (`r2-client-analyze.log`).
+- Focused: agent 168 passed (`r2-agent-focused.log`); client 738 passed, 1 skipped (`r2-client-focused.log`).
+- Probe against `6a832396`: `r2-probe-6a832396-emit-with-response.log`.
+- `fvm dart test` (agent, full suite): 2,956 passed, 14 skipped, 0 failed (`r2-agent-full-suite.log`).
+- `fvm flutter test` (client, full suite): 1,732 passed, 1 skipped, 0 failed (`r2-client-full-suite.log`).
+
 ### Remaining
 
 - Live regression on worktree-isolated homes and ports, serial agent then client, per the port

@@ -208,6 +208,9 @@ See `docs/plans/tasks/done/110-critical-priority-srp-refactoring.md` for the ful
   connection's current socket rather than one captured at call time.
 - **T1-3:** main did not change the cache store after the base, so the owners were taken as extracted.
   The Task 122 draft route reaches the store only through the unchanged draft API.
+- r2 (see the 110 plan): the draft cache's device-context callbacks are required, and a guard pins
+  that an `emitWithResponse` timeout after a reconnect cleans up on the live socket. A late timeout
+  still removes a newer same-event listener; that is pre-existing on `6a832396` and is unchanged.
 - Known cosmetic difference kept from the original extraction: `SanadSocketService.dispose()` now closes
   the connection controller's streams before the facade's own streams, and log lines carry the
   controller's hash code.
