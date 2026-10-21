@@ -472,6 +472,22 @@ void main() {
     },
   );
 
+  test(
+    'Task 118b: the summary instruction states that every value is one string with lists as lines',
+    () {
+      final instruction = CompactionSummaryPrompt.buildJsonInstruction();
+      expect(
+        instruction,
+        contains('Every value except schemaVersion is a single JSON string'),
+      );
+      expect(instruction, contains('write lists as separate lines inside that string'));
+      expect(
+        instruction,
+        contains(r'"filesAndPaths": "agent/lib/a.dart\nagent/lib/b.dart"'),
+      );
+    },
+  );
+
   test('timeout fails at once with its measured duration recorded', () async {
     final adapter = _ScriptedAdapter([_Shape.timeout, _Shape.valid]);
     Object? failure;

@@ -662,6 +662,8 @@ ledger, diagnostics or logs:
 | `summary_invalid_json` | the strict JSON parser rejects the text | `invalid_response` |
 | `summary_schema_mismatch` | valid JSON whose allowlisted field holds a non-string value (object, array, number, boolean or null; Task 118b D3) | `invalid_response` |
 
+The base instruction also states, route-neutrally, that every value except `schemaVersion` is a single JSON string, never an object or an array, with lists written as separate lines inside the string, and it gives a short example (Task 118b round 5).
+
 A schema mismatch is not normalized: the contract stays strict (no wrong types), and a value is never flattened or trimmed by the agent. Its single correction instead names each mismatched field and its JSON type (for example "the value of filesAndPaths must be a JSON string, not a JSON object") and asks for the whole content in one string, rather than re-listing every required field. Live r2 on OpenRouter `gpt-4o-mini` returned an object for `filesAndPaths`; it had been classified as invalid JSON, and the generic repair then produced broken JSON.
 
 Each shape gets exactly one corrective attempt from the immutable base; the
