@@ -92,3 +92,9 @@ The only producer of the required context is the `all-required` job in `ci.yml`.
   - adding a protected label re-verifies;
   - one push gives one full run.
 - [ ] Merge under the user's authorization, plus the `maintainer-reviewed` label authorization.
+
+## Delivery
+
+- Candidate committed on `fix/121-ci-label-event-runs` and merged with `origin/main` (`2286267a`). `ci.yml` keeps the new `Validate shipped model capability defaults` step from main together with this task's trigger, permission and run-time label changes.
+- Local verification after the merge: `scripts/community/validate_governance.rb` passes, `scripts/community/test_sync_labels.sh` passes, and `ci.yml`, `protected-labels.yml` and `release.yml` parse as YAML. `actionlint` is not installed locally.
+- The PR is created once with all its ordinary labels, and its own events serve as the live proof: one Public CI run for the head SHA, an ordinary label added mid-run starts or cancels nothing, and the authorized `maintainer-reviewed` label re-runs only `Verify protected review labels` and `All required checks pass` as a new attempt of the same run.
