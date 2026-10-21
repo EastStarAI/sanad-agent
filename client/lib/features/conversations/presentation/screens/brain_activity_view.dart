@@ -24,6 +24,7 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
+import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/draft_attachment_error_text.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
@@ -143,7 +144,9 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   late final ValueNotifier<DateTime> _clockNotifier = ValueNotifier<DateTime>(DateTime.now());
   Timer? _clockTimer;
   final Set<String> _pendingEntranceEventIds = {};
-  TextEditingController? _editController;
+  /// Renders file references as icon+name chips, like the composer, and
+  /// exports them back to their exact link text on save.
+  SlashCommandTextController? _editController;
   String? _editingEventId;
   List<InlineEditAttachment> _editAttachments = const [];
   String? _editAttachmentError;
@@ -978,7 +981,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   void _beginInlineEdit(CanonicalEvent event) {
     _editController?.dispose();
     setState(() {
-      _editController = TextEditingController(text: event.text);
+      _editController = SlashCommandTextController()..setDraftText(event.text);
       _editingEventId = event.id;
       _editAttachments = List.unmodifiable(
         event.userAttachments.map(InlineEditAttachment.existing),
@@ -1580,7 +1583,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         onCancelEdit: _cancelInlineEdit,
         onSubmitEdit: canReplay
             ? () async {
-                final text = _editController?.text.trim() ?? '';
+                final text = _editController?.exportPlainText().trim() ?? '';
                 if (text.isEmpty && _editAttachments.isEmpty) return;
                 if (_editAttachments.any(
                   (attachment) => attachment.status == InlineEditAttachmentStatus.failed,

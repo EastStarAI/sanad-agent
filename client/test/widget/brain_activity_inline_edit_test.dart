@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
+import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
@@ -894,5 +895,31 @@ void main() {
     ]) {
       expect(arabic, isNot(english), reason: 'every inline attachment message has an Arabic translation');
     }
+  });
+
+  testWidgets('inline edit shows file tokens as chips and round-trips them unchanged (114 D1)', (tester) async {
+    const link = '[plain114.txt](file:///Users/me/scratch/plain114.txt)';
+    final event = CanonicalEvent(
+      id: initialUserEvent.id,
+      kind: EventKind.userMessage,
+      text: 'Read $link please',
+      sessionId: 'session-1',
+      timestamp: initialUserEvent.timestamp,
+      metadata: initialUserEvent.metadata,
+    );
+    await pumpView(tester, initialMessages: [event]);
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    final editor = find.byKey(const Key('inline_message_editor'));
+    final field = tester.widget<TextField>(editor);
+    expect(field.controller!.text, isNot(contains('file://')), reason: 'no raw path in the edit field');
+    expect(field.controller!.text, isNot(contains('plain114.txt](')));
+    expect(field.controller, isA<SlashCommandTextController>());
+    expect((field.controller! as SlashCommandTextController).fileTokensByMarker.values.single.fileName, 'plain114.txt');
+
+    await tester.tap(find.text('Send'));
+    await tester.pumpAndSettle();
+    expect(conversationRepository.replayWithAttachmentRequests.single['message'], 'Read $link please');
   });
 }
