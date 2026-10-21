@@ -1281,6 +1281,63 @@ void main() {
       expect(inputCubit.state.attachmentError, isNull);
     });
 
+    Future<void> lunaRoute() async {
+      messagesCubit.emitState(
+        const SessionMessagesState(nextMessageProviderId: 'openai-codex', nextMessageModel: 'gpt-6-luna'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await inputCubit.selectModel(
+        scope: CapabilityValueScope.message,
+        providerId: 'openai-codex',
+        model: 'gpt-6-luna',
+      );
+      inputCubit.selectWorkspace(workspace);
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    Future<void> addMix() async {
+      for (final (name, bytes) in [
+        ('My (1) [v2].pdf', const [0x25, 0x50, 0x44, 0x46]),
+        ('photo114.heic', const [0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]),
+        ('img114_blue.png', const [0x89, 0x50, 0x4E, 0x47]),
+      ]) {
+        await inputCubit.addDraftAttachment(
+          name: name,
+          bytes: Uint8List.fromList(bytes),
+          source: DraftAttachmentSource.paste,
+          capability: capability,
+        );
+      }
+    }
+
+    test('PDF+HEIC+PNG on a luna-like route is handed to the agent, never refused in the client (114 D4)', () async {
+      await lunaRoute();
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      await addMix();
+
+      await inputCubit.sendMessage('describe these');
+
+      expect(conversationRepository.sentAttachmentRequests.single.map((item) => item['name']), [
+        'My (1) [v2].pdf',
+        'photo114.heic',
+        'img114_blue.png',
+      ]);
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    test('a failed attachment send shows a reason and keeps the draft (114 D4)', () async {
+      await lunaRoute();
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: 'existing-session');
+      await addMix();
+      conversationRepository.failAttachmentAdmission = true;
+
+      await inputCubit.sendMessage('describe these');
+
+      expect(conversationRepository.sentAttachmentRequests, hasLength(1));
+      expect(inputCubit.state.attachmentError, isNotNull, reason: 'a refused send is never silent');
+      expect(inputCubit.state.draftAttachments, hasLength(3), reason: 'the draft is kept for a retry');
+    });
+
     test('an explicit dismiss clears it', () async {
       await addOversized();
       inputCubit.clearAttachmentError();

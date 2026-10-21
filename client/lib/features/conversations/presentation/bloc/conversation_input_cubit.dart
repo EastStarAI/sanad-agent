@@ -225,6 +225,11 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
             },
         ],
       );
+      if (!accepted && attachments.isNotEmpty && _draftScope == submittedScope) {
+        // Never refuse silently: the attachments stay in the draft and the
+        // composer states that the send did not go through.
+        emit(state.copyWith(attachmentError: const DraftAttachmentError(DraftAttachmentErrorKind.sendFailed)));
+      }
       if (accepted && attachments.isNotEmpty) {
         final cached = _draftsByScope[submittedScope];
         if (cached != null) {

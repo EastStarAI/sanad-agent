@@ -128,6 +128,17 @@ See each task file's progress log for locations and regression tests.
 
   They now use the shared `FileExtensionIcon` from the attachment's own name, at the previous 20/28/22 px sizes. The rail keeps the icon centred in its 32 px slot, and image previews and the opening spinner are unchanged. Tests: `test/widget/composer_input_routing_and_paste_test.dart` ("Attachment rail file type icons") and `test/widget/user_message_tile_test.dart` (file card and inline chip).
 
+### Live r1 defects (round 5, `389caede`, notes in the coordinator run folder)
+
+- **D4 (HIGH):** PDF+HEIC+PNG (and PDF+PNG) from a remote client were silently not sent on ChatGPT `gpt-6-luna` and OpenRouter `gpt-4o-mini`, but sent on OpenCode Go `deepseek-v4.1-flash`. No code path reads the route during admission, so the route correlation is timing. Three real causes:
+  - Agent `HostedBinaryRelay` registered an upload only after `await _store.create`, and Socket.IO does not await listeners, so an early chunk or commit was rejected as `invalid_request`. More files and larger staging widen the window.
+  - The client relay ignored a terminal rejection while it waited for a chunk ACK and sat until its 30 s timeout.
+  - The resulting failure landed in a cubit `error` that nothing renders, so the draft just stayed.
+
+  Fixes:
+  - `038bffd1`: chunk, commit, cancel, and disconnect wait for the in-flight start.
+  - D4 client commit: the relay fails fast on any terminal rejection, and a failed attachment send shows the localized `sendFailed` reason in the dismissible attachment line while the draft stays. The client never refuses this mix by itself; a luna-like route test hands all three files to the agent.
+
 ### Verification (port worktree)
 
 - `fvm dart analyze` (agent): no issues. `fvm flutter analyze` (client): no issues.

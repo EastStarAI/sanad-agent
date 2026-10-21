@@ -195,6 +195,44 @@ void main() {
       expect(await admission, ['opaque-attachment']);
     });
 
+    test('fails at once when the Agent rejects an upload before its chunk ACK (114 D4)', () async {
+      final bytes = Uint8List.fromList(utf8.encode('%PDF-1.3 doc'));
+      final startEmission = socket.nextEmit('attachment_upload_start');
+      final admission = service.admitHostedAttachments(
+        deviceId: 'remote-device',
+        sessionId: 'session-a',
+        requestId: 'request-b',
+        attachments: [
+          {
+            'name': 'doc.pdf',
+            'size_bytes': bytes.length,
+            'sha256': sha256.convert(bytes).toString(),
+            'data_base64': base64Encode(bytes),
+          },
+        ],
+      );
+      await startEmission;
+      final chunkEmission = socket.nextEmit('attachment_upload_chunk');
+      await socket.receive('attachment_upload_ack', {
+        'version': 'v1',
+        'upload_id': 'request-b_0',
+        'state': 'started',
+        'next_index': 0,
+      });
+      await chunkEmission;
+      final outcome = expectLater(admission, throwsA(isA<StateError>()));
+
+      // A terminal rejection while the client still waits for the chunk ACK.
+      await socket.receive('attachment_upload_ack', {
+        'version': 'v1',
+        'upload_id': 'request-b_0',
+        'state': 'terminal',
+        'outcome': 'rejected',
+        'error_code': 'invalid_request',
+      });
+      await outcome.timeout(const Duration(seconds: 2));
+    });
+
     test('reassembles and verifies exact remote media bytes', () async {
       final bytes = Uint8List.fromList(utf8.encode('image bytes'));
       final fetchEmission = socket.nextEmit('conversation_media_fetch');

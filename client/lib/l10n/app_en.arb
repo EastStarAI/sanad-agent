@@ -594,5 +594,9 @@
   "attachmentErrorResolveFailedBeforeSend": "Remove or retry failed attachments before sending.",
   "@attachmentErrorResolveFailedBeforeSend": {
     "description": "Inline message editor: Send is blocked while an attachment is in the failed state."
+  },
+  "attachmentErrorSendFailed": "The message with attachments could not be sent. Your text and files are kept; try again.",
+  "@attachmentErrorSendFailed": {
+    "description": "Composer feedback when admitting or sending attachments failed; the draft is kept."
   }
 }

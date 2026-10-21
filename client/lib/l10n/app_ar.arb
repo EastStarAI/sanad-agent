@@ -453,5 +453,6 @@
   "attachmentErrorDismiss": "إغلاق",
   "attachmentErrorOpenFailed": "تعذّر فتح المرفق المحدد.",
   "attachmentErrorReadFailed": "تعذّرت قراءة المرفق المحدد.",
-  "attachmentErrorResolveFailedBeforeSend": "أزِل المرفقات الفاشلة أو أعد المحاولة قبل الإرسال."
+  "attachmentErrorResolveFailedBeforeSend": "أزِل المرفقات الفاشلة أو أعد المحاولة قبل الإرسال.",
+  "attachmentErrorSendFailed": "تعذّر إرسال الرسالة مع المرفقات. احتُفظ بالنص والملفات؛ حاول مرة أخرى."
 }

@@ -9,6 +9,7 @@ abstract final class DraftAttachmentErrorText {
     DraftAttachmentErrorKind.tooLarge => l10n.attachmentErrorTooLarge(formatLimit(error.limit)),
     DraftAttachmentErrorKind.tooMany => l10n.attachmentErrorTooMany(error.limit),
     DraftAttachmentErrorKind.totalTooLarge => l10n.attachmentErrorTotalTooLarge(formatLimit(error.limit)),
+    DraftAttachmentErrorKind.sendFailed => l10n.attachmentErrorSendFailed,
   };
 
   /// Formats a byte limit with binary units: whole MiB or KiB when exact,
