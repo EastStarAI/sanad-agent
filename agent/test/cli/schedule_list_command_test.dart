@@ -96,12 +96,18 @@ void main() {
   /// Hashes the database content files. `-shm` is excluded on purpose: it is
   /// SQLite's WAL shared-memory index, where every WAL reader (read-only ones
   /// included) records read marks; it holds no database content.
+  // A zero-length `-wal` holds no frames, so it fingerprints like an absent
+  // one: some SQLite builds (Linux CI) leave an empty WAL behind after a
+  // read-only open of a WAL-mode database, because a read-only connection
+  // cannot checkpoint and delete it. Database content is unchanged either way.
   String fingerprint() {
     final parts = <String>[];
     for (final suffix in ['', '-wal']) {
       final file = File('${dbPath()}$suffix');
+      final empty =
+          suffix.isNotEmpty && file.existsSync() && file.lengthSync() == 0;
       parts.add(
-        file.existsSync()
+        file.existsSync() && !empty
             ? '$suffix:${sha256.convert(file.readAsBytesSync())}'
             : '$suffix:absent',
       );

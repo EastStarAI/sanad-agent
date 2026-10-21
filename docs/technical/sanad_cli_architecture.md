@@ -310,7 +310,9 @@ owned by the daemon's `CronScheduler` (single writer), so the CLI has no mutatio
   migration, WAL switch or permission repair, and it takes no state-root ownership lease, so it is safe
   while the daemon runs. A missing `state.db` is reported as empty and is never created. In WAL mode
   SQLite readers record read marks in the `state.db-shm` shared-memory index; `state.db` and
-  `state.db-wal` stay byte-identical.
+  `state.db-wal` content stay byte-identical. When no `state.db-wal` exists, some SQLite builds
+  (for example on Linux) leave an empty one behind, because a read-only connection cannot checkpoint
+  and delete it; an empty WAL holds no frames and changes no data.
 - **Schema tolerance:** `ScheduledTaskRepository.inspectScheduledTasks` issues `PRAGMA`/`SELECT`
   only. A missing table is empty; a pre-Task-112 table (`run_at` only) is listed with the defaults
   `once`/`local`/enabled. The effective next run follows the migration precedence: a non-blank
