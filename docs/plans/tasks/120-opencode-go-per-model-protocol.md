@@ -33,7 +33,7 @@ Live round 1 of [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-t
 
 ## Boundaries
 
-- **Issuer stability:** provider-state issuers include protocol and endpoint. Unchanged Chat routes must keep their current issuer, or this task declares an explicit issuer-equivalence set that [Task 116](docs/plans/tasks/116-deepseek-reasoning-replay-across-tool-history.md)'s replay policy consumes. Existing DeepSeek/GLM/Kimi history must not become foreign.
+- **Issuer stability:** provider-state issuers include protocol and endpoint. Unchanged Chat routes must keep their current issuer, or this task declares an explicit issuer-equivalence set that [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md)'s replay policy consumes. Existing DeepSeek/GLM/Kimi history must not become foreign.
 - No guessed endpoints, no per-model name tables, no provider substitution or credential copying.
 - Mixed-wire history within one instance (Chat → Messages → Chat) uses 116's projection rules; do not replay foreign opaque state.
 
@@ -46,4 +46,4 @@ Live round 1 of [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-t
 
 ## Dependencies
 
-- Depends on [Task 116](docs/plans/tasks/116-deepseek-reasoning-replay-across-tool-history.md): 116 lands the model stamp and issuer comparison first.
+- Depends on [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md): 116 lands the model stamp and issuer comparison first.

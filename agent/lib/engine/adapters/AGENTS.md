@@ -11,7 +11,11 @@ This contract applies to `agent/lib/engine/adapters/`.
 
 ## Reasoning and Provider State
 - Visible reasoning deltas use the reasoning callback and never contaminate final-content chunks.
-- Opaque continuation state uses a typed namespace and issuer; replay only when both match the current instance/protocol/normalized endpoint owner.
+- Opaque continuation state uses a typed namespace and issuer; replay only when both match the current instance/protocol/normalized endpoint owner and the recorded producing model equals the destination model. Missing model provenance is foreign.
+- Projection is per request and never rewrites canonical history. Provenance keys are additive inside adapter-owned state data; issuer strings stay stable.
+- Never copy, pad, relabel or synthesize reasoning for foreign or unrecorded turns. Echo semantics come only from the destination's exact models.dev `interleaved.field` and the data-driven `ChatReasoningReplayPolicy` table; probe outcomes change data, not logic.
+- History with no truthful wire representation fails before HTTP with `ProviderHistoryProjectionException` carrying only route, closed reason code and count. Wire measurement never raises it; dispatch and the summarizer always enforce.
+- Anthropic signed or redacted thinking replays only to the same issuer and model; unpaired `tool_use` fails closed rather than being stripped.
 - State rejection may clear only matching keys and may trigger one bounded persisted fallback.
 - Never replay local reasoning ids as provider wire state.
 - Malformed tool arguments fail before execution and must not become an empty object.
@@ -19,6 +23,7 @@ This contract applies to `agent/lib/engine/adapters/`.
 ## Request Consistency
 - Sync and stream for one protocol reuse the same request builder and final normalization.
 - Diagnostic response dumps use the same aggregated normalized assistant message, tool calls, finish reason, and usage exposed by the adapter; interrupted streams may record a bounded partial projection plus the error, never raw SSE lines.
+- Request dumps never contain any part of a credential: credential-bearing headers and fields (`Authorization`, `x-api-key`, `api-key`, `api_key`, tokens) are masked by name at the dumper boundary, and the top-level key records presence only.
 - Structured reasoning fields take precedence over textual thought tags.
 - Codex Responses transport reuses its codec, SSE accumulator, policy, and model service; do not implement parallel contracts in the adapter.
 - Adapter-owned wire measurement fingerprints instructions, tools, and ordered input items. When a later request is a strict wire extension, provider-confirmed input remains authoritative and only the appended wire suffix is estimated.

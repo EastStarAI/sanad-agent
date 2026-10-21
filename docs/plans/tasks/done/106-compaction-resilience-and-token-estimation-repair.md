@@ -72,7 +72,7 @@ The former ordered queue (0P follow-ups, Stage2, 3A, 3B, timeout toast, 116) is 
 | Stage2 near-window summarization resilience; Stage3A complete-request target, public metrics and replay-aware tail; Stage3B premature/repeated automatic pressure | [Task 118 — Compaction accuracy and target](docs/plans/tasks/118-compaction-accuracy-and-target.md) | Uses the locked decisions and observations below. |
 | Misleading manual-compaction timeout toast | [Task 119 — Manual compaction timeout feedback](docs/plans/tasks/done/119-manual-compaction-timeout-feedback.md) | Delivered in [PR228](https://github.com/EastStarAI/sanad-agent/pull/228). |
 | OpenCode Go per-model wire protocol (live round 1 D3) | [Task 120 — OpenCode Go per-model protocol](docs/plans/tasks/120-opencode-go-per-model-protocol.md) | After 116; keeps issuers stable. |
-| Per-request destination-compatible projection | [Task 116](docs/plans/tasks/116-deepseek-reasoning-replay-across-tool-history.md) | Detached; own PR. |
+| Per-request destination-compatible projection | [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md) | Detached; own PR. |
 
 ## Delivered Baseline and Evidence
 
@@ -132,7 +132,7 @@ Reuse existing operation persistence, narrow additive JSON and the request dumpe
 
 ### Stage3A Follow-Up — Replay-Aware Tail Selection
 
-Now owned by [Task 118](docs/plans/tasks/118-compaction-accuracy-and-target.md) (Stage3A); not a blanket reasoning-removal feature. [Task 116](docs/plans/tasks/116-deepseek-reasoning-replay-across-tool-history.md) owns destination/issuer compatibility only if the shared projection boundary needs coordination.
+Now owned by [Task 118](docs/plans/tasks/118-compaction-accuracy-and-target.md) (Stage3A); not a blanket reasoning-removal feature. [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md) owns destination/issuer compatibility only if the shared projection boundary needs coordination.
 
 - [ ] Trace selection cost versus actual transmitted projection at the owning boundary. Explain the paired tails: estimated20031/actual19689 versus estimated20666/actual32557, with fixed route/effort/instructions/tools. Separate the full-request target defect from the component-accounting defect; known actual opaque cost must not become zero or be estimated from ciphertext length.
 - [ ] Add privacy-safe deterministic paired regressions using representative synthetic tool/replay shapes and explicitly fixture-scoped provider receipts:4 versus23 replay items,8 versus39 tool/result pairs. Cover actual cost reuse with proven identity and missing/stale/unmatched cost as unknown; do not import user Home payloads or fabricate live proof. The previous in-tolerance case must not hide the larger retained-chain case.

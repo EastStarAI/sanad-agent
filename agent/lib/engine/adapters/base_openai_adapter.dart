@@ -38,6 +38,7 @@ import 'package:crypto/crypto.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import 'tool_result_wire_codec.dart';
+import 'chat_reasoning_replay_policy.dart';
 import '../llm_request_dumper.dart';
 import '../context/compaction_token_estimator.dart';
 
@@ -54,6 +55,9 @@ class BaseOpenAIAdapter
   final String? apiKeyOverride;
   final String? defaultModelOverride;
   final String? providerInstanceId;
+
+  /// Per-route reasoning replay policy (Task 116 D3); data-driven seam.
+  final ChatReasoningReplayPolicy replayPolicy;
   String _availableModelsSource = 'fallback';
   Object? _lastModelsException;
 
@@ -68,6 +72,7 @@ class BaseOpenAIAdapter
     this.apiKeyOverride,
     this.defaultModelOverride,
     this.providerInstanceId,
+    this.replayPolicy = const ChatReasoningReplayPolicy(),
   });
 
   String get _baseUrl => ProviderEndpointResolver.normalizeBaseUrl(
@@ -101,12 +106,14 @@ class BaseOpenAIAdapter
     required LLMRequestOptions options,
     List<ToolSchema>? tools,
     bool stream = false,
+    bool enforceProjection = true,
   }) => _buildRequestBody(
     history,
     resolvedModel: resolvedModel,
     options: options,
     tools: tools,
     stream: stream,
+    enforceProjection: enforceProjection,
   );
 
   @override
@@ -132,12 +139,15 @@ class BaseOpenAIAdapter
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
     final resolvedModel = resolveModel(modelOverride);
+    // Measurement estimates the as-recorded projection; only dispatch and the
+    // summarizer enforce pre-dispatch history rejection (Task 116 D4).
     final body = await buildRequestBody(
       history,
       resolvedModel: resolvedModel,
       options: options,
       tools: tools,
       stream: false,
+      enforceProjection: false,
     );
     final messages = (body['messages'] as List?) ?? const [];
     final measured = <String, dynamic>{
@@ -1088,6 +1098,9 @@ class BaseOpenAIAdapter
       details: structuredReasoning.details,
       reasoningContent: structuredReasoning.providerContent,
       options: options,
+      resolvedModel: resolvedModel,
+      observation: ReasoningFieldObservation.of(choice),
+      hasToolCalls: toolCalls.isNotEmpty,
     );
 
     return AgentResponse(
@@ -1198,6 +1211,7 @@ class BaseOpenAIAdapter
       final reasoningBuffer = StringBuffer();
       final providerReasoningContentBuffer = StringBuffer();
       var hasProviderReasoningContent = false;
+      var reasoningObservation = ReasoningFieldObservation.absent;
       Map<String, dynamic>? finalUsage;
       LLMFinishReason streamFinishReason = LLMFinishReason.unknown;
 
@@ -1263,6 +1277,9 @@ class BaseOpenAIAdapter
             if (delta == null) continue;
 
             final structuredReasoning = _extractStructuredReasoning(delta);
+            reasoningObservation = reasoningObservation.merge(
+              ReasoningFieldObservation.of(delta),
+            );
             reasoningDetails.addAll(structuredReasoning.details);
             final providerReasoningContent =
                 structuredReasoning.providerContent;
@@ -1321,6 +1338,9 @@ class BaseOpenAIAdapter
                         ? providerReasoningContentBuffer.toString()
                         : null,
                     options: options,
+                    resolvedModel: resolvedModel,
+                    observation: reasoningObservation,
+                    hasToolCalls: false,
                   );
             if (providerState != null) emittedProviderState = true;
 
@@ -1392,6 +1412,9 @@ class BaseOpenAIAdapter
                 ? providerReasoningContentBuffer.toString()
                 : null,
             options: options,
+            resolvedModel: resolvedModel,
+            observation: reasoningObservation,
+            hasToolCalls: true,
           );
           if (providerState != null) emittedProviderState = true;
           yield AgentResponse(
@@ -1420,6 +1443,9 @@ class BaseOpenAIAdapter
                     ? providerReasoningContentBuffer.toString()
                     : null,
                 options: options,
+                resolvedModel: resolvedModel,
+                observation: reasoningObservation,
+                hasToolCalls: false,
               ),
             ),
             model: resolvedModel,
@@ -1505,7 +1531,14 @@ class BaseOpenAIAdapter
     required LLMRequestOptions options,
     List<ToolSchema>? tools,
     bool stream = false,
+    bool enforceProjection = true,
   }) async {
+    final reasoningReplay = _reasoningReplayPlan(
+      history,
+      resolvedModel: resolvedModel,
+      options: options,
+      enforce: enforceProjection,
+    );
     final hasImages = ToolResultWireCodec.hasImages(history);
     bool supportsImages = false;
     if (hasImages) {
@@ -1563,7 +1596,7 @@ class BaseOpenAIAdapter
         history,
         messageToWire: (message) => _messageToWire(
           message,
-          options,
+          reasoningReplay[message] ?? ChatReasoningReplay.none,
           verifiedAttachments: verifiedAttachments,
         ),
         supportsImageInput: supportsImages,
@@ -1638,7 +1671,7 @@ class BaseOpenAIAdapter
 
   Map<String, dynamic> _messageToWire(
     Message message,
-    LLMRequestOptions options, {
+    ChatReasoningReplay reasoningReplay, {
     Map<String, String>? verifiedAttachments,
   }) {
     dynamic content = message.role == MessageRole.tool
@@ -1689,18 +1722,37 @@ class BaseOpenAIAdapter
       data['tool_call_id'] = message.toolCallId;
     }
 
-    final state = message.providerState;
-    if (state?.namespace == _providerStateNamespace &&
-        state?.issuer == _stateIssuer(options)) {
-      final reasoningDetails = state!.data['reasoning_details'];
-      if (reasoningDetails is List) {
-        data['reasoning_details'] = reasoningDetails;
-      }
-      if (state.data.containsKey('reasoning_content')) {
-        data['reasoning_content'] = state.data['reasoning_content'];
-      }
-    }
+    reasoningReplay.applyTo(data);
     return data;
+  }
+
+  /// Per-request reasoning replay for this exact destination route (Task 116
+  /// D2/D3): same instance, protocol, endpoint and model only, with the
+  /// route's models.dev `interleaved.field` selecting the echo policy.
+  Map<Message, ChatReasoningReplay> _reasoningReplayPlan(
+    List<Message> history, {
+    required String resolvedModel,
+    required LLMRequestOptions options,
+    required bool enforce,
+  }) {
+    final instance =
+        options.providerInstanceId ?? providerInstanceId ?? profile.name;
+    return replayPolicy.plan(
+      history,
+      namespace: _providerStateNamespace,
+      issuer: _stateIssuer(options),
+      resolvedModel: resolvedModel,
+      route: '$instance/$resolvedModel',
+      routeKey:
+          '${ModelsDevService.providerToModelsDev[profile.name] ?? profile.name}'
+          '/$resolvedModel',
+      routeEchoField: ChatReasoningReplayPolicy.interleavedField(
+        modelsDevService?.modelEntrySync(profile.name, resolvedModel),
+      ),
+      thinkingDirective: options.thinkingDirective,
+      normalizeModel: _normalizeModelId,
+      enforce: enforce,
+    );
   }
 
   Map<String, String> _requestHeaders(LLMRequestOptions options) =>
@@ -1721,20 +1773,31 @@ class BaseOpenAIAdapter
     return '$instance|${profile.effectiveProtocol}|$endpoint';
   }
 
+  /// Typed provenance for one Chat response (Task 116 D1). Every tool-call
+  /// response is stamped, even without reasoning, so a later request can tell
+  /// a same-route zero-reasoning turn from foreign history. Keys are additive;
+  /// the namespace and issuer string are unchanged.
   LLMProviderState? _providerStateForReasoning({
     required List<dynamic> details,
     required dynamic reasoningContent,
     required LLMRequestOptions options,
+    required String resolvedModel,
+    required ReasoningFieldObservation observation,
+    required bool hasToolCalls,
   }) {
     final data = <String, dynamic>{
       if (details.isNotEmpty) 'reasoning_details': details,
       'reasoning_content': ?reasoningContent,
     };
-    if (data.isEmpty) return null;
+    if (data.isEmpty && !hasToolCalls) return null;
     return LLMProviderState(
       namespace: _providerStateNamespace,
       issuer: _stateIssuer(options),
-      data: data,
+      data: {
+        ...data,
+        ProviderStateProvenance.issuerModelKey: resolvedModel,
+        ProviderStateProvenance.reasoningFieldKey: observation.wire,
+      },
     );
   }
 

@@ -35,7 +35,7 @@ Owners: `agent/lib/engine/context/context_compaction_engine.dart` (`prepareSelec
 
 - No blanket multiplier, fabricated floor, ciphertext-length cost or zero opaque cost.
 - Never trim required summary sections, drop tools, lower thinking, globally delete replay or shrink summary limits to force a fit.
-- Destination/issuer compatibility is [Task 116](docs/plans/tasks/116-deepseek-reasoning-replay-across-tool-history.md); history rewrite and the recovery summarizer are [Task 117](docs/plans/tasks/117-session-history-integrity.md).
+- Destination/issuer compatibility is [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md); history rewrite and the recovery summarizer are [Task 117](docs/plans/tasks/117-session-history-integrity.md).
 
 ## Gates
 
