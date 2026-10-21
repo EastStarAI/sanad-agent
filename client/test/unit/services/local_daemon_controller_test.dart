@@ -7,6 +7,8 @@ import 'package:sanad_client/features/devices/data/daemon/local_daemon_controlle
 import 'package:sanad_client/features/devices/data/daemon/source_daemon_controller.dart';
 import 'package:sanad_client/features/devices/data/daemon/standalone_daemon_controller.dart';
 
+import '../../helpers/fake_agent_cli.dart';
+
 class TestStandaloneDaemonController extends StandaloneDaemonController {
   bool runningState = false;
   Map<String, dynamic>? healthState;
@@ -314,18 +316,19 @@ Sanad Agent Service Status:
       final binDir = Directory(p.join(tempHome.path, 'bin'))..createSync(recursive: true);
       File(p.join(binDir.path, 'sanad')).createSync();
 
+      final cli = FakeAgentCli(
+        '1.0.17',
+        serviceInstallFailure: 'Service operation failed: The systemd user service manager is unavailable.',
+      );
       final controller = StandaloneDaemonController(
         sanadHomePath: tempHome.path,
+        environment: {'HOME': tempHome.path},
         platformOverride: 'linux',
-        processRunner: (executable, arguments) async => ProcessResult(
-          1,
-          1,
-          '',
-          'Service operation failed: The systemd user service manager is unavailable.',
-        ),
+        processRunner: cli.run,
+        bootstrapInstallerFactory: noBootstrapExpected,
       );
 
-      final result = await controller.updateDaemon(targetVersion: '1.0.0');
+      final result = await controller.updateDaemon(targetVersion: '1.0.17');
 
       expect(result.status, AgentLifecycleStatus.serviceRegistrationFailed);
       expect(
@@ -344,11 +347,13 @@ Sanad Agent Service Status:
 
       final emptyController = StandaloneDaemonController(
         sanadHomePath: tempHome.path,
+        environment: {'HOME': tempHome.path},
         platformOverride: 'linux',
-        processRunner: (executable, arguments) async => ProcessResult(1, 1, '', ''),
+        processRunner: FakeAgentCli('1.0.17', serviceInstallFailure: '').run,
+        bootstrapInstallerFactory: noBootstrapExpected,
       );
 
-      final emptyResult = await emptyController.updateDaemon(targetVersion: '1.0.0');
+      final emptyResult = await emptyController.updateDaemon(targetVersion: '1.0.17');
 
       expect(emptyResult.status, AgentLifecycleStatus.serviceRegistrationFailed);
       expect(
@@ -362,16 +367,13 @@ Sanad Agent Service Status:
 
       final unsuitableController = StandaloneDaemonController(
         sanadHomePath: tempHome.path,
+        environment: {'HOME': tempHome.path},
         platformOverride: 'linux',
-        processRunner: (executable, arguments) async => ProcessResult(
-          1,
-          1,
-          '',
-          'Unhandled exception:\n#0 main',
-        ),
+        processRunner: FakeAgentCli('1.0.17', serviceInstallFailure: 'Unhandled exception:\n#0 main').run,
+        bootstrapInstallerFactory: noBootstrapExpected,
       );
 
-      final unsuitableResult = await unsuitableController.updateDaemon(targetVersion: '1.0.0');
+      final unsuitableResult = await unsuitableController.updateDaemon(targetVersion: '1.0.17');
 
       expect(unsuitableResult.status, AgentLifecycleStatus.serviceRegistrationFailed);
       expect(
@@ -394,15 +396,19 @@ Sanad Agent Service Status:
       });
 
       try {
+        final cli = FakeAgentCli('1.0.17');
         final controller = StandaloneDaemonController(
           sanadHomePath: tempHome.path,
+          environment: {'HOME': tempHome.path},
           platformOverride: 'linux',
-          processRunner: (executable, arguments) async => ProcessResult(
-            1,
-            1,
-            'RAW_STDOUT_TOKEN_SECRET_123',
-            'RAW_STDERR_PASSWORD_SECRET_456\nService operation failed: user bus is unavailable',
-          ),
+          processRunner: (executable, arguments) async => arguments.first == 'help'
+              ? cli.run(executable, arguments)
+              : ProcessResult(
+                  1,
+                  1,
+                  'RAW_STDOUT_TOKEN_SECRET_123',
+                  'RAW_STDERR_PASSWORD_SECRET_456\nService operation failed: user bus is unavailable',
+                ),
         );
 
         final result = await controller.registerService();

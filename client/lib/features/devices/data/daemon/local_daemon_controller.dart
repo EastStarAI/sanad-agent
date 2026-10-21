@@ -81,4 +81,12 @@ abstract class LocalDaemonController {
   bool isServiceInstalled();
   bool get shouldAutoStart;
   Future<bool> install();
+
+  /// Whether [updateDaemon] owns the complete lifecycle of a stopped agent:
+  /// inspecting the installed executable, replacing an outdated or
+  /// incompatible one, registering the service, and starting it.
+  ///
+  /// When false, callers start the registered service before asking for an
+  /// update, which keeps source-managed agents under developer control.
+  bool get ownsStoppedAgentLifecycle => false;
 }

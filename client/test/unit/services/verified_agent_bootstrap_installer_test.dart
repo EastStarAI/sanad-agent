@@ -179,7 +179,49 @@ void main() {
     final result = await installer.install(targetVersion: '1.1.0');
 
     expect(result.status, AgentBootstrapStatus.trustFailed);
+    expect(result.message, contains('stage=platform_verifier'));
     expect(target.readAsStringSync(), 'existing');
+  });
+
+  test('macOS reports the typed stage and sanitized detail of a detailed trust failure', () async {
+    final bytes = utf8.encode('candidate');
+    final artifactFile = File('${temporaryDirectory.path}/candidate')..writeAsBytesSync(bytes);
+    final manifest = _manifest(
+      size: bytes.length,
+      digest: await sha256OfFile(artifactFile),
+    );
+    final artifact = (manifest['artifacts']! as List).single as Map<String, dynamic>;
+    artifact
+      ..['platform'] = 'macos'
+      ..['architecture'] = 'arm64'
+      ..['filename'] = 'sanad-agent-1.1.0-macos-arm64'
+      ..['url'] = 'https://github.com/EastStarAI/sanad-agent/releases/download/v1.1.0/sanad-agent-1.1.0-macos-arm64'
+      ..['signature_type'] = 'developer-id+notarization+github-attestation';
+    final target = File('${temporaryDirectory.path}/sanad')..writeAsStringSync('existing');
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: target.path,
+      operatingSystem: 'macos',
+      architecture: 'arm64',
+      detailedPlatformVerifier: (file, _) async => PlatformTrustResult.untrusted(
+        stage: PlatformTrustStage.publisherRequirement,
+        exitCode: 3,
+        detail: sanitizePlatformVerifierOutput('${file.path}: untrusted publisher', filePath: file.path),
+      ),
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('release-manifest.json')) {
+          return http.Response(jsonEncode(manifest), 200);
+        }
+        return http.Response.bytes(bytes, 200);
+      }),
+    );
+
+    final result = await installer.install(targetVersion: '1.1.0');
+
+    expect(result.status, AgentBootstrapStatus.trustFailed);
+    expect(result.message, contains('stage=publisher_requirement: exit=3: <artifact>: untrusted publisher'));
+    expect(result.message, isNot(contains(temporaryDirectory.path)));
+    expect(target.readAsStringSync(), 'existing');
+    expect(File('${target.path}.bootstrap-staged').existsSync(), isFalse);
   });
 
   test('keeps the existing executable when verification fails', () async {

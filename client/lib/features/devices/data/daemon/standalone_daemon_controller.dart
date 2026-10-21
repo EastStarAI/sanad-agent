@@ -17,12 +17,27 @@ class StandaloneDaemonController implements LocalDaemonController {
     this.environment,
     this.processRunner,
     this.platformOverride,
+    this.bootstrapInstallerFactory,
+    this.healthProvider,
+    this.executableProbeTimeout = defaultExecutableProbeTimeout,
   });
+
+  /// Upper bound for a read-only probe of the installed executable. A legacy
+  /// or damaged binary must never block pairing indefinitely.
+  static const Duration defaultExecutableProbeTimeout = Duration(seconds: 20);
+
+  final Duration executableProbeTimeout;
 
   final String? sanadHomePath;
   final Map<String, String>? environment;
   final Future<ProcessResult> Function(String executable, List<String> arguments)? processRunner;
   final String? platformOverride;
+
+  /// Test seam for the verified bootstrap installer bound to a target path.
+  final VerifiedAgentBootstrapInstaller Function(String targetPath)? bootstrapInstallerFactory;
+
+  /// Test seam replacing the authenticated local `/health` probe.
+  final Future<Map<String, dynamic>?> Function()? healthProvider;
 
   bool get _isLinux => platformOverride == 'linux' || (platformOverride == null && Platform.isLinux);
 
@@ -39,7 +54,8 @@ class StandaloneDaemonController implements LocalDaemonController {
   LocalGatewayHttpClient get _gatewayClient => const LocalGatewayHttpClient();
 
   VerifiedAgentBootstrapInstaller createBootstrapInstaller() {
-    return VerifiedAgentBootstrapInstaller(targetPath: getExecutablePath());
+    final targetPath = getExecutablePath();
+    return bootstrapInstallerFactory?.call(targetPath) ?? VerifiedAgentBootstrapInstaller(targetPath: targetPath);
   }
 
   String getHomeDirectory() {
@@ -94,6 +110,8 @@ class StandaloneDaemonController implements LocalDaemonController {
 
   @override
   Future<bool> isDaemonRunning() async {
+    final provider = healthProvider;
+    if (provider != null) return await provider() != null;
     if (Platform.environment.containsKey('FLUTTER_TEST')) {
       return false;
     }
@@ -109,25 +127,14 @@ class StandaloneDaemonController implements LocalDaemonController {
 
   @override
   Future<String?> getDaemonVersion() async {
-    if (Platform.environment.containsKey('FLUTTER_TEST')) {
-      return null;
-    }
-    try {
-      final response = await _gatewayClient
-          .get(Uri.parse('${LocalDaemonController.defaultUrl}/health'))
-          .timeout(const Duration(milliseconds: 800));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data is Map) {
-          return data['version']?.toString();
-        }
-      }
-    } catch (_) {}
-    return null;
+    final health = await getDaemonHealth();
+    return health?['version']?.toString();
   }
 
   @override
   Future<Map<String, dynamic>?> getDaemonHealth() async {
+    final provider = healthProvider;
+    if (provider != null) return provider();
     if (Platform.environment.containsKey('FLUTTER_TEST')) {
       return null;
     }
@@ -143,6 +150,104 @@ class StandaloneDaemonController implements LocalDaemonController {
       }
     } catch (_) {}
     return null;
+  }
+
+  /// Environment for read-only executable probes. It pins the probed binary to
+  /// the Home this controller manages, so a probe can never initialize a
+  /// different Sanad Home.
+  Map<String, String> get executableProbeEnvironment => {'SANAD_HOME': getSanadHome()};
+
+  /// The version reported by the installed executable's `--version` output,
+  /// including any prerelease suffix, or null when it is absent, unparseable,
+  /// fails, or exceeds [executableProbeTimeout].
+  Future<String?> getInstalledExecutableVersion() async {
+    final execPath = getExecutablePath();
+    if (!File(execPath).existsSync()) return null;
+    final result = await _probeExecutable(execPath, const ['--version']);
+    if (result == null || result.exitCode != 0) return null;
+    return parseAgentVersionOutput(result.stdout.toString());
+  }
+
+  static final RegExp _versionLine = RegExp(
+    r'^\s*Version:\s*v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\s*$',
+    multiLine: true,
+  );
+
+  /// Parses only the dedicated `Version:` line every released agent prints.
+  /// Other numbers, such as an OS or kernel version, are never accepted.
+  static String? parseAgentVersionOutput(String output) {
+    final raw = _versionLine.firstMatch(output)?.group(1);
+    if (raw == null) return null;
+    try {
+      return ReleaseVersion.parse(raw).toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Whether the installed executable accepts every option in
+  /// [serviceInstallArguments].
+  ///
+  /// The probe is `sanad help service install`, which is read-only on every
+  /// released agent. `service install --help` is never used: v1.0.0-v1.0.4
+  /// ignored `--help` there and performed a real service installation.
+  Future<bool> validateServiceInstallCompatibility() async {
+    final requiredOptions = serviceInstallArguments.where((arg) => arg.startsWith('--')).toList();
+    if (requiredOptions.isEmpty) return true;
+    final execPath = getExecutablePath();
+    if (!File(execPath).existsSync()) return false;
+    final subcommands = serviceInstallArguments.takeWhile((arg) => !arg.startsWith('-'));
+    final usage = await _probeExecutable(execPath, ['help', ...subcommands]);
+    if (usage == null || usage.exitCode != 0) return false;
+    final help = '${usage.stdout}\n${usage.stderr}';
+    for (final option in requiredOptions) {
+      final listed = RegExp('(?:^|[\\s,\\[])${RegExp.escape(option)}(?![\\w-])', multiLine: true);
+      if (!listed.hasMatch(help)) {
+        _logger.info('Installed agent does not support a required service option: $option');
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<ProcessResult?> _probeExecutable(String execPath, List<String> arguments) async {
+    try {
+      final runner = processRunner;
+      if (runner != null) {
+        return await runner(execPath, arguments).timeout(executableProbeTimeout);
+      }
+      return await _runBoundedProcess(
+        execPath,
+        arguments,
+        environment: executableProbeEnvironment,
+        timeout: executableProbeTimeout,
+      );
+    } catch (error) {
+      _logger.info('Installed agent probe failed (${error.runtimeType}).');
+      return null;
+    }
+  }
+
+  static Future<ProcessResult> _runBoundedProcess(
+    String executable,
+    List<String> arguments, {
+    required Map<String, String> environment,
+    required Duration timeout,
+  }) async {
+    final process = await Process.start(executable, arguments, environment: environment);
+    // EOF on stdin ends any interactive fallback in an unexpected binary.
+    unawaited(process.stdin.close().catchError((_) {}));
+    final stdout = process.stdout.transform(systemEncoding.decoder).join();
+    final stderr = process.stderr.transform(systemEncoding.decoder).join();
+    try {
+      final exitCode = await process.exitCode.timeout(timeout);
+      return ProcessResult(process.pid, exitCode, await stdout, await stderr);
+    } on TimeoutException {
+      process.kill(ProcessSignal.sigkill);
+      unawaited(stdout.then((_) {}, onError: (_) {}));
+      unawaited(stderr.then((_) {}, onError: (_) {}));
+      rethrow;
+    }
   }
 
   @override
@@ -219,109 +324,140 @@ class StandaloneDaemonController implements LocalDaemonController {
     }
 
     if (health == null) {
-      final executableExists = File(getExecutablePath()).existsSync();
-      if (executableExists) {
-        if (!isServiceInstalled()) {
-          final registration = await registerService();
-          if (!registration.succeeded) {
-            return AgentLifecycleResult(
-              AgentLifecycleStatus.serviceRegistrationFailed,
-              message: registration.failureMessage,
-            );
-          }
-        }
-        if (!await startDaemon()) {
-          return const AgentLifecycleResult(AgentLifecycleStatus.startFailed);
-        }
-        for (var attempt = 0; attempt < 10; attempt++) {
-          if (await getDaemonHealth() != null) {
-            return updateDaemon(
-              targetVersion: targetVersion,
-              onProgress: onProgress,
-            );
-          }
-          await Future<void>.delayed(
-            Duration(milliseconds: 300 + attempt * 200),
-          );
-        }
-        return const AgentLifecycleResult(AgentLifecycleStatus.healthFailed);
+      return _updateStoppedAgent(targetVersion, onProgress);
+    }
+
+    // A running agent owns its own verified replacement through /update.
+    try {
+      final updateUri = Uri.parse(
+        '${LocalDaemonController.defaultUrl}/update',
+      ).replace(queryParameters: {'target_version': targetVersion});
+      final response = await _gatewayClient.post(updateUri).timeout(const Duration(minutes: 2));
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        return const AgentLifecycleResult(AgentLifecycleStatus.authFailed);
       }
-      try {
-        final bootstrap = await createBootstrapInstaller().install(
-          targetVersion: targetVersion,
-          onProgress: onProgress,
+      final body = jsonDecode(response.body);
+      if (body is! Map) {
+        return const AgentLifecycleResult(
+          AgentLifecycleStatus.manifestInvalid,
         );
-        if (!bootstrap.isSuccess) return _bootstrapResult(bootstrap);
-        if (!isServiceInstalled() || _isWindows) {
-          final registration = await registerService();
-          if (!registration.succeeded) {
-            return AgentLifecycleResult(
-              AgentLifecycleStatus.serviceRegistrationFailed,
-              message: registration.failureMessage,
-            );
-          }
-        }
-        if (!await startDaemon()) {
-          return const AgentLifecycleResult(AgentLifecycleStatus.startFailed);
-        }
-      } catch (error) {
-        _logger.severe('Verified agent bootstrap failed: $error');
+      }
+      final status = body['status']?.toString() ?? 'failed';
+      if (status != 'restart_required' && status != 'up_to_date') {
         return AgentLifecycleResult(
-          AgentLifecycleStatus.replacementFailed,
-          message: 'Agent installation failed: $error',
+          _agentStatus(status),
+          message: body['message']?.toString(),
         );
       }
-    } else {
-      try {
-        final updateUri = Uri.parse(
-          '${LocalDaemonController.defaultUrl}/update',
-        ).replace(queryParameters: {'target_version': targetVersion});
-        final response = await _gatewayClient.post(updateUri).timeout(const Duration(minutes: 2));
-        if (response.statusCode == 401 || response.statusCode == 403) {
-          return const AgentLifecycleResult(AgentLifecycleStatus.authFailed);
-        }
-        final body = jsonDecode(response.body);
-        if (body is! Map) {
-          return const AgentLifecycleResult(
-            AgentLifecycleStatus.manifestInvalid,
-          );
-        }
-        final status = body['status']?.toString() ?? 'failed';
-        if (status != 'restart_required' && status != 'up_to_date') {
-          return AgentLifecycleResult(
-            _agentStatus(status),
-            message: body['message']?.toString(),
-          );
-        }
-      } catch (error) {
-        _logger.severe('Daemon-owned update request failed: $error');
-        return AgentLifecycleResult(
-          AgentLifecycleStatus.networkFailed,
-          message: 'Agent update request failed: $error',
-        );
-      }
+    } catch (error) {
+      _logger.severe('Daemon-owned update request failed: $error');
+      return AgentLifecycleResult(
+        AgentLifecycleStatus.networkFailed,
+        message: 'Agent update request failed: $error',
+      );
     }
 
     final finalState = await _waitForTargetVersion(targetVersion);
-    if (!finalState.isSuccess && health != null && await _restoreRollback()) {
+    if (!finalState.isSuccess && await _restoreRollback(restart: true)) {
       return const AgentLifecycleResult(AgentLifecycleStatus.rollbackCompleted);
     }
     return finalState;
   }
 
-  Future<bool> _restoreRollback() async {
+  @override
+  bool get ownsStoppedAgentLifecycle => true;
+
+  /// Brings a stopped agent to [targetVersion] without contacting a daemon.
+  ///
+  /// A compatible executable at the target version is reused. A missing,
+  /// older, unparseable, or incompatible executable is replaced through the
+  /// verified bootstrap installer before any service registration, so an old
+  /// binary is never invoked with options it does not support. A newer
+  /// executable is never replaced; it is started when compatible, matching the
+  /// behavior for a newer running agent.
+  Future<AgentLifecycleResult> _updateStoppedAgent(
+    String targetVersion,
+    void Function(double progress)? onProgress,
+  ) async {
+    final executable = File(getExecutablePath());
+    final replacesExisting = executable.existsSync();
+    if (replacesExisting) {
+      final installedVersion = await getInstalledExecutableVersion();
+      if (installedVersion != null) {
+        final comparison = _compareVersions(installedVersion, targetVersion);
+        final compatible = comparison >= 0 && await validateServiceInstallCompatibility();
+        if (comparison > 0) {
+          if (compatible) await _registerAndStartService();
+          return const AgentLifecycleResult(AgentLifecycleStatus.downgradeRejected);
+        }
+        if (comparison == 0 && compatible) {
+          return await _registerAndStartService() ?? await _waitForTargetVersion(targetVersion);
+        }
+      }
+    }
+
+    try {
+      final bootstrap = await createBootstrapInstaller().install(
+        targetVersion: targetVersion,
+        onProgress: onProgress,
+      );
+      if (!bootstrap.isSuccess) return _bootstrapResult(bootstrap);
+    } catch (error) {
+      _logger.severe('Verified agent bootstrap failed (${error.runtimeType}).');
+      return AgentLifecycleResult(
+        AgentLifecycleStatus.replacementFailed,
+        message: 'Agent installation failed: $error',
+      );
+    }
+
+    final outcome = await _registerAndStartService() ?? await _waitForTargetVersion(targetVersion);
+    if (!outcome.isSuccess && replacesExisting && await _restoreRollback(restart: false)) {
+      return AgentLifecycleResult(
+        AgentLifecycleStatus.rollbackCompleted,
+        message: 'The update failed and the previous agent was restored: ${outcome.actionableMessage}',
+      );
+    }
+    return outcome;
+  }
+
+  /// Registers the service when needed and starts it. Returns null on success
+  /// or the failing lifecycle result.
+  Future<AgentLifecycleResult?> _registerAndStartService() async {
+    if (!isServiceInstalled() || _isWindows) {
+      final registration = await registerService();
+      if (!registration.succeeded) {
+        return AgentLifecycleResult(
+          AgentLifecycleStatus.serviceRegistrationFailed,
+          message: registration.failureMessage,
+        );
+      }
+    }
+    if (!await startDaemon()) {
+      return const AgentLifecycleResult(AgentLifecycleStatus.startFailed);
+    }
+    return null;
+  }
+
+  /// Restores the executable preserved by the last verified replacement.
+  ///
+  /// With [restart] false the agent was stopped before the update, so the
+  /// failed candidate is stopped and the previous copy is left stopped.
+  Future<bool> _restoreRollback({required bool restart}) async {
     final target = File(getExecutablePath());
     final backup = File('${target.path}.rollback');
     if (!backup.existsSync()) return false;
     try {
+      if (!restart) await stopDaemon();
       if (target.existsSync()) await target.delete();
       await backup.rename(target.path);
-      final chmod = await Process.run('chmod', ['700', target.path]);
-      if (chmod.exitCode != 0) return false;
-      return await startDaemon();
+      if (!_isWindows) {
+        final chmod = await Process.run('chmod', ['700', target.path]);
+        if (chmod.exitCode != 0) return false;
+      }
+      return restart ? await startDaemon() : true;
     } catch (error) {
       _logger.severe(
-        'Could not restore the previous agent after failed health: $error',
+        'Could not restore the previous agent after a failed update (${error.runtimeType}).',
       );
       return false;
     }
@@ -422,6 +558,13 @@ class StandaloneDaemonController implements LocalDaemonController {
           'Agent executable is not present yet; service registration is deferred.',
         );
         return const ServiceRegistrationResult(succeeded: true);
+      }
+      if (!await validateServiceInstallCompatibility()) {
+        _logger.warning('Daemon service registration rejected: the installed agent lacks required service options.');
+        return const ServiceRegistrationResult(
+          succeeded: false,
+          diagnostic: ServiceRegistrationResult.incompatibleExecutableDiagnostic,
+        );
       }
       final runner = processRunner ?? Process.run;
       final result = await runner(execPath, serviceInstallArguments);
@@ -535,6 +678,9 @@ class ServiceRegistrationResult {
     required this.succeeded,
     this.diagnostic,
   });
+
+  static const String incompatibleExecutableDiagnostic =
+      'The installed agent does not support the required service options. Update the agent and try again.';
 
   static const String defaultFailureMessage =
       'The agent was downloaded but its background service could not be registered.';
