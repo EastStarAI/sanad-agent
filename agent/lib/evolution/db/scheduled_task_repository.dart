@@ -5,7 +5,9 @@ import 'agent_state_database.dart';
 /// Persistent storage for scheduled tasks (Task 112).
 ///
 /// Owns every read and write of the `scheduled_tasks` table. The table schema
-/// and its additive migration are owned by [AgentStateDatabase]; the only
+/// and its additive migration are owned by [AgentStateDatabase]; `run_at` is
+/// a legacy mirror of `next_run_at` kept for older agents, written on every
+/// save and never read here. The only
 /// mutation path above this repository is `CronScheduler` (single writer).
 class ScheduledTaskRepository {
   final AgentStateDatabase _state;
@@ -31,13 +33,14 @@ class ScheduledTaskRepository {
     bool enabled = true,
   }) {
     final now = DateTime.now();
+    final nextRunAtValue = _normalizeDateTime(nextRunAt);
     final stmt = _db.prepare('''
       INSERT INTO scheduled_tasks (
         id, task, session_id, kind, interval_minutes, at_time,
-        weekdays, month_day, zone, next_run_at, created_at,
+        weekdays, month_day, zone, next_run_at, run_at, created_at,
         updated_at, last_run_at, last_status, enabled
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         task = excluded.task,
         session_id = excluded.session_id,
@@ -48,6 +51,7 @@ class ScheduledTaskRepository {
         month_day = excluded.month_day,
         zone = excluded.zone,
         next_run_at = excluded.next_run_at,
+        run_at = excluded.run_at,
         updated_at = excluded.updated_at,
         last_run_at = excluded.last_run_at,
         last_status = excluded.last_status,
@@ -64,7 +68,10 @@ class ScheduledTaskRepository {
         weekdays,
         monthDay,
         zone,
-        _normalizeDateTime(nextRunAt),
+        nextRunAtValue,
+        // Mirror for older agents sharing this Home (rollback safety); on an
+        // old table `run_at` is still NOT NULL, so it is always written.
+        nextRunAtValue,
         _normalizeDateTime(now),
         _normalizeDateTime(updatedAt ?? now),
         lastRunAt != null ? _normalizeDateTime(lastRunAt) : null,

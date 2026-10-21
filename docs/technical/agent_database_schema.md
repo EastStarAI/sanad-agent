@@ -81,6 +81,7 @@ erDiagram
         integer month_day
         text zone
         text next_run_at
+        text run_at
         text created_at
         text updated_at
         text last_run_at
@@ -248,16 +249,18 @@ Ownership: the table schema and its migration live in `AgentStateDatabase`; ever
 | `weekdays` | `TEXT` | Nullable | Comma-separated weekdays e.g. `mon,wed,fri` (for `weekly`) |
 | `month_day` | `INTEGER` | Nullable | Day of month 1..31 (for `monthly`) |
 | `zone` | `TEXT` | Non-null DEFAULT `'local'` | Timezone (`local` or fixed UTC offset `Z`, `+HH:MM`, `-HH:MM`) |
-| `next_run_at` | `TEXT` | Non-null | ISO8601 UTC timestamp of next scheduled execution (migrated from legacy `run_at`) |
+| `next_run_at` | `TEXT` | Nullable only for rows an older agent inserted (backfilled at the next open); always written by the current agent | ISO8601 UTC timestamp of next scheduled execution; the only column the current agent reads for scheduling |
+| `run_at` | `TEXT` | Nullable on new tables; still `NOT NULL` on tables created before Task 112 | Legacy mirror of `next_run_at`, written on every save and never read by the current agent, so an older agent (rollback) on the same Home keeps working |
 | `created_at` | `TEXT` | Non-null | ISO8601 UTC creation timestamp |
-| `updated_at` | `TEXT` | Non-null | ISO8601 UTC last update timestamp |
+| `updated_at` | `TEXT` | Nullable only for rows an older agent inserted (backfilled from `created_at` at the next open) | ISO8601 UTC last update timestamp |
 | `last_run_at` | `TEXT` | Nullable | ISO8601 UTC timestamp of previous execution (preserved without change on skipped occurrences) |
 | `last_status` | `TEXT` | Nullable | Status of previous execution (`fired`, `skipped_missed`, `error`) |
 | `enabled` | `INTEGER` | Non-null DEFAULT `1` | 1 if schedule is active (pause/resume is out of scope in this release; reserved for future lifecycle control) |
 
 #### Migration Note (Task 112a)
 Pre-existing rows from earlier versions migrate automatically via an idempotent guarded migration:
-- Legacy `run_at` is renamed to `next_run_at`.
+- The migration is strictly additive: no column is renamed, dropped, or tightened. `run_at` is kept (and keeps its legacy `NOT NULL` on old tables); `next_run_at` and the D8 columns are added beside it as nullable or defaulted columns, so the pre-112 `INSERT (id, task, run_at, session_id, created_at)`, its `ON CONFLICT` upsert, and `SELECT ... ORDER BY run_at` keep working for an older agent on the same Home.
+- At every open, `next_run_at` takes the value of `run_at` wherever they differ (current writes keep them equal, so a difference means an older agent wrote last), and `run_at` is filled from `next_run_at` where it is empty.
 - Rows default to `kind = 'once'`, `zone = 'local'`, `enabled = 1`, and `updated_at = created_at`.
 - An index `idx_scheduled_tasks_next_run` is created on `next_run_at ASC`.
 - Repeated migration execution is an idempotent no-op.

@@ -60,8 +60,9 @@ storage that survives a daemon restart.
   the persistence layer directly.
 - **D8 — Storage.** `scheduled_tasks` becomes the durable source of truth with columns:
   `id, task, session_id, kind, interval_minutes, at_time, weekdays, month_day, zone, next_run_at,
-  created_at, updated_at, last_run_at, last_status, enabled`. The legacy `run_at` column is renamed
-  to `next_run_at` by an **idempotent additive migration**; pre-existing rows migrate to
+  created_at, updated_at, last_run_at, last_status, enabled`. The legacy `run_at` column is **kept**
+  as a write-only mirror of `next_run_at` (amended on the port: no rename, see "Additive
+  migration" under "Port onto current main") by an **idempotent additive migration**; pre-existing rows migrate to
   `kind='once'`, `zone='local'`, `enabled=1`, `next_run_at = old run_at`. Use the repository's
   existing guarded-migration pattern and make a second run a no-op.
 - **D9 — Bounded output.** Tool output always exposes the schedule id plus a human recurrence
@@ -129,8 +130,8 @@ storage that survives a daemon restart.
 
 ### A2 — Durable storage and migration
 
-- [x] Migrate the table to the D8 column set with the idempotent, guarded migration and the
-      `run_at` → `next_run_at` rename.
+- [x] Migrate the table to the D8 column set with the idempotent, guarded migration. *(Port
+      amendment: `run_at` is kept and mirrored instead of renamed to `next_run_at`.)*
 - [x] Update the persistence methods that read/write schedules to the new column set, keeping the
       table's single owner (`agent/lib/evolution/db/session_db.dart`).
 - [x] Regenerate `agent/test/interfaces/interfaces_test.mocks.dart` if a mocked signature changes.
@@ -208,8 +209,35 @@ original branch and PR #224 were not modified.
 | `interfaces_test.mocks.dart` | regenerated from current lib with a build filter (main's committed copy was already stale against main's own lib) |
 
 **Schema version:** the agent-state database has no integer schema version; migrations are
-guarded and idempotent. The port adds no new migration — `_migrateScheduledTasks` stays additive
-and runs after main's existing migrations in `_createSchemaAndMigrate`.
+guarded and idempotent. `_migrateScheduledTasks` runs after main's existing migrations in
+`_createSchemaAndMigrate`.
+
+### Additive migration (coordinator-required fix, 2026-10-21)
+
+The delivered migration renamed `run_at` to `next_run_at`. That is not additive: after it, an older
+agent (main today, or a rollback) on the same Home inserts and reads `run_at` and fails, and test
+Homes return to main after every live run. The port now:
+
+- never renames or drops: `run_at` stays (with its legacy `NOT NULL` on old tables), and
+  `next_run_at` is added beside it; the new `CREATE TABLE` carries `run_at TEXT` (nullable), and the
+  columns the pre-112 `INSERT` omits (`next_run_at`, `updated_at`) are nullable there;
+- writes `run_at` = `next_run_at` on every save (`ScheduledTaskRepository`), so writes succeed on an
+  old `run_at NOT NULL` table and an older agent sees current instants;
+- reads only `next_run_at`; at every open, `next_run_at` takes `run_at` where they differ (only an
+  older agent's write can make them differ) and `run_at` is filled where empty;
+- tests (`agent/test/evolution/scheduled_tasks_migration_test.dart`): old table with rows migrates
+  with both columns equal and a second run changes nothing; a write and upsert on an old
+  `run_at NOT NULL` table; the pre-112 raw `INSERT`/upsert/`SELECT ... ORDER BY run_at`/`DELETE`
+  copied verbatim succeed on a migrated table and on a freshly created one; rows an older agent
+  wrote are resynchronized at the next open.
+
+Verification after this fix: `fvm dart analyze` no issues; migration suite 8 passed; focused 112
+suites 114 passed; full agent suite 3,075 passed, 14 skipped, 0 failed.
+
+Rollback residue (not a column problem, recorded for the operator): an older agent reading a
+migrated Home sees recurring rows as one-shot tasks at `run_at` and deletes each after it fires or
+after its stale-task grace, because its code has no recurrence. Rows survive only while no older
+agent runs on that Home.
 
 ### Defects found by the port review and fixed
 
@@ -263,7 +291,8 @@ reviewer confirmed seven recorded findings with evidence and repaired them in th
   for calls persisted before the merge.
 - **R5 (minor)** — the duplicated environment read is gone; `Config` owns the zone default.
 - **R6 (minor)** — the mirrored `run_at` key and its read fallback are gone; only the migration
-  rename and its test remain.
+  rename and its test remain. *(Superseded on the port: the rename was replaced by an additive
+  migration that keeps `run_at` as a write-only mirror; reads still use `next_run_at` only.)*
 - **R7 (minor)** — the unreachable second weekly scan was removed.
 
 Independently re-verified by the orchestrator after the review, not accepted on report alone:

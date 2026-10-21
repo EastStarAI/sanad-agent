@@ -482,10 +482,15 @@ class AgentStateDatabase {
     ''');
 
     // ── scheduled_tasks ───────────────────────────────────────────────────
+    // Additive and rollback-safe (Task 112): `run_at` stays and mirrors
+    // `next_run_at` on every write, and every column an older agent's INSERT
+    // omits is nullable or defaulted, so an older agent on the same Home keeps
+    // inserting and reading `run_at` successfully.
     db.execute('''
       CREATE TABLE IF NOT EXISTS scheduled_tasks (
         id TEXT PRIMARY KEY,
         task TEXT NOT NULL,
+        run_at TEXT,
         session_id TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'once',
         interval_minutes INTEGER,
@@ -493,9 +498,9 @@ class AgentStateDatabase {
         weekdays TEXT,
         month_day INTEGER,
         zone TEXT NOT NULL DEFAULT 'local',
-        next_run_at TEXT NOT NULL,
+        next_run_at TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
+        updated_at TEXT,
         last_run_at TEXT,
         last_status TEXT,
         enabled INTEGER NOT NULL DEFAULT 1
@@ -1335,13 +1340,10 @@ class AgentStateDatabase {
   static void _migrateScheduledTasks(Database db) {
     if (!_tableExists(db, 'scheduled_tasks')) return;
 
-    if (!_columnExists(db, 'scheduled_tasks', 'next_run_at')) {
-      if (_columnExists(db, 'scheduled_tasks', 'run_at')) {
-        db.execute('ALTER TABLE scheduled_tasks RENAME COLUMN run_at TO next_run_at');
-      } else {
-        _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN next_run_at TEXT');
-      }
-    }
+    // Never rename or drop: `run_at` is the column older agents read and
+    // write. `next_run_at` is added beside it.
+    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN run_at TEXT');
+    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN next_run_at TEXT');
 
     _safeAddColumn(
       db,
@@ -1384,6 +1386,20 @@ class AgentStateDatabase {
       'ALTER TABLE scheduled_tasks ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1',
     );
 
+    // Current writes keep both columns equal, so a difference means an older
+    // agent wrote `run_at` last (insert or upsert); take its value. Runs at
+    // every open, after any rollback period.
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET next_run_at = run_at
+      WHERE run_at IS NOT NULL AND TRIM(run_at) <> ''
+        AND (next_run_at IS NULL OR next_run_at <> run_at);
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET run_at = next_run_at
+      WHERE (run_at IS NULL OR TRIM(run_at) = '') AND next_run_at IS NOT NULL;
+    ''');
     db.execute('''
       UPDATE scheduled_tasks
       SET kind = 'once'

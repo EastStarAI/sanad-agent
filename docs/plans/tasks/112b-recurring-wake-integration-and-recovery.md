@@ -144,7 +144,10 @@ the agent today's date in the schedule's zone.
 Ported with 112a onto `adc128ec` on branch `feat/112-port`; the ownership map, schema-version note,
 and the port-review defects (P1 startup event drop, P8 interval anchor drift, and the B3 amendment
 P2/P3 belong to this record's scope) are recorded in
-`docs/plans/tasks/112a-recurring-schedule-model-and-merged-tool.md` under "Port onto current main".
+`docs/plans/tasks/112a-recurring-schedule-model-and-merged-tool.md` under "Port onto current main",
+together with the additive `scheduled_tasks` migration (no `run_at` rename; `run_at` mirrors
+`next_run_at` on every write) that keeps restart recovery working when a Home is shared with an
+older agent.
 
 ## Review gate and delivery
 
