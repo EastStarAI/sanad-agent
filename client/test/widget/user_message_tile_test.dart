@@ -1,14 +1,18 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
+import 'package:sanad_client/shared/widgets/copy_button.dart';
+import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 void main() {
   testWidgets('short user message does not show Read more', (tester) async {
@@ -66,6 +70,429 @@ void main() {
 
     expect(find.text('Read more'), findsOneWidget);
     expect(find.text('See less'), findsNothing);
+  });
+
+  testWidgets('single-line user message renders without newlines', (tester) async {
+    final event = CanonicalEvent(
+      id: 'msg-single',
+      kind: EventKind.userMessage,
+      text: 'Single line message',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(event: event),
+        ),
+      ),
+    );
+
+    expect(find.text('Single line message'), findsOneWidget);
+    expect(find.text('Read more'), findsNothing);
+  });
+
+  testWidgets('two-line Shift+Enter message renders as two lines', (tester) async {
+    final event = CanonicalEvent(
+      id: 'msg-two-lines',
+      kind: EventKind.userMessage,
+      text: 'First line\nSecond line',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(event: event),
+        ),
+      ),
+    );
+
+    // MarkdownBody preserves soft line break so \n is kept rather than collapsed into a space
+    expect(find.text('First line\nSecond line'), findsOneWidget);
+    expect(find.text('First line Second line'), findsNothing);
+  });
+
+  testWidgets('file link renders as a chip with icon+name and does not trigger external open', (tester) async {
+    String? openedUrl;
+    final event = CanonicalEvent(
+      id: 'msg-file-link',
+      kind: EventKind.userMessage,
+      text: 'Review this file: [spec.dart](file:///workspace/lib/spec.dart)',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(
+            event: event,
+            onOpenUrl: (url) async {
+              openedUrl = url;
+            },
+          ),
+        ),
+      ),
+    );
+
+    // Renders the custom chip
+    expect(find.byType(UserMessageFileChip), findsOneWidget);
+    expect(find.byKey(const Key('user_message_file_chip')), findsOneWidget);
+
+    // FileExtensionIcon is displayed
+    expect(find.byType(FileExtensionIcon), findsOneWidget);
+
+    // File name is displayed
+    expect(find.text('spec.dart'), findsOneWidget);
+
+    // Raw path is not displayed as plain text
+    expect(find.text('file:///workspace/lib/spec.dart'), findsNothing);
+
+    // Tooltip contains full path
+    final tooltip = tester.widget<Tooltip>(
+      find.ancestor(
+        of: find.byKey(const Key('user_message_file_chip')),
+        matching: find.byType(Tooltip),
+      ),
+    );
+    expect(tooltip.message, contains('spec.dart'));
+
+    // Tapping the chip does not trigger external open
+    await tester.tap(find.byType(UserMessageFileChip));
+    await tester.pump();
+    expect(openedUrl, isNull);
+  });
+
+  testWidgets('file link without label extracts file name from URI', (tester) async {
+    final event = CanonicalEvent(
+      id: 'msg-file-autolink',
+      kind: EventKind.userMessage,
+      text: '<file:///workspace/docs/guide.pdf>',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(event: event),
+        ),
+      ),
+    );
+
+    expect(find.byType(UserMessageFileChip), findsOneWidget);
+    expect(find.text('guide.pdf'), findsOneWidget);
+    expect(find.text('file:///workspace/docs/guide.pdf'), findsNothing);
+  });
+
+  testWidgets('https links remain unchanged and trigger open on tap', (tester) async {
+    String? openedUrl;
+    final event = CanonicalEvent(
+      id: 'msg-https-link',
+      kind: EventKind.userMessage,
+      text: 'Visit [Sanad Website](https://sanad.ai)',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(
+            event: event,
+            onOpenUrl: (url) async {
+              openedUrl = url;
+            },
+          ),
+        ),
+      ),
+    );
+
+    // No file chip is rendered
+    expect(find.byType(UserMessageFileChip), findsNothing);
+
+    // The link stays inline: it merges into the paragraph text instead of
+    // becoming a separately wrapped widget.
+    expect(find.text('Visit Sanad Website', findRichText: true), findsOneWidget);
+
+    // Tapping the link span triggers external open
+    await tester.tapOnText(find.textRange.ofSubstring('Sanad Website'));
+    await tester.pump();
+
+    expect(openedUrl, 'https://sanad.ai');
+  });
+
+  testWidgets('Read more line-count logic behaves with multi-line Shift+Enter messages', (tester) async {
+    final sixLineText = List.generate(6, (index) => 'Shift Enter line ${index + 1}').join('\n');
+    final event = CanonicalEvent(
+      id: 'msg-six-lines',
+      kind: EventKind.userMessage,
+      text: sixLineText,
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: UserMessageTile(event: event),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Read more'), findsOneWidget);
+    expect(find.text('See less'), findsNothing);
+
+    await tester.tap(find.text('Read more'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Read more'), findsNothing);
+    expect(find.text('See less'), findsOneWidget);
+
+    await tester.tap(find.text('See less'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Read more'), findsOneWidget);
+    expect(find.text('See less'), findsNothing);
+  });
+
+  testWidgets('CopyButton copies stored message text with file reference and newlines', (tester) async {
+    const rawText = 'Notes:\n[config.json](file:///etc/config.json)';
+    String? copiedText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map)['text']?.toString();
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    final event = CanonicalEvent(
+      id: 'msg-copy-raw',
+      kind: EventKind.userMessage,
+      text: rawText,
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(event: event),
+        ),
+      ),
+    );
+
+    final copyButton = tester.widget<CopyButton>(find.byType(CopyButton));
+    expect(copyButton.text, rawText);
+
+    await tester.tap(find.byType(CopyButton));
+    await tester.pump();
+
+    expect(copiedText, rawText);
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
+  });
+
+  testWidgets('Shift+Enter newline renders as a real line break and increases body height', (tester) async {
+    Future<double> bodyHeight(String id, String text) async {
+      final event = CanonicalEvent(
+        id: id,
+        kind: EventKind.userMessage,
+        text: text,
+        timestamp: DateTime.utc(2026, 7, 23),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: UserMessageTile(event: event),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return tester.getSize(find.byKey(Key('user_message_body:$id'))).height;
+    }
+
+    final singleLineHeight = await bodyHeight('msg-height-single', 'First line');
+    final twoLineHeight = await bodyHeight('msg-height-double', 'First line\nSecond line');
+
+    expect(twoLineHeight, greaterThan(singleLineHeight));
+  });
+
+  testWidgets('fenced code block in a user message keeps its newlines and block rendering', (tester) async {
+    final event = CanonicalEvent(
+      id: 'msg-code-block',
+      kind: EventKind.userMessage,
+      text: 'Steps:\n```dart\nfinal a = 1;\nfinal b = 2;\n```',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: UserMessageTile(event: event),
+          ),
+        ),
+      ),
+    );
+
+    final codeBlock = tester.widget<AppCodeBlock>(find.byType(AppCodeBlock));
+    expect(codeBlock.codeText, 'final a = 1;\nfinal b = 2;');
+    expect(codeBlock.language, 'dart');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('file chip decodes percent-encoded name and exposes decoded full path in tooltip', (tester) async {
+    final event = CanonicalEvent(
+      id: 'msg-file-encoded',
+      kind: EventKind.userMessage,
+      text: '[My Report.pdf](file:///Users/ahmed/My%20Documents/My%20Report.pdf)',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(event: event),
+        ),
+      ),
+    );
+
+    expect(find.byType(UserMessageFileChip), findsOneWidget);
+    expect(find.text('My Report.pdf'), findsOneWidget);
+    expect(find.textContaining('%20'), findsNothing);
+
+    final tooltip = tester.widget<Tooltip>(
+      find.ancestor(
+        of: find.byKey(const Key('user_message_file_chip')),
+        matching: find.byType(Tooltip),
+      ),
+    );
+    expect(tooltip.message, '/Users/ahmed/My Documents/My Report.pdf');
+  });
+
+  testWidgets('multiple file references render as separate chips and https links still open', (tester) async {
+    String? openedUrl;
+    final event = CanonicalEvent(
+      id: 'msg-multi-chips',
+      kind: EventKind.userMessage,
+      text:
+          'Compare [a.dart](file:///workspace/a.dart) and [b.dart](file:///workspace/b.dart), then see [docs](https://sanad.ai/docs)',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    Widget host() => MaterialApp(
+      home: Scaffold(
+        body: UserMessageTile(
+          event: event,
+          onOpenUrl: (url) async {
+            openedUrl = url;
+          },
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(host());
+    // A second pump forces an element update for the inline chip children.
+    await tester.pumpWidget(host());
+
+    expect(find.byType(UserMessageFileChip), findsNWidgets(2));
+    expect(find.text('a.dart'), findsOneWidget);
+    expect(find.text('b.dart'), findsOneWidget);
+
+    await tester.tap(find.text('b.dart'));
+    await tester.pump();
+    expect(openedUrl, isNull);
+
+    await tester.tapOnText(find.textRange.ofSubstring('docs'));
+    await tester.pump();
+    expect(openedUrl, 'https://sanad.ai/docs');
+  });
+
+  testWidgets('file chips and links stay inline with the surrounding paragraph text', (tester) async {
+    final event = CanonicalEvent(
+      id: 'msg-inline-flow',
+      kind: EventKind.userMessage,
+      text: 'Before [a.dart](file:///workspace/a.dart) middle [docs](https://sanad.ai/docs) after',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: UserMessageTile(event: event)),
+      ),
+    );
+
+    final body = find.byKey(const Key('user_message_body:msg-inline-flow'));
+    // One paragraph: the chip is a WidgetSpan and the link a TextSpan of a
+    // single merged rich text, so no Wrap splits the line around them.
+    final paragraphs = tester.widgetList<Wrap>(find.descendant(of: body, matching: find.byType(Wrap)));
+    expect(paragraphs, hasLength(1));
+    expect(paragraphs.single.children, hasLength(1));
+    expect(find.text('Before \uFFFC middle docs after', findRichText: true), findsOneWidget);
+    expect(find.byType(UserMessageFileChip), findsOneWidget);
+  });
+
+  testWidgets('long file reference URIs do not trigger Read more for a short message', (tester) async {
+    final longDir = List.generate(12, (index) => 'very-long-directory-segment-$index').join('/');
+    final text = List.generate(
+      3,
+      (index) => '[file$index.md](${Uri.file('/$longDir/file$index.md')})',
+    ).join(' ');
+    final event = CanonicalEvent(
+      id: 'msg-long-uris',
+      kind: EventKind.userMessage,
+      text: 'See $text',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: UserMessageTile(event: event)),
+      ),
+    );
+
+    expect(find.byType(UserMessageFileChip), findsNWidgets(3));
+    expect(find.text('Read more'), findsNothing);
+  });
+
+  test('measurableText collapses file links to their names and keeps other links', () {
+    expect(
+      UserMessageLinkBuilder.measurableText('a [x.md](file:///tmp/My%20(1)/x.md) b [y](https://e.com) c'),
+      'a \u2003x.md b [y](https://e.com) c',
+    );
+  });
+
+  testWidgets('file chip renders inside RTL Arabic message and keeps RTL direction', (tester) async {
+    final event = CanonicalEvent(
+      id: 'msg-file-rtl',
+      kind: EventKind.userMessage,
+      text: 'راجع هذا الملف [spec.dart](file:///workspace/spec.dart) قبل الإرسال',
+      timestamp: DateTime.utc(2026, 7, 23),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(event: event),
+        ),
+      ),
+    );
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(UserMessageFileChip), findsOneWidget);
+    expect(find.text('spec.dart'), findsOneWidget);
+    expect(
+      Directionality.of(tester.element(find.byType(UserMessageFileChip))),
+      TextDirection.rtl,
+    );
   });
 
   testWidgets(

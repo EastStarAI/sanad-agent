@@ -181,7 +181,14 @@ The conversation timeline renders Markdown, code, reasoning summaries, tool
 activity, permission requests, recovery notices, and final responses. User
 messages render ordered image thumbnails and file cards above their text;
 activating an image opens an accessible lightbox, while supported files use a
-safe preview and other files use an authenticated download. Internal agent
+safe preview and other files use an authenticated download. Single line breaks
+typed with Shift+Enter stay visible as line breaks in the user message instead
+of collapsing into spaces, and `file://` file references render as inert
+icon-and-name chips (full path in the tooltip) that never navigate, while
+ordinary `http`/`https` links keep their existing style and open behavior. Chips
+and links flow inline with the surrounding paragraph, and the collapsed
+"Read more" measure counts a file reference by its displayed name rather than
+its raw URI. Internal agent
 paths and media credentials are never displayed.
 
 A `view_image` tool row is titled `View Image` and places its thumbnail directly
