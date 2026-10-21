@@ -184,10 +184,11 @@ class ContextCompactionEngine {
     return _estimatedMeasurement(request);
   }
 
-  /// The conservative reservation when no capability declares one, bounded
-  /// to a quarter of the window like the internal reservation of tiny
-  /// windows ([calculateEffectiveInputWindow]), so a small window never
-  /// assumes an output it could not hold.
+  /// The conservative reservation: the fallback when no capability declares
+  /// one, and the ceiling for any declared value. Bounded to a quarter of the
+  /// window like the internal reservation of tiny windows
+  /// ([calculateEffectiveInputWindow]), so a small window never assumes an
+  /// output it could not hold.
   int _fallbackReservation(CompactionEngineRequest request) {
     final window = request.inputLimitTokens ?? request.contextWindowTokens;
     final quarter = (window * 0.25).floor();
@@ -210,7 +211,7 @@ class ContextCompactionEngine {
     String instruction,
   ) async {
     final settings = request.providerRequestOptions.maxOutputTokens;
-    final (reservation, source) = settings != null && settings > 0
+    final (declared, source) = settings != null && settings > 0
         ? (settings, 'settings')
         : request.outputReservationTokens != null &&
               request.outputReservationTokens! > 0
@@ -218,7 +219,21 @@ class ContextCompactionEngine {
             request.outputReservationTokens!,
             request.outputReservationSource ?? 'route_capability',
           )
-        : (_fallbackReservation(request), 'fallback');
+        : (null, 'fallback');
+    // A wrong skip costs at least one extra billed pass and summary quality;
+    // a wrong send costs one unbilled provider rejection. So the reservation
+    // is bounded by the conservative ceiling (the fallback value, itself at
+    // most a quarter of W) even when a much larger output is declared.
+    // A settings value is sent on the wire with the pass, so the provider
+    // reserves exactly it and it is used as is.
+    final ceiling = _fallbackReservation(request);
+    final exact = source == 'settings';
+    final reservation = declared == null
+        ? ceiling
+        : exact || declared <= ceiling
+        ? declared
+        : ceiling;
+    final capped = declared != null && !exact && declared > ceiling;
     final summaryRequest = [
       ...base,
       Message(role: MessageRole.user, content: instruction),
@@ -243,6 +258,7 @@ class ContextCompactionEngine {
       'presend_request_tokens': requestTokens,
       'output_reservation_tokens': reservation,
       'output_reservation_source': source,
+      if (capped) 'output_reservation_capped': true,
     };
   }
 

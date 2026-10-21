@@ -746,6 +746,15 @@ The reservation comes from route capability, in order:
 3. the models.dev `limit.output`;
 4. otherwise the conservative fallback `CompactionRecoveryPolicy.fallbackOutputReservationTokens` (16,384: the default completion reservation observed on a route with no output limit), bounded to a quarter of the window like the internal reservation of tiny windows.
 
+The check is deliberately conservative about skipping, because the two errors are not symmetric:
+
+- a wrong skip costs at least one extra **billed** pass (chunk plus reduce) and some summary quality;
+- a wrong send costs one **unbilled** provider rejection (live r2: 0 usage, 1.8 s).
+
+A declared capability value (provider metadata or models.dev) is therefore bounded by the same ceiling: the reservation is `min(declared, fallbackOutputReservationTokens, W/4)`, and the snapshot records `output_reservation_capped: true` when the ceiling applies. Many current models declare very large outputs; without the ceiling, `0.9 × W` plus the declared output would exceed `W` even at `W = 1,000,000`, and every automatic compaction would become chunk plus reduce.
+
+A settings value (`maxOutputTokens`) is not capped: it is sent on the wire with the pass, so the provider reserves exactly that amount.
+
 The reservation is a planning value only. Compaction still sends no output cap of its own, because a hard cap truncates summaries and reasoning models spend it on reasoning.
 
 ### 8.12 Bounded recovery summarizer (Task 117, 0P-F2)

@@ -289,6 +289,53 @@ CompactionEngineRequest _nearWindowRequest({required int maxOutputTokens}) {
   );
 }
 
+/// A request at a 1M window carrying [requestTokens] of history and a
+/// declared [declaredOutput] from route capability (Task 118b review).
+CompactionEngineRequest _largeWindowRequest({
+  required int requestTokens,
+  required int declaredOutput,
+}) {
+  const perRow = 50_000;
+  final rows = [
+    IndexedConversationMessage(
+      rowId: 1,
+      message: Message(role: MessageRole.user, content: 'finish the migration'),
+    ),
+    for (var index = 0; index < requestTokens ~/ perRow; index++)
+      IndexedConversationMessage(
+        rowId: index + 2,
+        message: Message(
+          role: MessageRole.assistant,
+          content: 'x' * (perRow * 4),
+        ),
+      ),
+  ];
+  return CompactionEngineRequest(
+    compactionId: 'cmp-large-window',
+    sessionId: 'session-shapes',
+    trigger: CompactionTrigger.auto,
+    sourceRevision: const CompactionHistoryRevision(1),
+    routeSignature: _route,
+    contextWindowTokens: 1_000_000,
+    timeline: rows,
+    systemPrompt: 'stable system',
+    runtimeContext: '',
+    toolSchemas: const [],
+    providerProjection: [
+      Message(role: MessageRole.system, content: 'stable system'),
+      for (final row in rows) row.message,
+    ],
+    providerRequestOptions: const LLMRequestOptions(
+      sessionId: 'session-shapes',
+      requestId: 'compaction:cmp-large-window',
+    ),
+    targetRequestTokens: 100_000,
+    thresholdRatio: 0.90,
+    outputReservationTokens: declaredOutput,
+    outputReservationSource: 'models_dev',
+  );
+}
+
 void main() {
   late AgentStateDatabase state;
 
@@ -452,6 +499,46 @@ void main() {
         (decision['presend_request_tokens'] as int) + 4_096,
         greaterThan(8_000),
       );
+    },
+  );
+
+  test(
+    'Task 118b review: a large declared output is capped, so a 0.9 W full pass is still sent',
+    () async {
+      final adapter = _ScriptedAdapter([_Shape.valid]);
+      final candidate = await engineFor(adapter).buildCandidate(
+        _largeWindowRequest(requestTokens: 900_000, declaredOutput: 384_000),
+        force: true,
+      );
+
+      expect(candidate, isNotNull);
+      expect(candidate!.diagnostics!.attempts.first.passKind, 'full');
+      final decision = candidate.diagnostics!.decisionSnapshot!;
+      expect(decision['full_pass_skipped'], isNull);
+    },
+  );
+
+  test(
+    'Task 118b review: a request that cannot fit even with the bounded reservation is skipped',
+    () async {
+      final adapter = _ScriptedAdapter([
+        for (var i = 0; i < 20; i++) _Shape.valid,
+      ]);
+      final candidate = await engineFor(adapter).buildCandidate(
+        _largeWindowRequest(requestTokens: 1_000_000, declaredOutput: 384_000),
+        force: true,
+      );
+
+      expect(candidate, isNotNull);
+      expect(
+        candidate!.diagnostics!.attempts.map((a) => a.passKind),
+        isNot(contains('full')),
+      );
+      final decision = candidate.diagnostics!.decisionSnapshot!;
+      expect(decision['full_pass_skipped'], 'presend_over_window');
+      expect(decision['output_reservation_tokens'], 16_384);
+      expect(decision['output_reservation_source'], 'models_dev');
+      expect(decision['output_reservation_capped'], isTrue);
     },
   );
 
