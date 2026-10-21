@@ -672,6 +672,36 @@ void main() {
       await drainToasts(tester);
     });
 
+    testWidgets(
+      'Task 118: a no-op compaction is a neutral not-needed notice, never a failure',
+      (tester) async {
+        conversationRepository.compactSessionResult = const SessionCompactResult(
+          outcome: 'no_op',
+        );
+        await pumpTestApp(
+          tester,
+          agentCubit: agentCubit,
+          sessionCubit: sessionCubit,
+          sessionMessagesCubit: sessionMessagesCubit,
+          capabilities: capabilities,
+          wrapWithToastification: true,
+          child: ConversationInputPanel(
+            sessionId: 'session-compact',
+            onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+          ),
+        );
+        await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('send_message_btn')));
+        await settle(tester);
+
+        expect(conversationRepository.compactSessionCalls, 1);
+        expect(validationErrors, isEmpty);
+        expect(infoNotices, [AppLocalizationsEn().compactionNotNeeded]);
+        await drainToasts(tester);
+      },
+    );
+
     testWidgets('late success after pending shows no failure', (tester) async {
       await runCompact(tester);
       settlement.complete(

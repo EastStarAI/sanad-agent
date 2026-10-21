@@ -60,6 +60,7 @@ CompactionEngineRequest _request({
   CompactionInternalSummary? previousSummary,
   CompactionMessageRange? previousSourceRange,
   List<Message>? providerProjection,
+  int targetRequestTokens = 500,
 }) {
   return CompactionEngineRequest(
     compactionId: 'cmp-engine',
@@ -75,7 +76,7 @@ CompactionEngineRequest _request({
     providerProjection: providerProjection,
     previousSummary: previousSummary,
     previousSourceRange: previousSourceRange,
-    targetRequestTokens: 500,
+    targetRequestTokens: targetRequestTokens,
     thresholdRatio: 0.10,
   );
 }
@@ -1026,16 +1027,23 @@ void main() {
         'repeated compaction keeps goal anchor with previous summary',
         () async {
           final engine = ContextCompactionEngine();
+          // The complete-request target must leave room for a multi-row tail
+          // next to the summary reservation, so the repeat has a head left.
           final first = await engine.buildCandidate(
-            _request(timeline: _timeline()),
+            _request(timeline: _timeline(), targetRequestTokens: 2_600),
           );
           expect(first, isNotNull);
+          // Pressure measures the active projection (previous summary plus the
+          // rows after its source range), so the repeat is forced here rather
+          // than triggered by the canonical head behind the boundary.
           final second = await engine.buildCandidate(
             _request(
               timeline: _timeline(),
               previousSummary: first!.internalSummary,
               previousSourceRange: first.sourceRange,
+              targetRequestTokens: 2_600,
             ),
+            force: true,
           );
           expect(second, isNotNull);
           expect(

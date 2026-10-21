@@ -9,6 +9,41 @@ import 'package:sanad_agent/engine/context/compaction_token_estimator.dart';
 import 'package:test/test.dart';
 
 void main() {
+  // Task 118b round 5: chars/4 prices Arabic and other non-Latin text at
+  // about half its real cost. ASCII stays chars/4; CJK, Hangul and Kana cost
+  // one token per code point; other text costs UTF-8 bytes / 4.
+  group('Task 118b non-ASCII text estimation', () {
+    test('ASCII text stays chars/4', () {
+      expect(CompactionTokenEstimator.estimateText('a' * 40), 10);
+      expect(CompactionTokenEstimator.estimateText('abcde'), 2);
+    });
+
+    test('Arabic text is priced by UTF-8 bytes, not characters', () {
+      // 10 Arabic letters are 20 UTF-8 bytes.
+      const arabic = 'مرحباعالمك';
+      expect(arabic.length, 10);
+      expect(CompactionTokenEstimator.estimateText(arabic), 5);
+      expect(CompactionTokenEstimator.estimateText(arabic * 40), 200);
+    });
+
+    test('CJK code points cost one token each', () {
+      expect(CompactionTokenEstimator.estimateText('你好世界'), 4);
+      expect(CompactionTokenEstimator.estimateText('안녕하세요'), 5);
+    });
+
+    test('mixed text prices each part by its rule', () {
+      // 8 ASCII bytes + 4 Arabic letters (8 bytes) + 2 CJK code points.
+      expect(CompactionTokenEstimator.estimateText('abcdefghسلام你好'), 2 + 4);
+    });
+
+    test('a lone surrogate never fails the estimate', () {
+      expect(
+        CompactionTokenEstimator.estimateText('x${String.fromCharCode(0xD800)}y'),
+        greaterThan(0),
+      );
+    });
+  });
+
   group('CompactionTokenEstimator', () {
     test('estimates plain text at charsPerToken ratio', () {
       expect(CompactionTokenEstimator.estimateText(''), 0);

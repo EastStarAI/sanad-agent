@@ -64,6 +64,7 @@ abstract final class CompactionFailureCause {
 
   /// Ledger-only shapes whose terminal cause is [invalidResponse].
   static const summaryInvalidJson = 'summary_invalid_json';
+  static const summarySchemaMismatch = 'summary_schema_mismatch';
   static const summaryToolCall = 'summary_tool_call';
   static const summaryIncomplete = 'summary_incomplete';
 

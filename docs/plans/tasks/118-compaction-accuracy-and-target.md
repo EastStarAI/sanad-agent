@@ -48,10 +48,10 @@ Both predate Task 117 and were observed during its live acceptance on a Test Hom
 ## Gates
 
 - [ ] Stage2 red → green for each failed-summary shape, with attempt accounting and localized safe feedback.
-- [ ] 3A deterministic paired regressions with fixture-scoped provider receipts; feasible and infeasible target cases; Client metrics consistent with `W`.
-- [ ] 3B runner/daemon regressions for below-threshold, true pressure, drift and restart non-repeat.
+- [x] 3A deterministic paired regressions with fixture-scoped provider receipts; feasible and infeasible target cases; Client metrics consistent with `W` (118b writer; review pending).
+- [x] 3B runner/daemon regressions for below-threshold, true pressure, drift and restart non-repeat (118b writer; review pending).
 - [ ] Owning docs: `docs/technical/context_compaction.md`, `docs/agent_engine/context_compaction_design.md`, `docs/qa_maintenance/context_compaction_qa.md`.
-- [ ] Independent review and delegated Sanad live acceptance on the Test Home (large-context route `OpenCode Go / deepseek-v4.1-flash`) with a bounded call and token budget; validate the first actual post-input. Meet 10% (13% allowed upper result for the observed case) or report measured infeasibility.
+- [x] Independent review and delegated Sanad live acceptance on the Test Home (large-context route `OpenCode Go / deepseek-v4.1-flash`) with a bounded call and token budget; validate the first actual post-input. Meet 10% (13% allowed upper result for the observed case) or report measured infeasibility.
 
 ## Representative Data
 
@@ -96,6 +96,129 @@ Gates at this round: agent `fvm dart analyze` clean (`r2-analyze.log`); 118 focu
 
 Still remaining: Stage3A (finding 3 of the live run: `target_scope` stays `usable_budget`), the Stage3B audit items listed in round 1, independent review and the Stage3A live acceptance.
 
+### Round 2 — 118b writer, 2026-10-21 (base `66e21c47`, branch `feat/118b-compaction-target`)
+
+One commit per item; each was red first, then green. Logs are under `temp/118b/` in the writer worktree (gitignored).
+
+| Item | What changed | Red → green evidence |
+|---|---|---|
+| 1. Stage3A complete-request target | The target is `floor(targetRatio × W)` for the whole next request from every caller (`CompactionTargetPolicy`). Before selection, the engine measures two things with the route's wire meter: the fixed overhead (leading instructions plus tools, kept intact) and the current request. The coordinator builds the meter from the adapter's `WireInputUsageMeasurer`. The tail budget is `target − overhead − summary reservation`: the previous summary's transmitted size, or 2048 for the instruction's two pages. After summarization the request is measured again in its transmitted form. The decision snapshot then records the estimated outcome and feasibility (`target_scope: context_window`). A tail above the target is a measured `not_met`, no longer a failure; nothing is trimmed to fit. The first confirmed post-input decides `target_outcome`. Manual and overflow "before" is the active projection, never the hidden canonical head. | `item1-red.log` (5 failures: scope `usable_budget`, no feasibility, factory 25288, outcome `unknown` ×2), `item1-green.log` |
+| 2. Replay-aware tail selection | Each candidate tail is priced as transmitted: the wire estimate, with the span between provider receipts that the adapter proves against the current request priced at the confirmed input difference. The receipt reader is shared with the restart restore. Opaque replay outside a proven span is counted as `unproven_replay_items`: not zero, not priced from ciphertext, and never a `met` estimate. Fixture-scoped pair from Task 106: A (4 replay items, 8 pairs, estimated 20031, provider 19689) and B (23 replay items, 39 pairs, 20666 versus 32557). Covered cases: stale, foreign-model and missing receipts; the newest replay item; feasible and infeasible targets. | `item2-red.log` (case B: item-1 code selects a tail whose provider cost 19982 exceeds the 12685 budget), `item2-red-compile.log`, `item2-green.log` (9 passed) |
+| 3. Client metrics on `W` | The detail card's before, after and threshold percentages use `W`; the usable-input line is removed. | `item3-red.log` (2 failures), `item3-green.log` (13 passed) |
+| 4. Stage3B regressions | Runner: after a completed compaction and a restart, the pre-boundary receipt in the retained tail is not restored and does not repeat compaction. Green on the base; a seeded mutation that skips the proof turns it red. Daemon F.53.11: one compaction under true pressure, no repeat across a restart and two follow-ups, and a small sibling never compacts. F.53.11 is a regression lock: green on `66e21c47`, and the mutation does not discriminate it. The audit of the existing drift, cache, image and restore suites is in `docs/qa_maintenance/context_compaction_qa.md`. | `item4-red-mutation-proof-ignored.log`, `item4-green-runner.log`, `item4-red-mutation-daemon.log` (non-discriminating, reported) |
+| 5. `projection_still_over_budget` on very small sessions | Cause, reproduced on `66e21c47`: a manual `/compact` of a session already within the target paid for a summary larger than the rows it replaced. The no-progress guard then rejected it with an "over budget" cause. Fix: a manual compaction within the target is `no_op` before any claim or provider call. Auto and overflow are unaffected. The Client shows a localized neutral not-needed notice (en/ar). Fixtures that modelled small sessions under large targets now use targets their sessions exceed. | `item5-red.log`, `item5-red-base-66e21c47.log`, `item5-green.log`, `item5-client-red.log`, `item5-client-green.log` |
+
+Gates at this round:
+
+- Agent `fvm dart analyze` clean.
+- Full agent suite +3217 ~14 (`final-agent-suite.log`; baseline +3199 ~14).
+- Daemon E2E 11/11 with `--concurrency=1` (`final-daemon-e2e.log`; baseline 10/10).
+- Client `fvm flutter analyze` clean; full Client suite +1882 ~1 (`final-client-suite.log`).
+- `scripts/lint_wiki.dart` passes.
+
+Findings reported, not changed:
+
+- The transmitted summary projection (`CompactionSummaryProjection.format`) omits the required `criticalContext` and `latestUserRequest` fields that the engine's own `formatSummary` includes. The engine now measures the transmitted form. Whether the projection should carry those fields is a decision outside this task.
+- A session above the target whose summary still makes no progress keeps the documented F5 `projection_still_over_budget` classification.
+- Task 117's optional "re-anchor boundary endpoints by `message_id`" slice names 118 as its destination but is not in this task's scope list; it was not implemented.
+
+Still remaining: independent review and the Stage3A live acceptance on the Test Home.
+
+### Round 3 — 118b writer, live r1 findings, 2026-10-21 (on `a80a59f2`, then merged with `origin/main` `4fa4dd72`)
+
+Input: 118b live r1 on Test Home 1, route OpenCode Go `deepseek-v4.1-flash`, which resolves `W` = 1,000,000.
+
+What passed:
+
+- A manual compaction met the target: the first confirmed post-input was 63,687, 6.37% of `W`.
+- The small-session no-op.
+- The Client tile shows `W`.
+- Restart and below-threshold, but neither could discriminate at `W` = 1M.
+
+Auto compaction was budget-blocked: crossing 90% of a 1M window costs over 900k input per call.
+
+| Finding | Result | Red → green evidence |
+|---|---|---|
+| D1. Fixed overhead under-measured on the manual path | Cause: `handleCompactCommand` seeded from a fresh session runner without the per-turn tool catalog or the runtime context. The measured overhead (1125) therefore missed the runtime system context and the 13 tools the follow-up carried (about 3863 by chars/4), and the summary pass lacked the ordinary tool list. `LocalRuntimeOrchestrator.prepareIdleRequest` now registers the same catalog and builds the same runtime context as an ordinary request; the idle request shape is shared with suspended resume. A runner-level check confirms the seed's instructions and tools equal the ordinary request's for the same inputs. The rest of the under-estimate (63,687 confirmed versus 54,800 estimated) is only partly overhead: about 2,700 is the overhead gap and about 6,100 (11%) is the summary and tail estimate. The retained tail was `estimated` (`proven_receipts=0`, since the imported receipts came from another instance and model), so the chars/4 rate applied. A same-route receipt inside the tail moves it to `mixed`. | `r2-d1-red.log` (runtime orchestrator never consulted), `r2-d1-green.log` |
+| D2. "Auto threshold" missing from the tile after restart and reopen | Cause: the Client history-row mapper dropped `auto_threshold_tokens`. Live events already carried it. This predates 118b (absent at `66e21c47`). | `r2-d2-red.log`, `r2-d2-green.log` |
+| G2. Pressure decision not observable on a turn that does not compact | Every automatic pressure decision now logs one fine-level scalar line: `auto_pressure basis=… estimated=… confirmed=…\|none threshold=… window=… capped=… decision=below_threshold\|cooldown\|compact`. | `r2-g2-red.log` (no record), `r2-g2-green.log` |
+
+Gates after the merge:
+
+- Agent `fvm dart analyze` clean; full agent suite +3251 ~14 (`r2-final-agent-suite.log`).
+- Daemon E2E 11/11 with `--concurrency=1` (`r2-final-daemon-e2e.log`).
+- Client `fvm flutter analyze` clean; full Client suite +1927 ~1 (`r2-final-client-suite-rerun.log`). The first run's two MCP test files failed to load ("Unable to connect to flutter_tester process"), then passed alone and in the full rerun.
+- Wiki lint passes.
+
+For a smaller-window live route (for example `W` ≈ 128k): the threshold is 115,200 and the target 12,800. With Sanad's fixed overhead (about 4k), a 2048 summary reservation and a summary of about 2k, the tail budget is about 6.7k, so the target is attainable only with a short tail. `target_feasibility` should still read `feasible`. Auto compaction records `before_measurement_kind` `mixed` or `confirmed` from the route's own receipts, and `retained_tail_cost_kind` `mixed` when the tail contains same-route receipts. Set `LOG_LEVEL=FINE` to see `auto_pressure` lines.
+
+### Round 4 — 118b writer, live r2 findings, 2026-10-21 (on `4039c570`; `origin/main` unchanged at `4fa4dd72`)
+
+Input: 118b live r2 on Test Home 3, route OpenRouter `openai/gpt-4o-mini`, `W` = 128,000.
+
+What passed:
+
+- Auto compaction met the target: the first confirmed post-input was 10,052, 7.85% of `W`. The estimate was 9,837, −2.1% (r1 was −14%).
+- D2.
+- Restart and below-threshold, with `auto_pressure` lines recorded.
+
+The manual compaction failed (D3).
+
+| Finding | Result | Red → green evidence |
+|---|---|---|
+| D3. Field type mismatch treated as invalid JSON | Valid JSON with a non-string value in an allowlisted field (an object or array in `filesAndPaths`) is now the distinct ledger shape `summary_schema_mismatch`; its terminal cause is `invalid_response`, so no new Client copy. Its single correction names each field and its JSON type instead of re-listing every required field. Applies in the main and recovery paths. Values are not normalized, because the design keeps wrong types rejected rather than flattening content. | `r4-d3-red.log` (8 failures), `r4-d3-green.log` (31 passed) |
+| D4. A failed operation under-reported its spend | `failStarted` writes `summarization_attempts` (ledger length) and the aggregate usage and duration into the accounting columns. The projection estimate columns stay NULL. | `r4-d4-red.log` (`Expected: <2> Actual: <0>`), `r4-d4-green.log` |
+| O1. Full pass sent although it must overflow | Not changed. The design forbids a compaction-only output cap, and predicting a provider overflow needs the provider's default output reservation, which the request does not know; the chars/4 estimate is not exact enough to skip the pass safely. The rejected pass was not billed (1.8 s), and bounded recovery then succeeded. | — |
+
+Gates:
+
+- Agent `fvm dart analyze` clean; full agent suite +3260 ~14 (`r4-final-agent-suite.log`).
+- Daemon E2E 11/11 with `--concurrency=1` (`r4-final-daemon-e2e.log`).
+- Client `fvm flutter analyze` clean; full Client suite +1927 ~1 (`r4-final-client-suite.log`).
+- Wiki lint passes.
+
+### Round 5 — 118b writer, reference-grounded, 2026-10-21 (merged with `origin/main` `fe6204b1`)
+
+Grounding: evidence ID `118`, fingerprint `sha256:0f7c36e8b2e4f8988d689127d9ca6a995df54f280cc5c1fe5a5412886e8ea4d2`. The record lives in the ignored evidence store.
+
+| Item | Result | Red → green evidence |
+|---|---|---|
+| 1. Pre-send fit check | The engine checks the whole summary request, plus the output the provider reserves, against `W` before the full pass. A pass that cannot fit is not sent; recovery runs directly and the snapshot records `full_pass_skipped: presend_over_window`. The reservation order is: settings (`maxOutputTokens`), cached provider metadata, models.dev `limit.output`, then the fallback of 16,384, bounded to a quarter of `W`. It is a planning value only; no compaction output cap is sent. Tests that relied on the old doomed full pass now expect it skipped. | `r5-presend-red.log` (a `full` pass was sent), `r5-presend-green.log` |
+| 2. Manual and auto overhead parity | One helper measures the fixed overhead for every trigger: `ContextCompactionEngine.measureRequest`. A runner regression runs auto and manual compaction on identical session state and requires equal `fixed_overhead_tokens`. It passes on this branch; a seeded mutation that drops the manual idle-request preparation turns it red (952 versus 912). | `r5-parity-red-mutation.log`, `r5-parity-green.log` |
+| 3. Field-type hint | The instruction states that every value except `schemaVersion` is a single JSON string, with lists as lines, and gives a route-neutral example. | `r5-hint-red.log`, `r5-hint-green.log` |
+| 4. Non-ASCII estimation | ASCII stays chars/4; CJK, Hangul and Kana cost one token per code point; every other code point costs UTF-8 bytes / 4. No fixture held provider-confirmed Arabic usage, so the change rests on the reference evidence that chars/4 priced Arabic at about half its cost. The recovery safety ratio stays 0.80 with an updated rationale. Thresholds and the target are unchanged, and no existing fixture moved. The blast radius is the compaction estimator only; the Client does not use it. | `r5-arabic-red.log` (3 failures), `r5-arabic-green.log` |
+| 5. Calibration hygiene | Defects found: a zero input count became the confirmed baseline; usage from a failed or cancelled response replaced it; and such a row's receipt could restore. All three are now rejected. | `r5-calibration-red.log` (4 failures), `r5-calibration-green.log` |
+
+Review fix (item 1): a declared output reservation is bounded to `min(declared, 16,384, W/4)` and records `output_reservation_capped`. A wrong skip costs billed passes, while a wrong send costs one unbilled rejection. A settings value is sent on the wire, so it stays exact and uncapped. Tests: a declared 384k output at `W` = 1M with a 0.9·W request still sends the full pass; a request that cannot fit even with the bounded reservation is skipped (`r5r-cap-red.log` → `r5r-cap-green.log`).
+
+Decisions:
+
+- **Rejected: a tool-free summary pass.** The summary pass deliberately reuses the ordinary provider projection, so its system, tools and history prefix hits the prompt cache. Removing the tools changes that prefix and re-bills the whole history uncached, which costs far more than the tool-schema overhead it saves. Overhead parity is handled by the single overhead helper (item 2).
+- **Follow-ups (not in 118b):**
+  - extract files and paths locally instead of asking the model;
+  - provider structured output, gated on declared capability;
+  - an automatic-compaction failure pause across runs. The 118a breaker covers only the run that failed; a new run retries.
+
+Gates:
+
+- Agent `fvm dart analyze` clean; full agent suite +3360 ~15 (`r5-final-agent-suite.log`).
+- Daemon E2E 11/11 with `--concurrency=1` (`r5-final-daemon-e2e.log`).
+- Client `fvm flutter analyze` clean; full Client suite +1954 ~1 (`r5-final-client-suite.log`).
+- Wiki lint passes.
+
+### Live r3 — Test Home 1, 2026-10-21 (candidate `1c62bf9d`; coordinator accepted)
+
+- `OpenCode Go / deepseek-v4.1-flash`: all 5 scenarios PASS.
+  - Auto at 90%: one operation with chunk + reduce; the first confirmed post-input was 9.82% of `W`, so the target was met.
+  - Manual `/compact`: fixed overhead equals auto exactly.
+  - Arabic estimate: −3.1% against the first confirmed input.
+  - Cancel: the next turn keeps the previous confirmed value.
+  - Restart: `below_threshold`, no repeated compaction.
+- ChatGPT `gpt-6-luna`: auto and manual PASS.
+- Follow-ups (not in 118b):
+  - **D5 (Medium):** the non-ASCII UTF-8 bytes / 4 estimate overprices Arabic on `gpt-6-luna` by about 43–55% before a confirmed receipt exists. It errs early and never overflows; with a receipt the error is about 0.1%.
+  - **O2 (Low):** `deepseek-v4.1-flash` estimates without a receipt run about −14% on tool-, JSON- and image-heavy history.
+
 ## Delivery Split
 
 Task 118 is delivered in two PRs. This file stays in `docs/plans/tasks/` until 118b lands.
@@ -121,8 +244,8 @@ Live acceptance on a Test Home:
 - The round 2 accounting fix is proven by tests only; it is simple and test-provable, so no live rerun was needed.
 - The second `context_compaction.completed` event is the planned republish by `reconcilePostBoundaryUsage`, which predates 118.
 
-### 118b — open
+### 118b — reviewed and live accepted (live r3)
 
-- Stage3A: the complete-request target against `W`, replay-aware tail selection, and Client metrics on `W`.
+- Stage3A: the complete-request target against `W`, replay-aware tail selection, and Client metrics on `W` (round 2 — 118b writer).
 - The rest of Stage3B (the audit items listed in round 1).
 - `projection_still_over_budget` on very small sessions (moved-in item 3).

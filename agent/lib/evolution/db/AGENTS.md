@@ -41,6 +41,7 @@ This contract applies to `agent/lib/evolution/db/`.
 - `TerminalAssistantClassifier` is the single definition of a terminal assistant reply (stamp, or no-tool non-steer assistant whose next active session row is absent or a root user input). History delivery and session search use it; no caller may classify by page position or by "newest assistant" alone.
 - Positional identity reuse for an incoming message without `message_id` must not take an id that another incoming message carries explicitly. Duplicate `message_id`s in one replacement throw before any write and roll back.
 - Anchored history hydration begins at the anchor's active persistence row and reads newer rows in chronological order. Older `has_more`/`next_cursor` and newer `has_newer`/`next_newer_cursor` are independent, opaque, fingerprinted keyset directions; an oldest-row anchor must retain following context and remain forward-pageable to the authoritative tail.
+- A failed compaction operation records its summarization attempts and billed usage in the same accounting columns as a completed one; its projection estimate columns stay NULL.
 - Compaction claims persist only a redacted semantic fingerprint and occurrence for the retained-tail end; history hydration uses it to relocate the same logical anchor after suffix row ids are rewritten.
 - Removing a workspace record must not cascade into sessions or messages;
   their stable workspace reference remains historical conversation metadata.

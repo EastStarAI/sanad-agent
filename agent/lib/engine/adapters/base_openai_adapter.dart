@@ -166,7 +166,7 @@ class BaseOpenAIAdapter
       estimatedTokens:
           CompactionTokenEstimator.estimateWirePayload(
             measured,
-            opaqueKeys: const {'encrypted_content'},
+            opaqueKeys: CompactionTokenEstimator.opaqueWireKeys,
           ) +
           CompactionTokenEstimator.estimateMediaTokens(history),
       stableMaterialFingerprint: fingerprint(stablePayload),
