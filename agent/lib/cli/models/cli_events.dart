@@ -433,6 +433,16 @@ class CliPermissionRequestEvent extends CliEvent {
 
   bool get isUserQuestion =>
       toolName == 'system_ask_user' || questions.isNotEmpty;
+
+  /// A `system_request_secret` form (Plan 84). Terminals never collect or
+  /// approve it: the values are entered only in a Sanad Client.
+  bool get isSecretRequest => toolName == 'system_request_secret';
+
+  /// Notice shown by terminal surfaces for a pending secret request.
+  String secretRequestNotice(String? sessionId) =>
+      'Notice: The agent requested a secret for session $sessionId '
+      '(request $requestId). Enter it in the Sanad Client; this terminal '
+      'never collects secrets.';
 }
 
 /// Dispatched when an execution turn completes.

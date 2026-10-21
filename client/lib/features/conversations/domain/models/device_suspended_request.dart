@@ -33,6 +33,11 @@ class DeviceSuspendedRequest {
     if (json.containsKey('question')) {
       toolInputMap['question'] = json['question'];
     }
+    // `system_request_secret` form description (Plan 84). It carries names
+    // and labels only; values never travel to the Client in any payload.
+    for (final key in const ['fields', 'reason', 'replaces']) {
+      if (json.containsKey(key)) toolInputMap[key] = json[key];
+    }
     return DeviceSuspendedRequest(
       requestId: json['request_id']?.toString() ?? '',
       sessionId: json['session_id']?.toString() ?? '',
@@ -82,6 +87,36 @@ class DeviceSuspendedRequest {
     return const [];
   }
 
+  static const secretRequestToolName = 'system_request_secret';
+
+  bool get isSecretRequest => toolName == secretRequestToolName;
+
+  /// Requested secret inputs, each with `name`, `label`, optional
+  /// `description`, `masked` and `required`.
+  List<SecretRequestFieldSpec> get secretFields {
+    final raw = toolInput['fields'];
+    if (raw is! List) return const [];
+    return [
+      for (final item in raw)
+        if (item is Map && item['name'] is String && (item['name'] as String).isNotEmpty)
+          SecretRequestFieldSpec(
+            name: item['name'] as String,
+            label: item['label']?.toString() ?? item['name'] as String,
+            description: item['description']?.toString() ?? '',
+            masked: item['masked'] is bool ? item['masked'] as bool : true,
+            required: item['required'] is bool ? item['required'] as bool : true,
+          ),
+    ];
+  }
+
+  String get secretReason => toolInput['reason']?.toString() ?? '';
+
+  /// Names whose stored value the submission replaces.
+  Set<String> get secretReplaces {
+    final raw = toolInput['replaces'];
+    return raw is List ? {for (final name in raw) name.toString()} : const {};
+  }
+
   String get scopeLabel {
     switch (scope) {
       case 'workspace':
@@ -118,4 +153,21 @@ class DeviceSuspendedRequest {
     workspaceName,
     workspacePath,
   );
+}
+
+/// One input of a secret request form.
+class SecretRequestFieldSpec {
+  final String name;
+  final String label;
+  final String description;
+  final bool masked;
+  final bool required;
+
+  const SecretRequestFieldSpec({
+    required this.name,
+    required this.label,
+    required this.description,
+    required this.masked,
+    required this.required,
+  });
 }

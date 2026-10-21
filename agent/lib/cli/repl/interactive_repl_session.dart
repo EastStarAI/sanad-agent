@@ -273,6 +273,10 @@ class InteractiveReplSession {
     subscriptions.add(
       activeClient.permissionStream.listen((event) async {
         if (event.sessionId == null || event.sessionId == effectiveSessionId) {
+          if (event.isSecretRequest) {
+            stdoutSink.writeln(event.secretRequestNotice(effectiveSessionId));
+            return;
+          }
           if (event.isUserQuestion) {
             final answer = await InteractiveAskUserHandler.prompt(
               event: event,

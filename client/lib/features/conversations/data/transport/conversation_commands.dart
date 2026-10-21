@@ -1313,6 +1313,7 @@ class ConversationCommands {
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) async {
     if (!_gateway.isConnected) return;
 
@@ -1325,6 +1326,9 @@ class ConversationCommands {
         'scope': scope ?? request.scope,
         if (comment != null && comment.trim().isNotEmpty) 'comment': comment.trim(),
         if (answer != null && answer.trim().isNotEmpty) 'answer': answer.trim(),
+        // Secret values are sent exactly as typed and only in this field;
+        // they are never logged, cached or projected into the timeline.
+        if (secretValues != null && secretValues.isNotEmpty) 'secret_values': secretValues,
       },
     );
   }

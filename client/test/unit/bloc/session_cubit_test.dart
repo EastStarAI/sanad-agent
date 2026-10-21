@@ -3099,6 +3099,7 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) async {
     _pendingSuspendedRequest = allow ? null : _pendingSuspendedRequest;
     _pendingSuspendedController.add(_pendingSuspendedRequest);

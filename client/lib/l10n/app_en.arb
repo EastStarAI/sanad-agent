@@ -669,5 +669,23 @@
         "type": "String"
       }
     }
-  }
+  },
+  "secretRequestTitle": "Secret requested",
+  "@secretRequestTitle": {
+    "description": "Header of the composer card that collects a secret the agent asked for"
+  },
+  "secretRequestVaultNotice": "Saved in the Agent's secure vault. The AI sees only the name, never the value.",
+  "secretRequestReplacesNotice": "Replaces the saved value",
+  "secretRequestRequiredField": "Enter a value for {label}.",
+  "@secretRequestRequiredField": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "secretRequestSave": "Save to vault",
+  "secretRequestSkip": "Skip",
+  "secretRequestShowValue": "Show value",
+  "secretRequestHideValue": "Hide value"
 }

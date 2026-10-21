@@ -7,7 +7,9 @@ import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import 'package:sanad_agent/capabilities/secrets/user_secret_vault.dart';
 import 'package:sanad_agent/capabilities/tools/system/host_capability_discovery_tool.dart';
+import 'package:sanad_agent/capabilities/tools/system/secret_tools.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/runtime/spec_backed_tool.dart';
@@ -22,9 +24,9 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
-import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
-import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
+
+import 'interactive_user_input.dart';
 
 import 'web_search/web_fetch_service.dart';
 import 'web_search/web_search_service.dart';
@@ -51,6 +53,7 @@ class LocalRuntimeCatalog {
     AdmittedAttachmentPathsResolver? admittedAttachmentPathsResolver,
     WorkspacePolicyStore? workspacePolicyStore,
     Map<String, String>? hostEnvironment,
+    UserSecretVault? userSecrets,
   }) : _workspaceRuntimeService = workspaceRuntimeService,
        _workspacePolicyStore = workspacePolicyStore ?? WorkspacePolicyStore(),
        _hostEnvironment = hostEnvironment,
@@ -62,7 +65,8 @@ class LocalRuntimeCatalog {
            platformRuntimeBridge ?? PlatformRuntimeBridge(),
        _pathResolver = pathResolver ?? const WorkspacePathResolver(),
        _admittedAttachmentPathsResolver =
-           admittedAttachmentPathsResolver ?? _noAdmittedAttachmentPaths;
+           admittedAttachmentPathsResolver ?? _noAdmittedAttachmentPaths,
+       _userSecrets = userSecrets;
 
   final LocalWorkspaceRuntimeService _workspaceRuntimeService;
   final WorkspacePathResolver _pathResolver;
@@ -74,6 +78,11 @@ class LocalRuntimeCatalog {
   final AdmittedAttachmentPathsResolver _admittedAttachmentPathsResolver;
   final WorkspacePolicyStore _workspacePolicyStore;
   final Map<String, String>? _hostEnvironment;
+  final UserSecretVault? _userSecrets;
+
+  late final InteractiveUserInput _userInput = InteractiveUserInput(
+    bridge: _platformRuntimeBridge,
+  );
 
   static Future<List<String>> _noAdmittedAttachmentPaths(
     String sessionId,
@@ -114,6 +123,7 @@ class LocalRuntimeCatalog {
       _buildWebFetchTool(),
       _buildSkillLoadTool(workspacePath),
       _buildAskUserTool(),
+      ..._buildSecretTools(request),
     ];
 
     if (workspacePath != null && workspacePath.isNotEmpty) {
@@ -546,6 +556,7 @@ class LocalRuntimeCatalog {
       ShellExecuteTool(
         workspacePath: workspacePath,
         permissionManager: _permissionManager,
+        userSecrets: _userSecrets,
         backendResolver: ExecutionBackendResolver(
           policyStore: _workspacePolicyStore,
         ),
@@ -966,15 +977,6 @@ class LocalRuntimeCatalog {
         serverName: 'system',
       ),
       onExecute: (args, {context}) async {
-        final toolContext =
-            context ??
-            ToolContext(
-              sessionId: 'default',
-              toolCallId: 'ask-call-${DateTime.now().millisecondsSinceEpoch}',
-            );
-        final requestId = DateTime.now().millisecondsSinceEpoch.toString();
-        final toolCallId = toolContext.toolCallId ?? 'ask-call-$requestId';
-
         final rawQuestions = args['questions'];
         final List<Map<String, dynamic>> questionsList = [];
 
@@ -1003,49 +1005,39 @@ class LocalRuntimeCatalog {
           }
         }
 
-        final permissionPayload = <String, dynamic>{
-          'request_id': requestId,
-          'tool_name': 'system_ask_user',
-          'session_id': toolContext.sessionId,
-          'tool_call_id': toolCallId,
-          'questions': questionsList,
-          'workspace_id': toolContext.metadata['workspace_id'],
-        };
-
-        final checkpointStore = getIt<SuspendedCheckpointStore>();
-        await checkpointStore.save(
-          SuspendedCheckpoint(
-            checkpointId: 'ask-$requestId',
-            sessionId: toolContext.sessionId,
-            requestId: requestId,
-            toolCallId: toolCallId,
-            toolName: 'system_ask_user',
-            status: 'awaiting_permission',
-            toolArguments: Map<String, dynamic>.from(args),
-            permissionPayload: permissionPayload,
-            createdAt: DateTime.now(),
-            updatedAt: DateTime.now(),
-          ),
+        final decision = await _userInput.request(
+          toolName: 'system_ask_user',
+          checkpointPrefix: 'ask',
+          context: context,
+          args: args,
+          fields: {'questions': questionsList},
         );
-
-        try {
-          final decision = await _platformRuntimeBridge.requestToolPermission(
-            sessionId: toolContext.sessionId,
-            payload: permissionPayload,
-            timeout: const Duration(hours: 24),
+        final answer = decision['answer']?.toString().trim();
+        if (answer == null || answer.isEmpty) {
+          throw Exception(
+            'User clarification question was resolved without an answer.',
           );
-          final answer = decision['answer']?.toString().trim();
-          if (answer == null || answer.isEmpty) {
-            throw Exception(
-              'User clarification question was resolved without an answer.',
-            );
-          }
-          return answer;
-        } finally {
-          await checkpointStore.deleteByRequestId(requestId);
         }
+        return answer;
       },
     );
+  }
+
+  /// Plan 84 secret tools, offered only on a turn with daemon-stamped owner
+  /// authority. Every authenticated client (local or cloud) is the owner.
+  List<BaseTool> _buildSecretTools(AgentTurnRequest request) {
+    final authority = CommandAuthority.fromStamped(
+      request.metadata[CommandAuthority.payloadKey],
+    );
+    if (!authority.isOwner) return const [];
+    return [
+      RequestSecretTool(userInput: _userInput, userSecrets: _userSecrets),
+      ListSecretsTool(userSecrets: _userSecrets),
+      DeleteSecretTool(
+        permissionManager: _permissionManager,
+        userSecrets: _userSecrets,
+      ),
+    ];
   }
 }
 

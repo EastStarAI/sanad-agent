@@ -504,5 +504,13 @@
   "workspaceSecurityRetry": "إعادة المحاولة",
   "workspacePolicyChangedRetry": "تغيّرت أذونات مساحة العمل هذه من مكان آخر وتم تحديثها. حاول مرة أخرى.",
   "workspacePermissionModeChangeFailed": "تعذّر تغيير وضع الأذونات. حاول مرة أخرى.",
-  "newerAgentInUseNotice": "الوكيل المثبَّت {agentVersion} أحدث من هذا العميل {clientVersion}. أُبقي عليه وهو قيد الاستخدام؛ حدِّث العميل عندما يناسبك."
+  "newerAgentInUseNotice": "الوكيل المثبَّت {agentVersion} أحدث من هذا العميل {clientVersion}. أُبقي عليه وهو قيد الاستخدام؛ حدِّث العميل عندما يناسبك.",
+  "secretRequestTitle": "طلب بيانات سرية",
+  "secretRequestVaultNotice": "تُحفظ في الخزينة الآمنة للوكيل. لا يرى الذكاء الاصطناعي سوى الاسم، ولا يرى القيمة أبدًا.",
+  "secretRequestReplacesNotice": "تستبدل القيمة المحفوظة",
+  "secretRequestRequiredField": "أدخل قيمة لـ {label}.",
+  "secretRequestSave": "حفظ في الخزينة",
+  "secretRequestSkip": "تخطي",
+  "secretRequestShowValue": "إظهار القيمة",
+  "secretRequestHideValue": "إخفاء القيمة"
 }

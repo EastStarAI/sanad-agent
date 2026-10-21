@@ -1023,6 +1023,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) =>
       _interventionCoordinator.respondToSuspendedRequest(
         request,
@@ -1030,6 +1031,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         scope: scope,
         comment: comment,
         answer: answer,
+        secretValues: secretValues,
       );
 
   Future<void> updateSessionPreferences({

@@ -26,12 +26,16 @@ This contract applies to `agent/lib/capabilities/tools/`.
 - Build the child environment only through `ProcessEnvironmentPolicy` and spawn with `includeParentEnvironment: false`; Dart otherwise merges the daemon environment back in.
 - `ShellExecuteTool` owns schema, workspace boundary, and permission checks, then delegates to the `ExecutionBackend` chosen from daemon policy at each execution. A backend never grants approval. The backend is resolved before approval and a refusing backend (`runsCommands: false`) answers without a prompt or durable grant. Protected execution and an unreadable policy fail closed and never fall back to the host.
 - The working directory must equal the canonical workspace root or lie within it; prefix matching is not containment.
+- Stored user secrets reach a command only when its `secrets` argument names them on an `owner` turn; unknown names fail before approval and the command never runs. The backend redacts every injected value from all reported output.
 
 ## Host Capability Discovery
 - `host_capability_discovery` never executes a binary, starts a shell, lists directories, or returns `PATH` or other environment values.
 - Its presence is decided by the runtime catalog from daemon policy and stamped authority; the tool itself never decides visibility and no prompt text may announce it.
 - Keep command output bounded and free of injected operational instructions.
 - Shell typed error status comes from terminal execution state, never output-string parsing; preserve the legacy encoded payload as the text projection.
+
+## User Secret Tools
+- Secret tools return names and outcomes only and refuse non-owner turns. `system_request_secret` never stores values itself; it trusts only the bridge-sanitized decision. `system_delete_secret` is sensitive and asks every time.
 
 ## Workspace Search
 - `search_glob` and `search_grep` execute through focused workspace handlers.
