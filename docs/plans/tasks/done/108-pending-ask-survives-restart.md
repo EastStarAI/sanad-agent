@@ -2,8 +2,8 @@
 plan_id: 108
 issue: https://github.com/EastStarAI/sanad-agent/issues/213
 branch: fix/108-pending-ask-survives-restart
-status: in_progress
-current_gate: G0
+status: done
+current_gate: G3
 ---
 
 # 108 — Pending ask-user / permission tool survives abrupt shutdown and restart
@@ -72,13 +72,27 @@ Error: Tool execution was interrupted before completion could be confirmed. The 
 - [x] Analyzer and focused/full fast test suites pass in the worktree.
 - [x] Documentation updated in the same session as the code change.
 - [x] Regression coverage exists for all three acceptance scenarios above.
-- [ ] PR delivered from this branch referencing plan 108 and issue #213.
-- [ ] Live behavioral verification on a managed runtime (pending user confirmation; plan below).
+- [x] PR delivered from this branch referencing plan 108 and issue #213 (PR #215).
+- [x] Live behavioral verification on a managed runtime (see Live Evidence).
 
 ## Integration Evidence
 
 - 2026-10-21: merged `origin/main` (`f77f0571`) into the branch with no textual conflicts. Main's startup compaction-orphan reconciliation and the 106b/116/117 runtime changes do not touch `resuming` classification and compose with this guard.
 - After the merge and the ordering correction: `fvm dart analyze` clean; `pending_ask_restart_repro_test.dart` 6/6; `test/interfaces/runtime/` 114 passed; full agent suite 2923 passed, 14 skipped.
+
+- After re-merging `origin/main` (`6a832396`, no overlapping paths): `fvm dart analyze` clean; `test/interfaces/runtime/` 114 passed.
+
+## Coordinator Review
+
+- The ordering correction is a reorder only: the interactive-wait guard now runs after the decision-ready check, so the decision-ready reclaim branch and its diagnostic are reachable again. Accepted.
+- Tests: `pending_ask_restart_repro_test.dart` 6/6; runtime folder 114 passed; full agent suite 2923 passed, 14 skipped.
+
+## Live Evidence (isolated Test Home, 7 model calls)
+
+- Case 1: a pending `system_ask_user` survived a verified `SIGKILL` of the daemon child; the ask stayed pending, and answering it resumed the turn to completion.
+- Case 2: two kills before answering; the ask stayed pending and the answer completed the turn.
+- Case 3: a pending shell permission prompt survived a kill, and "allow once" completed the turn.
+- Across all cases: 0 "interrupted before completion" results and 0 blocked notices.
 
 ## Live-check Plan (isolated Test Home)
 
