@@ -1,5 +1,6 @@
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:sanad_agent/core/models/message.dart';
 
 import '../adapters/llm_adapter.dart';
@@ -33,6 +34,11 @@ class ConfirmedUsageReceipt {
     String? providerAlias,
   }) {
     if (message.role != MessageRole.assistant) return null;
+    // Usage of a failed or cancelled response never anchors (Task 118b).
+    if (message.finishReason == LLMFinishReason.failed ||
+        message.finishReason == LLMFinishReason.cancelled) {
+      return null;
+    }
     final metadata = message.metadata;
     final contextUsage = metadata?['context_usage'];
     final usage = metadata?['usage'];

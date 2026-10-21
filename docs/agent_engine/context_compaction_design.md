@@ -46,6 +46,10 @@ canonical history. Stale non-null owners cannot clear newer compacting state or 
   tools, and ordered wire input items; a strict extension starts from the
   confirmed value and estimates only the appended wire suffix (`confirmed` /
   `mixed`). A larger rough estimate of the full request cannot override it.
+- Usage that cannot be trusted never calibrates (Task 118b): neither the live
+  baseline nor a persisted receipt accepts usage from a failed or cancelled
+  response, or a zero (unavailable) input count. Receipts from before an
+  activated boundary are already rejected by the wire proof.
 - A route/model/config revision, prompt, tool-schema, or measured-prefix change
   invalidates the snapshot and returns to an explicitly estimated projection.
 - Recovering that baseline after a restart reads the timestamped per-model-step

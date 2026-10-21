@@ -5,6 +5,7 @@ import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
+import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
@@ -441,6 +442,32 @@ void main() {
       },
     );
   });
+
+  test(
+    'Task 118b: a receipt on a failed or cancelled response is never a calibration anchor',
+    () {
+      for (final finish in [LLMFinishReason.failed, LLMFinishReason.cancelled]) {
+        final message = Message(
+          role: MessageRole.assistant,
+          content: '',
+          finishReason: finish,
+          metadata: {
+            'context_usage': {
+              'input_tokens': 5000,
+              'provider_instance_id': _route.providerInstanceId,
+              'model_id': _route.modelId,
+              'wire_proof': 'v1:${'0' * 64}',
+            },
+          },
+        );
+        expect(
+          ConfirmedUsageReceipt.read(message, routeSignature: _route),
+          isNull,
+          reason: finish.name,
+        );
+      }
+    },
+  );
 
   group('Task 118 unproven replay cost stays unknown', () {
     for (final (label, build) in <(String, Future<_Fixture> Function())>[

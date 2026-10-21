@@ -42,6 +42,7 @@ import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
+import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:test/test.dart';
 
 class _PreflightAdapter implements LLMAdapter, WireInputUsageMeasurer {
@@ -1782,6 +1783,73 @@ compaction:
         expect(decisions.last, isNot(contains(sessionId)));
       },
     );
+
+    // Task 118b round 5: usage from a failed, aborted or unavailable response
+    // never calibrates pressure.
+    MockClient usageClient(int promptTokens) => MockClient((request) async {
+      final sseData = [
+        'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"acknowledged"},"finish_reason":null}]}',
+        '',
+        'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":$promptTokens,"completion_tokens":20,"total_tokens":${promptTokens + 20}}}',
+        '',
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return http.Response(
+        sseData,
+        200,
+        headers: {'content-type': 'text/event-stream'},
+      );
+    });
+
+    test(
+      'Task 118b: an unavailable zero input usage never becomes the confirmed baseline',
+      () async {
+        final runner = openAiRunner(
+          sessionId: 'session-usage-zero',
+          client: usageClient(0),
+        );
+        await runner
+            .streamMessage(
+              'continue',
+              providerId: routeProvider,
+              model: routeModel,
+            )
+            .toList();
+
+        expect(runner.debugConfirmedInputUsageBaseline, isNull);
+      },
+    );
+
+    for (final finish in [LLMFinishReason.failed, LLMFinishReason.cancelled]) {
+      test(
+        'Task 118b: usage from a ${finish.name} response does not replace the confirmed baseline',
+        () async {
+          final runner = openAiRunner(
+            sessionId: 'session-usage-${finish.name}',
+            client: usageClient(371839),
+          );
+          await runner
+              .streamMessage(
+                'continue',
+                providerId: routeProvider,
+                model: routeModel,
+              )
+              .toList();
+          expect(runner.debugConfirmedInputUsageBaseline?.inputTokens, 371839);
+
+          runner.updateMetrics(
+            AgentResponse(
+              message: Message(role: MessageRole.assistant, content: ''),
+              usage: const {'prompt_tokens': 999},
+              finishReason: finish,
+            ),
+          );
+
+          expect(runner.debugConfirmedInputUsageBaseline?.inputTokens, 371839);
+        },
+      );
+    }
 
     test('warm live confirmed input is used for generic-route admission', () async {
       const sessionId = 'session-generic-warm';

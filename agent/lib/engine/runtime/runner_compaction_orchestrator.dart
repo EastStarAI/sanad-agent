@@ -7,6 +7,7 @@ import '../../capabilities/registry/tools_registry.dart';
 import '../../core/agent_runtime_service.dart';
 import '../../core/config.dart';
 import '../../core/di.dart';
+import '../../core/models/llm_finish_reason.dart';
 import '../../core/models/llm_usage_snapshot.dart';
 import '../../core/models/message.dart';
 import '../../evolution/compaction/model_projection_builder.dart';
@@ -182,19 +183,25 @@ class RunnerCompactionOrchestrator {
   /// A response without usage or without input tokens leaves the pending
   /// baseline staged, so a stream whose usage arrives only in a later chunk
   /// still confirms it.
-  void confirmInputUsageBaseline(Map<String, dynamic>? usage) {
+  ///
+  /// Usage that cannot be trusted never calibrates (Task 118b): a response
+  /// that failed or was cancelled, and a zero (unavailable) input count.
+  void confirmInputUsageBaseline(
+    Map<String, dynamic>? usage, {
+    LLMFinishReason finishReason = LLMFinishReason.unknown,
+  }) {
     final pending = pendingInputUsageBaseline;
     final activeBoundary = host.activeProjectionBoundary;
     final now = DateTime.now().toUtc();
 
-    if (usage == null) {
+    if (usage == null || !isCalibrationUsable(finishReason)) {
       return;
     }
 
     final snapshot = LlmUsageSnapshot.fromProviderUsage(usage);
     final inputTokens = snapshot.inputTokens;
 
-    if (inputTokens == null) {
+    if (inputTokens == null || inputTokens <= 0) {
       return;
     }
 
@@ -221,6 +228,12 @@ class RunnerCompactionOrchestrator {
       );
     }
   }
+
+  /// Whether usage from a response with [finishReason] may calibrate pressure:
+  /// never from a failed or cancelled response.
+  static bool isCalibrationUsable(LLMFinishReason finishReason) =>
+      finishReason != LLMFinishReason.failed &&
+      finishReason != LLMFinishReason.cancelled;
 
   /// Reserves the post-boundary dispatch of the current step when a compaction
   /// boundary is active and the pending baseline carries a route. Returns the
