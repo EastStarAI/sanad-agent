@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:logging/logging.dart';
+
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
@@ -1631,6 +1633,19 @@ void main() {
           'context_usage': (await producer.getContextUsageSnapshot())!,
         });
 
+        // Task 118b live-testability: every automatic pressure decision is
+        // logged at fine level with scalar fields only.
+        final previousLevel = Logger.root.level;
+        Logger.root.level = Level.ALL;
+        final decisions = <String>[];
+        final subscription = Logger.root.onRecord
+            .where((record) => record.message.startsWith('auto_pressure '))
+            .listen((record) => decisions.add(record.message));
+        addTearDown(() async {
+          await subscription.cancel();
+          Logger.root.level = previousLevel;
+        });
+
         // Restart 1: the proven 371839 receipt is genuine pressure and
         // compacts once.
         final first = openAiRunner(sessionId: sessionId, client: client);
@@ -1652,6 +1667,16 @@ void main() {
         );
         expect(second.debugLastPreflightPressure?.exceedsThreshold, isFalse);
         expect(boundaries.listLifecycleForSession(sessionId), hasLength(1));
+
+        expect(decisions, hasLength(2));
+        expect(decisions.first, contains('basis=mixed'));
+        expect(decisions.first, contains('confirmed=371839'));
+        expect(decisions.first, contains('decision=compact'));
+        expect(decisions.last, contains('basis=estimated'));
+        expect(decisions.last, contains('confirmed=none'));
+        expect(decisions.last, contains('decision=below_threshold'));
+        expect(decisions.last, contains('threshold=322200'));
+        expect(decisions.last, isNot(contains(sessionId)));
       },
     );
 

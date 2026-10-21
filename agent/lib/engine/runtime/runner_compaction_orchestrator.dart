@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:logging/logging.dart';
+
 import '../../capabilities/models/tool_schema.dart';
 import '../../capabilities/registry/tools_registry.dart';
 import '../../core/agent_runtime_service.dart';
@@ -75,6 +77,25 @@ abstract class RunnerCompactionHost {
 /// idle compaction provider seed.
 class RunnerCompactionOrchestrator {
   static const Duration compactionCooldown = Duration(seconds: 30);
+  static final Logger _logger = Logger('RunnerCompactionOrchestrator');
+
+  /// Fine-level scalar record of one automatic pressure decision (Task 118b),
+  /// so a turn that does not compact still shows whether admission used a
+  /// provider receipt or the estimate. No session, content or route identity.
+  static void _logPressureDecision(
+    RequestPressureSnapshot pressure,
+    String decision,
+  ) {
+    _logger.fine(
+      'auto_pressure basis=${pressure.measurementKind.wireValue} '
+      'estimated=${pressure.estimatedRequestTokens} '
+      'confirmed=${pressure.confirmedInputTokens ?? 'none'} '
+      'threshold=${pressure.thresholdTokens} '
+      'window=${pressure.windowTokens} '
+      'capped=${pressure.thresholdCappedByUsableBudget} '
+      'decision=$decision',
+    );
+  }
 
   final RunnerCompactionHost host;
 
@@ -457,6 +478,7 @@ class RunnerCompactionOrchestrator {
       preflightPressure = pressure;
       lastPreflightPressure = pressure;
       if (!pressure.exceedsThreshold) {
+        _logPressureDecision(pressure, 'below_threshold');
         return false;
       }
       final withinCooldown =
@@ -465,8 +487,10 @@ class RunnerCompactionOrchestrator {
               compactionCooldown;
       if (withinCooldown &&
           pressure.estimatedRequestTokens <= pressure.effectiveInputBudget) {
+        _logPressureDecision(pressure, 'cooldown');
         return false;
       }
+      _logPressureDecision(pressure, 'compact');
     }
     try {
       final request = CompactionEngineRequest(

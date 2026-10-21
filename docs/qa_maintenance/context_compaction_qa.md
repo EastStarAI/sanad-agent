@@ -55,6 +55,8 @@ Below the threshold automatic compaction must not run; true pressure must trigge
 | One compaction under true pressure, no repeat across restart and two follow-ups, a small sibling session never compacts | daemon F.53.11 (new). A regression lock: green on base `66e21c47`, and the deterministic fixture's usage does not discriminate the proof mutation, which the runner case above does. | daemon |
 | Post-boundary visible growth re-triggers only on real growth | `codex_wire_pressure_regression_test.dart` "visible growth still crosses the threshold while a post-boundary projection does not re-trigger" | adapter |
 
+Live observability: with `LOG_LEVEL=FINE`, every automatic pressure decision logs one scalar line, `auto_pressure basis=<estimated|mixed|confirmed> estimated=<n> confirmed=<n|none> threshold=<n> window=<W> capped=<bool> decision=<below_threshold|cooldown|compact>` (no session, route or content). A turn that does not compact therefore still shows whether admission used a restored receipt or the estimate (Task 118b, live r1 gap G2).
+
 ## Manual scenarios (53f)
 
 1. Long session auto-compaction before provider call when request exceeds budget.
