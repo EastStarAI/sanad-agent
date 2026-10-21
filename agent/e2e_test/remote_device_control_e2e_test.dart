@@ -90,6 +90,59 @@ void main() {
           ),
         );
 
+        // Task 123: the managed browser opens at the Home workspaces root
+        // and a nested folder can be picked as a workspace by path.
+        await _sendCommand(
+          socket,
+          deviceId: deviceId,
+          command: 'browse_workspace_tree',
+          requestId: 'g6-browse-root',
+          payload: {'managed_remote': true},
+        );
+        final rootTree = await _waitForEvent(frames, 'workspace_tree');
+        final managedRoot = rootTree['payload']['root_path'] as String;
+        expect(rootTree['payload']['path'], managedRoot);
+        expect(rootTree['payload']['parent_path'], isNull);
+        expect(
+          managedRoot,
+          endsWith('${Platform.pathSeparator}workspaces'),
+        );
+        expect(
+          workspace['path'].toString(),
+          startsWith('$managedRoot${Platform.pathSeparator}'),
+        );
+
+        await _sendCommand(
+          socket,
+          deviceId: deviceId,
+          command: 'workspace.create_folder',
+          requestId: 'g6-create-folder',
+          payload: {
+            'managed_remote': true,
+            'parent_path': workspace['path'],
+            'name': 'g6-picked',
+          },
+        );
+        final folder = await _waitForEvent(
+          frames,
+          'workspace.folder_created',
+        );
+        final pickedPath = folder['payload']['path'] as String;
+
+        await _sendCommand(
+          socket,
+          deviceId: deviceId,
+          command: 'create_workspace',
+          requestId: 'g6-pick-ws',
+          payload: {'path': pickedPath, 'managed_remote': true},
+        );
+        final picked = await _waitForEvent(frames, 'workspace_created');
+        final pickedWorkspace = Map<String, dynamic>.from(
+          picked['payload']['workspace'] as Map,
+        );
+        expect(pickedWorkspace['path'], pickedPath);
+        expect(pickedWorkspace['name'], 'g6-picked');
+
         await _sendCommand(
           socket,
           deviceId: deviceId,
@@ -137,6 +190,10 @@ void main() {
         final workspaces = (listed['payload']['workspaces'] as List)
             .cast<Map<dynamic, dynamic>>();
         expect(workspaces.any((entry) => entry['name'] == 'g6-notes'), isTrue);
+        expect(
+          workspaces.any((entry) => entry['name'] == 'g6-picked'),
+          isTrue,
+        );
 
         await _sendCommand(
           socket,
