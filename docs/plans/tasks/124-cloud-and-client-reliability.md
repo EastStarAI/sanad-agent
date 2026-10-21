@@ -271,7 +271,7 @@ A narrow-width test exposed a second overflow at the same width: the desktop sta
 | r1 | `a725bfbb` | S1a, S3, and the S4 mechanism passed. S1b failed (D1). D2 and D3 found. Item 4 not reproduced. |
 | r2 | `39061cd3` | D1 and D3 passed. The D2 Agent fix worked, but acceptance failed because of a new defect, D4. D5 and D6 found. Item 4 not reproduced. |
 | r3 | `ad8adae6` (merged with main as `43652814`) | D4 passed live. D5 failed live (below). R1a, R4, and S3 passed. D7 found (already on main). D8 found (relay throughput). |
-| r4 | this round | D5 and D7 addressed (below). D8 recorded as a follow-up. |
+| r4 | `dc7ee42f` (merged with main `d3040b9a`) | D5 and D7 addressed (below) and both passed live. The D4 and send smokes passed. D8 recorded as a follow-up. One Low observation: a `model.snapshot` is sent during the Offline transition and is answered with `error`. |
 
 ### D4 — Cloud replies stalled behind `model.snapshot_result` (High)
 
@@ -423,3 +423,20 @@ In live r3, a 3.75 MB `session_history` took 12.8 s and 17.5 s from A's emit to 
   - After the section replies succeed, B must send one more `list_workspaces`, and "Could not refresh workspaces" and "Could not refresh all sections" must clear with no tap.
   - Then restart A. After A shows Online, the thinking Retry must turn into the control after one new `model.snapshot`, and the history "Could not load" must clear.
 - **D7:** repeat d5-b (restart A while B's section queries are in flight). Sections answered with an `error` must keep their rows and show "Could not refresh all sections", never "No conversations". After A is back, they must refresh with no tap.
+
+## Live Round 4 Summary
+
+Live r4 on `dc7ee42f` (TH2 = A, cloud; TH3 = B, Client on cloud for the test, then back to `--no-cloud`). The live report is outside this repository.
+
+- **D5 passed.**
+  - d5-g: A's verified daemon child was frozen 2 s after B's restart, for 18 s. `list_workspaces` and the unscoped `get_sessions` timed out. The section replies succeeded after resume, and B then sent exactly one more `list_workspaces`. "Could not refresh all sections" cleared about 3 s later, with no tap.
+  - d5-e2 and d5-g2: after an A restart, when A showed Online, B sent one `model.snapshot`. The thinking Retry became the control, and the history "Could not load" cleared within about 2 s, with no tap. That closes the r3 history gap.
+- **D7 passed.**
+  - d7-a and d7-b: A's frozen daemon child was killed with `kill -KILL` while B's sections were syncing. The Gateway answered the section `get_sessions` with correlated `error` events, and the Client logged each one as a failure (`code=error`).
+  - The sidebar kept all 26 rows and showed "Could not refresh all sections", never "No conversations". After A's supervisor respawned the child and A showed Online, B refreshed the workspaces and every section with no tap.
+- **Smoke passed.**
+  - D4: after a B restart, the single `model.snapshot` reached B 0.25 s after A emitted it, and all 8 `get_sessions` were answered in about 1 s.
+  - A deepseek-v4.1-flash send from B was answered in under 4 s. The new session shows in both sidebars.
+  - R1a held at teardown: with `--no-cloud`, B shows "This device", not "No devices".
+- **Observation (Low).** On the Offline transition, B sends a `model.snapshot` to the offline device, and the Gateway answers it with `error`. This is harmless, because the Online retry follows.
+
