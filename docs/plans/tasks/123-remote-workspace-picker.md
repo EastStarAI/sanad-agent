@@ -1,8 +1,8 @@
 ---
 id: 123
 title: Remote workspace picker confined to the managed workspaces root
-status: planned
-gate: design (awaiting user answers to the open questions)
+status: in_progress
+gate: G1 (implementation)
 created: 2026-10-21
 parent_task: none
 depends_on: []
@@ -171,7 +171,7 @@ Record operation ids, screenshots and the on-disk listings in the Round Log.
 
 ## Gates
 
-- [ ] G0 — User answers to Q1–Q5, recorded below.
+- [x] G0 — User answers to Q1–Q5, recorded under Decisions (2026-10-21).
 - [ ] G1 — Agent: A1–A8 with S1–S20 red on `adc128ec`, then green; analyzer clean.
 - [ ] G2 — Client: C1–C5; widget and unit tests; en/ar strings; analyzer clean.
 - [ ] G3 — Contracts and docs listed above updated, with no stale "remote sends no filesystem command" or "reserved for a future file tree" text left.
@@ -195,6 +195,16 @@ Record operation ids, screenshots and the on-disk listings in the Round Log.
 - **Q3 — Renaming a folder that contains a workspace.** Refuse with `workspace_in_use` (recommended; simple and safe), or rename and then rewrite the affected workspace paths? The second matches "same as the old popup" more closely but is a relocate in disguise.
 - **Q4 — Remote "Change Path".** Settings "Change Path" stays local-only today. Should the same confined browser also serve remote relocate, limited to targets inside the root? (Recommended: a follow-up task, not this one.)
 - **Q5 — Files in the dialog.** The old popup showed folders only. Keep it folders-only (recommended), or also list files read-only?
+
+## Decisions (2026-10-21)
+
+The user answered the open questions on 2026-10-21. These answers are binding for this task.
+
+- **Q1 — Strict root: accepted.** From the cloud, browsing and folder changes are allowed only inside the Home's workspaces root. Workspaces registered outside it keep working for chat and tools but cannot be browsed or changed remotely. The root is resolved in code as `<SANAD_HOME>/workspaces` from the runtime's Home; `.sanad` or `~/.sanad` is never hardcoded anywhere. Test Homes use other paths (for example `~/.sanad-test-2/workspaces`), and a test proves that the root follows a custom Home.
+- **Q2 — Nested workspaces: allowed.** A workspace may sit inside another workspace or contain one, the same as the local picker.
+- **Q3 — Folder containing a workspace: refused.** Renaming or deleting a folder that is or contains a registered workspace is refused with `workspace_in_use`. Paths are never rewritten.
+- **Q4 — Remote "Change Path": out of scope.** Using the dialog for remote Settings "Change Path" is a separate follow-up, not part of Task 123.
+- **Q5 — Folders only.** The dialog lists folders only.
 
 ## Estimate
 
