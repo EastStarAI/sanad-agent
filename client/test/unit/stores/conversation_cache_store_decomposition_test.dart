@@ -258,10 +258,14 @@ void main() {
   group('Hardening: Owner modularity and one-way injection', () {
     test('store delegates to injected owners without shared mutable state', () {
       final guard = CacheGenerationGuard();
+      late final SessionSectionCache sectionCache;
       final draftCache = ConversationDraftCache(
+        getContext: (id) => sectionCache.contextFor(id),
+        updateContext: (id, ctx) => sectionCache.updateContext(id, ctx),
+        ensureDeviceContext: (id) => sectionCache.ensureDeviceContext(id),
         notify: () {},
       );
-      final sectionCache = SessionSectionCache(
+      sectionCache = SessionSectionCache(
         generationGuard: guard,
         draftCache: draftCache,
         notify: () {},

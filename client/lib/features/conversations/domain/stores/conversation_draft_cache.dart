@@ -5,15 +5,15 @@ import 'package:sanad_client/features/conversations/domain/models/device_convers
 /// Owns draft read, write, recovery, and clear operations for sessions and New Conversation.
 class ConversationDraftCache {
   final Map<String, ConversationDraft> _sessionDrafts = {};
-  final DeviceConversationContext Function(String deviceId)? _getContext;
-  final void Function(String deviceId, DeviceConversationContext context)? _updateContext;
-  final void Function(String deviceId)? _ensureDeviceContext;
+  final DeviceConversationContext Function(String deviceId) _getContext;
+  final void Function(String deviceId, DeviceConversationContext context) _updateContext;
+  final void Function(String deviceId) _ensureDeviceContext;
   final void Function() _notify;
 
   ConversationDraftCache({
-    DeviceConversationContext Function(String deviceId)? getContext,
-    void Function(String deviceId, DeviceConversationContext context)? updateContext,
-    void Function(String deviceId)? ensureDeviceContext,
+    required DeviceConversationContext Function(String deviceId) getContext,
+    required void Function(String deviceId, DeviceConversationContext context) updateContext,
+    required void Function(String deviceId) ensureDeviceContext,
     required void Function() notify,
   })  : _getContext = getContext,
         _updateContext = updateContext,
@@ -73,9 +73,9 @@ class ConversationDraftCache {
       _sessionDrafts.remove(draftKey);
       return true;
     }
-    final ctx = _getContext?.call(deviceId);
-    if (ctx != null && ctx.newConversationDraftPendingRequestId == requestId) {
-      _updateContext?.call(deviceId, ctx.copyWith(clearNewConversationDraft: true));
+    final ctx = _getContext(deviceId);
+    if (ctx.newConversationDraftPendingRequestId == requestId) {
+      _updateContext(deviceId, ctx.copyWith(clearNewConversationDraft: true));
       return true;
     }
     return false;
@@ -180,7 +180,7 @@ class ConversationDraftCache {
     String deviceId,
     String sessionId,
   ) {
-    final ctx = _getContext?.call(deviceId) ?? DeviceConversationContext.empty();
+    final ctx = _getContext(deviceId);
     final draft = ConversationDraft(
       text: ctx.newConversationDraftText,
       workspaceId: ctx.newConversationDraftWorkspaceId,
@@ -194,7 +194,7 @@ class ConversationDraftCache {
     if (!draft.isEmpty) {
       _sessionDrafts[DeviceConversationCacheSnapshot.sessionDraftKey(deviceId, sessionId)] = draft;
     }
-    _updateContext?.call(deviceId, ctx.copyWith(clearNewConversationDraft: true));
+    _updateContext(deviceId, ctx.copyWith(clearNewConversationDraft: true));
     _notify();
   }
 
@@ -213,9 +213,9 @@ class ConversationDraftCache {
     bool clearPermissionMode = false,
     bool clearPendingRequest = false,
   }) {
-    _ensureDeviceContext?.call(deviceId);
-    final ctx = _getContext?.call(deviceId) ?? DeviceConversationContext.empty();
-    _updateContext?.call(
+    _ensureDeviceContext(deviceId);
+    final ctx = _getContext(deviceId);
+    _updateContext(
       deviceId,
       ctx.copyWith(
         newConversationDraftText: text,
@@ -240,9 +240,9 @@ class ConversationDraftCache {
     String deviceId,
     String requestId,
   ) {
-    _ensureDeviceContext?.call(deviceId);
-    final context = _getContext?.call(deviceId) ?? DeviceConversationContext.empty();
-    _updateContext?.call(
+    _ensureDeviceContext(deviceId);
+    final context = _getContext(deviceId);
+    _updateContext(
       deviceId,
       context.copyWith(
         newConversationDraftPendingRequestId: requestId,
@@ -252,8 +252,8 @@ class ConversationDraftCache {
   }
 
   void clearNewConversationDraft(String deviceId) {
-    _ensureDeviceContext?.call(deviceId);
-    final ctx = _getContext?.call(deviceId) ?? DeviceConversationContext.empty();
+    _ensureDeviceContext(deviceId);
+    final ctx = _getContext(deviceId);
     if (ctx.newConversationDraftText.isEmpty &&
         ctx.newConversationDraftWorkspaceId == null &&
         ctx.newConversationDraftProviderId == null &&
@@ -263,7 +263,7 @@ class ConversationDraftCache {
         ctx.newConversationDraftPendingRequestId == null) {
       return;
     }
-    _updateContext?.call(deviceId, ctx.copyWith(clearNewConversationDraft: true));
+    _updateContext(deviceId, ctx.copyWith(clearNewConversationDraft: true));
     _notify();
   }
 
