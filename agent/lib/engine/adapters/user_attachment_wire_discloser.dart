@@ -38,9 +38,14 @@ abstract final class UserAttachmentWireDiscloser {
     'image/gif',
   };
 
-  /// Fixed English guidance sentence appended to disclosed file references.
+  /// Fixed English guidance sentence appended to one disclosed file reference.
   static const String guidanceSentence =
       'Use your tools to read this file; it is available on disk.';
+
+  /// Fixed English guidance sentence appended to several disclosed file
+  /// references.
+  static const String pluralGuidanceSentence =
+      'Use your tools to read these files; they are available on disk.';
 
   /// Maximum length for sanitized safe names in wire reference links.
   static const int maxSafeNameLength = 120;
@@ -53,18 +58,20 @@ abstract final class UserAttachmentWireDiscloser {
   static bool isProviderSafeImage(UserAttachment attachment) =>
       providerSafeImageMimes.contains(attachment.mimeType.toLowerCase());
 
-  /// Sanitizes a file basename for embedding in markdown links (`[<safe name>](...)`),
-  /// removing every line break, control rune, backtick, and bracket character
-  /// that could break or inject into the reference line.
+  /// Sanitizes a file basename for embedding in markdown links (`[<safe name>](...)`).
+  ///
+  /// Line breaks and control runes are removed; backslash, brackets, and
+  /// backticks are Markdown-escaped rather than replaced, so the model reads
+  /// back the real name (`My (1) \[v2\].pdf`) while the label can neither close
+  /// early nor open a code span.
   static String sanitizeSafeName(String name) {
     final cleaned = name
         .replaceAll(RegExp(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]'), '')
-        .replaceAll('[', '_')
-        .replaceAll(']', '_')
-        .replaceAll('`', '_')
         .trim();
-    final safe = cleaned.isEmpty ? 'attachment' : cleaned;
-    return String.fromCharCodes(safe.runes.take(maxSafeNameLength));
+    final bounded = String.fromCharCodes(
+      (cleaned.isEmpty ? 'attachment' : cleaned).runes.take(maxSafeNameLength),
+    );
+    return bounded.replaceAllMapped(RegExp(r'[\\\[\]`]'), (m) => '\\${m[0]}');
   }
 
   /// Resolves the absolute on-disk path for [attachment] inside the agent-side
@@ -173,7 +180,9 @@ abstract final class UserAttachmentWireDiscloser {
       buffer.writeln(line);
     }
     buffer.writeln();
-    buffer.write(guidanceSentence);
+    buffer.write(
+      referenceLines.length == 1 ? guidanceSentence : pluralGuidanceSentence,
+    );
 
     return buffer.toString().trim();
   }

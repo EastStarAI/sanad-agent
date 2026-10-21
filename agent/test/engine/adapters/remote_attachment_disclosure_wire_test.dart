@@ -239,7 +239,7 @@ void main() {
     test('sanitizes safe names and bounds length', () {
       expect(
         UserAttachmentWireDiscloser.sanitizeSafeName('report[final].pdf'),
-        equals('report_final_.pdf'),
+        equals(r'report\[final\].pdf'),
       );
       expect(
         UserAttachmentWireDiscloser.sanitizeSafeName('name\nwith\rbreaks.pdf'),
@@ -250,7 +250,7 @@ void main() {
       expect(sanitized.runes.length, lessThanOrEqualTo(120));
       expect(
         UserAttachmentWireDiscloser.sanitizeSafeName('a`b`.pdf'),
-        equals('a_b_.pdf'),
+        equals(r'a\`b\`.pdf'),
         reason: 'Backticks must not open a code span inside the link label.',
       );
       expect(
@@ -265,6 +265,45 @@ void main() {
         equals('neltest.pdf'),
         reason: 'C1 control runes are line breaks for many tokenizers.',
       );
+    });
+
+    test('keeps the real name with Markdown-escaped brackets (114 minor)', () {
+      expect(
+        UserAttachmentWireDiscloser.sanitizeSafeName('My (1) [v2].pdf'),
+        equals(r'My (1) \[v2\].pdf'),
+        reason: 'the model must read back the real name, not _v2_',
+      );
+    });
+
+    test('uses the plural guidance for several disclosed files (114 minor)', () {
+      final pdf = createAttachment(
+        id: 'pdf-plural-1',
+        safeName: 'My (1) [v2].pdf',
+        mimeType: 'application/pdf',
+        bytes: validPdfBytes,
+        kind: UserAttachmentKind.file,
+      );
+      final heic = createAttachment(
+        id: 'heic-plural-1',
+        safeName: 'photo114.heic',
+        mimeType: 'application/octet-stream',
+        bytes: validPdfBytes,
+        kind: UserAttachmentKind.file,
+      );
+      final two = UserAttachmentWireDiscloser.discloseContent(
+        originalContent: 'inspect',
+        nonSafeAttachments: [pdf, heic],
+        attachmentStore: store,
+      );
+      expect(two, endsWith(UserAttachmentWireDiscloser.pluralGuidanceSentence));
+      expect(two, isNot(contains(UserAttachmentWireDiscloser.guidanceSentence)));
+      expect(two, contains(r'[My (1) \[v2\].pdf](file:///'));
+      final one = UserAttachmentWireDiscloser.discloseContent(
+        originalContent: 'inspect',
+        nonSafeAttachments: [pdf],
+        attachmentStore: store,
+      );
+      expect(one, endsWith(UserAttachmentWireDiscloser.guidanceSentence));
     });
 
     test('formats reference lines with file URI and agent-side path', () {

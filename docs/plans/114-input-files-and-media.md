@@ -153,6 +153,8 @@ See each task file's progress log for locations and regression tests.
 
 - **D1 (gap):** editing a sent message with a file token showed the raw Markdown link with the full path in the inline editor. Fix: the inline editor uses the composer's `SlashCommandTextController` (`setDraftText`), so tokens render as icon+name chips. Save exports them back through `exportPlainText`, so an unchanged edit round-trips the exact link text. Red-first test in `test/widget/brain_activity_inline_edit_test.dart`.
 
+- **Minor (agent, live r1):** the disclosure label replaced brackets with underscores (`My (1) _v2_.pdf`), and the model reported the wrong name. It now Markdown-escapes backslash, brackets, and backticks (`My (1) \[v2\].pdf`). The guidance sentence is plural for several disclosed files. Red-first tests in `agent/test/engine/adapters/remote_attachment_disclosure_wire_test.dart`.
+
 ### Verification (port worktree)
 
 - `fvm dart analyze` (agent): no issues. `fvm flutter analyze` (client): no issues.
