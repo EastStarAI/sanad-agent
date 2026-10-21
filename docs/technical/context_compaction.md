@@ -349,6 +349,24 @@ Compaction policy declares two primary thresholds:
 7. **Before-measurement.** The request being replaced is the active projection: its instructions, tools, the previous summary and the rows after the previous source range, never the canonical head behind an eligible boundary. Auto preflight passes its own wire/confirmed measurement; manual and overflow requests use the wire measurement when the route has one.
 8. **Target outcome.** The first actual provider-confirmed post-boundary input decides `target_outcome` (§11.4): `met` when it is at most `target_request_tokens`, otherwise `not_met`. Operations recorded under the earlier tail-only `usable_budget` scope stay `unknown`.
 
+#### Replay-Aware Tail Selection (Task 118 Stage3A)
+
+The tail selection cost is the cost of the tail as transmitted, not a provider-neutral text estimate. Task 106's paired observation on one route and effort showed why: the estimate grew 635 tokens (20031 → 20666) while the provider-attributed tail grew 12868 (19689 → 32557), from 4 to 23 replayed reasoning items and from 8 to 39 tool call/result pairs.
+
+`ContextCompactionEngine.measureRequest` builds `CompactionTailCosts`, keyed by the timeline index where a candidate tail starts:
+
+1. **Alignment.** The active provider projection must match the timeline after the previous source range, row for row (leading instructions and the previous summary aside). If it does not, nothing is claimed and selection falls back to the provider-neutral estimate.
+2. **Wire estimate.** Walking from the newest row backward, each candidate start `i` is remeasured as the projection prefix before `i`. The wire estimate of the tail is `full − prefix(i)`.
+3. **Proven receipts.** An assistant row's `context_usage` (`ConfirmedUsageReceipt`, shared with the restart restore) is a proven receipt only when all of these hold:
+   - its route identity matches;
+   - its `wire_proof` equals the proof of the remeasured prefix;
+   - the current request extends that prefix.
+4. **Provider attribution.** Between the nearest proven receipt at or after `i` and the newest proven receipt, the provider-confirmed input difference replaces the wire estimate: `cost(i) = (full − prefix(i)) + (δ_newest − δ_nearest)`, where `δ = confirmed input − wire estimate of the same prefix`. That span carries replayed reasoning, tool framing and media at the cost the provider reported.
+5. **Unknown replay.** Opaque replay items (`CompactionTokenEstimator.opaqueWireKeys`, for example encrypted reasoning) outside a proven span have unknown cost. They are counted in `unproven_replay_items`, never priced as zero or from ciphertext length. An estimated request that looks within the target with unproven replay is recorded as `estimated_target_outcome: unknown`, not `met`.
+6. **Bounded walk.** The walk stops once a tail exceeds the target and the newest connected exchange is covered; a missing index means "over budget".
+
+The complete current request is then `full + δ_newest` (`mixed`) when a receipt is proven. The decision snapshot records `retained_tail_cost_kind` (`mixed` / `estimated`), `retained_tail_confirmed_tokens`, `unproven_replay_items` and `proven_receipts`. Missing, stale, foreign-route and unbound receipts fail closed to the wire estimate. The first actual provider-confirmed post-input remains the authority for the target outcome.
+
 ## 5. Provider Wire Stripping (Gate A0)
 
 The following must never appear in provider request bodies or adapter-visible message lists:

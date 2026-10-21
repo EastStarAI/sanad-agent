@@ -310,66 +310,13 @@ class RunnerCompactionOrchestrator {
       // Unsupported/no-measurer adapters fail closed to explicit estimate.
       return;
     }
-    // Candidate provider aliases exclude null and empty values: an absent
-    // recorded identity must fail closed, not match via a null alias.
-    final providerIds = <String>{
-      routeSignature.providerInstanceId,
-      routeSignature.templateId,
-      ?providerId,
-    }.where((value) => value.isNotEmpty).toSet();
-
     for (var index = prospectiveHistory.length - 1; index >= 0; index--) {
-      final message = prospectiveHistory[index];
-      if (message.role != MessageRole.assistant) continue;
-
-      final metadata = message.metadata;
-      final contextUsage = metadata?['context_usage'];
-      final usage = metadata?['usage'];
-      final contextInputTokens = contextUsage is Map
-          ? contextUsage['input_tokens']
-          : null;
-      final usageInputTokens = usage is Map ? usage['input_tokens'] : null;
-      final inputTokens = contextInputTokens is num && contextInputTokens > 0
-          ? contextInputTokens
-          : usageInputTokens;
-      if (inputTokens is! num || inputTokens <= 0) continue;
-
-      final contextUsageProvider = contextUsage is Map
-          ? contextUsage['provider_instance_id']?.toString()
-          : null;
-      final contextUsageModel = contextUsage is Map
-          ? contextUsage['model_id']?.toString()
-          : null;
-      final legacyProvider = metadata?['provider']?.toString();
-      final legacyModel = metadata?['model']?.toString();
-      // A present authoritative identity wins; the mutable legacy value is
-      // consulted only when the snapshot carries no identity at all.
-      final recordedProvider =
-          (contextUsageProvider == null || contextUsageProvider.isEmpty)
-          ? legacyProvider
-          : contextUsageProvider;
-      final recordedModel =
-          (contextUsageModel == null || contextUsageModel.isEmpty)
-          ? legacyModel
-          : contextUsageModel;
-      if (recordedProvider == null ||
-          recordedProvider.isEmpty ||
-          !providerIds.contains(recordedProvider) ||
-          recordedModel == null ||
-          recordedModel.isEmpty ||
-          recordedModel != routeSignature.modelId) {
-        continue;
-      }
-
-      final persistedProof = contextUsage is Map
-          ? contextUsage['wire_proof']?.toString()
-          : null;
-      if (persistedProof == null ||
-          persistedProof.isEmpty ||
-          !RequestPressureEvaluator.isValidWireProof(persistedProof)) {
-        // Missing, unbound legacy, or unknown-version proof fails closed.
-        continue;
-      }
+      final receipt = ConfirmedUsageReceipt.read(
+        prospectiveHistory[index],
+        routeSignature: routeSignature,
+        providerAlias: providerId,
+      );
+      if (receipt == null) continue;
 
       final measuredMessages = prospectiveHistory.sublist(0, index);
       final toolSchemas = host.registry.allTools
@@ -384,11 +331,7 @@ class RunnerCompactionOrchestrator {
       );
       if (measurement == null) continue;
 
-      final expectedProof = RequestPressureEvaluator.wireProof(
-        wireMeasurement: measurement,
-        routeSignature: routeSignature,
-      );
-      if (persistedProof != expectedProof) {
+      if (!receipt.provenBy(measurement, routeSignature)) {
         // Historical wire material, tool schemas, prompt, or route mismatch:
         // fails closed.
         continue;
@@ -401,7 +344,7 @@ class RunnerCompactionOrchestrator {
 
       confirmedInputUsageBaseline = ConfirmedInputUsageBaseline(
         routeSignature: routeSignature,
-        inputTokens: inputTokens.round(),
+        inputTokens: receipt.inputTokens,
         conversationMessages: measuredMessages,
         systemPrompt: '',
         runtimeContext: '',

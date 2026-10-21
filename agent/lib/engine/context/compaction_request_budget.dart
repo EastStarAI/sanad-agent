@@ -25,16 +25,72 @@ class CompactionRequestMeasurement {
   /// wire codec rather than the provider-neutral fallback estimate.
   final bool wireMeasured;
 
-  /// The complete current request, when measured on the wire.
+  /// The complete current request, when measured on the wire: the wire
+  /// estimate, or the newest proven provider receipt plus the estimated wire
+  /// suffix after it (`mixed`).
   final int? requestTokens;
   final CompactionMeasurementKind requestKind;
+
+  /// Transmitted cost of every candidate retained tail, when the active
+  /// projection could be aligned with the timeline and measured.
+  final CompactionTailCosts? tailCosts;
 
   const CompactionRequestMeasurement({
     required this.fixedOverheadTokens,
     required this.wireMeasured,
     this.requestTokens,
     this.requestKind = CompactionMeasurementKind.estimated,
+    this.tailCosts,
   });
+}
+
+/// Transmitted cost of the retained tail that starts at one timeline index
+/// (Task 118 Stage3A replay-aware selection).
+///
+/// [tokens] is the route's wire estimate of the tail plus the provider
+/// attribution of its proven span: between the nearest proven receipt at or
+/// after the tail start and the newest proven receipt, the provider-confirmed
+/// input difference replaces the wire estimate, so replayed reasoning and
+/// tool framing the estimator cannot see are counted at their actual cost.
+@immutable
+class CompactionTailCost {
+  final int tokens;
+
+  /// `mixed` when a provider-confirmed span is included, else `estimated`.
+  final CompactionMeasurementKind kind;
+
+  /// Provider-confirmed tokens of the proven span inside the tail.
+  final int confirmedTokens;
+
+  /// Opaque replay items (for example encrypted reasoning) outside a proven
+  /// span. Their cost is unknown: neither zero nor priced from ciphertext.
+  final int unprovenReplayItems;
+
+  const CompactionTailCost({
+    required this.tokens,
+    required this.kind,
+    this.confirmedTokens = 0,
+    this.unprovenReplayItems = 0,
+  });
+}
+
+/// Tail costs keyed by the timeline index where the tail starts. Indices are
+/// measured from the newest row backward until a tail exceeds the target, so
+/// a missing index is a tail that is already over budget.
+@immutable
+class CompactionTailCosts {
+  final Map<int, CompactionTailCost> _byStart;
+
+  /// Provider receipts proven against the current request.
+  final int provenReceipts;
+
+  CompactionTailCosts(
+    Map<int, CompactionTailCost> byStart, {
+    required this.provenReceipts,
+  }) : _byStart = Map.unmodifiable(byStart);
+
+  CompactionTailCost? operator [](int tailStartIndex) =>
+      _byStart[tailStartIndex];
 }
 
 /// Budget decisions taken when the retained tail was selected.

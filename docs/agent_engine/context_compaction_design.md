@@ -135,6 +135,14 @@ canonical history. Stale non-null owners cannot clear newer compacting state or 
 - Selection walks backward from the newest row and produces one connected suffix.
   Every model-visible canonical row is therefore either summary source or retained
   tail; no middle gap is permitted.
+- Each candidate tail is priced as transmitted (Task 118 Stage3A): the
+  route's wire estimate of the tail, with the span between two provider
+  receipts that the active adapter proves against the current request priced
+  at the provider-confirmed input difference. Replayed reasoning and tool
+  framing therefore cost what the provider reported. Opaque replay outside a
+  proven span is counted as unknown (`unproven_replay_items`), never priced as
+  zero or from ciphertext. Detail: `docs/technical/context_compaction.md`
+  §4.8, "Replay-Aware Tail Selection".
 - Summarizer input describes media and truncates oversized tool results; protected
   tail rows stay verbatim for summarizer partitioning.
 - Structured tool results (`Message.toolResult`) are pruned coherently with their

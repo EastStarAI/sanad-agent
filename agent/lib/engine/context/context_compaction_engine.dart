@@ -7,6 +7,7 @@ import 'package:sanad_agent/core/models/llm_usage_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
+import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
@@ -20,6 +21,7 @@ import 'compaction_summarizer.dart';
 import 'compaction_tail_selector.dart';
 import 'compaction_token_estimator.dart';
 import 'compaction_tool_pruner.dart';
+import 'confirmed_usage_receipt.dart';
 import 'request_pressure_evaluator.dart';
 import 'request_pressure_snapshot.dart';
 
@@ -156,10 +158,13 @@ class ContextCompactionEngine {
         final fixed = await meter(leadingSystemMessages(projection));
         final full = await meter(projection);
         if (fixed != null && full != null) {
+          final tail = await _measureTailCosts(request, meter, projection, full);
           return CompactionRequestMeasurement(
             fixedOverheadTokens: fixed.estimatedTokens,
             wireMeasured: true,
-            requestTokens: full.estimatedTokens,
+            requestTokens: tail?.requestTokens ?? full.estimatedTokens,
+            requestKind: tail?.requestKind ?? CompactionMeasurementKind.estimated,
+            tailCosts: tail?.costs,
           );
         }
       } catch (_) {
@@ -168,6 +173,142 @@ class ContextCompactionEngine {
       }
     }
     return _estimatedMeasurement(request);
+  }
+
+  /// Prices every candidate retained tail as transmitted (Task 118 Stage3A
+  /// replay-aware selection).
+  ///
+  /// The active provider projection must align row for row with the timeline
+  /// after the previous source range; otherwise nothing is claimed and the
+  /// selection falls back to the provider-neutral estimate. Each candidate
+  /// start is priced by the route's wire estimate of the tail, and the span
+  /// between two provider receipts that the active adapter proves against the
+  /// current request carries the provider-confirmed input difference instead.
+  /// That span includes replayed reasoning and tool framing at the cost the
+  /// provider reported. Opaque replay outside a proven span stays unknown and
+  /// is counted, never priced as zero or from its ciphertext.
+  Future<_TailCostMeasurement?> _measureTailCosts(
+    CompactionEngineRequest request,
+    CompactionWireMeter meter,
+    List<Message> projection,
+    WireInputMeasurement full,
+  ) async {
+    final timeline = request.timeline;
+    final startIndex = _tailSelector.sourceStartIndex(
+      timeline: timeline,
+      previousSourceEnd: request.previousSourceRange,
+    );
+    if (startIndex >= timeline.length - 1) return null;
+    final rowCount = timeline.length - startIndex;
+    final offset = projection.length - rowCount;
+    final instructionCount = leadingSystemMessages(projection).length;
+    final summaryOffset = request.previousSourceRange != null ? 1 : 0;
+    if (offset != instructionCount && offset != instructionCount + summaryOffset) {
+      return null;
+    }
+    for (var row = 0; row < rowCount; row++) {
+      if (jsonEncode(projection[offset + row].toJson()) !=
+          jsonEncode(timeline[startIndex + row].message.toJson())) {
+        return null;
+      }
+    }
+
+    final minimalStart = _tailSelector.minimalTailStart(
+      timeline: timeline,
+      previousSourceEnd: request.previousSourceRange,
+    );
+    final opaqueItems = [
+      for (final entry in timeline) _opaqueReplayItems(entry.message),
+    ];
+    final costs = <int, CompactionTailCost>{};
+    int? latestIndex;
+    int? latestInput;
+    int? latestDelta;
+    int? nearestIndex;
+    int? nearestInput;
+    int? nearestDelta;
+    var proven = 0;
+    for (var index = timeline.length - 1; index > startIndex; index--) {
+      final prefix = await meter(
+        projection.sublist(0, offset + index - startIndex),
+      );
+      if (prefix == null) return null;
+      final receipt = ConfirmedUsageReceipt.read(
+        timeline[index].message,
+        routeSignature: request.routeSignature,
+        providerAlias: request.providerRequestOptions.providerInstanceId,
+      );
+      if (receipt != null &&
+          receipt.provenBy(prefix, request.routeSignature) &&
+          full.extendsMeasurement(prefix)) {
+        final delta = receipt.inputTokens - prefix.estimatedTokens;
+        latestIndex ??= index;
+        latestInput ??= receipt.inputTokens;
+        latestDelta ??= delta;
+        nearestIndex = index;
+        nearestInput = receipt.inputTokens;
+        nearestDelta = delta;
+        proven++;
+      }
+      final wireTail = full.estimatedTokens - prefix.estimatedTokens;
+      final correction = latestDelta == null ? 0 : latestDelta - nearestDelta!;
+      final tokens = wireTail + correction;
+      var unproven = 0;
+      for (var row = index; row < timeline.length; row++) {
+        final covered =
+            nearestIndex != null && row >= nearestIndex && row < latestIndex!;
+        if (!covered) unproven += opaqueItems[row];
+      }
+      final hasConfirmedSpan =
+          nearestIndex != null && nearestIndex != latestIndex;
+      costs[index] = CompactionTailCost(
+        tokens: tokens < 0 ? 0 : tokens,
+        kind: hasConfirmedSpan
+            ? CompactionMeasurementKind.mixed
+            : CompactionMeasurementKind.estimated,
+        confirmedTokens: hasConfirmedSpan ? latestInput! - nearestInput! : 0,
+        unprovenReplayItems: unproven,
+      );
+      if (tokens > request.targetRequestTokens && index <= minimalStart) break;
+    }
+    return _TailCostMeasurement(
+      costs: CompactionTailCosts(costs, provenReceipts: proven),
+      requestTokens: latestDelta == null
+          ? full.estimatedTokens
+          : full.estimatedTokens + latestDelta,
+      requestKind: latestDelta == null
+          ? CompactionMeasurementKind.estimated
+          : CompactionMeasurementKind.mixed,
+    );
+  }
+
+  /// Opaque provider replay items a message carries on the wire, such as
+  /// encrypted reasoning items: provider-priced state the text estimator
+  /// cannot see.
+  static int _opaqueReplayItems(Message message) {
+    final state = message.providerState;
+    if (state == null) return 0;
+    int count(Object? value) {
+      if (value is Map) {
+        var total = 0;
+        for (final entry in value.entries) {
+          if (CompactionTokenEstimator.opaqueWireKeys.contains(entry.key) &&
+              entry.value is String &&
+              (entry.value as String).isNotEmpty) {
+            total++;
+          } else {
+            total += count(entry.value);
+          }
+        }
+        return total;
+      }
+      if (value is List) {
+        return value.fold(0, (sum, item) => sum + count(item));
+      }
+      return 0;
+    }
+
+    return count(state.data);
   }
 
   CompactionRequestMeasurement _estimatedMeasurement(
@@ -243,11 +384,15 @@ class ContextCompactionEngine {
     final tailBudget = progressCap > 0 && progressCap < targetTailBudget
         ? progressCap
         : targetTailBudget;
+    final tailCosts = measured.tailCosts;
     return _tailSelector
         .select(
           timeline: request.timeline,
           tailTokenBudget: tailBudget,
           previousSourceEnd: request.previousSourceRange,
+          tailCost: tailCosts == null
+              ? null
+              : (int start) => tailCosts[start]?.tokens,
         )
         .withBudget(
           CompactionSelectionBudget(
@@ -408,17 +553,35 @@ class ContextCompactionEngine {
     // target is unattainable for this request, which is reported, not forced.
     final minimalTailTokens = post.minimalTailTokens;
     final target = request.targetRequestTokens;
+    final tailCost = post.tailCost;
+    // Opaque replay outside a proven span has unknown cost, so a request that
+    // looks within the target cannot be claimed as meeting it.
+    final unprovenReplayItems =
+        tailCost?.unprovenReplayItems ??
+        projectedTail.fold<int>(
+          0,
+          (sum, entry) => sum + _opaqueReplayItems(entry.message),
+        );
     decisionSnapshot.addAll({
       'summary_tokens': summaryTokens,
       'retained_tail_tokens': retainedTailTokens,
+      'retained_tail_cost_kind':
+          (tailCost?.kind ?? CompactionMeasurementKind.estimated).wireValue,
+      'unproven_replay_items': unprovenReplayItems,
+      if (tailCost != null) ...{
+        'retained_tail_confirmed_tokens': tailCost.confirmedTokens,
+        'proven_receipts': measurement.tailCosts!.provenReceipts,
+      },
       'estimated_request_tokens_after': afterTokens,
       'target_feasibility':
           fixedOverheadTokens + summaryTokens + minimalTailTokens <= target
           ? 'feasible'
           : 'infeasible',
-      'estimated_target_outcome': afterTokens <= target
-          ? TargetOutcome.met.wireValue
-          : TargetOutcome.notMet.wireValue,
+      'estimated_target_outcome': afterTokens > target
+          ? TargetOutcome.notMet.wireValue
+          : unprovenReplayItems > 0
+          ? TargetOutcome.unknown.wireValue
+          : TargetOutcome.met.wireValue,
     });
 
     return CompactionCandidate(
@@ -484,23 +647,31 @@ class ContextCompactionEngine {
       try {
         final instructions = leadingSystemMessages(projection);
         final withSummary = await meter([...instructions, summary]);
-        final withTail = await meter([...instructions, summary, ...tail]);
-        final withMinimalTail = await meter([
-          ...instructions,
-          summary,
-          ...minimalTail,
-        ]);
-        if (withSummary != null &&
-            withTail != null &&
-            withMinimalTail != null) {
+        if (withSummary != null) {
           final summaryTokens =
               withSummary.estimatedTokens - measurement.fixedOverheadTokens;
-          return _PostRequestMeasurement(
-            summaryTokens: summaryTokens < 0 ? 0 : summaryTokens,
-            tailTokens: withTail.estimatedTokens - withSummary.estimatedTokens,
-            minimalTailTokens:
-                withMinimalTail.estimatedTokens - withSummary.estimatedTokens,
-          );
+          // The selection's own transmitted cost wins, so the measured tail
+          // is exactly the tail that was selected (replay-aware, Task 118).
+          final costs = measurement.tailCosts;
+          final selected = costs?[request.timeline.length - tail.length];
+          final minimal = costs?[minimalStart];
+          Future<int?> wireTail(List<Message> rows) async {
+            final measured = await meter([...instructions, summary, ...rows]);
+            return measured == null
+                ? null
+                : measured.estimatedTokens - withSummary.estimatedTokens;
+          }
+
+          final tailTokens = selected?.tokens ?? await wireTail(tail);
+          final minimalTokens = minimal?.tokens ?? await wireTail(minimalTail);
+          if (tailTokens != null && minimalTokens != null) {
+            return _PostRequestMeasurement(
+              summaryTokens: summaryTokens < 0 ? 0 : summaryTokens,
+              tailTokens: tailTokens,
+              minimalTailTokens: minimalTokens,
+              tailCost: selected,
+            );
+          }
         }
       } catch (_) {
         // Fall back to the provider-neutral estimate below.
@@ -1608,10 +1779,26 @@ class _PostRequestMeasurement {
   final int tailTokens;
   final int minimalTailTokens;
 
+  /// The selection's replay-aware cost of the retained tail, when measured.
+  final CompactionTailCost? tailCost;
+
   const _PostRequestMeasurement({
     required this.summaryTokens,
     required this.tailTokens,
     required this.minimalTailTokens,
+    this.tailCost,
+  });
+}
+
+class _TailCostMeasurement {
+  final CompactionTailCosts costs;
+  final int requestTokens;
+  final CompactionMeasurementKind requestKind;
+
+  const _TailCostMeasurement({
+    required this.costs,
+    required this.requestTokens,
+    required this.requestKind,
   });
 }
 

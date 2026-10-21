@@ -16,6 +16,12 @@ abstract final class CompactionTokenEstimator {
 
   static const int charsPerToken = 4;
 
+  /// Wire keys carrying opaque provider-owned state (for example Codex
+  /// `encrypted_content` reasoning replay). The provider prices that state
+  /// under its own token model, so the text estimate never prices it; its
+  /// actual cost is known only from a proven provider receipt.
+  static const Set<String> opaqueWireKeys = {'encrypted_content'};
+
   /// Conservative tokens per ~1 KiB of media payload (image/audio/file bytes).
   static const int tokensPerKiBMedia = 85;
 
