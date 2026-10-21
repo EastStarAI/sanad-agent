@@ -12,6 +12,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/constants.dart';
 import '../../core/sanad_home/sanad_home_bootstrap.dart';
+import '../../core/sanad_home/test_runtime_isolation.dart';
 import 'session_lineage.dart';
 import '../models/session_search.dart';
 
@@ -57,26 +58,7 @@ class AgentStateDatabase {
   /// Opens (or creates) `state.db` under [getSanadStateHome] and initializes the
   /// full schema. This is the single production connection.
   AgentStateDatabase() : _busyRetryWait = sleep {
-    _rejectUnisolatedTestOpen();
     _openAtPath(getSanadStateHome());
-  }
-
-  static void _rejectUnisolatedTestOpen() {
-    if (!_isDartTestRuntime() || hasExplicitSanadStateIsolation()) return;
-    throw StateError(
-      'Refusing to open the inherited Sanad state database from a Dart test. '
-      'Inject AgentStateDatabase.inMemory(), use AgentStateDatabase.atPath(), '
-      'or select a temporary state root with setSanadHomeOverride(), '
-      'setSanadStateHomeOverride(), or SANAD_STATE_HOME.',
-    );
-  }
-
-  static bool _isDartTestRuntime() {
-    if (Zone.current[#test.invoker] != null) return true;
-    // Suite-level initializers run before the test invoker Zone exists. The VM
-    // runner executes those initializers from its generated dart_test kernel.
-    final script = Platform.script.toString();
-    return script.contains('dart_test.kernel.') && script.endsWith('.dill');
   }
 
   /// Opens (or creates) `state.db` under an explicit runtime-state directory.
@@ -233,6 +215,10 @@ class AgentStateDatabase {
   }
 
   void _openAtPath(String stateHomePath) {
+    rejectUnisolatedTestHomeAccess(
+      'open an on-disk Sanad state database',
+      path: stateHomePath,
+    );
     ensureSqliteOverride();
     // SQLite owns page/WAL/SHM writes and therefore cannot use the generic
     // atomic-file helper. SEC-02 brackets the native connection instead: root,
@@ -1397,7 +1383,10 @@ class AgentStateDatabase {
     // Never rename or drop: `run_at` is the column older agents read and
     // write. `next_run_at` is added beside it.
     _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN run_at TEXT');
-    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN next_run_at TEXT');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN next_run_at TEXT',
+    );
 
     _safeAddColumn(
       db,
@@ -1407,14 +1396,8 @@ class AgentStateDatabase {
       db,
       'ALTER TABLE scheduled_tasks ADD COLUMN interval_minutes INTEGER',
     );
-    _safeAddColumn(
-      db,
-      'ALTER TABLE scheduled_tasks ADD COLUMN at_time TEXT',
-    );
-    _safeAddColumn(
-      db,
-      'ALTER TABLE scheduled_tasks ADD COLUMN weekdays TEXT',
-    );
+    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN at_time TEXT');
+    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN weekdays TEXT');
     _safeAddColumn(
       db,
       'ALTER TABLE scheduled_tasks ADD COLUMN month_day INTEGER',

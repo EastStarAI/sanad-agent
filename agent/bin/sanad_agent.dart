@@ -22,6 +22,19 @@ void main(List<String> arguments) async {
     return;
   }
 
+  // G0: select the Home before anything can resolve one. Bootstrap, the vault
+  // (whose open migrates and deletes legacy secret files), the bundled-skill
+  // sync, `.env` seeding and the supervisor parent all resolve the active Home
+  // and must never fall back to `SANAD_HOME`/`~/.sanad` when `--home` names
+  // another. An unparseable command line only yields a usage error, so it
+  // touches no Home at all.
+  final selection = SanadCommandRunner.selectedHome(arguments);
+  if (!selection.parsed) {
+    await _executeCommand(arguments);
+    return;
+  }
+  if (selection.home != null) selectSanadHome(selection.home!);
+
   // A supervised daemon parent must remain a lightweight process owner. Its
   // child prepares the secure Home roots before any daemon dependency is
   // composed, avoiding duplicate full-tree work on every source start.

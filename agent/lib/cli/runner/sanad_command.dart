@@ -154,7 +154,11 @@ abstract class SanadCommand extends Command<int> {
   String? get account => getOption('account');
   bool get standalone => getFlag('standalone');
   String? get gatewayUrl => getOption('gateway-url') ?? getOption('url');
-  String get sanadHome => getOption('home') ?? getSanadHome();
+
+  /// The selected Home. `bin/sanad_agent.dart` has already applied the same
+  /// selection ([SanadCommandRunner.selectedHome]) before any Home access.
+  String get sanadHome =>
+      normalizeSanadHomeOption(getOption('home')) ?? getSanadHome();
 
   @override
   Future<int> run() async {

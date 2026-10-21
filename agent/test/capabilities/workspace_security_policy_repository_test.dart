@@ -6,8 +6,10 @@ import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart
 import 'package:sanad_agent/capabilities/permissions/workspace_security_policy_repository.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:test/test.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 void main() {
+  useIsolatedSanadStateRoot();
   late AgentStateDatabase state;
   late WorkspaceSecurityPolicyRepository repository;
   const binding = WorkspacePolicyBinding(

@@ -49,9 +49,11 @@ The architecture enforces **one canonical agent runtime**:
 The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
 
 1. **`SANAD_HOME` Resolution:**
-   - Explicit CLI flag: `--home <path>`
+   - Explicit CLI flag: `--home <path>` or `--home=<path>` (a command's own option wins over the top-level option; the value is made absolute and normalized).
    - Environment variable: `SANAD_HOME`
    - Default user path: `~/.sanad` (or OS equivalent via `SanadHomeBootstrap.identity()`).
+   - **Selection happens before any Home access (Task 126).** `agent/bin/sanad_agent.dart` resolves the selected Home with `SanadCommandRunner.selectedHome` — the same parser and precedence the commands use — and applies `selectSanadHome` before Home bootstrap, the vault open (which migrates and deletes legacy secret files), the bundled-skill sync, `.env` seeding, and the supervisor parent. Version and usage queries stay pure and touch no Home; a command line that does not parse only reports the usage error (exit `64`) and touches no Home either.
+   - An explicit `--home` is a complete Home: identity, credentials, the vault, and runtime state (`state.db`) all resolve inside it, so an inherited `SANAD_HOME` or `SANAD_STATE_HOME` never leaks in. The supervised daemon child receives the same arguments and re-applies the selection.
 
 2. **Secret Credential Lookup:**
    - The CLI reads the local gateway token from `SANAD_HOME/.local_token`.
@@ -209,7 +211,7 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
 
 E2E tests that initialize DI, open the on-disk SQLite owner, or launch an agent process use temporary roots for both `SANAD_HOME` and `SANAD_STATE_HOME`. Dart child processes receive both variables explicitly rather than inheriting the developer's environment. In-process tests set and clear both root overrides around each test.
 
-`AgentStateDatabase` additionally fails closed under the Dart test runner when no explicit state isolation is detectable. `test/guards/e2e_state_isolation_contract_test.dart` scans E2E persistent-runtime entry points and Dart child-process tests so newly added coverage cannot silently fall back to the user's normal Sanad database.
+`AgentStateDatabase` (default and `atPath`) and `SecretVaults.open`/`openDetached` additionally fail closed under the Dart test runner when no explicit state isolation is detectable, and whenever the selected root is the OS user's real default Home (`rejectUnisolatedTestHomeAccess` in `agent/lib/core/sanad_home/test_runtime_isolation.dart`). Suites that pass their own temporary paths declare isolation with `useIsolatedSanadStateRoot()`; worker isolates select their own root because overrides are per isolate. Under the Dart test runner and in `SANAD_E2E_TEST_MODE=true` processes, `createAgentSecretStore` returns the owner-only file store inside the selected Home, so tests and E2E subprocesses never reach the macOS Keychain, DPAPI, or Secret Service. `test/cli/cli_home_selection_isolation_test.dart` runs the real CLI entry with `HOME` and `--home` on different temporary roots and proves the default Home stays byte-for-byte untouched. `test/guards/e2e_state_isolation_contract_test.dart` scans E2E persistent-runtime entry points and Dart child-process tests so newly added coverage cannot silently fall back to the user's normal Sanad database.
 
 ### 8.1. Turn-Event Readiness in In-Process Runner Tests
 

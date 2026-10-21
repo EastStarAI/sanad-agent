@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 
 import '../constants.dart';
 import '../sanad_home/sanad_home_bootstrap.dart';
+import '../sanad_home/test_runtime_isolation.dart';
 import 'agent_secret_namespaces.dart';
 import 'agent_secret_store.dart';
 
@@ -148,6 +149,7 @@ class SecretVaults {
   /// legacy files. Never throws: an unavailable vault keeps legacy values
   /// readable and rejects writes.
   static Future<SecretVaults> open({AgentSecretStore? store}) async {
+    _rejectUnisolatedTestOpen();
     final key = _canonical(getSanadHome());
     final existing = _opened[key];
     if (existing != null) return existing;
@@ -159,6 +161,7 @@ class SecretVaults {
   /// Opens an instance that is not registered for this process (another
   /// process's view in tests).
   static Future<SecretVaults> openDetached({AgentSecretStore? store}) async {
+    _rejectUnisolatedTestOpen();
     final home = SanadHomeBootstrap.identity();
     AgentSecretStore? backend = store;
     if (backend == null) {
@@ -176,6 +179,13 @@ class SecretVaults {
     await vaults._initialize();
     return vaults;
   }
+
+  /// Opening migrates and deletes legacy secret files, so a Dart test may
+  /// open a vault only for an explicitly isolated, non-default Home.
+  static void _rejectUnisolatedTestOpen() => rejectUnisolatedTestHomeAccess(
+    'open the Agent secret vault',
+    path: getSanadHome(),
+  );
 
   /// Closes every vault this process opened.
   static Future<void> closeAll() async {

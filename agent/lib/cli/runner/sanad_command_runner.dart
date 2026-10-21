@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 
+import '../../core/constants.dart';
+
 import 'commands.dart';
 import '../artifacts/run_artifacts.dart';
 import '../client/cli_turn_client.dart';
@@ -373,6 +375,36 @@ class SanadCommandRunner extends CommandRunner<int> {
       }
     }
     return false;
+  }
+
+  /// The Sanad Home that [arguments] select, resolved exactly as
+  /// [SanadCommand.sanadHome] resolves it: the innermost command's `--home`
+  /// (`--home <path>` or `--home=<path>`) wins over the top-level option, and
+  /// the value is normalized by [normalizeSanadHomeOption].
+  ///
+  /// `parsed` is `false` when the command line does not parse; such a command
+  /// line only produces a usage error and must not touch any Home. Entry
+  /// points call this before any Home access.
+  static ({bool parsed, String? home}) selectedHome(List<String> arguments) {
+    final ArgResults results;
+    try {
+      results = SanadCommandRunner().parse(arguments);
+    } catch (_) {
+      return (parsed: false, home: null);
+    }
+    final chain = <ArgResults>[];
+    for (ArgResults? level = results; level != null; level = level.command) {
+      chain.add(level);
+    }
+    for (final level in chain.reversed) {
+      if (level.options.contains('home') && level.wasParsed('home')) {
+        return (
+          parsed: true,
+          home: normalizeSanadHomeOption(level['home'] as String?),
+        );
+      }
+    }
+    return (parsed: true, home: null);
   }
 
   static bool handleEarlyDaemonHelpOrInvalidArguments(

@@ -6,7 +6,9 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
 
+import '../constants.dart';
 import '../sanad_home/sanad_home_bootstrap.dart';
+import '../sanad_home/test_runtime_isolation.dart';
 import 'agent_secret_store_contract.dart';
 import 'linux_auto_secret_store.dart';
 
@@ -14,7 +16,24 @@ export 'agent_secret_store_contract.dart';
 export 'linux_auto_secret_store.dart';
 export 'linux_secret_service.dart';
 
+/// Whether this process must keep secrets out of the OS credential vault.
+///
+/// Deterministic E2E processes (`SANAD_E2E_TEST_MODE=true`, the switch the
+/// subprocess and daemon E2E suites already set) and the Dart test runtime use
+/// the owner-only file store inside the selected Home, so no test reads or
+/// writes the real Keychain, DPAPI or Secret Service.
+bool usesTestAgentSecretStore() =>
+    isDartTestRuntime() ||
+    Platform.environment['SANAD_E2E_TEST_MODE']?.trim().toLowerCase() == 'true';
+
 AgentSecretStore createAgentSecretStore() {
+  if (usesTestAgentSecretStore()) {
+    rejectUnisolatedTestHomeAccess(
+      'open the Agent secret store',
+      path: getSanadHome(),
+    );
+    return LinuxOwnerFileAgentSecretStore();
+  }
   final scope = sha256
       .convert(utf8.encode(SanadHomeBootstrap.identity().canonicalRoot()))
       .toString();

@@ -13,8 +13,10 @@ import 'package:sanad_agent/evolution/db/runtime/session_work_item_repository.da
 import 'package:test/test.dart';
 
 import '../../bin/daemon.dart' as daemon_entry;
+import '../support/isolated_sanad_test_home.dart';
 
 void main() {
+  useIsolatedSanadStateRoot();
   final now = DateTime.utc(2026, 8, 30, 12);
 
   group('AgentMaintenanceStateRepository.parseSuccessTimestamp', () {

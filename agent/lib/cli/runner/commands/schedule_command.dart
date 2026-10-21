@@ -77,11 +77,7 @@ class ScheduleListCommand extends SanadCommand {
   /// `--home` selects the Home whose root holds `state.db`; otherwise the
   /// process state root (`SANAD_STATE_HOME`, then `SANAD_HOME`, then default).
   String _stateHome() {
-    final home = getOption('home')?.trim();
-    if (home != null && home.isNotEmpty) {
-      return p.normalize(p.absolute(home));
-    }
-    return getSanadStateHome();
+    return normalizeSanadHomeOption(getOption('home')) ?? getSanadStateHome();
   }
 }
 

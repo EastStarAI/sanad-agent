@@ -23,6 +23,7 @@ import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import '../support/memory_workspace_policy_store.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 class FakeMcpRuntimeManager extends McpRuntimeManager {
   FakeMcpRuntimeManager()
@@ -145,6 +146,7 @@ class _FakeSessionManager implements SessionManager {
 }
 
 void main() {
+  useIsolatedSanadStateRoot();
   group('LocalRuntimeCatalog', () {
     late Directory tempDir;
     late Directory workspaceDir;

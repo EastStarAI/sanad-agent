@@ -13,6 +13,7 @@ import 'package:sanad_agent/evolution/db/session_history_revision_repository.dar
 import 'package:sanad_agent/evolution/models/compaction_operation_record.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:test/test.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 RouteSignature _route() {
   return const RouteSignature(
@@ -79,6 +80,7 @@ CompactionCandidate _candidate({
 }
 
 void main() {
+  useIsolatedSanadStateRoot();
   late AgentStateDatabase state;
   late SessionDB sessions;
   late CompactionBoundaryRepository boundaries;
