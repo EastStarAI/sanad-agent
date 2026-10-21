@@ -226,6 +226,42 @@ class LocalRuntimeOrchestrator {
     });
   }
 
+  /// The request an idle session operation stands in for: the session's
+  /// persisted workspace, route and permission metadata, with no new message.
+  static AgentTurnRequest idleRequestFor(
+    String sessionId,
+    Map<String, dynamic> sessionMetadata,
+  ) => AgentTurnRequest(
+    sessionId: sessionId,
+    message: '',
+    workspaceId: sessionMetadata['workspace_id']?.toString(),
+    model: sessionMetadata['model']?.toString(),
+    thinkingMode: sessionMetadata['thinking_mode']?.toString(),
+    requestId: sessionMetadata['request_id']?.toString(),
+    metadata: Map<String, dynamic>.from(sessionMetadata),
+  );
+
+  /// Prepares [agentRunner] for an idle request of [sessionId], such as manual
+  /// compaction (Task 118b): registers the same per-turn tool catalog and
+  /// returns the same runtime context an ordinary request of the session
+  /// builds, so the idle request carries exactly what the next ordinary
+  /// request will transmit.
+  Future<String?> prepareIdleRequest({
+    required AgentRunner agentRunner,
+    required String sessionId,
+  }) async {
+    final sessionMetadata = getIt.isRegistered<SessionManager>()
+        ? getIt<SessionManager>().getSessionMetadata(sessionId)
+        : null;
+    final request = idleRequestFor(sessionId, sessionMetadata ?? const {});
+    final tools = await _runtimeCatalog.buildTools(
+      registry: agentRunner.registry,
+      request: request,
+    );
+    agentRunner.registry.registerTools(tools);
+    return buildRuntimeContext(request, registry: agentRunner.registry);
+  }
+
   Future<String?> buildRuntimeContext(
     AgentTurnRequest request, {
     ToolsRegistry? registry,

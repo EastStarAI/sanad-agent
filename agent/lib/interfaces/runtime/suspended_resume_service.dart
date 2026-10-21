@@ -11,6 +11,7 @@ import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart
 import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
+import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 
 import 'local_workspace_runtime_service.dart';
@@ -169,14 +170,9 @@ class SuspendedResumeService {
 
     final sessionMetadata =
         _sessionManager.getSessionMetadata(checkpoint.sessionId) ?? const {};
-    final runtimeRequest = AgentTurnRequest(
-      sessionId: checkpoint.sessionId,
-      message: '',
-      workspaceId: sessionMetadata['workspace_id']?.toString(),
-      model: sessionMetadata['model']?.toString(),
-      thinkingMode: sessionMetadata['thinking_mode']?.toString(),
-      requestId: sessionMetadata['request_id']?.toString(),
-      metadata: Map<String, dynamic>.from(sessionMetadata),
+    final runtimeRequest = LocalRuntimeOrchestrator.idleRequestFor(
+      checkpoint.sessionId,
+      sessionMetadata,
     );
     final agentRunner = getIt<AgentRunner>(param1: checkpoint.sessionId);
     SessionRunOrchestrator? orchestrator;

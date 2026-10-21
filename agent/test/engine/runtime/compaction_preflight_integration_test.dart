@@ -493,6 +493,33 @@ void main() {
     },
   );
 
+  test(
+    'Task 118b D1: the manual seed carries the same instructions and tools as the ordinary request',
+    () async {
+      runner.registry.registerTools([_SchemaDriftProbeTool()]);
+      const runtimeContext = 'workspace runtime context for the next request';
+      final ordinary = await runner.debugPrepareProviderHistory(
+        runtimeSystemPrompt: runtimeContext,
+      );
+      final seed = await runner.prepareCompactionProviderSeed(
+        runtimeSystemPrompt: runtimeContext,
+      );
+
+      String instructions(List<Message> projection) => [
+        for (final message in projection.takeWhile(
+          (message) => message.role == MessageRole.system,
+        ))
+          message.content ?? '',
+      ].join('\n');
+      expect(instructions(seed.projection), instructions(ordinary));
+      expect(instructions(seed.projection), contains(runtimeContext));
+      expect(
+        [for (final tool in seed.tools) tool.name],
+        [for (final tool in runner.registry.allTools) tool.schema.name],
+      );
+    },
+  );
+
   test('one failed auto compaction opens the per-run breaker', () async {
     sessions.replaceMessages('session-preflight', [
       Message(role: MessageRole.user, content: 'goal: exercise breaker'),

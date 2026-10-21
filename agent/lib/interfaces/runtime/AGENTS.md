@@ -17,7 +17,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Queue promotion, deletion, route rewrite, and execution-snapshot recomputation commit through the execution aggregate owner.
 - Steering targets the active run's runner and bypasses ordinary admission only through the dedicated steer lifecycle.
 - Turn thinking provenance: a turn `thinking_mode` equal to the session preference persisted before that turn (by `create_session`, a previous turn or a preference update) is a carried-over preference, not a fresh explicit choice. Before execution the orchestrator passes it through `ThinkingRouteSessionSync.revalidateCarriedTurnSelection`: an offered value is unchanged, while a value the target route does not offer falls back to provider default with the existing route-scoped correction. A value that differs from the persisted preference stays a fresh explicit request and admission still validates and rejects it.
-- Idle manual compaction obtains its provider projection, ordinary tool list, and request settings from a session-scoped `AgentRunner` seed without admitting or inventing a user turn.
+- Idle manual compaction obtains its provider projection, ordinary tool list, and request settings from a session-scoped `AgentRunner` seed without admitting or inventing a user turn. Before the seed is built, `LocalRuntimeOrchestrator.prepareIdleRequest` registers the same per-turn tool catalog and builds the same runtime context an ordinary request of the session does, so the seed carries exactly what the next ordinary request will transmit.
 
 ## Runtime Collaborators
 - `SessionQueueCoordinator` owns queue projection, FIFO drain, and non-terminal route rewrites.
