@@ -124,7 +124,7 @@ So it normally appears only in a Protected owner session. There is no prompt tex
 
 Provider credentials and MCP secrets live in `AgentSecretStore` (macOS Keychain, Windows DPAPI, Linux Secret Service, or the Linux headless owner-only fallback, which is not encryption), owned by `SecretVaults`.
 
-- Namespaces: `providers:<instance id>` (JSON `SecretRecord`) and `mcp:<mcp-secret:// reference>`, each with a `<prefix>index` list. `AgentSecretNamespaces` also reserves `agent:auth:` and `custom:`.
+- Namespaces: `providers:<instance id>` (JSON `SecretRecord`), `mcp:<mcp-secret:// reference>` and `custom:<NAME>` (user secrets, Plan 84, see §10), each with a `<prefix>index` list. `AgentSecretNamespaces` also reserves `agent:auth:`. `custom:` has no legacy file and is never migrated from one.
 - Reads come from a cache loaded when the vault opens. Writes are verified by read-back, then committed to the index under a cross-process file lock, and a generation marker in Sanad Home tells other processes to reload (the daemon polls it every two seconds).
 - The daemon and CLI open the vault at start-up. Opening migrates `provider_secrets.json` and `mcp_secrets.json`: entries not yet in the vault are written and verified, the index is committed, and only then is the file deleted. A failed migration keeps the file and its values readable (writes still go to the vault) and retries on the next open. A value already in the vault always wins over a legacy value.
 - User decision 2026-10-21: deleting the legacy files is approved; downgrade compatibility is not required. An older Agent on the same Home loses those secrets.

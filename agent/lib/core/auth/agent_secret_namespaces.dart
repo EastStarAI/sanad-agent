@@ -16,8 +16,10 @@ abstract final class AgentSecretNamespaces {
   static String authKey(String key) => '$authPrefix$key';
   static String providerKey(String instanceId) => '$providerPrefix$instanceId';
   static String mcpKey(String reference) => '$mcpPrefix$reference';
-  static String customKey(String key) =>
-      key.startsWith(customPrefix) ? key : '$customPrefix$key';
+
+  /// User secret named [name] (Plan 84); the name is its environment
+  /// variable name.
+  static String customKey(String name) => '$customPrefix$name';
 
   static bool isAuthKey(String key) => key.startsWith(authPrefix);
   static bool isProviderKey(String key) => key.startsWith(providerPrefix);
