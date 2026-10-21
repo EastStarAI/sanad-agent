@@ -37,7 +37,7 @@ Split from [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-
 ## Boundaries
 
 - No deletion of canonical history, no silent anchor repair, no DB edits to user sessions.
-- `Message.providerState` and `metadata` stay opaque and round-trip byte-identically; [Task 116](docs/plans/tasks/116-deepseek-reasoning-replay-across-tool-history.md) relies on this.
+- `Message.providerState` and `metadata` stay opaque and round-trip byte-identically; [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md) relies on this.
 - Tail-selection and target changes belong to [Task 118](docs/plans/tasks/118-compaction-accuracy-and-target.md).
 - Run focused suites normally; `--concurrency=1` only for port-binding E2E tests.
 

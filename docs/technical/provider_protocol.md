@@ -359,11 +359,73 @@ network notice; it does not reinterpret the failure as a rate limit.
 ### Chat Completions reasoning continuity
 
 OpenAI-compatible Chat Completions endpoints may return structured
-`reasoning_details` needed across a tool loop. Sanad persists those details as
-opaque provider state, separately from user-visible reasoning, and replays
-them only when the issuer composed from provider instance, protocol, and
-normalized endpoint matches the active connection. A provider or endpoint
-switch drops this wire state from the next payload while retaining the ordinary assistant text.
+`reasoning_details` or `reasoning_content` needed across a tool loop. Sanad
+persists those fields as opaque provider state, separately from user-visible
+reasoning, and replays them only when the issuer composed from provider
+instance, protocol, and normalized endpoint matches the active connection
+**and** the recorded producing model equals the destination model. A provider,
+endpoint or model switch drops this wire state from the next payload while
+retaining the ordinary assistant text and tool-call/result pairs.
+
+### Per-request provider-compatible projection (Task 116)
+
+Canonical history is never rewritten for a destination. Every request (sync,
+stream, wire measurement and the compaction summarizer share the request
+builder) projects the same history for its own route, so X→Y→X switches,
+restarts and compacted tails need no reset.
+
+- **Recorded provenance (D1).** Every Chat tool-call response carries typed
+  state in namespace `openai_chat_completions`, even without reasoning. The
+  additive `data` keys are `issuer_model` (resolved model) and
+  `reasoning_field` (`string`, `null` or `absent`, as received; stream deltas
+  fold so any string wins, then an explicit null). The issuer string and the
+  existing `reasoning_content`/`reasoning_details` keys are unchanged; no
+  database column changes.
+- **Same-model replay (D2).** Reasoning and opaque state replay only to the
+  same instance, protocol, endpoint and model. Legacy state without
+  `issuer_model` uses `metadata.context_usage.model_id`, then
+  `metadata.model`; with neither it is foreign. This closes cross-model leaks
+  on one aggregator instance (for example Kimi or GLM reasoning reaching
+  DeepSeek on OpenCode Go).
+- **Route echo policy (D3).** The destination's exact models.dev entry
+  `interleaved.field` selects the policy. Same route sends exactly what was
+  recorded, including `""`; a recorded explicit `null` is echoed only to a
+  route declaring `reasoning_content`, so strict routes never receive a key
+  they did not send. Foreign or unrecorded origin is never copied, padded or
+  relabelled. On an echo-required route the five probe cells (same-route
+  empty, absent and null; foreign earlier-turn and current-turn) default to
+  `asRecorded` until live probes decide them; a probe outcome is a one-line
+  data change to `ChatReasoningReplayPolicy.defaultDecisions` or an exact
+  `<models.dev vendor>/<model>` entry in `routeOverrides`. Thinking explicitly
+  off never rejects.
+- **Safe rejection (D4).** A history with no truthful representation raises
+  `ProviderHistoryProjectionException` before any HTTP call, carrying only the
+  route, a closed reason code (`foreign_tool_turn_requires_reasoning`,
+  `same_route_reasoning_unrecoverable`, `unpaired_tool_call`) and an affected
+  count. The runner reports one blocked `invalid_request` notice ("Conversation
+  history not supported by this model") with no failover, retry, thinking
+  change or history change. The message never suggests compaction because the
+  summarizer replays the same history. Wire measurement projects as recorded
+  and never raises, so preflight pressure stays a real estimate; dispatch and
+  the summarizer enforce. Notice text is Agent-authored English like the
+  sibling image and thinking-option notices; Client localization of these
+  titles is not yet keyed.
+- **Anthropic (D5).** Signed `thinking` blocks (with `signature`, including
+  streamed `signature_delta`) and `redacted_thinking` blocks are captured in
+  namespace `anthropic_messages` with the same issuer shape plus
+  `issuer_model`, and replay first in the assistant content only to that exact
+  issuer and model. Unsigned thinking is visible reasoning only. A `tool_use`
+  without a matching `tool_result` is no longer stripped: the request fails
+  closed with `unpaired_tool_call`.
+- **Other families (D6).** Native Ollama emits only portable fields; Codex
+  Responses replays only its own issuer's `reasoning_items`; strict Chat routes
+  receive no reasoning keys from foreign history. Codex reasoning items are not
+  yet model-stamped: cross-model rejection on one Codex instance is unevidenced
+  and remains a recorded gap.
+
+Task 120 must keep the Chat issuer string stable for unchanged routes or
+declare an issuer-equivalence set; otherwise every persisted row becomes
+foreign under this projection.
 Chat Completions sync and stream share the same request fields and terminal
 classification; stream-only flags are the only payload difference.
 

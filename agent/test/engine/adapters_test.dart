@@ -2039,7 +2039,7 @@ void main() {
     );
 
     test(
-      'should merge consecutive tool results into one user message and strip orphan tool_use',
+      'should merge consecutive tool results into one user message',
       () async {
         late Map<String, dynamic> capturedBody;
         final mockClient = MockClient((request) async {
@@ -2063,9 +2063,9 @@ void main() {
           client: mockClient,
         );
 
-        // History with:
-        // - assistant message with 2 tool_use blocks (both answered)
-        // - assistant message with 1 orphan tool_use (no matching tool_result)
+        // History with one assistant message carrying 2 answered tool_use
+        // blocks. Unpaired tool_use is rejected before dispatch instead of
+        // being stripped (Task 116 D5; anthropic_thinking_replay_wire_test).
         await adapter.generateResponse(
           [
             Message(role: MessageRole.user, content: 'Search for two things'),
@@ -2087,17 +2087,6 @@ void main() {
               toolCallId: 'tool_2',
               content: 'result B',
             ),
-            Message(
-              role: MessageRole.assistant,
-              content: 'Now an orphan',
-              toolCalls: [
-                ToolCall(
-                  id: 'orphan_tool',
-                  name: 'search',
-                  arguments: {'q': 'orphan'},
-                ),
-              ],
-            ),
           ],
           options: const LLMRequestOptions(
             maxOutputTokens: 16384,
@@ -2111,7 +2100,6 @@ void main() {
           'budget_tokens': 8192,
         });
 
-        // The orphan tool_use must not appear in the wire body.
         final allToolUseIds = <String>[];
         for (final m in messages) {
           if (m['content'] is List) {
@@ -2122,7 +2110,7 @@ void main() {
             }
           }
         }
-        expect(allToolUseIds, isNot(contains('orphan_tool')));
+        expect(allToolUseIds, ['tool_1', 'tool_2']);
 
         // Find the user message that contains tool_results.
         // Both tool_result blocks should be in the SAME user message (merged).

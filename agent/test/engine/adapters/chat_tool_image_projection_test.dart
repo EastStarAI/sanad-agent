@@ -389,6 +389,9 @@ void main() {
           issuer: 'opencode-go|openai_compatible|https://opencode.ai/zen/go/v1',
           data: const {'reasoning_content': 'opaque reasoning'},
         ),
+        // Legacy state without `issuer_model` replays only when the stored
+        // model matches the destination (Task 116 D2).
+        metadata: {'model': adapter().resolveModel(null)},
       );
       await adapter().generateResponse(source);
       expect(

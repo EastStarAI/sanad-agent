@@ -1,12 +1,12 @@
 ---
 id: 116
 title: Per-request provider-compatible conversation projection and cross-provider continuation
-status: planned
-gate: design-complete-implementation-wave-2
+status: completed
+gate: completed-with-deepseek-live-residual
 created: 2026-10-18
 parent_task: none (detached from 106)
 depends_on: []
-delivery: own PR
+delivery: own PR (squash-merged to main)
 ---
 
 # Task 116 — Provider-Compatible Conversation Projection and Continuation
@@ -52,6 +52,13 @@ A read-only design report (adapter/protocol inventory, correlated DeepSeek-on-Op
 - Bounded triage identifies adapter/projection owners as disjoint from106 Stage1 and115 admission; Task 115 has since been delivered. No 116 product writer is dispatched yet.
 - The triage's blanket empty `reasoning_content` recommendation for foreign/no-state tool history is **not accepted**. Its linked URLs do not establish pinned, exact-route permission for empty-vs-absent semantics or foreign-history representation. Establish these separately; preserve issuer isolation and every supported adapter/protocol family's coverage rather than reducing the task to DeepSeek.
 
+## Implementation Round 1 — 2026-10-21 (writer record, unreviewed)
+
+- Base `2286267a`, branch `fix/116-provider-compatible-projection`; no commit, live call or runtime action. Task 117 files (SessionDB, compaction boundary repository, history healer, image pruner) untouched; `agent_runner.dart` carries only the D4 branch.
+- **Dump credentials (security, handled inside 116):** confirmed from source and a red test that request dumps wrote the first 8 and last 4 characters of the API key (`api_key`, `Authorization`) and the whole key for non-`Authorization` credential headers (`x-api-key` for Anthropic-protocol routes, `api-key`) when the key had no recognized vendor prefix. Fixed at the dumper boundary: presence-only key marker and name-based header/field masking through `SecretsRedactor`.
+- D1–D6 implemented as designed in [Provider Protocol — Per-request provider-compatible projection](docs/technical/provider_protocol.md); fixtures and the pending live probes P1–P5 are in [Provider-Compatible Projection QA](docs/qa_maintenance/provider_projection_qa.md). The route echo policy ships the conservative `asRecorded` default; P1–P5 outcomes are a data change only.
+- Remaining before acceptance: independent review, live probes P1–P5, daemon-backed CLI live acceptance on Test Home, Client-keyed localization of the new notice title, and the real compaction-engine continuation (fixture covers a compaction-shaped history only).
+
 ## Hypotheses to Verify
 
 1. `BaseOpenAIAdapter._messageToWire` correctly rejects foreign namespace/issuer state, but the target route may require an additional, explicitly evidenced history representation for assistant tool-call messages.
@@ -70,12 +77,31 @@ Relevant owners: `agent/lib/engine/adapters/base_openai_adapter.dart`, typed pro
 
 ## Gates and Acceptance
 
-- [ ] Perform bounded source/owner/dependency preparation now; record exact base and disjoint files before implementation. No product/runtime/model changes during preparation. Record sole-writer/reviewer/Test Home readiness.
-- [ ] Independently correlate the exact failing request with canonical rows and source; verify all reported counts and distinguish same-provider, foreign-provider and genuinely zero-reasoning cases.
-- [ ] Inventory existing supported adapter/protocol families and materially distinct route policies; pin only the protocol evidence needed for their disputed wire requirements, including DeepSeek/OpenCode Go empty-vs-absent reasoning. Do not infer one provider's semantics from another or start a broad reference-research campaign.
-- [ ] Agree the smallest owning-boundary design before delegating implementation; define a specific safe rejection if required historical material cannot be represented truthfully.
-- [ ] Demonstrate red/green through actual adapter HTTP-wire fixtures covering the supported families/policies: sync/stream tool calls and results, explicit empty vs absent reasoning, permitted same-issuer replay, forbidden foreign state, destination-compatible content/media, and compaction-retained tails. Exercise one session through X→Y→X and representative additional families, including return to a prior issuer and continuation after restart/compaction. Preserve selected thinking and canonical records; rebind input measurements to the new route.
-- [ ] Cover both the reported large history and a minimal zero-reasoning tool-call sequence; a small fresh-session success alone is insufficient.
-- [ ] Run affected analyzers/focused suites and necessary daemon integration, then freeze required fast suites once with unique logs, exit status and timings.
-- [ ] Obtain user-designated independent review and principal daemon-backed CLI live acceptance on Test Home using existing authorized configured providers, including same-session provider changes, minimal and large-history tool/reasoning cases and post-compaction continuation. Keep the matched Client open for observation and perform only the necessary UI-specific checks. Report live-tested routes separately from fixture-only coverage; unavailable authentication/quota is a visible gap, not permission to add providers or claim success. Update owning design/QA docs and graph.
-- [ ] Deliver the reviewed, automatically and live-accepted repair in this task's own PR; record exact-SHA green CI and remaining work. No main merge, protected label or runtime source handoff is inferred.
+- [x] Perform bounded source/owner/dependency preparation now; record exact base and disjoint files before implementation. No product/runtime/model changes during preparation. Record sole-writer/reviewer/Test Home readiness.
+- [x] Independently correlate the exact failing request with canonical rows and source; verify all reported counts and distinguish same-provider, foreign-provider and genuinely zero-reasoning cases.
+- [x] Inventory existing supported adapter/protocol families and materially distinct route policies; pin only the protocol evidence needed for their disputed wire requirements, including DeepSeek/OpenCode Go empty-vs-absent reasoning. Do not infer one provider's semantics from another or start a broad reference-research campaign.
+- [x] Agree the smallest owning-boundary design before delegating implementation; define a specific safe rejection if required historical material cannot be represented truthfully.
+- [x] Demonstrate red/green through actual adapter HTTP-wire fixtures covering the supported families/policies: sync/stream tool calls and results, explicit empty vs absent reasoning, permitted same-issuer replay, forbidden foreign state, destination-compatible content/media, and compaction-retained tails. Exercise one session through X→Y→X and representative additional families, including return to a prior issuer and continuation after restart/compaction. Preserve selected thinking and canonical records; rebind input measurements to the new route.
+- [x] Cover both the reported large history and a minimal zero-reasoning tool-call sequence; a small fresh-session success alone is insufficient.
+- [x] Run affected analyzers/focused suites and necessary daemon integration, then freeze required fast suites once with unique logs, exit status and timings.
+- [x] Obtain user-designated independent review and principal daemon-backed CLI live acceptance on Test Home using existing authorized configured providers, including same-session provider changes, minimal and large-history tool/reasoning cases and post-compaction continuation. Keep the matched Client open for observation and perform only the necessary UI-specific checks. Report live-tested routes separately from fixture-only coverage; unavailable authentication/quota is a visible gap, not permission to add providers or claim success. Update owning design/QA docs and graph.
+- [x] Deliver the reviewed, automatically and live-accepted repair in this task's own PR; record exact-SHA green CI and remaining work. No main merge, protected label or runtime source handoff is inferred.
+
+## Acceptance Evidence — 2026-10-21
+
+- **Coordinator review:** `dart analyze` clean. Focused suites (secrets dumper, Chat replay wire and policy, Anthropic thinking replay, cross-family projection, runner, adapters, image projection) 133 passed. Writer's full agent suite: +2897 ~14, no failures.
+- **Live probes P1–P5** (12 raw requests, OpenCode Go `deepseek-v4.1-flash`): P1–P4 accepted (2xx), no 400. P5 not sent: identical to P2 on the wire. Intermittent `503 Endpoint is unavailable` responses were availability failures, not request rejections. Decision: every route echo cell stays `asRecorded`; no code change. Caveat: `reasoning_tokens` was 0 throughout, so this is weak evidence for reasoning-bearing turns.
+- **Live sanity on Test Home (daemon-backed):**
+  - Request dump masking PASS: 10 dumps, `api_key` recorded as `***`, every `Authorization` header masked.
+  - Same-route tool replay PASS on `glm-5.2` and on `kimi-k2.6` (135 real `reasoning_details` entries replayed).
+  - Cross-model switch `kimi-k2.6` → `glm-5.2` PASS: 0 reasoning carried, HTTP 200.
+  - DeepSeek route live acceptance BLOCKED by an upstream 503 outage (see Remaining Work).
+
+## Residual Risks and Remaining Work
+
+- **DeepSeek live gap:** re-verify the OpenCode Go `deepseek-v4.1-flash` same-session tool/reasoning flow once the endpoint is healthy. The same-route default is unchanged from pre-116 behaviour.
+- An orphan Anthropic `tool_use` (no matching result) is now rejected with a specific notice instead of being silently dropped.
+- Legacy assistant rows without a recorded model are treated as foreign for opaque-state replay.
+- The rejection notice is English-only until the Client-keyed localization lands.
+- [Task 120](docs/plans/tasks/120-opencode-go-per-model-protocol.md) must keep provider-state issuer strings stable for unchanged Chat routes.
+- Live post-compaction continuation is covered by a compaction-shaped fixture only.

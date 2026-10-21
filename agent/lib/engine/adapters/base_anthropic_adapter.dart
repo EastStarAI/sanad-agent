@@ -7,6 +7,7 @@ import '../../core/config.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/tool_call.dart';
+import '../../core/models/llm_provider_state.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/models/model_metadata.dart';
@@ -24,6 +25,8 @@ import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import 'tool_result_wire_codec.dart';
+import 'chat_reasoning_replay_policy.dart';
+import 'provider_history_projection_exception.dart';
 import '../llm_request_dumper.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 
@@ -352,6 +355,7 @@ class BaseAnthropicAdapter
     String content = '';
     String reasoning = '';
     List<ToolCall>? toolCalls;
+    final signedThinking = <Map<String, dynamic>>[];
 
     for (var block in contentBlocks) {
       final type = block['type'];
@@ -359,6 +363,13 @@ class BaseAnthropicAdapter
         content += block['text'] as String? ?? '';
       } else if (type == 'thinking') {
         reasoning += block['thinking'] as String? ?? '';
+        _addSignedThinking(
+          signedThinking,
+          thinking: block['thinking']?.toString() ?? '',
+          signature: block['signature']?.toString(),
+        );
+      } else if (type == 'redacted_thinking') {
+        _addRedactedThinking(signedThinking, block['data']?.toString());
       } else if (type == 'tool_use') {
         toolCalls ??= [];
         toolCalls.add(
@@ -393,6 +404,11 @@ class BaseAnthropicAdapter
         content: content,
         reasoning: reasoning.trim().isEmpty ? null : reasoning,
         toolCalls: toolCalls,
+        providerState: _thinkingState(
+          signedThinking,
+          options: options,
+          resolvedModel: resolvedModel,
+        ),
       ),
       isToolCall: toolCalls != null && toolCalls.isNotEmpty,
       usage: usage,
@@ -495,6 +511,7 @@ class BaseAnthropicAdapter
       LLMFinishReason? streamFinishReason;
       final contentBuffer = StringBuffer();
       final reasoningBuffer = StringBuffer();
+      final thinkingBlocks = <int, _PartialThinkingBlock>{};
 
       try {
         await for (final line in transport.decodeSseLines(
@@ -573,8 +590,19 @@ class BaseAnthropicAdapter
                   partialToolCalls[index] = _PartialClaudeToolCall()
                     ..id = block['id']
                     ..name = block['name'];
+                } else if (block != null &&
+                    block['type'] == 'redacted_thinking') {
+                  thinkingBlocks[index] = _PartialThinkingBlock()
+                    ..redactedData = block['data']?.toString();
                 } else if (block != null && block['type'] == 'thinking') {
+                  final partialThinking = thinkingBlocks[index] =
+                      _PartialThinkingBlock();
+                  final initialSignature = block['signature']?.toString();
+                  if (initialSignature != null) {
+                    partialThinking.signature.write(initialSignature);
+                  }
                   final initial = block['thinking']?.toString();
+                  if (initial != null) partialThinking.thinking.write(initial);
                   if (initial != null && initial.isNotEmpty) {
                     reasoningBuffer.write(initial);
                     yield AgentResponse(
@@ -611,8 +639,16 @@ class BaseAnthropicAdapter
                       model: resolvedModel,
                       provider: 'anthropic',
                     );
+                  } else if (deltaType == 'signature_delta') {
+                    final signature = delta['signature']?.toString();
+                    if (signature != null) {
+                      thinkingBlocks[index]?.signature.write(signature);
+                    }
                   } else if (deltaType == 'thinking_delta') {
                     final chunk = delta['thinking']?.toString();
+                    if (chunk != null) {
+                      thinkingBlocks[index]?.thinking.write(chunk);
+                    }
                     if (chunk != null && chunk.isNotEmpty) {
                       reasoningBuffer.write(chunk);
                       yield AgentResponse(
@@ -683,12 +719,32 @@ class BaseAnthropicAdapter
           );
         }
 
+        final signedThinking = <Map<String, dynamic>>[];
+        for (final index in thinkingBlocks.keys.toList()..sort()) {
+          final block = thinkingBlocks[index]!;
+          if (block.redactedData != null) {
+            _addRedactedThinking(signedThinking, block.redactedData);
+          } else {
+            _addSignedThinking(
+              signedThinking,
+              thinking: block.thinking.toString(),
+              signature: block.signature.toString(),
+            );
+          }
+        }
+        final thinkingState = _thinkingState(
+          signedThinking,
+          options: options,
+          resolvedModel: resolvedModel,
+        );
+
         if (completedToolCalls.isNotEmpty) {
           yield AgentResponse(
             message: Message(
               role: MessageRole.assistant,
               content: '',
               toolCalls: completedToolCalls,
+              providerState: thinkingState,
             ),
             isToolCall: true,
             usage: finalUsage,
@@ -696,9 +752,13 @@ class BaseAnthropicAdapter
             provider: 'anthropic',
             finishReason: streamFinishReason ?? LLMFinishReason.toolCalls,
           );
-        } else if (finalUsage != null) {
+        } else if (finalUsage != null || thinkingState != null) {
           yield AgentResponse(
-            message: Message(role: MessageRole.assistant, content: ''),
+            message: Message(
+              role: MessageRole.assistant,
+              content: '',
+              providerState: thinkingState,
+            ),
             isToolCall: false,
             usage: finalUsage,
             model: resolvedModel,
@@ -794,7 +854,10 @@ class BaseAnthropicAdapter
   List<Map<String, dynamic>> _buildAnthropicMessages(
     List<Message> history, {
     Map<String, String>? verifiedAttachments,
+    required LLMRequestOptions options,
+    required String resolvedModel,
   }) {
+    final issuer = _stateIssuer(options);
     final nonSystem = history
         .where((m) => m.role != MessageRole.system)
         .toList();
@@ -821,7 +884,18 @@ class BaseAnthropicAdapter
           ],
         });
       } else if (m.role == MessageRole.assistant) {
-        final List<dynamic> contentList = [];
+        final List<dynamic> contentList = [
+          // Signed thinking replays first, and only to its exact issuer and
+          // model; foreign or unsigned thinking is never sent (Task 116 D5).
+          if (ProviderStateProvenance.isSameRoute(
+            m,
+            namespace: thinkingStateNamespace,
+            issuer: issuer,
+            resolvedModel: resolvedModel,
+            normalizeModel: _resolveModel,
+          ))
+            ..._replayableThinking(m.providerState!),
+        ];
         if (m.content != null && m.content!.isNotEmpty) {
           contentList.add({'type': 'text', 'text': m.content!});
         }
@@ -890,34 +964,31 @@ class BaseAnthropicAdapter
       }
     }
 
-    // Third pass: strip orphan tool_use blocks from assistant messages
-    // whose IDs have no matching tool_result anywhere in the history.
+    // Third pass: a tool_use without a matching tool_result cannot be sent
+    // and must not be silently dropped (canonical meaning would change), so
+    // the request fails closed before dispatch (Task 116 D5).
+    var unpairedToolCalls = 0;
     for (final wm in wireMessages) {
-      if (wm['role'] == 'assistant') {
-        final content = wm['content'];
-        if (content is List) {
-          final filtered = <dynamic>[];
-          for (final block in content) {
-            if (block is Map && block['type'] == 'tool_use') {
-              final id = block['id']?.toString();
-              if (id != null && !answeredToolUseIds.contains(id)) {
-                continue; // strip orphan tool_use
-              }
-            }
-            filtered.add(block);
-          }
-          if (filtered.isEmpty) {
-            // All content was orphan tool_use; keep minimal text.
-            wm['content'] = '';
-          } else if (filtered.length == 1 &&
-              filtered[0] is Map &&
-              filtered[0]['type'] == 'text') {
-            wm['content'] = filtered[0]['text'];
-          } else {
-            wm['content'] = filtered;
+      if (wm['role'] != 'assistant') continue;
+      final content = wm['content'];
+      if (content is! List) continue;
+      for (final block in content) {
+        if (block is Map && block['type'] == 'tool_use') {
+          final id = block['id']?.toString();
+          if (id == null || !answeredToolUseIds.contains(id)) {
+            unpairedToolCalls++;
           }
         }
       }
+    }
+    if (unpairedToolCalls > 0) {
+      throw ProviderHistoryProjectionException(
+        route:
+            '${options.providerInstanceId ?? providerInstanceId ?? profile.name}'
+            '/$resolvedModel',
+        reasonCode: ProviderHistoryProjectionException.unpairedToolCall,
+        affectedCount: unpairedToolCalls,
+      );
     }
 
     // Fourth pass: merge consecutive same-role messages.
@@ -1036,6 +1107,8 @@ class BaseAnthropicAdapter
     final formattedMessages = _buildAnthropicMessages(
       history,
       verifiedAttachments: verifiedAttachments,
+      options: options,
+      resolvedModel: resolvedModel,
     );
 
     final body = <String, dynamic>{
@@ -1062,6 +1135,72 @@ class BaseAnthropicAdapter
 
     AnthropicThinkingWireCodec.applyThinking(body, options.thinkingDirective);
     return body;
+  }
+
+  /// Namespace for issuer-bound Anthropic thinking blocks (Task 116 D5).
+  static const thinkingStateNamespace = 'anthropic_messages';
+  static const thinkingBlocksKey = 'thinking_blocks';
+
+  String _stateIssuer(LLMRequestOptions options) {
+    final instance =
+        options.providerInstanceId ?? providerInstanceId ?? profile.name;
+    final endpoint = _baseUrl.replaceFirst(RegExp(r'/+$'), '');
+    return '$instance|${profile.effectiveProtocol}|$endpoint';
+  }
+
+  /// Only signed thinking is replayable; unsigned text is visible reasoning.
+  static void _addSignedThinking(
+    List<Map<String, dynamic>> blocks, {
+    required String thinking,
+    required String? signature,
+  }) {
+    if (signature == null || signature.isEmpty) return;
+    blocks.add({
+      'type': 'thinking',
+      'thinking': thinking,
+      'signature': signature,
+    });
+  }
+
+  static void _addRedactedThinking(
+    List<Map<String, dynamic>> blocks,
+    String? data,
+  ) {
+    if (data == null || data.isEmpty) return;
+    blocks.add({'type': 'redacted_thinking', 'data': data});
+  }
+
+  LLMProviderState? _thinkingState(
+    List<Map<String, dynamic>> blocks, {
+    required LLMRequestOptions options,
+    required String resolvedModel,
+  }) {
+    if (blocks.isEmpty) return null;
+    return LLMProviderState(
+      namespace: thinkingStateNamespace,
+      issuer: _stateIssuer(options),
+      data: {
+        thinkingBlocksKey: blocks,
+        ProviderStateProvenance.issuerModelKey: resolvedModel,
+      },
+    );
+  }
+
+  static List<Map<String, dynamic>> _replayableThinking(
+    LLMProviderState state,
+  ) {
+    final raw = state.data[thinkingBlocksKey];
+    if (raw is! List) return const [];
+    return [
+      for (final block in raw)
+        if (block is Map &&
+            ((block['type'] == 'thinking' &&
+                    block['signature'] is String &&
+                    (block['signature'] as String).isNotEmpty) ||
+                (block['type'] == 'redacted_thinking' &&
+                    block['data'] is String)))
+          Map<String, dynamic>.from(block),
+    ];
   }
 
   LLMFinishReason _normalizeFinishReason(
@@ -1093,6 +1232,12 @@ Map<String, dynamic> _normalizeAnthropicUsage(Map<String, dynamic> usage) => {
   'cache_read_input_tokens': ?usage['cache_read_input_tokens'],
   'cache_creation_input_tokens': ?usage['cache_creation_input_tokens'],
 };
+
+class _PartialThinkingBlock {
+  final StringBuffer thinking = StringBuffer();
+  final StringBuffer signature = StringBuffer();
+  String? redactedData;
+}
 
 class _PartialClaudeToolCall {
   String? id;
