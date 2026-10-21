@@ -441,6 +441,51 @@ class SessionMessageRepository {
     return rows.isEmpty ? null : rows.first['id'] as int;
   }
 
+  /// Session-scoped anchor for a legacy route notice without
+  /// `anchor_message_id`: the newest active tool-result row of [requestId]'s
+  /// turn whose `terminal_at` is no later than [at], else the turn's root user
+  /// row. Null when the request has no active root row. Page-independent, so
+  /// the notice lands on exactly one page.
+  int? legacyRouteNoticeAnchorRowId(
+    String sessionId,
+    String requestId,
+    DateTime at,
+  ) {
+    final rootRowId = activeRootRowIdForRequest(sessionId, requestId);
+    if (rootRowId == null) return null;
+    final nextRoot = _db.select(
+      '''
+      SELECT MIN(id) AS id FROM messages
+      WHERE session_id = ? AND id > ?
+        AND (input_kind IS NULL OR input_kind = 'root_turn')
+        AND json_extract(data, '\$.role') = 'user'
+        AND (history_status = 'active' OR history_status IS NULL)
+      ''',
+      [sessionId, rootRowId],
+    );
+    final turnEnd = nextRoot.isEmpty ? null : nextRoot.first['id'] as int?;
+    final toolRows = _db.select(
+      '''
+      SELECT id, json_extract(data, '\$.metadata.terminal_at') AS terminal_at
+      FROM messages
+      WHERE session_id = ? AND id > ? ${turnEnd == null ? '' : 'AND id < ?'}
+        AND json_extract(data, '\$.role') = 'tool'
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id DESC
+      ''',
+      [sessionId, rootRowId, ?turnEnd],
+    );
+    for (final row in toolRows) {
+      final terminalAt = DateTime.tryParse(
+        row['terminal_at']?.toString() ?? '',
+      );
+      if (terminalAt != null && !terminalAt.isAfter(at)) {
+        return row['id'] as int;
+      }
+    }
+    return rootRowId;
+  }
+
   /// Row id of the newest active row copied by a fork (`origin_message_id`
   /// set): the end of a child's copied prefix. Post-fork rows never carry an
   /// origin, so the answer is page-independent.

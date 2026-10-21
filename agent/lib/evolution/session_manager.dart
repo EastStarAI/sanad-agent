@@ -332,8 +332,11 @@ class SessionManager {
   int? activeRowIdForMessageId(String sessionId, String messageId) =>
       _db.activeRowIdForMessageId(sessionId, messageId);
 
-  int? activeRootRowIdForRequest(String sessionId, String requestId) =>
-      _db.activeRootRowIdForRequest(sessionId, requestId);
+  int? legacyRouteNoticeAnchorRowId(
+    String sessionId,
+    String requestId,
+    DateTime at,
+  ) => _db.legacyRouteNoticeAnchorRowId(sessionId, requestId, at);
 
   int? lastActiveForkCopiedRowId(String sessionId) =>
       _db.lastActiveForkCopiedRowId(sessionId);

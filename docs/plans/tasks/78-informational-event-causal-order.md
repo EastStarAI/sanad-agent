@@ -69,9 +69,11 @@ Neither covers this task's behaviour; nothing was dropped as a duplicate of them
    exactly the last row the user saw live. History inserts the notice right
    after that row, after earlier derived rows at the same anchor (compaction,
    earlier revisions).
-3. **Legacy notices** (no anchor, or anchor no longer active) fall back to
-   their request's root row. In that turn they go after the tool results whose
-   real `terminal_at` precedes the notice. A notice whose identities resolve to
+3. **Legacy notices** (no anchor, or anchor no longer active) resolve at
+   session scope (`SessionMessageRepository.legacyRouteNoticeAnchorRowId`) to
+   the newest active tool-result row of their request turn whose real
+   `terminal_at` precedes the notice, else the turn's root user row. The
+   one-page rule then applies to that row, as for the fork marker. A notice whose identities resolve to
    no active row stays tail-only. Synthetic history timestamps are never
    compared.
 4. **One page per notice.** A notice or marker is emitted only on the page
@@ -125,8 +127,37 @@ Neither covers this task's behaviour; nothing was dropped as a duplicate of them
 - [x] C — Failover notice durable anchor plus legacy fallback, auto-failover only.
 - [x] D — Client parity locked; no client production change needed.
 - [x] E — Analyzers, focused tests, full suites and local E2E (see Evidence).
-- [ ] Live acceptance (scenarios below): not run; needs a Test Home and a
-  provider that can be made to fail before streaming.
+- [x] Coordinator review r1: approved (additive migration; agent 12/12,
+  client 37/37, analyze clean).
+- [ ] Live acceptance r1 on TH1 (coordinator records `runs/78/live-r1/`):
+  L1–L6 PASS, **L7 FAIL** (F1 below). Fixed in round 2; live re-run of L7
+  pending.
+
+### Round 2 (2026-10-21)
+
+- **F1 (L7):** the legacy fallback found the request's root row at session
+  level but looked for finished tool results only inside the current page.
+  When the request row and its tool results were on different pages, the
+  notice landed right after the user row, so merged pages read user, notice,
+  tool. Fix: the whole turn anchor resolves at session scope in
+  `SessionMessageRepository.legacyRouteNoticeAnchorRowId`, and the one-page
+  rule applies to that row. Red first: the same legacy notice at page sizes
+  1, 2, 3 and 100 now gives one occurrence and the single-page merged order
+  (`temp/78/r2-agent-red.log` failed at page size 1, then
+  `temp/78/r2-agent-green.log`).
+- Rebased onto `origin/main` `86a783d9` (Task 112). Nothing had been shared,
+  so this was a local rebase. Task 112 and Task 78 migrations are both
+  additive and both kept.
+
+## Out-of-scope follow-ups (no code here)
+
+- **O2:** a fork copies `messages` and compaction rows but not
+  `session_route_transitions`. An auto-failover notice inside the copied
+  prefix therefore disappears from the child, and the child's copied rows
+  show the copy time rather than the original times.
+- **O3:** the oldest page of a long fork child did not load through driver
+  scrolling in live r1. Unverified whether this is a product or a driver
+  issue.
 
 ## Live acceptance scenarios
 

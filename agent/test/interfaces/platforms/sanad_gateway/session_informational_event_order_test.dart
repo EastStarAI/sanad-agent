@@ -272,6 +272,44 @@ void main() {
       expect(labels(rows(tail)), isNot(contains('route:2')));
     });
 
+    test('a legacy notice keeps one occurrence and the single-page order '
+        'at every page size, even when its tool results sit on a newer '
+        'page than its request', () {
+      final sessionId = toolTurnSession();
+      sessions.saveSessionHistory(sessionId, [
+        ...sessions.getMessages(sessionId),
+        user('q2', 'm-u2', 't2', req: 'req-2'),
+        answer('a2', 'm-a2', 't2'),
+      ]);
+      transitions.insert(legacy(sessionId));
+
+      List<String> merged(int limit) {
+        final pages = <List<String>>[];
+        String? cursor;
+        do {
+          final page = historyPayload(sessionId, limit: limit, cursor: cursor);
+          pages.insert(0, labels(rows(page)));
+          cursor = page['has_more'] == true
+              ? page['next_cursor'] as String?
+              : null;
+        } while (cursor != null);
+        return [for (final page in pages) ...page];
+      }
+
+      const expected = [
+        'user_message:search it',
+        'tool_use',
+        'tool_result',
+        'route:2',
+        'final_answer:done',
+        'user_message:q2',
+        'final_answer:a2',
+      ];
+      for (final limit in [1, 2, 3, 100]) {
+        expect(merged(limit), expected, reason: 'page size $limit');
+      }
+    });
+
     test('an anchored notice follows its anchor row, not the turn timing', () {
       final sessionId = toolTurnSession();
       // Anchored on the tool-call row: the failover hit the step before the

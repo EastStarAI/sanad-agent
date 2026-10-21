@@ -284,8 +284,15 @@ class SessionDB {
   int? activeRowIdForMessageId(String sessionId, String messageId) =>
       _messageRepository.activeRowIdForMessageId(sessionId, messageId);
 
-  int? activeRootRowIdForRequest(String sessionId, String requestId) =>
-      _messageRepository.activeRootRowIdForRequest(sessionId, requestId);
+  int? legacyRouteNoticeAnchorRowId(
+    String sessionId,
+    String requestId,
+    DateTime at,
+  ) => _messageRepository.legacyRouteNoticeAnchorRowId(
+    sessionId,
+    requestId,
+    at,
+  );
 
   int? lastActiveForkCopiedRowId(String sessionId) =>
       _messageRepository.lastActiveForkCopiedRowId(sessionId);

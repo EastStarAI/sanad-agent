@@ -820,9 +820,10 @@ class SessionQueryHandler {
 
   /// Places an automatic-failover notice where it appeared live: after the
   /// last durable row at failover time (`anchor_message_id`). Legacy rows
-  /// without that anchor fall back to their request's turn, after the tool
-  /// results that had finished by then. Either way the notice belongs to the
-  /// one page that holds its anchor; an unresolvable notice stays tail-only.
+  /// without that anchor resolve, at session scope, to their request turn's
+  /// newest tool result finished by then (else its root user row). Either way
+  /// the notice belongs to the one page holding its anchor row; an
+  /// unresolvable notice stays tail-only.
   int? _routeTransitionInsertionIndex(
     SessionRouteTransition transition, {
     required String sessionId,
@@ -844,35 +845,20 @@ class SessionQueryHandler {
     }
 
     final requestId = transition.requestId;
-    final requestRowId = requestId == null || requestId.isEmpty
+    final legacyAnchorRowId = requestId == null || requestId.isEmpty
         ? null
-        : _sessionManager.activeRootRowIdForRequest(sessionId, requestId);
-    if (requestRowId == null) {
+        : _sessionManager.legacyRouteNoticeAnchorRowId(
+            sessionId,
+            requestId,
+            transition.createdAt,
+          );
+    if (legacyAnchorRowId == null) {
       return isTailPage ? historyMessages.length : null;
     }
-    if (!pageRowIds.contains(requestRowId)) return null;
-
-    var turnAnchorRowId = requestRowId;
-    final turnStart = _historyIndexAfterRow(historyMessages, requestRowId);
-    for (var i = turnStart; i < historyMessages.length; i++) {
-      final row = historyMessages[i];
-      if (row['sender'] == 'user' &&
-          row['input_kind'] != MessageHistoryIdentity.steer) {
-        break;
-      }
-      final terminalAt = row['type'] == 'tool_result'
-          ? DateTime.tryParse(row['terminal_at']?.toString() ?? '')
-          : null;
-      final sourceRowId = row['source_message_row_id'];
-      if (terminalAt != null &&
-          sourceRowId is int &&
-          !terminalAt.isAfter(transition.createdAt)) {
-        turnAnchorRowId = sourceRowId;
-      }
-    }
+    if (!pageRowIds.contains(legacyAnchorRowId)) return null;
     return _indexAfterEarlierSyntheticRows(
       historyMessages,
-      _historyIndexAfterRow(historyMessages, turnAnchorRowId),
+      _historyIndexAfterRow(historyMessages, legacyAnchorRowId),
       transition.createdAt,
     );
   }
