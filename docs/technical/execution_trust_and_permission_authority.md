@@ -1,11 +1,11 @@
 ---
 title: "Execution Trust and Permission Authority"
-description: "Transport-derived command authority, daemon-private workspace policy, child-process environment policy, Direct/Protected backends, host discovery, project .env redaction, and the Agent secret vault."
+description: "Transport-derived command authority, daemon-private workspace policy, child-process environment policy, Direct/Protected backends, host discovery, project .env redaction, the Agent secret vault, and user secrets."
 ---
 
 # Execution Trust and Permission Authority
 
-Owner: Plan 83. This page describes who may decide workspace security policy, where that policy is stored, what a model-requested child process inherits, where commands run, and which values never reach a model-visible result.
+Owner: Plan 83 (§10: Plan 84). This page describes who may decide workspace security policy, where that policy is stored, what a model-requested child process inherits, where commands run, and which values never reach a model-visible result.
 
 ## 1. Authority comes from the transport
 
