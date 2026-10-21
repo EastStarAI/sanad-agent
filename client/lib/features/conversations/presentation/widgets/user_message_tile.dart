@@ -655,10 +655,7 @@ class _InlineEditAttachmentThumbnailState extends State<_InlineEditAttachmentThu
   @override
   Widget build(BuildContext context) {
     if (!widget.attachment.isImage) {
-      return const Icon(
-        Icons.insert_drive_file_outlined,
-        size: 22,
-      );
+      return FileExtensionIcon(fileName: widget.attachment.name, size: 22);
     }
 
     if (widget.attachment.bytes != null) {
@@ -957,7 +954,7 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 else
-                  const Icon(Icons.insert_drive_file_outlined, size: 28),
+                  FileExtensionIcon(fileName: widget.attachment.safeName, size: 28),
                 const SizedBox(height: 6),
                 Text(
                   widget.attachment.safeName,

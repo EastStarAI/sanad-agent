@@ -193,7 +193,9 @@ when any attachment is removed, after the next successful add, on Send, and when
 switching to another conversation, and it never comes back with a restored
 draft. The inline message editor behaves the same way. Image tiles on the rail show a thumbnail, safe
 name, size, status, and remove action; other files admitted to the rail use
-compact icon cards with the same controls. Validation or remote transfer shows
+compact cards with the same controls and the same file-type icon as file
+references. Sent messages and the inline message editor show non-image
+attachments with that file-type icon too. Validation or remote transfer shows
 progress, and Send remains unavailable until every attachment is ready. A failed
 item preserves the draft and offers Retry or Remove. On a remote device, the
 client never sends its local path as runtime input: the file must be admitted on

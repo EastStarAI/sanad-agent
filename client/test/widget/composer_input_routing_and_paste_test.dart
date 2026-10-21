@@ -573,6 +573,50 @@ void main() {
     });
   });
 
+  group('Attachment rail file type icons', () {
+    testWidgets('a file shows its type icon while an image keeps a preview', (tester) async {
+      await pumpComposer(tester, activeAgent: remoteAgent);
+      const capability = Capability(supportsAttachments: true);
+      // The cubit awaits a zero delay before marking the item ready, which
+      // fake time only advances through a pump.
+      unawaited(
+        inputCubit.addDraftAttachment(
+          name: 'report.pdf',
+          bytes: Uint8List.fromList(const [1, 2, 3]),
+          source: DraftAttachmentSource.picker,
+          capability: capability,
+        ),
+      );
+      await tester.pump();
+      // The cubit awaits a zero delay before marking the item ready, which
+      // fake time only advances through a pump.
+      unawaited(
+        inputCubit.addDraftAttachment(
+          name: 'shot.png',
+          bytes: Uint8List.fromList(const [1, 2, 3]),
+          source: DraftAttachmentSource.picker,
+          capability: capability,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      final [file, image] = inputCubit.state.draftAttachments;
+      final fileTile = find.byKey(ValueKey('draft_attachment_${file.id}'));
+      final icon = find.descendant(of: fileTile, matching: find.byType(FileExtensionIcon));
+      expect(icon, findsOneWidget);
+      expect(tester.widget<FileExtensionIcon>(icon).fileName, 'report.pdf');
+      expect(tester.widget<FileExtensionIcon>(icon).size, 20);
+      expect(tester.getSize(icon), const Size(20, 20), reason: 'the 32px slot keeps the icon at its own size');
+
+      final imageTile = find.byKey(ValueKey('draft_attachment_${image.id}'));
+      expect(find.descendant(of: imageTile, matching: find.byType(Image)), findsOneWidget);
+      expect(find.descendant(of: imageTile, matching: find.byType(FileExtensionIcon)), findsNothing);
+      // Let composer timers started by the draft change elapse.
+      await tester.pump(const Duration(seconds: 1));
+    });
+  });
+
   group('File token presentation and span rendering', () {
     testWidgets('renders FileExtensionIcon and file name in controller text span', (tester) async {
       await pumpComposer(

@@ -18,6 +18,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/session_st
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/composer_input_router.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/draft_attachment_error_text.dart';
+import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:sanad_client/l10n/app_localizations_en.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/provider_route_label.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
@@ -472,7 +473,7 @@ class _AttachmentRail extends StatelessWidget {
                                     errorBuilder: (_, _, _) => const Icon(Symbols.image, size: 20),
                                   ),
                                 )
-                              : const Icon(Symbols.draft, size: 20),
+                              : Center(child: FileExtensionIcon(fileName: attachment.name, size: 20)),
                         ),
                         const SizedBox(width: 8),
                         Expanded(

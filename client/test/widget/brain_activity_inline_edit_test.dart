@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
@@ -811,7 +812,8 @@ void main() {
 
     final chip = find.byKey(const ValueKey('inline_edit_attachment_att-doc-1'));
     expect(chip, findsOneWidget);
-    expect(find.descendant(of: chip, matching: find.byIcon(Icons.insert_drive_file_outlined)), findsOneWidget);
+    expect(find.descendant(of: chip, matching: find.byType(FileExtensionIcon)), findsOneWidget);
+    expect(find.descendant(of: chip, matching: find.byIcon(Icons.insert_drive_file_outlined)), findsNothing);
     expect(loader.loadedIds, isEmpty);
   });
 

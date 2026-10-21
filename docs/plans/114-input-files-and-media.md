@@ -121,6 +121,13 @@ See each task file's progress log for locations and regression tests.
   - tests: `test/widget/brain_activity_inline_edit_test.dart` covers a non-default 1 MiB limit and the localized open failure.
 - **114g privacy follow-up (114i):** `ConversationMediaByteCache.shared` was never cleared, so hosted (cloud) media bytes fetched under one account could survive into the next session. `AppAuthListener`, the existing auth teardown owner, now calls `bindAccount(userId)` on `AuthAuthenticated` and `bindAccount(null)` on `AuthUnauthenticated` (sign-out, revoked or lost auth). A different account or sign-out drops every hosted entry; local device media is kept, mirroring `clearCloudUserScope`. Test: `test/unit/conversations/conversation_media_cache_test.dart` ("account binding").
 
+- **File type icons (114j, user request):** non-image attachments used generic icons in three places:
+  - the composer rail (`Symbols.draft`);
+  - the user-message file card;
+  - the inline-edit chip (`Icons.insert_drive_file_outlined`).
+
+  They now use the shared `FileExtensionIcon` from the attachment's own name, at the previous 20/28/22 px sizes. The rail keeps the icon centred in its 32 px slot, and image previews and the opening spinner are unchanged. Tests: `test/widget/composer_input_routing_and_paste_test.dart` ("Attachment rail file type icons") and `test/widget/user_message_tile_test.dart` (file card and inline chip).
+
 ### Verification (port worktree)
 
 - `fvm dart analyze` (agent): no issues. `fvm flutter analyze` (client): no issues.
@@ -134,4 +141,6 @@ See each task file's progress log for locations and regression tests.
 ### Remaining
 
 - Coordinator-owned live acceptance on a Test Home for every part (see each task's live gate).
+- live-r2:
+  - [ ] non-image files (e.g. `.pdf`, `.dart`) show their file-type icon in the composer attachment rail, in the sent user message, and in the inline message editor, while images still show a preview.
 - Delivery (push and Draft pull request) after explicit authorization.

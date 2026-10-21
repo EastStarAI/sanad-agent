@@ -680,6 +680,88 @@ void main() {
     expect(captured.headers['x-sanad-local-token'], 'credential');
     expect(captured.url.toString(), isNot(contains('credential')));
   });
+
+  testWidgets('file attachments show their type icon while images keep a preview', (tester) async {
+    final loader = _FakeAttachmentLoader();
+    final event = CanonicalEvent(
+      id: 'msg-file-icons',
+      kind: EventKind.userMessage,
+      text: 'Files',
+      timestamp: DateTime.utc(2026, 10, 21),
+      sessionId: 'session-1',
+      metadata: {
+        'attachments': [
+          _attachmentJson(id: 'image-1', kind: 'image'),
+          _attachmentJson(id: 'file-1', kind: 'file', mimeType: 'application/pdf', name: 'report.pdf'),
+        ],
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(width: 600, child: UserMessageTile(event: event, attachmentMediaLoader: loader)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final fileCard = find.byKey(const ValueKey('user_file_attachment_file-1'));
+    final icon = find.descendant(of: fileCard, matching: find.byType(FileExtensionIcon));
+    expect(icon, findsOneWidget);
+    expect(tester.widget<FileExtensionIcon>(icon).fileName, 'report.pdf');
+    expect(tester.widget<FileExtensionIcon>(icon).size, 28);
+    expect(find.descendant(of: fileCard, matching: find.byIcon(Icons.insert_drive_file_outlined)), findsNothing);
+
+    final imageCard = find.byKey(const ValueKey('open_user_attachment_image-1'));
+    expect(find.descendant(of: imageCard, matching: find.byType(Image)), findsOneWidget);
+    expect(find.descendant(of: imageCard, matching: find.byType(FileExtensionIcon)), findsNothing);
+  });
+
+  testWidgets('inline edit file chips show their type icon while images keep a preview', (tester) async {
+    final controller = TextEditingController(text: 'edit');
+    addTearDown(controller.dispose);
+    final event = CanonicalEvent(
+      id: 'msg-inline-icons',
+      kind: EventKind.userMessage,
+      text: 'edit',
+      timestamp: DateTime.utc(2026, 10, 21),
+      sessionId: 'session-1',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UserMessageTile(
+            event: event,
+            canReplay: true,
+            isEditing: true,
+            editController: controller,
+            editAttachments: [
+              const InlineEditAttachment(id: 'new-file', name: 'main.dart', sizeBytes: 12, isImage: false, isExisting: false),
+              InlineEditAttachment(
+                id: 'new-image',
+                name: 'shot.png',
+                sizeBytes: _FakeAttachmentLoader._png.length,
+                isImage: true,
+                isExisting: false,
+                bytes: _FakeAttachmentLoader._png,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final fileChip = find.byKey(const ValueKey('inline_edit_attachment_thumbnail_new-file'));
+    final icon = find.descendant(of: fileChip, matching: find.byType(FileExtensionIcon));
+    expect(icon, findsOneWidget);
+    expect(tester.widget<FileExtensionIcon>(icon).fileName, 'main.dart');
+    expect(tester.widget<FileExtensionIcon>(icon).size, 22);
+
+    final imageChip = find.byKey(const ValueKey('inline_edit_attachment_thumbnail_new-image'));
+    expect(find.descendant(of: imageChip, matching: find.byType(Image)), findsOneWidget);
+    expect(find.descendant(of: imageChip, matching: find.byType(FileExtensionIcon)), findsNothing);
+  });
 }
 
 Map<String, dynamic> _attachmentJson({
