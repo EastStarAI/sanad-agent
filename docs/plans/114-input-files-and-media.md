@@ -155,6 +155,12 @@ See each task file's progress log for locations and regression tests.
 
 - **Minor (agent, live r1):** the disclosure label replaced brackets with underscores (`My (1) _v2_.pdf`), and the model reported the wrong name. It now Markdown-escapes backslash, brackets, and backticks (`My (1) \[v2\].pdf`). The guidance sentence is plural for several disclosed files. Red-first tests in `agent/test/engine/adapters/remote_attachment_disclosure_wire_test.dart`.
 
+- **Minor (client, live r1):**
+  - Pasting or dropping the same file twice created duplicate attachments; a draft scope now keeps one attachment per content (SHA-256 of the bytes).
+  - The HEIC token used the generic file icon; `FileExtensionIcon` maps `heic`, `heif`, `tif`, `tiff`, and `avif` to the image icon.
+
+  Red-first tests: `test/widget/file_extension_icon_test.dart` and the cubit "same file twice" case.
+
 ### Verification (port worktree)
 
 - `fvm dart analyze` (agent): no issues. `fvm flutter analyze` (client): no issues.
@@ -169,5 +175,10 @@ See each task file's progress log for locations and regression tests.
 
 - Coordinator-owned live acceptance on a Test Home for every part (see each task's live gate).
 - live-r2:
+  - [ ] D4: remote PDF+HEIC+PNG and PDF+PNG send on ChatGPT `gpt-6-luna` and OpenRouter `gpt-4o-mini` (agent dump shows the PDF/HEIC reference lines, the plural guidance, the escaped `My (1) \[v2\].pdf` label, and the PNG image part); a forced admission failure shows the localized "could not be sent" line and keeps the draft.
+  - [ ] D2: a refused first send in a new remote conversation keeps the attachments with the text in the created conversation; the next new conversation starts with an empty rail.
+  - [ ] D3: a multi-file paste (`.py` + PNG) within 2 s of opening a conversation and right after a turn finishes always shows every file (or a visible per-file read error).
+  - [ ] D1: editing a sent message with a file token shows the icon+name chip (no raw path), and saving unchanged keeps the exact link.
+  - [ ] Minor: pasting the same file twice leaves one rail item; the HEIC token and attachment use the image icon.
   - [ ] non-image files (e.g. `.pdf`, `.dart`) show their file-type icon in the composer attachment rail, in the sent user message, and in the inline message editor, while images still show a preview.
 - Delivery (push and Draft pull request) after explicit authorization.

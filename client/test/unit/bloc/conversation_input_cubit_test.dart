@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'dart:io';
@@ -352,7 +353,8 @@ void main() {
     ]) {
       await inputCubit.addDraftAttachment(
         name: entry.$1,
-        bytes: Uint8List.fromList(const [1, 2, 3]),
+        // Distinct content per source: identical bytes are one attachment.
+        bytes: Uint8List.fromList([1, 2, 3 + entry.$2.index]),
         source: entry.$2,
         capability: capability,
       );
@@ -368,7 +370,10 @@ void main() {
       'drop.bin',
     ]);
     expect(admitted.map((entry) => entry['size_bytes']), everyElement(3));
-    expect(admitted.map((entry) => entry['data_base64']), everyElement('AQID'));
+    expect(admitted.map((entry) => entry['data_base64']), [
+      for (final source in [DraftAttachmentSource.paste, DraftAttachmentSource.picker, DraftAttachmentSource.drop])
+        base64Encode([1, 2, 3 + source.index]),
+    ]);
     expect(
       admitted.map((entry) => entry['sha256']),
       everyElement(hasLength(64)),
@@ -1386,6 +1391,22 @@ void main() {
       expect(inputCubit.state.draftAttachments, isEmpty);
       inputCubit.setDraftScope(deviceId: agent.id, sessionId: created);
       expect(inputCubit.state.draftAttachments, hasLength(3));
+    });
+
+    test('pasting the same file twice keeps one attachment in the draft (114 minor)', () async {
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: 'session-a');
+      await addValid('img114_red.png');
+      await addValid('img114_red.png');
+      await addValid('renamed-copy.png');
+      expect(inputCubit.state.draftAttachments, hasLength(1), reason: 'identical bytes are one attachment');
+
+      await inputCubit.addDraftAttachment(
+        name: 'other.png',
+        bytes: Uint8List.fromList(const [9, 9, 9]),
+        source: DraftAttachmentSource.paste,
+        capability: capability,
+      );
+      expect(inputCubit.state.draftAttachments, hasLength(2));
     });
 
     test('an explicit dismiss clears it', () async {

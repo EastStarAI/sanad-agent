@@ -97,6 +97,8 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
       if (target == _draftScope) emit(state.copyWith(attachmentError: rejection));
       return;
     }
+    // The same file pasted or dropped twice stays one attachment.
+    if (_containsSameContent(current, bytes)) return;
     final item = DraftAttachment(
       id: const Uuid().v4(),
       name: _safeDraftName(name),
@@ -152,6 +154,13 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         clearAttachmentError: true,
       ),
     );
+  }
+
+  static bool _containsSameContent(List<DraftAttachment> attachments, Uint8List bytes) {
+    final sameSize = attachments.where((item) => item.bytes.length == bytes.length).toList(growable: false);
+    if (sameSize.isEmpty) return false;
+    final digest = sha256.convert(bytes);
+    return sameSize.any((item) => sha256.convert(item.bytes) == digest);
   }
 
   static String _safeDraftName(String input) {

@@ -619,7 +619,7 @@ void main() {
       unawaited(
         inputCubit.addDraftAttachment(
           name: 'shot.png',
-          bytes: Uint8List.fromList(const [1, 2, 3]),
+          bytes: Uint8List.fromList(const [4, 5, 6]),
           source: DraftAttachmentSource.picker,
           capability: capability,
         ),
