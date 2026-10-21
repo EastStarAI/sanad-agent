@@ -40,6 +40,35 @@ void rejectUnisolatedTestHomeAccess(String operation, {required String path}) {
   }
 }
 
+/// Refuses to run the E2E runtime ([isSanadE2eTestMode]) against anything
+/// but temporary roots; a no-op outside E2E mode.
+///
+/// E2E mode swaps in the deterministic provider and the owner-only file secret
+/// store, so a real runtime started with it by mistake would hide the user's
+/// OS-vault secrets and write new ones to a file. It therefore requires an
+/// explicit `SANAD_STATE_HOME` separate from the selected identity Home, and
+/// neither root may be the OS user's real default Home. Throws [StateError]
+/// before any Home access when the rule is violated.
+void requireSanadE2eTestIsolation() {
+  if (!isSanadE2eTestMode()) return;
+  final stateHome = Platform.environment['SANAD_STATE_HOME']?.trim() ?? '';
+  final identityHome = getSanadHome();
+  if (stateHome.isEmpty || _canonical(stateHome) == _canonical(identityHome)) {
+    throw StateError(
+      'SANAD_E2E_TEST_MODE requires SANAD_STATE_HOME to be isolated from SANAD_HOME.',
+    );
+  }
+  final realHome = defaultSanadHome();
+  if (realHome != null &&
+      (_canonical(identityHome) == _canonical(realHome) ||
+          _canonical(stateHome) == _canonical(realHome))) {
+    throw StateError(
+      'SANAD_E2E_TEST_MODE refuses the real default Sanad Home; select '
+      'temporary SANAD_HOME and SANAD_STATE_HOME roots.',
+    );
+  }
+}
+
 String _canonical(String path) {
   final absolute = p.normalize(p.absolute(path));
   try {

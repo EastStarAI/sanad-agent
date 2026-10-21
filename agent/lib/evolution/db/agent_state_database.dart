@@ -1383,10 +1383,7 @@ class AgentStateDatabase {
     // Never rename or drop: `run_at` is the column older agents read and
     // write. `next_run_at` is added beside it.
     _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN run_at TEXT');
-    _safeAddColumn(
-      db,
-      'ALTER TABLE scheduled_tasks ADD COLUMN next_run_at TEXT',
-    );
+    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN next_run_at TEXT');
 
     _safeAddColumn(
       db,
@@ -1396,8 +1393,14 @@ class AgentStateDatabase {
       db,
       'ALTER TABLE scheduled_tasks ADD COLUMN interval_minutes INTEGER',
     );
-    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN at_time TEXT');
-    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN weekdays TEXT');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN at_time TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN weekdays TEXT',
+    );
     _safeAddColumn(
       db,
       'ALTER TABLE scheduled_tasks ADD COLUMN month_day INTEGER',

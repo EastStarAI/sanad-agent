@@ -23,14 +23,30 @@ String? normalizeSanadHomeOption(String? value) {
   return p.normalize(p.absolute(trimmed));
 }
 
-/// Selects [home] as this process's complete Sanad Home.
+/// Whether this process runs the deterministic E2E runtime
+/// (`SANAD_E2E_TEST_MODE=true`), which test harnesses set together with
+/// temporary `SANAD_HOME` and `SANAD_STATE_HOME` roots.
+bool isSanadE2eTestMode() =>
+    Platform.environment['SANAD_E2E_TEST_MODE']?.trim().toLowerCase() == 'true';
+
+/// Selects [home] as this process's Sanad Home.
 ///
 /// An explicit Home is authoritative and self-contained: identity,
 /// credentials, the vault and runtime state all resolve inside it, so an
 /// inherited `SANAD_HOME` or `SANAD_STATE_HOME` can never leak another Home's
 /// state into the selected one. Entry points call this before any Home access.
+///
+/// The one exception is the E2E runtime ([isSanadE2eTestMode]): its harness
+/// sets `SANAD_STATE_HOME` deliberately, separate from the identity Home, and
+/// E2E isolation requires that separation, so an explicitly set
+/// `SANAD_STATE_HOME` keeps owning runtime state there.
 void selectSanadHome(String home) {
   setSanadHomeOverride(home);
+  final stateHome = Platform.environment['SANAD_STATE_HOME']?.trim() ?? '';
+  if (isSanadE2eTestMode() && stateHome.isNotEmpty) {
+    setSanadStateHomeOverride(null);
+    return;
+  }
   setSanadStateHomeOverride(home);
 }
 

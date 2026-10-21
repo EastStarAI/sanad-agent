@@ -8,6 +8,7 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
 import 'package:sanad_agent/core/sanad_home/runtime_ownership.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/test_runtime_isolation.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
@@ -30,6 +31,7 @@ Future<void> main(List<String> args) async {
   // Must run before DI/config/auth can read or open anything under either
   // configured runtime root. The outer CLI also performs this for supervised
   // launches; keeping it here protects direct daemon entry points and tests.
+  requireSanadE2eTestIsolation();
   await SanadHomeBootstrap.prepareAll();
   _runtimeOwnership ??= await SanadRuntimeOwnership.acquire();
   setupDI();

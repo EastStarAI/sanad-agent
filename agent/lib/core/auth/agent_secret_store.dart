@@ -22,12 +22,11 @@ export 'linux_secret_service.dart';
 /// subprocess and daemon E2E suites already set) and the Dart test runtime use
 /// the owner-only file store inside the selected Home, so no test reads or
 /// writes the real Keychain, DPAPI or Secret Service.
-bool usesTestAgentSecretStore() =>
-    isDartTestRuntime() ||
-    Platform.environment['SANAD_E2E_TEST_MODE']?.trim().toLowerCase() == 'true';
+bool usesTestAgentSecretStore() => isDartTestRuntime() || isSanadE2eTestMode();
 
 AgentSecretStore createAgentSecretStore() {
   if (usesTestAgentSecretStore()) {
+    requireSanadE2eTestIsolation();
     rejectUnisolatedTestHomeAccess(
       'open the Agent secret store',
       path: getSanadHome(),

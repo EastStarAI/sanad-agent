@@ -6,6 +6,7 @@ import 'package:sanad_agent/core/hot_restart_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/setup/env_template.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/test_runtime_isolation.dart';
 import 'daemon.dart' as daemon;
 import 'setup.dart' as setup;
 import 'login.dart' as login_cmd;
@@ -34,6 +35,14 @@ void main(List<String> arguments) async {
     return;
   }
   if (selection.home != null) selectSanadHome(selection.home!);
+  // The E2E runtime must run on temporary roots only; refuse before any Home
+  // access rather than bootstrapping the real default Home.
+  try {
+    requireSanadE2eTestIsolation();
+  } on StateError catch (error) {
+    stderr.writeln('Error: ${error.message}');
+    exit(78);
+  }
 
   // A supervised daemon parent must remain a lightweight process owner. Its
   // child prepares the secure Home roots before any daemon dependency is

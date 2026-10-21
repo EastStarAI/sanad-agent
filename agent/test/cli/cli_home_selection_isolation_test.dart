@@ -44,7 +44,7 @@ void main() {
     if (root.existsSync()) root.deleteSync(recursive: true);
   });
 
-  Map<String, String> isolatedEnvironment() {
+  Map<String, String> isolatedEnvironment({required bool withStateHome}) {
     final parentHome =
         Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
     return {
@@ -58,15 +58,21 @@ void main() {
       'HOME': userHome.path,
       if (Platform.isWindows) 'USERPROFILE': userHome.path,
       'SANAD_E2E_TEST_MODE': 'true',
+      // E2E mode requires a state root separate from the identity Home, as
+      // every daemon/CLI E2E harness provides.
+      if (withStateHome) 'SANAD_STATE_HOME': p.join(root.path, 'state'),
     };
   }
 
-  Future<ProcessResult> runCli(List<String> arguments) {
+  Future<ProcessResult> runCli(
+    List<String> arguments, {
+    bool withStateHome = true,
+  }) {
     return Process.run(
       Platform.resolvedExecutable,
       ['run', 'bin/sanad_agent.dart', ...arguments],
       workingDirectory: Directory.current.path,
-      environment: isolatedEnvironment(),
+      environment: isolatedEnvironment(withStateHome: withStateHome),
       includeParentEnvironment: false,
     ).timeout(const Duration(seconds: 120));
   }
@@ -115,4 +121,36 @@ void main() {
     expect(snapshot(defaultHome), before);
     expect(selectedHome.listSync(), isEmpty);
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  group('SANAD_E2E_TEST_MODE', () {
+    test('refuses the real default Home before any Home access', () async {
+      final before = snapshot(defaultHome);
+
+      // No --home and no SANAD_HOME: the selected Home is `<HOME>/.sanad`.
+      final result = await runCli(['models']);
+
+      expect(result.exitCode, 78, reason: result.stderr.toString());
+      expect(result.stderr.toString(), contains('SANAD_E2E_TEST_MODE'));
+      expect(snapshot(defaultHome), before);
+    }, timeout: const Timeout(Duration(minutes: 3)));
+
+    test(
+      'refuses a state root that is not isolated from the selected Home',
+      () async {
+        final before = snapshot(defaultHome);
+
+        final result = await runCli([
+          'models',
+          '--home',
+          selectedHome.path,
+        ], withStateHome: false);
+
+        expect(result.exitCode, 78, reason: result.stderr.toString());
+        expect(result.stderr.toString(), contains('SANAD_STATE_HOME'));
+        expect(snapshot(defaultHome), before);
+        expect(selectedHome.listSync(), isEmpty);
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+  });
 }

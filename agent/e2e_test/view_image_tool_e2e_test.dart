@@ -10,8 +10,12 @@ import 'package:test/test.dart';
 
 import 'support/local_gateway_test_support.dart';
 import 'support/workspace_policy_seed.dart';
+import '../test/support/isolated_sanad_test_home.dart';
 
 void main() {
+  // In-process seeding and inspection open the temporary state roots the
+  // spawned daemons use; declare that isolation for the G0 test guard.
+  useIsolatedSanadStateRoot();
   test(
     'daemon-backed view_image derives its answer from pixels and keeps events text-only',
     () async {
