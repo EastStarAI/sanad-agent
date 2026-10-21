@@ -20,7 +20,7 @@ Fix four reliability defects that were found live on Test Homes. All four predat
 | # | Defect | Status |
 |---|---|---|
 | 1 | A remembered cloud device that can no longer appear leaves the Client on "No device selected" instead of falling back to the local device. | fixed |
-| 2 | After a cloud reconnect the session-list request races the device re-announce, and the open conversation stays on "Processing…" until it is reopened. | pending |
+| 2 | After a cloud reconnect the session-list request races the device re-announce, and the open conversation stays on "Processing…" until it is reopened. | fixed |
 | 3 | An `emitWithResponse` late timeout calls `off(event)` and removes a newer same-event listener. | fixed |
 | 4 | Opening a search result, then pressing "+" for a new conversation, stops navigation until a Client restart. | pending |
 
@@ -86,3 +86,23 @@ Response correlation is still by event name. Two concurrent calls for the same e
   - no invented selection.
 - `client/test/unit/services/device_manager_test.dart`, group `isCloudInventoryPending`: cloud disabled, signed out, connecting or reconnecting, failed, and ready before and after the authoritative inventory.
 - Red → green: `temp/g3/item1-red.log` (8 failed), `temp/g3/item1-green.log` (37 passed).
+
+## Item 2 — Cloud reconnect re-sync
+
+### Root cause
+
+`ConversationClientRegistryImpl` called `SocketConversationClient.synchronizeAfterReconnect` exactly once, when the device transport became ready (the Client's cloud socket reached `ready` after `auth_success`). When the Gateway connection drops for both sides, the Client can be ready before the Agent has re-announced its device. That first `get_sessions` is then never answered and only times out. Nothing re-synced when the device later turned Online. The open conversation kept its pre-disconnect execution snapshot ("Processing…") until it was reopened.
+
+A second sync would not have helped either. `getSessions` deduplicates an in-flight default request, so it would have joined the unanswered request.
+
+### Fix
+
+- The registry tracks each managed device's inventory Online flag. In `retainClientsFor`, it re-syncs a client when its device turns Online (the re-announce) and its transport is ready. An inventory update that keeps the device Online does not re-sync.
+- `synchronizeAfterReconnect` first invalidates the session snapshot and any in-flight session-list request. It then fetches the list and reloads the open conversation's history, which carries its execution state.
+- `DeviceCubit` already passes every merged inventory update to `retainClientsFor`, and a `device_status_changed` event republishes inventory. No new wiring was needed.
+
+### Tests
+
+- `client/test/unit/services/connection_registries_test.dart`: "cloud reconnect re-syncs again once the device re-announces online". Its first request races the re-announce, the Online flip triggers a second request, and a further Online-to-Online update does not.
+- `client/test/unit/services/socket_conversation_client_test.dart`: "a re-sync supersedes an unanswered reconnect request and hydrates the open conversation".
+- Red → green: `temp/g3/item2-red.log` (2 failed), `temp/g3/item2-green.log` (23 passed).
