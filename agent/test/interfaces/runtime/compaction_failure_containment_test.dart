@@ -104,8 +104,12 @@ class _MockRunnerWithSeed implements AgentRunner {
     String? runtimeSystemPrompt,
   }) async {
     return CompactionProviderSeed(
+      // The seed is the active projection the request is measured on; it is
+      // above the complete-request target so manual compaction has work
+      // (Task 118 small-session no-op).
       projection: [
         Message(role: MessageRole.user, content: 'goal: ship compaction safely'),
+        Message(role: MessageRole.assistant, content: 'progress ${'x' * 80000}'),
       ],
       tools: const <ToolSchema>[],
       options: LLMRequestOptions(
@@ -266,10 +270,12 @@ void main() {
           lastUserMessageAt: now,
         ),
       );
-      sessionDb.replaceMessages(
-        'session-alpha',
-        _heavyTimeline().map((e) => e.message).toList(),
-      );
+      // Above the complete-request target of the resolved window, so a
+      // manual compaction has work (Task 118 small-session no-op).
+      sessionDb.replaceMessages('session-alpha', [
+        ..._heavyTimeline().map((e) => e.message),
+        Message(role: MessageRole.assistant, content: 'progress ${'x' * 80000}'),
+      ]);
       sessionDb.replaceMessages('session-beta', [
         Message(role: MessageRole.user, content: 'Beta user ask'),
         Message(role: MessageRole.assistant, content: 'Beta reply'),
@@ -403,7 +409,8 @@ void main() {
             runtimeContext: '',
             toolSchemas: const [],
             projectionRevision: 1,
-            targetRequestTokens: 10_000,
+            // Above the complete-request target (Task 118 small-session no-op).
+            targetRequestTokens: 100,
             thresholdRatio: 0.9,
           ),
           force: true,
@@ -479,7 +486,8 @@ void main() {
             runtimeContext: '',
             toolSchemas: const [],
             projectionRevision: 1,
-            targetRequestTokens: 10_000,
+            // Above the complete-request target (Task 118 small-session no-op).
+            targetRequestTokens: 100,
             thresholdRatio: 0.9,
           ),
           force: true,

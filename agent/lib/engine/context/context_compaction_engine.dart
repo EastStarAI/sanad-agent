@@ -368,6 +368,16 @@ class ContextCompactionEngine {
     if (!force && !pressure.exceedsThreshold) {
       return null;
     }
+    // Task 118 (small sessions): a manual request already within the
+    // complete-request target cannot get closer to it, and its summary would
+    // replace rows smaller than itself. It is a no-op before any claim or
+    // provider call, never a misleading "still over budget" failure.
+    // Automatic compaction only runs above its threshold, and a provider
+    // overflow is authoritative evidence against any low estimate.
+    if (request.trigger == CompactionTrigger.manual &&
+        pressure.estimatedRequestTokens <= request.targetRequestTokens) {
+      return null;
+    }
     if (!_tailSelector.hasCompressibleHead(
       timeline: request.timeline,
       previousSourceEnd: request.previousSourceRange,

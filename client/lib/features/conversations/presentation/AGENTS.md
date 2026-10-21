@@ -149,6 +149,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Rendered user and assistant message bodies expose stable Driver keys scoped by canonical event id (`user_message_body:<eventId>` and `assistant_message_body:<eventId>`); never replace them with kind-only keys that collide across mounted timeline rows.
 - Provider chips render daemon-owned display names and model names, never raw provider UUIDs. Session display metadata is valid only when its provider identity matches the active or staged provider route.
 - Context-usage UI shows only the latest active-session snapshot, includes cached input only when available, and never displays cache-write usage.
+- A `/compact` result of `no_op` (nothing to compact, for example a conversation already within the target) is a localized neutral notice, never a failure toast.
 - Compaction timeline labels keep a localized 44-logical-pixel interaction target, remain centered without narrow-width overflow, and expose the same redacted multiline details by hover, tap, and keyboard focus; the surrounding full-width separator remains non-interactive.
 - Composer controls remain horizontally bounded on narrow layouts and expose Material semantics, labels, and keyboard focus.
 - Narrow conversation headers share one navigation/window-action surface across New Conversation and active sessions; native-desktop actions reuse the wide-header geometry and neutral color, and macOS reserves the leading title-bar region for native traffic-light controls.

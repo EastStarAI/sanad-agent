@@ -162,7 +162,9 @@ void main() {
     required List<IndexedConversationMessage> timeline,
     CompactionTrigger trigger = CompactionTrigger.auto,
     int contextWindowTokens = 3_000,
-    int targetRequestTokens = 2_000,
+    // Fixture sessions are small; a small complete-request target keeps
+    // manual compaction above it (Task 118 small-session no-op).
+    int targetRequestTokens = 100,
     String? compactionId,
     List<Message>? providerProjection,
   }) {
@@ -686,8 +688,9 @@ void main() {
     final record = boundaries.findById(outcome.compactionId);
     expect(record?.metrics?.providerConfirmedRequestTokensAfter, 1_250);
     expect(record?.diagnostics?.postBoundary.status, 'confirmed');
-    // Task 118: 1,250 confirmed tokens are within the complete-request target.
-    expect(record?.diagnostics?.postBoundary.targetOutcome, TargetOutcome.met);
+    // Task 118: 1,250 confirmed tokens exceed the fixture's complete-request
+    // target, so the outcome is not met.
+    expect(record?.diagnostics?.postBoundary.targetOutcome, TargetOutcome.notMet);
     expect(record?.diagnostics?.postBoundary.requestId, 'req-first-call');
     expect(record?.diagnostics?.postBoundary.cachedTokens, 300);
 

@@ -84,6 +84,11 @@ CompactionEngineRequest _request({
 
 class _FixedSummarizer
     implements CompactionSummarizer, ProviderProjectionCompactionSummarizer {
+  _FixedSummarizer({this.remainingWorkTokens = 0});
+
+  /// A realistic two-page summary carries most of its text in transmitted
+  /// fields such as the remaining work.
+  final int remainingWorkTokens;
   int calls = 0;
 
   @override
@@ -103,7 +108,8 @@ class _FixedSummarizer
             latestUserRequest: 'keep going',
             activeState: 'in progress',
             criticalContext: _text(600),
-            remainingWork: 'finish the remaining steps',
+            remainingWork:
+                'finish the remaining steps ${_text(remainingWorkTokens)}',
           ),
         ),
       ),
@@ -114,6 +120,79 @@ class _FixedSummarizer
 }
 
 void main() {
+  // Task 118 moved-in item 3: `projection_still_over_budget` on very small
+  // sessions. A manual `/compact` of a conversation whose complete request is
+  // already inside the target paid for a summary larger than the rows it
+  // replaced, then failed the no-progress guard with an "over budget" cause.
+  group('Task 118 small sessions', () {
+    for (final trigger in [CompactionTrigger.manual]) {
+      test(
+        '${trigger.name} compaction of a request already within the target is a no-op before any provider call',
+        () async {
+          final summarizer = _FixedSummarizer(remainingWorkTokens: 1_200);
+          final history = _history(pairs: 3, tokens: 60);
+          final base = _request(systemTokens: 8_944, timeline: history);
+          final request = CompactionEngineRequest(
+            compactionId: base.compactionId,
+            sessionId: base.sessionId,
+            trigger: trigger,
+            sourceRevision: base.sourceRevision,
+            routeSignature: base.routeSignature,
+            contextWindowTokens: base.contextWindowTokens,
+            timeline: base.timeline,
+            systemPrompt: base.systemPrompt,
+            runtimeContext: base.runtimeContext,
+            toolSchemas: base.toolSchemas,
+            providerProjection: base.providerProjection,
+            providerTools: base.providerTools,
+            targetRequestTokens: base.targetRequestTokens,
+            thresholdRatio: base.thresholdRatio,
+            targetRatio: base.targetRatio,
+          );
+
+          final candidate = await ContextCompactionEngine(
+            summarizer: summarizer,
+          ).buildCandidate(request, force: true);
+
+          expect(candidate, isNull);
+          expect(summarizer.calls, 0);
+        },
+      );
+    }
+
+    test(
+      'an overflow is never treated as within the target',
+      () async {
+        final summarizer = _FixedSummarizer();
+        final base = _request(systemTokens: 8_944);
+        final request = CompactionEngineRequest(
+          compactionId: base.compactionId,
+          sessionId: base.sessionId,
+          trigger: CompactionTrigger.overflow,
+          sourceRevision: base.sourceRevision,
+          routeSignature: base.routeSignature,
+          contextWindowTokens: base.contextWindowTokens,
+          timeline: _history(pairs: 40, tokens: 60),
+          systemPrompt: base.systemPrompt,
+          runtimeContext: base.runtimeContext,
+          toolSchemas: base.toolSchemas,
+          providerProjection: base.providerProjection,
+          providerTools: base.providerTools,
+          targetRequestTokens: base.targetRequestTokens,
+          thresholdRatio: base.thresholdRatio,
+          targetRatio: base.targetRatio,
+        );
+
+        final candidate = await ContextCompactionEngine(
+          summarizer: summarizer,
+        ).buildCandidate(request, force: true);
+
+        expect(summarizer.calls, 1);
+        expect(candidate, isNotNull);
+      },
+    );
+  });
+
   group('Task 118 Stage3A complete-request target', () {
     test(
       'retained tail leaves room for instructions, tools and summary within 10% of W',

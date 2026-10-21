@@ -434,6 +434,7 @@
   "compactionActionPersistence": "تأكد من توفر مساحة تخزين كافية ثم حاول مجدداً.",
   "compactionFailureUnexpected": "حدث خطأ غير متوقع أثناء ضغط سياق المحادثة.",
   "compactionActionRetry": "حاول تشغيل الضغط مرة أخرى.",
+  "compactionNotNeeded": "لا حاجة إلى ضغط السياق: هذه المحادثة ضمن الحجم المستهدف بالفعل.",
   "compactionPendingStillRunning": "لا يزال ضغط سياق المحادثة قيد التشغيل. ستظهر نتيجته في هذه المحادثة عند انتهائه.",
   "compactionFailurePrefix": "الفشل: {explanation}",
   "compactionNextActionPrefix": "الإجراء التالي: {action}",

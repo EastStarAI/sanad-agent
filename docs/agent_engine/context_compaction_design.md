@@ -100,6 +100,10 @@ canonical history. Stale non-null owners cannot clear newer compacting state or 
   summary and the retained tail) has a `10%` target over `W` (Task 118
   Stage3A). Both ratios may be overridden per exact normalized model id in
   `SANAD_HOME/config.yaml`.
+- A manual compaction whose complete request is already within the target is
+  a no-op before any claim or provider call (Task 118: very small sessions
+  otherwise paid for a summary larger than the rows it replaced and failed
+  with `projection_still_over_budget`).
 - Before the tail is selected, `ContextCompactionEngine.measureRequest`
   measures the fixed overhead and the complete current request with the
   route's wire meter (fallback: provider-neutral estimate). The tail budget is

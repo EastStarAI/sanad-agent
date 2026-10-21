@@ -651,7 +651,8 @@ void main() {
         sourceRevision: revision.toCompactionRevision(),
         routeSignature: _testRoute,
         contextWindowTokens: 50000,
-        targetRequestTokens: 10000,
+        // Above the complete-request target (Task 118 small-session no-op).
+        targetRequestTokens: 100,
         timeline: [
           for (final entry in canonical.messages)
             IndexedConversationMessage(
@@ -726,8 +727,8 @@ void main() {
       expect(postStatus!.status, 'confirmed');
       expect(postStatus.inputTokens, 1420);
       // Task 118: the first confirmed post-input is judged against the
-      // complete-request target over W.
-      expect(postStatus.targetOutcome, TargetOutcome.met);
+      // complete-request target over W (the fixture's small target).
+      expect(postStatus.targetOutcome, TargetOutcome.notMet);
       expect(postStatus.requestId, startsWith('turn-req-trailing:'));
     },
   );
@@ -1402,7 +1403,8 @@ void main() {
             sourceRevision: revision.toCompactionRevision(),
             routeSignature: _testRoute,
             contextWindowTokens: 50000,
-            targetRequestTokens: 10000,
+            // Above the complete-request target (Task 118 small-session no-op).
+            targetRequestTokens: 100,
             timeline: [
               for (final entry in canonical.messages)
                 IndexedConversationMessage(
@@ -1494,7 +1496,8 @@ void main() {
             sourceRevision: revision.toCompactionRevision(),
             routeSignature: _testRoute,
             contextWindowTokens: 50000,
-            targetRequestTokens: 10000,
+            // Above the complete-request target (Task 118 small-session no-op).
+            targetRequestTokens: 100,
             timeline: [
               for (final entry in canonical.messages)
                 IndexedConversationMessage(
@@ -1615,7 +1618,8 @@ void main() {
           sourceRevision: revision.toCompactionRevision(),
           routeSignature: _testRoute,
           contextWindowTokens: 50000,
-          targetRequestTokens: 10000,
+          // Above the complete-request target (Task 118 small-session no-op).
+          targetRequestTokens: 100,
           timeline: [
             for (final entry in canonical.messages)
               IndexedConversationMessage(
