@@ -436,6 +436,7 @@ class SessionInterventionCoordinator {
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) async {
     final agent = getCurrentAgent();
     if (agent == null) return;
@@ -447,6 +448,7 @@ class SessionInterventionCoordinator {
         scope: scope,
         comment: comment,
         answer: answer,
+        secretValues: secretValues,
       );
       emit(
         getState().copyWith(

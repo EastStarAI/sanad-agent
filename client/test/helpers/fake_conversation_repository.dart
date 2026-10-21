@@ -843,6 +843,7 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) async {
     permissionResponses.add({
       'device_id': agent.id,
@@ -851,6 +852,7 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
       'scope': scope,
       'comment': comment,
       'answer': answer,
+      'secret_names': secretValues?.keys.join(','),
     });
     _pendingSuspendedByAgentId[agent.id] = null;
     _pendingSuspensionController(agent.id).add(null);

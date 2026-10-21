@@ -701,6 +701,7 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) {
     return _commands!.respondToSuspendedRequest(
       request,
@@ -708,6 +709,7 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
       scope: scope,
       comment: comment,
       answer: answer,
+        secretValues: secretValues,
     );
   }
 

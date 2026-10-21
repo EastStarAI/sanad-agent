@@ -575,6 +575,7 @@ class SocketConversationRepository
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) {
     return _clientFor(agent).respondToSuspendedRequest(
       request,
@@ -582,6 +583,7 @@ class SocketConversationRepository
       scope: scope,
       comment: comment,
       answer: answer,
+        secretValues: secretValues,
     );
   }
 

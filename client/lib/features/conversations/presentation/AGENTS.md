@@ -76,6 +76,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Preserve pending UI until authoritative resolution.
 - Permission cards use action-specific titles and readable labeled fields for known command, file, search, and MCP actions; unknown tools fall back to action-neutral language. Render only daemon-provided display input and never reconstruct redacted arguments. Visually separate the darker request content from the prompt and choices.
 - A running tool row whose matching suspension awaits permission shows the permission shield instead of progress. Running `system_ask_user` timeline rows remain hidden because the composer owns the active question; completed question/answer content renders without generic tool-header chrome. Unblocked running tools retain progress.
+- A `system_request_secret` suspension renders `SecretRequestCard`: masked inputs without suggestions or autocorrect, localized copy, and Save/Skip. Typed values go only into `ConversationInputCubit.submitSecretRequest` (the `secret_values` field of the response) and are cleared from the controllers on submit or skip; they never enter cubit state, caches, the timeline, or logs.
 - Keep background suspension and recovery state out of the active composer while surfacing its session-row attention state.
 
 ## Atomic Session Presentation

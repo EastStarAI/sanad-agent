@@ -157,6 +157,12 @@ A name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and must not be a protected opera
 - The tool result is `{"status":"stored","secrets":[names]}`, `{"status":"skipped"}` or `{"status":"failed"}` (vault refused the write). It never contains a value. Re-entering a stored name replaces its value.
 - Terminal clients do not collect secrets: `sanad run` never auto-approves a secret request and records `needs_input`, the REPL leaves it pending for the Sanad Client, and the in-process terminal platform skips it.
 
+### Client
+
+- `SecretRequestCard` (composer, en/ar) shows the model's reason, one input per field (masked fields hide the value, disable suggestions and autocorrect, and offer a show/hide toggle), a "Replaces the saved value" note for names in `replaces`, and Save to vault / Skip.
+- Save requires every required field and sends `secret_values` exactly as typed through `ConversationInputCubit.submitSecretRequest`; Skip sends a plain denial. The controllers are cleared immediately and the values never enter Client state, caches, the timeline, or logs. Driver keys are listed in [Flutter VM Driver CLI QA](../qa_maintenance/flutter_vm_driver_cli_qa.md).
+- The timeline shows the tool call (reason, field names and labels) and the value-free result.
+
 ### Listing, deletion and revocation
 
 - `system_list_secrets` returns the sorted names in `custom:` only; it never lists `providers:` or `mcp:` entries.

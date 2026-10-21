@@ -2022,6 +2022,38 @@ void main() {
     });
     expect(store.currentPendingSuspendedRequest, isNotNull);
   });
+
+  test('a secret response carries secret_values untrimmed and never an answer', () async {
+    store.activateSession('session-1');
+    const request = DeviceSuspendedRequest(
+      requestId: 'secret-1',
+      sessionId: 'session-1',
+      toolName: 'system_request_secret',
+      permissionClass: '',
+      scope: 'once',
+      workspaceId: null,
+      workspaceName: null,
+      workspacePath: null,
+      toolInput: {},
+      tool: {},
+    );
+
+    await commands.respondToSuspendedRequest(
+      request,
+      allow: true,
+      secretValues: const {'DEMO_TOKEN': ' dummy value '},
+    );
+
+    final emitted = socket.capturedCommands.last;
+    expect(emitted['command'], 'tool_permission_response');
+    expect(emitted['payload'], {
+      'session_id': 'session-1',
+      'request_id': 'secret-1',
+      'allowed': true,
+      'scope': 'once',
+      'secret_values': {'DEMO_TOKEN': ' dummy value '},
+    });
+  });
 }
 
 Map<String, dynamic> _historyRow(String id, String content) => {
