@@ -801,8 +801,10 @@ and are injectable through the engine constructor.
    `recovery_split_count`, `recovery_reduce_batches`, and
    `recovery_provider_calls`; each pass keeps its ledger entry.
 
-Skipping the ordinary request when it is already estimated to overflow is not
-implemented; the reactive overflow remains the only recovery trigger.
+Recovery has two triggers: the reactive `CompactionProviderOverflow` of the
+ordinary request, and the pre-send fit check (Task 118b), which skips the
+ordinary request when the request plus the output reservation exceeds `W` and
+records `full_pass_skipped: presend_over_window`.
 
 ## 9. Orchestration and Protocol Contract (Task 53d)
 
