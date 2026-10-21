@@ -3,7 +3,7 @@ id: 106
 title: Context Compaction Resilience, Protocol Alignment, and Reference-Grounded Token Estimation
 status: completed
 gate: completed-with-106b-follow-up-pr
-delivery: 106b follow-up PR (`fix/106b-remaining-compaction-and-thinking-stages`)
+delivery: "[PR210](https://github.com/EastStarAI/sanad-agent/pull/210) and [PR229](https://github.com/EastStarAI/sanad-agent/pull/229)"
 split_into: [116, 117, 118, 119, 120]
 created: 2026-10-13
 branch: fix/106b-remaining-compaction-and-thinking-stages
@@ -24,11 +24,11 @@ Reliable manual/automatic/overflow compaction with preserved canonical history, 
 Task 106 is **complete**. It was delivered in two pull requests:
 
 - [PR210](https://github.com/EastStarAI/sanad-agent/pull/210), squash `2607a3423c94f43553debb46c3866eea69ad878b`: wire outcomes, pressure, pairing/attribution, CLI compaction and the delivered baseline below.
-- The 106b follow-up PR from `fix/106b-remaining-compaction-and-thinking-stages`: the scope in the next section.
+- [PR229](https://github.com/EastStarAI/sanad-agent/pull/229), the 106b follow-up from `fix/106b-remaining-compaction-and-thinking-stages`: the scope in the next section.
 
 The remaining queue was split into separately delivered tasks (see [Split of the Remaining Queue](#split-of-the-remaining-queue)). This file stays under `done/` for link stability.
 
-### Delivered by the 106b Follow-Up PR
+### Delivered by PR229 (106b)
 
 | Scope | What changed | Evidence |
 |---|---|---|
@@ -70,7 +70,7 @@ The former ordered queue (0P follow-ups, Stage2, 3A, 3B, timeout toast, 116) is 
 |---|---|---|
 | 0P-F1 history rewrite re-ids rows; 0P-F2 unbounded recovery summarizer | [Task 117 — Session history integrity](docs/plans/tasks/117-session-history-integrity.md) | Before 118. |
 | Stage2 near-window summarization resilience; Stage3A complete-request target, public metrics and replay-aware tail; Stage3B premature/repeated automatic pressure | [Task 118 — Compaction accuracy and target](docs/plans/tasks/118-compaction-accuracy-and-target.md) | Uses the locked decisions and observations below. |
-| Misleading manual-compaction timeout toast | Task 119 — Manual compaction timeout feedback | Own PR on `fix/119-manual-compaction-timeout-feedback`; triage in `temp/106-implementation/compact-timeout-toast-triage.md`. |
+| Misleading manual-compaction timeout toast | [Task 119 — Manual compaction timeout feedback](docs/plans/tasks/done/119-manual-compaction-timeout-feedback.md) | Delivered in [PR228](https://github.com/EastStarAI/sanad-agent/pull/228). |
 | OpenCode Go per-model wire protocol (live round 1 D3) | [Task 120 — OpenCode Go per-model protocol](docs/plans/tasks/120-opencode-go-per-model-protocol.md) | After 116; keeps issuers stable. |
 | Per-request destination-compatible projection | [Task 116](docs/plans/tasks/116-deepseek-reasoning-replay-across-tool-history.md) | Detached; own PR. |
 

@@ -5,7 +5,7 @@ status: completed
 gate: completed-with-106b-follow-up-pr
 created: 2026-10-18
 parent_task: 106
-delivery: 106b follow-up PR (`fix/106b-remaining-compaction-and-thinking-stages`)
+delivery: "[PR229](https://github.com/EastStarAI/sanad-agent/pull/229)"
 ---
 
 # Task 115 — Provider-Specific Thinking Admission Regression
@@ -16,7 +16,7 @@ Restore legitimate message execution for the affected provider/model routes whil
 
 ## Completion — 2026-10-21
 
-Delivered with Task 106's follow-up PR (see [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-estimation-repair.md)). The sections after this one are the historical working record.
+Delivered in [PR229](https://github.com/EastStarAI/sanad-agent/pull/229) with Task 106's follow-up (see [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-estimation-repair.md)). The sections after this one are the historical working record.
 
 - **Admission repair.** Carried, persisted and explicit selections are distinguished at admission. A stale target-route preference is revalidated before rejection, legacy same-route sessions without provenance are handled, and an explicit default/reset (`selectionId: null`, `restorePreserved: false`) no longer resurrects the previous session mode (`thinking_route_session_sync.dart`). Genuine invalid explicit selections still fail with `thinking_option_unavailable_for_route`.
 - **Truthful capabilities.** Replaced by the five-layer authority (user config → provider metadata → shipped defaults `agent/model_capability_defaults.yaml` → models.dev vendor → models.dev canonical; otherwise unknown and admitted with the provider default). Moonshot `kimi-for-coding` is now `endpoint_declared` from Kimi `/models` discovery.
