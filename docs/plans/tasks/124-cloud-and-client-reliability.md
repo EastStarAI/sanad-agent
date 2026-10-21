@@ -270,7 +270,8 @@ A narrow-width test exposed a second overflow at the same width: the desktop sta
 |---|---|---|
 | r1 | `a725bfbb` | S1a, S3, and the S4 mechanism passed. S1b failed (D1). D2 and D3 found. Item 4 not reproduced. |
 | r2 | `39061cd3` | D1 and D3 passed. The D2 Agent fix worked, but acceptance failed because of a new defect, D4. D5 and D6 found. Item 4 not reproduced. |
-| r3 | this round | D4, D5, and D6 addressed (below). |
+| r3 | `ad8adae6` (merged with main as `43652814`) | D4 passed live. D5 failed live (below). R1a, R4, and S3 passed. D7 found (already on main). D8 found (relay throughput). |
+| r4 | this round | D5 and D7 addressed (below). D8 recorded as a follow-up. |
 
 ### D4 — Cloud replies stalled behind `model.snapshot_result` (High)
 
@@ -347,3 +348,78 @@ The fallback marker lives in memory. `device.fallback restored` can only fire wh
   - `model.snapshot_result` must reach B in seconds, not 18–60 s.
   - All five section `sessions_list` replies must arrive before the 10 s timeout, with no "Failed to get sessions".
 - **D5:** force a section failure, then let a later `get_sessions` succeed (for example through the R4 Agent restart). The "Could not refresh all sections" banner and a thinking-mode "Retry" chip must clear without a tap.
+
+## Live Round 3 Summary
+
+Live r3 on `43652814` (TH2 = A cloud, TH3 = B Client). The live report is outside this repository.
+
+- **D4 passed.** Each B restart sent one `model.snapshot`, the result reached B 0.4–6 s after A emitted it (18–60 s in r2), and every section `get_sessions` was answered in time. A snapshot is now about 0.29 MB.
+- **D4 follow-on.** Search and click-to-open passed. A 3.75 MB corpus history missed the 10 s timeout twice while the relay ran at roughly 20–40 KB/s, and loaded in 1.5 s later (D8).
+- **D5 failed.** Clean repro (d5-e): A's daemon was frozen right after B's `auth_success`. `list_workspaces`, the default `get_sessions`, the history load, and the snapshot timed out. The section queries sent after that timeout succeeded, and later an A restart re-synced B. "Could not refresh all sections", "Could not refresh workspaces", the history "Could not load", and the thinking Retry all stayed until the user navigated.
+- **D7 found.** An A restart while B's section queries were in flight made the Gateway answer each with a correlated `error` event. Every section showed "No conversations" with no banner, and later re-syncs did not repair it.
+- **R1a, R4 (mechanism), and S3 passed.**
+
+## Round 4
+
+`origin/main` moved to `d3040b9a` (Plan 84). It merged with no conflicts as `73433fbc`.
+
+### D5 — Stale sidebar surfaces after a later success (Medium)
+
+**Root cause.**
+- Round 3 recovered stale sections only from `SocketConversationClient.sessions`, which publishes only the *default* (legacy, unscoped, paged) session list. The successful replies in d5-e were *scoped section queries* (`unscoped_only` and `workspace_id`). They never publish, so nothing refreshed the stale workspace list.
+- The default-list publication is also fragile as the only trigger. It is dropped whenever the client's default generation moves during the fetch (any section refresh calls `refreshSessions`, which invalidates it, and so do session events). Also, the watcher captured the device config from the first refresh and never re-subscribed after its stream closed.
+- `SessionCubit` refreshes the sidebar only when the active device *id* changes, so the device coming back Online refreshed nothing.
+- The thinking control retried only on a tap, a model-cache update, or another consumer's snapshot. Nothing loads a snapshot when the device comes back Online.
+- Live evidence limit: the r3 client log ends at 00:14:01. It shows the R4 re-sync (3 default pages) followed by one `list_workspaces` and a second history load, both answered. The log does not show why the banners then stayed. The fix below does not depend on that one path.
+
+**Fix.**
+- `ConversationCacheRepository.refreshStaleResources(device)` refreshes, once each, the workspace list and then every section still in `staleError`. It is called after any successful sidebar fetch for the device (workspace list, section first page, next page), on a default-list publication, and by `SessionCubit` when the active device comes back Online. Only successes trigger it, so a failing device cannot loop. The watcher now uses the latest device config and re-subscribes when its stream closes.
+- `RouteThinkingModeSelector` retries a failed snapshot once when its active device goes from offline to Online.
+- The history "Could not load" overlay already re-issues on a store publication (round 2, D2). The r3 log shows that re-issue being sent at 00:13:58.910 and answered, but the log ends before the outcome. That behavior is unchanged here; live r4 must confirm the overlay clears.
+
+**Tests (red → green).**
+- `client/test/unit/repositories/conversation_cache_repository_stale_recovery_test.dart`. Real wiring (cache repository, `SocketConversationRepository`, `ConversationClientRegistryImpl`, `SocketConversationClient`, command gateway, fake cloud socket), with timeouts on the fake clock:
+  - "a successful scoped reply refreshes a workspace list that timed out" reproduces d5-e: `list_workspaces` and the default `get_sessions` time out, then the section replies succeed. Red: no `list_workspaces` was ever sent again.
+  - "the device Online re-sync refreshes sections that timed out" and "… a workspace list that timed out": the R4 path through `retainClientsFor` offline → Online. These passed before the fix in this wiring and guard the publication path.
+  - Red: `temp/g3/r4/d5-sidebar-red.log` (1 failed). Green: `temp/g3/r4/d5-sidebar-green.log` (3 passed).
+- `client/test/unit/bloc/session_cubit_test.dart`: "the active device coming back Online refreshes a stale workspace list once". It uses the real `SessionCubit` and cache repository: the workspace list fails, then the device goes offline and Online. It also checks that a later Online update with nothing stale sends nothing. Red: `temp/g3/r4/d5-online-red.log` (expected 4 calls, got 3). Green: `temp/g3/r4/d5-online-green.log`.
+- `client/test/widget/route_thinking_mode_selector_test.dart`: "the active device coming back Online refetches a failed snapshot once". Red: `temp/g3/r4/d5-thinking-red.log` (expected 2 calls, got 1). Green: `temp/g3/r4/d5-thinking-green.log` (60 passed).
+
+### D7 — A correlated Gateway `error` reply became an empty list (Medium, on main)
+
+**Root cause.** `ConversationCommandGateway._handleIncomingEvent` completes a pending request with any event that carries its `request_id`, including `error`. Several `ConversationCommands` helpers read their success field with a default:
+- `getSessions` (`payload['sessions'] ?? []`), `getWorkspaces`, and `searchSlashCommands` returned empty lists;
+- `loadSessionHistory` and the older/newer page loads checked only a payload `error` object, so an `error` event hydrated an empty history;
+- `searchSessions` checked only a payload `error` object;
+- `createSession` parsed the error payload as a session, `updateSessionPreferences` treated any reply as success, and `deleteSession` and `updateSessionTitle` logged success.
+
+The section was therefore marked `ready` and empty instead of `staleError`. No banner was shown, and because the section was not stale, nothing ever refreshed it.
+
+**Fix.** One shared helper, `ConversationCommands._responseError`, recognizes both shapes: a correlated `error` event and a payload `error` object. `_throwIfErrorResponse` turns it into a `StateError`. All of the helpers above use it, and `searchSessions` keeps its coded `SessionSearchException`. A section answered with an error now becomes `staleError` and keeps its cached rows, its banner, and its Retry, and the D5 recovery refreshes it after the next success. Already safe and unchanged: workspace/folder mutations (`WorkspaceCommandFailure`), `attachment.admit` (requires `accepted`), and replay, fork, and compact (an error payload has no `outcome`, so it parses as `invalid_response` or `failed`).
+
+**Tests (red → green).**
+- `client/test/unit/services/device_conversation_commands_test.dart`, group "a correlated Gateway error is a failure, never an empty success": `getSessions`, `getWorkspaces`, `searchSessions`, `searchSlashCommands`, `loadSessionHistory`, `createSession`/`deleteSession`, and `updateSessionPreferences`.
+- `client/test/unit/repositories/conversation_cache_repository_stale_recovery_test.dart`: "marks the section stale instead of empty, and a later success repairs it" (live d5-b on the real wiring).
+- Red: `temp/g3/r4/d7-red.log` (8 failed). Green: `temp/g3/r4/d7-green.log` (68 passed).
+
+### D8 — Large cloud replies exceed the 10 s timeout on a slow relay (follow-up, out of scope)
+
+In live r3, a 3.75 MB `session_history` took 12.8 s and 17.5 s from A's emit to B's receipt, and 1.5 s later in the same run. A emits in about 0.1 s, so the delay is in the Gateway relay (roughly 20 KB/s to MB/s during the run). Not changed in this task. Candidate directions for a separate task: a byte-bounded first history page, a size-aware request timeout, or relay throughput work in the private Gateway.
+
+### Round 4 Verification
+
+| Gate | Result | Log |
+|---|---|---|
+| `fvm flutter analyze` (client) | no issues | — |
+| `fvm dart analyze` (agent) | no issues | — |
+| Client full suite | 2,009 passed | `temp/g3/r4/final-client-suite.log` |
+| Agent full suite | 3,395 passed, 15 skipped | `temp/g3/r4/final-agent-suite.log` |
+| Client E2E (`local_dual_connection`, `hosted_attachment_relay`), `--concurrency=1` | 14 passed | `temp/g3/r4/final-e2e.log` |
+| `scripts/lint_wiki.dart` | not run (this round's rules forbid `fvm dart run`) | — |
+
+### Round 4 Live Checks
+
+- **D5:** repeat d5-e (freeze A right after B's `auth_success` for longer than 10 s, then resume).
+  - After the section replies succeed, B must send one more `list_workspaces`, and "Could not refresh workspaces" and "Could not refresh all sections" must clear with no tap.
+  - Then restart A. After A shows Online, the thinking Retry must turn into the control after one new `model.snapshot`, and the history "Could not load" must clear.
+- **D7:** repeat d5-b (restart A while B's section queries are in flight). Sections answered with an `error` must keep their rows and show "Could not refresh all sections", never "No conversations". After A is back, they must refresh with no tap.

@@ -50,6 +50,7 @@ class SessionCubit extends Cubit<SessionState> {
   final StreamController<DeletedSessionIdentity> _deletedSessionsController =
       StreamController<DeletedSessionIdentity>.broadcast();
   String? _lastRefreshedDeviceId;
+  final Map<String, bool> _lastOnlineByDeviceId = {};
 
   Stream<DeletedSessionIdentity> get deletedSessions => _deletedSessionsController.stream;
 
@@ -93,10 +94,16 @@ class SessionCubit extends Cubit<SessionState> {
     if (activeAgent != null) {
       conversationCacheRepository?.selectDevice(activeAgent.id);
     }
+    final cameOnline = activeAgent != null && _lastOnlineByDeviceId[activeAgent.id] == false && activeAgent.isOnline;
+    if (activeAgent != null) _lastOnlineByDeviceId[activeAgent.id] = activeAgent.isOnline;
     if (activeAgent != null && _canRefreshConversations(activeAgent)) {
       if (_lastRefreshedDeviceId != activeAgent.id) {
         _lastRefreshedDeviceId = activeAgent.id;
         unawaited(conversationCacheRepository?.refreshDeviceSidebar(activeAgent));
+      } else if (cameOnline) {
+        // The device answers again: sections and the workspace list whose last
+        // refresh failed are refreshed once instead of keeping their banner.
+        unawaited(conversationCacheRepository?.refreshStaleResources(activeAgent));
       }
     }
     _listenToClientSessionStreams(agentState);
@@ -104,6 +111,7 @@ class SessionCubit extends Cubit<SessionState> {
 
   void _resetForEmptyAgents() {
     _lastRefreshedDeviceId = null;
+    _lastOnlineByDeviceId.clear();
     processingStore.clear();
     _cancelClientSessionSubscriptions();
     emit(const SessionState());

@@ -257,6 +257,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
+    _throwIfErrorResponse(result, 'Failed to create session');
     if (result != null) {
       final payload = Map<String, dynamic>.from(
         result['payload'] as Map? ?? result,
@@ -431,6 +432,33 @@ class ConversationCommands {
   static Map<String, dynamic> _responsePayload(Map<String, dynamic> response) =>
       Map<String, dynamic>.from(response['payload'] as Map? ?? response);
 
+  /// The rejection carried by a correlated reply, or `null` for a success.
+  ///
+  /// The Gateway completes a request with any event that repeats its
+  /// `request_id`, so a correlated `error` event (an admission or relay
+  /// rejection) and an Agent reply whose payload holds an `error` object are
+  /// both failures, never an empty success.
+  static ({String? code, String? message})? _responseError(Map<String, dynamic>? result) {
+    if (result == null) return null;
+    final payload = _responsePayload(result);
+    final nested = payload['error'];
+    if (nested is Map) {
+      return (code: nested['code']?.toString(), message: nested['message']?.toString());
+    }
+    if (result['event']?.toString() == 'error') {
+      return (code: payload['code']?.toString(), message: payload['message']?.toString());
+    }
+    return null;
+  }
+
+  /// Throws a [StateError] when [result] is a correlated rejection.
+  static void _throwIfErrorResponse(Map<String, dynamic>? result, String fallbackMessage) {
+    final error = _responseError(result);
+    if (error == null) return;
+    final message = error.message ?? fallbackMessage;
+    throw StateError(error.code == null ? message : '${error.code}: $message');
+  }
+
   Future<SessionForkResult> forkSession({
     required String sessionId,
     required String targetMessageId,
@@ -537,6 +565,7 @@ class ConversationCommands {
     if (result == null) {
       throw StateError('Failed to update session preferences');
     }
+    _throwIfErrorResponse(result, 'Failed to update session preferences');
   }
 
   Future<SessionQueryResult> getSessions({SessionQueryRequest? query}) async {
@@ -547,7 +576,8 @@ class ConversationCommands {
       requestId: requestId,
     );
 
-    if (result != null) {
+    final error = _responseError(result);
+    if (result != null && error == null) {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       final sessions = payload['sessions'] as List? ?? [];
       final deviceId = result['device_id'] as String?;
@@ -573,7 +603,10 @@ class ConversationCommands {
       );
     }
 
-    _logger.severe('❌ [ConversationCommands] Failed to get sessions');
+    _logger.severe(
+      '❌ [ConversationCommands] Failed to get sessions'
+      '${error == null ? '' : ' code=${error.code ?? 'error'}'}',
+    );
     throw StateError('Failed to get sessions from gateway');
   }
 
@@ -599,14 +632,12 @@ class ConversationCommands {
         'Conversation search is unavailable.',
       );
     }
-    final payload = Map<String, dynamic>.from(
-      result['payload'] as Map? ?? result,
-    );
-    final error = payload['error'];
-    if (error is Map) {
+    final payload = _responsePayload(result);
+    final error = _responseError(result);
+    if (error != null) {
       throw SessionSearchException(
-        error['code']?.toString() ?? 'session_search_failed',
-        error['message']?.toString() ?? 'Conversation search failed.',
+        error.code ?? 'session_search_failed',
+        error.message ?? 'Conversation search failed.',
       );
     }
     final deviceId = result['device_id']?.toString();
@@ -634,6 +665,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
+    _throwIfErrorResponse(result, 'Failed to get workspaces');
     if (result != null) {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       final workspaces = payload['workspaces'] as List? ?? [];
@@ -664,6 +696,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
+    _throwIfErrorResponse(result, 'Failed to search slash commands');
     if (result != null) {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       final commands = payload['commands'] as List? ?? [];
@@ -999,7 +1032,7 @@ class ConversationCommands {
       final payload = Map<String, dynamic>.from(
         result['payload'] as Map? ?? {},
       );
-      _throwHistoryError(payload);
+      _throwHistoryError(result);
       final messagesData = payload['messages'] as List? ?? [];
       final queuedMessagesData = payload['queued_messages'] as List? ?? [];
       final pendingSteersData = payload['pending_steers'] as List? ?? [];
@@ -1152,8 +1185,8 @@ class ConversationCommands {
     if (generation != _historyHydrationGeneration || _conversationStore.currentSessionId != sessionId) {
       return List<CanonicalEvent>.from(_conversationStore.currentMessages);
     }
+    _throwHistoryError(result);
     final payload = Map<String, dynamic>.from(result['payload'] as Map? ?? {});
-    _throwHistoryError(payload);
     final events = _mapper.mapHistory(payload['messages'] as List? ?? const []);
     _conversationStore.prependHistory(
       events,
@@ -1212,8 +1245,8 @@ class ConversationCommands {
     if (generation != _historyHydrationGeneration || _conversationStore.currentSessionId != sessionId) {
       return List<CanonicalEvent>.from(_conversationStore.currentMessages);
     }
+    _throwHistoryError(result);
     final payload = Map<String, dynamic>.from(result['payload'] as Map? ?? {});
-    _throwHistoryError(payload);
     final events = _mapper.mapHistory(
       payload['messages'] as List? ?? const [],
     );
@@ -1226,13 +1259,10 @@ class ConversationCommands {
     return List<CanonicalEvent>.from(_conversationStore.currentMessages);
   }
 
-  void _throwHistoryError(Map<String, dynamic> payload) {
-    final rawError = payload['error'];
-    if (rawError is! Map) return;
-    final error = Map<String, dynamic>.from(rawError);
-    final code = error['code']?.toString() ?? 'history_failed';
-    final message = error['message']?.toString() ?? 'Session history request failed';
-    throw StateError('$code: $message');
+  void _throwHistoryError(Map<String, dynamic> result) {
+    final error = _responseError(result);
+    if (error == null) return;
+    throw StateError('${error.code ?? 'history_failed'}: ${error.message ?? 'Session history request failed'}');
   }
 
   bool _isAlreadyRepresentedInHistory(
@@ -1280,7 +1310,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
-    if (result != null) {
+    if (result != null && _responseError(result) == null) {
       _logger.info(
         '✅ [ConversationCommands] Session title updated: $sessionId',
       );
@@ -1297,7 +1327,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
-    if (result != null) {
+    if (result != null && _responseError(result) == null) {
       _logger.info('✅ [ConversationCommands] Session deleted: $sessionId');
     } else {
       _logger.severe('❌ [ConversationCommands] Failed to delete session');

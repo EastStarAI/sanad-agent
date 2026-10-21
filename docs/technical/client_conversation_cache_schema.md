@@ -103,6 +103,8 @@ Each resource (workspace section, conversation page) carries a `ConversationReso
 | `ready` | Snapshot available; no refresh running. |
 | `staleError` | Last refresh failed; a stale snapshot remains. |
 
+A `staleError` resource recovers without a user tap. `ConversationCacheRepository.refreshStaleResources` refreshes, once each, only the resources still in `staleError` (workspace list first, then sections) when the device is known to answer again: after any successful sidebar fetch for that device (workspace list, section first page, or next page), after a default session-list publication (for example the reconnect re-sync), and when `SessionCubit` sees the active device come back Online. A resource that is not stale or is already refreshing issues no request, and only successes trigger recovery, so a failing device never loops.
+
 This implements stale-while-revalidate: the UI renders the memory/persistent snapshot immediately, then the store refreshes in the background. A resource containing cached rows is always treated as `refreshing`, even if an older lifecycle marker says `notLoaded`; loading indicators must never replace non-empty cached rows.
 
 ## 4. Pagination Merge Rules

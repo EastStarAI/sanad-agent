@@ -535,6 +535,58 @@ void main() {
     expect(fakeClient.callCount, callsAfterFailure, reason: 'the published snapshot is adopted without a new request');
   });
 
+  testWidgets('the active device coming back Online refetches a failed snapshot once (Task 124 D5)', (tester) async {
+    final online = DeviceConfig(id: 'device-a', name: 'A', isOnline: true);
+    final offline = online.copyWith(isOnline: false);
+    fakeClient.shouldThrow = true;
+    final inputSlice = createInputSlice(
+      nextMessageProviderId: 'provider-1',
+      nextMessageModel: 'model-a',
+    );
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice, activeAgent: online));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsOneWidget);
+    final callsAfterFailure = fakeClient.callCount;
+
+    // The Agent restarts: the device goes offline, then comes back Online.
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice, activeAgent: offline));
+    await tester.pumpAndSettle();
+    expect(fakeClient.callCount, callsAfterFailure);
+    fakeClient.shouldThrow = false;
+    fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+      instances: [
+        ModelCacheInstanceDto(
+          id: 'provider-1',
+          displayName: 'P1',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: [
+            ModelCacheModelDto(
+              id: 'model-a',
+              thinkingControl: ThinkingControlDescriptorDto(
+                status: ThinkingCapabilityStatus.supported,
+                options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
+              ),
+            ),
+          ],
+        ),
+      ],
+      recent: [],
+    );
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice, activeAgent: online));
+    await tester.pumpAndSettle();
+
+    expect(fakeClient.callCount, callsAfterFailure + 1);
+    expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsNothing);
+    expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+
+    // Staying Online issues no further request.
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice, activeAgent: online.copyWith(name: 'A2')));
+    await tester.pumpAndSettle();
+    expect(fakeClient.callCount, callsAfterFailure + 1);
+  });
+
   testWidgets(
     'renders a distinct unknown chip without Off label',
     (tester) async {

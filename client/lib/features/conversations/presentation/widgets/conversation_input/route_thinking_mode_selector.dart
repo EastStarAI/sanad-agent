@@ -163,6 +163,18 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     super.didUpdateWidget(oldWidget);
     final session = _currentSession();
     _checkRouteChanged(session: session, activeAgent: widget.activeAgent);
+    _refetchWhenDeviceCameOnline(oldWidget.activeAgent);
+  }
+
+  /// The active device coming back Online (for example after an Agent restart)
+  /// can answer again, so a failed snapshot load is retried once instead of
+  /// leaving the Retry chip until a tap or another consumer's load.
+  void _refetchWhenDeviceCameOnline(DeviceConfig? previous) {
+    final current = widget.activeAgent;
+    if (!_hasFetchError || _isLoading || current == null || previous == null) return;
+    if (previous.id != current.id || previous.isOnline || !current.isOnline) return;
+    if (!widget.capabilities.usesModelThinkingControls) return;
+    unawaited(_loadSnapshot());
   }
 
   /// Reads the owning composer cubit, or `null` when this control is mounted

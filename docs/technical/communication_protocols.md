@@ -320,7 +320,11 @@ an explicit policy:
 - Explicit cross-interface state events use the user room regardless of request
   correlation so every interface refreshes its shared inventory.
 - Other events matching a registered `request_id` return only to the requesting
-  app socket.
+  app socket. This includes a Gateway or Agent `error` event that repeats the
+  request id, so the Client completes the pending request with it. Sanad
+  Client treats such a correlated `error` event, and a reply whose payload
+  holds an `error` object, as a failed request (`ConversationCommands`
+  `_responseError`), never as an empty result.
 - Live conversation events (`user_message`, thought/tool streams,
   `final_answer`, suspension, stop, and error events) broadcast to every app
   interface owned by the user. Each event retains `device_id` and `session_id`,
