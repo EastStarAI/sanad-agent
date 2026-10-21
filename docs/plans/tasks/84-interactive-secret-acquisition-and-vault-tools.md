@@ -113,6 +113,7 @@ The old draft (PR #208, `feat/task-84-interactive-secret-acquisition`, commit `8
 - **D10:** `--allow-all-tools` auto-approved a secret request with an empty allow and the REPL offered a y/n prompt. Fixed: terminals never answer it. Red `05-cli-red.log`, green `05-cli-green.log`.
 - **D11:** the Client card sent values as a trimmed `answer`, had no l10n and promised a `.env` write. Fixed: `secret_values` untrimmed, en/ar, driver keys, controllers cleared. Red `06-client-transport-red.log`, `07-client-card-red.log`; green `07-client-green.log`.
 - **D12:** no revocation or deletion existed. Added `system_delete_secret` with a per-call approval; deleted names fail later as `secret_not_found` (`secret_tools_test.dart`).
+- **D14 (found by E2E, pre-existing in 83):** a turn reconstructed from durable work read `command_authority` from the top level of the stored event metadata, where it never is, so every recovered turn became `unverified`. With owner-only secret tools the tool set changed across recovery and the replacement provider request differed from its predecessor (`durable_recovery_restart_e2e_test.dart` F.2.10 failed 2/2). The restorer now restores the stamp from the stored command payload. Red `08-recovery-authority-red.log`; green `08-recovery-file-84x3.log` (3/3). F.2.10 is also intermittently flaky on `feat/83-port` (1 of 3 whole-file runs, `08-recovery-file-83x3.log`).
 - **D13:** the gitleaks allowlist was widened for a test with realistic keys. Not ported; tests use `dummy-` values.
 
 **Open questions:**
@@ -122,4 +123,11 @@ The old draft (PR #208, `feat/task-84-interactive-secret-acquisition`, commit `8
 - Values cross the Cloud Gateway relay inside `tool_permission_response` for a cloud client; the private Backend's logging of that command should be confirmed.
 - Redaction catches verbatim echoes only; transformed output is a known limit.
 
-**Verification:** see the final report of this round for analyzer, suite and E2E counts.
+**Verification (2026-10-21):**
+
+- `fvm dart analyze` and `fvm flutter analyze`: no issues.
+- Agent fast suite: 3342 passed, 15 skipped, 0 failed.
+- Client fast suite: 1956 passed, 1 skipped, 0 failed.
+- Affected Agent E2E (`--concurrency=1`: shell environment isolation, local tool permissions, platform tool execution, Sanad gateway platform, durable recovery restart): 24 passed, 2 failed, identical to the `feat/83-port` baseline (the two known `local_tool_permissions` failures).
+- Client E2E not run: the Client change is a payload field and a composer card, with no socket, bootstrap or daemon-contract change.
+- `lint_wiki`: success.
