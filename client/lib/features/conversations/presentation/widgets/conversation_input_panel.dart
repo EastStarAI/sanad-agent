@@ -770,6 +770,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
           activeAgent: activeAgent,
           capability: capabilities,
           source: DraftAttachmentSource.drop,
+          draftScope: ConversationInputCubit.draftScopeKey(deviceId: activeAgent?.id, sessionId: widget.sessionId),
         );
         _chatFocusNode.requestFocus();
       },

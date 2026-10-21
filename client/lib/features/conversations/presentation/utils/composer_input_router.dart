@@ -250,7 +250,9 @@ class ComposerInputRouter {
     required DeviceConfig? activeAgent,
     required Capability capability,
     required DraftAttachmentSource source,
+    String? draftScope,
   }) async {
+    final scope = draftScope ?? inputCubit.draftScope;
     final isSameMachine = isSameMachineAgent(activeAgent);
     final maxAttachmentBytes = DraftAttachmentPolicy.maxFileBytes(capability);
     final decision = decideRoute(
@@ -268,6 +270,7 @@ class ComposerInputRouter {
           bytes: bytes,
           source: source,
           capability: capability,
+          scope: scope,
         );
         break;
 
@@ -296,7 +299,10 @@ class ComposerInputRouter {
     required DeviceConfig? activeAgent,
     required Capability capability,
     required DraftAttachmentSource source,
+    String? draftScope,
   }) async {
+    // Bind every file of this paste/drop/pick to the scope it started in.
+    final scope = draftScope ?? inputCubit.draftScope;
     final seenPaths = <String>{};
     for (final item in items) {
       if (item.path != null && item.path!.isNotEmpty) {
@@ -309,6 +315,7 @@ class ComposerInputRouter {
         activeAgent: activeAgent,
         capability: capability,
         source: source,
+        draftScope: scope,
       );
     }
   }

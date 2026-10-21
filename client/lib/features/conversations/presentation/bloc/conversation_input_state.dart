@@ -14,7 +14,7 @@ enum DraftAttachmentSource { picker, paste, drop }
 
 enum DraftAttachmentStatus { validating, uploading, ready, failed }
 
-enum DraftAttachmentErrorKind { unsupported, tooLarge, tooMany, totalTooLarge, sendFailed }
+enum DraftAttachmentErrorKind { unsupported, tooLarge, tooMany, totalTooLarge, sendFailed, readFailed }
 
 /// Transient, typed attachment rejection. Presentation localizes it with the
 /// [limit] that was actually enforced; it is never part of a cached draft.

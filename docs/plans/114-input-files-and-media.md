@@ -141,6 +141,16 @@ See each task file's progress log for locations and regression tests.
 
 - **D2 (HIGH, from D4):** a refused first send in a New remote conversation had already created the session and moved the text there. `ConversationInputCubit` left the attachments in the New-conversation scope, so they reappeared in the next new conversation and were once sent unintentionally (`evt_67cda46d`). Fix: when a New-conversation send creates a session but is not accepted, its submitted attachments move with the text into the created session's scope, wherever each scope lives (active state or cache). The New scope keeps nothing that was submitted; acceptance already removed submitted ids. Red-first tests cover both orders: the composer following the new session after the failure and during admission.
 
+- **D3 (MEDIUM, intermittent):** later files of a multi-file paste sometimes vanished, right after opening a conversation or after a turn finished. Two causes:
+  - every add went into whatever draft scope was active when it completed, and the composer rebinds its scope post-frame, so a scope flip while files were still read (or the cubit's one-frame lag) put the remaining files into another conversation's draft;
+  - one unreadable clipboard item threw out of the paste loop, and the text-paste fallback discarded every other file.
+
+  Fixes:
+  - paste, drop, and picker capture the device and session the composer shows when they start, and every file completes into that scope (active state or cache);
+  - each clipboard item is read on its own, and an unreadable item is reported with the localized read-failure message instead of discarding the others.
+
+  Red-first tests: the router scope-flip case, and the composer paste with one unreadable item.
+
 ### Verification (port worktree)
 
 - `fvm dart analyze` (agent): no issues. `fvm flutter analyze` (client): no issues.

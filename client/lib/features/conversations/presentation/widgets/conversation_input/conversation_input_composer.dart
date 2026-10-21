@@ -160,6 +160,7 @@ class ConversationInputComposer extends StatelessWidget {
               agentSlice: agentSlice,
               capabilities: capabilities,
               readClipboard: readClipboard,
+              sessionId: sessionId,
               child: _UnifiedComposerContainer(
                 chatController: chatController,
                 chatFocusNode: chatFocusNode,
@@ -247,6 +248,7 @@ class _ComposerPasteAction extends Action<ComposerPasteIntent> {
 
 class _ComposerPasteCapture extends StatefulWidget {
   const _ComposerPasteCapture({
+    this.sessionId,
     required this.chatController,
     required this.chatFocusNode,
     required this.agentSlice,
@@ -261,6 +263,9 @@ class _ComposerPasteCapture extends StatefulWidget {
   final Capability capabilities;
   final Widget child;
   final Future<ClipboardReader?> Function()? readClipboard;
+
+  /// The conversation this composer shows; a paste completes into its draft.
+  final String? sessionId;
 
   @override
   State<_ComposerPasteCapture> createState() => _ComposerPasteCaptureState();
@@ -295,6 +300,12 @@ class _ComposerPasteCaptureState extends State<_ComposerPasteCapture> {
   }
 
   Future<void> _handlePaste(BuildContext context) async {
+    // Bind the paste to the conversation shown now: clipboard reads are async
+    // and the composer may rebind before every file is routed.
+    final draftScope = ConversationInputCubit.draftScopeKey(
+      deviceId: widget.agentSlice.activeAgent?.id,
+      sessionId: widget.sessionId,
+    );
     final readerFuture = widget.readClipboard?.call() ?? SystemClipboard.instance?.read();
 
     if (readerFuture == null) {
@@ -320,39 +331,23 @@ class _ComposerPasteCaptureState extends State<_ComposerPasteCapture> {
 
       final items = <ComposerRoutableItem>[];
       final seenPaths = <String>{};
+      var unreadable = 0;
 
+      // Each clipboard item is read on its own: one unreadable item is
+      // reported and never discards the other pasted files.
       for (final item in reader.items) {
-        if (item.canProvide(Formats.fileUri)) {
-          final uri = await item.readValue(Formats.fileUri);
-          if (uri != null && uri.isScheme('file')) {
-            try {
-              final filePath = uri.toFilePath();
-              if (seenPaths.add(filePath)) {
-                items.add(ComposerRoutableItem.fromFilePathSync(filePath));
-              }
-            } catch (_) {}
-          }
-          continue;
-        }
-
-        for (final format in _supportedImageFormats) {
-          if (item.canProvide(format)) {
-            final bytes = await item.readFileBytes(format);
-            if (bytes != null && bytes.isNotEmpty) {
-              final suggestedName = await item.getSuggestedName();
-              items.add(
-                ComposerRoutableItem.fromImageBytes(
-                  bytes: bytes,
-                  formatName: _extensionForFormat(format),
-                  suggestedName: suggestedName,
-                ),
-              );
-              break;
-            }
-          }
+        try {
+          final routable = await _readClipboardItem(item, seenPaths);
+          if (routable != null) items.add(routable);
+        } catch (_) {
+          unreadable++;
         }
       }
 
+      if (items.isEmpty && unreadable > 0) {
+        _maybeInputCubit(context)?.setAttachmentError(const DraftAttachmentError(DraftAttachmentErrorKind.readFailed));
+        return;
+      }
       if (items.isEmpty) {
         _fallbackTextPaste();
         return;
@@ -367,12 +362,39 @@ class _ComposerPasteCaptureState extends State<_ComposerPasteCapture> {
           activeAgent: widget.agentSlice.activeAgent,
           capability: widget.capabilities,
           source: DraftAttachmentSource.paste,
+          draftScope: draftScope,
         );
+        if (unreadable > 0) {
+          cubit.setAttachmentError(const DraftAttachmentError(DraftAttachmentErrorKind.readFailed));
+        }
       }
       widget.chatFocusNode.requestFocus();
     } catch (_) {
       _fallbackTextPaste();
     }
+  }
+
+  /// Reads one clipboard item into a routable item, or `null` when it holds
+  /// nothing attachable. Throws when the item cannot be read.
+  Future<ComposerRoutableItem?> _readClipboardItem(ClipboardDataReader item, Set<String> seenPaths) async {
+    if (item.canProvide(Formats.fileUri)) {
+      final uri = await item.readValue(Formats.fileUri);
+      if (uri == null || !uri.isScheme('file')) return null;
+      final filePath = uri.toFilePath();
+      return seenPaths.add(filePath) ? ComposerRoutableItem.fromFilePathSync(filePath) : null;
+    }
+    for (final format in _supportedImageFormats) {
+      if (!item.canProvide(format)) continue;
+      final bytes = await item.readFileBytes(format);
+      if (bytes != null && bytes.isNotEmpty) {
+        return ComposerRoutableItem.fromImageBytes(
+          bytes: bytes,
+          formatName: _extensionForFormat(format),
+          suggestedName: await item.getSuggestedName(),
+        );
+      }
+    }
+    return null;
   }
 
   void _fallbackTextPaste() {
@@ -756,6 +778,7 @@ class _UnifiedComposerContainer extends StatelessWidget {
         activeAgent: agentSlice.activeAgent,
         capability: capabilities,
         source: DraftAttachmentSource.picker,
+        draftScope: ConversationInputCubit.draftScopeKey(deviceId: agentSlice.activeAgent?.id, sessionId: sessionId),
       );
     }
     chatFocusNode.requestFocus();

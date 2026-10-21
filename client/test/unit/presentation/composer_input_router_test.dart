@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -364,6 +365,47 @@ void main() {
       );
       expect(inputCubit.state.draftAttachments, isEmpty);
       expect(controller.fileTokensByMarker, isEmpty);
+    });
+  });
+
+  group('multi-file paste survives draft scope changes (114 D3)', () {
+    test('a file that finishes after a scope flip lands in the scope that started the paste', () async {
+      final inputCubit = ConversationInputCubit(messagesCubit: _FakeSessionMessagesCubit());
+      addTearDown(inputCubit.close);
+      final controller = SlashCommandTextController();
+      addTearDown(controller.dispose);
+      const capability = Capability(supportsAttachments: true);
+      final secondBytes = Completer<Uint8List>();
+
+      inputCubit.setDraftScope(deviceId: remoteAgent.id, sessionId: 'session-a');
+      final paste = ComposerInputRouter.routeItems(
+        items: [
+          ComposerRoutableItem(name: 'img114_red.png', bytes: Uint8List.fromList(const [1, 2, 3]), sizeBytes: 3),
+          ComposerRoutableItem(name: 'code114.py', sizeBytes: 4, readBytes: () => secondBytes.future),
+        ],
+        controller: controller,
+        inputCubit: inputCubit,
+        activeAgent: remoteAgent,
+        capability: capability,
+        source: DraftAttachmentSource.paste,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(inputCubit.state.draftAttachments.map((item) => item.name), ['img114_red.png']);
+
+      // Opening a conversation or a finished turn rebinds the composer while
+      // the second file is still being read.
+      inputCubit.setDraftScope(deviceId: remoteAgent.id, sessionId: 'session-b');
+      secondBytes.complete(Uint8List.fromList(const [4, 5, 6, 7]));
+      await paste;
+      inputCubit.setDraftScope(deviceId: remoteAgent.id, sessionId: 'session-a');
+
+      expect(
+        inputCubit.state.draftAttachments.map((item) => item.name),
+        ['img114_red.png', 'code114.py'],
+        reason: 'no pasted file may silently vanish',
+      );
+      inputCubit.setDraftScope(deviceId: remoteAgent.id, sessionId: 'session-b');
+      expect(inputCubit.state.draftAttachments, isEmpty, reason: 'nothing leaks into the other conversation');
     });
   });
 }

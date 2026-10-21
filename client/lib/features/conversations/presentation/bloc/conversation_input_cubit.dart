@@ -48,8 +48,16 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     });
   }
 
+  /// The draft scope key for a device/session (New conversation when
+  /// [sessionId] is empty).
+  static String draftScopeKey({required String? deviceId, required String? sessionId}) =>
+      '${deviceId ?? ''}\u0000${sessionId ?? ''}';
+
+  /// The draft scope the composer is currently bound to.
+  String get draftScope => _draftScope;
+
   void setDraftScope({required String? deviceId, required String? sessionId}) {
-    final nextScope = '${deviceId ?? ''}\u0000${sessionId ?? ''}';
+    final nextScope = draftScopeKey(deviceId: deviceId, sessionId: sessionId);
     if (nextScope == _draftScope) return;
     if (_draftScope.isNotEmpty) {
       _draftsByScope[_draftScope] = state.draftAttachments;
@@ -73,8 +81,12 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     required Uint8List bytes,
     required DraftAttachmentSource source,
     required Capability capability,
+    String? scope,
   }) async {
-    final current = state.draftAttachments;
+    // A multi-file paste/drop completes into the scope that started it, even
+    // when the composer rebinds to another conversation while files are read.
+    final target = scope ?? _draftScope;
+    final current = _scopeAttachments(target);
     final rejection = DraftAttachmentPolicy.check(
       capability: capability,
       existingCount: current.length,
@@ -82,7 +94,7 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
       nextBytes: bytes.length,
     );
     if (rejection != null) {
-      emit(state.copyWith(attachmentError: rejection));
+      if (target == _draftScope) emit(state.copyWith(attachmentError: rejection));
       return;
     }
     final item = DraftAttachment(
@@ -91,26 +103,19 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
       bytes: bytes,
       source: source,
     );
-    emit(
-      state.copyWith(
-        draftAttachments: List.unmodifiable([...current, item]),
-        clearAttachmentError: true,
-      ),
-    );
+    _setScopeAttachments(target, [...current, item]);
+    if (target == _draftScope) emit(state.copyWith(clearAttachmentError: true));
     await Future<void>.delayed(Duration.zero);
-    emit(
-      state.copyWith(
-        draftAttachments: List.unmodifiable([
-          for (final attachment in state.draftAttachments)
-            attachment.id == item.id
-                ? attachment.copyWith(
-                    status: DraftAttachmentStatus.ready,
-                    clearError: true,
-                  )
-                : attachment,
-        ]),
-      ),
-    );
+    if (isClosed) return;
+    _setScopeAttachments(target, [
+      for (final attachment in _scopeAttachments(target))
+        attachment.id == item.id
+            ? attachment.copyWith(
+                status: DraftAttachmentStatus.ready,
+                clearError: true,
+              )
+            : attachment,
+    ]);
   }
 
   void removeDraftAttachment(String id) {

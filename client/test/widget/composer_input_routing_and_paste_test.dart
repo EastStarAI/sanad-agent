@@ -91,6 +91,13 @@ class _FakeItemReader extends Fake implements ClipboardDataReader {
   Future<String?> getSuggestedName() async => suggestedName;
 }
 
+class _UnreadableItemReader extends _FakeItemReader {
+  _UnreadableItemReader() : super(values: {Formats.fileUri: Uri.file('/gone/missing.txt')});
+
+  @override
+  Future<T?> readValue<T extends Object>(ValueFormat<T> format) async => throw StateError('clipboard item gone');
+}
+
 class _FakeClipboardReader extends Fake implements ClipboardReader {
   @override
   final List<ClipboardDataReader> items;
@@ -570,6 +577,25 @@ void main() {
       expect(tester.widget<Text>(find.byKey(const Key('attachment_error'))).data, ar.attachmentErrorTooLarge('1 MiB'));
       expect(ar.attachmentErrorTooLarge('1 MiB'), isNot('Each attachment must be 1 MiB or smaller.'));
       expect(find.byKey(const Key('attachment_error_dismiss')), findsOneWidget);
+    });
+  });
+
+  group('Multi-file paste reports per-file failures (114 D3)', () {
+    testWidgets('one unreadable item never drops the other pasted files', (tester) async {
+      final fakeReader = _FakeClipboardReader([
+        _UnreadableItemReader(),
+        _FakeItemReader(values: {Formats.fileUri: Uri.file('/path/to/code114.py')}),
+      ]);
+      await pumpComposer(tester, activeAgent: localAgent, readClipboard: () async => fakeReader);
+      focusNode.requestFocus();
+      await tester.pump();
+
+      Actions.invoke(tester.element(find.byType(TextField)), const ComposerPasteIntent());
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(chatController.fileTokensByMarker.values.map((token) => token.fileName), ['code114.py']);
+      expect(find.byKey(const Key('attachment_error')), findsOneWidget, reason: 'the unreadable item is reported');
     });
   });
 
