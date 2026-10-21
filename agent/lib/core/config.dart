@@ -998,6 +998,23 @@ class ModelAwareRuntimePolicy {
     return modelCapabilities[modelId];
   }
 
+  /// The compaction pass timeout the runtime of [sanadHome] uses
+  /// (`config.yaml` `compaction.passTimeoutSeconds`). A client of that
+  /// runtime, such as `sanad session compact`, bounds its wait for a
+  /// compaction result with it. An unreadable or invalid file yields the
+  /// default, because the client must still wait for the real outcome.
+  static Duration compactionPassTimeoutForHome(String sanadHome) {
+    try {
+      return ModelAwareRuntimePolicy.load(
+        File('$sanadHome/config.yaml'),
+      ).compaction.passTimeout;
+    } on FormatException {
+      return ModelAwareCompactionPolicy.defaultPassTimeout;
+    } on FileSystemException {
+      return ModelAwareCompactionPolicy.defaultPassTimeout;
+    }
+  }
+
   factory ModelAwareRuntimePolicy.load(File file) {
     if (!file.existsSync() || file.readAsStringSync().trim().isEmpty) {
       return defaults;
