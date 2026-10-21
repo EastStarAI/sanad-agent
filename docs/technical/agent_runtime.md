@@ -238,7 +238,9 @@ assistant result, and performs `running|resuming -> completed` in one SQLite
 transaction. `SessionTurnExecutor` may emit the final transport event only
 after that owner returns `committed`. A `stale_owner` or
 `recovery_owns_state` result is silent; it cannot produce a final answer or a
-follow-on error. A persistence failure produces one controlled error before
+follow-on error. The unstamped durable reply still hydrates from history as a
+`final_answer` when it ends its turn (session-scoped terminal classification,
+Task 111). A persistence failure produces one controlled error before
 any final and leaves the work item non-terminal for restart recovery.
 
 `waiting -> completed` and `blocked -> completed` remain forbidden. If

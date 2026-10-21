@@ -1,8 +1,8 @@
 ---
 title: "111 — Terminal final-answer classification and footer integrity"
 status: "in_progress"
-current_gate: "G1 — Terminal classification authority"
-remaining_estimate: "Gate-based only; G0 closed, implementation gates open."
+current_gate: "G4 — Live verification (coordinator)"
+remaining_estimate: "Gate-based only; G0–G3 closed, live verification pending."
 ---
 
 # Goal
@@ -106,71 +106,112 @@ documented silent `stale_owner` / `recovery_owns_state` contract
 
 ## G1 — Terminal classification authority (agent)
 
-- [ ] One evolution-owned classifier decides "terminal assistant result" as
+- [x] One evolution-owned classifier decides "terminal assistant result" as
       the stamp, **or** a no-tool, non-steer assistant row whose next active row
       in the **session** is a user row or nothing. It is independent of page
       position.
-- [ ] History delivery, fork eligibility, and search use that classifier.
-- [ ] Terminal replies keep identity fields and statistics in history.
-- [ ] Non-terminal assistant text (typed `thought`, commentary followed by more
+- [x] History delivery and session search use that classifier. Fork
+      eligibility stays stamp-based on purpose: `session_fork_service_test.dart`
+      locks "rejects unknown-finish assistant text without a terminal marker".
+- [x] Terminal replies keep identity fields and statistics in history.
+- [x] Non-terminal assistant text (typed `thought`, commentary followed by more
       assistant output in the same turn, steer segments) stays on the transient
       Thoughts surface.
 
 ## G2 — Terminal stamp integrity (agent)
 
-- [ ] An in-place terminal stamp invalidates revision-keyed history caches.
-- [ ] A history rewrite of the same message identity carries the durable
+- [x] An in-place terminal stamp invalidates revision-keyed history caches.
+- [x] A history rewrite of the same message identity carries the durable
       terminal stamp forward instead of erasing it.
-- [ ] A regression test commits a terminal result, rewrites session history from
+- [x] A regression test commits a terminal result, rewrites session history from
       memory, and re-reads the row.
 
 ## G3 — Live-path completion (agent)
 
-- [ ] The silent `stale_owner` / `recovery_owns_state` outcome stays silent. G1
+- [x] The silent `stale_owner` / `recovery_owns_state` outcome stays silent. G1
       coverage proves that the unstamped durable reply still hydrates as
       `final_answer`.
 
 ## G4 — Verification, documentation, and delivery
 
-- [ ] Focused agent tests cover classification, stamp integrity, fork
+- [x] Focused agent tests cover classification, stamp integrity, fork
       eligibility, and the thought/final-answer split.
-- [ ] Agent analyzer and full agent suite pass. The Client is untouched, so no
+- [x] Agent analyzer and full agent suite pass. The Client is untouched, so no
       Client suite is needed.
 - [ ] Live verification scenarios are handed to the coordinator.
-- [ ] Owning documentation is updated in the same session
+- [x] Owning documentation is updated in the same session
       (`docs/technical/reasoning_thoughts_separation.md`,
       `docs/technical/communication_protocols.md`,
       `docs/technical/agent_database_schema.md`, the nearest `AGENTS.md`).
 
 # Acceptance Criteria
 
-- [ ] Given an assistant reply whose durable row is the terminal result of its
+- [x] Given an assistant reply whose durable row is the terminal result of its
       turn, when the Client hydrates history for that session, then the reply is
       delivered as `final_answer` with `message_id`, `turn_id`, token usage,
       model, duration, and the Fork control available.
-- [ ] Given a session page that is not the newest page, when older replies are
+- [x] Given a session page that is not the newest page, when older replies are
       loaded, then terminal replies in that page are still delivered as
       `final_answer`, because classification no longer depends on page position.
-- [ ] Given intermediate assistant text before a tool call or a steer segment,
+- [x] Given intermediate assistant text before a tool call or a steer segment,
       when history is hydrated, then it still renders as the transient Thoughts
       surface with a copy action only.
-- [ ] Given a committed terminal result, when a later turn rewrites session
+- [x] Given a committed terminal result, when a later turn rewrites session
       history from memory, then the row keeps `terminal_work_item_id` and
       `terminal_generation`.
-- [ ] Automated coverage fails on the pre-fix classification and stamp
+- [x] Automated coverage fails on the pre-fix classification and stamp
       behavior and passes after the fix.
 
 # Definition of Done
 
-- [ ] `fvm dart analyze` clean in `agent/`. `fvm flutter analyze` clean in
+- [x] `fvm dart analyze` clean in `agent/`. `fvm flutter analyze` clean in
       `client/` as a no-regression check.
-- [ ] Focused and full agent tests pass with the changed behavior covered.
+- [x] Focused and full agent tests pass with the changed behavior covered.
 - [ ] Live verification scenarios recorded for the coordinator.
-- [ ] Documentation updated; no stale or contradictory contract text remains.
+- [x] Documentation updated; no stale or contradictory contract text remains.
 - [ ] No push or PR without explicit user authorization.
+
+## Implementation
+
+- `agent/lib/evolution/db/terminal_assistant_classifier.dart` (new): the single
+  definition of a terminal reply (`isTerminal`), the stamp carry-forward
+  (`carryForwardStamp`), and the equivalent SQL predicate (`sqlIsTerminal`).
+- `SessionHistoryPage.followingMessage`: the first active row after the page,
+  read by `SessionMessageRepository.getPersistedMessagePage`.
+- `SessionQueryHandler._buildHistoryEnvelope`: the page-scoped
+  `legacyFinalAssistant` is replaced by the classifier.
+- `SessionRepository.searchSessions`: the newest-row-of-session rule is
+  replaced by `sqlIsTerminal`.
+- `SessionMessageRepository._replaceMessagesInDatabase`: identity-matched
+  replacements keep a stored terminal stamp.
+- `SessionExecutionStateCoordinator._persistAssistantResult`: an in-place stamp
+  bumps `history_revision`.
+- On the primary Home (read-only), the SQL classifier marks 2 754 of 2 760
+  candidates terminal: 1 982 stamped plus 772 unstamped turn-enders. The other
+  6 are mid-turn commentary.
+- Remaining gap: legacy rows whose stamp was already erased **and** whose
+  `finishReason` is `unknown` (250 on the primary Home) now render the footer,
+  but the server still refuses their Fork under the locked fork contract. New
+  replies keep their stamp, so this does not recur.
+
+## Verification evidence (logs under `temp/111/`)
+
+- Pre-fix red: `g2-prefix-red.log` (3/3 stamp tests fail),
+  `g1-history-prefix-red.log` (3/4 history tests fail),
+  `g1-search-prefix-red.log` (1 search test fails).
+- `fvm dart analyze` (agent): No issues found — `agent-analyze.log`.
+- Focused (8 files): +129, all passed — `focused-green.log`.
+- Full agent suite `fvm dart test`: +3011 ~14, all passed —
+  `agent-full-suite.log`.
+- `fvm flutter analyze` (client, untouched, after `gen-l10n`): No issues
+  found — `client-analyze.log`.
+- No port-binding E2E run: no socket, daemon, or restart boundary changed.
+- `graphify update .`: succeeded — `graphify-update.log`.
 
 ## Current status
 
 Ported to `.agent/worktrees/111-port` on branch
 `fix/111-final-answer-terminal-classification-v2` from `origin/main`
-(`adc128ec`). G0 is closed with the evidence above. G1 and G2 are in progress.
+(`adc128ec`). G0–G3 are closed and automated verification is green. Live
+verification in the worktree runtime is pending with the coordinator. There is
+no push and no PR.
