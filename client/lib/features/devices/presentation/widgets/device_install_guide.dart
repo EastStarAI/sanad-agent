@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
+import 'package:sanad_release_contract/release_contract.dart';
 
 class _InstallGuideStyle {
   const _InstallGuideStyle._();
@@ -25,17 +26,9 @@ class DeviceInstallGuide extends StatelessWidget {
     required this.token,
   });
 
-  String get _posixCommand {
-    final quotedToken = _quotePosix(token);
-    return 'curl -fsSL https://sanad.eaststarai.com/install.sh | '
-        'bash -s -- --pairing-token $quotedToken';
-  }
-
-  static String _quotePosix(String value) => "'${value.replaceAll("'", "'\\''")}'";
-  String get _windowsCommand =>
-      '& ([scriptblock]::Create((irm '
-      'https://sanad.eaststarai.com/install.ps1))) '
-      '-PairingToken \'$token\'';
+  // The shared release contract is the single source of installer commands.
+  String get _posixCommand => OfficialAgentInstaller.pairingCommand('linux', token);
+  String get _windowsCommand => OfficialAgentInstaller.pairingCommand('windows', token);
 
   @override
   Widget build(BuildContext context) {

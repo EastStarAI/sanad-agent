@@ -3,12 +3,18 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import 'src/platform_trust.dart';
+
+export 'src/platform_trust.dart';
+
 const sanadReleaseRepository = 'EastStarAI/sanad-agent';
 
 enum ReleaseChannel { rc, stable }
 
 typedef PlatformArtifactVerifier =
     Future<bool> Function(File file, String operatingSystem);
+typedef PlatformArtifactDetailedVerifier =
+    Future<PlatformTrustResult> Function(File file, String operatingSystem);
 typedef ReleaseProcessRunner =
     Future<ProcessResult> Function(String executable, List<String> arguments);
 
@@ -382,52 +388,158 @@ Future<String> sha256OfFile(File file) async {
   return digest.toString();
 }
 
+/// Verifies [file] against the declared trust policy of [artifact].
+///
+/// Fail-closed: any metadata violation, verifier rejection, or verifier launch
+/// failure yields an untrusted result. [detailedVerifier] takes precedence over
+/// the legacy boolean [platformVerifier]; with neither, the exact
+/// Apple-anchored publisher requirement is checked on macOS.
+Future<PlatformTrustResult> verifyReleaseArtifactTrustDetailed(
+  File file, {
+  required ReleaseArtifact artifact,
+  PlatformArtifactDetailedVerifier? detailedVerifier,
+  PlatformArtifactVerifier? platformVerifier,
+}) async {
+  try {
+    ReleaseArtifactTrustPolicy.validateMetadata(artifact);
+  } on FormatException catch (error) {
+    return PlatformTrustResult.untrusted(
+      stage: PlatformTrustStage.metadataValidation,
+      detail: sanitizePlatformVerifierOutput(
+        error.message,
+        filePath: file.path,
+      ),
+    );
+  }
+  if (artifact.platform != 'macos') {
+    // Windows unsigned provenance and Linux GitHub attestations are proved by
+    // protected release CI. Runtime acceptance never claims to re-verify them.
+    return const PlatformTrustResult.trusted();
+  }
+  try {
+    if (detailedVerifier != null) {
+      return await detailedVerifier(file, artifact.platform);
+    }
+    if (platformVerifier != null) {
+      return await platformVerifier(file, artifact.platform)
+          ? const PlatformTrustResult.trusted()
+          : const PlatformTrustResult.untrusted(
+              stage: PlatformTrustStage.platformVerifier,
+              detail:
+                  'The platform code signature verifier rejected the artifact.',
+            );
+    }
+    return await verifyPlatformCodeSignatureDetailed(file, artifact.platform);
+  } catch (error) {
+    return PlatformTrustResult.untrusted(
+      stage: PlatformTrustStage.verifierUnavailable,
+      detail: sanitizePlatformVerifierOutput('$error', filePath: file.path),
+    );
+  }
+}
+
 Future<bool> verifyReleaseArtifactTrust(
   File file, {
   required ReleaseArtifact artifact,
   PlatformArtifactVerifier platformVerifier = verifyPlatformCodeSignature,
+}) async => (await verifyReleaseArtifactTrustDetailed(
+  file,
+  artifact: artifact,
+  platformVerifier: platformVerifier,
+)).isTrusted;
+
+/// `codesign` exits with 3 when a valid signature does not satisfy the
+/// requested requirement; any other non-zero status is a signature failure.
+const _codesignRequirementUnsatisfiedExitCode = 3;
+
+Future<PlatformTrustResult> verifyPlatformCodeSignatureDetailed(
+  File file,
+  String operatingSystem, {
+  ReleaseProcessRunner processRunner = _runReleaseProcess,
 }) async {
-  try {
-    ReleaseArtifactTrustPolicy.validateMetadata(artifact);
-  } on FormatException {
-    return false;
+  if (operatingSystem == 'macos') {
+    final ProcessResult verification;
+    try {
+      verification = await processRunner('/usr/bin/codesign', [
+        '--verify',
+        '--strict',
+        '--verbose=2',
+        '--test-requirement',
+        macosAgentPublisherRequirement,
+        file.path,
+      ]);
+    } catch (error) {
+      return _verifierUnavailable(error, file);
+    }
+    if (verification.exitCode == 0) return const PlatformTrustResult.trusted();
+    return PlatformTrustResult.untrusted(
+      stage: verification.exitCode == _codesignRequirementUnsatisfiedExitCode
+          ? PlatformTrustStage.publisherRequirement
+          : PlatformTrustStage.codesignVerification,
+      exitCode: verification.exitCode,
+      detail: _verifierDetail(
+        verification,
+        file,
+        fallback: 'codesign rejected the artifact.',
+      ),
+    );
   }
-  if (artifact.platform == 'macos') {
-    return platformVerifier(file, artifact.platform);
+  if (operatingSystem == 'windows') {
+    final escaped = file.path.replaceAll("'", "''");
+    final ProcessResult verification;
+    try {
+      verification = await processRunner('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "(Get-AuthenticodeSignature -LiteralPath '$escaped').Status -eq 'Valid'",
+      ]);
+    } catch (error) {
+      return _verifierUnavailable(error, file);
+    }
+    final valid = verification.stdout.toString().trim().toLowerCase() == 'true';
+    if (verification.exitCode == 0 && valid) {
+      return const PlatformTrustResult.trusted();
+    }
+    return PlatformTrustResult.untrusted(
+      stage: PlatformTrustStage.authenticodeSignature,
+      exitCode: verification.exitCode,
+      detail: _verifierDetail(
+        verification,
+        file,
+        fallback: 'The Authenticode signature status was not Valid.',
+      ),
+    );
   }
-  // Windows unsigned provenance and Linux GitHub attestations are proved by
-  // protected release CI. Runtime acceptance never claims to re-verify them.
-  return true;
+  return const PlatformTrustResult.trusted();
 }
 
 Future<bool> verifyPlatformCodeSignature(
   File file,
   String operatingSystem, {
   ReleaseProcessRunner processRunner = _runReleaseProcess,
-}) async {
-  if (operatingSystem == 'macos') {
-    final verification = await processRunner('/usr/bin/codesign', [
-      '--verify',
-      '--strict',
-      '--verbose=2',
-      '--test-requirement',
-      macosAgentPublisherRequirement,
-      file.path,
-    ]);
-    return verification.exitCode == 0;
-  }
-  if (operatingSystem == 'windows') {
-    final escaped = file.path.replaceAll("'", "''");
-    final verification = await Process.run('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      "(Get-AuthenticodeSignature -LiteralPath '$escaped').Status -eq 'Valid'",
-    ]);
-    return verification.exitCode == 0 &&
-        verification.stdout.toString().trim().toLowerCase() == 'true';
-  }
-  return true;
+}) async => (await verifyPlatformCodeSignatureDetailed(
+  file,
+  operatingSystem,
+  processRunner: processRunner,
+)).isTrusted;
+
+PlatformTrustResult _verifierUnavailable(Object error, File file) =>
+    PlatformTrustResult.untrusted(
+      stage: PlatformTrustStage.verifierUnavailable,
+      detail: sanitizePlatformVerifierOutput('$error', filePath: file.path),
+    );
+
+String _verifierDetail(
+  ProcessResult result,
+  File file, {
+  required String fallback,
+}) {
+  final raw = '${result.stderr}\n${result.stdout}'.trim();
+  return sanitizePlatformVerifierOutput(
+    raw.isEmpty ? fallback : raw,
+    filePath: file.path,
+  );
 }
 
 String generateAppcastXml(ReleaseManifest manifest, DateTime publishedAt) {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:sanad_release_contract/release_contract.dart';
 import '../../../core/app_config.dart';
 import '../../../core/constants.dart';
 import '../../../core/update/agent_update_service.dart';
@@ -32,6 +33,9 @@ class UpdateCommand extends SanadCommand {
     if (result.availableVersion != null) {
       print('Available Version: ${result.availableVersion}');
     }
+    if (result.status == AgentUpdateStatus.trustFailed) {
+      print(trustFailureRecoveryGuidance(Platform.operatingSystem));
+    }
     if (Platform.isWindows && result.stagedPath != null) {
       await service.scheduleWindowsReplacement(result);
       await Process.run(Platform.resolvedExecutable, ['service', 'stop']);
@@ -40,3 +44,14 @@ class UpdateCommand extends SanadCommand {
     return result.isSuccess ? 0 : 1;
   }
 }
+
+/// Recovery guidance printed after a platform trust rejection. The verified
+/// copy was not installed, so the running Agent is unchanged; the official
+/// installer is the supported recovery path.
+String trustFailureRecoveryGuidance(String operatingSystem) =>
+    '\nThe downloaded update was not installed because it failed platform '
+    'trust verification; the current Agent is unchanged.\n'
+    'To reinstall the verified Agent with the official installer, run:\n'
+    '  ${OfficialAgentInstaller.recoveryCommand(operatingSystem)}\n'
+    'The installer restarts the background service, which briefly interrupts '
+    'connected clients. Existing sign-in is kept.';

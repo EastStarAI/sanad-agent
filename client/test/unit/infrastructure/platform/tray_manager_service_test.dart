@@ -45,6 +45,9 @@ class FakeTrayManagerAdapter implements TrayManagerAdapter {
 }
 
 class FakeDaemonController implements LocalDaemonController {
+  @override
+  bool get ownsStoppedAgentLifecycle => false;
+
   bool running = false;
   int isDaemonRunningCalls = 0;
   int startDaemonCalls = 0;
@@ -93,8 +96,7 @@ class FakeDaemonController implements LocalDaemonController {
   Future<AgentLifecycleResult> updateDaemon({
     required String targetVersion,
     void Function(double progress)? onProgress,
-  }) async =>
-      const AgentLifecycleResult(AgentLifecycleStatus.ready);
+  }) async => const AgentLifecycleResult(AgentLifecycleStatus.ready);
 
   @override
   bool isServiceInstalled() => true;

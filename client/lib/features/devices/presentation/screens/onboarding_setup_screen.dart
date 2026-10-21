@@ -45,7 +45,9 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
         unawaited(_routeAfterCloudAuth());
       }
       final gatewayStatus = context.read<GatewayConnectionCubit>().state;
-      if (gatewayStatus.isDesktop && gatewayStatus.localGateway == LocalGatewayStatus.connected && !_showProviderSetup) {
+      if (gatewayStatus.isDesktop &&
+          gatewayStatus.localGateway == LocalGatewayStatus.connected &&
+          !_showProviderSetup) {
         unawaited(_checkProviderReadiness());
       }
     });

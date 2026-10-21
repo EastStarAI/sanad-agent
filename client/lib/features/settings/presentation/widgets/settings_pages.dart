@@ -15,6 +15,7 @@ import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
+import 'package:sanad_client/features/devices/presentation/widgets/local_agent_lifecycle_notice.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/utils/device_ui_mapper.dart';
@@ -1239,6 +1240,7 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                   label: 'Current route',
                   value: route == ConnectionScope.local ? 'Local' : 'Cloud',
                 ),
+                if (route == ConnectionScope.local) LocalAgentLifecycleNotice(coordinator: _coordinator),
                 if (_runtimeStatus != null) ...[
                   const SizedBox(height: 8),
                   Align(

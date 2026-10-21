@@ -250,4 +250,7 @@ class SourceDaemonController implements LocalDaemonController {
 
   @override
   Future<bool> install() async => true; // No-op in dev mode
+
+  @override
+  bool get ownsStoppedAgentLifecycle => false;
 }

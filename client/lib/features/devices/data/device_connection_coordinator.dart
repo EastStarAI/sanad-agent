@@ -47,6 +47,9 @@ class DeviceConnectionCoordinator {
   StreamSubscription? _localLifecycleSubscription;
   bool _isDisposed = false;
   Future<void>? _localConnectionFuture;
+  Future<bool>? _localDaemonCheck;
+  AgentLifecycleResult? _localAgentLifecycle;
+  bool _localDaemonCheckForced = false;
   final Set<String> _cloudInterestDeviceIds = {};
   String? _lastPublishedCloudInterestSignature;
 
@@ -92,29 +95,63 @@ class DeviceConnectionCoordinator {
     }
   }
 
+  /// The most recent local agent lifecycle result, for Settings and notices.
+  AgentLifecycleResult? get localAgentLifecycle => _localAgentLifecycle;
+
+  Future<bool> _pairLocalAgent() async {
+    final result = await _serviceManager.updateDaemon(targetVersion: expectedVersion);
+    _localAgentLifecycle = result;
+    _emitChange();
+    return result.isSuccess;
+  }
+
+  /// Ensures the local agent runs at [expectedVersion] when allowed.
+  ///
+  /// Concurrent callers share one attempt so two bootstrap paths never update
+  /// or install the same executable at once. A forced caller that joined an
+  /// unforced attempt which failed retries once with force.
   Future<bool> checkAndStartLocalDaemon({bool force = false}) async {
     if (!AppPlatform.isDesktop) return false;
 
-    final isRunning = await _serviceManager.isDaemonRunning();
-    if (isRunning) {
-      final result = await _serviceManager.updateDaemon(
-        targetVersion: expectedVersion,
-      );
-      return result.isSuccess;
+    final inFlight = _localDaemonCheck;
+    if (inFlight != null) {
+      final inFlightForced = _localDaemonCheckForced;
+      final result = await inFlight;
+      if (result || inFlightForced || !force) return result;
+      return checkAndStartLocalDaemon(force: true);
     }
 
-    if ((_serviceManager.shouldAutoStart || force) && _serviceManager.isServiceInstalled()) {
-      final started = await _serviceManager.startDaemon();
-      if (!started) return false;
-      for (var attempt = 0; attempt < 8; attempt++) {
-        if (await _serviceManager.isDaemonRunning()) {
-          final result = await _serviceManager.updateDaemon(
-            targetVersion: expectedVersion,
-          );
-          return result.isSuccess;
-        }
-        await Future<void>.delayed(Duration(milliseconds: 300 + attempt * 250));
+    final attempt = _checkAndStartLocalDaemon(force: force);
+    _localDaemonCheck = attempt;
+    _localDaemonCheckForced = force;
+    try {
+      return await attempt;
+    } finally {
+      if (identical(_localDaemonCheck, attempt)) _localDaemonCheck = null;
+    }
+  }
+
+  Future<bool> _checkAndStartLocalDaemon({required bool force}) async {
+    if (await _serviceManager.isDaemonRunning()) {
+      return _pairLocalAgent();
+    }
+
+    if (!_serviceManager.shouldAutoStart && !force) return false;
+
+    if (_serviceManager.ownsStoppedAgentLifecycle) {
+      // The controller validates, replaces, registers, and starts the stopped
+      // agent itself, so an incompatible binary is never started first.
+      return _pairLocalAgent();
+    }
+
+    if (!_serviceManager.isServiceInstalled()) return false;
+    final started = await _serviceManager.startDaemon();
+    if (!started) return false;
+    for (var attempt = 0; attempt < 8; attempt++) {
+      if (await _serviceManager.isDaemonRunning()) {
+        return _pairLocalAgent();
       }
+      await Future<void>.delayed(Duration(milliseconds: 300 + attempt * 250));
     }
     return false;
   }

@@ -19,10 +19,68 @@ Sanad home binary directory, while launchd, systemd, or the Windows service
 adapter owns process persistence. Lifecycle actions target the registered
 service rather than an arbitrary process discovered by the UI.
 
-When the daemon is installed, update requests are delegated to its local
-`/update` endpoint so `AgentUpdateService` remains the only replacement owner.
-The client uses the shared verified bootstrap installer only when no standalone
-daemon executable exists yet. Later updates never use that bootstrap path.
+When the daemon is running, update requests are delegated to its local
+`/update` endpoint so `AgentUpdateService` remains the replacement owner.
+
+When the daemon is stopped, `StandaloneDaemonController.updateDaemon` owns the
+whole lifecycle (`ownsStoppedAgentLifecycle` is true), so the coordinator hands
+it the stopped Agent instead of starting the service first:
+
+1. Read the installed version with `sanad --version`. Only the dedicated
+   `Version:` line is accepted, with any prerelease suffix kept; an OS or
+   kernel version elsewhere in the output is never used.
+2. Check service compatibility with `sanad help service install` and require
+   every option in the platform's service install arguments (today only
+   `--user-scope` on Linux) as an exact flag.
+3. Reuse a compatible executable at the target version. Replace an absent,
+   older, unparseable, or incompatible one through the verified bootstrap
+   installer before any registration, so an old binary is never invoked with
+   an option it lacks. Never replace a newer executable. Start it when
+   compatible; once healthy it is `newerAgentInUse` (`isSuccess` true, with
+   `agentVersion`). An incompatible or non-starting newer executable is
+   `downgradeRejected`.
+4. Register the service when needed, start it, and wait for target-version
+   health. After a verified replacement on macOS or Linux, an existing
+   registration is reused unless the new executable's read-only
+   `sanad service definition` report says the installed plist or systemd user
+   unit differs from the one it would generate (executable, arguments,
+   `SANAD_HOME`, and the plist's `SANAD_SERVICE_INSTANCE`); then the service is
+   re-registered exactly once. An unknown report reuses the registration.
+   Windows refreshes its Scheduled Task on every registration. A failure after replacing an existing executable restores the
+   previous copy (see [Release and Update Architecture](update_architecture.md));
+   success removes the `.rollback` copy.
+
+The coordinator records the last result as `localAgentLifecycle` and emits a
+change. `LocalAgentLifecycleNotice` renders the localized `newerAgentInUseNotice`
+(en/ar) for the local device in Settings, and **Run Sanad Locally**
+(`InstallationTerminalView`) logs the same notice as `[INFO]` and completes.
+
+### Executable probes
+
+Probes are read-only, bounded, and Home-pinned. The capability probe is the
+`help <command>` form because it is read-only on every release; v1.0.0–v1.0.4
+ignore `service install --help` and perform a real installation. Each probe
+closes stdin, runs with `SANAD_HOME` set to the managed Home, and is killed
+after `StandaloneDaemonController.defaultExecutableProbeTimeout` (20 seconds);
+a timeout counts as an unknown version or an incompatible executable.
+
+Every agent child process the controller runs (probes and `service install`,
+`start`, and `stop`) receives `SANAD_HOME` for the managed Home and, when
+configured, `SANAD_SERVICE_INSTANCE`. The agent resolves its Home only from
+that variable (else `~/.sanad`), so a Client built for an isolated Home can
+never register, start, or stop the default service. Agents from this release
+answer `--version` and `help …` before preparing any Home, so a probe writes
+nothing; older Agents may still initialize the managed Home, never another one.
+`registerService` repeats the capability check and refuses to run
+`service install` with options the executable does not support.
+
+### Source runtimes and concurrency
+
+`SourceDaemonController` keeps `ownsStoppedAgentLifecycle` false: an explicit
+**Run Sanad Locally** starts the developer's source daemon and only then asks
+for an update, which returns `source_managed`. `checkAndStartLocalDaemon` is
+single-flight; concurrent callers share one attempt, and a forced caller that
+joined a failed unforced attempt retries once with force.
 
 ### Service Registration and Error Diagnostics
 
