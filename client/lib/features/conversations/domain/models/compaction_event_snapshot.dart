@@ -191,11 +191,25 @@ class CompactionEventSnapshot extends Equatable {
 }
 
 class SessionCompactResult extends Equatable {
+  /// Client-only outcome: the command was dispatched once but its
+  /// acknowledgement did not arrive within the request window. The daemon may
+  /// still be compacting; this is never a failure.
+  static const pendingOutcome = 'pending';
+
+  /// Client-only outcome: a pending command produced no correlated result
+  /// within the settlement window. The real outcome is unknown, not failed.
+  static const unconfirmedOutcome = 'unconfirmed';
+
   final String outcome;
   final String? failureReason;
   final String? compactionId;
   final String? failureStage;
   final String? failureCause;
+  final String? requestId;
+
+  /// Completes once with the daemon's late correlated result for a [pending]
+  /// command, or with [unconfirmedOutcome]. Not part of value equality.
+  final Future<SessionCompactResult>? settlement;
 
   const SessionCompactResult({
     required this.outcome,
@@ -203,6 +217,8 @@ class SessionCompactResult extends Equatable {
     this.compactionId,
     this.failureStage,
     this.failureCause,
+    this.requestId,
+    this.settlement,
   });
 
   factory SessionCompactResult.fromJson(Map<String, dynamic> json) {
@@ -221,10 +237,15 @@ class SessionCompactResult extends Equatable {
           json['compactionId']?.toString(),
       failureStage: failureStage,
       failureCause: failureCause,
+      requestId: json['request_id']?.toString(),
     );
   }
 
   bool get accepted => outcome == 'accepted';
+
+  bool get pending => outcome == pendingOutcome;
+
+  bool get unconfirmed => outcome == unconfirmedOutcome;
 
   bool get sessionBusy =>
       outcome == 'session_busy' ||
@@ -249,5 +270,6 @@ class SessionCompactResult extends Equatable {
     compactionId,
     failureStage,
     failureCause,
+    requestId,
   ];
 }

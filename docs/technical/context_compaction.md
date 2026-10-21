@@ -270,6 +270,15 @@ Plan 106 Gate G9 maps allowlisted stage and cause diagnostics into user-actionab
 4. **History & Live Parity:** `UnifiedDeviceMapper` parses `failure_stage` and `failure_cause` from both live `context_compaction.failed` envelopes and hydrated historical rows (`session.query`), ensuring reopening a conversation reproduces the exact same explanation as the original event.
 5. **Redaction & Safety:** Client feedback never renders raw exception messages, stack traces, file paths, or provider bodies.
 
+### 4.3.3 Manual `/compact` Acknowledgement Timing (Task 119)
+
+The daemon's `SessionRunOrchestrator.handleCompactCommand` awaits `CompactionCoordinator.runCompaction` before the handler emits `session.compact_result`, so the result carries the terminal outcome (`accepted` means completed) rather than admission. Busy, in-progress, unavailable and invalid-request rejections still return before any provider call. A provider summary can therefore outlive the Client's request window; the Client owns truthful presentation of that gap:
+
+1. **One dispatch, unchanged window:** `ConversationCommands.compactSession` sends `session.compact` once with the gateway's 10-second acknowledgement window (`defaultCompactAcknowledgementTimeout`); the global gateway timeout is not raised, and a timeout never resends.
+2. **Pending, not failed:** an unacknowledged dispatch returns `SessionCompactResult.pendingOutcome`. The composer shows the neutral localized `compactionPendingStillRunning` notice (info toast, not an error) and releases the runtime action; a later explicit `/compact` is a new user intent that the daemon admits or rejects (for example `compaction_in_progress`).
+3. **Late correlation:** a listener registered before dispatch matches the late `session.compact_result` by exact `session_id` and `request_id` and settles at most once (duplicates and other requests or sessions are ignored). Without a match inside `defaultCompactSettlementWindow` (10 minutes) or when the event stream closes, it settles as `unconfirmedOutcome`, which is unknown rather than failed and shows nothing further.
+4. **Real outcome:** a late failure or rejection shows the same `CompactionFailureFormatter` toast as an on-time one, exactly once, and only while the composer still shows the requesting session. A late success shows no toast. The `context_compaction.started|completed|failed` lifecycle tiles remain the durable timeline and history surface in every case.
+
 ### 4.4 `CompactionPressure`
 
 Input to the engine; produced by pressure evaluation only.

@@ -466,6 +466,10 @@
   "compactionActionPersistence": "Ensure sufficient disk space and try again.",
   "compactionFailureUnexpected": "Context compaction encountered an unexpected error.",
   "compactionActionRetry": "Try running compaction again.",
+  "compactionPendingStillRunning": "Context compaction is still running. Its result will appear in this conversation when it finishes.",
+  "@compactionPendingStillRunning": {
+    "description": "Neutral notice when the /compact acknowledgement is slower than the request window; the daemon may still be compacting, so this must never read as a failure."
+  },
   "compactionFailurePrefix": "Failure: {explanation}",
   "@compactionFailurePrefix": {
     "placeholders": {
