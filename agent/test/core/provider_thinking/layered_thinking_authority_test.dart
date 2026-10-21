@@ -34,7 +34,6 @@ import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
-import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
@@ -447,7 +446,10 @@ model_capabilities:
       modelId: model,
       selectionId: selectionId,
     );
-    final profile = ProviderRegistry.findByNameOrAlias(inst.templateId)!;
+    // Dispatch on the model's own wire, as `AgentRuntimeService` does (Task
+    // 120): a catalog-declared Responses/Messages model leaves the Chat wire.
+    final routed = assembler.routeInstance(inst, model);
+    final profile = routed.template!;
     Map<String, dynamic>? captured;
     final client = MockClient((request) async {
       captured = jsonDecode(request.body) as Map<String, dynamic>;
@@ -470,7 +472,7 @@ model_capabilities:
           headers: {'content-type': 'application/json'},
         );
       }
-      if (inst.protocol == ProviderProtocol.anthropicCompatible) {
+      if (routed.protocol == ProviderProtocol.anthropicCompatible) {
         return http.Response(
           jsonEncode({
             'id': 'msg-1',
@@ -498,7 +500,7 @@ model_capabilities:
       );
     });
     final LLMAdapter adapter =
-        inst.protocol == ProviderProtocol.anthropicCompatible
+        routed.protocol == ProviderProtocol.anthropicCompatible
         ? BaseAnthropicAdapter(
             config,
             profile,
@@ -844,8 +846,10 @@ model_capabilities:
         'max',
       ]);
       expect(d.defaultOptionId, isNull);
+      // Served on Responses (Task 120): the selection is `reasoning.effort`.
       final body = await wireBody(inst, 'gpt-6-luna', 'xhigh');
-      expect(body['reasoning_effort'], 'xhigh');
+      expect((body['reasoning'] as Map)['effort'], 'xhigh');
+      expect(body.containsKey('reasoning_effort'), isFalse);
     });
 
     test('claude-haiku-5-5: toggle plus effort with a leading Off', () async {

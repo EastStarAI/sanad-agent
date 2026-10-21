@@ -2,6 +2,7 @@
 library;
 
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_model_wire.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_stale_evidence.dart';
@@ -102,11 +103,21 @@ class ThinkingCapabilityAssembler {
   String _revision(ProviderInstance instance, String tag, String modelId) =>
       '${instance.configRevision}:${instance.credentialRevision}:$tag:$modelId';
 
+  /// [instance] viewed through [modelId]'s catalog-declared wire (Task 120),
+  /// so protocol, api mode and the models.dev wire follow the model's route.
+  ProviderInstance routeInstance(ProviderInstance instance, String modelId) =>
+      ProviderModelWire.routeInstance(
+        instance,
+        modelId,
+        lookup: _modelsDevLookup,
+      );
+
   /// Resolves the single layer that owns [model] on [instance].
   ThinkingCapabilityLayer resolveLayer({
     required ProviderInstance instance,
     required ModelOption model,
   }) {
+    instance = routeInstance(instance, model.value);
     final override = _config?.modelAwarePolicy
         .capabilityOverrideFor(model.value)
         ?.thinkingControl;
@@ -226,6 +237,7 @@ class ThinkingCapabilityAssembler {
     DateTime? observedAt,
     String? evidenceSource,
   }) {
+    instance = routeInstance(instance, model.value);
     final layer = resolveLayer(instance: instance, model: model);
     final descriptor = _assembleLayer(
       layer,

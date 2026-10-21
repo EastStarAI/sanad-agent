@@ -219,6 +219,7 @@ class ProviderRegistry {
       authType: 'api_key',
       apiMode: 'chat_completions',
       thinkingPolicyId: 'openai_chat_effort',
+      catalogModelWire: true,
       aliases: ['opencode_go', 'go', 'opencode-go-sub'],
       fallbackModels: [
         'kimi-k2.7-code',
