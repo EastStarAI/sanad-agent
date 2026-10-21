@@ -66,7 +66,7 @@ final class AttachmentStore {
 
   static const String storageDirectoryName = 'attachments';
   static const String _partialDirectoryName = '.partial';
-  static const String _payloadName = 'payload';
+  static const String payloadFileName = 'payload';
   static const int _maxSafeNameRunes = 120;
 
   final AgentStateDatabase _state;
@@ -184,7 +184,7 @@ final class AttachmentStore {
     final mime = _inspectMime(prefix);
     final attachmentId = const Uuid().v4();
     final mediaId = const Uuid().v4();
-    final relativePath = p.join(attachmentId, _payloadName);
+    final relativePath = p.join(attachmentId, payloadFileName);
     final targetDirectory = Directory(p.join(_root.path, attachmentId));
     final target = File(p.join(_root.path, relativePath));
     await _secureDirectory(targetDirectory);
@@ -233,6 +233,25 @@ final class AttachmentStore {
       agentLocalReference: p.join(storageDirectoryName, relativePath),
       mediaId: mediaId,
     );
+  }
+
+  /// Resolves the absolute on-disk path for an attachment inside this store.
+  ///
+  /// The admitted reference is honored only while it is store-relative and
+  /// stays inside the store root. A foreign absolute or traversal reference is
+  /// replaced by the canonical payload path derived from the opaque attachment
+  /// id, so no caller can project an external path. Returns null only when no
+  /// in-store path can be derived at all.
+  String? resolveAttachmentPath(UserAttachment attachment) {
+    final reference = attachment.agentLocalReference.trim();
+    if (reference.isNotEmpty && !p.isAbsolute(reference)) {
+      final candidate = p.normalize(p.join(p.dirname(_root.path), reference));
+      if (p.isWithin(_root.path, candidate)) return candidate;
+    }
+    final canonical = p.normalize(
+      p.join(_root.path, attachment.id, payloadFileName),
+    );
+    return p.isWithin(_root.path, canonical) ? canonical : null;
   }
 
   /// Resolves a durable private reference inside this store and revalidates

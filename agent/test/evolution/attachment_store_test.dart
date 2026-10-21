@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -180,6 +181,57 @@ void main() {
             ? await Process.run('stat', ['-f', '%Lp', path])
             : await Process.run('stat', ['-c', '%a', path]);
         expect((result.stdout as String).trim(), '600');
+      }
+    },
+  );
+
+  test(
+    'provider projection keeps non-image attachments on the message without a text projection',
+    () async {
+      final bytes = utf8.encode('%PDF-1.4 bounded file');
+      final upload = await store.create(
+        fileName: 'report.pdf',
+        expectedSize: bytes.length,
+        expectedSha256: sha256.convert(bytes).toString(),
+      );
+      await store.write(upload, bytes);
+      final attachment = await store.commit(
+        upload,
+        sessionId: 'session-a',
+        admissionId: 'message-a',
+      );
+      _claim(
+        store,
+        sessionId: 'session-a',
+        admissionId: 'message-a',
+        messageId: 'message-a',
+        attachmentId: attachment.id,
+      );
+
+      for (final supportsImageInput in [true, false]) {
+        final projected = await AgentRunner.projectUserAttachmentsForProvider(
+          store: store,
+          sessionId: 'session-a',
+          messages: [
+            Message(
+              role: MessageRole.user,
+              content: 'read the report',
+              attachments: [attachment],
+            ),
+          ],
+          supportsImageInput: supportsImageInput,
+        );
+
+        expect(projected.single.content, 'read the report');
+        expect(
+          projected.single.content,
+          isNot(contains('Agent-local attachments')),
+          reason:
+              'Wire disclosure owns the single reference projection; the '
+              'provider history must not duplicate it as text.',
+        );
+        expect(projected.single.attachments, hasLength(1));
+        expect(projected.single.attachments.single.id, attachment.id);
       }
     },
   );
@@ -442,7 +494,16 @@ void main() {
     'resolveAdmissionPaths accepts attached rows when owned by active message with matching admission requestId',
     () async {
       final upload = await store.create(fileName: 'replay-test.png');
-      await store.write(upload, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      await store.write(upload, [
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        0x0d,
+        0x0a,
+        0x1a,
+        0x0a,
+      ]);
       final committed = await store.commit(
         upload,
         sessionId: 'session-a',
@@ -451,12 +512,10 @@ void main() {
 
       // Simulate commitSoftRewindAdmission: row status updated to attached with message_id,
       // and active message inserted with matching request_id.
-      state.db.execute(
-        '''
+      state.db.execute('''
         INSERT INTO messages (session_id, message_id, request_id, history_status, data)
         VALUES ('session-a', 'msg-replay-1', 'req-replay-1', 'active', '{"role":"user","content":"replay"}')
-        ''',
-      );
+        ''');
       state.db.execute(
         '''
         UPDATE user_attachments

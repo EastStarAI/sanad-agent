@@ -132,10 +132,10 @@ class RunnerContextProjector {
         final isImage =
             attachment.kind == UserAttachmentKind.image ||
             attachment.mimeType.toLowerCase().startsWith('image/');
-        if (supportsImageInput && isImage) {
-          remainingAttachments.add(attachment);
-        } else {
+        if (!supportsImageInput && isImage) {
           textProjectedAttachments.add(attachment);
+        } else {
+          remainingAttachments.add(attachment);
         }
       }
 

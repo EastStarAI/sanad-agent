@@ -39,6 +39,8 @@ import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import 'tool_result_wire_codec.dart';
 import 'chat_reasoning_replay_policy.dart';
+import 'user_attachment_wire_discloser.dart';
+import '../../evolution/attachments/attachment_store.dart';
 import '../llm_request_dumper.dart';
 import '../context/compaction_token_estimator.dart';
 
@@ -1598,6 +1600,7 @@ class BaseOpenAIAdapter
           message,
           reasoningReplay[message] ?? ChatReasoningReplay.none,
           verifiedAttachments: verifiedAttachments,
+          attachmentStore: options.attachmentStore,
         ),
         supportsImageInput: supportsImages,
       ),
@@ -1673,16 +1676,26 @@ class BaseOpenAIAdapter
     Message message,
     ChatReasoningReplay reasoningReplay, {
     Map<String, String>? verifiedAttachments,
+    AttachmentStore? attachmentStore,
   }) {
     dynamic content = message.role == MessageRole.tool
         ? textOnlyToolResultContent(message)
         : message.content ?? '';
     if (message.role == MessageRole.user && message.attachments.isNotEmpty) {
+      final partition = UserAttachmentWireDiscloser.partition(
+        message.attachments,
+      );
+      final effectiveText = UserAttachmentWireDiscloser.discloseContent(
+        originalContent: message.content,
+        nonSafeAttachments: partition.disclosedFiles,
+        attachmentStore: attachmentStore,
+      );
+
       final parts = <Map<String, dynamic>>[];
-      if (message.content != null && message.content!.isNotEmpty) {
-        parts.add({'type': 'text', 'text': message.content!});
+      if (effectiveText.isNotEmpty) {
+        parts.add({'type': 'text', 'text': effectiveText});
       }
-      for (final att in message.attachments) {
+      for (final att in partition.safeImages) {
         final b64 =
             verifiedAttachments?[att.id] ??
             ToolResultWireCodec.userAttachmentBase64(
@@ -1696,8 +1709,10 @@ class BaseOpenAIAdapter
           });
         }
       }
-      if (parts.isNotEmpty) {
+      if (partition.hasSafeImages && parts.isNotEmpty) {
         content = parts;
+      } else {
+        content = effectiveText;
       }
     }
     final data = <String, dynamic>{
