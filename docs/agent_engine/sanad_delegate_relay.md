@@ -143,7 +143,7 @@ Appended newline-delimited event records matching status transitions:
 `sanad session stop <session_id>` is session-scoped and transport-confirmed: the daemon-backed CLI keeps its Local Gateway connection open through an ordered history query, then returns success only after the target is authoritatively idle or a matching `stopped` event arrives. A stop event for another session cannot complete the command, and an unconfirmed active stop fails instead of reporting false success.
 
 - **`0`**: Successful turn completion (`status: "completed"`).
-- **`1`**: Execution failure or prompt error (`status: "failed"`).
+- **`1`**: Execution failure or prompt error (`status: "failed"`). Also returned at once when the daemon blocks the turn (`cause: "blocked"`, no Stop sent; the blocked work awaits Retry, Change Provider or `sanad session stop`) or refuses it with a typed `error_code` such as `turn_failed`.
 - **`2`**: Validation error (invalid arguments or missing paths).
 - **`124`**: Execution timeout (`status: "timeout"`). Automatically sends `sanad session stop <session_id>`.
 - **`130` / `143`**: Process interrupted via `SIGINT` or `SIGTERM` (`status: "interrupted"`). Automatically sends `sanad session stop <session_id>`.

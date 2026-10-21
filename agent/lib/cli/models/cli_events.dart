@@ -486,6 +486,10 @@ class CliRuntimeNoticeEvent extends CliEvent {
       status == 'blocked' ||
       status == 'resuming' ||
       status == 'cleared';
+
+  /// Blocked work waits for an explicit Retry, Change Provider or Stop; a
+  /// non-interactive one-shot run ends on it instead of waiting (Task 125).
+  bool get isBlocked => status == 'blocked';
 }
 
 /// Error received from gateway.

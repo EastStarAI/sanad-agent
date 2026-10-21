@@ -398,6 +398,7 @@ class OneshotRunner {
     bool hasError = false;
     bool wasCancelled = false;
     bool wasInterrupted = false;
+    bool wasBlocked = false;
 
     final automaticallyApproveTools = allowAllTools;
 
@@ -701,6 +702,24 @@ class OneshotRunner {
             .listen((event) {
               if (event.sessionId == null ||
                   event.sessionId == effectiveSessionId) {
+                // A blocked turn awaits an intervention this non-interactive
+                // run cannot give: end now with one reason line instead of
+                // waiting for --timeout. The blocked work stays daemon-owned
+                // for Retry, Change Provider or Stop, so no Stop is sent.
+                if (event.isBlocked) {
+                  if (completer.isCompleted) return;
+                  hasError = true;
+                  wasBlocked = true;
+                  errorMessage =
+                      'blocked: ${event.message}. Intervene with '
+                      'sanad session stop $effectiveSessionId or retry from a '
+                      'client.';
+                  if (!json) {
+                    err.writeln('Error: $errorMessage');
+                  }
+                  completer.complete(1);
+                  return;
+                }
                 if (event.isRecovering) {
                   coordinator.recordRuntimeNotice(
                     status: event.status == 'cleared'
@@ -914,7 +933,9 @@ class OneshotRunner {
         status: terminalStatus,
         text: assistantBuffer.toString(),
         error: hasError ? errorMessage : null,
-        cause: terminalStatus == 'incomplete' ? 'missing_final' : null,
+        cause: terminalStatus == 'incomplete'
+            ? 'missing_final'
+            : (wasBlocked ? 'blocked' : null),
         finalModel: finalModel,
         finalProvider: finalProvider,
         usage: usageInfo,

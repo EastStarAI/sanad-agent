@@ -129,7 +129,7 @@ The CLI supports both attached daemon operation and standalone fallback:
 2. **Standalone Fallback Mode:**
    - Triggered when `--standalone` is passed or when no running daemon is detected.
    - `StandaloneCliTurnClient` initializes DI, auth, sessions, `SessionRunOrchestrator`, tools, permissions, provider routing, and canonical event translation inside the CLI process.
-   - It binds both orchestrator responses and `RuntimeRecoveryService` notices into the canonical event path. Only `fatal` (or an unknown fail-closed status) terminates the current one-shot command. `waiting`, `blocked`, `resuming`, and `cleared` are non-terminal recovery lifecycle events: an attached `sanad run` remains connected while blocked for intervention and through a later resume, until the turn completes or its own timeout/stop boundary fires.
+   - It binds both orchestrator responses and `RuntimeRecoveryService` notices into the canonical event path. `fatal` (or an unknown fail-closed status) and `blocked` end the current one-shot command. `blocked` awaits an intervention a non-interactive run cannot give, so `sanad run` exits `1` at once with one `Error: blocked: …` reason line (JSON `error`, artifact `status: failed`, `cause: blocked`) and sends no Stop: the blocked work stays daemon-owned for Retry, Change Provider or Stop (Task 125). `waiting`, `resuming`, and `cleared` remain non-terminal recovery lifecycle events while the daemon owns automatic progress. A typed refusal (`final_answer.error_code`, including `turn_failed`) also exits `1` at once.
    - It starts no Local Gateway, cloud transport, daemon supervisor, cron scheduler, or listening port.
    - The daemon and standalone process compete for the same owner-only state-root lock before SQLite opens. A conflict exits with configuration code `78` and advises attachment or another Home.
    - Teardown detaches the runtime bridge, closes orchestrator subscriptions, workspace/MCP/OAuth resources, provider model cache, the database owner, event streams, and finally the ownership lease.
@@ -137,7 +137,7 @@ The CLI supports both attached daemon operation and standalone fallback:
 
 3. **Automation and cancellation:**
    - `--timeout` defaults to 300 seconds and accepts 1–86400 seconds before or after `run`.
-   - Timeout, SIGINT, and SIGTERM converge on one idempotent Stop request and then deterministic exit codes `124`, `130`, and `143`.
+   - Timeout, SIGINT, and SIGTERM converge on one idempotent Stop request and then deterministic exit codes `124`, `130`, and `143`. A daemon block or refusal never reaches the timeout: it exits `1` immediately (Task 125).
    - `--json` emits one result envelope on stdout; `--quiet` emits only final assistant text. Bootstrap notices and diagnostics use stderr in both modes.
    - Gated tools are denied in non-interactive execution unless the caller supplies the invocation-scoped dangerous option `--allow-all-tools`; this option never mutates durable workspace policy.
 

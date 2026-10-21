@@ -1044,7 +1044,7 @@ void main() {
     );
 
     test(
-      'stays attached through waiting, blocked, and resuming runtime notices',
+      'stays attached through waiting and resuming runtime notices',
       () async {
         final runner = SanadCommandRunner(
           stdoutSink: stdoutBuffer,
@@ -1089,10 +1089,6 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         expect(completed, isFalse);
 
-        emitNotice('blocked', 'Waiting for retry or route intervention.');
-        await Future<void>.delayed(Duration.zero);
-        expect(completed, isFalse);
-
         emitNotice('resuming', 'Resuming last request with the new route.');
         await Future<void>.delayed(Duration.zero);
         expect(completed, isFalse);
@@ -1114,6 +1110,66 @@ void main() {
         expect(
           stderrBuffer.toString(),
           contains('Resuming last request with the new route.'),
+        );
+      },
+    );
+
+    test(
+      'exits 1 at once on a blocked notice with one reason line and no stop',
+      () async {
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          client: client,
+          stdinReader: () async => null,
+        );
+
+        final runFuture = _runTargeted(runner, [
+          'run',
+          '--timeout',
+          '300',
+          'Blocked provider turn',
+        ]);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final sentEnvelope =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final sessionId = sentEnvelope['payload']['session_id'] as String;
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': sessionId,
+            'event': {
+              'type': 'session.runtime_notice',
+              'session_id': sessionId,
+              'payload': {
+                'status': 'blocked',
+                'reason': 'invalidRequest',
+                'title': 'Image input not supported',
+                'message': 'Change provider or stop.',
+              },
+            },
+          }),
+        );
+
+        // The daemon already blocked the turn: the run ends now, not at its
+        // own 300 s timeout.
+        final exitCode = await runFuture.timeout(const Duration(seconds: 5));
+        expect(exitCode, 1);
+        final errorLines = const LineSplitter()
+            .convert(stderrBuffer.toString())
+            .where((line) => line.startsWith('Error:'))
+            .toList();
+        expect(errorLines, hasLength(1));
+        expect(
+          errorLines.single,
+          startsWith('Error: blocked: Image input not supported'),
+        );
+        expect(errorLines.single, contains('sanad session stop $sessionId'));
+        // Blocked work stays daemon-owned for intervention: no Stop is sent.
+        expect(
+          mockSocket.sentMessages.where((m) => m.contains('"stop"')),
+          isEmpty,
         );
       },
     );
