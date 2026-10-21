@@ -188,6 +188,13 @@ class _TestConversationInputCubit extends Cubit<ConversationInputState> implemen
 
   String? get admittedThinkingMode => admissions.isEmpty ? null : admissions.last.thinkingMode;
 
+  /// The explicit (user-chosen) thinking value the composer carries; a draft
+  /// resolves its effective selection from it.
+  String? explicitThinkingMode;
+
+  @override
+  String? get explicitNextMessageThinkingMode => explicitThinkingMode;
+
   @override
   void admitRouteThinkingMode(String? thinkingMode) {
     admissions.add(
@@ -738,10 +745,15 @@ void main() {
       expect(thinkingMenuOptionIds(tester), isNot(contains('low')));
       expect(
         inputCubit.selectCount,
+        0,
+        reason: 'admitting a route default is never a user choice (Task 122 D2)',
+      );
+      expect(
+        inputCubit.admitCount,
         1,
         reason: 'only the resolved current route admits its own native default',
       );
-      expect(inputCubit.selectedThinkingMode, 'high');
+      expect(inputCubit.admittedThinkingMode, 'high');
     },
   );
 
@@ -2038,6 +2050,8 @@ void main() {
     testWidgets(
       'failed modelSnapshot fetch preserves prior same-device snapshot without losing authority',
       (tester) async {
+        // The conversation stores its own High: an existing conversation shows
+        // its stored selection, never a value carried in memory (Task 122 D3).
         final session = Session(
           id: 'session-1',
           title: 'Session 1',
@@ -2045,6 +2059,7 @@ void main() {
           updatedAt: DateTime.now(),
           modelProvider: 'provider-1',
           model: 'model-a',
+          thinkingMode: 'high',
         );
         final sessionCubit = _TestSessionCubit(session);
         final inputCubit = _TestConversationInputCubit();
@@ -4023,6 +4038,56 @@ void main() {
         ]);
         expect(sessionCubit.thinkingWrites, isEmpty);
         expect(inputCubit.selectCount, 0);
+      },
+    );
+
+    testWidgets(
+      'Task 122 D3 (live case 4c): a NULL session shows its route default, never a carried High',
+      (tester) async {
+        fakeClient.snapshotResult = snapshotFor(
+          'glm-5.2',
+          const ThinkingControlDescriptorDto(
+            status: ThinkingCapabilityStatus.supported,
+            kind: ThinkingControlKind.effort,
+            defaultOptionId: 'max',
+            options: [
+              ThinkingControlOptionDto(id: 'high', label: 'High'),
+              ThinkingControlOptionDto(id: 'max', label: 'Max'),
+            ],
+          ),
+        );
+        final sessionCubit = _TestSessionCubit(
+          Session(
+            id: 'session-null',
+            title: 'NULL',
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+            modelProvider: 'provider-1',
+            model: 'glm-5.2',
+          ),
+        );
+        final inputCubit = _TestConversationInputCubit(mirrorSessionCubit: sessionCubit);
+        inputCubit.setActiveSession('session-null');
+
+        await tester.pumpWidget(
+          createWidget(
+            // The composer still carries a High that glm-5.2 also offers.
+            inputSlice: createInputSlice(
+              nextMessageProviderId: 'provider-1',
+              nextMessageModel: 'glm-5.2',
+              nextMessageThinkingMode: 'high',
+            ),
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('chip_Max')), findsOneWidget);
+        expect(find.byKey(const Key('chip_High')), findsNothing);
+        expect(inputCubit.admittedThinkingMode, 'max', reason: 'the next send carries the shown default');
+        expect(inputCubit.selectCount, 0);
+        expect(sessionCubit.thinkingWrites, isEmpty);
       },
     );
 

@@ -433,7 +433,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
           model: preserveBoundContext ? existing?.model : inputState.nextMessageModel ?? existing?.model,
           thinkingMode: preserveBoundContext
               ? existing?.thinkingMode
-              : inputState.nextMessageThinkingMode ?? existing?.thinkingMode,
+              : _inputCubit.explicitNextMessageThinkingMode ?? existing?.thinkingMode,
           permissionMode: preserveBoundContext ? existing?.permissionMode : inputState.permissionMode.name,
           pendingRequestId: null,
           updatedAt: DateTime.now().toUtc(),
@@ -447,17 +447,21 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
           clearPendingRequest: true,
         );
       } else {
+        // Only an explicit thinking choice is persisted. A route default the
+        // control admitted for display and the next send is never a choice,
+        // so the draft keeps null and the same default resolves again.
+        final explicitThinking = _inputCubit.explicitNextMessageThinkingMode;
         repo.setNewConversationDraft(
           deviceId,
           text: text,
           workspaceId: inputState.selectedWorkspace?.id,
           providerId: inputState.nextMessageProviderId,
           model: inputState.nextMessageModel,
-          thinkingMode: inputState.nextMessageThinkingMode,
+          thinkingMode: explicitThinking,
           clearWorkspace: inputState.selectedWorkspace == null,
           clearProvider: inputState.nextMessageProviderId == null,
           clearModel: inputState.nextMessageModel == null,
-          clearThinkingMode: inputState.nextMessageThinkingMode == null,
+          clearThinkingMode: explicitThinking == null,
           clearPermissionMode: true,
           clearPendingRequest: true,
         );
@@ -534,10 +538,17 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
   bool _draftContextMatchesInput(ConversationDraft draft) {
     final state = _inputCubit.state;
+    // A draft without a complete route does not own the route, so the device
+    // route it leaves in place is not a mismatch to restore again.
+    if (!draft.hasCompleteRoute) {
+      return state.selectedWorkspace?.id == draft.workspaceId;
+    }
+    // Compare the explicit thinking value: a draft never stores an admitted
+    // route default, so comparing the next-send value would restore forever.
     return state.selectedWorkspace?.id == draft.workspaceId &&
         state.nextMessageProviderId == draft.providerId &&
         state.nextMessageModel == draft.model &&
-        state.nextMessageThinkingMode == draft.thinkingMode;
+        _inputCubit.explicitNextMessageThinkingMode == draft.thinkingMode;
   }
 
   Future<void> _restoreNewConversationDraftContext(

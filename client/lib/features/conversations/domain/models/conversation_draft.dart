@@ -65,6 +65,13 @@ class ConversationDraft extends Equatable {
     updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
   );
 
+  /// Provider and model form one route. A pair with either side missing is
+  /// not a route and must never be persisted, copied, or restored as one.
+  static bool isCompleteRoute(String? providerId, String? model) =>
+      providerId?.trim().isNotEmpty == true && model?.trim().isNotEmpty == true;
+
+  bool get hasCompleteRoute => isCompleteRoute(providerId, model);
+
   bool get isEmpty =>
       text.trim().isEmpty &&
       workspaceId == null &&
