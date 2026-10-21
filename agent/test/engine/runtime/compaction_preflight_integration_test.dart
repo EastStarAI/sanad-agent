@@ -440,8 +440,21 @@ void main() {
           lastUserMessageAt: DateTime.utc(2026, 8, 29),
         ),
       );
+      // Task 118b: the full pass is sent only when it fits the window next to
+      // the output reservation, so this seed check runs on a window large
+      // enough for it, with a lower per-model threshold to reach pressure.
+      File('${sanadHome.path}/config.yaml').writeAsStringSync('''
+compaction:
+  models:
+    gpt-4o:
+      threshold: 0.50
+''');
+      getIt.registerSingleton<Config>(Config());
+      final wideAdapter = _PreflightAdapter(contextLimit: 200_000);
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+          wideAdapter;
       runner = AgentRunner(
-        _PreflightAdapter(contextLimit: 3_000),
+        wideAdapter,
         ToolsRegistry(),
         sessionManager,
         existingSessionId: 'session-preflight',

@@ -1,6 +1,9 @@
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/engine/adapters/rate_limited_llm_adapter.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/context/context.dart';
@@ -9,6 +12,8 @@ import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/session_projection_revision_repository.dart';
 import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:uuid/uuid.dart';
+
+import 'compaction_output_reservation.dart';
 
 /// Canonical compaction lifecycle payload for protocol/UI (Plan 53d D6).
 @immutable
@@ -217,6 +222,9 @@ class CompactionCoordinator {
     final compactionId = request.compactionId.isNotEmpty
         ? request.compactionId
         : const Uuid().v4();
+    final reservation = request.outputReservationTokens == null
+        ? _outputReservationFor(request.routeSignature)
+        : null;
     final engineRequest = CompactionEngineRequest(
       compactionId: compactionId,
       sessionId: request.sessionId,
@@ -241,6 +249,10 @@ class CompactionCoordinator {
       thresholdRatio: request.thresholdRatio,
       targetRatio: request.targetRatio,
       wireMeter: request.wireMeter ?? _wireMeterFor(request),
+      outputReservationTokens:
+          request.outputReservationTokens ?? reservation?.$1,
+      outputReservationSource:
+          request.outputReservationSource ?? reservation?.$2,
     );
 
     // Measuring precedes selection; selection and the claim stay synchronous.
@@ -404,6 +416,39 @@ class CompactionCoordinator {
       ),
     );
     return CompactionOutcome.completed(candidate: candidate);
+  }
+
+  /// The model's declared output reservation from cached provider metadata,
+  /// then models.dev (Task 118b). Lookup failures leave the engine fallback.
+  static (int, String)? _outputReservationFor(RouteSignature route) {
+    Map<String, Object?>? metadata;
+    Map<String, dynamic>? modelsDev;
+    try {
+      if (getIt.isRegistered<ProviderModelCacheService>()) {
+        for (final option
+            in getIt<ProviderModelCacheService>().snapshot(
+                  route.providerInstanceId,
+                ) ??
+                const []) {
+          if (option.value == route.modelId) {
+            metadata = option.modelMetadata;
+            break;
+          }
+        }
+      }
+      if (getIt.isRegistered<ModelsDevService>()) {
+        modelsDev = getIt<ModelsDevService>().modelEntrySync(
+          route.templateId,
+          route.modelId,
+        );
+      }
+    } catch (_) {
+      return null;
+    }
+    return CompactionOutputReservation.resolve(
+      providerModelMetadata: metadata,
+      modelsDevEntry: modelsDev,
+    );
   }
 
   /// The active route's own wire measurement of a provider projection, with

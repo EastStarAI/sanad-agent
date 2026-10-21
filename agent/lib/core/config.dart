@@ -476,6 +476,7 @@ class CompactionRecoveryPolicy {
     passBudgetSafetyRatio: 0.80,
     maxChunks: 16,
     minPassBudgetTokens: 512,
+    fallbackOutputReservationTokens: 16_384,
   );
 
   /// Fraction of the effective input budget one recovery pass may use. Kept
@@ -491,10 +492,19 @@ class CompactionRecoveryPolicy {
   /// tool schemas, and instruction are reserved.
   final int minPassBudgetTokens;
 
+  /// Output reservation assumed for the pre-send fit check of the full
+  /// summary pass when no route capability (settings, provider metadata,
+  /// models.dev) declares the model's maximum output (Task 118b). It is the
+  /// default completion reservation a provider applied when the request set
+  /// no output limit (live: 16384). Planning only: compaction never sends an
+  /// output cap of its own.
+  final int fallbackOutputReservationTokens;
+
   const CompactionRecoveryPolicy({
     required this.passBudgetSafetyRatio,
     required this.maxChunks,
     required this.minPassBudgetTokens,
+    this.fallbackOutputReservationTokens = 16_384,
   });
 }
 

@@ -719,10 +719,24 @@ correctness condition nor an efficiency claim. If the full request overflows,
 bounded contiguous chunk/reduce recovery (§8.12) preserves tool groups and never
 activates partial summaries.
 
+#### 8.11.2 Pre-send fit check of the full pass (Task 118b)
+
+Before the full summary pass is sent, the engine measures the whole summary request (the provider projection, the appended instruction and the tools) with the route's wire meter, or by estimate. It adds the output the provider will reserve. If that sum exceeds the window `W`, the full pass would be rejected, so it is not sent. The engine goes straight to the bounded chunk/reduce recovery (§8.12) and records `full_pass_skipped: presend_over_window`, `presend_request_tokens`, `output_reservation_tokens` and `output_reservation_source`.
+
+The reservation comes from route capability, in order:
+
+1. settings (`LLMRequestOptions.maxOutputTokens`);
+2. cached provider model metadata (an output-limit field, flat or under `top_provider`/`limit`);
+3. the models.dev `limit.output`;
+4. otherwise the conservative fallback `CompactionRecoveryPolicy.fallbackOutputReservationTokens` (16,384: the default completion reservation observed on a route with no output limit), bounded to a quarter of the window like the internal reservation of tiny windows.
+
+The reservation is a planning value only. Compaction still sends no output cap of its own, because a hard cap truncates summaries and reasoning models spend it on reasoning.
+
 ### 8.12 Bounded recovery summarizer (Task 117, 0P-F2)
 
-`ContextCompactionEngine._generateRecoverySummary` runs only after the
-ordinary provider request reports `CompactionProviderOverflow`. Its limits
+`ContextCompactionEngine._generateRecoverySummary` runs when the ordinary
+provider request reports `CompactionProviderOverflow`, or without that request
+when the pre-send fit check proves it cannot fit (Task 118b, below). Its limits
 live in `CompactionRecoveryPolicy` (`agent/lib/core/config.dart`; defaults:
 safety ratio `0.80`, at most `16` chunks, minimum pass budget `512` tokens)
 and are injectable through the engine constructor.

@@ -228,6 +228,10 @@ run can repeat compaction work; manual compaction and a new run remain eligible.
   current goal, latest user request, active state, critical context, and
   remaining work. Provider-only reasoning wrappers are removed and the parsed
   structure is redacted before persistence.
+- Before the full pass is sent, its whole request plus the output reservation
+  from route capability (settings, provider metadata, models.dev, then a
+  documented fallback) is checked against `W`; a pass that cannot fit is not
+  sent and the bounded recovery runs directly. No output cap is sent.
 - If the append-only request overflows before output, the bounded recovery
   summarizer packs contiguous groups that keep assistant tool calls with their
   results into chunks within a per-pass token budget, splits an overflowing

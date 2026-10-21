@@ -247,6 +247,48 @@ CompactionEngineRequest _request() => CompactionEngineRequest(
   thresholdRatio: 0.10,
 );
 
+/// A request whose full summary pass is close to the 8000-token window
+/// (Task 118b round 5 pre-send fit check).
+CompactionEngineRequest _nearWindowRequest({required int maxOutputTokens}) {
+  final rows = [
+    IndexedConversationMessage(
+      rowId: 1,
+      message: Message(role: MessageRole.user, content: 'finish the migration'),
+    ),
+    for (var index = 2; index <= 31; index++)
+      IndexedConversationMessage(
+        rowId: index,
+        message: Message(
+          role: MessageRole.assistant,
+          content: 'progress $index ${'word ' * 180}',
+        ),
+      ),
+  ];
+  return CompactionEngineRequest(
+    compactionId: 'cmp-presend',
+    sessionId: 'session-shapes',
+    trigger: CompactionTrigger.auto,
+    sourceRevision: const CompactionHistoryRevision(1),
+    routeSignature: _route,
+    contextWindowTokens: 8_000,
+    timeline: rows,
+    systemPrompt: 'stable system',
+    runtimeContext: '',
+    toolSchemas: const [],
+    providerProjection: [
+      Message(role: MessageRole.system, content: 'stable system'),
+      for (final row in rows) row.message,
+    ],
+    providerRequestOptions: LLMRequestOptions(
+      sessionId: 'session-shapes',
+      requestId: 'compaction:cmp-presend',
+      maxOutputTokens: maxOutputTokens,
+    ),
+    targetRequestTokens: 3_000,
+    thresholdRatio: 0.10,
+  );
+}
+
 void main() {
   late AgentStateDatabase state;
 
@@ -386,6 +428,49 @@ void main() {
       },
     );
   }
+
+  test(
+    'Task 118b: a full pass that cannot fit the window with its output reservation is skipped without a provider call',
+    () async {
+      final adapter = _ScriptedAdapter([
+        for (var i = 0; i < 20; i++) _Shape.valid,
+      ]);
+      final candidate = await engineFor(
+        adapter,
+      ).buildCandidate(_nearWindowRequest(maxOutputTokens: 4_096), force: true);
+
+      expect(candidate, isNotNull);
+      final attempts = candidate!.diagnostics!.attempts;
+      expect(attempts.map((a) => a.passKind), isNot(contains('full')));
+      expect(attempts.first.passKind, 'chunk');
+      expect(adapter.calls, attempts.length);
+      final decision = candidate.diagnostics!.decisionSnapshot!;
+      expect(decision['full_pass_skipped'], 'presend_over_window');
+      expect(decision['output_reservation_tokens'], 4_096);
+      expect(decision['output_reservation_source'], 'settings');
+      expect(
+        (decision['presend_request_tokens'] as int) + 4_096,
+        greaterThan(8_000),
+      );
+    },
+  );
+
+  test(
+    'Task 118b: a full pass that fits the window with its output reservation is sent',
+    () async {
+      final adapter = _ScriptedAdapter([_Shape.valid]);
+      final candidate = await engineFor(
+        adapter,
+      ).buildCandidate(_nearWindowRequest(maxOutputTokens: 256), force: true);
+
+      expect(candidate, isNotNull);
+      expect(candidate!.diagnostics!.attempts.single.passKind, 'full');
+      expect(
+        candidate.diagnostics!.decisionSnapshot!['full_pass_skipped'],
+        isNull,
+      );
+    },
+  );
 
   test('timeout fails at once with its measured duration recorded', () async {
     final adapter = _ScriptedAdapter([_Shape.timeout, _Shape.valid]);

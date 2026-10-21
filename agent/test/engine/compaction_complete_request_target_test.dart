@@ -187,7 +187,9 @@ void main() {
           summarizer: summarizer,
         ).buildCandidate(request, force: true);
 
-        expect(summarizer.calls, 1);
+        // Provider work happens (here the bounded recovery, since the full
+        // pass cannot fit the window with its output reservation).
+        expect(summarizer.calls, greaterThan(0));
         expect(candidate, isNotNull);
       },
     );

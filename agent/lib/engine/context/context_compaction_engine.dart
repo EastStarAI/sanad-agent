@@ -56,6 +56,13 @@ class CompactionEngineRequest {
   /// route exposes one.
   final CompactionWireMeter? wireMeter;
 
+  /// The model's output reservation from route capability (provider
+  /// metadata or models.dev) and where it came from, for the pre-send fit
+  /// check of the full summary pass. Settings win through
+  /// [LLMRequestOptions.maxOutputTokens].
+  final int? outputReservationTokens;
+  final String? outputReservationSource;
+
   const CompactionEngineRequest({
     required this.compactionId,
     required this.sessionId,
@@ -80,6 +87,8 @@ class CompactionEngineRequest {
     this.thresholdRatio = 0.90,
     this.targetRatio,
     this.wireMeter,
+    this.outputReservationTokens,
+    this.outputReservationSource,
   });
 }
 
@@ -173,6 +182,68 @@ class ContextCompactionEngine {
       }
     }
     return _estimatedMeasurement(request);
+  }
+
+  /// The conservative reservation when no capability declares one, bounded
+  /// to a quarter of the window like the internal reservation of tiny
+  /// windows ([calculateEffectiveInputWindow]), so a small window never
+  /// assumes an output it could not hold.
+  int _fallbackReservation(CompactionEngineRequest request) {
+    final window = request.inputLimitTokens ?? request.contextWindowTokens;
+    final quarter = (window * 0.25).floor();
+    final fallback = _recoveryPolicy.fallbackOutputReservationTokens;
+    return fallback < quarter ? fallback : quarter;
+  }
+
+  /// Pre-send fit check of the full summary pass (Task 118b): the whole
+  /// summary request (the projection, the appended instruction and the
+  /// tools) plus the output the provider reserves must fit the window `W`.
+  /// Returns the decision fields when it cannot, or `null` when it fits.
+  /// The reservation comes from route capability: settings
+  /// ([LLMRequestOptions.maxOutputTokens]), then provider metadata or
+  /// models.dev ([CompactionEngineRequest.outputReservationTokens]), then
+  /// the documented conservative fallback. It is a planning value only;
+  /// no output cap is sent.
+  Future<Map<String, dynamic>?> _fullPassFit(
+    CompactionEngineRequest request,
+    List<Message> base,
+    String instruction,
+  ) async {
+    final settings = request.providerRequestOptions.maxOutputTokens;
+    final (reservation, source) = settings != null && settings > 0
+        ? (settings, 'settings')
+        : request.outputReservationTokens != null &&
+              request.outputReservationTokens! > 0
+        ? (
+            request.outputReservationTokens!,
+            request.outputReservationSource ?? 'route_capability',
+          )
+        : (_fallbackReservation(request), 'fallback');
+    final summaryRequest = [
+      ...base,
+      Message(role: MessageRole.user, content: instruction),
+    ];
+    int? requestTokens;
+    final meter = request.wireMeter;
+    if (meter != null) {
+      try {
+        requestTokens = (await meter(summaryRequest))?.estimatedTokens;
+      } catch (_) {
+        requestTokens = null;
+      }
+    }
+    requestTokens ??=
+        CompactionTokenEstimator.estimateMessages(summaryRequest) +
+        CompactionTokenEstimator.estimateMediaTokens(summaryRequest) +
+        CompactionTokenEstimator.estimateToolSchemas(_toolSchemas(request));
+    final window = request.inputLimitTokens ?? request.contextWindowTokens;
+    if (requestTokens + reservation <= window) return null;
+    return {
+      'full_pass_skipped': 'presend_over_window',
+      'presend_request_tokens': requestTokens,
+      'output_reservation_tokens': reservation,
+      'output_reservation_source': source,
+    };
   }
 
   /// Prices every candidate retained tail as transmitted (Task 118 Stage3A
@@ -739,6 +810,21 @@ class ContextCompactionEngine {
       }
       final immutableBase = List<Message>.unmodifiable(base);
       var instruction = CompactionSummaryPrompt.buildJsonInstruction();
+      final presend = await _fullPassFit(request, immutableBase, instruction);
+      if (presend != null) {
+        // The full pass cannot fit the window next to the output the
+        // provider reserves; it would be rejected or truncated, so go
+        // straight to the bounded chunk/reduce recovery (Task 118b).
+        return _generateRecoverySummary(
+          request: request,
+          provider: provider,
+          source: prunedSource,
+          anchors: anchors,
+          initialLedger: ledger,
+          pressure: pressure,
+          presend: presend,
+        );
+      }
       var attempts = 0;
       var totalDuration = Duration.zero;
       _CompactionUsage aggregateUsage = const _CompactionUsage();
@@ -1113,10 +1199,12 @@ class ContextCompactionEngine {
     required List<CompactionContinuityAnchor> anchors,
     List<CompactionSummarizationAttemptRecord> initialLedger = const [],
     required RequestPressureSnapshot pressure,
+    Map<String, dynamic> presend = const {},
   }) async {
     final policy = _recoveryPolicy;
     final ledger = List<CompactionSummarizationAttemptRecord>.from(initialLedger);
     final decision = <String, dynamic>{
+      ...presend,
       'recovery_max_chunks': policy.maxChunks,
       'recovery_safety_ratio': policy.passBudgetSafetyRatio,
     };
