@@ -6,7 +6,6 @@ import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/delegate_task_tool.dart';
-import 'package:sanad_agent/capabilities/tools/list_scheduled_tasks_tool.dart';
 import 'package:sanad_agent/capabilities/tools/runtime/spec_backed_tool.dart';
 import 'package:sanad_agent/capabilities/tools/schedule_task_tool.dart';
 import 'package:sanad_agent/core/constants.dart';
@@ -102,19 +101,21 @@ void main() {
     );
 
     test(
-      'schedule and list typed results preserve legacy projections',
+      'schedule and list typed results preserve legacy projections and alias lookup',
       () async {
         final schedule = ScheduleTaskTool();
-        final list = ListScheduledTasksTool();
+        registry.registerTool(schedule);
+
+        final context = ToolContext(sessionId: 'test-session');
 
         final invalidTyped = await schedule.executeResult({
           'task': 'task',
           'time': 'invalid',
-        });
+        }, context: context);
         final invalidLegacy = await schedule.execute({
           'task': 'task',
           'time': 'invalid',
-        });
+        }, context: context);
         expect(invalidTyped.displayText, invalidLegacy);
         expect(invalidTyped.isError, isTrue);
         expect(invalidTyped.errorCode, ToolResultErrorCode.invalidInput);
@@ -122,15 +123,19 @@ void main() {
         final scheduled = await schedule.executeResult({
           'task': 'typed task',
           'time': 'in 1 hours',
-        });
+        }, context: context);
         expect(scheduled.isError, isFalse);
         expect(
           scheduled.displayText,
-          startsWith('Task scheduled successfully'),
+          contains('created successfully'),
         );
 
-        final listed = await list.executeResult({});
-        final legacyListed = await list.execute({});
+        // Resolved through lookup-only alias in registry
+        final listTool = registry.getTool('list_scheduled_tasks');
+        expect(listTool, isNotNull);
+
+        final listed = await listTool!.executeResult({}, context: context);
+        final legacyListed = await listTool.execute({}, context: context);
         expect(listed.displayText, legacyListed);
         expect(listed.displayText, contains('typed task'));
         expect(listed.isError, isFalse);

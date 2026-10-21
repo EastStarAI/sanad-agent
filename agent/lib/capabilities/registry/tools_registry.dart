@@ -17,6 +17,20 @@ class ToolsRegistry {
   final Map<String, BaseTool> _tools = {};
   final Map<String, LocalToolSpec> _specs = {};
 
+  /// Lookup-only aliases mapping legacy or alternative tool names to their canonical registered names.
+  ///
+  /// Aliases are lookup-only: they are honored by [getTool], [isRestartReplaySafe], and [getSpec],
+  /// but they never add a second entry to [allTools] or [allSpecs], and never appear in the model-facing catalog.
+  /// This is required because [ToolExecutionCoordinator] resolves tools by `registry.getTool(toolCall.name)`
+  /// and persisted/replayed tool-call identity (e.g. legacy `list_scheduled_tasks`) must keep working.
+  final Map<String, String> _aliases = {
+    'list_scheduled_tasks': 'schedule_task',
+  };
+
+  void registerAlias(String aliasName, String targetToolName) {
+    _aliases[aliasName] = targetToolName;
+  }
+
   void registerTool(BaseTool tool) {
     _tools[tool.schema.name] = tool;
     _specs[tool.schema.name] = _resolveSpec(tool);
@@ -29,18 +43,23 @@ class ToolsRegistry {
   }
 
   BaseTool? getTool(String name) {
-    return _tools[name];
+    final canonicalName = _aliases[name] ?? name;
+    return _tools[canonicalName];
   }
 
   bool isRestartReplaySafe(String name) {
-    return _tools[name]?.restartReplaySafe == true;
+    final canonicalName = _aliases[name] ?? name;
+    return _tools[canonicalName]?.restartReplaySafe == true;
   }
 
   List<BaseTool> get allTools => _tools.values.toList();
 
   List<LocalToolSpec> get allSpecs => _specs.values.toList(growable: false);
 
-  LocalToolSpec? getSpec(String name) => _specs[name];
+  LocalToolSpec? getSpec(String name) {
+    final canonicalName = _aliases[name] ?? name;
+    return _specs[canonicalName];
+  }
 
   List<Map<String, dynamic>> toRegisterAllToolsPayload() {
     return allSpecs
@@ -91,6 +110,9 @@ class ToolsRegistry {
   ToolsRegistry copy() {
     final clone = ToolsRegistry();
     clone.registerTools(allTools);
+    for (final entry in _aliases.entries) {
+      clone.registerAlias(entry.key, entry.value);
+    }
     return clone;
   }
 
