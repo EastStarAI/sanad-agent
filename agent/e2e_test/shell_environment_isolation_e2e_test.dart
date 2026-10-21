@@ -11,11 +11,15 @@ import 'package:test/test.dart';
 
 import 'support/local_gateway_test_support.dart';
 import 'support/workspace_policy_seed.dart';
+import '../test/support/isolated_sanad_test_home.dart';
 
 /// A real daemon process receives a provider credential in its own
 /// environment; a shell command it runs must not see it, while developer
 /// variables and `PATH` survive.
 void main() {
+  // In-process seeding and inspection open the temporary state roots the
+  // spawned daemons use; declare that isolation for the G0 test guard.
+  useIsolatedSanadStateRoot();
   const sentinel = 'sk-e2e-isolation-sentinel-000000000000';
 
   test(

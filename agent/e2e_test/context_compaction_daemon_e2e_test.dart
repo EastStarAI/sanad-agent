@@ -30,6 +30,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonica
 import 'package:test/test.dart';
 
 import 'support/local_gateway_test_support.dart';
+import '../test/support/isolated_sanad_test_home.dart';
 
 const _template = 'openai';
 const _authMethod = 'api_key';
@@ -57,6 +58,9 @@ const _structuredPngBytes = [
 ];
 
 void main() {
+  // In-process seeding and inspection open the temporary state roots the
+  // spawned daemons use; declare that isolation for the G0 test guard.
+  useIsolatedSanadStateRoot();
   test(
     'F.53.1 manual compact emits lifecycle and history row over real daemon',
     () async {

@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:test/test.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 /// Opens an isolated on-disk `AgentStateDatabase` inside a worker isolate and
 /// runs [count] transactions before signalling completion through [sendPort].
@@ -16,6 +18,9 @@ void _writerMain(List<Object> args) {
   AgentStateDatabase? db;
   var announcedReady = false;
   try {
+    // Isolates do not share the runner's root overrides: declare this
+    // worker's temporary state root explicitly (G0 test guard).
+    setSanadStateHomeOverride(dirPath);
     db = AgentStateDatabase.atPath(dirPath);
     ready.send(const ['ready']);
     announcedReady = true;
@@ -47,6 +52,7 @@ void _writerMain(List<Object> args) {
 }
 
 void main() {
+  useIsolatedSanadStateRoot();
   test(
     'concurrent writers on separate handles commit without lock failures',
     () async {

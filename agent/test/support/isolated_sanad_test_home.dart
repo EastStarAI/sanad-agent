@@ -34,3 +34,24 @@ void useIsolatedSanadTestHome() {
     if (await root.exists()) await root.delete(recursive: true);
   });
 }
+
+/// Gives every test in the calling suite a separate temporary runtime-state
+/// root without resetting dependency injection.
+///
+/// On-disk state owners (`AgentStateDatabase.atPath`, the vault) refuse to
+/// open from a Dart test without explicit isolation (G0). Suites that already
+/// pass their own temporary paths use this to declare that isolation; any
+/// default state resolution then also lands in a temporary root.
+void useIsolatedSanadStateRoot() {
+  late Directory root;
+
+  setUp(() {
+    root = Directory.systemTemp.createTempSync('sanad-test-state-root-');
+    setSanadStateHomeOverride(root.path);
+  });
+
+  tearDown(() {
+    setSanadStateHomeOverride(null);
+    if (root.existsSync()) root.deleteSync(recursive: true);
+  });
+}

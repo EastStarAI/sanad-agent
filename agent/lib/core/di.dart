@@ -2,12 +2,12 @@ import 'package:sanad_agent/core/provider_runtime/vault_secret_store.dart';
 import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/engine/runtime/thinking_field_rejection.dart';
-import 'dart:io';
 
 import 'package:get_it/get_it.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/sanad_home/test_runtime_isolation.dart';
 import 'package:sanad_agent/core/e2e_agent_runtime_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -94,20 +94,8 @@ import 'package:sanad_agent/evolution/title_service.dart';
 final GetIt getIt = GetIt.instance;
 
 void setupDI() {
-  final e2eTestMode =
-      Platform.environment['SANAD_E2E_TEST_MODE']?.trim().toLowerCase() ==
-      'true';
-  if (e2eTestMode) {
-    final stateHome = Platform.environment['SANAD_STATE_HOME']?.trim() ?? '';
-    final sanadHome = getSanadHome();
-    if (stateHome.isEmpty ||
-        Directory(stateHome).absolute.path ==
-            Directory(sanadHome).absolute.path) {
-      throw StateError(
-        'SANAD_E2E_TEST_MODE requires SANAD_STATE_HOME to be isolated from SANAD_HOME.',
-      );
-    }
-  }
+  final e2eTestMode = isSanadE2eTestMode();
+  requireSanadE2eTestIsolation();
 
   getIt.registerLazySingleton<AuthManager>(() => AuthManager());
   getIt.registerLazySingleton<DeviceCommandAdmission>(

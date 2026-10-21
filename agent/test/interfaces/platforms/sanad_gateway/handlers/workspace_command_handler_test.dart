@@ -16,8 +16,10 @@ import 'package:test/test.dart';
 
 import '../../../../support/memory_agent_secret_store.dart';
 import '../../../../support/memory_workspace_policy_store.dart';
+import '../../../../support/isolated_sanad_test_home.dart';
 
 void main() {
+  useIsolatedSanadStateRoot();
   final getIt = GetIt.instance;
 
   late Directory tempDir;

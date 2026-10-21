@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, watch, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -988,7 +988,9 @@ test('sanad sourceRoot validation fails closed on missing roots, entries, and wr
 });
 
 test('sanad custom Home propagation injects --home and fails closed on ambiguity', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'delegate-home-test-'));
+  // Canonical root: macOS tmpdir is a /var -> /private/var symlink and the
+  // supervisor records canonical workspaces.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-home-test-')));
   const worktree = join(root, 'target-worktree');
   const customHome = join(root, 'managed-home');
   const outDir = join(root, 'task-out');
@@ -1016,7 +1018,11 @@ test('sanad custom Home propagation injects --home and fails closed on ambiguity
     const resPath = resolve(outDir, 'result.json');
     const evPath = resolve(outDir, 'events.jsonl');
     mkdirSync(dirname(resPath), {recursive:true});
-    writeFileSync(resPath, JSON.stringify({status: 'completed', exit_code: 0, home, argv: args}));
+    writeFileSync(resPath, JSON.stringify({
+      status: 'completed', exit_code: 0, home, argv: args,
+      envHome: process.env.SANAD_HOME ?? null,
+      envStateHome: process.env.SANAD_STATE_HOME ?? null,
+    }));
     appendFileSync(evPath, JSON.stringify({type: 'completed', status: 'completed'}) + '\\n');
     process.exit(0);
   `, 'utf8');
@@ -1044,7 +1050,12 @@ test('sanad custom Home propagation injects --home and fails closed on ambiguity
     }],
   }), 'utf8');
 
-  runNode(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir, '--max-concurrency', '1']);
+  // The caller's own Home and state root must never reach the worker (G0).
+  runNode(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir, '--max-concurrency', '1'], {
+    ...process.env,
+    SANAD_HOME: join(root, 'caller-home'),
+    SANAD_STATE_HOME: join(root, 'caller-state'),
+  });
 
   const event = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '0']));
   assert.equal(event.to, 'completed');
@@ -1053,6 +1064,8 @@ test('sanad custom Home propagation injects --home and fails closed on ambiguity
   assert.equal(result.status, 'completed');
   assert.equal(result.home, customHome);
   assert.equal(result.argv.filter((value) => value === '--home').length, 1);
+  assert.equal(result.envHome, customHome);
+  assert.equal(result.envStateHome, null);
 
   const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.tasks['home-task'].home, customHome);

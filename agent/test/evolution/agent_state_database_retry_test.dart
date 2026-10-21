@@ -4,8 +4,10 @@ import 'package:logging/logging.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 void main() {
+  useIsolatedSanadStateRoot();
   test('on-disk database initializes in WAL mode with 5000ms busy_timeout', () {
     final dir = Directory.systemTemp.createTempSync('sanad_wal_');
     addTearDown(() => dir.deleteSync(recursive: true));

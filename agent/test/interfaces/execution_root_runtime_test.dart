@@ -29,6 +29,7 @@ import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 import 'package:test/test.dart';
 
 import 'interfaces_test.mocks.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 class RecordingRuntimeContextBuilder extends RuntimeContextBuilder {
   String? lastWorkspacePath;
@@ -54,6 +55,7 @@ class RecordingRuntimeContextBuilder extends RuntimeContextBuilder {
 }
 
 void main() {
+  useIsolatedSanadStateRoot();
   group('Workspace and temporary execution targeting', () {
     late Directory tempDir;
     late Directory logicalWorkspaceDir;
