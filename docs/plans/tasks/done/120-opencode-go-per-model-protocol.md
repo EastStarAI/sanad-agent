@@ -1,8 +1,8 @@
 ---
 id: 120
 title: OpenCode Go per-model wire protocol
-status: in-progress
-gate: independent-review
+status: completed
+gate: accepted
 created: 2026-10-21
 parent_task: none (split from 106)
 depends_on: [116]
@@ -42,7 +42,7 @@ Live round 1 of [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-t
 - [x] Wire fixtures for Responses and Messages against Go-shaped endpoints, and provider-state round-trips across a same-instance protocol change.
 - [x] Regression: unchanged Chat models keep the same issuer and wire.
 - [x] Owning docs: `docs/technical/provider_protocol.md`, `agent/lib/engine/adapters/AGENTS.md`.
-- [ ] Independent review and delegated Sanad live acceptance on the Test Home: Go `gpt-6-luna` with a thinking selection, and one Messages-served model, with explicit scalar evidence.
+- [x] Independent review and delegated Sanad live acceptance on the Test Home: Go `gpt-6-luna` with a thinking selection, and one Messages-served model, with explicit scalar evidence.
 
 ## Dependencies
 
@@ -60,3 +60,16 @@ Live round 1 of [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-t
 - **Recorded gap (not changed).** Responses `reasoning_items` are still not model-stamped (Task 116 D6). Go Responses models such as `gpt-6-luna` and `grok-4.7` share one issuer, so a cross-model encrypted replay is possible; it relies on the bounded `invalid_encrypted_content` recovery.
 - Remaining: independent review and delegated live acceptance on the Test Home.
 
+
+## Acceptance — 2026-10-21
+
+- **Coordinator review.** `fvm dart analyze` clean. Focused tests: 295 passed (the two new wire test files, layered thinking authority, adapters). Writer full suite: +2915 ~14.
+- **Live acceptance on a Test Home (OpenCode Go).**
+  - `gpt-6-luna` on Responses with thinking High: URL `/inference/go/openai/v1/responses`, `reasoning.effort=high`, `store=false`, HTTP 200. Encrypted reasoning replayed on the follow-up with no `invalid_encrypted_content`. Issuer `<id>|codex_responses|https://opencode.ai/inference/go/openai/v1`.
+  - `claude-haiku-5-5` on Messages: `x-api-key` and `anthropic-version` headers, adaptive thinking with effort high, HTTP 200 (no 401). Signed thinking replayed first.
+  - Switch to `deepseek-v4.1-flash`: unchanged Chat URL and issuer, with no foreign opaque state replayed.
+  - A compaction on the Responses route persisted `api_mode=codex_responses`. The compaction itself failed with `projection_still_over_budget` on a very small session. This predates Task 120 (the same failure occurred on DeepSeek before 120) and is moved to [Task 118](docs/plans/tasks/118-compaction-accuracy-and-target.md) for review.
+- **Residual risks.**
+  - Codex/Responses reasoning is not model-stamped across Go Responses models that share one issuer (follow-up task).
+  - A catalog `provider.api` overrides a user-custom base URL for opted-in templates.
+  - Chat models stay on the legacy `zen/go/v1` base for issuer stability.

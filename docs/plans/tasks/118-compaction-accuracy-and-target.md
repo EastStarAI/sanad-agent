@@ -37,6 +37,7 @@ Both predate Task 117 and were observed during its live acceptance on a Test Hom
 
 1. **Compaction-pass provider timeout.** The bounded recovery engaged as designed (3 chunks, per-pass budget 44,694, estimated source 96,218), but a recovery pass failed on a provider timeout in both rounds. The 90 s `connectTimeout` in `agent/lib/engine/adapters/provider_watchdog_config.dart` caps non-streamed compaction passes. The failure was contained: the session stayed usable and showed a notice.
 2. **Overflow-path breaker.** After a failed automatic compaction, overflow compaction still runs in the same run: `_autoCompactionBlockedForRun` in `agent/lib/engine/agent_runner.dart` is not checked on the overflow path.
+3. `projection_still_over_budget` on very small sessions (seen on 120 live and on DeepSeek 2026-10-20) — review in Stage2/3A.
 
 ## Boundaries
 
