@@ -1,12 +1,12 @@
 ---
 id: 117
 title: Session history integrity — in-place history rewrite and bounded recovery summarizer
-status: in-review
-gate: design-complete
+status: completed
+gate: completed-with-recovery-live-residual
 created: 2026-10-21
 parent_task: none (split from 106)
 depends_on: []
-delivery: own PR
+delivery: own PR (squash-merged to main)
 ---
 
 # Task 117 — Session History Integrity
@@ -48,7 +48,10 @@ Split from [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-
 - [x] The legacy affected shape stays ineligible with its record unchanged (0P regression lock).
 - [x] Recovery for a source larger than four windows: every request is within budget and the call count is bounded; over capacity fails with zero recovery provider calls (only the original overflowing request was sent) and an actionable localized notice (`agent/test/engine/compaction_bounded_recovery_test.dart`). Skipping the ordinary request on an estimated overflow is not implemented.
 - [x] Owning docs: `docs/technical/context_compaction.md`, `agent/lib/evolution/AGENTS.md`, `agent/lib/evolution/db/AGENTS.md`, engine `AGENTS.md`, `docs/agent_engine/context_compaction_design.md`, `docs/qa_maintenance/context_compaction_qa.md`.
-- [ ] Independent review, then delegated Sanad live acceptance on the Test Home: a compaction plus image or tool-repair history so a rewrite lands inside the source range, then continuation; and a session larger than four windows. The 0P live gate deferred from Task 106 (r2/r3 `not_run`) closes here.
+- [x] Independent coordinator review (see Acceptance Evidence).
+- [x] Delegated Sanad live acceptance on the Test Home, history integrity: rewrites inside the source range keep row ids, superseded rows and old compaction records; restart stable. The 0P live gate deferred from Task 106 (r2/r3 `not_run`) closes here.
+- [x] Live bounded recovery on a session larger than four windows engaged as designed. Its completion is not proven: a recovery pass hit the provider timeout (moved to [Task 118](docs/plans/tasks/118-compaction-accuracy-and-target.md)).
+- [ ] Live `/compact` on the image session followed by continuation: not run (token cost). The in-place image rewrite itself was observed live.
 
 ## Representative Data
 
@@ -57,4 +60,22 @@ Real sessions exported read-only from the main Home are staged privately for thi
 ## Dependencies
 
 - Must land before [Task 118](docs/plans/tasks/118-compaction-accuracy-and-target.md): 118's tail selection reads the boundary ranges this task stabilizes.
-- No file overlap with Task 116; the two can run in parallel.
+- Task 116 landed first; the merge with it was conflict-free.
+
+## Acceptance Evidence — 2026-10-21
+
+- **Coordinator review:** agent `dart analyze` clean; client `flutter analyze` clean. Focused suites: 55 passed for the in-place rewrite, bounded recovery, projection builder, history healer and pagination tests; 36 passed for the boundary repository. Writer's full agent suite: 2874 passed, 14 skipped. Client formatter and tile tests 24/24.
+- **Live on a Test Home with the representative corpus (two rounds):**
+  - History integrity PASS: no row-id changes, superseded rows preserved, old compaction records unchanged, exactly one boundary-invalidated log line, restart stable.
+  - `HistoryImagePruner` rewrote two image rows in place with the same ids (Option A confirmed live).
+  - Bounded recovery engaged as designed (3 chunks, per-pass budget 44,694, estimated source 96,218). In both rounds a recovery pass failed on a provider timeout. The failure was contained: the session stayed usable and showed a notice. Cause: the 90 s `connectTimeout` in `agent/lib/engine/adapters/provider_watchdog_config.dart` caps non-streamed compaction passes; it predates this task.
+  - The image-session `/compact` step was not run because of its token cost.
+
+## Residual Items Moved Out
+
+- **To [Task 118](docs/plans/tasks/118-compaction-accuracy-and-target.md):**
+  - The compaction-pass provider timeout above (non-streamed compaction passes capped by the 90 s `connectTimeout`).
+  - The overflow-path breaker: after a failed automatic compaction, overflow compaction still runs in the same run because `_autoCompactionBlockedForRun` is not checked on the overflow path in `agent/lib/engine/agent_runner.dart`.
+  - Both predate Task 117.
+- **New follow-up task (to be numbered):** a blocked work item can hold the session queue. Predates Task 117.
+- **Daemon E2E F.53.6** (rejected thinking preparation returns `accepted`) in `agent/e2e_test/context_compaction_daemon_e2e_test.dart` fails identically on the pre-117 base `2286267a`; it is unrelated to this task and not fixed here.

@@ -25,7 +25,7 @@ Ensure every request projects the same canonical conversation into the selected 
 
 ## Design
 
-A read-only design report (adapter/protocol inventory, correlated DeepSeek-on-OpenCode-Go mechanism, fetched vendor evidence, smallest owning-boundary design, wire-fixture plan and file ownership versus Tasks 117 and 120) exists in the coordinator's records. It is input, not accepted policy. Implementation is wave 2. It has no file overlap with [Task 117](docs/plans/tasks/117-session-history-integrity.md); the shared contract is that `providerState` and `metadata` stay opaque and round-trip byte-identically through history rewrites, and 116 adds keys only, never columns or `SessionDB` changes.
+A read-only design report (adapter/protocol inventory, correlated DeepSeek-on-OpenCode-Go mechanism, fetched vendor evidence, smallest owning-boundary design, wire-fixture plan and file ownership versus Tasks 117 and 120) exists in the coordinator's records. It is input, not accepted policy. Implementation is wave 2. It has no file overlap with [Task 117](docs/plans/tasks/done/117-session-history-integrity.md); the shared contract is that `providerState` and `metadata` stay opaque and round-trip byte-identically through history rewrites, and 116 adds keys only, never columns or `SessionDB` changes.
 
 ## Expanded User Scope and Live Verification — 2026-10-19
 
