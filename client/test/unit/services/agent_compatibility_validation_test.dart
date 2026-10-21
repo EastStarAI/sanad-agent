@@ -337,9 +337,16 @@ void main() {
       expect(await controller.validateServiceInstallCompatibility(), isFalse);
     });
 
-    test('probes pin SANAD_HOME to the managed Home', () {
+    test('agent child processes are pinned to the managed Home and service instance', () {
       final controller = controllerFor(FakeAgentCli('1.0.17'));
-      expect(controller.executableProbeEnvironment, {'SANAD_HOME': tempHome.path});
+      expect(controller.managedAgentEnvironment, {'SANAD_HOME': tempHome.path});
+
+      final isolated = StandaloneDaemonController(
+        sanadHomePath: tempHome.path,
+        environment: {'HOME': tempHome.path, 'SANAD_SERVICE_INSTANCE': 'qa107'},
+        platformOverride: 'linux',
+      );
+      expect(isolated.managedAgentEnvironment, {'SANAD_HOME': tempHome.path, 'SANAD_SERVICE_INSTANCE': 'qa107'});
     });
 
     test('option detection requires the exact flag', () async {

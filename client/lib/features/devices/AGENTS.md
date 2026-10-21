@@ -51,7 +51,8 @@ This contract applies to `client/lib/features/devices/`.
 - Development source runtimes must not be force-terminated or auto-started by normal UI lifecycle actions.
 - A failed or timed-out safe restart must not fall back to process termination or stop/start; force restart requires an explicit daemon request flag.
 - Production service management remains encapsulated by the standalone controller implementation.
-- An installed daemon owns its own updates through the local update endpoint. The client may bootstrap a verified agent only when the executable is absent; it must not maintain a competing updater after installation.
+- A running daemon owns its own updates through the local update endpoint. The standalone controller may use the verified bootstrap installer only while the agent is stopped and its executable is absent, older than the client, unparseable, or missing a required service option; it must never replace a newer executable or run a competing updater against a running daemon.
+- Probes of an installed agent executable must be read-only (`--version`, `help <command>`), bounded by a timeout, and pinned to the managed Sanad Home. Never run a mutating subcommand, including `service install --help`, to discover capabilities.
 
 ## Cross-Feature Boundary
 - Device selection comes from `DeviceCubit`; conversation cache/session selection belongs to the conversations feature.

@@ -152,10 +152,26 @@ class StandaloneDaemonController implements LocalDaemonController {
     return null;
   }
 
-  /// Environment for read-only executable probes. It pins the probed binary to
-  /// the Home this controller manages, so a probe can never initialize a
-  /// different Sanad Home.
-  Map<String, String> get executableProbeEnvironment => {'SANAD_HOME': getSanadHome()};
+  /// Environment for every agent child process this controller runs.
+  ///
+  /// The agent resolves its Home only from `SANAD_HOME` (else `~/.sanad`) and
+  /// its service identity from `SANAD_SERVICE_INSTANCE`. Passing both pins
+  /// probes and service commands to the Home and instance this controller
+  /// manages, so a Client built for an isolated Home can never register,
+  /// start, or stop the default service or initialize another Home.
+  Map<String, String> get managedAgentEnvironment {
+    final instance = _serviceInstance();
+    return {
+      'SANAD_HOME': getSanadHome(),
+      if (instance.isNotEmpty) 'SANAD_SERVICE_INSTANCE': instance,
+    };
+  }
+
+  Future<ProcessResult> _runAgent(String execPath, List<String> arguments) {
+    final runner = processRunner;
+    if (runner != null) return runner(execPath, arguments);
+    return Process.run(execPath, arguments, environment: managedAgentEnvironment);
+  }
 
   /// The version reported by the installed executable's `--version` output,
   /// including any prerelease suffix, or null when it is absent, unparseable,
@@ -219,7 +235,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       return await _runBoundedProcess(
         execPath,
         arguments,
-        environment: executableProbeEnvironment,
+        environment: managedAgentEnvironment,
         timeout: executableProbeTimeout,
       );
     } catch (error) {
@@ -254,8 +270,7 @@ class StandaloneDaemonController implements LocalDaemonController {
   Future<bool> startDaemon() async {
     try {
       final execPath = getExecutablePath();
-      final runner = processRunner ?? Process.run;
-      final result = await runner(execPath, ['service', 'start']);
+      final result = await _runAgent(execPath, ['service', 'start']);
       _logger.info('Started daemon service: exitCode=${result.exitCode}');
       return result.exitCode == 0;
     } catch (e) {
@@ -268,8 +283,7 @@ class StandaloneDaemonController implements LocalDaemonController {
   Future<bool> stopDaemon() async {
     try {
       final execPath = getExecutablePath();
-      final runner = processRunner ?? Process.run;
-      final result = await runner(execPath, ['service', 'stop']);
+      final result = await _runAgent(execPath, ['service', 'stop']);
       _logger.info('Stopped daemon service: exitCode=${result.exitCode}');
       return result.exitCode == 0;
     } catch (e) {
@@ -566,8 +580,7 @@ class StandaloneDaemonController implements LocalDaemonController {
           diagnostic: ServiceRegistrationResult.incompatibleExecutableDiagnostic,
         );
       }
-      final runner = processRunner ?? Process.run;
-      final result = await runner(execPath, serviceInstallArguments);
+      final result = await _runAgent(execPath, serviceInstallArguments);
       if (result.exitCode != 0) {
         final detail = sanitizeServiceRegistrationOutput(
           stderr: result.stderr.toString(),
