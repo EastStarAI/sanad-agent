@@ -20,21 +20,15 @@ class WorkspaceMcpCoordinator {
     resolveWorkspacePathById,
     required Future<String?> Function(String workspaceIdOrPath)
     resolveWorkspacePath,
-    McpRuntimeManager? mcpRuntimeManager,
-    McpOAuthService? mcpOAuthService,
+    required McpRuntimeManager mcpRuntimeManager,
+    required McpOAuthService mcpOAuthService,
   })  : _getSanadHome = getSanadHome,
         _getCurrentWorkspacePath = getCurrentWorkspacePath,
         _getWorkspaceRecordById = getWorkspaceRecordById,
         _resolveWorkspacePathById = resolveWorkspacePathById,
         _resolveWorkspacePath = resolveWorkspacePath,
-        _mcpRuntimeManager =
-            mcpRuntimeManager ??
-            McpRuntimeManager(
-              settingsStore: SanadSettingsStore(
-                homeDirectoryPath: getSanadHome(),
-              ),
-            ),
-        _mcpOAuthService = mcpOAuthService ?? McpOAuthService();
+        _mcpRuntimeManager = mcpRuntimeManager,
+        _mcpOAuthService = mcpOAuthService;
 
   final String Function() _getSanadHome;
   final String? Function() _getCurrentWorkspacePath;
