@@ -874,6 +874,7 @@ class AgentStateDatabase {
         normalized_base_url TEXT NOT NULL,
         config_revision INTEGER NOT NULL,
         credential_revision INTEGER NOT NULL,
+        api_mode TEXT,
         context_window_tokens INTEGER,
         effective_input_budget_tokens INTEGER,
         auto_threshold_tokens INTEGER,
@@ -945,6 +946,11 @@ class AgentStateDatabase {
     _safeAddColumn(
       db,
       'ALTER TABLE session_compaction_operations ADD COLUMN diagnostics_json TEXT',
+    );
+    // Task 120: catalog-resolved per-model api mode of the route signature.
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN api_mode TEXT',
     );
     db.execute('''
       CREATE UNIQUE INDEX IF NOT EXISTS idx_session_compaction_one_started

@@ -18,7 +18,7 @@ Ensure every request projects the same canonical conversation into the selected 
 ## Intake and Authorization
 
 - The user supplied an external investigation of a failure observed while working in Task 106's worktree. The initial intake was record-only; the 2026-10-19 user amendment authorized this scoped repair, originally within [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-estimation-repair.md).
-- Detached from Task 106 on 2026-10-21 and delivered in its own PR. Task 115 is complete ([record](docs/plans/tasks/done/115-post-201-provider-thinking-route-admission-regression.md)), so there is no remaining admission dependency. [Task 120](docs/plans/tasks/120-opencode-go-per-model-protocol.md) depends on this task and must keep provider-state issuers stable for unchanged Chat routes.
+- Detached from Task 106 on 2026-10-21 and delivered in its own PR. Task 115 is complete ([record](docs/plans/tasks/done/115-post-201-provider-thinking-route-admission-regression.md)), so there is no remaining admission dependency. [Task 120](docs/plans/tasks/done/120-opencode-go-per-model-protocol.md) depends on this task and must keep provider-state issuers stable for unchanged Chat routes.
 - Keep reasoning replay distinct from thinking-capability admission and pressure estimation. An upstream replay failure after admission is not automatically a compaction-estimation cause. Any proven blocking dependency on another task must be recorded here before work proceeds.
 - Live acceptance uses this task's own worktree source and the user-designated Test Home (`.sanad-test` under user home), preserving the normal conversation runtime; rediscover runtime ownership before live work. No merge, protected label, runtime source switch, credential copy or new provider is implied by this plan.
 - The report is not independent verification by the coordinating principal. Its counts, causal claims and proposed remedies remain hypotheses until the exact request, canonical rows and current source are correlated.
@@ -103,5 +103,5 @@ Relevant owners: `agent/lib/engine/adapters/base_openai_adapter.dart`, typed pro
 - An orphan Anthropic `tool_use` (no matching result) is now rejected with a specific notice instead of being silently dropped.
 - Legacy assistant rows without a recorded model are treated as foreign for opaque-state replay.
 - The rejection notice is English-only until the Client-keyed localization lands.
-- [Task 120](docs/plans/tasks/120-opencode-go-per-model-protocol.md) must keep provider-state issuer strings stable for unchanged Chat routes.
+- [Task 120](docs/plans/tasks/done/120-opencode-go-per-model-protocol.md) must keep provider-state issuer strings stable for unchanged Chat routes.
 - Live post-compaction continuation is covered by a compaction-shaped fixture only.

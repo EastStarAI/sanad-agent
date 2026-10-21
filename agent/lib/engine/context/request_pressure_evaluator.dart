@@ -140,6 +140,8 @@ class RequestPressureEvaluator {
       'model_id': routeSignature.modelId,
       'protocol': routeSignature.protocol,
       'base_url': routeSignature.normalizedBaseUrl,
+      // Additive (Task 120): unchanged routes keep their existing proof.
+      'api_mode': ?routeSignature.apiMode,
       'stable': wireMeasurement.stableMaterialFingerprint,
       'items': wireMeasurement.inputItemFingerprints,
     };
@@ -165,6 +167,7 @@ class RequestPressureEvaluator {
       route.modelId,
       route.protocol,
       route.normalizedBaseUrl,
+      route.apiMode,
       route.configRevision,
       route.credentialRevision,
       jsonEncode(toolSchemas),

@@ -233,7 +233,7 @@ DeepSeek and ZAI templates carry the `deepseek_thinking` / `zai_thinking` wire l
 
 The Kimi Moonshot template carries the `kimi_thinking` wire label (generic Chat codec: `reasoning_effort` for efforts, `thinking: {type: enabled/disabled}` for a toggle). Its controls come from the five-layer authority: provider-reported `/models` metadata first (for example `kimi-for-coding` reporting `think_efforts` `low/high/max` default `max` with thinking type `only`), then shipped defaults (`kimi-k3` `low/high/max` default `max`, `kimi-k2.6` toggle default `on`), then models.dev.
 
-OpenCode Go routes take controls from the five-layer authority. Shipped defaults restore the pre-regression families: DeepSeek `off/low/high/max` default `high`, GLM, Kimi and Grok. The `opencode-go` models.dev vendor entry answers for models without a shipped record, for example `gpt-6-luna` effort `none…max` and `claude-haiku-5-5` toggle plus effort. `supports_reasoning_output` alone never proves request-time control support. An unselected or cleared choice resolves to `UseProviderDefault()`. Per-model wire protocol (`provider.npm` `@ai-sdk/openai` → Responses, `@ai-sdk/anthropic` → Messages) is not yet routed (see the Task 106 live-r1 D3 record); those models still dispatch on the template Chat wire.
+OpenCode Go routes take controls from the five-layer authority. Shipped defaults restore the pre-regression families: DeepSeek `off/low/high/max` default `high`, GLM, Kimi and Grok. The `opencode-go` models.dev vendor entry answers for models without a shipped record, for example `gpt-6-luna` effort `none…max` and `claude-haiku-5-5` toggle plus effort. `supports_reasoning_output` alone never proves request-time control support. An unselected or cleared choice resolves to `UseProviderDefault()`. Models the catalog serves on Responses or Messages resolve their controls on that wire (see [Per-model catalog wire](#per-model-catalog-wire-task-120)): `gpt-6-luna` effort becomes `reasoning.effort`, and `claude-haiku-5-5` effort becomes Anthropic adaptive effort. A bare models.dev toggle has no Messages representation, so for example `minimax-m3` stays `unknown` and dispatches with the provider default.
 
 A turn `thinking_mode` that equals the session preference persisted before the turn (for example the value a Client sent with `create_session` and repeats on the first `think`) is a carried-over preference, not a fresh explicit choice. When the target route reports a set that does not offer it, the daemon admits the turn with provider default and records the route-scoped correction instead of rejecting it. A fresh explicit value is clamped to the nearest lower offered level, or rejected before any provider request when none exists. On an `unknown` route any value passes through and no thinking field is sent.
 
@@ -421,11 +421,53 @@ restarts and compacted tails need no reset.
   Responses replays only its own issuer's `reasoning_items`; strict Chat routes
   receive no reasoning keys from foreign history. Codex reasoning items are not
   yet model-stamped: cross-model rejection on one Codex instance is unevidenced
-  and remains a recorded gap.
+  and remains a recorded gap. Since Task 120 the gap also covers OpenCode Go
+  Responses models (for example `gpt-6-luna` and `grok-4.7`), which share one
+  Responses issuer; a rejected replay takes the bounded
+  `invalid_encrypted_content` recovery.
 
-Task 120 must keep the Chat issuer string stable for unchanged routes or
-declare an issuer-equivalence set; otherwise every persisted row becomes
-foreign under this projection.
+Task 120 keeps the Chat issuer string byte-identical for unchanged routes, so
+no issuer-equivalence set exists. A model that moves to another wire mints a
+new issuer, and its older Chat history is foreign under this projection.
+
+### Per-model catalog wire (Task 120)
+
+A template opts in with `catalogModelWire` (only `opencode-go` today). For an
+opted-in, non-custom instance, `ProviderModelWire` reads the serving vendor's
+exact hydrated models.dev entry, with no I/O, and maps its `provider.npm`:
+
+| `provider.npm` | Wire | Adapter | Issuer |
+| --- | --- | --- | --- |
+| `@ai-sdk/openai` | Responses (`codex_responses`) | `CodexResponsesAdapter` (bearer key, `POST {api}/responses`) | `<instance>\|codex_responses\|<api>` |
+| `@ai-sdk/anthropic` | Messages (`anthropic_messages`) | `BaseAnthropicAdapter` (`x-api-key`, `POST {api}/messages`) | `<instance>\|anthropic_compatible\|<api>` |
+| anything else, or absent | the instance's configured wire | unchanged | unchanged |
+
+- The base URL is the entry's own `provider.api` (https only). If either the
+  package or `provider.api` is missing, the model keeps the configured wire
+  and base URL. There is no guessed endpoint, no model-name table, no provider
+  substitution and no credential copying; the instance key and headers are
+  reused.
+- Chat-served models keep the configured base (for OpenCode Go the template's
+  `https://opencode.ai/zen/go/v1`), even though their catalog entry names
+  `/inference/go/openai/v1`. Their issuer and wire stay byte-identical.
+- `AgentRuntimeService.resolveSignature` freezes the result into
+  `RouteSignature`: `protocol`, `normalizedBaseUrl` and the additive `apiMode`
+  (`null` for the configured wire). The adapter cache key, `_buildAdapter`
+  (via `ProviderProfile.withRouteWire`), compaction measurement and summarizer
+  (`adapterFor(routeSignature)`), and request dumps (the adapter's real URL)
+  all follow from the signature. The compaction route is persisted with an
+  additive nullable `api_mode` column. The wire proof adds `api_mode` only when
+  it is set, so existing proofs stay valid.
+- Thinking authority sees the same wire. `ThinkingCapabilityAssembler.routeInstance`
+  views the instance through the model's catalog wire before
+  `ThinkingRoutePolicy.apiModeFor`, `policyIdFor`, `isWireCompatible` and
+  `ModelsDevThinkingWire.forRoute` run, and `ThinkingSelectionResolver`
+  validates on that view. The view is transient and is never persisted.
+- Image capability stays model-identity based (the route capability resolver
+  is unchanged); the Responses and Messages adapters declare native image tool
+  results.
+- A catalog that is not yet hydrated resolves no override, so the model
+  dispatches on the configured wire until the catalog loads.
 Chat Completions sync and stream share the same request fields and terminal
 classification; stream-only flags are the only payload difference.
 

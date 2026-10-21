@@ -73,6 +73,12 @@ class ProviderProfile {
   /// derives from [apiMode].
   final String? thinkingPolicyId;
 
+  /// Whether a model on this template may be dispatched on its own wire as
+  /// declared by the serving vendor's exact models.dev entry (`provider.npm`
+  /// plus `provider.api`, Task 120). Off by default: only templates whose
+  /// catalog documents per-model endpoints opt in.
+  final bool catalogModelWire;
+
   const ProviderProfile({
     required this.name,
     this.displayName = '',
@@ -96,7 +102,39 @@ class ProviderProfile {
     this.supportsMultipleInstances = true,
     this.defaultRequestsPerMinute = 0,
     this.thinkingPolicyId,
+    this.catalogModelWire = false,
   });
+
+  /// This template re-pointed at one model's catalog-declared wire (Task 120).
+  /// Identity, auth and headers are unchanged; the thinking policy derives
+  /// from the new [apiMode] and the copy never re-resolves a catalog wire.
+  ProviderProfile withRouteWire({
+    required String apiMode,
+    required String protocol,
+    required String baseUrl,
+  }) => ProviderProfile(
+    name: name,
+    displayName: displayName,
+    description: description,
+    defaultBaseUrl: baseUrl,
+    envApiKeyName: envApiKeyName,
+    envModelName: envModelName,
+    envBaseUrlName: envBaseUrlName,
+    defaultHeaders: defaultHeaders,
+    authType: authType,
+    apiMode: apiMode,
+    aliases: aliases,
+    fallbackModels: fallbackModels,
+    authFlow: authFlow,
+    docsUrl: docsUrl,
+    supportsModelFetch: supportsModelFetch,
+    disconnectable: disconnectable,
+    protocol: protocol,
+    apiKeyRequirement: apiKeyRequirement,
+    authMethods: authMethods,
+    supportsMultipleInstances: supportsMultipleInstances,
+    defaultRequestsPerMinute: defaultRequestsPerMinute,
+  );
 
   /// Resolves the effective auth flow, deriving from authType when authFlow
   /// is not explicitly set.
