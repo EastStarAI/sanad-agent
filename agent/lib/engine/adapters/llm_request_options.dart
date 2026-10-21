@@ -104,6 +104,10 @@ class LLMRequestOptions {
         'type': 'openai_effort',
         'effort': effort,
       },
+      NativeThinkingEffortDirective(:final effort) => {
+        'type': 'native_effort',
+        'effort': effort,
+      },
       ResponsesReasoningDirective(:final effort, :final summary) => {
         'type': 'responses_reasoning',
         'effort': effort,

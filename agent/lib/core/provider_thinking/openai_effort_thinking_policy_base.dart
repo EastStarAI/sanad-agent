@@ -1,22 +1,16 @@
 /// Shared OpenAI-family effort policy logic (Task 43 Gate E).
 ///
-/// The policy owns the Chat/Responses effort *wire family*; the exact model
-/// facts it publishes come from model-owned authorities:
-/// * the exact OpenAI reasoning catalog and validated native Codex metadata,
-/// * exact grounded xAI Grok facts on Chat-compatible modes,
-/// * exact grounded `gpt-oss` facts on the compatible Chat reasoning-effort
-///   mode (intrinsic model facts, no provider-kind allowlist).
+/// The policy owns the Chat/Responses effort *wire family*. The only facts it
+/// publishes are provider-reported: the exact model's validated native Codex
+/// discovery metadata. Without it the route stays `unknown` so the settings and
+/// models.dev authority layers decide; no model-name table is consulted.
 library;
 
-import 'compatible_chat_effort_facts.dart';
-import 'gpt_oss_model_catalog.dart';
 import 'native_thinking_directive.dart';
 import 'openai_reasoning_models.dart';
 import 'provider_thinking_policy.dart';
 import 'thinking_control_models.dart';
 import 'thinking_policy_context.dart';
-import 'thinking_wire_dialect.dart';
-import 'xai_model_catalog.dart';
 
 /// Exact finite effort facts for one route/model pair.
 class EffortAuthority {
@@ -40,58 +34,11 @@ abstract class OpenAiEffortThinkingPolicyBase
     return mode == 'chat_completions' || mode == 'chat';
   }
 
-  /// Resolves the exact finite effort facts for the active route, or `null` when
-  /// no authority evidences a selectable effort for this model/route.
+  /// Resolves the provider-reported finite effort facts for the active route,
+  /// or `null` when the exact model's discovery item reports none.
   static EffortAuthority? resolveEffortAuthority(
     ThinkingPolicyContext context,
   ) {
-    // Exact xAI Grok facts are Chat-wire facts; the documented xAI parameter is
-    // the Chat `reasoning_effort` field.
-    if (isChatMode(context.apiMode) &&
-        XaiModelCatalog.supportsEffort(context.modelId)) {
-      return EffortAuthority(
-        optionIds: XaiModelCatalog.effortOptionIdsForModel(context.modelId),
-        defaultOptionId: XaiModelCatalog.defaultEffortIdForModel(
-          context.modelId,
-        ),
-      );
-    }
-
-    // Exact `gpt-oss` facts are intrinsic model facts; the compatible Chat
-    // reasoning-effort mode is the only wire on which they are advertised.
-    final gptOssOptions = isChatMode(context.apiMode)
-        ? GptOssModelCatalog.effortOptionIdsForModel(context.modelId)
-        : const <String>[];
-    if (gptOssOptions.isNotEmpty) {
-      return EffortAuthority(
-        optionIds: gptOssOptions,
-        defaultOptionId: GptOssModelCatalog.defaultEffortIdForModel(
-          context.modelId,
-        ),
-      );
-    }
-
-    // Documented standard-effort facts on the compatible wire: the family's
-    // effective effort ladder without its native envelope, without a fabricated
-    // disable and without an invented family default.
-    if (ThinkingWireDialectFacts.forTemplate(
-          context.templateId,
-          apiMode: context.apiMode,
-        ) ==
-        ThinkingWireDialect.compatibleChat) {
-      final compatible = CompatibleChatEffortFacts.effortOptionIdsForModel(
-        context.modelId,
-      );
-      if (compatible.isNotEmpty) {
-        return EffortAuthority(
-          optionIds: compatible,
-          defaultOptionId: CompatibleChatEffortFacts.defaultEffortIdForModel(
-            context.modelId,
-          ),
-        );
-      }
-    }
-
     if (!OpenAiReasoningModels.supportsReasoningControls(context)) {
       return null;
     }
@@ -108,16 +55,16 @@ abstract class OpenAiEffortThinkingPolicyBase
   }
 
   static String labelForEffortId(String effortId) {
-    final openAiLabel = openAiEffortTierLabels[effortId];
-    if (openAiLabel != null) return openAiLabel;
-    return XaiModelCatalog.labelForEffortId(effortId);
+    return openAiEffortTierLabels[effortId] ?? effortId;
   }
 
   @override
   ThinkingControlDescriptor resolveCapability(ThinkingPolicyContext context) {
     final authority = resolveEffortAuthority(context);
     if (authority == null || !authority.hasOptions) {
-      return ThinkingControlDescriptor.unsupported(
+      // No provider-reported facts is absence of evidence, never a positive
+      // `unsupported` claim; later authority layers may still resolve it.
+      return ThinkingControlDescriptor.unknown(
         capabilityRevision: context.capabilityRevision,
         source: 'profile',
       );

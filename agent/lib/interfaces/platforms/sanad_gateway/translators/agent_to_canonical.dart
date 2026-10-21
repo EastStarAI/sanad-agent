@@ -135,6 +135,10 @@ class AgentToCanonical {
         if (response.runtimeMs != null) 'runtime_ms': response.runtimeMs,
         if (response.contextTokens != null)
           'context_tokens': response.contextTokens,
+        // A typed pre-dispatch rejection (no provider call) keeps its code so
+        // a consumer never reads the rejection text as a completed turn.
+        if (response.message.metadata?['error_code'] is String)
+          'error_code': response.message.metadata!['error_code'],
         ...MessageHistoryIdentity.wireFields(response.message),
       };
     } else {

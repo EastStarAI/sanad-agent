@@ -129,6 +129,9 @@ jobs:
       - name: Validate embedded product skills
         working-directory: agent
         run: fvm dart run tool/generate_bundled_skills.dart --check
+      - name: Validate shipped model capability defaults
+        working-directory: agent
+        run: fvm dart run tool/generate_model_capability_defaults.dart --check
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze

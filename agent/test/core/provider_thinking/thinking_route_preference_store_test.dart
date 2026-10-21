@@ -67,4 +67,128 @@ void main() {
     expect(store.read(session.sessionId), isNull);
     expect(store.readCorrection(session.sessionId)?.previousSelectionId, 'deep');
   });
+
+  test('preserves distinct route preferences across different provider/model routes', () {
+    GetIt.I.reset();
+    SessionManager.resetForTesting();
+    final state = AgentStateDatabase.inMemory();
+    addTearDown(() {
+      GetIt.I.reset();
+      SessionManager.resetForTesting();
+      state.dispose();
+    });
+    GetIt.I.registerSingleton<AgentStateDatabase>(state);
+    final sessions = SessionManager();
+    final store = ThinkingRoutePreferenceStore(sessions);
+    final session = sessions.createSession('o3');
+
+    // Route A: inst-1, o3 => high
+    store.savePreference(
+      sessionId: session.sessionId,
+      preference: const ThinkingRoutePreference(
+        selectionId: 'high',
+        providerInstanceId: 'inst-1',
+        modelId: 'o3',
+        capabilityRevision: 'rev-o3',
+      ),
+    );
+
+    // Route B: inst-codex, gpt-6-luna => medium
+    store.savePreference(
+      sessionId: session.sessionId,
+      preference: const ThinkingRoutePreference(
+        selectionId: 'medium',
+        providerInstanceId: 'inst-codex',
+        modelId: 'gpt-6-luna',
+        capabilityRevision: 'rev-codex',
+      ),
+    );
+
+    // Active preference is Route B
+    expect(store.read(session.sessionId)?.selectionId, 'medium');
+
+    // But Route A is preserved independently
+    final routeAPref = store.readForRoute(
+      session.sessionId,
+      providerInstanceId: 'inst-1',
+      modelId: 'o3',
+    );
+    expect(routeAPref?.selectionId, 'high');
+    expect(routeAPref?.modelId, 'o3');
+
+    // And Route B is preserved
+    final routeBPref = store.readForRoute(
+      session.sessionId,
+      providerInstanceId: 'inst-codex',
+      modelId: 'gpt-6-luna',
+    );
+    expect(routeBPref?.selectionId, 'medium');
+
+    // Correcting Route B does not erase Route A
+    store.recordCorrection(
+      sessionId: session.sessionId,
+      reason: 'unsupported',
+      providerInstanceId: 'inst-codex',
+      modelId: 'gpt-6-luna',
+    );
+    expect(
+      store.readForRoute(
+        session.sessionId,
+        providerInstanceId: 'inst-codex',
+        modelId: 'gpt-6-luna',
+      ),
+      isNull,
+    );
+    expect(
+      store.readForRoute(
+        session.sessionId,
+        providerInstanceId: 'inst-1',
+        modelId: 'o3',
+      )?.selectionId,
+      'high',
+    );
+  });
+
+  test('recordCorrection without route args removes active route preference from routePreferences map', () {
+    GetIt.I.reset();
+    SessionManager.resetForTesting();
+    final state = AgentStateDatabase.inMemory();
+    addTearDown(() {
+      GetIt.I.reset();
+      SessionManager.resetForTesting();
+      state.dispose();
+    });
+    GetIt.I.registerSingleton<AgentStateDatabase>(state);
+    final sessions = SessionManager();
+    final store = ThinkingRoutePreferenceStore(sessions);
+    final session = sessions.createSession('o3');
+
+    store.savePreference(
+      sessionId: session.sessionId,
+      preference: const ThinkingRoutePreference(
+        selectionId: 'high',
+        providerInstanceId: 'inst-1',
+        modelId: 'o3',
+        capabilityRevision: 'rev-1',
+      ),
+    );
+
+    expect(store.read(session.sessionId)?.selectionId, 'high');
+    expect(
+      store.readForRoute(session.sessionId, providerInstanceId: 'inst-1', modelId: 'o3')?.selectionId,
+      'high',
+    );
+
+    store.recordCorrection(
+      sessionId: session.sessionId,
+      reason: 'option_unavailable',
+      previousSelectionId: 'high',
+    );
+
+    expect(store.read(session.sessionId), isNull);
+    expect(
+      store.readForRoute(session.sessionId, providerInstanceId: 'inst-1', modelId: 'o3'),
+      isNull,
+    );
+  });
 }

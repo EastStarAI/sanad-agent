@@ -168,9 +168,17 @@ class MockDelegationTurnClient extends CliTurnClientBase {
     );
   }
 
-  void emitTurnComplete({String? sessionId, String finalMessage = ''}) {
+  void emitTurnComplete({
+    String? sessionId,
+    String finalMessage = '',
+    String? errorCode,
+  }) {
     _events.add(
-      CliTurnCompleteEvent(finalMessage: finalMessage, sessionId: sessionId),
+      CliTurnCompleteEvent(
+        finalMessage: finalMessage,
+        sessionId: sessionId,
+        errorCode: errorCode,
+      ),
     );
   }
 
@@ -309,7 +317,98 @@ void main() {
         ]);
 
         expect(exitCode, equals(2));
-        expect(stderrBuf.toString(), contains('Mutually exclusive'));
+        final stderrText = stderrBuf.toString();
+        expect(stderrText, contains('--brief-file'));
+        expect(stderrText, contains('"positional prompt text"'));
+      },
+    );
+
+    test(
+      'G4: --thinking-mode off is a selectable product option id',
+      () async {
+        final briefFile = File(p.join(tempDir.path, 'task_brief.md'))
+          ..writeAsStringSync('Answer briefly.');
+        final runner = createRunner();
+        fakeClient.completeTurnImmediately = true;
+
+        final exitCode = await runner.run([
+          'run',
+          '--brief-file',
+          briefFile.path,
+          '--thinking-mode',
+          'off',
+          '--workspace',
+          'ws-locked-88',
+          '--out-dir',
+          outDir.path,
+        ]);
+
+        expect(exitCode, equals(0), reason: stderrBuf.toString());
+        expect(fakeClient.dispatchedRequest?.thinkingMode, 'off');
+      },
+    );
+
+    test(
+      'G4: a stray positional next to --brief-file names the stray argument '
+      'instead of a misleading mutual-exclusion message',
+      () async {
+        final briefFile = File(p.join(tempDir.path, 'task_brief.md'))
+          ..writeAsStringSync('Answer briefly.');
+        final runner = createRunner();
+        final exitCode = await runner.run([
+          'run',
+          '--brief-file',
+          briefFile.path,
+          '--thinking',
+          'off',
+          '--workspace',
+          'ws-locked-88',
+        ]);
+
+        expect(exitCode, equals(2));
+        final stderrText = stderrBuf.toString();
+        expect(stderrText, isNot(contains('Mutually exclusive')));
+        expect(stderrText, contains('"off"'));
+        expect(fakeClient.dispatchedRequest, isNull);
+      },
+    );
+
+    test(
+      'G3: a pre-dispatch thinking rejection exits non-zero with its reason',
+      () async {
+        final outDir = Directory(p.join(tempDir.path, 'out-rejected'))
+          ..createSync();
+        final client = MockDelegationTurnClient();
+        final oneshot = OneshotRunner(stdinReader: () async => null);
+        final runFuture = oneshot.run(
+          prompt: 'hi',
+          session: 'sess-rejected',
+          thinkingMode: 'none',
+          outDir: outDir.path,
+          client: client,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+        await client.turnDispatched.future;
+        client.emitTurnComplete(
+          sessionId: 'sess-rejected',
+          finalMessage:
+              'The selected thinking option is unavailable for this route.',
+          errorCode: 'thinking_option_unavailable_for_route',
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, isNot(0));
+        expect(
+          stderrBuf.toString(),
+          contains('thinking_option_unavailable_for_route'),
+        );
+        final result = await RunArtifactStore(outDir.path).readResult();
+        expect(result, isNotNull);
+        expect(result!.status, 'failed');
+        expect(result.exitCode, isNot(0));
+        expect(result.error, contains('thinking_option_unavailable_for_route'));
+        await client.dispose();
       },
     );
 

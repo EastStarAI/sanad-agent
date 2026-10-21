@@ -45,6 +45,7 @@ class AggregatorThinkingWireCodec {
   ) {
     switch (directive) {
       case OpenAiEffortDirective(:final effort):
+      case NativeThinkingEffortDirective(:final effort):
       case AnthropicAdaptiveDirective(:final effort):
         _applyEffort(body, effort);
       case GoogleLevelDirective(:final level):

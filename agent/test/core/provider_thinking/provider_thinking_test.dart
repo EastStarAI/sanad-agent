@@ -3,19 +3,14 @@ import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.da
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/core/provider_thinking/aggregator_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_wire_vocabulary.dart';
-import 'package:sanad_agent/core/provider_thinking/aggregator_upstream_thinking_policy.dart';
-import 'package:sanad_agent/core/provider_thinking/anthropic_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/anthropic_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/ollama_thinking_probe.dart';
 import 'package:sanad_agent/core/provider_thinking/ollama_live_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/ollama_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/codex_responses_effort_thinking_policy.dart';
-import 'package:sanad_agent/core/provider_thinking/deepseek_thinking_policy.dart';
-import 'package:sanad_agent/core/provider_thinking/google_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/google_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/openai_chat_effort_thinking_policy.dart';
-import 'package:sanad_agent/core/provider_thinking/openai_reasoning_models.dart';
 import 'package:sanad_agent/core/provider_thinking/openai_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_policy.dart';
@@ -244,26 +239,17 @@ void main() {
   });
 
   group('ProviderThinkingRegistry', () {
-    test('registers reserved policies and falls back to unknown', () {
+    test('registers only provider-reported capability policies', () {
       final registry = buildProviderThinkingRegistry();
 
-      expect(
-        registry.registeredPolicyIds.toSet(),
-        containsAll(reservedThinkingPolicyIds),
-      );
-      expect(registry.registeredPolicyIds, contains('openai_chat_effort'));
-      expect(registry.policyFor('missing-policy').policyId, equals('unknown'));
-      expect(
-        registry
-            .resolveForTemplate(thinkingPolicyId: 'codex_responses_effort')
-            .policyId,
-        equals('codex_responses_effort'),
-      );
-    });
-
-    test('registers real OpenAI policies instead of placeholders', () {
-      final registry = buildProviderThinkingRegistry();
-
+      // Capability authorities read provider-reported item metadata only; every
+      // other reserved id is a wire-dialect label and falls back to unknown.
+      expect(registry.registeredPolicyIds.toSet(), {
+        'unknown',
+        'openai_chat_effort',
+        'codex_responses_effort',
+        'ollama_live',
+      });
       expect(
         registry.resolveForTemplate(thinkingPolicyId: 'openai_chat_effort'),
         isA<OpenAiChatEffortThinkingPolicy>(),
@@ -273,25 +259,62 @@ void main() {
         isA<CodexResponsesEffortThinkingPolicy>(),
       );
       expect(
-        registry.resolveForTemplate(thinkingPolicyId: 'anthropic_thinking'),
-        isA<AnthropicThinkingPolicy>(),
-      );
-      expect(
-        registry.resolveForTemplate(thinkingPolicyId: 'aggregator_upstream'),
-        isA<AggregatorUpstreamThinkingPolicy>(),
-      );
-      expect(
         registry.resolveForTemplate(thinkingPolicyId: 'ollama_live'),
         isA<OllamaLiveThinkingPolicy>(),
       );
-      expect(
-        registry.resolveForTemplate(thinkingPolicyId: 'google_thinking'),
-        isA<GoogleThinkingPolicy>(),
+      for (final labelOnly in [
+        'anthropic_thinking',
+        'aggregator_upstream',
+        'google_thinking',
+        'deepseek_thinking',
+        'kimi_thinking',
+        'zai_thinking',
+        'nim_thinking',
+        'missing-policy',
+      ]) {
+        expect(
+          registry.resolveForTemplate(thinkingPolicyId: labelOnly).policyId,
+          'unknown',
+          reason: labelOnly,
+        );
+      }
+    });
+
+    test('provider-reported OpenAI policy without item facts stays unknown', () {
+      const policy = OpenAiChatEffortThinkingPolicy();
+      const context = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'opencode-go',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'gpt-6-luna',
+        capabilityRevision: 'rev-1',
       );
+      // Absence of a table entry is not a positive `unsupported` claim.
       expect(
-        registry.resolveForTemplate(thinkingPolicyId: 'deepseek_thinking'),
-        isA<DeepSeekThinkingPolicy>(),
+        policy.resolveCapability(context).status,
+        ThinkingCapabilityStatus.unknown,
       );
+      final withLevels = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'openai-codex',
+        protocol: 'openai_compatible',
+        apiMode: 'codex_responses',
+        modelId: 'gpt-6-luna',
+        capabilityRevision: 'rev-1',
+        modelMetadata: const {
+          'supported_reasoning_levels': [
+            {'effort': 'low'},
+            {'effort': 'high'},
+          ],
+          'default_reasoning_level': 'low',
+        },
+      );
+      final descriptor = const CodexResponsesEffortThinkingPolicy()
+          .resolveCapability(withLevels);
+      expect(descriptor.status, ThinkingCapabilityStatus.supported);
+      expect(descriptor.options.map((o) => o.id), ['low', 'high']);
+      expect(descriptor.defaultOptionId, 'low');
     });
 
     test('derives thinking policy ids from provider templates', () {
@@ -580,303 +603,7 @@ void main() {
     });
   });
 
-  group('Aggregator upstream thinking policy', () {
-    final policy = AggregatorUpstreamThinkingPolicy();
 
-    test('delegates OpenAI reasoning models to effort options', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openrouter',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'openai/o3',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.status, ThinkingCapabilityStatus.supported);
-      expect(
-        descriptor.options.map((option) => option.id),
-        containsAll(['low', 'medium', 'high']),
-      );
-    });
-
-    test('delegates Anthropic models to adaptive effort options', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openrouter',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'anthropic/claude-opus-4.7',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.kind, ThinkingControlKind.adaptive);
-      expect(descriptor.containsOptionId('high'), isTrue);
-    });
-
-    test('delegates Google budget models to token budget options', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openrouter',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'google/gemini-2.5-flash',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.kind, ThinkingControlKind.tokenBudget);
-      expect(descriptor.containsOptionId('medium'), isTrue);
-    });
-
-    test('delegates DeepSeek chat fixture to toggle options', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openrouter',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'deepseek/deepseek-chat',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.kind, ThinkingControlKind.toggle);
-      expect(descriptor.containsOptionId('off'), isTrue);
-      expect(descriptor.containsOptionId('on'), isTrue);
-    });
-
-    test('delegates DeepSeek effort fixture to effort options', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openrouter',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'deepseek/deepseek-v4-flash',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.kind, ThinkingControlKind.effort);
-      expect(descriptor.containsOptionId('off'), isTrue);
-      expect(descriptor.containsOptionId('high'), isTrue);
-      expect(descriptor.containsOptionId('max'), isTrue);
-    });
-
-    test(
-      'keeps unresolved DeepSeek models unknown via aggregator delegate',
-      () {
-        const context = ThinkingPolicyContext(
-          providerInstanceId: 'instance-1',
-          templateId: 'openrouter',
-          protocol: 'openai_compatible',
-          apiMode: 'chat_completions',
-          modelId: 'deepseek/deepseek-unknown-model',
-          capabilityRevision: 'rev-1',
-        );
-
-        final descriptor = policy.resolveCapability(context);
-        expect(descriptor.status, ThinkingCapabilityStatus.unknown);
-      },
-    );
-
-    test(
-      'keeps Moonshot/Kimi aggregator models unknown until XOR policy exists',
-      () {
-        const context = ThinkingPolicyContext(
-          providerInstanceId: 'instance-1',
-          templateId: 'openrouter',
-          protocol: 'openai_compatible',
-          apiMode: 'chat_completions',
-          modelId: 'moonshotai/kimi-k2.6',
-          capabilityRevision: 'rev-1',
-        );
-
-        final descriptor = policy.resolveCapability(context);
-        expect(descriptor.status, ThinkingCapabilityStatus.unknown);
-      },
-    );
-  });
-
-  group('Google thinking policy', () {
-    const policy = GoogleThinkingPolicy();
-
-    test('advertises budget tiers for Gemini 2.5 models', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'gemini',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gemini-2.5-flash',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.kind, ThinkingControlKind.tokenBudget);
-      expect(descriptor.options.map((option) => option.id), [
-        'off',
-        'low',
-        'medium',
-        'high',
-      ]);
-      expect(
-        policy.resolveDirective(context, 'medium'),
-        isA<GoogleBudgetDirective>(),
-      );
-    });
-
-    test('advertises level tiers for Gemini 3 models', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'gemini',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gemini-3.6-flash',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.kind, ThinkingControlKind.level);
-      expect(descriptor.options.map((option) => option.id), [
-        'minimal',
-        'low',
-        'medium',
-        'high',
-      ]);
-      expect(descriptor.defaultOptionId, 'medium');
-      expect(
-        policy.resolveDirective(context, 'medium'),
-        isA<GoogleLevelDirective>(),
-      );
-      expect(
-        policy.resolveDirective(context, 'medium'),
-        isNot(isA<GoogleBudgetDirective>()),
-      );
-    });
-
-    test('advertises the documented minimal level only where grounded', () {
-      const minimalContext = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'gemini',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gemini-3-flash-preview',
-        capabilityRevision: 'rev-1',
-      );
-      final minimal = policy.resolveCapability(minimalContext);
-      expect(minimal.containsOptionId('minimal'), isTrue);
-      expect(
-        policy.resolveDirective(minimalContext, 'minimal'),
-        isA<GoogleLevelDirective>().having(
-          (directive) => directive.level,
-          'level',
-          'minimal',
-        ),
-      );
-
-      // Gemini 3.8 Flash documents that `minimal` returns an error.
-      const flashContext = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'gemini',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gemini-3.8-flash',
-        capabilityRevision: 'rev-1',
-      );
-      expect(
-        policy.resolveCapability(flashContext).containsOptionId('minimal'),
-        isFalse,
-      );
-      expect(
-        policy.resolveCapability(flashContext).defaultOptionId,
-        'medium',
-        reason: 'the official thinking table documents Medium as 3.8 default',
-      );
-
-      // Gemini 3 Pro preview documents Low/High only, default High.
-      const proContext = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'gemini',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gemini-3-pro-preview',
-        capabilityRevision: 'rev-1',
-      );
-      final pro = policy.resolveCapability(proContext);
-      expect(pro.options.map((option) => option.id), ['low', 'high']);
-      expect(pro.defaultOptionId, 'high');
-      expect(
-        policy.resolveDirective(proContext, 'medium'),
-        isA<UseProviderDefault>(),
-      );
-
-      // Gemini 3.1 Pro preview is directly documented as Low/Medium/High with
-      // default High on the official thinking table.
-      const pro31Context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'gemini',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gemini-3.1-pro-preview',
-        capabilityRevision: 'rev-1',
-      );
-      final pro31 = policy.resolveCapability(pro31Context);
-      expect(pro31.kind, ThinkingControlKind.level);
-      expect(pro31.options.map((option) => option.id), [
-        'low',
-        'medium',
-        'high',
-      ]);
-      expect(pro31.defaultOptionId, 'high');
-      expect(
-        policy.resolveDirective(pro31Context, 'medium'),
-        isA<GoogleLevelDirective>().having(
-          (directive) => directive.level,
-          'level',
-          'medium',
-        ),
-      );
-
-      // Models without an obtained per-model finite set stay unknown.
-      const unknownContext = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'gemini',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gemini-3.1-flash-lite',
-        capabilityRevision: 'rev-1',
-      );
-      expect(
-        policy.resolveCapability(unknownContext).status,
-        ThinkingCapabilityStatus.unknown,
-      );
-    });
-
-    test('never advertises Off for an always-on Gemini Pro model', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'gemini',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gemini-2.5-pro',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.kind, ThinkingControlKind.tokenBudget);
-      expect(descriptor.options.map((option) => option.id), [
-        'low',
-        'medium',
-        'high',
-      ]);
-      expect(descriptor.options.any((option) => option.isOff), isFalse);
-      expect(
-        policy.resolveDirective(context, 'off'),
-        isA<UseProviderDefault>(),
-      );
-    });
-  });
 
   group('GoogleThinkingWireCodec', () {
     test('maps budget directive to nested thinking_budget only', () {
@@ -910,96 +637,6 @@ void main() {
     });
   });
 
-  group('DeepSeek thinking policy', () {
-    const policy = DeepSeekThinkingPolicy();
-
-    test('returns unknown for unresolved DeepSeek models', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'deepseek',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'deepseek-unknown-model',
-        capabilityRevision: 'rev-1',
-      );
-
-      expect(
-        policy.resolveCapability(context).status,
-        ThinkingCapabilityStatus.unknown,
-      );
-    });
-
-    test('returns unsupported for fixed reasoner models', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'deepseek',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'deepseek-reasoner',
-        capabilityRevision: 'rev-1',
-      );
-
-      expect(
-        policy.resolveCapability(context).status,
-        ThinkingCapabilityStatus.unsupported,
-      );
-    });
-
-    test('maps chat fixture to toggle off or on directives', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'deepseek',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'deepseek-chat',
-        capabilityRevision: 'rev-1',
-      );
-
-      expect(
-        policy.resolveDirective(context, 'off'),
-        isA<ThinkingToggleDirective>(),
-      );
-      expect(
-        (policy.resolveDirective(context, 'off') as ThinkingToggleDirective)
-            .enabled,
-        isFalse,
-      );
-      expect(
-        policy.resolveDirective(context, 'on'),
-        isA<ThinkingToggleDirective>(),
-      );
-      expect(
-        (policy.resolveDirective(context, 'on') as ThinkingToggleDirective)
-            .enabled,
-        isTrue,
-      );
-    });
-
-    test('maps effort models to off toggle or OpenAiEffortDirective', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'deepseek',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'deepseek-v4-flash',
-        capabilityRevision: 'rev-1',
-      );
-
-      expect(
-        policy.resolveDirective(context, 'off'),
-        isA<ThinkingToggleDirective>(),
-      );
-      expect(
-        policy.resolveDirective(context, 'high'),
-        isA<OpenAiEffortDirective>(),
-      );
-      expect(
-        (policy.resolveDirective(context, 'high') as OpenAiEffortDirective)
-            .effort,
-        'high',
-      );
-    });
-  });
 
   group('ToggleEffortThinkingWireCodec', () {
     test('applies effort without thinking toggle fields', () {
@@ -1211,135 +848,6 @@ void main() {
     });
   });
 
-  group('Anthropic thinking policy', () {
-    const policy = AnthropicThinkingPolicy();
-
-    test('manual models advertise token budget tiers', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'anthropic',
-        protocol: 'anthropic_compatible',
-        apiMode: 'anthropic_messages',
-        modelId: 'claude-sonnet-4-5',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.kind, ThinkingControlKind.tokenBudget);
-      expect(descriptor.options.map((option) => option.id), [
-        'off',
-        'low',
-        'medium',
-        'high',
-      ]);
-      expect(
-        policy.resolveDirective(context, 'medium'),
-        isA<AnthropicBudgetDirective>(),
-      );
-    });
-
-    test(
-      'adaptive models advertise effort tiers without manual budget shape',
-      () {
-        const context = ThinkingPolicyContext(
-          providerInstanceId: 'instance-1',
-          templateId: 'anthropic',
-          protocol: 'anthropic_compatible',
-          apiMode: 'anthropic_messages',
-          modelId: 'claude-opus-4-7',
-          capabilityRevision: 'rev-1',
-        );
-
-        final descriptor = policy.resolveCapability(context);
-        expect(descriptor.kind, ThinkingControlKind.adaptive);
-        expect(descriptor.options.map((option) => option.id), [
-          'off',
-          'low',
-          'medium',
-          'high',
-          'max',
-        ]);
-        expect(
-          policy.resolveDirective(context, 'high'),
-          isA<AnthropicAdaptiveDirective>(),
-        );
-        expect(
-          policy.resolveDirective(context, 'high'),
-          isNot(isA<AnthropicBudgetDirective>()),
-        );
-      },
-    );
-
-    test('always-on adaptive models hide explicit off', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'anthropic',
-        protocol: 'anthropic_compatible',
-        apiMode: 'anthropic_messages',
-        modelId: 'claude-fable-5',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = policy.resolveCapability(context);
-      expect(descriptor.options.any((option) => option.isOff), isFalse);
-      expect(
-        policy.resolveDirective(context, 'off'),
-        isA<UseProviderDefault>(),
-      );
-    });
-
-    test('missing budget tier resolves to provider default', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'anthropic',
-        protocol: 'anthropic_compatible',
-        apiMode: 'anthropic_messages',
-        modelId: 'claude-sonnet-4-5',
-        capabilityRevision: 'rev-1',
-      );
-
-      expect(
-        policy.resolveDirective(context, 'max'),
-        isA<UseProviderDefault>(),
-      );
-      expect(
-        policy.resolveDirective(context, 'ultra'),
-        isA<UseProviderDefault>(),
-      );
-    });
-
-    test('manual and adaptive shapes stay mutually exclusive', () {
-      const manualContext = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'anthropic',
-        protocol: 'anthropic_compatible',
-        apiMode: 'anthropic_messages',
-        modelId: 'claude-sonnet-4-5',
-        capabilityRevision: 'rev-1',
-      );
-      const adaptiveContext = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'anthropic',
-        protocol: 'anthropic_compatible',
-        apiMode: 'anthropic_messages',
-        modelId: 'claude-opus-4-7',
-        capabilityRevision: 'rev-1',
-      );
-
-      expect(
-        policy.resolveDirective(manualContext, 'medium'),
-        isA<AnthropicBudgetDirective>(),
-      );
-      expect(
-        policy.resolveDirective(adaptiveContext, 'medium'),
-        isA<AnthropicAdaptiveDirective>(),
-      );
-      expect(
-        policy.resolveDirective(manualContext, 'medium'),
-        isNot(isA<AnthropicAdaptiveDirective>()),
-      );
-    });
-  });
 
   group('AnthropicThinkingWireCodec', () {
     test('maps manual directive to enabled budget_tokens', () {
@@ -1430,387 +938,6 @@ void main() {
     });
   });
 
-  group('OpenAI effort policies', () {
-    const chatPolicy = OpenAiChatEffortThinkingPolicy();
-    const codexPolicy = CodexResponsesEffortThinkingPolicy();
-
-    test('advertises effort options for reasoning models', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openai',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'o3',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = chatPolicy.resolveCapability(context);
-      expect(descriptor.status, ThinkingCapabilityStatus.supported);
-      expect(descriptor.options.map((option) => option.id), [
-        'low',
-        'medium',
-        'high',
-      ]);
-      expect(descriptor.options.map((option) => option.label), [
-        'Low',
-        'Medium',
-        'High',
-      ]);
-      expect(descriptor.defaultOptionId, 'medium');
-      expect(
-        descriptor.options
-            .firstWhere((option) => option.id == 'medium')
-            .isProviderDefault,
-        isTrue,
-      );
-    });
-
-    test(
-      'advertises grounded effort tiers for gpt-5.6-sol and gpt-6-astra from official documentation',
-      () {
-        const gpt56SolContext = ThinkingPolicyContext(
-          providerInstanceId: 'instance-1',
-          templateId: 'openai-codex',
-          protocol: 'openai_compatible',
-          apiMode: 'codex_responses',
-          modelId: 'gpt-5.6-sol',
-          capabilityRevision: 'rev-1',
-        );
-        final descriptorSol = codexPolicy.resolveCapability(gpt56SolContext);
-        expect(descriptorSol.status, ThinkingCapabilityStatus.supported);
-        expect(descriptorSol.options.map((option) => option.id), [
-          'none',
-          'low',
-          'medium',
-          'high',
-          'xhigh',
-          'max',
-        ]);
-        expect(descriptorSol.options.map((option) => option.label), [
-          'None',
-          'Low',
-          'Medium',
-          'High',
-          'Extra High',
-          'Max',
-        ]);
-        expect(
-          descriptorSol.options.firstWhere((o) => o.id == 'none').isOff,
-          isTrue,
-        );
-        expect(
-          descriptorSol.options
-              .firstWhere((o) => o.id == 'none')
-              .isProviderDefault,
-          isFalse,
-        );
-        expect(
-          descriptorSol.options
-              .firstWhere((o) => o.id == 'medium')
-              .isProviderDefault,
-          isTrue,
-        );
-        expect(descriptorSol.defaultOptionId, 'medium');
-
-        // Undocumented bare gpt-5.6 is not inferred without native catalog entry
-        expect(OpenAiReasoningModels.isEvidencedModel('gpt-5.6'), isFalse);
-
-        const astraContext = ThinkingPolicyContext(
-          providerInstanceId: 'instance-1',
-          templateId: 'openai-codex',
-          protocol: 'openai_compatible',
-          apiMode: 'codex_responses',
-          modelId: 'gpt-6-astra',
-          capabilityRevision: 'rev-1',
-        );
-        final descriptorAstra = codexPolicy.resolveCapability(astraContext);
-        expect(descriptorAstra.status, ThinkingCapabilityStatus.supported);
-        expect(descriptorAstra.options.map((option) => option.id), [
-          'low',
-          'medium',
-          'high',
-          'xhigh',
-          'max',
-        ]);
-        expect(
-          OpenAiReasoningModels.allowsEffortId('gpt-6-astra', 'none'),
-          isFalse,
-        );
-        expect(
-          OpenAiReasoningModels.allowsEffortId('gpt-6-astra', 'max'),
-          isTrue,
-        );
-        expect(descriptorAstra.defaultOptionId, isNull);
-        expect(
-          descriptorAstra.options.every((option) => !option.isProviderDefault),
-          isTrue,
-        );
-        expect(
-          OpenAiReasoningModels.defaultEffortIdForModel('gpt-6-astra'),
-          isNull,
-        );
-        expect(
-          OpenAiReasoningModels.defaultEffortIdForModel('gpt-5.1-codex-mini'),
-          isNull,
-        );
-        expect(
-          OpenAiReasoningModels.defaultEffortIdForModel('gpt-5.2-codex'),
-          isNull,
-        );
-        expect(OpenAiReasoningModels.defaultEffortIdForModel('o1'), 'medium');
-        expect(
-          OpenAiReasoningModels.defaultEffortIdForModel('o3-mini'),
-          'medium',
-        );
-        expect(OpenAiReasoningModels.defaultEffortIdForModel('o3'), 'medium');
-        expect(
-          OpenAiReasoningModels.defaultEffortIdForModel('gpt-5.6-sol'),
-          'medium',
-        );
-        expect(
-          OpenAiReasoningModels.allowsEffortId('gpt-5.6-sol', 'none'),
-          isTrue,
-        );
-        expect(
-          OpenAiReasoningModels.allowsEffortId('gpt-5.6-sol', 'max'),
-          isTrue,
-        );
-
-        // Bare aliases from display names are not inferred
-        expect(OpenAiReasoningModels.isEvidencedModel('astra'), isFalse);
-        expect(OpenAiReasoningModels.isEvidencedModel('daybreak'), isFalse);
-      },
-    );
-
-    test(
-      'CodexNativeReasoningSchema strictly parses native schema and fails closed on malformed metadata',
-      () {
-        // Valid native schema
-        final valid = CodexNativeReasoningSchema.tryParse({
-          'slug': 'gpt-custom',
-          'supported_reasoning_levels': [
-            {'effort': 'low'},
-            {'effort': 'medium'},
-            {'effort': 'high'},
-            {'effort': 'max'},
-          ],
-          'default_reasoning_level': 'medium',
-        }, expectedModelId: 'gpt-custom');
-        expect(valid, isNotNull);
-        expect(valid!.supportedEfforts, ['low', 'medium', 'high', 'max']);
-        expect(valid.defaultEffort, 'medium');
-
-        // Exact model identity mismatch fails closed
-        final mismatched = CodexNativeReasoningSchema.tryParse({
-          'slug': 'gpt-other',
-          'supported_reasoning_levels': [
-            {'effort': 'low'},
-          ],
-        }, expectedModelId: 'gpt-custom');
-        expect(mismatched, isNull);
-
-        // Empty supported levels fails closed
-        expect(
-          CodexNativeReasoningSchema.tryParse({
-            'supported_reasoning_levels': [],
-          }),
-          isNull,
-        );
-
-        // Malformed entries (not a map with effort String) fails closed
-        expect(
-          CodexNativeReasoningSchema.tryParse({
-            'supported_reasoning_levels': ['low', 'medium'],
-          }),
-          isNull,
-        );
-        expect(
-          CodexNativeReasoningSchema.tryParse({
-            'supported_reasoning_levels': [
-              {'effort': 123},
-            ],
-          }),
-          isNull,
-        );
-        expect(
-          CodexNativeReasoningSchema.tryParse({
-            'supported_reasoning_levels': [
-              {'no_effort': 'low'},
-            ],
-          }),
-          isNull,
-        );
-
-        // Default level not in supported levels fails closed
-        expect(
-          CodexNativeReasoningSchema.tryParse({
-            'supported_reasoning_levels': [
-              {'effort': 'low'},
-            ],
-            'default_reasoning_level': 'high',
-          }),
-          isNull,
-        );
-
-        // Old synthetic keys are ignored
-        expect(
-          CodexNativeReasoningSchema.tryParse({
-            'effort_options': ['low', 'high'],
-          }),
-          isNull,
-        );
-      },
-    );
-
-    test('reasoning output alone does not advertise thinking controls', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openai',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'gpt-test',
-        supportsReasoningOutput: true,
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = chatPolicy.resolveCapability(context);
-      expect(descriptor.status, ThinkingCapabilityStatus.unsupported);
-    });
-
-    test('OpenCode Go reasoning output alone does not advertise controls', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'opencode-go',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'future-unknown-model',
-        supportsReasoningOutput: true,
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = chatPolicy.resolveCapability(context);
-      expect(descriptor.status, ThinkingCapabilityStatus.unsupported);
-    });
-
-    test('OpenAI recognized model advertises effort controls', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'opencode-go',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'o3-mini',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = chatPolicy.resolveCapability(context);
-      expect(descriptor.status, ThinkingCapabilityStatus.supported);
-      expect(descriptor.options.map((option) => option.id), [
-        'low',
-        'medium',
-        'high',
-      ]);
-
-      // Kimi models are not claimed by chatPolicy heuristic; they are governed by KimiThinkingPolicy
-      const kimiContext = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'opencode-go',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'kimi-k2.7-code',
-        capabilityRevision: 'rev-1',
-      );
-      final kimiDesc = chatPolicy.resolveCapability(kimiContext);
-      expect(kimiDesc.status, ThinkingCapabilityStatus.unsupported);
-    });
-
-    test('restricts o1 models to medium and high', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openai',
-        protocol: 'openai_compatible',
-        apiMode: 'chat_completions',
-        modelId: 'o1',
-        capabilityRevision: 'rev-1',
-      );
-
-      final descriptor = chatPolicy.resolveCapability(context);
-      expect(descriptor.options.map((option) => option.id), ['medium', 'high']);
-    });
-
-    test('chat and codex policies emit distinct directive shapes', () {
-      const context = ThinkingPolicyContext(
-        providerInstanceId: 'instance-1',
-        templateId: 'openai-codex',
-        protocol: 'openai_compatible',
-        apiMode: 'codex_responses',
-        modelId: 'gpt-5.2-codex',
-        capabilityRevision: 'rev-1',
-      );
-
-      expect(
-        chatPolicy.resolveDirective(context, 'high'),
-        isA<OpenAiEffortDirective>(),
-      );
-      expect(
-        codexPolicy.resolveDirective(context, 'high'),
-        isA<ResponsesReasoningDirective>(),
-      );
-    });
-
-    test(
-      'nonstatic native model with valid supported_reasoning_levels but absent default_reasoning_level asserts descriptor defaultOptionId null and Default omits wire',
-      () {
-        const nonStaticContext = ThinkingPolicyContext(
-          providerInstanceId: 'instance-1',
-          templateId: 'openai-codex',
-          protocol: 'openai_compatible',
-          apiMode: 'codex_responses',
-          modelId: 'gpt-custom-reasoner-no-default',
-          capabilityRevision: 'rev-1',
-          modelMetadata: {
-            'slug': 'gpt-custom-reasoner-no-default',
-            'supported_reasoning_levels': [
-              {'effort': 'low'},
-              {'effort': 'medium'},
-              {'effort': 'high'},
-            ],
-          },
-        );
-
-        final descriptor = codexPolicy.resolveCapability(nonStaticContext);
-        expect(descriptor.status, ThinkingCapabilityStatus.supported);
-        expect(descriptor.defaultOptionId, isNull);
-        expect(descriptor.options.map((option) => option.id), [
-          'low',
-          'medium',
-          'high',
-        ]);
-        expect(
-          descriptor.options.every((option) => !option.isProviderDefault),
-          isTrue,
-        );
-
-        final directive = codexPolicy.resolveDirective(nonStaticContext, null);
-        expect(directive, isA<UseProviderDefault>());
-
-        final responsesReasoning = <String, dynamic>{};
-        OpenAiThinkingWireCodec.applyResponsesReasoning(
-          responsesReasoning,
-          directive,
-        );
-        expect(responsesReasoning.containsKey('effort'), isFalse);
-
-        final chatBody = <String, dynamic>{
-          'model': 'gpt-custom-reasoner-no-default',
-        };
-        OpenAiThinkingWireCodec.applyChatCompletionsReasoning(
-          chatBody,
-          directive,
-        );
-        expect(chatBody.containsKey('reasoning_effort'), isFalse);
-      },
-    );
-  });
 
   group('OpenAiThinkingWireCodec', () {
     test('maps chat directive to reasoning_effort only', () {

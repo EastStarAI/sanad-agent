@@ -127,9 +127,9 @@ The two discovery outcomes are deliberately different, and the tests that would
 otherwise bless an unsafe native fallback were updated:
 
 - **Names-only / no `reasoning` member** — absence of new evidence. Nothing is
-  published, so existing authority and intrinsic model knowledge survive: an
-  intrinsically evidenced catalog model keeps its documented ladder, and the
-  synthetic unknown model keeps its unsupported answer.
+  published, so the next authority layer answers: a model with an `openrouter`
+  models.dev entry keeps that entry's ladder, and the synthetic unknown model
+  stays `unknown` (never a fabricated `unsupported`).
 - **`reasoning` member present but yielding no trustworthy declaration** — the
   wire's own evidence owns that exact route's control state. Discovery publishes
   explicit `unknown` route-control evidence (`thinking_control: {status: unknown}`,
@@ -173,7 +173,7 @@ and a previously selectable tier is refused before dispatch.
 | 12 | Finite documented sets across the full vocabulary: all seven values, `max/xhigh/low`, `minimal/low`, `max/low`, `minimal/max` | Declared exactly as documented, in documented order, with no reduction, clamping, promotion or aliasing: `minimal` beside `low` stays `minimal` (no legacy alias remap), `max` beside `xhigh` stays `max` with no reset, `none` inside a wider set is the disable envelope, and each advertised value reaches the actual body |
 | 13 | Malformed declarations (non-object `reasoning`, non-list/`bogus`/case-shifted/padded/duplicate/mixed-type effort lists, default outside the documented set or non-string, non-Boolean `mandatory`/`default_enabled`, mandatory with only `none`) | Explicit `unknown` route-control evidence, raw evidence verbatim, `unknown` descriptor from `endpoint_declared` with no options and no default, zero dispatch |
 | 13a | The same malformed/no-effort declarations on an intrinsically evidenced model with image, tool and output facts on the item | Explicit `unknown` route evidence for the exact route; verbatim architecture/tool/context metadata, reasoning-output flag and label preserved; each previously selectable intrinsic tier (`low`/`medium`/`high`/`none`) refused with zero dispatch; a real Default omission still dispatches a normal request and adds no endpoint probe |
-| 14 | No usable evidence on a synthetic unknown model; a names-only item whose id merely suggests reasoning output; the same absence on an intrinsically evidenced catalog model | The unevidenced synthetic model stays unsupported (`profile`) and the names-only item keeps its reasoning-output flag while advertising no control; the catalog model keeps its intrinsic options — proving the discovery path, not a static catalog coincidence |
+| 14 | No usable evidence on a synthetic unknown model; a names-only item whose id merely suggests reasoning output; the same absence on an intrinsically evidenced catalog model | The unevidenced synthetic model stays `unknown` (`unconfigured`) and the names-only item keeps its reasoning-output flag while advertising no control; the model with an `openrouter` models.dev entry keeps that entry's options (`models_dev`) — proving the layered authority, not a static catalog coincidence |
 | 15 | The same documented `reasoning` metadata served by a generic `custom` Chat endpoint | The item is still discovered, but the aggregator schema is not consumed: no declaration, `unknown` descriptor, zero dispatch — recognition is provider identity, not a URL substring |
 | 16 | A declaration discovered for an intrinsically evidenced model id | The declared set is authoritative for that exact route (`endpoint_declared`), not the catalog ladder |
 | 17 | The full documented vocabulary (a finite `max/minimal` set and an explicit `null` set) on a catalog-known exact route | The documented set is declared truthfully and is authoritative over the intrinsic catalog ladder for that route; an intrinsic tier outside the documented set is refused before dispatch, and `none` stays the canonical disable envelope |

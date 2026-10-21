@@ -1,3 +1,5 @@
+import 'package:logging/logging.dart';
+import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 
@@ -6,11 +8,16 @@ import '../db/session_db.dart';
 import '../models/compaction_operation_record.dart';
 import 'compaction_summary_projection.dart';
 import 'model_context_projection.dart';
-import 'model_projection_exception.dart';
 
 /// Builds ephemeral model projections from canonical history and the latest
 /// eligible completed compaction boundary (Plan 53b Gate B2).
 class ModelProjectionBuilder {
+  static final Logger _logger = Logger('ModelProjectionBuilder');
+  static final Set<String> _loggedInvalidations = <String>{};
+
+  @visibleForTesting
+  static void resetLoggedInvalidations() => _loggedInvalidations.clear();
+
   final SessionDB _sessions;
   final CompactionBoundaryRepository _boundaries;
 
@@ -19,6 +26,14 @@ class ModelProjectionBuilder {
     required CompactionBoundaryRepository boundaries,
   }) : _sessions = sessions,
        _boundaries = boundaries;
+
+  static void _logInvalidation(String compactionId, String reason) {
+    if (_loggedInvalidations.add('$compactionId:$reason')) {
+      _logger.warning(
+        'Compaction boundary invalidated: compaction_id=$compactionId, reason=$reason',
+      );
+    }
+  }
 
   CanonicalConversationTimeline loadCanonicalTimeline(String sessionId) {
     return CanonicalConversationTimeline(
@@ -29,10 +44,8 @@ class ModelProjectionBuilder {
 
   ModelContextProjection buildForSession(String sessionId) {
     final timeline = loadCanonicalTimeline(sessionId);
-    final rowIds = timeline.messages.map((entry) => entry.rowId).toSet();
     final boundary = _findLatestEligibleBoundary(sessionId, timeline.messages);
     if (boundary == null) {
-      _rejectConflictingNewestBoundary(sessionId, rowIds);
       return ModelContextProjection(
         sessionId: sessionId,
         conversationMessages: timeline.messages
@@ -41,12 +54,8 @@ class ModelProjectionBuilder {
       );
     }
 
-    final byId = {
-      for (final entry in timeline.messages) entry.rowId: entry.message,
-    };
-    _assertRetainedTailStartPresent(byId, boundary.retainedTailRange);
-    final retainedTailEndPresent = byId.containsKey(
-      boundary.retainedTailRange.end.rowId,
+    final retainedTailEndPresent = timeline.messages.any(
+      (entry) => entry.rowId == boundary.retainedTailRange.end.rowId,
     );
     final tailMessages = _messagesForRange(
       timeline.messages,
@@ -62,12 +71,8 @@ class ModelProjectionBuilder {
               .toList(growable: false)
         : const <Message>[];
 
-    final summary = boundary.internalSummary;
-    if (summary == null) {
-      throw const ModelProjectionException(
-        'completed boundary is missing internal summary',
-      );
-    }
+    // Guaranteed non-null by CompactionBoundaryValidity.isAuthoritativeProjection.
+    final summary = boundary.internalSummary!;
 
     final projected = <Message>[
       Message(
@@ -93,21 +98,28 @@ class ModelProjectionBuilder {
     List<PersistedMessage> timeline,
   ) {
     final rowIds = timeline.map((entry) => entry.rowId).toSet();
-    final revision = _boundaries.historyRevisionForSession(sessionId);
-    if (revision == null) {
+    final currentRevision = _boundaries.historyRevisionForSession(sessionId);
+    if (currentRevision == null) {
       return null;
     }
 
     final completed = _boundaries.listCompletedForSession(sessionId);
     for (final boundary in completed) {
-      if (CompactionBoundaryValidity.isProjectionEligible(
+      final ineligibilityReason =
+          CompactionBoundaryValidity.ineligibilityReason(
             boundary: boundary,
             existingMessageRowIds: rowIds,
-            currentRevision: revision,
-          ) &&
-          _retainedTailPreservesToolPairs(boundary, timeline)) {
-        return boundary;
+            currentRevision: currentRevision,
+          );
+      if (ineligibilityReason != null) {
+        _logInvalidation(boundary.compactionId, ineligibilityReason);
+        continue;
       }
+      if (!_retainedTailPreservesToolPairs(boundary, timeline)) {
+        _logInvalidation(boundary.compactionId, 'orphaned_tool_calls');
+        continue;
+      }
+      return boundary;
     }
     return null;
   }
@@ -141,34 +153,6 @@ class ModelProjectionBuilder {
       }
     }
     return true;
-  }
-
-  void _rejectConflictingNewestBoundary(String sessionId, Set<int> rowIds) {
-    for (final boundary in _boundaries.listCompletedForSession(sessionId)) {
-      if (!boundary.isAuthoritativeProjection) {
-        continue;
-      }
-      if (CompactionBoundaryValidity.hasConflictingMessageRowIds(
-        boundary: boundary,
-        existingMessageRowIds: rowIds,
-      )) {
-        throw const ModelProjectionException(
-          'newest completed boundary references conflicting message row ids',
-        );
-      }
-      return;
-    }
-  }
-
-  void _assertRetainedTailStartPresent(
-    Map<int, Message> byId,
-    CompactionMessageRange range,
-  ) {
-    final id = range.start.rowId;
-    if (byId.containsKey(id)) return;
-    throw ModelProjectionException(
-      'missing retained tail start row id $id for active boundary',
-    );
   }
 
   List<Message> _messagesForRange(

@@ -1,13 +1,13 @@
 /// Focused NVIDIA NIM native-wire coverage.
 ///
 /// The shipped `nvidia` template is the hosted NIM catalog
-/// (`https://integrate.api.nvidia.com/v1`). Its per-model contracts are
-/// mode-owned and differ from the first-party vendor APIs, so this suite proves
-/// the documented hosted subset/defaults and the **absence of any undocumented
-/// `thinking` envelope**, the documented `chat_template_kwargs` Boolean
-/// toggles, the self-hosted-only Qwen contract (exposed through an explicit
-/// validated declaration, never through hosted availability), and the exact
-/// identity/mode negatives.
+/// (`https://integrate.api.nvidia.com/v1`). Capability comes only from the
+/// layered authority (settings, provider-reported metadata, models.dev); this
+/// suite proves the typed `chat_template_kwargs` Boolean serializer and its
+/// declaration validation, the self-hosted-only Qwen contract (exposed through
+/// an explicit validated declaration, never through hosted availability), the
+/// absence of any undocumented `thinking` envelope, and that model names alone
+/// never acquire controls.
 ///
 /// Every expectation is an independently written literal body fact; no
 /// production serializer generates expected output.
@@ -27,13 +27,11 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
-import 'package:sanad_agent/core/provider_thinking/nim_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_policy.dart';
-import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
@@ -42,6 +40,8 @@ import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
+
+import '../../support/thinking_matchers.dart';
 
 const _selfHostedQwenDeclaration = '''
 model_capabilities:
@@ -605,23 +605,6 @@ model_capabilities:
       }
     });
 
-    test('hosted Boolean Off is marked as an actual disable', () {
-      setUpHarness();
-      addTearDown(tearDownHarness);
-      for (final modelId in [
-        'moonshotai/kimi-k2.6',
-        'qwen/qwen3.5-122b-a10b',
-      ]) {
-        final descriptor = assembler.assemble(
-          instance: instanceFor('nvidia'),
-          model: ModelOption(value: modelId, label: modelId),
-        );
-        expect(
-          descriptor.options.singleWhere((option) => option.id == 'off').isOff,
-          isTrue,
-        );
-      }
-    });
 
     test(
       'template kwargs declaration is incompatible with aggregator envelope',
@@ -645,7 +628,7 @@ model_capabilities:
             modelId: modelId,
             selectionId: 'off',
           ),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
         );
         expect(capturedBodies, isEmpty);
       },
@@ -741,7 +724,7 @@ model_capabilities:
           modelId: 'qwen/qwen3.8-27b',
           selectionId: 'off',
         ),
-        throwsA(isA<ThinkingSelectionException>()),
+        sendsNoThinkingField,
       );
     });
   });
@@ -847,7 +830,7 @@ model_capabilities:
           modelId: 'qwen/qwen3.8-27b',
           selectionId: 'xhigh',
         ),
-        throwsA(isA<ThinkingSelectionException>()),
+        sendsNoThinkingField,
       );
       expect(capturedBodies, isEmpty);
     });
@@ -857,151 +840,66 @@ model_capabilities:
     setUp(() => setUpHarness());
     tearDown(tearDownHarness);
 
-    test('hosted DeepSeek V4 Flash/Pro expose none/high/max without an '
-        'envelope', () async {
-      for (final modelId in [
-        'deepseek-ai/deepseek-v4-flash',
-        'deepseek-ai/deepseek-v4-pro',
-      ]) {
-        final inst = instanceFor('nvidia');
-        final descriptor = assembler.assemble(
-          instance: inst,
-          model: ModelOption(value: modelId, label: modelId),
-        );
-        expect(descriptor.status, ThinkingCapabilityStatus.supported);
-        expect(descriptor.kind, ThinkingControlKind.effort);
-        expect(descriptor.options.map((option) => option.id), [
-          'none',
-          'high',
-          'max',
-        ]);
-        expect(descriptor.defaultOptionId, 'high');
-        expect(
-          descriptor.options.firstWhere((o) => o.id == 'none').isOff,
-          isTrue,
-          reason: 'the documented `none` disables thinking on this transport',
-        );
 
-        // Every advertised value reaches the documented field with no
-        // `thinking` envelope and no template kwargs.
-        for (final selection in ['none', 'high', 'max']) {
-          final resolution = resolver.resolve(
-            providerInstanceId: inst.id,
-            modelId: modelId,
-            selectionId: selection,
-          );
-          final body = await dispatch(
-            inst: inst,
-            modelId: modelId,
-            directive: resolution.directive,
-          );
-          expect(body['model'], modelId);
-          expect(body['reasoning_effort'], selection);
-          expect(body.containsKey('thinking'), isFalse);
-          expect(body.containsKey('chat_template_kwargs'), isFalse);
-        }
 
-        // Provider default omits the field entirely.
-        final omitted = resolver.resolve(
-          providerInstanceId: inst.id,
-          modelId: modelId,
-          selectionId: null,
-        );
-        final omittedBody = await dispatch(
-          inst: inst,
-          modelId: modelId,
-          directive: omitted.directive,
-        );
-        expect(omittedBody.containsKey('reasoning_effort'), isFalse);
-        expect(omittedBody.containsKey('thinking'), isFalse);
-      }
-    });
 
-    test('hosted Kimi K3 keeps the documented effort ladder', () async {
+    test('documented hosted ids come from shipped nim records', () async {
       final inst = instanceFor('nvidia');
-      final descriptor = assembler.assemble(
+      final deepSeek = assembler.assemble(
         instance: inst,
-        model: ModelOption(value: 'moonshotai/kimi-k3', label: 'Kimi K3'),
+        model: ModelOption(
+          value: 'deepseek-ai/deepseek-v4-flash',
+          label: 'DeepSeek V4 Flash',
+        ),
       );
-      expect(descriptor.status, ThinkingCapabilityStatus.supported);
-      expect(descriptor.options.map((option) => option.id), [
-        'low',
-        'high',
-        'max',
-      ]);
-      expect(descriptor.defaultOptionId, 'max');
-      expect(descriptor.options.any((option) => option.isOff), isFalse);
+      expect(deepSeek.source, 'shipped_default');
+      expect(deepSeek.options.map((o) => o.id), ['none', 'high', 'max']);
+      expect(deepSeek.defaultOptionId, 'high');
+      expect(
+        deepSeek.options.where((o) => o.isOff).map((o) => o.id),
+        ['none'],
+      );
+      final high = resolver.resolve(
+        providerInstanceId: inst.id,
+        modelId: 'deepseek-ai/deepseek-v4-flash',
+        selectionId: 'high',
+      );
+      final body = await dispatch(
+        inst: inst,
+        modelId: 'deepseek-ai/deepseek-v4-flash',
+        directive: high.directive,
+      );
+      expect(body['reasoning_effort'], 'high');
+      expect(body.containsKey('thinking'), isFalse);
 
-      for (final selection in ['low', 'high', 'max']) {
-        final resolution = resolver.resolve(
-          providerInstanceId: inst.id,
-          modelId: 'moonshotai/kimi-k3',
-          selectionId: selection,
-        );
-        final body = await dispatch(
-          inst: inst,
-          modelId: 'moonshotai/kimi-k3',
-          directive: resolution.directive,
-        );
-        expect(body['reasoning_effort'], selection);
-        expect(body.containsKey('thinking'), isFalse);
-      }
+      final kimiToggle = resolver.resolve(
+        providerInstanceId: inst.id,
+        modelId: 'moonshotai/kimi-k2.6',
+        selectionId: 'off',
+      );
+      final kwargs = await dispatch(
+        inst: inst,
+        modelId: 'moonshotai/kimi-k2.6',
+        directive: kimiToggle.directive,
+      );
+      expect(kwargs['chat_template_kwargs'], {'thinking': false});
+      expect(kwargs.containsKey('reasoning_effort'), isFalse);
+
+      // The same hosted records never apply on a generic Chat route.
+      final custom = instanceFor(kCustomProviderTemplateId);
+      expect(
+        assembler
+            .assemble(
+              instance: custom,
+              model: ModelOption(
+                value: 'moonshotai/kimi-k2.6',
+                label: 'Kimi K2.6',
+              ),
+            )
+            .status,
+        ThinkingCapabilityStatus.unknown,
+      );
     });
-
-    test(
-      'hosted template-kwargs toggles use the documented Boolean keys',
-      () async {
-        const cases = {
-          'moonshotai/kimi-k2.6': 'thinking',
-          'qwen/qwen3.5-122b-a10b': 'enable_thinking',
-        };
-        for (final entry in cases.entries) {
-          final modelId = entry.key;
-          final key = entry.value;
-          final inst = instanceFor('nvidia');
-          final descriptor = assembler.assemble(
-            instance: inst,
-            model: ModelOption(value: modelId, label: modelId),
-          );
-          expect(descriptor.status, ThinkingCapabilityStatus.supported);
-          expect(descriptor.kind, ThinkingControlKind.toggle);
-          expect(descriptor.options.map((option) => option.id), ['on', 'off']);
-          expect(
-            descriptor.defaultOptionId,
-            isNull,
-            reason: 'no Boolean default is documented for this contract',
-          );
-
-          for (final selection in ['on', 'off']) {
-            final resolution = resolver.resolve(
-              providerInstanceId: inst.id,
-              modelId: modelId,
-              selectionId: selection,
-            );
-            final body = await dispatch(
-              inst: inst,
-              modelId: modelId,
-              directive: resolution.directive,
-            );
-            expect(body['chat_template_kwargs'], {key: selection == 'on'});
-            expect(body.containsKey('reasoning_effort'), isFalse);
-            expect(body.containsKey('thinking'), isFalse);
-          }
-
-          final omitted = resolver.resolve(
-            providerInstanceId: inst.id,
-            modelId: modelId,
-            selectionId: null,
-          );
-          final omittedBody = await dispatch(
-            inst: inst,
-            modelId: modelId,
-            directive: omitted.directive,
-          );
-          expect(omittedBody.containsKey('chat_template_kwargs'), isFalse);
-        }
-      },
-    );
 
     test('hosted ids without documented controls stay unknown', () {
       final inst = instanceFor('nvidia');
@@ -1034,13 +932,9 @@ model_capabilities:
             modelId: modelId,
             selectionId: 'high',
           ),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
         );
       }
-      expect(
-        NimThinkingPolicy.isEvidencedModel('deepseek-ai/deepseek-v4-flash'),
-        isTrue,
-      );
     });
 
     test('hosted contracts are not advertised on an incompatible mode', () {
@@ -1248,7 +1142,7 @@ model_capabilities:
             modelId: 'qwen/qwen3.8-27b',
             selectionId: 'off',
           ),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
           reason: '${entry.key} must reject before dispatch',
         );
         expect(capturedBodies, isEmpty);
@@ -1271,50 +1165,6 @@ model_capabilities:
     });
   });
 
-  group('compatible subset reuses existing exact model authorities', () {
-    setUp(() => setUpHarness());
-    tearDown(tearDownHarness);
-
-    test('verified aliases and negatives follow the existing catalogs', () {
-      final inst = instanceFor(kCustomProviderTemplateId);
-      // A verified DeepSeek alias already owned by the catalog evidences the
-      // compatible ladder, without a second inventory.
-      final aliased = assembler.assemble(
-        instance: inst,
-        model: ModelOption(
-          value: 'deepseek-ai/deepseek-v4-flash',
-          label: 'DeepSeek V4 Flash',
-        ),
-      );
-      expect(aliased.status, ThinkingCapabilityStatus.supported);
-      expect(aliased.options.map((option) => option.id), [
-        'low',
-        'high',
-        'max',
-      ]);
-      expect(aliased.defaultOptionId, isNull);
-      expect(aliased.options.any((option) => option.isOff), isFalse);
-
-      // Case/namespace/variant negatives stay unknown.
-      for (final modelId in [
-        'DEEPSEEK-AI/DEEPSEEK-V4-FLASH',
-        'untrusted/deepseek-v4-flash',
-        'deepseek-v4-flash-custom',
-        'KIMI-K3',
-        'moonshotai/kimi-k3',
-      ]) {
-        final descriptor = assembler.assemble(
-          instance: inst,
-          model: ModelOption(value: modelId, label: modelId),
-        );
-        expect(
-          descriptor.status,
-          ThinkingCapabilityStatus.unknown,
-          reason: '$modelId must stay unknown on a generic Chat route',
-        );
-      }
-    });
-  });
 
   group('no hosted advertisement without an explicit declaration', () {
     setUp(() => setUpHarness());

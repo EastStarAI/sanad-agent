@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:get_it/get_it.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -267,6 +268,45 @@ void main() {
       tempHomeDir.deleteSync(recursive: true);
     }
   });
+
+  test(
+    'G3: an expected pre-dispatch rejection is not logged as SEVERE and '
+    'carries no stack trace',
+    () async {
+      admit(workItemId: 'work-rejected-log', requestId: 'req-rejected-1');
+      final previousLevel = Logger.root.level;
+      Logger.root.level = Level.ALL;
+      final records = <LogRecord>[];
+      final sub = Logger.root.onRecord.listen(records.add);
+      try {
+        final responses = await runRejectionTurn(
+          workItemId: 'work-rejected-log',
+        );
+        expect(responses.single.message.metadata?['error_code'], isNotNull);
+      } finally {
+        await sub.cancel();
+        Logger.root.level = previousLevel;
+      }
+      final executorRecords = records
+          .where((r) => r.loggerName == 'SessionTurnExecutor')
+          .toList();
+      expect(
+        executorRecords.where((r) => r.level >= Level.SEVERE),
+        isEmpty,
+        reason: executorRecords.map((r) => '${r.level} ${r.message}').join('\n'),
+      );
+      expect(executorRecords.where((r) => r.stackTrace != null), isEmpty);
+      expect(
+        executorRecords.any(
+          (r) => r.message.contains(
+            ThinkingSelectionErrorCode.capabilityUnsupported,
+          ),
+        ),
+        isTrue,
+        reason: 'the rejection is still recorded with its code',
+      );
+    },
+  );
 
   test(
     'owned rejection terminalizes its durable item, delivers once, and never strands it',

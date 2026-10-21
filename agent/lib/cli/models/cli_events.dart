@@ -233,6 +233,9 @@ sealed class CliEvent {
           contextUsage: contextUsage,
           model: payload['model']?.toString(),
           provider: payload['provider']?.toString(),
+          errorCode: payload['error_code'] is String
+              ? payload['error_code'] as String
+              : null,
           sessionId: sessionId,
           runId: runId,
           eventId: eventId,
@@ -440,12 +443,18 @@ class CliTurnCompleteEvent extends CliEvent {
   final String? model;
   final String? provider;
 
+  /// Typed rejection code when the agent ended the turn without dispatching
+  /// it (for example `thinking_option_unavailable_for_route`). A turn that
+  /// carries one is a failure, not a completion.
+  final String? errorCode;
+
   CliTurnCompleteEvent({
     required this.finalMessage,
     this.usage,
     this.contextUsage,
     this.model,
     this.provider,
+    this.errorCode,
     super.sessionId,
     super.runId,
     super.eventId,

@@ -2,8 +2,8 @@
 /// explicit-budget dispatch.
 ///
 /// Scope, matching the approved closure decisions:
-/// * a token-budget option discloses the exact positive token count the route
-///   resolves for it, from the owning catalog's own budget authority;
+/// * a token-budget option discloses the exact positive token count its
+///   settings or provider-reported declaration resolves for it;
 /// * Off, effort/level/toggle options, and unknown counts disclose nothing;
 /// * an omitted/null selection stays provider default by omission even when the
 ///   descriptor publishes native default metadata;
@@ -14,27 +14,14 @@ library;
 
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
-import 'package:sanad_agent/core/provider_thinking/anthropic_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/anthropic_thinking_wire_codec.dart';
-import 'package:sanad_agent/core/provider_thinking/google_thinking_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
-import 'package:sanad_agent/core/provider_thinking/thinking_policy_context.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_wire_vocabulary.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
-
-ThinkingPolicyContext _context(String modelId, {String apiMode = 'messages'}) =>
-    ThinkingPolicyContext(
-      providerInstanceId: 'instance-1',
-      templateId: 'anthropic',
-      protocol: ProviderProtocol.anthropicCompatible,
-      apiMode: apiMode,
-      modelId: modelId,
-      capabilityRevision: 'rev-1',
-    );
 
 int? _budgetOf(ThinkingControlDescriptor descriptor, String id) =>
     descriptor.options.firstWhere((option) => option.id == id).budgetTokens;
@@ -162,84 +149,7 @@ void main() {
     });
   });
 
-  group('Anthropic descriptor budget metadata', () {
-    const policy = AnthropicThinkingPolicy();
 
-    test('manual budget options disclose the exact catalog token counts', () {
-      final descriptor = policy.resolveCapability(
-        _context('claude-sonnet-4-5'),
-      );
-
-      expect(descriptor.status, ThinkingCapabilityStatus.supported);
-      expect(descriptor.kind, ThinkingControlKind.tokenBudget);
-      expect(_budgetOf(descriptor, 'off'), isNull);
-      expect(_budgetOf(descriptor, 'low'), equals(2048));
-      expect(_budgetOf(descriptor, 'medium'), equals(8192));
-      expect(_budgetOf(descriptor, 'high'), equals(16384));
-    });
-
-    test('adaptive options carry no token budget', () {
-      final descriptor = policy.resolveCapability(_context('claude-opus-4-7'));
-
-      expect(descriptor.kind, ThinkingControlKind.adaptive);
-      expect(descriptor.options, isNotEmpty);
-      expect(
-        descriptor.options.every((option) => option.budgetTokens == null),
-        isTrue,
-      );
-    });
-
-    test('an omitted selection stays provider default by omission', () {
-      for (final omitted in <String?>[null, '', '   ']) {
-        expect(
-          policy.resolveDirective(_context('claude-sonnet-4-5'), omitted),
-          isA<UseProviderDefault>(),
-        );
-      }
-      expect(
-        policy.resolveDirective(_context('claude-sonnet-4-5'), 'high'),
-        isA<AnthropicBudgetDirective>(),
-      );
-    });
-  });
-
-  group('Google descriptor budget metadata', () {
-    const policy = GoogleThinkingPolicy();
-
-    test('budget models disclose exact counts and Off stays a non-budget', () {
-      final descriptor = policy.resolveCapability(_context('gemini-2.5-flash'));
-
-      expect(descriptor.kind, ThinkingControlKind.tokenBudget);
-      final off = descriptor.options.firstWhere((option) => option.id == 'off');
-      expect(off.isOff, isTrue);
-      expect(off.budgetTokens, isNull);
-      expect(_budgetOf(descriptor, 'low'), equals(1024));
-      expect(_budgetOf(descriptor, 'medium'), equals(8192));
-      expect(_budgetOf(descriptor, 'high'), equals(24576));
-    });
-
-    test('always-on budget models expose no Off option', () {
-      final descriptor = policy.resolveCapability(_context('gemini-2.5-pro'));
-
-      expect(descriptor.kind, ThinkingControlKind.tokenBudget);
-      expect(
-        descriptor.options.any((option) => option.isOff),
-        isFalse,
-      );
-      expect(_budgetOf(descriptor, 'high'), equals(24576));
-    });
-
-    test('level models carry no token budget on any option', () {
-      final descriptor = policy.resolveCapability(_context('gemini-4-argon'));
-
-      expect(descriptor.kind, ThinkingControlKind.level);
-      expect(descriptor.options, isNotEmpty);
-      expect(
-        descriptor.options.every((option) => option.budgetTokens == null),
-        isTrue,
-      );
-    });
-  });
 
   group('Declared endpoint budget metadata', () {
     ProviderInstance customAnthropicInstance() => ProviderInstance(

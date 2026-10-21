@@ -835,6 +835,89 @@ void main() {
     expect(confirmedRecord?.metrics?.providerConfirmedRequestTokensAfter, 12_500);
   });
 
+  test('coordinator rejects route mismatch on post-boundary dispatch reservation and reconciliation', () async {
+    final now = DateTime.utc(2026, 8, 29);
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-route-mismatch-coord',
+        model: 'gpt-4o',
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      ),
+    );
+    sessions.replaceMessages(
+      'session-route-mismatch-coord',
+      [
+        ..._heavyTimeline().map((entry) => entry.message),
+      ],
+    );
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-route-mismatch-coord');
+    final outcome = await coordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-route-mismatch-coord',
+        compactionId: 'cmp-route-mismatch-coord',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.auto,
+        contextWindowTokens: 100_000,
+      ),
+      force: true,
+    );
+    expect(outcome?.status, CompactionStatus.completed);
+
+    const differentRoute = RouteSignature(
+      providerInstanceId: 'provider-other',
+      templateId: 'anthropic',
+      protocol: 'anthropic_messages',
+      normalizedBaseUrl: 'https://api.anthropic.com',
+      modelId: 'claude-3-5-sonnet',
+      configRevision: 1,
+      credentialRevision: 1,
+    );
+
+    // Reservation with different route fails
+    final reserved = coordinator.reservePostBoundaryDispatch(
+      compactionId: outcome!.compactionId,
+      requestId: 'turn-1:step-1',
+      routeSignature: differentRoute,
+      dispatchedAt: DateTime.utc(2026, 8, 29, 3, 1),
+    );
+    expect(reserved, isFalse);
+
+    // Matching reservation succeeds
+    final matchingReserved = coordinator.reservePostBoundaryDispatch(
+      compactionId: outcome.compactionId,
+      requestId: 'turn-1:step-1',
+      routeSignature: _route(),
+      dispatchedAt: DateTime.utc(2026, 8, 29, 3, 1),
+    );
+    expect(matchingReserved, isTrue);
+
+    // Reconciliation with different route fails
+    final reconciled = coordinator.reconcilePostBoundaryUsage(
+      compactionId: outcome.compactionId,
+      requestId: 'turn-1:step-1',
+      observedAt: DateTime.utc(2026, 8, 29, 3, 2),
+      inputTokens: 14_000,
+      routeSignature: differentRoute,
+    );
+    expect(reconciled, isFalse);
+
+    // Boundary remains reserved with null confirmed tokens
+    final current = boundaries.findById(outcome.compactionId);
+    expect(current?.metrics?.providerConfirmedRequestTokensAfter, isNull);
+    expect(current?.diagnostics?.postBoundary.status, 'reserved');
+  });
+
   test('failed compaction run preserves attempt ledger and decision snapshot into session_compaction_operations', () async {
     final failingEngine = ContextCompactionEngine(
       summarizer: _ThrowingProviderSummarizer(),
@@ -899,5 +982,83 @@ void main() {
     expect(record.diagnostics!.attempts.first.inputTokens, 1200);
     expect(record.diagnostics!.decisionSnapshot?['target_scope'], 'usable_budget');
     expect(record.diagnostics!.decisionSnapshot?['context_window'], 100_000);
+  });
+
+  test('post-boundary turn retrying under 429 generates retry-attempt request IDs, preserves post-boundary reservation without premature missing finalization, and reconciles confirmed post-boundary usage upon retry success', () async {
+    final now = DateTime.utc(2026, 8, 29);
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-retry-resilience',
+        model: 'gpt-4o',
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      ),
+    );
+    sessions.replaceMessages(
+      'session-retry-resilience',
+      [
+        ..._heavyTimeline().map((entry) => entry.message),
+      ],
+    );
+
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-retry-resilience');
+    final outcome = await coordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-retry-resilience',
+        compactionId: 'cmp-retry-resilience-1',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.auto,
+        contextWindowTokens: 100_000,
+        providerProjection: [
+          for (final entry in canonical.messages) entry.message,
+        ],
+      ),
+      force: true,
+    );
+    expect(outcome?.status, CompactionStatus.completed);
+
+    // 1. Post-boundary dispatch is reserved for the turn's first step
+    const stepRequestId = 'turn-retry:model_step_1';
+    final reserved = coordinator.reservePostBoundaryDispatch(
+      compactionId: outcome!.compactionId,
+      requestId: stepRequestId,
+      routeSignature: _route(),
+      dispatchedAt: DateTime.utc(2026, 8, 29, 3, 1),
+    );
+    expect(reserved, isTrue);
+
+    final boundaryRecord = boundaries.findById(outcome.compactionId);
+    expect(boundaryRecord?.diagnostics?.postBoundary.status, 'reserved');
+    expect(boundaryRecord?.diagnostics?.postBoundary.requestId, stepRequestId);
+
+    // 2. Intermediate 429 error occurs. Crucially, because it is retried by the runner,
+    // post-boundary status MUST NOT be prematurely finalized as missing.
+    // It stays reserved.
+    expect(boundaryRecord?.diagnostics?.postBoundary.status, 'reserved');
+
+    // 3. Retry attempt succeeds with provider-confirmed usage for stepRequestId
+    final reconciled = coordinator.reconcilePostBoundaryUsage(
+      compactionId: outcome.compactionId,
+      requestId: stepRequestId,
+      observedAt: DateTime.utc(2026, 8, 29, 3, 2),
+      inputTokens: 15_000,
+      routeSignature: _route(),
+    );
+    expect(reconciled, isTrue);
+
+    // 4. Confirmed status is durably recorded with the actual token count
+    final confirmedRecord = boundaries.findById(outcome.compactionId);
+    expect(confirmedRecord?.diagnostics?.postBoundary.status, 'confirmed');
+    expect(confirmedRecord?.metrics?.providerConfirmedRequestTokensAfter, 15_000);
   });
 }

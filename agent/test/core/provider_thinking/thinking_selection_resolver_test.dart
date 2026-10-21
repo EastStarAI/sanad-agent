@@ -25,6 +25,8 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:test/test.dart';
 
+import '../../support/thinking_matchers.dart';
+
 class _SupportedEffortPolicy implements ProviderThinkingPolicy {
   @override
   String get policyId => 'test_effort';
@@ -98,6 +100,10 @@ void main() {
       models: [
         {
           'value': 'gpt-test',
+          // Provider-reported: the endpoint declares no request-time control.
+          'model_metadata': {
+            'thinking_control': {'status': 'unsupported'},
+          },
           'thinking_control': {
             'status': 'unsupported',
             'capability_revision': 'rev-1',
@@ -146,13 +152,7 @@ void main() {
         modelId: 'gpt-test',
         selectionId: 'medium',
       ),
-      throwsA(
-        isA<ThinkingSelectionException>().having(
-          (error) => error.code,
-          'code',
-          ThinkingSelectionErrorCode.capabilityUnknown,
-        ),
-      ),
+      sendsNoThinkingField,
     );
   });
 
@@ -161,12 +161,20 @@ void main() {
     final staleObservedAt = DateTime.now().toUtc().subtract(
       const Duration(minutes: 10),
     );
-    repo.upsertModelCache(
+    // The cache row carries the current capability revision (including any
+    // default-fill suffix): read it from one fresh resolution first.
+    void cacheStaleLive(String revision) => repo.upsertModelCache(
       instanceId: 'inst-1',
       cacheKey: 'models',
       models: [
         {
           'value': 'o3',
+          // Provider-reported native levels (capability authority).
+          'supported_reasoning_levels': [
+            {'effort': 'low'},
+            {'effort': 'medium'},
+            {'effort': 'high'},
+          ],
           'thinking_control': {
             'status': 'supported',
             'kind': 'effort',
@@ -175,7 +183,7 @@ void main() {
               {'id': 'medium', 'label': 'Medium'},
               {'id': 'high', 'label': 'High'},
             ],
-            'capability_revision': '1:1:openai_chat_effort:o3',
+            'capability_revision': revision,
             'source': 'live',
             'observed_at': staleObservedAt.toIso8601String(),
           },
@@ -185,6 +193,17 @@ void main() {
       source: 'live',
       configRevision: 1,
       credentialRevision: 1,
+    );
+    cacheStaleLive('placeholder');
+    cacheStaleLive(
+      resolver
+          .resolve(
+            providerInstanceId: 'inst-1',
+            modelId: 'o3',
+            selectionId: null,
+          )
+          .descriptor
+          .capabilityRevision,
     );
 
     final resolution = resolver.resolve(
@@ -206,6 +225,12 @@ void main() {
       models: [
         {
           'value': 'o3',
+          // Provider-reported native levels (capability authority).
+          'supported_reasoning_levels': [
+            {'effort': 'low'},
+            {'effort': 'medium'},
+            {'effort': 'high'},
+          ],
           'thinking_control': {
             'status': 'supported',
             'kind': 'effort',
@@ -244,6 +269,12 @@ void main() {
       models: [
         {
           'value': 'o3',
+          // Provider-reported native levels (capability authority).
+          'supported_reasoning_levels': [
+            {'effort': 'low'},
+            {'effort': 'medium'},
+            {'effort': 'high'},
+          ],
           'thinking_control': {
             'status': 'supported',
             'kind': 'effort',
@@ -282,6 +313,11 @@ void main() {
       models: [
         {
           'value': 'o1',
+          // Provider-reported native levels (capability authority).
+          'supported_reasoning_levels': [
+            {'effort': 'medium'},
+            {'effort': 'high'},
+          ],
           'thinking_control': {
             'status': 'supported',
             'kind': 'effort',
@@ -317,7 +353,7 @@ void main() {
   });
 
   test(
-    'manual anthropic route rejects missing budget tier before adapter call',
+    'manual anthropic route clamps an unoffered budget tier to the nearest lower one',
     () {
       repo.createInstance(_anthropicInstance());
       repo.upsertModelCache(
@@ -346,19 +382,17 @@ void main() {
         credentialRevision: 1,
       );
 
+      // The shipped Claude manual-budget record offers off/low/medium/high:
+      // an unoffered `max` clamps down to the nearest lower tier, `high`.
+      final clamped = resolver.resolve(
+        providerInstanceId: 'anthropic-1',
+        modelId: 'claude-sonnet-4-5',
+        selectionId: 'max',
+      );
+      expect(clamped.selectionId, 'high');
       expect(
-        () => resolver.resolve(
-          providerInstanceId: 'anthropic-1',
-          modelId: 'claude-sonnet-4-5',
-          selectionId: 'max',
-        ),
-        throwsA(
-          isA<ThinkingSelectionException>().having(
-            (error) => error.code,
-            'code',
-            ThinkingSelectionErrorCode.optionUnavailable,
-          ),
-        ),
+        (clamped.directive as AnthropicBudgetDirective).budgetTokens,
+        16384,
       );
     },
   );
@@ -912,7 +946,7 @@ model_capabilities:
             modelId: 'claude-invalid-budget',
             selectionId: 'invented',
           ),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
         );
         expect(
           () => testResolver.resolve(
@@ -920,7 +954,7 @@ model_capabilities:
             modelId: 'claude-invalid-budget',
             selectionId: 'too_small',
           ),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
         );
       },
     );
@@ -1244,13 +1278,7 @@ model_capabilities:
               modelId: modelId,
               selectionId: 'high',
             ),
-            throwsA(
-              isA<ThinkingSelectionException>().having(
-                (e) => e.code,
-                'code',
-                ThinkingSelectionErrorCode.capabilityUnknown,
-              ),
-            ),
+            sendsNoThinkingField,
             reason:
                 '$modelId on custom instance must reject selection as capabilityUnknown',
           );
@@ -1259,7 +1287,7 @@ model_capabilities:
     );
 
     test(
-      'custom routes reuse exact evidenced model controls; Chat Claude preserved as not native Anthropic wire',
+      'custom routes reuse shipped model defaults; Chat Claude preserved as not native Anthropic wire',
       () {
         // 1. Custom Anthropic with claude-3-7-sonnet gets native Anthropic controls
         final customAnthropic = ProviderInstance(
@@ -1316,13 +1344,7 @@ model_capabilities:
             modelId: 'claude-3-7-sonnet',
             selectionId: 'high',
           ),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
+          sendsNoThinkingField,
         );
 
         // 3. Custom OpenAI with o3-mini gets exact OpenAI controls
@@ -1355,7 +1377,7 @@ model_capabilities:
     );
 
     test(
-      'unconfigured shipped templates fail closed for unevidenced models, resolve exact evidenced models',
+      'shipped templates without a record fail closed to unknown; shipped records resolve',
       () {
         final unconfiguredTemplates = [
           ('nvidia', 'nvidia/nemotron-3-ultra-550b-a55b'),
@@ -1391,13 +1413,7 @@ model_capabilities:
               modelId: modelId,
               selectionId: 'low',
             ),
-            throwsA(
-              isA<ThinkingSelectionException>().having(
-                (e) => e.code,
-                'code',
-                ThinkingSelectionErrorCode.capabilityUnknown,
-              ),
-            ),
+            sendsNoThinkingField,
             reason:
                 '$tpl with $modelId must reject selection as capabilityUnknown',
           );
@@ -1436,13 +1452,7 @@ model_capabilities:
             modelId: 'custom-unsupported-llama',
             selectionId: 'high',
           ),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
+          sendsNoThinkingField,
         );
       },
     );
@@ -1639,13 +1649,7 @@ model_capabilities:
             modelId: 'gemma4:e2b',
             selectionId: 'off',
           ),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
+          sendsNoThinkingField,
         );
       },
     );
@@ -1712,13 +1716,7 @@ model_capabilities:
             modelId: 'gemma4:e2b',
             selectionId: 'off',
           ),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
+          sendsNoThinkingField,
         );
       },
     );
@@ -1784,13 +1782,7 @@ model_capabilities:
             modelId: 'gemma4:e2b',
             selectionId: 'off',
           ),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
+          sendsNoThinkingField,
         );
       },
     );
@@ -1867,13 +1859,7 @@ model_capabilities:
             modelId: 'gemma4:e2b',
             selectionId: 'off',
           ),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
+          sendsNoThinkingField,
         );
       },
     );

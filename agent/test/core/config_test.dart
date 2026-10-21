@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -801,6 +802,58 @@ model_capabilities:
         expect(cap1.fingerprint, hasLength(64));
       },
     );
+
+    test('anthropic_budget admits only a Boolean false Off and '
+        'native_toggle_effort validates toggles and efforts', () {
+      final budget = ThinkingControlOverride.parse({
+        'status': 'supported',
+        'wire': 'anthropic_budget',
+        'options': {'off': false, 'low': 2048},
+      });
+      expect(budget.options, {'off': false, 'low': 2048});
+
+      final native = ThinkingControlOverride.parse({
+        'status': 'supported',
+        'wire': 'native_toggle_effort',
+        'options': {'off': false, 'low': 'low', 'max': 'max'},
+        'default_option': 'max',
+      });
+      expect(native.options, {'off': false, 'low': 'low', 'max': 'max'});
+      for (final bad in [
+        {'off': true},
+        {'on': false},
+        {'high': true},
+        {'low': 'high'},
+        {'off': 'low'},
+        {'low': 'none'},
+      ]) {
+        expect(
+          () => ThinkingControlOverride.parse({
+            'status': 'supported',
+            'wire': 'native_toggle_effort',
+            'options': bad,
+          }),
+          throwsA(isA<FormatException>()),
+          reason: '$bad',
+        );
+      }
+    });
+
+    test('the shipped config.example.yaml override parses', () {
+      File('${tempSanadHome.path}/config.yaml').writeAsStringSync(
+        File.fromUri(
+          Isolate.resolvePackageUriSync(
+            Uri.parse('package:sanad_agent/'),
+          )!.resolve('../config.example.yaml'),
+        ).readAsStringSync(),
+      );
+      final config = Config(environment: const {});
+      final control = config.modelAwarePolicy
+          .capabilityOverrideFor('deepseek-v4.1-flash')
+          ?.thinkingControl;
+      expect(control?.wire, 'native_toggle_effort');
+      expect(control?.defaultOption, 'high');
+    });
 
     test('rejects off/none option under anthropic_budget wire', () {
       const badBudgetYaml = '''

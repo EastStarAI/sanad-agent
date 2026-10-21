@@ -1433,6 +1433,654 @@ void main() {
         expect(content['finish_reason'], equals('length'));
       },
     );
+
+    test(
+      'compaction dump marks truncated capture_state explicitly for Anthropic max_tokens finish_reason',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        const compactionId = 'anthropic-truncation-compaction';
+        const requestId = 'compaction:anthropic-truncation-compaction:full:0';
+        final url = Uri.parse('https://api.anthropic.com/v1/messages');
+
+        final dumpPath = await LLMRequestDumper.recordActualRequest(
+          url: url,
+          headers: {},
+          body: {},
+          compactionId: compactionId,
+          requestId: requestId,
+          provider: 'anthropic',
+          model: 'claude-3-5-sonnet',
+          baseUrl: 'https://api.anthropic.com',
+        );
+        expect(dumpPath, isNotNull);
+
+        await LLMRequestDumper.dumpResponse(
+          {'content': [{'type': 'text', 'text': 'cut off summary'}], 'stop_reason': 'max_tokens'},
+          compactionId: compactionId,
+          requestId: requestId,
+          statusCode: 200,
+          duration: const Duration(milliseconds: 410),
+          finishReason: 'max_tokens',
+        );
+
+        final content = jsonDecode(await File(dumpPath!).readAsString()) as Map<String, dynamic>;
+        expect(content['capture_state'], equals('truncated'));
+        expect(content['truncated'], isTrue);
+        expect(content['finish_reason'], equals('max_tokens'));
+      },
+    );
+
+    test(
+      'compaction dump marks error capture_state explicitly for cancelled or failed finish_reason',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        const compactionId = 'cancelled-compaction';
+        const requestId = 'compaction:cancelled-compaction:full:0';
+        final url = Uri.parse('https://api.openai.com/v1/chat/completions');
+
+        final dumpPath = await LLMRequestDumper.recordActualRequest(
+          url: url,
+          headers: {},
+          body: {},
+          compactionId: compactionId,
+          requestId: requestId,
+          provider: 'openai',
+          model: 'gpt-4o',
+        );
+        expect(dumpPath, isNotNull);
+
+        await LLMRequestDumper.dumpResponse(
+          {'choices': []},
+          compactionId: compactionId,
+          requestId: requestId,
+          statusCode: 200,
+          duration: const Duration(milliseconds: 150),
+          finishReason: 'cancelled',
+        );
+
+        final content = jsonDecode(await File(dumpPath!).readAsString()) as Map<String, dynamic>;
+        expect(content['capture_state'], equals('error'));
+        expect(content['finish_reason'], equals('cancelled'));
+      },
+    );
+
+    test(
+      'F3 reproduction: completed normal-turn dump is not overwritten by subsequent unkeyed auxiliary call',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        // 1. Normal turn finishes successfully (200 completed)
+        final normalPath = await LLMRequestDumper.dumpRequest(
+          sessionId: 'session-f3',
+          history: [
+            Message(role: MessageRole.user, content: 'Normal user prompt'),
+          ],
+          tools: [],
+          model: 'deepseek-v4.1-flash',
+          provider: 'opencode-go',
+          requestId: 'turn-1-step-1',
+        );
+        expect(normalPath, isNotNull);
+
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.opencode.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer test-key'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'Normal user prompt'},
+            ],
+          },
+          requestId: 'turn-1-step-1',
+        );
+
+        await LLMRequestDumper.dumpResponse(
+          {
+            'choices': [
+              {
+                'message': {
+                  'role': 'assistant',
+                  'content': 'Normal assistant reply',
+                },
+              },
+            ],
+          },
+          requestId: 'turn-1-step-1',
+          statusCode: 200,
+          duration: const Duration(milliseconds: 500),
+        );
+
+        // Verify normal turn dump file is completed with 200
+        final initialContent =
+            jsonDecode(await File(normalPath!).readAsString())
+                as Map<String, dynamic>;
+        expect(initialContent['capture_state'], equals('completed'));
+        expect(initialContent['status_code'], equals(200));
+
+        // 2. Auxiliary unkeyed call (e.g. TitleService with options.requestId == null) fails with 429
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.opencode.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer test-key'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'Generate title'},
+            ],
+          },
+          requestId: null, // Unkeyed auxiliary call
+        );
+
+        await LLMRequestDumper.recordError(
+          _FakeHttpLikeError(
+            statusCode: 429,
+            uri: Uri.parse('https://api.opencode.example/v1/chat/completions'),
+            responseBody: '{"error": "rate limit"}',
+          ),
+          requestId: null,
+          statusCode: 429,
+          duration: const Duration(milliseconds: 777),
+        );
+
+        // 3. Normal turn dump MUST NOT be corrupted or overwritten with error/429
+        final finalContent =
+            jsonDecode(await File(normalPath).readAsString())
+                as Map<String, dynamic>;
+        expect(
+          finalContent['capture_state'],
+          equals('completed'),
+          reason:
+              'Completed normal turn dump must not be overwritten by auxiliary error',
+        );
+        expect(
+          finalContent['status_code'],
+          equals(200),
+          reason: 'Normal turn status 200 must be preserved',
+        );
+        expect(
+          finalContent['request']?['body']?['messages']?[0]?['content'],
+          equals('Normal user prompt'),
+          reason:
+              'Normal turn prompt must not be overwritten by TitleService prompt',
+        );
+      },
+    );
+
+    test(
+      'F3 reproduction: retried attempts under 429 preserve both attempt 0 (error) and attempt 1 (completed)',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        // Attempt 0 fails with 429
+        final attempt0Path = await LLMRequestDumper.dumpRequest(
+          sessionId: 'session-retry',
+          history: [
+            Message(role: MessageRole.user, content: 'User prompt'),
+          ],
+          tools: [],
+          model: 'deepseek-v4.1-flash',
+          provider: 'opencode-go',
+          requestId: 'turn-step:attempt_0',
+        );
+        expect(attempt0Path, isNotNull);
+
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.opencode.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer test-key'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'User prompt'},
+            ],
+          },
+          requestId: 'turn-step:attempt_0',
+        );
+
+        await LLMRequestDumper.recordError(
+          _FakeHttpLikeError(
+            statusCode: 429,
+            uri: Uri.parse('https://api.opencode.example/v1/chat/completions'),
+            responseBody: '{"error": "rate limit"}',
+          ),
+          requestId: 'turn-step:attempt_0',
+          statusCode: 429,
+          duration: const Duration(milliseconds: 400),
+        );
+
+        // Attempt 1 succeeds with 200
+        final attempt1Path = await LLMRequestDumper.dumpRequest(
+          sessionId: 'session-retry',
+          history: [
+            Message(role: MessageRole.user, content: 'User prompt'),
+          ],
+          tools: [],
+          model: 'deepseek-v4.1-flash',
+          provider: 'opencode-go',
+          requestId: 'turn-step:retry_1',
+        );
+        expect(attempt1Path, isNotNull);
+        expect(attempt1Path, isNot(equals(attempt0Path)));
+
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.opencode.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer test-key'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'User prompt'},
+            ],
+          },
+          requestId: 'turn-step:retry_1',
+        );
+
+        await LLMRequestDumper.dumpResponse(
+          {
+            'choices': [
+              {
+                'message': {
+                  'role': 'assistant',
+                  'content': 'Success reply',
+                },
+              },
+            ],
+          },
+          requestId: 'turn-step:retry_1',
+          statusCode: 200,
+          duration: const Duration(milliseconds: 600),
+        );
+
+        // Both files exist and preserve their respective states
+        final attempt0Content =
+            jsonDecode(await File(attempt0Path!).readAsString())
+                as Map<String, dynamic>;
+        expect(attempt0Content['capture_state'], equals('error'));
+        expect(attempt0Content['status_code'], equals(429));
+
+        final attempt1Content =
+            jsonDecode(await File(attempt1Path!).readAsString())
+                as Map<String, dynamic>;
+        expect(attempt1Content['capture_state'], equals('completed'));
+        expect(attempt1Content['status_code'], equals(200));
+      },
+    );
+
+    test(
+      'F3 cross-request fallback: A-complete/B-active/late-A response AND error fails closed and leaves B unchanged',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        // 1. Turn A initializes, executes, and completes
+        final pathA = await LLMRequestDumper.dumpRequest(
+          sessionId: 'session-ab',
+          history: [Message(role: MessageRole.user, content: 'Prompt A')],
+          tools: [],
+          model: 'deepseek-v4.1-flash',
+          provider: 'opencode-go',
+          requestId: 'req-A',
+        );
+        expect(pathA, isNotNull);
+
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer key-a'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'Prompt A'},
+            ],
+          },
+          requestId: 'req-A',
+        );
+
+        await LLMRequestDumper.dumpResponse(
+          {
+            'choices': [
+              {
+                'message': {'role': 'assistant', 'content': 'Reply A'},
+              },
+            ],
+          },
+          requestId: 'req-A',
+          statusCode: 200,
+          duration: const Duration(milliseconds: 300),
+        );
+
+        final initialA =
+            jsonDecode(await File(pathA!).readAsString())
+                as Map<String, dynamic>;
+        expect(initialA['capture_state'], equals('completed'));
+        expect(initialA['status_code'], equals(200));
+
+        // 2. Turn B initializes and is now actively in-flight
+        final pathB = await LLMRequestDumper.dumpRequest(
+          sessionId: 'session-ab',
+          history: [
+            Message(role: MessageRole.user, content: 'Prompt B in-flight'),
+          ],
+          tools: [],
+          model: 'deepseek-v4.1-flash',
+          provider: 'opencode-go',
+          requestId: 'req-B',
+        );
+        expect(pathB, isNotNull);
+        expect(pathB, isNot(equals(pathA)));
+
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer key-b'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'Prompt B in-flight'},
+            ],
+          },
+          requestId: 'req-B',
+        );
+
+        // 3. Late response for terminal Turn A arrives while B is in flight
+        final lateResponseResult = await LLMRequestDumper.dumpResponse(
+          {
+            'choices': [
+              {
+                'message': {'role': 'assistant', 'content': 'Late Reply A'},
+              },
+            ],
+          },
+          requestId: 'req-A',
+          statusCode: 200,
+          duration: const Duration(milliseconds: 100),
+        );
+        expect(
+          lateResponseResult,
+          isNull,
+          reason:
+              'Late response for terminal request A must fail closed and return null',
+        );
+
+        // 4. Late error for terminal Turn A arrives while B is in flight
+        final lateErrorResult = await LLMRequestDumper.recordError(
+          _FakeHttpLikeError(
+            statusCode: 500,
+            uri: Uri.parse('https://api.example/v1/chat/completions'),
+            responseBody: '{"error": "late failure"}',
+          ),
+          requestId: 'req-A',
+          statusCode: 500,
+          duration: const Duration(milliseconds: 100),
+        );
+        expect(
+          lateErrorResult,
+          isNull,
+          reason:
+              'Late error for terminal request A must fail closed and return null',
+        );
+
+        // 5. Unknown nonempty request ID arrives while B is in flight
+        final unknownResult = await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer key-unknown'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'Unknown request'},
+            ],
+          },
+          requestId: 'unknown-req-id',
+        );
+        expect(
+          unknownResult,
+          isNull,
+          reason:
+              'Unknown nonempty request ID must fail closed and never attach to active request B',
+        );
+
+        // 6. Verify B's file is completely untouched by late A and unknown requests
+        final contentB =
+            jsonDecode(await File(pathB!).readAsString())
+                as Map<String, dynamic>;
+        expect(
+          contentB['capture_state'],
+          equals('request_sent'),
+          reason: 'B must still be in request_sent state, untouched by late A',
+        );
+        expect(
+          contentB['status_code'],
+          isNull,
+          reason: 'B must have no status code yet',
+        );
+        expect(
+          contentB['error'],
+          isNull,
+          reason: 'B must not have been given late A error',
+        );
+        expect(
+          contentB['request']?['body']?['messages']?[0]?['content'],
+          equals('Prompt B in-flight'),
+        );
+
+        // 7. Verify A's file remains terminal and unchanged
+        final contentA =
+            jsonDecode(await File(pathA).readAsString())
+                as Map<String, dynamic>;
+        expect(contentA['capture_state'], equals('completed'));
+        expect(contentA['status_code'], equals(200));
+        expect(
+          contentA['response']?['choices']?[0]?['message']?['content'],
+          equals('Reply A'),
+        );
+      },
+    );
+
+    test(
+      'F3 cross-request fallback: keyed B-active / unkeyed auxiliary actual-request+error leaves B isolated',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        // 1. Keyed Turn B is actively in-flight
+        final pathB = await LLMRequestDumper.dumpRequest(
+          sessionId: 'session-keyed-b',
+          history: [
+            Message(role: MessageRole.user, content: 'Normal turn B prompt'),
+          ],
+          tools: [],
+          model: 'deepseek-v4.1-flash',
+          provider: 'opencode-go',
+          requestId: 'turn-b-keyed-1',
+        );
+        expect(pathB, isNotNull);
+
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer key-b'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'Normal turn B prompt'},
+            ],
+          },
+          requestId: 'turn-b-keyed-1',
+        );
+
+        // 2. Unkeyed auxiliary actual-request arrives while B is in flight
+        final auxPath = await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.example/v1/chat/completions'),
+          headers: {'Authorization': 'Bearer key-aux'},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'Auxiliary title prompt'},
+            ],
+          },
+          requestId: null,
+          sessionId: 'session-keyed-b',
+        );
+        expect(auxPath, isNotNull);
+        expect(
+          auxPath,
+          isNot(equals(pathB)),
+          reason:
+              'Unkeyed auxiliary call must auto-create an independent file, not attach to in-flight B',
+        );
+
+        // 3. Unkeyed auxiliary call encounters 429 error
+        final auxErrorPath = await LLMRequestDumper.recordError(
+          _FakeHttpLikeError(
+            statusCode: 429,
+            uri: Uri.parse('https://api.example/v1/chat/completions'),
+            responseBody: '{"error": "rate limit"}',
+          ),
+          requestId: null,
+          statusCode: 429,
+          duration: const Duration(milliseconds: 700),
+        );
+        expect(
+          auxErrorPath,
+          equals(auxPath),
+          reason:
+              'Unkeyed error must pair with the unkeyed auxiliary dump file',
+        );
+
+        // 4. Verify B's file is completely untouched by auxiliary request and error
+        final contentB =
+            jsonDecode(await File(pathB!).readAsString())
+                as Map<String, dynamic>;
+        expect(
+          contentB['capture_state'],
+          equals('request_sent'),
+          reason:
+              'B must not be marked error or completed by unkeyed auxiliary traffic',
+        );
+        expect(
+          contentB['status_code'],
+          isNull,
+          reason: 'B status code must remain null while in-flight',
+        );
+        expect(
+          contentB['error'],
+          isNull,
+          reason: 'B must not receive the auxiliary 429 error',
+        );
+        expect(
+          contentB['request']?['body']?['messages']?[0]?['content'],
+          equals('Normal turn B prompt'),
+        );
+
+        // 5. B completes normally
+        await LLMRequestDumper.dumpResponse(
+          {
+            'choices': [
+              {
+                'message': {'role': 'assistant', 'content': 'Reply B'},
+              },
+            ],
+          },
+          requestId: 'turn-b-keyed-1',
+          statusCode: 200,
+          duration: const Duration(milliseconds: 900),
+        );
+
+        final finalB =
+            jsonDecode(await File(pathB).readAsString())
+                as Map<String, dynamic>;
+        expect(finalB['capture_state'], equals('completed'));
+        expect(finalB['status_code'], equals(200));
+        expect(
+          finalB['response']?['choices']?[0]?['message']?['content'],
+          equals('Reply B'),
+        );
+
+        // 6. Verify auxiliary file recorded the 429 error independently
+        final finalAux =
+            jsonDecode(await File(auxPath!).readAsString())
+                as Map<String, dynamic>;
+        expect(finalAux['capture_state'], equals('error'));
+        expect(finalAux['status_code'], equals(429));
+      },
+    );
+
+    test(
+      'F3 cross-request fallback: two distinct active keyed turns correlate to their own files during interleaved execution',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        // 1. Both turns initialize
+        final path1 = await LLMRequestDumper.dumpRequest(
+          sessionId: 'session-1',
+          history: [
+            Message(role: MessageRole.user, content: 'User 1'),
+          ],
+          tools: [],
+          requestId: 'turn-1:attempt_0',
+        );
+        final path2 = await LLMRequestDumper.dumpRequest(
+          sessionId: 'session-2',
+          history: [
+            Message(role: MessageRole.user, content: 'User 2'),
+          ],
+          tools: [],
+          requestId: 'turn-2:attempt_0',
+        );
+        expect(path1, isNotNull);
+        expect(path2, isNotNull);
+        expect(path1, isNot(equals(path2)));
+
+        // 2. Interleaved actual requests
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.example/v1/chat/completions'),
+          headers: {},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'User 2'},
+            ],
+          },
+          requestId: 'turn-2:attempt_0',
+        );
+        await LLMRequestDumper.recordActualRequest(
+          url: Uri.parse('https://api.example/v1/chat/completions'),
+          headers: {},
+          body: {
+            'messages': [
+              {'role': 'user', 'content': 'User 1'},
+            ],
+          },
+          requestId: 'turn-1:attempt_0',
+        );
+
+        // 3. Turn 1 fails with 429 error
+        await LLMRequestDumper.recordError(
+          _FakeHttpLikeError(
+            statusCode: 429,
+            uri: Uri.parse('https://api.example/v1/chat/completions'),
+            responseBody: '{"error": "rate limit"}',
+          ),
+          requestId: 'turn-1:attempt_0',
+          statusCode: 429,
+        );
+
+        // 4. Turn 2 completes with 200
+        await LLMRequestDumper.dumpResponse(
+          {
+            'choices': [
+              {
+                'message': {'role': 'assistant', 'content': 'Reply 2'},
+              },
+            ],
+          },
+          requestId: 'turn-2:attempt_0',
+          statusCode: 200,
+        );
+
+        // Verify file 1: error 429, user 1
+        final content1 =
+            jsonDecode(await File(path1!).readAsString())
+                as Map<String, dynamic>;
+        expect(content1['capture_state'], equals('error'));
+        expect(content1['status_code'], equals(429));
+
+        // Verify file 2: completed 200, user 2
+        final content2 =
+            jsonDecode(await File(path2!).readAsString())
+                as Map<String, dynamic>;
+        expect(content2['capture_state'], equals('completed'));
+        expect(content2['status_code'], equals(200));
+        expect(
+          content2['response']?['choices']?[0]?['message']?['content'],
+          equals('Reply 2'),
+        );
+      },
+    );
   });
 }
 

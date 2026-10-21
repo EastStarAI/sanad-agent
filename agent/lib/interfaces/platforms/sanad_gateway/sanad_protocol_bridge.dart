@@ -24,6 +24,7 @@ import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service
 import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
@@ -125,6 +126,9 @@ class SanadProtocolBridge {
         thinkingPreferenceStore:
             getIt.isRegistered<ThinkingRoutePreferenceStore>()
             ? getIt<ThinkingRoutePreferenceStore>()
+            : null,
+        thinkingRouteSessionSync: getIt.isRegistered<ThinkingRouteSessionSync>()
+            ? getIt<ThinkingRouteSessionSync>()
             : null,
         compactionBoundaries: getIt.isRegistered<CompactionBoundaryRepository>()
             ? getIt<CompactionBoundaryRepository>()

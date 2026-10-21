@@ -482,6 +482,13 @@ class SessionTurnExecutor {
         onError: (e, stack) {
           if (e is RuntimeRecoveryRequired || e is RuntimeRecoveryCancelled) {
             _logger.info('Runtime recovery transition in streamTurn: $e');
+          } else if (e is ThinkingSelectionException) {
+            // An expected user-selection rejection before dispatch: one line
+            // with its code, no stack trace (clean logging).
+            _logger.info(
+              'Thinking selection rejected before dispatch for session '
+              '${event.sessionId}: ${e.code}',
+            );
           } else {
             _logger.severe('Error in streamTurn: $e', e, stack);
           }
@@ -809,6 +816,8 @@ class SessionTurnExecutor {
         'model_display': agentRunner.activeModelDisplay,
       if (agentRunner.activeProvider != null)
         'provider': agentRunner.activeProvider,
+      if (agentRunner.activeProviderInstanceId != null)
+        'provider_instance_id': agentRunner.activeProviderInstanceId,
       if (snapshot['context_window_tokens'] != null)
         'context_tokens': snapshot['context_window_tokens'],
     });
