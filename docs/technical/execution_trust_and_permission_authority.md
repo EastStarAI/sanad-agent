@@ -148,3 +148,23 @@ A name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and must not be a protected opera
 - The approval key of a call with secrets is `shell_execute::<command>::secrets=<sorted names>`, so a grant for a command without secrets never covers the same command with secrets, and the permission prompt shows the names (never values).
 - Every output the Direct backend reports (progress checkpoints, final, partial, timeout and error output) has each injected value replaced by `[REDACTED:<NAME>]` before it becomes a tool result, history row, request dump or client timeline entry. Only verbatim echoes are caught.
 
+### Acquisition
+
+- `system_request_secret` takes a `reason` (at most 500 characters) and 1 to 10 `fields` (`name`, `label`, optional `description`, `masked` default true, `required` default true). Names are validated as above and must be unique. It is offered, and runs, only on an `owner` turn, and fails without prompting when the vault is unavailable.
+- The call suspends like `system_ask_user`: a durable checkpoint (tool name, fields, reason, and `replaces` for names already stored, never values) is written first, then `tool.permission_request` reaches the Client.
+- The Client answers with `tool_permission_response` carrying `secret_values` (`{NAME: value}`) to save, or `allowed: false` to skip. `PlatformRuntimeBridge` accepts it only when the ingress stamped `owner` authority (`PERMISSION_DENIED` otherwise), refuses `answer`, unrequested names, non-text or oversized values and missing required values (`INVALID_SECRET_VALUES`), and in every refusal keeps the request pending and logs the code only.
+- `SecretAcquisition` writes accepted values to the vault and replaces the decision with `{allowed, secret_outcome: stored|skipped|failed, secret_names}`. Only that value-free decision is retained in memory, handed to the waiting tool, claimed into `suspended_checkpoints.resolved_decision`, or resumed after a restart, where `SuspendedResumeService` returns the same result instead of re-running the tool.
+- The tool result is `{"status":"stored","secrets":[names]}`, `{"status":"skipped"}` or `{"status":"failed"}` (vault refused the write). It never contains a value. Re-entering a stored name replaces its value.
+
+### Listing, deletion and revocation
+
+- `system_list_secrets` returns the sorted names in `custom:` only; it never lists `providers:` or `mcp:` entries.
+- `system_delete_secret` takes 1 to 16 names. It is sensitive (`permission_class: secret_management`) and asks the user every time, then reports `deleted` and `not_found`. Deletion removes the vault entry and its index id, so later calls naming it fail as `secret_not_found`. A command already running keeps the environment it started with.
+
+### Limits
+
+- Redaction catches verbatim echoes only. A command that encodes, splits or transforms a value, or a value cut at an output truncation boundary, is not detected. Injection therefore stays behind the shell approval (or Full Access) and the owner check.
+- In Full Access, a command naming secrets runs without a prompt, as any other command does.
+- Secret values travel from the Client to the Agent inside `tool_permission_response`; for a cloud client that path is the TLS Cloud Gateway relay. Neither side logs payloads.
+- If the daemon stops after a decision is claimed and before the vault write completes, the recovered decision still reports `stored`; the next use then fails as `secret_not_found` and the user can enter it again.
+

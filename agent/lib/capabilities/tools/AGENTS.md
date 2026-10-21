@@ -34,6 +34,9 @@ This contract applies to `agent/lib/capabilities/tools/`.
 - Keep command output bounded and free of injected operational instructions.
 - Shell typed error status comes from terminal execution state, never output-string parsing; preserve the legacy encoded payload as the text projection.
 
+## User Secret Tools
+- Secret tools return names and outcomes only and refuse non-owner turns. `system_request_secret` never stores values itself; it trusts only the bridge-sanitized decision. `system_delete_secret` is sensitive and asks every time.
+
 ## Workspace Search
 - `search_glob` and `search_grep` execute through focused workspace handlers.
 - Glob matching supports full relative path and basename semantics plus brace alternatives.

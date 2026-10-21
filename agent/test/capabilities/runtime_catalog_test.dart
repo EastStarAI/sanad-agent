@@ -262,6 +262,36 @@ Use the review skill.''');
       });
     });
 
+    group('secret tools presence', () {
+      Future<Set<String>> names(String authority) async => (await catalog
+              .buildTools(
+                registry: ToolsRegistry(),
+                request: AgentTurnRequest(
+                  sessionId: 'thread-secrets',
+                  message: 'connect',
+                  metadata: {CommandAuthority.payloadKey: authority},
+                ),
+              ))
+          .map((tool) => tool.schema.name)
+          .toSet();
+
+      const secretTools = {
+        'system_request_secret',
+        'system_list_secrets',
+        'system_delete_secret',
+      };
+
+      test('are offered on an owner turn', () async {
+        expect(await names('owner'), containsAll(secretTools));
+      });
+
+      test('are absent on an unverified turn', () async {
+        final present = await names('unverified');
+        expect(present.intersection(secretTools), isEmpty);
+        expect(present, contains('system_ask_user'));
+      });
+    });
+
     group('host capability discovery presence', () {
       Future<Set<String>> toolNames(String authority) async {
         final tools = await catalog.buildTools(
