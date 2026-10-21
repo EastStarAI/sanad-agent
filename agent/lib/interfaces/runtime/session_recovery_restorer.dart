@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -754,6 +755,16 @@ class SessionRecoveryRestorer {
     String? requestId,
     Map<String, dynamic>? metadata,
   }) {
+    // The durable event metadata keeps the ingress-stamped authority inside
+    // its command payload; restore it so a recovered turn keeps its owner
+    // authority (and its owner-only tool set) instead of reading unverified.
+    final eventMetadata = metadata ?? const <String, dynamic>{};
+    final commandPayload = eventMetadata['payload'];
+    final stamped =
+        eventMetadata[CommandAuthority.payloadKey] ??
+        (commandPayload is Map
+            ? commandPayload[CommandAuthority.payloadKey]
+            : null);
     return AgentTurnRequest(
       sessionId: sessionId,
       message: message,
@@ -762,7 +773,10 @@ class SessionRecoveryRestorer {
       model: model,
       thinkingMode: thinkingMode,
       requestId: requestId,
-      metadata: metadata ?? const {},
+      metadata: CommandAuthority.stampTurnMetadata(
+        eventMetadata,
+        CommandAuthority.fromStamped(stamped),
+      ),
     );
   }
 

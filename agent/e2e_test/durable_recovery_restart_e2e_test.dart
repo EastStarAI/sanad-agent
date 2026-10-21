@@ -29,7 +29,6 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
@@ -39,6 +38,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
 import 'support/local_gateway_test_support.dart';
+import 'support/workspace_policy_seed.dart';
 
 const _template = 'openai';
 const _authMethod = 'api_key';
@@ -1072,9 +1072,10 @@ class _RecoveryHarness {
     } finally {
       workspaceState.dispose();
     }
-    await const WorkspacePolicyStore().savePermissionMode(
-      workspaceDir.path,
-      permissionMode,
+    seedWorkspacePolicy(
+      stateHomePath: sanadStateHome.path,
+      workspacePath: workspaceDir.path,
+      policy: WorkspacePolicy(permissionMode: permissionMode),
     );
 
     final gatewayPort =

@@ -5,11 +5,11 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:image/image.dart' as img;
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/engine/adapters/e2e_fixture_adapter.dart';
 import 'package:test/test.dart';
 
 import 'support/local_gateway_test_support.dart';
+import 'support/workspace_policy_seed.dart';
 
 void main() {
   test(
@@ -220,9 +220,12 @@ void main() {
         E2eFixtureAdapter.viewImagePixelResponseText,
       );
 
-      await const WorkspacePolicyStore().savePermissionMode(
-        harness.workspace.path,
-        WorkspacePermissionMode.fullAccess,
+      seedWorkspacePolicy(
+        stateHomePath: harness.sanadStateHome.path,
+        workspacePath: harness.workspace.path,
+        policy: const WorkspacePolicy(
+          permissionMode: WorkspacePermissionMode.fullAccess,
+        ),
       );
       final fullAccessSession = harness.nextSessionId('full-access');
       harness.sendViewImage(

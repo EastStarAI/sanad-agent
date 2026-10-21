@@ -1,3 +1,4 @@
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:uuid/uuid.dart';
 import '../../../../core/models/message.dart';
 import '../../../models/gateway_event.dart';
@@ -149,11 +150,16 @@ class CanonicalToAgent {
 
   static Map<String, dynamic> _turnMetadata(Map<String, dynamic> payload) {
     final rawSessionMetadata = payload['session_metadata'];
-    return {
-      if (rawSessionMetadata is Map)
-        ...Map<String, dynamic>.from(rawSessionMetadata),
-      if (payload['platform_tools'] != null)
-        'platform_tools': payload['platform_tools'],
-    };
+    final sessionMetadata = rawSessionMetadata is Map
+        ? Map<String, dynamic>.from(rawSessionMetadata)
+        : <String, dynamic>{};
+    return CommandAuthority.stampTurnMetadata(
+      {
+        ...sessionMetadata,
+        if (payload['platform_tools'] != null)
+          'platform_tools': payload['platform_tools'],
+      },
+      CommandAuthority.fromStamped(payload[CommandAuthority.payloadKey]),
+    );
   }
 }

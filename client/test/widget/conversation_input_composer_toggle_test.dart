@@ -1,5 +1,6 @@
 import 'dart:ui' show SemanticsAction;
 
+import 'package:sanad_client/features/conversations/presentation/bloc/session_workspace_coordinator.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/thinking_control.dart';
@@ -136,6 +137,22 @@ void main() {
       ),
     );
   }
+
+  testWidgets('permission mode menu items carry driver keys', (tester) async {
+    await pumpComposer(
+      tester,
+      capabilities: const Capability(supportsToolPermissions: true),
+      inputSlice: idleSlice(
+        selectedWorkspace: const DeviceWorkspace(id: 'workspace-1', name: 'Project', path: '/project'),
+      ),
+      agentSlice: onlineAgentSlice,
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('permission_mode_selector_button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('composer_permission_mode_default')), findsOneWidget);
+    expect(find.byKey(const Key('composer_permission_mode_full_access')), findsOneWidget);
+  });
 
   testWidgets('clicking blank composer surface focuses the text input', (
     tester,
@@ -894,7 +911,9 @@ class _StubConversationInputCubit extends Cubit<ConversationInputState> implemen
   void setDraftScope({required String? deviceId, required String? sessionId}) {}
 
   @override
-  Future<void> setWorkspacePermissionMode(WorkspacePermissionMode mode) async {}
+  Future<WorkspacePolicyChangeFailure?> setWorkspacePermissionMode(
+    WorkspacePermissionMode mode,
+  ) async => null;
 
   @override
   Future<void> selectThinkingMode({

@@ -20,7 +20,7 @@ import 'package:test/test.dart';
 
 class FakeSuspendedResumeService extends SuspendedResumeService {
   static final PermissionManager _permissionManager = PermissionManager(
-    policyStore: const WorkspacePolicyStore(),
+    policyStore: WorkspacePolicyStore(),
     platformRuntimeBridge: PlatformRuntimeBridge(),
     checkpointStore: SuspendedCheckpointStore(sessionManager: SessionManager()),
   );

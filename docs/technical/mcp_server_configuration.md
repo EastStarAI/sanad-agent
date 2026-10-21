@@ -44,7 +44,7 @@ Configuration documents contain non-secret values and opaque secret references o
 
 ## Secret ownership and migration
 
-`mcp_secrets.json` under owner-protected Sanad Home is the single MCP secret owner. It uses the existing `SanadHomeBootstrap` atomic-write and owner-only permission boundary. Keys are opaque references scoped by configuration origin and server identity.
+`McpSecretStore` is the single MCP secret owner. Values live in the `mcp:` namespace of the Agent vault (`SecretVaults` over `AgentSecretStore`; see [Execution Trust and Permission Authority](execution_trust_and_permission_authority.md#9-agent-secret-vault)); a legacy `mcp_secrets.json` is migrated and deleted at startup. Keys are opaque references scoped by configuration origin and server identity. STDIO servers start with exactly the allowlisted operator environment plus their own configured values; nothing else from the daemon environment reaches them.
 
 Secrets include bearer tokens, secret custom-header values, secret environment values, OAuth access/refresh tokens, OAuth client secrets, and STDIO argument values following recognized credential flags such as `--api-key` or `--token`. Secret argument positions retain a redacted placeholder plus opaque reference in configuration and resolve only when the daemon launches the server. OAuth client IDs, endpoints, ordinary arguments, ordinary headers, and ordinary environment values are non-secret metadata.
 

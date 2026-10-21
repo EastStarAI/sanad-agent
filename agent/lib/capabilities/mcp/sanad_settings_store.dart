@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 
@@ -15,24 +14,6 @@ class SanadSettingsStore {
 
   McpSecretStore get _secrets =>
       McpSecretStore(homeDirectoryPath: _resolveSanadHomeDirectory());
-
-  Future<WorkspacePolicy> readWorkspacePolicy(String workspacePath) async =>
-      WorkspacePolicy.fromJson(
-        await readWorkspaceSettingsDocument(workspacePath),
-      );
-
-  Future<void> saveWorkspacePolicy(
-    String workspacePath,
-    WorkspacePolicy policy,
-  ) async {
-    final file = settingsFileForWorkspace(workspacePath);
-    final current = await _readSettingsMap(file);
-    final merged = Map<String, dynamic>.from(current)
-      ..remove('permissionMode')
-      ..remove('permissions')
-      ..addAll(policy.toJson());
-    await _writeSettingsMap(file, merged);
-  }
 
   Future<List<McpServerConfig>> readUserMcpServers() async =>
       parseMcpServersDocument(await readUserMcpConfigDocument());

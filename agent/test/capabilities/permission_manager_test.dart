@@ -4,14 +4,15 @@ import 'dart:async';
 
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:test/test.dart';
+import '../support/memory_workspace_policy_store.dart';
 
 class FakePlatformRuntimeBridge extends PlatformRuntimeBridge {
   Map<String, dynamic> nextDecision = const {
@@ -108,7 +109,7 @@ void main() {
   group('PermissionManager', () {
     late Directory tempDir;
     late Directory workspaceDir;
-    late WorkspacePolicyStore store;
+    late MemoryWorkspacePolicyStore store;
     late FakePlatformRuntimeBridge bridge;
     late FakeCheckpointStore checkpointStore;
     late PermissionManager manager;
@@ -120,9 +121,8 @@ void main() {
       );
       workspaceDir = Directory('${tempDir.path}/workspace')
         ..createSync(recursive: true);
-      store = WorkspacePolicyStore(
-        settingsStore: SanadSettingsStoreForTest(tempDir.path),
-      );
+      store = MemoryWorkspacePolicyStore();
+      store.bind(workspaceDir.path, workspaceDir.path);
       bridge = FakePlatformRuntimeBridge();
       checkpointStore = FakeCheckpointStore();
       manager = PermissionManager(
@@ -544,7 +544,7 @@ void main() {
     });
 
     test('uses full_access workspace mode without prompting', () async {
-      await store.savePolicy(
+      await store.seed(
         workspaceDir.path,
         const WorkspacePolicy(
           permissionMode: WorkspacePermissionMode.fullAccess,
@@ -572,13 +572,14 @@ void main() {
     });
 
     test(
-      'bypasses permission prompt when allow_all_tools is true in session metadata',
+      'bypasses permission prompt when allow_all_tools is true on an owner turn',
       () async {
         final context = ToolContext(
           sessionId: 'thread-allow-all',
           toolCallId: 'call-allow-all',
           metadata: {
             'allow_all_tools': true,
+            CommandAuthority.payloadKey: CommandAuthority.owner.value,
             'workspace': {
               'id': workspaceDir.path,
               'name': 'workspace',
@@ -600,7 +601,7 @@ void main() {
     test(
       'explicit workspace policy deny rule takes precedence over allow_all_tools bypass',
       () async {
-        await store.savePolicy(
+        await store.seed(
           workspaceDir.path,
           const WorkspacePolicy(
             permissionMode: WorkspacePermissionMode.defaultMode,
@@ -641,30 +642,186 @@ void main() {
     );
 
     test(
-      'bypasses permission prompt when permission_mode is full_access in session metadata',
+      'turn metadata cannot claim a bypass without owner authority',
       () async {
-        final context = ToolContext(
-          sessionId: 'thread-full-access-meta',
-          toolCallId: 'call-full-access-meta',
-          metadata: {
+        final claims = <Map<String, dynamic>>[
+          {'permission_mode': 'full_access'},
+          {
             'permission_mode': 'full_access',
-            'workspace': {
-              'id': workspaceDir.path,
-              'name': 'workspace',
-              'path': workspaceDir.path,
-            },
+            CommandAuthority.payloadKey: CommandAuthority.owner.value,
           },
-        );
+          {'allow_all_tools': true},
+          {'allow_all_tools': 'true'},
+          {
+            'allow_all_tools': true,
+            CommandAuthority.payloadKey:
+                CommandAuthority.unverified.value,
+          },
+          {'allow_all_tools': true, CommandAuthority.payloadKey: 'OWNER'},
+        ];
+        bridge.nextDecision = const {'allowed': false};
+        for (final (index, claim) in claims.indexed) {
+          final context = ToolContext(
+            sessionId: 'thread-claim-$index',
+            toolCallId: 'call-claim-$index',
+            metadata: {
+              ...claim,
+              'workspace': {
+                'id': workspaceDir.path,
+                'name': 'workspace',
+                'path': workspaceDir.path,
+              },
+            },
+          );
+          await expectLater(
+            manager.ensureAuthorized(
+              tool: shellTool,
+              arguments: {'command': 'pwd'},
+              context: context,
+            ),
+            throwsA(isA<Exception>()),
+            reason: '$claim',
+          );
+        }
+        expect(bridge.requestCount, claims.length);
+      },
+    );
 
-        await manager.ensureAuthorized(
+    test('a forged workspace settings file grants nothing', () async {
+      File('${workspaceDir.path}/.sanad/settings.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          '{"permissionMode":"full_access",'
+          '"permissions":{"allow":["shell_execute::pwd"]}}',
+        );
+      bridge.nextDecision = const {'allowed': false};
+      final context = ToolContext(
+        sessionId: 'thread-forged-settings',
+        toolCallId: 'call-forged-settings',
+        metadata: {
+          'workspace': {
+            'id': workspaceDir.path,
+            'name': 'workspace',
+            'path': workspaceDir.path,
+          },
+        },
+      );
+
+      await expectLater(
+        manager.ensureAuthorized(
           tool: shellTool,
           arguments: {'command': 'pwd'},
           context: context,
-        );
+        ),
+        throwsA(isA<Exception>()),
+      );
+      expect(bridge.requestCount, 1);
+    });
 
-        expect(bridge.requestCount, equals(0));
-      },
-    );
+    test('a user denial is a typed permission denial', () async {
+      bridge.nextDecision = const {'allowed': false};
+      await expectLater(
+        manager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {'command': 'rm -rf build'},
+          context: ToolContext(
+            sessionId: 'thread-deny-typed',
+            metadata: {
+              'workspace': {'id': workspaceDir.path, 'path': workspaceDir.path},
+            },
+          ),
+        ),
+        throwsA(isA<ToolPermissionDeniedException>()),
+      );
+    });
+
+    test('a workspace grant announces the raised revision to every client', () async {
+      final announced = <(String, WorkspacePolicy)>[];
+      final announcing = MemoryWorkspacePolicyStore(
+        paths: {workspaceDir.path: workspaceDir.path},
+        announceChange: (id, policy) => announced.add((id, policy)),
+      );
+      addTearDown(announcing.dispose);
+      final granting = PermissionManager(
+        policyStore: announcing,
+        platformRuntimeBridge: bridge,
+        checkpointStore: checkpointStore,
+      );
+      await granting.ensureAuthorized(
+        tool: shellTool,
+        arguments: {'command': 'ls'},
+        context: ToolContext(
+          sessionId: 'thread-grant-announce',
+          toolCallId: 'call-grant-announce',
+          metadata: {
+            'workspace': {'id': workspaceDir.path, 'path': workspaceDir.path},
+          },
+        ),
+      );
+      expect(announced.single.$1, workspaceDir.path);
+      expect(announced.single.$2.revision, 1);
+      expect(announced.single.$2.permissions.allow, ['shell_execute::ls']);
+    });
+
+    test('a workspace grant persists to the daemon store, not the file', () async {
+      final context = ToolContext(
+        sessionId: 'thread-grant',
+        toolCallId: 'call-grant',
+        metadata: {
+          'workspace': {
+            'id': workspaceDir.path,
+            'name': 'workspace',
+            'path': workspaceDir.path,
+          },
+        },
+      );
+      await manager.ensureAuthorized(
+        tool: shellTool,
+        arguments: {'command': 'pwd'},
+        context: context,
+      );
+      final stored = await store.readPolicy(workspaceDir.path);
+      expect(stored.permissions.allow, contains('shell_execute::pwd'));
+      expect(
+        File('${workspaceDir.path}/.sanad/settings.json').existsSync(),
+        isFalse,
+      );
+
+      // Policy stays with the workspace id when its folder is relocated.
+      final elsewhere = Directory('${tempDir.path}/elsewhere')..createSync();
+      store.bind(workspaceDir.path, elsewhere.path);
+      expect(
+        (await store.readPolicy(workspaceDir.path)).permissions.allow,
+        contains('shell_execute::pwd'),
+      );
+    });
+
+    test('a workspace grant for an unregistered workspace stays session scoped', () async {
+      store.bind(workspaceDir.path, null);
+      final context = ToolContext(
+        sessionId: 'thread-unbound',
+        toolCallId: 'call-unbound',
+        metadata: {
+          'workspace': {
+            'id': workspaceDir.path,
+            'name': 'workspace',
+            'path': workspaceDir.path,
+          },
+        },
+      );
+      await manager.ensureAuthorized(
+        tool: shellTool,
+        arguments: {'command': 'pwd'},
+        context: context,
+      );
+      await manager.ensureAuthorized(
+        tool: shellTool,
+        arguments: {'command': 'pwd'},
+        context: context,
+      );
+      expect(bridge.requestCount, 1);
+      expect((await store.readPolicy(workspaceDir.path)).revision, 0);
+    });
 
     test('applies resumed once-scope approvals as one-shot bypasses', () async {
       final context = ToolContext(

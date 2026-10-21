@@ -23,6 +23,17 @@ This contract applies to `agent/lib/capabilities/permissions/`.
 - Resume through the normal runtime and canonical platform path; do not create an ad-hoc execution or delivery side channel.
 - Denial and late/already-resolved responses remain authoritative and must not execute the tool.
 
+## Policy Authority
+- Workspace permission mode, execution mode, host discovery policy, and durable grants live only in the Agent state database (`WorkspaceSecurityPolicyRepository` behind `WorkspacePolicyStore`), keyed by registered workspace UUID or a validated `exec_root:` key. Policy stays with the workspace id across relocation.
+- Derive the governing policy only from the validated tool root (`WorkspacePolicyStore.resolveForRoot`), never from workspace display metadata: the innermost containing registered workspace owns writes, else the root's `exec_root:` key, and every containing scope combines most restrictively.
+- Never read, seed from, or write policy in `<workspace>/.sanad/settings.json` or any other model-writable file.
+- Authority is `CommandAuthority`, derived by transport ingress and stamped into payloads and turn metadata; payload content can never raise it. Every authenticated client transport (loopback Local Gateway, Cloud Gateway relay, in-process CLI) is `owner`; any other transport is `unverified` and fails closed. Widening any policy axis requires `owner`; narrowing does not.
+- Turn-level `allow_all_tools` bypasses approval only on an `owner` turn. Session metadata `permission_mode` grants nothing. Explicit workspace deny entries win over every bypass.
+- Policy writes are compare-and-swap on `revision`; unknown stored values resolve to the restrictive posture. Schema changes to the policy table are additive only.
+- `ProcessEnvironmentPolicy` is the single owner of model-requested child environments. It removes Sanad credentials derived from the provider registry and `Config`, never strips developer variables by suffix, and rejects protected overrides by key without logging values.
+
+- A refusal (user denial, session or workspace deny) raises `ToolPermissionDeniedException`; the tool result records the typed `permission_denied` code so clients render it as not run.
+
 ## Safety
 - Never log raw sensitive arguments, decisions containing secrets, or recovered payload text.
 - Platform-provided tools retain platform execution target and cannot be converted into local execution by approval.

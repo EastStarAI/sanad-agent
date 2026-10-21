@@ -2,6 +2,7 @@ import '../../core/models/view_image_media_metadata.dart';
 import 'dart:async';
 
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -252,6 +253,10 @@ class SuspendedResumeService {
         runtimeSystemPrompt: runtimeSystemPrompt,
         forcedOutput: forcedOutput,
         forcedIsError: forcedIsError,
+        // A user denial never ran the tool: record the typed refusal.
+        forcedErrorCode: !isAskUser && decision['allowed'] != true
+            ? ToolResultErrorCode.permissionDenied
+            : null,
         onToolEvent:
             ({
               required String toolName,
@@ -264,6 +269,7 @@ class SuspendedResumeService {
               DateTime? startedAt,
               DateTime? terminalAt,
               int? runtimeMs,
+              String? errorCode,
             }) async {
               if (!canPublish()) return;
               await emitResponse(
@@ -278,6 +284,7 @@ class SuspendedResumeService {
                       'started_at': ?startedAt?.toIso8601String(),
                       'terminal_at': ?terminalAt?.toIso8601String(),
                       'runtime_ms': ?runtimeMs,
+                      if (!isStart) 'error_code': ?errorCode,
                     },
                   ),
                   isComplete: false,

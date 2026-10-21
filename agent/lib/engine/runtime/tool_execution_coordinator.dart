@@ -4,6 +4,7 @@ import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
 import '../../core/models/tool_execution_result.dart';
 import '../../core/models/view_image_media_metadata.dart';
+import '../../capabilities/permissions/permission_manager.dart';
 import '../../capabilities/registry/tools_registry.dart';
 import '../../capabilities/tools/base_tool.dart';
 import '../../core/di.dart';
@@ -29,6 +30,8 @@ typedef ToolEventCallback =
       DateTime? startedAt,
       DateTime? terminalAt,
       int? runtimeMs,
+      // Typed outcome wire value (for example `permission_denied`).
+      String? errorCode,
     });
 
 /// Executes tool-call batches (sequential or parallel), persists per-tool
@@ -347,6 +350,7 @@ class ToolExecutionCoordinator {
             ),
             isError: result.isError,
             isStart: false,
+            errorCode: result.errorCodeWire,
             toolRunId: toolCall.id,
             startedAt: timing?.startedAt,
             terminalAt: timing?.terminalAt,
@@ -531,6 +535,7 @@ class ToolExecutionCoordinator {
               ),
               isError: typedResult.isError,
               isStart: false,
+            errorCode: typedResult.errorCodeWire,
               toolRunId: toolCall.id,
               startedAt: startedAt,
               terminalAt: terminalAt,
@@ -694,7 +699,7 @@ class ToolExecutionCoordinator {
           typedResults[toolCall.id] = ToolExecutionResult.text(
             result,
             isError: true,
-            errorCode: ToolResultErrorCode.executionFailed,
+            errorCode: _errorCodeFor(e),
           );
           final terminalAt = DateTime.now().toUtc();
           final runtimeMs = terminalAt.difference(startedAt).inMilliseconds;
@@ -762,6 +767,7 @@ class ToolExecutionCoordinator {
             ),
             isError: isError,
             isStart: false,
+            errorCode: typedResults[toolCall.id]?.errorCodeWire,
             toolRunId: toolCall.id,
             startedAt: timing?.startedAt,
             terminalAt: timing?.terminalAt,
@@ -793,6 +799,7 @@ class ToolExecutionCoordinator {
     bool emitStartEvent = true,
     String? forcedOutput,
     bool forcedIsError = false,
+    ToolResultErrorCode? forcedErrorCode,
   }) async {
     final execution = await _executeSingleToolCall(
       toolCall,
@@ -802,6 +809,7 @@ class ToolExecutionCoordinator {
       emitStartEvent: emitStartEvent,
       forcedOutput: forcedOutput,
       forcedIsError: forcedIsError,
+      forcedErrorCode: forcedErrorCode,
       appendToHistory: true,
     );
     return execution.result.displayText;
@@ -815,6 +823,7 @@ class ToolExecutionCoordinator {
     bool emitStartEvent = true,
     String? forcedOutput,
     bool forcedIsError = false,
+    ToolResultErrorCode? forcedErrorCode,
     required bool appendToHistory,
     DateTime? startedAtOverride,
   }) async {
@@ -848,7 +857,9 @@ class ToolExecutionCoordinator {
       typedResult = ToolExecutionResult.text(
         forcedOutput,
         isError: forcedIsError,
-        errorCode: forcedIsError ? ToolResultErrorCode.executionFailed : null,
+        errorCode:
+            forcedErrorCode ??
+            (forcedIsError ? ToolResultErrorCode.executionFailed : null),
       );
     } else {
       final tool = registry.getTool(toolCall.name);
@@ -875,7 +886,7 @@ class ToolExecutionCoordinator {
           typedResult = ToolExecutionResult.text(
             'Error executing tool: $e',
             isError: true,
-            errorCode: ToolResultErrorCode.executionFailed,
+            errorCode: _errorCodeFor(e),
           );
         }
       }
@@ -923,6 +934,7 @@ class ToolExecutionCoordinator {
           ),
           isError: typedResult.isError,
           isStart: false,
+            errorCode: typedResult.errorCodeWire,
           toolRunId: toolCall.id,
           startedAt: startedAt,
           terminalAt: terminalAt,
@@ -1051,6 +1063,13 @@ class ToolExecutionCoordinator {
       return false;
     }
   }
+
+  /// A refused call (user denial or policy deny) never ran; every other
+  /// exception is an execution failure.
+  static ToolResultErrorCode _errorCodeFor(Object error) =>
+      error is ToolPermissionDeniedException
+      ? ToolResultErrorCode.permissionDenied
+      : ToolResultErrorCode.executionFailed;
 }
 
 abstract interface class TypedToolExecutionCallbacks {

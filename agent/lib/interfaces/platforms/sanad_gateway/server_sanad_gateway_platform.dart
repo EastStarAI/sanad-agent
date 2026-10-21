@@ -7,6 +7,7 @@ import 'package:meta/meta.dart';
 
 import 'package:logging/logging.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -96,6 +97,13 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   @override
   String get transportName => 'client';
+
+  /// Commands arrive only on the Gateway socket this Agent registered with
+  /// its key-bound Device Credential; the Gateway delivers only the owner
+  /// account's authenticated clients. User decision 2026-10-21: the cloud
+  /// client is as trusted as the local client.
+  @override
+  CommandAuthority get ingressAuthority => CommandAuthority.owner;
   final _eventController = StreamController<GatewayEvent>.broadcast();
   final _voiceEngines = <String, VoiceEngine>{};
   final _sessionClientTags = <String, String>{};

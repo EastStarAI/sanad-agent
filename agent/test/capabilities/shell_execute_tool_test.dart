@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/shell_execute_tool.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
@@ -12,6 +11,7 @@ import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_windows_path/windows_path.dart';
 import 'package:test/test.dart';
+import '../support/memory_workspace_policy_store.dart';
 
 String get _readTestFileCommand =>
     Platform.isWindows ? 'type test.txt' : 'cat test.txt';
@@ -64,7 +64,7 @@ void main() {
   group('ShellExecuteTool Tests', () {
     late Directory tempDir;
     late Directory workspaceDir;
-    late WorkspacePolicyStore store;
+    late MemoryWorkspacePolicyStore store;
     late FakePlatformRuntimeBridge bridge;
     late PermissionManager permissionManager;
 
@@ -74,9 +74,7 @@ void main() {
       );
       workspaceDir = Directory('${tempDir.path}/workspace')
         ..createSync(recursive: true);
-      store = WorkspacePolicyStore(
-        settingsStore: SanadSettingsStoreForTest(tempDir.path),
-      );
+      store = MemoryWorkspacePolicyStore();
       bridge = FakePlatformRuntimeBridge();
       permissionManager = PermissionManager(
         policyStore: store,

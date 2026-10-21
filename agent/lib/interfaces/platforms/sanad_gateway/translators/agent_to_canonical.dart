@@ -92,6 +92,9 @@ class AgentToCanonical {
         'tool': response.toolName,
         'output': response.message.content,
         'isError': response.isToolError,
+        // Typed outcome (for example permission_denied: the tool never ran).
+        'errorCode': ?(response.message.toolResult?.errorCodeWire ??
+            terminalMetadata?['error_code']?.toString()),
         'status': response.isToolCancelled
             ? 'cancelled'
             : (response.isToolError ? 'error' : 'done'),

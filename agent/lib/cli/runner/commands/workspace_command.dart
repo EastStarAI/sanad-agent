@@ -697,6 +697,8 @@ class WorkspacePolicyCommand extends _BaseWorkspaceSubcommand {
     stdoutSink.writeln('Workspace Security Policy:');
     stdoutSink.writeln('  Workspace:       $wsName ($wsPath)');
     stdoutSink.writeln('  Permission Mode: ${policy.permissionMode.value}');
+    stdoutSink.writeln('  Execution Mode:  ${policy.executionMode.value}');
+    stdoutSink.writeln('  Host Discovery:  ${policy.hostDiscoveryPolicy.value}');
 
     final perms = policy.permissions;
     stdoutSink.writeln('  Tool Permissions:');

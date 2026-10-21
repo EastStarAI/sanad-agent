@@ -92,7 +92,7 @@ void main() {
       );
 
       final permissionManager = PermissionManager(
-        policyStore: const WorkspacePolicyStore(),
+        policyStore: WorkspacePolicyStore(),
         platformRuntimeBridge: PlatformRuntimeBridge(),
         checkpointStore: SuspendedCheckpointStore(
           sessionManager: mockSessionManager,

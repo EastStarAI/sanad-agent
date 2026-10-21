@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:sanad_client/features/settings/data/workspace_security_client.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
@@ -84,9 +85,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     this.capabilitiesStore,
     this.localToolRuntime,
     this.workspaceRuntimeContext,
+    WorkspaceSecurityClient? workspaceSecurityClient,
   }) : super(const SessionMessagesState()) {
     _workspaceCoordinator = SessionWorkspaceCoordinator(
       conversationRepository: conversationRepository,
+      workspaceSecurityClient: workspaceSecurityClient,
       conversationCacheRepository: conversationCacheRepository,
       capabilitiesStore: capabilitiesStore,
       localToolRuntime: localToolRuntime,
@@ -1528,7 +1531,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   Future<void> _ensureWorkspacesForAgent(DeviceConfig agent, {bool force = false}) =>
       _workspaceCoordinator.ensureWorkspacesForAgent(agent, force: force);
 
-  Future<void> setWorkspacePermissionMode(WorkspacePermissionMode permissionMode) =>
+  Future<WorkspacePolicyChangeFailure?> setWorkspacePermissionMode(WorkspacePermissionMode permissionMode) =>
       _workspaceCoordinator.setWorkspacePermissionMode(permissionMode);
 
   bool _sessionMatchesAgent(Session? session, DeviceConfig? agent) =>

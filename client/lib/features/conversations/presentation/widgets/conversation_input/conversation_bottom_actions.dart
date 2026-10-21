@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:sanad_client/utils/toast_utils.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_workspace_coordinator.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
@@ -318,6 +320,7 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
       itemBuilder: (context) => WorkspacePermissionMode.values
           .map(
             (mode) => PopupMenuItem<WorkspacePermissionMode>(
+              key: Key('composer_permission_mode_${mode.value}'),
               value: mode,
               height: 40,
               child: Row(
@@ -355,7 +358,16 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
           return;
         }
 
-        await context.read<ConversationInputCubit>().setWorkspacePermissionMode(mode);
+        final failure = await context.read<ConversationInputCubit>().setWorkspacePermissionMode(mode);
+        if (failure != null && context.mounted) {
+          final l10n = AppLocalizations.of(context)!;
+          ToastUtils.showError(
+            context,
+            failure == WorkspacePolicyChangeFailure.staleRevision
+                ? l10n.workspacePolicyChangedRetry
+                : l10n.workspacePermissionModeChangeFailed,
+          );
+        }
       },
     );
   }

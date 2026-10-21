@@ -24,7 +24,7 @@ Both the CLI setup wizard and the Flutter onboarding/settings UI consume these s
 |---|---|---|
 | Env file | `.env` (local or `~/.sanad/.env`) | Simple API keys, base URLs, model names, `ACTIVE_PROVIDER`, `LLM_MODEL` |
 | Provider credential store | `~/.sanad/provider_auth.json` | OAuth access/refresh tokens, expiry, scope, status |
-| Secret store (Plan 29) | `~/.sanad/provider_secrets.json` | Instance-keyed `SecretRecord` (API key OR OAuth bundle) + masked `SecretSummary`. Atomic temp+rename, cross-process `FileLock`, owner-only (`chmod 600` / Windows ACL). Never logged raw. |
+| Secret store (Plan 29, Plan 83) | Agent vault, `providers:` namespace | Instance-keyed `SecretRecord` (API key OR OAuth bundle) + masked `SecretSummary`, stored through `VaultSecretStore`. Verified writes under a cross-process lock; the legacy `provider_secrets.json` is migrated and deleted at startup. Never logged raw. |
 | Provider instances tables | `~/.sanad/state.db` (or `$SANAD_STATE_HOME/state.db`) — shared with sessions | `provider_instances` metadata + revisions, `provider_model_cache`, `recent_model_selections` — **no secrets** (Plan 29). Owned by the single `AgentStateDatabase` connection. |
 | Sanad auth | `~/.sanad/auth.json` | Device identity (`hardware_id`, device token) — **never** LLM provider secrets |
 

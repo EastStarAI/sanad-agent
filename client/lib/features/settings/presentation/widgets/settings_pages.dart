@@ -25,6 +25,8 @@ import 'package:sanad_client/features/settings/data/account_lifecycle_repository
 import 'package:sanad_client/features/settings/data/device_control_client.dart';
 import 'package:sanad_client/features/settings/data/device_settings_client.dart';
 import 'package:sanad_client/features/settings/data/device_skills_client.dart';
+import 'package:sanad_client/features/settings/data/workspace_security_client.dart';
+import 'package:sanad_client/features/settings/presentation/widgets/workspace_security_card.dart';
 import 'package:sanad_client/features/settings/domain/account_lifecycle.dart';
 import 'package:sanad_client/infrastructure/platform/auto_update_service.dart';
 import 'package:sanad_client/features/client_cli/presentation/widgets/client_cli_settings_card.dart';
@@ -1888,7 +1890,10 @@ class WorkspacePage extends StatelessWidget {
               PageFrame(
                 title: 'Workspace Overview',
                 subtitle: 'Configuration scope on ${device.name}.',
-                child: SettingsCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SettingsCard(
                   child: Column(
                     children: [
                       DetailRow(label: 'Name', value: workspace.name),
@@ -1921,6 +1926,14 @@ class WorkspacePage extends StatelessWidget {
                       ),
                     ],
                   ),
+                ),
+                    const SizedBox(height: 16),
+                    WorkspaceSecurityCard(
+                      device: device,
+                      workspaceId: workspace.id,
+                      client: getIt<WorkspaceSecurityClient>(),
+                    ),
+                  ],
                 ),
               ),
               McpServerManagementScreen(

@@ -123,41 +123,63 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
     lifecycle logging; it never changes authorization, execution, delivery, or
     response routing, and malformed metadata cannot stop command processing.
 
-#### B.1. Workspace Policy Commands (Plan 25)
+#### B.1. Workspace Policy Commands (Plan 25, Plan 83)
+Policy is stored by the Agent, keyed by workspace id, and never read from
+workspace files. Authority comes from the receiving transport, not the
+payload: see [Execution Trust and Permission Authority](execution_trust_and_permission_authority.md).
+
 - **Command: `workspace.get_policy`**
-  - Requests the active permission policy for a workspace path.
+  - Reads the policy of a registered workspace. `workspace_id` is preferred; a
+    `workspace_path` resolves to its registered workspace, or to its
+    `exec_root:` key when the path is not registered.
   - Payload Schema:
     ```json
     {
+      "workspace_id": "workspace-id",
       "workspace_path": "/absolute/path/to/workspace"
     }
     ```
   - Response Schema:
     ```json
     {
-      "permissionMode": "default" | "full_access"
+      "workspaceId": "workspace-id",
+      "permissionMode": "default" | "full_access",
+      "executionMode": "direct" | "protected",
+      "hostDiscoveryPolicy": "owner_only" | "disabled",
+      "revision": 0,
+      "canWiden": true
     }
     ```
 
 - **Command: `workspace.set_permission_mode`**
-  - Sets/updates the permission mode of a daemon-registered workspace. The
-    daemon resolves the current path from `workspace_id`; a legacy
-    `workspace_path` field may be sent for client compatibility but is ignored.
-    Both local and cloud clients may explicitly select `default` or
-    `full_access`. `think` and `steer` never change this policy implicitly.
+  - Changes one or more policy axes of a daemon-registered workspace (or an
+    `exec_root:` key). The daemon resolves the root from `workspace_id`; a
+    legacy `workspace_path` is ignored. `think` and `steer` never change this
+    policy.
+  - Widening any axis requires owner authority, which every authenticated
+    client transport has (loopback, Cloud Gateway, in-process CLI); an
+    unverified transport may only narrow. An optional `expected_revision`
+    makes the change compare-and-swap.
   - Payload Schema:
     ```json
     {
       "workspace_id": "workspace-id",
-      "permission_mode": "default" | "full_access"
+      "permission_mode": "default" | "full_access",
+      "execution_mode": "direct" | "protected",
+      "host_discovery_policy": "owner_only" | "disabled",
+      "expected_revision": 3
     }
     ```
-  - Response Schema:
-    ```json
-    {
-      "permissionMode": "default" | "full_access"
-    }
-    ```
+  - Response Schema: the `workspace.get_policy` response shape. Success also
+    broadcasts `workspace.policy_changed` with `{workspace_id, policy}` to every
+    Sanad client on every platform (local and cloud) through
+    `GatewayManager.publishFamilyEvent`, not only to the requester; the
+    composer chip and the Workspace Settings card follow it.
+  - Error codes: `invalid_request`, `permission_denied`, `stale_revision`
+    (with `current_revision`), `workspace_not_found`, `workspace_unavailable`,
+    `policy_update_failed`.
+
+- **Tool result `errorCode` (Plan 83, additive):** live `tool_result` events and `get_session_history` `tool_result` rows carry the typed outcome as `errorCode` when one exists (for example `permission_denied` for a denied call that never ran). Older clients ignore it.
 
 #### B.2. Remote CLI Relay Commands (Plan 102)
 - **Command: `device.cli.execute`**

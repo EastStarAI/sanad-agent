@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mcp_client/mcp_client.dart';
+
+import 'strict_stdio_client_transport.dart';
 import 'package:sanad_windows_path/windows_path.dart';
 
 import '../models/local_tool_spec.dart';
@@ -369,16 +371,27 @@ class McpRuntimeManager {
         return (client: null, error: 'STDIO server missing command.');
       }
       try {
-        final result = await McpClient.createAndConnect(
-          config: clientConfig,
-          transportConfig: TransportConfig.stdio(
+        final result = await Results.catchingAsync(() async {
+          final transport = await StrictStdioClientTransport.start(
             command: config.command!,
             arguments: _settingsStore.resolveArguments(config),
             environment: await buildSafeEnvironment(
               resolvedEnvironment ?? _settingsStore.resolveEnvironment(config),
             ),
-          ),
-        ).timeout(const Duration(seconds: 20));
+          );
+          final client = McpClient.createClient(clientConfig);
+          try {
+            await client.connectWithRetry(
+              transport,
+              maxRetries: clientConfig.maxRetries,
+              delay: clientConfig.retryDelay,
+            );
+          } catch (_) {
+            transport.close();
+            rethrow;
+          }
+          return client;
+        }).timeout(const Duration(seconds: 20));
         final connection = result.fold<({dynamic client, String? error})>((
           client,
         ) {
@@ -509,6 +522,50 @@ class McpRuntimeManager {
     return 'error';
   }
 
+  /// Operator variables a STDIO server may inherit. The child is spawned with
+  /// exactly this allowlist plus its own configured values; nothing else from
+  /// the daemon environment (credentials included) reaches it.
+  static const _safeEnvironmentKeys = {
+    'PATH',
+    'HOME',
+    'USER',
+    'LOGNAME',
+    'LANG',
+    'TERM',
+    'SHELL',
+    'TMPDIR',
+    'TZ',
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'NO_PROXY',
+    'ALL_PROXY',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
+    'NODE_EXTRA_CA_CERTS',
+    'REQUESTS_CA_BUNDLE',
+    // Windows processes cannot start reliably without these.
+    'PATHEXT',
+    'COMSPEC',
+    'SYSTEMROOT',
+    'SYSTEMDRIVE',
+    'WINDIR',
+    'TEMP',
+    'TMP',
+    'USERNAME',
+    'USERPROFILE',
+    'HOMEDRIVE',
+    'HOMEPATH',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'PROGRAMDATA',
+    'PROGRAMFILES',
+    'PROGRAMFILES(X86)',
+    'COMMONPROGRAMFILES',
+    'NUMBER_OF_PROCESSORS',
+    'PROCESSOR_ARCHITECTURE',
+    'OS',
+  };
+
   /// Builds the allowlisted environment used by MCP stdio children.
   ///
   /// Public for focused boundary tests; callers should normally connect through
@@ -517,13 +574,13 @@ class McpRuntimeManager {
     Map<String, String>? userEnv, {
     Map<String, String>? platformEnvironment,
   }) async {
-    const safeKeys = {'HOME', 'USER', 'LANG', 'TERM', 'SHELL', 'TMPDIR'};
     final source = platformEnvironment ?? Platform.environment;
     var env = <String, String>{};
     for (final entry in source.entries) {
-      if (safeKeys.contains(entry.key) ||
-          entry.key.startsWith('XDG_') ||
-          entry.key.toLowerCase() == 'path') {
+      final upper = entry.key.toUpperCase();
+      if (_safeEnvironmentKeys.contains(upper) ||
+          upper.startsWith('XDG_') ||
+          upper.startsWith('LC_')) {
         env[entry.key] = entry.value;
       }
     }

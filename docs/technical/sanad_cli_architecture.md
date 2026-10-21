@@ -165,7 +165,7 @@ The CLI auto-detects the active workspace using `WorkspaceLocator`:
 - `sanad ws add [path] [--name <name>]`: Registers existing directory (defaults to `.`).
 - `sanad ws create <name> [--path <dir>]`: Creates directory and registers workspace.
 - `sanad ws tree [subpath]`: Renders formatted file/folder tree.
-- `sanad ws policy [default|full_access]`: Views or updates security permission mode.
+- `sanad ws policy [default|full_access]`: Views or updates security permission mode. The view also shows the Agent-owned execution mode and host discovery setting (read-only).
 
 ---
 
