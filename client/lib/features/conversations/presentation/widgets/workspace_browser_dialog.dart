@@ -427,6 +427,9 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                               itemBuilder: (context, index) {
                                 final entry = directories[index];
                                 return ListTile(
+                                  key: ValueKey(
+                                    'workspace_browser_folder_row:${entry.name}',
+                                  ),
                                   dense: true,
                                   contentPadding: EdgeInsets.zero,
                                   leading: const Icon(
@@ -456,6 +459,9 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                                           children: [
                                             if (widget.onRenameFolder != null)
                                               IconButton(
+                                                key: ValueKey(
+                                                  'workspace_browser_rename_button:${entry.name}',
+                                                ),
                                                 icon: const Icon(
                                                   Icons.edit_outlined,
                                                   size: 16,
@@ -468,6 +474,9 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                                               ),
                                             if (widget.onDeleteFolder != null)
                                               IconButton(
+                                                key: ValueKey(
+                                                  'workspace_browser_delete_button:${entry.name}',
+                                                ),
                                                 icon: const Icon(
                                                   Icons.delete_outline,
                                                   size: 16,

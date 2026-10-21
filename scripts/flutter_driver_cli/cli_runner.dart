@@ -530,10 +530,11 @@ class CliRunner {
       final textStr = el.text != null ? ' text: "${el.text}"' : '';
       final hintStr = el.hint != null ? ' hint: "${el.hint}"' : '';
       final tipStr = el.tooltip != null ? ' tip: "${el.tooltip}"' : '';
+      final stateStr = el.enabled == false ? ' (disabled)' : '';
       final boundsStr = (!compact && el.bounds != null)
           ? ' @ ${el.bounds}'
           : '';
-      print('• ${el.type}$keyStr$textStr$hintStr$tipStr$boundsStr');
+      print('• ${el.type}$keyStr$textStr$hintStr$tipStr$stateStr$boundsStr');
     }
   }
 
