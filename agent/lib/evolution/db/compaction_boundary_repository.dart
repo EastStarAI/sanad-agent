@@ -267,6 +267,24 @@ class CompactionBoundaryRepository {
     });
   }
 
+  /// Target outcome of the first confirmed post-boundary input (Task 118
+  /// Stage3A): met when the complete request fits the target recorded over
+  /// the full window `W`. Operations recorded under the earlier usable-budget
+  /// tail-only scope, or without a target, stay `unknown`.
+  static TargetOutcome _targetOutcomeFor(
+    CompactionOperationRecord operation,
+    int inputTokens,
+  ) {
+    final snapshot = operation.diagnostics?.decisionSnapshot;
+    final target = snapshot?['target_request_tokens'];
+    if (snapshot?['target_scope'] != 'context_window' ||
+        target is! num ||
+        target <= 0) {
+      return TargetOutcome.unknown;
+    }
+    return inputTokens <= target ? TargetOutcome.met : TargetOutcome.notMet;
+  }
+
   /// Records the exact post-boundary provider confirmation, binding to the
   /// specific first request that used the compaction boundary and route.
   CompactionOperationRecord? reconcilePostBoundaryUsage({
@@ -319,10 +337,9 @@ class CompactionBoundaryRepository {
         return null;
       }
 
-      // In Stage 1, target outcome remains unknown; postInputRatio is truthfully recorded
       final w = existing.metrics!.contextWindowTokens;
       final double? postInputRatio = w > 0 ? inputTokens / w : null;
-      const targetOutcome = TargetOutcome.unknown;
+      final targetOutcome = _targetOutcomeFor(existing, inputTokens);
 
       final updatedPostStatus = CompactionPostBoundaryStatus(
         status: 'confirmed',
@@ -534,10 +551,9 @@ class CompactionBoundaryRepository {
       if (existing.diagnostics == null) {
         return null;
       }
-      // In Stage 1, target outcome remains unknown; postInputRatio is truthfully recorded
       final w = existing.metrics!.contextWindowTokens;
       final double? postInputRatio = w > 0 ? inputTokens / w : null;
-      const targetOutcome = TargetOutcome.unknown;
+      final targetOutcome = _targetOutcomeFor(existing, inputTokens);
       final updatedPostStatus = CompactionPostBoundaryStatus(
         status: 'confirmed',
         observedAt: DateTime.now().toUtc(),

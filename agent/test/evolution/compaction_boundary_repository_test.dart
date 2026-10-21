@@ -816,6 +816,62 @@ void main() {
     expect(post.postInputRatio, closeTo(10_000 / 128_000, 0.0001));
   });
 
+  for (final (inputTokens, expected) in [
+    (25_800, TargetOutcome.met),
+    (25_801, TargetOutcome.notMet),
+  ]) {
+    test(
+      'Task 118: first confirmed post-input $inputTokens decides the complete-request target over W',
+      () {
+        final startedAt = DateTime.utc(2026, 8, 29, 1);
+        final claim = boundaries.tryClaim(
+          compactionId: 'cmp-target-$inputTokens',
+          sessionId: 'session-1',
+          trigger: CompactionTrigger.auto,
+          sourceRange: _sourceRange(),
+          retainedTailRange: _tailRange(),
+          routeSignature: _route(),
+          startedAt: startedAt,
+        );
+        boundaries.completeStarted(
+          candidate: _candidate(
+            compactionId: 'cmp-target-$inputTokens',
+            sessionId: 'session-1',
+            revision: claim.record!.sourceHistoryRevision,
+            contextWindowTokens: 258_000,
+            diagnostics: const CompactionDurableDiagnostics(
+              decisionSnapshot: {
+                'target_ratio': 0.10,
+                'target_request_tokens': 25_800,
+                'target_scope': 'context_window',
+              },
+            ),
+          ),
+          startedAt: startedAt,
+          completedAt: DateTime.utc(2026, 8, 29, 2),
+        );
+        boundaries.reservePostBoundaryDispatch(
+          compactionId: 'cmp-target-$inputTokens',
+          requestId: 'req-target',
+          routeSignature: _route(),
+          dispatchedAt: DateTime.utc(2026, 8, 29, 2, 4),
+        );
+
+        final reconciled = boundaries.reconcilePostBoundaryUsage(
+          compactionId: 'cmp-target-$inputTokens',
+          requestId: 'req-target',
+          observedAt: DateTime.utc(2026, 8, 29, 2, 5),
+          inputTokens: inputTokens,
+          routeSignature: _route(),
+        );
+
+        final post = reconciled!.diagnostics!.postBoundary;
+        expect(post.targetOutcome, expected);
+        expect(post.postInputRatio, closeTo(inputTokens / 258_000, 0.000001));
+      },
+    );
+  }
+
   test('reconcilePostBoundaryUsage rejects route mismatch and preserves pending state', () {
     final startedAt = DateTime.utc(2026, 8, 29, 1);
     final claim = boundaries.tryClaim(

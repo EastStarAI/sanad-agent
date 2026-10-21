@@ -549,9 +549,10 @@ class RunnerCompactionOrchestrator {
         projectionRevision: currentProjectionRevision(),
         previousSummary: projection.activeBoundary?.internalSummary,
         previousSourceRange: projection.activeBoundary?.sourceRange,
-        targetRequestTokens:
-            (calculateEffectiveInputWindow(contextWindow) * policy.targetRatio)
-                .round(),
+        targetRequestTokens: CompactionTargetPolicy.targetRequestTokens(
+          windowTokens: contextWindow,
+          ratio: policy.targetRatio,
+        ),
         thresholdRatio: policy.threshold,
         targetRatio: policy.targetRatio,
       );

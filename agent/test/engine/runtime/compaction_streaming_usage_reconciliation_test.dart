@@ -725,7 +725,9 @@ void main() {
       expect(postStatus, isNotNull);
       expect(postStatus!.status, 'confirmed');
       expect(postStatus.inputTokens, 1420);
-      expect(postStatus.targetOutcome, TargetOutcome.unknown);
+      // Task 118: the first confirmed post-input is judged against the
+      // complete-request target over W.
+      expect(postStatus.targetOutcome, TargetOutcome.met);
       expect(postStatus.requestId, startsWith('turn-req-trailing:'));
     },
   );

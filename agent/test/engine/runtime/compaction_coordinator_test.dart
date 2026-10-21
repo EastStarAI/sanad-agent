@@ -561,7 +561,8 @@ void main() {
     final record = boundaries.findById(outcome.compactionId);
     expect(record?.metrics?.providerConfirmedRequestTokensAfter, 1_250);
     expect(record?.diagnostics?.postBoundary.status, 'confirmed');
-    expect(record?.diagnostics?.postBoundary.targetOutcome, TargetOutcome.unknown);
+    // Task 118: 1,250 confirmed tokens are within the complete-request target.
+    expect(record?.diagnostics?.postBoundary.targetOutcome, TargetOutcome.met);
     expect(record?.diagnostics?.postBoundary.requestId, 'req-first-call');
     expect(record?.diagnostics?.postBoundary.cachedTokens, 300);
 
@@ -980,7 +981,7 @@ void main() {
     expect(record.diagnostics!.attempts, isNotEmpty);
     expect(record.diagnostics!.attempts.first.outcome, 'invalid_response');
     expect(record.diagnostics!.attempts.first.inputTokens, 1200);
-    expect(record.diagnostics!.decisionSnapshot?['target_scope'], 'usable_budget');
+    expect(record.diagnostics!.decisionSnapshot?['target_scope'], 'context_window');
     expect(record.diagnostics!.decisionSnapshot?['context_window'], 100_000);
   });
 

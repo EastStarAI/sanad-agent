@@ -1,5 +1,7 @@
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/engine/adapters/rate_limited_llm_adapter.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/context/context.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
@@ -238,9 +240,16 @@ class CompactionCoordinator {
       targetRequestTokens: request.targetRequestTokens,
       thresholdRatio: request.thresholdRatio,
       targetRatio: request.targetRatio,
+      wireMeter: request.wireMeter ?? _wireMeterFor(request),
     );
 
-    final selection = _engine.prepareSelection(engineRequest, force: force);
+    // Measuring precedes selection; selection and the claim stay synchronous.
+    final measurement = await _engine.measureRequest(engineRequest);
+    final selection = _engine.prepareSelection(
+      engineRequest,
+      force: force,
+      measurement: measurement,
+    );
     if (selection == null) return null;
 
     final startedAt = DateTime.now().toUtc();
@@ -395,6 +404,31 @@ class CompactionCoordinator {
       ),
     );
     return CompactionOutcome.completed(candidate: candidate);
+  }
+
+  /// The active route's own wire measurement of a provider projection, with
+  /// the request's exact tools and options (Task 118 Stage3A), or `null` when
+  /// the route's adapter cannot measure its wire projection.
+  CompactionWireMeter? _wireMeterFor(CompactionEngineRequest request) {
+    final runtime = _runtime;
+    if (runtime == null) return null;
+    final LLMAdapter adapter;
+    try {
+      adapter = runtime.adapterFor(request.routeSignature);
+    } catch (_) {
+      return null;
+    }
+    final provider = adapter is RateLimitedLLMAdapter
+        ? adapter.providerAdapter
+        : adapter;
+    if (provider is! WireInputUsageMeasurer) return null;
+    final measurer = provider as WireInputUsageMeasurer;
+    return (projection) => measurer.measureInput(
+      projection,
+      tools: request.providerTools,
+      modelOverride: request.routeSignature.modelId,
+      options: request.providerRequestOptions,
+    );
   }
 
   bool _activationFenceMatches(CompactionEngineRequest request) {

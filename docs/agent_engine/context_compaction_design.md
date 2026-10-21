@@ -95,9 +95,21 @@ canonical history. Stale non-null owners cannot clear newer compacting state or 
   attachment is priced by the per-image ceiling even when the route text-projects
   it instead of sending the image, so the residual error stays bounded (at most
   one ceiling per attachment) and never grows with the encoded payload.
-- Automatic compaction triggers above `90%` of the effective input window by
-  default. The retained-history suffix has a separate `10%` target. Both ratios
-  may be overridden per exact normalized model id in `SANAD_HOME/config.yaml`.
+- Automatic compaction triggers above `90%` of the full window `W` by default.
+  The complete post-compaction request (intact instructions and tools, the
+  summary and the retained tail) has a `10%` target over `W` (Task 118
+  Stage3A). Both ratios may be overridden per exact normalized model id in
+  `SANAD_HOME/config.yaml`.
+- Before the tail is selected, `ContextCompactionEngine.measureRequest`
+  measures the fixed overhead and the complete current request with the
+  route's wire meter (fallback: provider-neutral estimate). The tail budget is
+  `target − fixed overhead − summary reservation`; the reservation is the
+  previous summary's transmitted size or the two-page planning constant in
+  `CompactionTargetPolicy`. After summarization the request is measured again
+  and the decision snapshot records the estimated target outcome and whether
+  the target was attainable at all. A tail above the target is a measured
+  `not_met`, not a failure; only a request that would not fit usable input, or
+  is not smaller than before, is rejected.
 - Output reservation and safety headroom remain internal safeguards. On tiny
   test/local windows where their fixed sum would consume the whole window, the
   combined reservation is bounded to `25%`; normal model windows retain the

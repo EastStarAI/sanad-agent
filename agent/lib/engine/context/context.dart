@@ -2,6 +2,7 @@
 library;
 
 export 'compaction_continuity_validator.dart';
+export 'compaction_request_budget.dart';
 export 'compaction_summarizer.dart';
 export 'compaction_summary_prompt.dart';
 export 'compaction_tail_selector.dart';

@@ -1,6 +1,7 @@
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 
+import 'compaction_request_budget.dart';
 import 'compaction_token_estimator.dart';
 
 /// Indexed message row used by the compaction engine (Plan 53c C1).
@@ -21,12 +22,25 @@ class CompactionRangeSelection {
   final List<IndexedConversationMessage> sourceMessages;
   final List<IndexedConversationMessage> tailMessages;
 
+  /// Complete-request budget the tail was selected against (Task 118).
+  final CompactionSelectionBudget? budget;
+
   const CompactionRangeSelection({
     required this.sourceRange,
     required this.retainedTailRange,
     required this.sourceMessages,
     required this.tailMessages,
+    this.budget,
   });
+
+  CompactionRangeSelection withBudget(CompactionSelectionBudget budget) =>
+      CompactionRangeSelection(
+        sourceRange: sourceRange,
+        retainedTailRange: retainedTailRange,
+        sourceMessages: sourceMessages,
+        tailMessages: tailMessages,
+        budget: budget,
+      );
 }
 
 /// Selects compressible head and tool-aware retained tail (Plan 53c Gate C1).
@@ -43,10 +57,39 @@ class CompactionTailSelector {
     return _sourceStartIndex(timeline, previousSourceEnd) < timeline.length - 1;
   }
 
+  /// Timeline index where the newest complete connected exchange starts: the
+  /// shortest tail any selection retains.
+  int minimalTailStart({
+    required List<IndexedConversationMessage> timeline,
+    CompactionMessageRange? previousSourceEnd,
+  }) {
+    final startIndex = _sourceStartIndex(timeline, previousSourceEnd);
+    final tailStart = (timeline.length - minimumRecentMessages).clamp(
+      startIndex + 1,
+      timeline.length - 1,
+    );
+    return _expandTailStart(
+      timeline,
+      tailStart,
+    ).clamp(startIndex + 1, timeline.length - 1);
+  }
+
+  /// Timeline index of the first row after the previous summarized range.
+  int sourceStartIndex({
+    required List<IndexedConversationMessage> timeline,
+    CompactionMessageRange? previousSourceEnd,
+  }) => _sourceStartIndex(timeline, previousSourceEnd);
+
+  /// Selects the newest connected tail whose cost fits [tailTokenBudget].
+  ///
+  /// [tailCost] prices the tail that starts at a timeline index as it will be
+  /// transmitted; `null` means the cost is not measured and is treated as
+  /// over budget. Without it the provider-neutral message estimate is used.
   CompactionRangeSelection select({
     required List<IndexedConversationMessage> timeline,
     required int tailTokenBudget,
     CompactionMessageRange? previousSourceEnd,
+    int? Function(int tailStartIndex)? tailCost,
   }) {
     if (timeline.isEmpty) {
       throw ArgumentError('timeline must not be empty');
@@ -55,25 +98,24 @@ class CompactionTailSelector {
     if (startIndex >= timeline.length - 1) {
       throw ArgumentError('no compressible head remains');
     }
+    final cost =
+        tailCost ??
+        (int start) => CompactionTokenEstimator.estimateMessages(
+          timeline.sublist(start).map((entry) => entry.message),
+        );
 
-    var tailStart = (timeline.length - minimumRecentMessages).clamp(
-      startIndex + 1,
-      timeline.length - 1,
+    var tailStart = minimalTailStart(
+      timeline: timeline,
+      previousSourceEnd: previousSourceEnd,
     );
-    tailStart = _expandTailStart(
-      timeline,
-      tailStart,
-    ).clamp(startIndex + 1, timeline.length - 1);
 
     while (tailStart > startIndex + 1) {
       final expanded = _expandTailStart(
         timeline,
         tailStart - 1,
       ).clamp(startIndex + 1, timeline.length - 1);
-      final groupTokens = CompactionTokenEstimator.estimateMessages(
-        timeline.sublist(expanded).map((entry) => entry.message),
-      );
-      if (groupTokens > tailTokenBudget) {
+      final groupTokens = cost(expanded);
+      if (groupTokens == null || groupTokens > tailTokenBudget) {
         break;
       }
       tailStart = expanded;

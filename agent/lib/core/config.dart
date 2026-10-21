@@ -449,6 +449,26 @@ class ModelAwareCompactionPolicy extends CompactionPolicy {
   }
 }
 
+/// Complete post-compaction request target (Task 118 Stage3A).
+///
+/// The target covers the whole next request (system/runtime instructions,
+/// tools, summary, retained tail, media and replay) and is a ratio of the
+/// full resolved window `W`, never of the internal usable input budget.
+abstract final class CompactionTargetPolicy {
+  /// Planning reservation for the summary while the retained tail is chosen,
+  /// before the summary exists: the summary instruction asks for about two
+  /// pages. A previous summary's measured size replaces it when one exists.
+  /// It never enters a reported measurement: the target outcome is decided on
+  /// the measured request after the summary is generated.
+  static const int summaryReservationTokens = 2048;
+
+  /// The complete-request target for a resolved window `W`.
+  static int targetRequestTokens({
+    required int windowTokens,
+    required double ratio,
+  }) => windowTokens <= 0 ? 0 : (windowTokens * ratio).floor();
+}
+
 /// Limits of the bounded recovery summarizer that runs when the ordinary
 /// provider-backed compaction request overflows (Task 117, 0P-F2).
 class CompactionRecoveryPolicy {
