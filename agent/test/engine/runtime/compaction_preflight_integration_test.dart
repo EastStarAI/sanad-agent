@@ -40,6 +40,8 @@ import 'package:sanad_agent/evolution/db/session_projection_revision_repository.
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
+import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
+import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:test/test.dart';
 
 class _PreflightAdapter implements LLMAdapter, WireInputUsageMeasurer {
@@ -212,6 +214,26 @@ class _SchemaDriftProbeTool extends BaseTool {
   Future<String> execute(Map<String, dynamic> args, {ToolContext? context}) async {
     return 'probe';
   }
+}
+
+/// Stands in for the per-turn catalog and runtime context an ordinary
+/// request of the session builds (Task 118b parity).
+class _ParityRuntimeOrchestrator implements LocalRuntimeOrchestrator {
+  _ParityRuntimeOrchestrator(this.runtimeContext);
+
+  final String runtimeContext;
+
+  @override
+  Future<String?> prepareIdleRequest({
+    required AgentRunner agentRunner,
+    required String sessionId,
+  }) async {
+    agentRunner.registry.registerTools([_SchemaDriftProbeTool()]);
+    return runtimeContext;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _FailingSummarizer implements CompactionSummarizer {
@@ -532,6 +554,74 @@ compaction:
         [for (final tool in seed.tools) tool.name],
         [for (final tool in runner.registry.allTools) tool.schema.name],
       );
+    },
+  );
+
+  test(
+    'Task 118b: manual and auto compaction report the same fixed overhead for the same session state',
+    () async {
+      const runtimeContext = 'workspace runtime context for the next request';
+      // Two identical sessions; equal-length ids keep the per-session runtime
+      // metadata in the system prompt the same size.
+      const autoId = 'session-parity-a';
+      const manualId = 'session-parity-m';
+      final now = DateTime.utc(2026, 10, 21);
+      for (final id in [autoId, manualId]) {
+        sessions.saveSession(
+          SessionState(
+            sessionId: id,
+            model: 'gpt-4o',
+            createdAt: now,
+            updatedAt: now,
+            lastUserMessageAt: now,
+          ),
+        );
+        sessions.replaceMessages(id, [
+          Message(role: MessageRole.user, content: 'goal: overhead parity'),
+          for (var i = 0; i < 160; i++)
+            Message(role: MessageRole.user, content: 'filler $i ${'x' * 500}'),
+        ]);
+      }
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+          _PreflightAdapter();
+
+      final autoRunner = AgentRunner(
+        _PreflightAdapter(),
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: autoId,
+      )..registry.registerTools([_SchemaDriftProbeTool()]);
+      await autoRunner.debugPrepareProviderHistory(
+        runtimeSystemPrompt: runtimeContext,
+      );
+
+      final manualRunner = AgentRunner(
+        _PreflightAdapter(),
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: manualId,
+      );
+      getIt.registerFactoryParam<AgentRunner, String, void>(
+        (_, _) => manualRunner,
+      );
+      getIt.registerSingleton<LocalRuntimeOrchestrator>(
+        _ParityRuntimeOrchestrator(runtimeContext),
+      );
+      getIt.registerSingleton<CompactionBoundaryRepository>(boundaries);
+      getIt.registerSingleton<SessionManager>(sessionManager);
+      final manual = await SessionRunOrchestrator().handleCompactCommand(
+        sessionId: manualId,
+        requestId: 'req-parity',
+      );
+
+      int? overhead(String id) => boundaries
+          .listLifecycleForSession(id)
+          .single
+          .diagnostics
+          ?.decisionSnapshot?['fixed_overhead_tokens'] as int?;
+      expect(manual['outcome'], 'accepted', reason: '$manual');
+      expect(overhead(autoId), isNotNull);
+      expect(overhead(manualId), overhead(autoId));
     },
   );
 
