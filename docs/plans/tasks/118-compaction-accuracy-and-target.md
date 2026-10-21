@@ -152,6 +152,31 @@ Gates after the merge:
 
 For a smaller-window live route (for example `W` ≈ 128k): the threshold is 115,200 and the target 12,800. With Sanad's fixed overhead (about 4k), a 2048 summary reservation and a summary of about 2k, the tail budget is about 6.7k, so the target is attainable only with a short tail. `target_feasibility` should still read `feasible`. Auto compaction records `before_measurement_kind` `mixed` or `confirmed` from the route's own receipts, and `retained_tail_cost_kind` `mixed` when the tail contains same-route receipts. Set `LOG_LEVEL=FINE` to see `auto_pressure` lines.
 
+### Round 4 — 118b writer, live r2 findings, 2026-10-21 (on `4039c570`; `origin/main` unchanged at `4fa4dd72`)
+
+Input: 118b live r2 on Test Home 3, route OpenRouter `openai/gpt-4o-mini`, `W` = 128,000.
+
+What passed:
+
+- Auto compaction met the target: the first confirmed post-input was 10,052, 7.85% of `W`. The estimate was 9,837, −2.1% (r1 was −14%).
+- D2.
+- Restart and below-threshold, with `auto_pressure` lines recorded.
+
+The manual compaction failed (D3).
+
+| Finding | Result | Red → green evidence |
+|---|---|---|
+| D3. Field type mismatch treated as invalid JSON | Valid JSON with a non-string value in an allowlisted field (an object or array in `filesAndPaths`) is now the distinct ledger shape `summary_schema_mismatch`; its terminal cause is `invalid_response`, so no new Client copy. Its single correction names each field and its JSON type instead of re-listing every required field. Applies in the main and recovery paths. Values are not normalized, because the design keeps wrong types rejected rather than flattening content. | `r4-d3-red.log` (8 failures), `r4-d3-green.log` (31 passed) |
+| D4. A failed operation under-reported its spend | `failStarted` writes `summarization_attempts` (ledger length) and the aggregate usage and duration into the accounting columns. The projection estimate columns stay NULL. | `r4-d4-red.log` (`Expected: <2> Actual: <0>`), `r4-d4-green.log` |
+| O1. Full pass sent although it must overflow | Not changed. The design forbids a compaction-only output cap, and predicting a provider overflow needs the provider's default output reservation, which the request does not know; the chars/4 estimate is not exact enough to skip the pass safely. The rejected pass was not billed (1.8 s), and bounded recovery then succeeded. | — |
+
+Gates:
+
+- Agent `fvm dart analyze` clean; full agent suite +3260 ~14 (`r4-final-agent-suite.log`).
+- Daemon E2E 11/11 with `--concurrency=1` (`r4-final-daemon-e2e.log`).
+- Client `fvm flutter analyze` clean; full Client suite +1927 ~1 (`r4-final-client-suite.log`).
+- Wiki lint passes.
+
 ## Delivery Split
 
 Task 118 is delivered in two PRs. This file stays in `docs/plans/tasks/` until 118b lands.
