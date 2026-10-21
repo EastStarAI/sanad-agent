@@ -5,6 +5,7 @@ import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
+import 'package:sanad_agent/capabilities/secrets/secret_acquisition.dart';
 import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
@@ -603,6 +604,115 @@ void main() {
         );
         expect(
           repo.findWorkItem('work-perm-val')?.state,
+          SessionWorkState.completed,
+        );
+      },
+    );
+
+    test(
+      'a secret-request checkpoint resumes with the value-free result and never re-runs the tool',
+      () async {
+        final now = DateTime.now().toUtc();
+        const sessionId = 'session-secret-resume';
+        const toolCallId = 'call-secret-resume';
+        const requestId = 'req-secret-resume';
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('$sessionId', 'gpt-4o', ?, ?)",
+          [now.toIso8601String(), now.toIso8601String()],
+        );
+        final checkpoint = SuspendedCheckpoint(
+          checkpointId: 'checkpoint-secret',
+          sessionId: sessionId,
+          requestId: requestId,
+          toolCallId: toolCallId,
+          toolName: SecretToolNames.request,
+          status: 'awaiting_permission',
+          toolArguments: const {'reason': 'r', 'fields': []},
+          permissionPayload: const {'fields': []},
+          createdAt: now,
+          updatedAt: now,
+        );
+        SessionDB.fromState(stateDb).saveSuspendedCheckpoint(checkpoint);
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-secret-resume',
+            sessionId: sessionId,
+            requestId: 'turn-secret-resume',
+            sequence: 0,
+            state: SessionWorkState.waiting,
+            attempt: 0,
+            continuationMetadata: const {
+              'owner_run_id': 'run-secret-resume',
+              'owner_generation': 1,
+              'currently_executing_tools': [toolCallId],
+            },
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+        when(
+          mockSessionManager.getSuspendedCheckpointByRequestId(requestId),
+        ).thenReturn(checkpoint);
+        when(
+          mockSessionManager.deleteSuspendedCheckpointByRequestId(requestId),
+        ).thenAnswer((_) {
+          SessionDB.fromState(
+            stateDb,
+          ).deleteSuspendedCheckpointByRequestId(requestId);
+        });
+        when(
+          mockAgentRunner.beginAuthoritativeRun(
+            'run-secret-resume',
+            workItemId: 'work-secret-resume',
+            generation: 1,
+          ),
+        ).thenReturn(null);
+        const decision = {
+          'allowed': true,
+          SecretAcquisition.outcomeKey: 'stored',
+          SecretAcquisition.namesKey: ['DEMO_TOKEN'],
+        };
+        final expected = SecretAcquisition.resultFor(decision);
+        when(
+          mockAgentRunner.resumeAfterToolCall(
+            toolCallId: toolCallId,
+            toolName: SecretToolNames.request,
+            arguments: checkpoint.toolArguments,
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            forcedOutput: expected.text,
+            forcedIsError: false,
+            onToolEvent: anyNamed('onToolEvent'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        ).thenAnswer((_) async* {
+          yield 'secret turn completed';
+        });
+
+        final service = SuspendedResumeService(
+          checkpointStore: SuspendedCheckpointStore(
+            sessionManager: mockSessionManager,
+          ),
+          sessionManager: mockSessionManager,
+          runtimeCatalog: runtimeCatalog,
+          runtimeContextBuilder: const RuntimeContextBuilder(
+            skillRegistry: SkillRegistry(),
+          ),
+          workspaceRuntimeService: workspaceRuntimeService,
+          permissionManager: getIt<PermissionManager>(),
+          persistedState: repo,
+        );
+        final responses = <GatewayResponse>[];
+        final resumed = await service.resumeFromDecision(
+          requestId: requestId,
+          decision: decision,
+          emitResponse: (response) async => responses.add(response),
+        );
+
+        expect(resumed, isTrue);
+        expect(responses.last.message.content, 'secret turn completed');
+        expect(
+          repo.findWorkItem('work-secret-resume')?.state,
           SessionWorkState.completed,
         );
       },

@@ -313,6 +313,7 @@ abstract class ConversationRepository {
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   });
   Future<WorkspacePolicy> getWorkspacePolicy(
     DeviceConfig agent,

@@ -17,7 +17,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Queue promotion, deletion, route rewrite, and execution-snapshot recomputation commit through the execution aggregate owner.
 - Steering targets the active run's runner and bypasses ordinary admission only through the dedicated steer lifecycle.
 - Turn thinking provenance: a turn `thinking_mode` equal to the session preference persisted before that turn (by `create_session`, a previous turn or a preference update) is a carried-over preference, not a fresh explicit choice. Before execution the orchestrator passes it through `ThinkingRouteSessionSync.revalidateCarriedTurnSelection`: an offered value is unchanged, while a value the target route does not offer falls back to provider default with the existing route-scoped correction. A value that differs from the persisted preference stays a fresh explicit request and admission still validates and rejects it.
-- Idle manual compaction obtains its provider projection, ordinary tool list, and request settings from a session-scoped `AgentRunner` seed without admitting or inventing a user turn.
+- Idle manual compaction obtains its provider projection, ordinary tool list, and request settings from a session-scoped `AgentRunner` seed without admitting or inventing a user turn. Before the seed is built, `LocalRuntimeOrchestrator.prepareIdleRequest` registers the same per-turn tool catalog and builds the same runtime context an ordinary request of the session does, so the seed carries exactly what the next ordinary request will transmit.
 
 ## Runtime Collaborators
 - `SessionQueueCoordinator` owns queue projection, FIFO drain, and non-terminal route rewrites.
@@ -34,6 +34,10 @@ This contract applies to `agent/lib/interfaces/runtime/`.
   restart after admission.
 - Runtime collaborators do not open database connections or duplicate table ownership.
 - An in-process CLI owns and tears down its bridge sink, workspace/MCP runtime resources, orchestrator subscriptions, database owner, and state-root lease; it never starts daemon transports or schedulers.
+
+## Secret Request Decisions
+- `PlatformRuntimeBridge` resolves a `system_request_secret` response only with stamped `owner` authority and through `SecretAcquisition`: values go to the vault before the waiter completes, and only the value-free decision is retained, claimed into the durable checkpoint, or resumed. A refused response stays pending and logs its code only.
+- `SuspendedResumeService` resumes a secret checkpoint with the sanitized result and never re-runs the tool.
 
 ## Terminal Commit
 - Deliver final assistant output only after an idempotent durable commit validates the exact session, work item, run, generation, and expected running/resuming state.

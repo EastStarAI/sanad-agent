@@ -136,7 +136,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       estimatedTokens:
           CompactionTokenEstimator.estimateWirePayload(
             measured,
-            opaqueKeys: _opaqueWireKeys,
+            opaqueKeys: CompactionTokenEstimator.opaqueWireKeys,
           ) +
           CompactionTokenEstimator.estimateMediaTokens(history),
       stableMaterialFingerprint: fingerprint({
@@ -469,7 +469,6 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
   /// Wire keys that carry provider-owned opaque state (encrypted reasoning
   /// replay). The provider prices them under its own token models, so text
   /// pricing must skip them instead of charging for the serialized transport.
-  static const _opaqueWireKeys = <String>{'encrypted_content'};
 
   CodexResponsesCodec _codec(LLMRequestOptions options) {
     final instance = options.providerInstanceId ?? profile.name;

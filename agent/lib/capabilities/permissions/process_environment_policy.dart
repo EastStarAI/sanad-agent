@@ -38,10 +38,14 @@ class ProcessEnvironmentPolicy {
   ///
   /// [inheritedEnvironment] defaults to the daemon's own environment.
   /// [requestOverrides] are typed per-request values (never a raw dump).
+  /// [secretEnvironment] holds the user secrets explicitly requested for this
+  /// call (Plan 84); it follows the same protected-key rule as overrides and
+  /// is empty unless a caller names a secret.
   Map<String, String> buildChildEnvironment({
     required ChildProcessPurpose purpose,
     Map<String, String>? inheritedEnvironment,
     Map<String, String>? requestOverrides,
+    Map<String, String> secretEnvironment = const {},
     void Function(RejectedEnvironmentOverride rejected)? onRejectedOverride,
   }) {
     final child = <String, String>{};
@@ -53,7 +57,7 @@ class ProcessEnvironmentPolicy {
       }
     }
 
-    requestOverrides?.forEach((key, value) {
+    void apply(String key, String value) {
       if (ChildProcessSecurityContract.isDangerousRequestOverride(key)) {
         final rejected = RejectedEnvironmentOverride(
           key,
@@ -73,7 +77,10 @@ class ProcessEnvironmentPolicy {
         child.removeWhere((existing, _) => existing.toUpperCase() == upper);
       }
       child[key] = value;
-    });
+    }
+
+    secretEnvironment.forEach(apply);
+    requestOverrides?.forEach(apply);
 
     return child;
   }

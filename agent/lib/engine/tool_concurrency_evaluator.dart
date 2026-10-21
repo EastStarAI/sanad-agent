@@ -7,7 +7,7 @@ class ToolConcurrencyEvaluator {
   static bool shouldParallelizeToolBatch(List<ToolCall> toolCalls) {
     if (toolCalls.length <= 1) return false;
 
-    const neverParallelTools = {'system_ask_user'};
+    const neverParallelTools = {'system_ask_user', 'system_request_secret'};
     const parallelSafeTools = {
       'tool_search',
       'web_search',

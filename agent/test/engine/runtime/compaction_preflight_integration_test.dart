@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:logging/logging.dart';
+
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
@@ -38,6 +40,8 @@ import 'package:sanad_agent/evolution/db/session_projection_revision_repository.
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
+import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
+import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:test/test.dart';
 
 class _PreflightAdapter implements LLMAdapter, WireInputUsageMeasurer {
@@ -210,6 +214,26 @@ class _SchemaDriftProbeTool extends BaseTool {
   Future<String> execute(Map<String, dynamic> args, {ToolContext? context}) async {
     return 'probe';
   }
+}
+
+/// Stands in for the per-turn catalog and runtime context an ordinary
+/// request of the session builds (Task 118b parity).
+class _ParityRuntimeOrchestrator implements LocalRuntimeOrchestrator {
+  _ParityRuntimeOrchestrator(this.runtimeContext);
+
+  final String runtimeContext;
+
+  @override
+  Future<String?> prepareIdleRequest({
+    required AgentRunner agentRunner,
+    required String sessionId,
+  }) async {
+    agentRunner.registry.registerTools([_SchemaDriftProbeTool()]);
+    return runtimeContext;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _FailingSummarizer implements CompactionSummarizer {
@@ -438,8 +462,21 @@ void main() {
           lastUserMessageAt: DateTime.utc(2026, 8, 29),
         ),
       );
+      // Task 118b: the full pass is sent only when it fits the window next to
+      // the output reservation, so this seed check runs on a window large
+      // enough for it, with a lower per-model threshold to reach pressure.
+      File('${sanadHome.path}/config.yaml').writeAsStringSync('''
+compaction:
+  models:
+    gpt-4o:
+      threshold: 0.50
+''');
+      getIt.registerSingleton<Config>(Config());
+      final wideAdapter = _PreflightAdapter(contextLimit: 200_000);
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+          wideAdapter;
       runner = AgentRunner(
-        _PreflightAdapter(contextLimit: 3_000),
+        wideAdapter,
         ToolsRegistry(),
         sessionManager,
         existingSessionId: 'session-preflight',
@@ -490,6 +527,101 @@ void main() {
         sessions.getSessionRecord('session-preflight')?.thinkingMode,
         'high',
       );
+    },
+  );
+
+  test(
+    'Task 118b D1: the manual seed carries the same instructions and tools as the ordinary request',
+    () async {
+      runner.registry.registerTools([_SchemaDriftProbeTool()]);
+      const runtimeContext = 'workspace runtime context for the next request';
+      final ordinary = await runner.debugPrepareProviderHistory(
+        runtimeSystemPrompt: runtimeContext,
+      );
+      final seed = await runner.prepareCompactionProviderSeed(
+        runtimeSystemPrompt: runtimeContext,
+      );
+
+      String instructions(List<Message> projection) => [
+        for (final message in projection.takeWhile(
+          (message) => message.role == MessageRole.system,
+        ))
+          message.content ?? '',
+      ].join('\n');
+      expect(instructions(seed.projection), instructions(ordinary));
+      expect(instructions(seed.projection), contains(runtimeContext));
+      expect(
+        [for (final tool in seed.tools) tool.name],
+        [for (final tool in runner.registry.allTools) tool.schema.name],
+      );
+    },
+  );
+
+  test(
+    'Task 118b: manual and auto compaction report the same fixed overhead for the same session state',
+    () async {
+      const runtimeContext = 'workspace runtime context for the next request';
+      // Two identical sessions; equal-length ids keep the per-session runtime
+      // metadata in the system prompt the same size.
+      const autoId = 'session-parity-a';
+      const manualId = 'session-parity-m';
+      final now = DateTime.utc(2026, 10, 21);
+      for (final id in [autoId, manualId]) {
+        sessions.saveSession(
+          SessionState(
+            sessionId: id,
+            model: 'gpt-4o',
+            createdAt: now,
+            updatedAt: now,
+            lastUserMessageAt: now,
+          ),
+        );
+        sessions.replaceMessages(id, [
+          Message(role: MessageRole.user, content: 'goal: overhead parity'),
+          for (var i = 0; i < 160; i++)
+            Message(role: MessageRole.user, content: 'filler $i ${'x' * 500}'),
+        ]);
+      }
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+          _PreflightAdapter();
+
+      final autoRunner = AgentRunner(
+        _PreflightAdapter(),
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: autoId,
+      )..registry.registerTools([_SchemaDriftProbeTool()]);
+      await autoRunner.debugPrepareProviderHistory(
+        runtimeSystemPrompt: runtimeContext,
+      );
+
+      final manualRunner = AgentRunner(
+        _PreflightAdapter(),
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: manualId,
+      );
+      getIt.registerFactoryParam<AgentRunner, String, void>(
+        (_, _) => manualRunner,
+      );
+      getIt.registerSingleton<LocalRuntimeOrchestrator>(
+        _ParityRuntimeOrchestrator(runtimeContext),
+      );
+      getIt.registerSingleton<CompactionBoundaryRepository>(boundaries);
+      getIt.registerSingleton<SessionManager>(sessionManager);
+      final manual = await SessionRunOrchestrator().handleCompactCommand(
+        sessionId: manualId,
+        requestId: 'req-parity',
+      );
+
+      int? overhead(String id) => boundaries
+          .listLifecycleForSession(id)
+          .single
+          .diagnostics
+          ?.decisionSnapshot?['fixed_overhead_tokens'] as int?;
+      expect(manual['outcome'], 'accepted', reason: '$manual');
+      expect(overhead(autoId), isNotNull);
+      expect(overhead(manualId), overhead(autoId));
     },
   );
 
@@ -1550,6 +1682,173 @@ void main() {
         );
       },
     );
+
+    test(
+      'Task 118 Stage3B: after a completed compaction and a restart the pre-boundary receipt is not restored and does not repeat compaction',
+      () async {
+        const sessionId = 'session-generic-post-boundary-restart';
+        final summarizer = _CapturingProviderSummarizer();
+        getIt.registerSingleton<CompactionCoordinator>(
+          CompactionCoordinator(
+            engine: ContextCompactionEngine(summarizer: summarizer),
+            boundaries: boundaries,
+            activation: CompactionActivationService(
+              boundaries: boundaries,
+              projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+            ),
+            projectionBuilder: getIt<ModelProjectionBuilder>(),
+          ),
+        );
+        final client = MockClient((request) async {
+          final sseData = [
+            'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"acknowledged"},"finish_reason":null}]}',
+            '',
+            'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":371839,"completion_tokens":20,"total_tokens":371859,"prompt_tokens_details":{"cached_tokens":370816}}}',
+            '',
+            'data: [DONE]',
+            '',
+          ].join('\n\n');
+          return http.Response(
+            sseData,
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          );
+        });
+        // A multi-turn conversation, so the compaction has a head to replace.
+        openAiRunner(sessionId: sessionId, client: client);
+        sessions.replaceMessages(sessionId, [
+          for (var turn = 0; turn < 6; turn++) ...[
+            Message(role: MessageRole.user, content: 'earlier ask $turn ${'q' * 400}'),
+            Message(role: MessageRole.assistant, content: 'earlier answer $turn ${'a' * 400}'),
+          ],
+        ]);
+        final producer = openAiRunner(sessionId: sessionId, client: client);
+        await producer
+            .streamMessage(
+              'continue the review',
+              providerId: routeProvider,
+              model: routeModel,
+            )
+            .toList();
+        producer.attachMetadataToLastAssistantMessage({
+          'provider': routeProvider,
+          'model': routeModel,
+          'context_usage': (await producer.getContextUsageSnapshot())!,
+        });
+
+        // Task 118b live-testability: every automatic pressure decision is
+        // logged at fine level with scalar fields only.
+        final previousLevel = Logger.root.level;
+        Logger.root.level = Level.ALL;
+        final decisions = <String>[];
+        final subscription = Logger.root.onRecord
+            .where((record) => record.message.startsWith('auto_pressure '))
+            .listen((record) => decisions.add(record.message));
+        addTearDown(() async {
+          await subscription.cancel();
+          Logger.root.level = previousLevel;
+        });
+
+        // Restart 1: the proven 371839 receipt is genuine pressure and
+        // compacts once.
+        final first = openAiRunner(sessionId: sessionId, client: client);
+        await first.debugPrepareProviderHistory();
+        final afterFirst = boundaries.listLifecycleForSession(sessionId);
+        expect(afterFirst, hasLength(1));
+        expect(afterFirst.single.status, CompactionStatus.completed);
+
+        // Restart 2, before any post-boundary turn: the newest retained row
+        // still carries the receipt measured on the pre-compaction request.
+        // Its wire proof cannot match the summary projection, so it is not
+        // restored and the small projection does not compact again.
+        final second = openAiRunner(sessionId: sessionId, client: client);
+        await second.debugPrepareProviderHistory();
+        expect(second.debugConfirmedInputUsageBaseline, isNull);
+        expect(
+          second.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+        expect(second.debugLastPreflightPressure?.exceedsThreshold, isFalse);
+        expect(boundaries.listLifecycleForSession(sessionId), hasLength(1));
+
+        expect(decisions, hasLength(2));
+        expect(decisions.first, contains('basis=mixed'));
+        expect(decisions.first, contains('confirmed=371839'));
+        expect(decisions.first, contains('decision=compact'));
+        expect(decisions.last, contains('basis=estimated'));
+        expect(decisions.last, contains('confirmed=none'));
+        expect(decisions.last, contains('decision=below_threshold'));
+        expect(decisions.last, contains('threshold=322200'));
+        expect(decisions.last, isNot(contains(sessionId)));
+      },
+    );
+
+    // Task 118b round 5: usage from a failed, aborted or unavailable response
+    // never calibrates pressure.
+    MockClient usageClient(int promptTokens) => MockClient((request) async {
+      final sseData = [
+        'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"acknowledged"},"finish_reason":null}]}',
+        '',
+        'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":$promptTokens,"completion_tokens":20,"total_tokens":${promptTokens + 20}}}',
+        '',
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return http.Response(
+        sseData,
+        200,
+        headers: {'content-type': 'text/event-stream'},
+      );
+    });
+
+    test(
+      'Task 118b: an unavailable zero input usage never becomes the confirmed baseline',
+      () async {
+        final runner = openAiRunner(
+          sessionId: 'session-usage-zero',
+          client: usageClient(0),
+        );
+        await runner
+            .streamMessage(
+              'continue',
+              providerId: routeProvider,
+              model: routeModel,
+            )
+            .toList();
+
+        expect(runner.debugConfirmedInputUsageBaseline, isNull);
+      },
+    );
+
+    for (final finish in [LLMFinishReason.failed, LLMFinishReason.cancelled]) {
+      test(
+        'Task 118b: usage from a ${finish.name} response does not replace the confirmed baseline',
+        () async {
+          final runner = openAiRunner(
+            sessionId: 'session-usage-${finish.name}',
+            client: usageClient(371839),
+          );
+          await runner
+              .streamMessage(
+                'continue',
+                providerId: routeProvider,
+                model: routeModel,
+              )
+              .toList();
+          expect(runner.debugConfirmedInputUsageBaseline?.inputTokens, 371839);
+
+          runner.updateMetrics(
+            AgentResponse(
+              message: Message(role: MessageRole.assistant, content: ''),
+              usage: const {'prompt_tokens': 999},
+              finishReason: finish,
+            ),
+          );
+
+          expect(runner.debugConfirmedInputUsageBaseline?.inputTokens, 371839);
+        },
+      );
+    }
 
     test('warm live confirmed input is used for generic-route admission', () async {
       const sessionId = 'session-generic-warm';

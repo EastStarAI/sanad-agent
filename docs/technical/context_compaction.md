@@ -334,22 +334,41 @@ Terminal result visible to orchestrator and protocol mappers.
 
 Compaction policy declares two primary thresholds:
 - `threshold`: Context utilization ratio (default `0.90`) of the **full resolved window `W`** at which prospective request token estimation triggers automatic compaction (Task 118: at `W=258000` the trigger is `232200`, not `0.90 × usable 252880 = 227592`). The usable input budget only caps it: when `ratio × W` exceeds usable input, usable input decides the trigger and the decision snapshot records `threshold_capped_by_usable_budget: true` instead of presenting it as the nominal threshold. The snapshot also carries `nominal_threshold_tokens` and `threshold_scope: context_window`.
-- `targetRatio`: Utilization ratio (default `0.10`) used to derive `targetRequestTokens = (effectiveInputWindow * targetRatio).round()`.
+- `targetRatio`: Ratio (default `0.10`) of the **full resolved window `W`** for the **complete post-compaction request** (Task 118 Stage3A): `targetRequestTokens = floor(targetRatio × W)` (`CompactionTargetPolicy.targetRequestTokens`), so `W=258000` gives `25800`, not `0.10 × usable 252880 = 25288`. Manual, automatic and overflow requests use the same helper. The decision snapshot records `target_scope: context_window`.
 
-#### Exact Semantics in Engine Selection
-1. **Retained-Tail Budget, Not Full-Request Cap:**
-   `ContextCompactionEngine.prepareSelection` uses `targetRequestTokens` specifically as the token budget for the **retained tail** (`tailTokenBudget`). It selects the most recent conversational turns that fit within this budget so the active conversation preserves recent context verbatim. The effective budget is capped at `targetRequestTokens` and can be smaller: a progress guard additionally caps it at 50% of the current history tokens (`progressCap`), whichever is lower.
-2. **Additive Non-Tail Overhead:**
-   The full prospective and confirmed request size after compaction comprises:
-   - System prompt and developer instructions
-   - Runtime context and memory injections
-   - Available tool schemas
-   - The generated compaction summary
-   - The retained tail messages
-3. **Full-Request Constraint Boundary:**
-   `buildCandidate` verifies the post-compaction request projection against the model's `effectiveInputBudget` (context window minus output token reservation), ensuring it safely fits within provider limits. It does *not* force the sum of tools, system prompt, summary, and tail into `targetRatio`. The retained tail itself is re-checked against `targetRequestTokens`: if either the full projection exceeds `effectiveInputBudget` or the tail exceeds the target, projection-only pruning runs once, and a candidate that still exceeds either bound fails with `projectionStillOverBudget` rather than activating an over-budget boundary.
-4. **Observed Confirmed Ratios:**
-   When `targetRatio = 0.10` and `threshold = 0.90`, an actual post-compaction request token utilization of ~18–20% (e.g. ~18.8% confirmed usage) is normal and mathematically expected behavior reflecting ~10% retained tail plus additive system prompt, tool schemas, and summary overhead.
+#### Exact Semantics in Engine Selection (Task 118 Stage3A)
+1. **The target covers the complete next request.** The post-compaction request is `fixed overhead + summary + retained tail`:
+   - fixed overhead: the leading system/runtime instructions of the active provider projection plus the tool schemas, kept intact;
+   - summary: the generated summary in the form the model projection transmits (`CompactionSummaryProjection.format`);
+   - retained tail: the newest connected rows, transmitted verbatim with their media and replay.
+2. **Measurement before selection.** `ContextCompactionEngine.measureRequest` measures the fixed overhead and the complete current request. `CompactionCoordinator` gives the engine the active route's wire meter (`CompactionWireMeter`, the adapter's `WireInputUsageMeasurer` with the request's exact tools and options), so both are measured through the route's own codec (`fixed_overhead_measurement: wire_estimate`). A route without wire measurement falls back to the provider-neutral estimate (`estimate`). Selection and the claim stay synchronous after this await. Every path measures what the next ordinary request transmits: auto preflight measures the prospective request itself, overflow measures the failed request, and manual compaction first prepares its idle seed with the session's per-turn tool catalog and runtime context (`LocalRuntimeOrchestrator.prepareIdleRequest`, Task 118b D1). Before that fix, the manual seed carried neither, so live r1 recorded a fixed overhead of 1125 tokens while the follow-up request carried about 3863. The fixed overhead itself is measured by one helper for every trigger, `ContextCompactionEngine.measureRequest`: the leading system messages of the request's provider projection plus its provider tools (the explicit tool schemas when given). The same session state therefore reports the same `fixed_overhead_tokens` from manual and automatic compaction (Task 118b round 5 regression).
+3. **Tail budget.** `prepareSelection` gives the tail `targetRequestTokens − fixed overhead − summary reservation`, never below zero. The summary reservation is the previous summary's transmitted size when one exists, otherwise `CompactionTargetPolicy.summaryReservationTokens` (2048, the instruction's "about two pages"). The reservation is a planning value only and never enters a reported measurement. The existing progress guard still caps the tail at 50% of the current history tokens. A zero budget keeps only the newest connected exchange (`CompactionTailSelector.minimalTailStart`).
+4. **Measured result.** After the summary is generated, `buildCandidate` measures summary and tail on the route's wire (or by estimate) and records in `decision_snapshot`: `fixed_overhead_tokens`, `summary_reservation_tokens`, `tail_budget_tokens`, `summary_tokens`, `retained_tail_tokens`, `estimated_request_tokens_after`, `estimated_target_outcome` (`met` / `not_met`) and `target_feasibility`. The target is `infeasible` when the intact overhead, the summary and the newest connected exchange alone exceed it. That case compacts normally and reports the measured result; nothing is trimmed, dropped or lowered to force a fit.
+5. **Hard bounds.** Only two conditions reject a candidate: the post-compaction request does not fit the usable input budget even after projection-only pruning, or it is not smaller than the request it replaces (no progress). Both fail with `projectionStillOverBudget`. A tail above the target is not a failure; it is a measured `not_met`.
+6. **Ranges are immutable after the claim.** The summary covers the whole visible conversation, but the source and tail ranges are persisted by the claim before the summarizer runs, and activation keeps them. The tail is therefore not reselected after the summary exists; a summary larger than its reservation is reported through the measured target outcome.
+7. **Before-measurement.** The request being replaced is the active projection: its instructions, tools, the previous summary and the rows after the previous source range, never the canonical head behind an eligible boundary. Auto preflight passes its own wire/confirmed measurement; manual and overflow requests use the wire measurement when the route has one.
+9. **Small sessions (moved-in item 3).** A manual compaction whose complete current request is already within `targetRequestTokens` returns no selection: no claim, no provider call, outcome `no_op` (CLI: "No compaction needed"; Client: the localized neutral `compactionNotNeeded` notice, never a failure toast). Cause of the live `projection_still_over_budget` on very small sessions (Task 120 live and DeepSeek 2026-10-20, reproduced on base `66e21c47`): the summary of about two pages was larger than the few rows it replaced, so the no-progress guard rejected the candidate after a paid summary pass with an "over budget" cause. Automatic compaction only runs above its threshold, and an overflow is authoritative evidence against a low estimate, so neither takes this no-op. A session above the target whose summary still makes no progress keeps the documented F5 classification (§11.3).
+8. **Target outcome.** The first actual provider-confirmed post-boundary input decides `target_outcome` (§11.4): `met` when it is at most `target_request_tokens`, otherwise `not_met`. Operations recorded under the earlier tail-only `usable_budget` scope stay `unknown`.
+
+Every automatic pressure decision, including one that does not compact, is logged at fine level as a scalar `auto_pressure` line (basis, estimated, confirmed or `none`, threshold, `W`, cap flag, decision). See `docs/qa_maintenance/context_compaction_qa.md`.
+
+#### Replay-Aware Tail Selection (Task 118 Stage3A)
+
+The tail selection cost is the cost of the tail as transmitted, not a provider-neutral text estimate. Task 106's paired observation on one route and effort showed why: the estimate grew 635 tokens (20031 → 20666) while the provider-attributed tail grew 12868 (19689 → 32557), from 4 to 23 replayed reasoning items and from 8 to 39 tool call/result pairs.
+
+`ContextCompactionEngine.measureRequest` builds `CompactionTailCosts`, keyed by the timeline index where a candidate tail starts:
+
+1. **Alignment.** The active provider projection must match the timeline after the previous source range, row for row (leading instructions and the previous summary aside). If it does not, nothing is claimed and selection falls back to the provider-neutral estimate.
+2. **Wire estimate.** Walking from the newest row backward, each candidate start `i` is remeasured as the projection prefix before `i`. The wire estimate of the tail is `full − prefix(i)`.
+3. **Proven receipts.** An assistant row's `context_usage` (`ConfirmedUsageReceipt`, shared with the restart restore) is a proven receipt only when all of these hold:
+   - its route identity matches;
+   - its `wire_proof` equals the proof of the remeasured prefix;
+   - the current request extends that prefix.
+4. **Provider attribution.** Between the nearest proven receipt at or after `i` and the newest proven receipt, the provider-confirmed input difference replaces the wire estimate: `cost(i) = (full − prefix(i)) + (δ_newest − δ_nearest)`, where `δ = confirmed input − wire estimate of the same prefix`. That span carries replayed reasoning, tool framing and media at the cost the provider reported.
+5. **Unknown replay.** Opaque replay items (`CompactionTokenEstimator.opaqueWireKeys`, for example encrypted reasoning) outside a proven span have unknown cost. They are counted in `unproven_replay_items`, never priced as zero or from ciphertext length. An estimated request that looks within the target with unproven replay is recorded as `estimated_target_outcome: unknown`, not `met`.
+6. **Bounded walk.** The walk stops once a tail exceeds the target and the newest connected exchange is covered; a missing index means "over budget".
+
+The complete current request is then `full + δ_newest` (`mixed`) when a receipt is proven. The decision snapshot records `retained_tail_cost_kind` (`mixed` / `estimated`), `retained_tail_confirmed_tokens`, `unproven_replay_items` and `proven_receipts`. Missing, stale, foreign-route and unbound receipts fail closed to the wire estimate. The first actual provider-confirmed post-input remains the authority for the target outcome.
 
 ## 5. Provider Wire Stripping (Gate A0)
 
@@ -641,6 +660,11 @@ ledger, diagnostics or logs:
 | `summary_reasoning_only` | visible content is empty after reasoning markup is removed, and reasoning or markup was returned | `summary_reasoning_only` |
 | `summary_empty` | no visible content and no reasoning | `summary_empty` |
 | `summary_invalid_json` | the strict JSON parser rejects the text | `invalid_response` |
+| `summary_schema_mismatch` | valid JSON whose allowlisted field holds a non-string value (object, array, number, boolean or null; Task 118b D3) | `invalid_response` |
+
+The base instruction also states, route-neutrally, that every value except `schemaVersion` is a single JSON string, never an object or an array, with lists written as separate lines inside the string, and it gives a short example (Task 118b round 5).
+
+A schema mismatch is not normalized: the contract stays strict (no wrong types), and a value is never flattened or trimmed by the agent. Its single correction instead names each mismatched field and its JSON type (for example "the value of filesAndPaths must be a JSON string, not a JSON object") and asks for the whole content in one string, rather than re-listing every required field. Live r2 on OpenRouter `gpt-4o-mini` returned an object for `filesAndPaths`; it had been classified as invalid JSON, and the generic repair then produced broken JSON.
 
 Each shape gets exactly one corrective attempt from the immutable base; the
 failure is stage `provider` with the latest attempt's cause, never a continuity
@@ -697,10 +721,47 @@ correctness condition nor an efficiency claim. If the full request overflows,
 bounded contiguous chunk/reduce recovery (§8.12) preserves tool groups and never
 activates partial summaries.
 
+#### 8.11.3 Text estimation of non-ASCII content (Task 118b round 5)
+
+`CompactionTokenEstimator.estimateText` prices ASCII text at `ceil(chars / 4)`. CJK, Hangul and Kana code points cost one token each. Every other code point costs its UTF-8 bytes, `ceil(bytes / 4)` in total. Plain chars/4 counted Arabic, Cyrillic, Greek and Indic text at about half its real BPE cost: Arabic letters are two UTF-8 bytes, and BPE tokenizers spend roughly one token per two to three such characters. That let an Arabic session ride toward the provider limit below the compaction threshold. Accented Latin barely moves.
+
+The rule is provider-neutral and applies everywhere the compaction estimator prices text:
+
+- pressure fallback;
+- adapter wire estimates;
+- tail costs;
+- the pre-send fit check;
+- recovery packing.
+
+Provider-confirmed usage still wins wherever a proven receipt exists. The Client does not use this estimator; its usage indicator shows provider-reported usage, so the change has no Client blast radius. No fixture in the suites depended on the old Arabic pricing. The thresholds and the target are ratios of `W` and are unchanged.
+
+#### 8.11.2 Pre-send fit check of the full pass (Task 118b)
+
+Before the full summary pass is sent, the engine measures the whole summary request (the provider projection, the appended instruction and the tools) with the route's wire meter, or by estimate. It adds the output the provider will reserve. If that sum exceeds the window `W`, the full pass would be rejected, so it is not sent. The engine goes straight to the bounded chunk/reduce recovery (§8.12) and records `full_pass_skipped: presend_over_window`, `presend_request_tokens`, `output_reservation_tokens` and `output_reservation_source`.
+
+The reservation comes from route capability, in order:
+
+1. settings (`LLMRequestOptions.maxOutputTokens`);
+2. cached provider model metadata (an output-limit field, flat or under `top_provider`/`limit`);
+3. the models.dev `limit.output`;
+4. otherwise the conservative fallback `CompactionRecoveryPolicy.fallbackOutputReservationTokens` (16,384: the default completion reservation observed on a route with no output limit), bounded to a quarter of the window like the internal reservation of tiny windows.
+
+The check is deliberately conservative about skipping, because the two errors are not symmetric:
+
+- a wrong skip costs at least one extra **billed** pass (chunk plus reduce) and some summary quality;
+- a wrong send costs one **unbilled** provider rejection (live r2: 0 usage, 1.8 s).
+
+A declared capability value (provider metadata or models.dev) is therefore bounded by the same ceiling: the reservation is `min(declared, fallbackOutputReservationTokens, W/4)`, and the snapshot records `output_reservation_capped: true` when the ceiling applies. Many current models declare very large outputs; without the ceiling, `0.9 × W` plus the declared output would exceed `W` even at `W = 1,000,000`, and every automatic compaction would become chunk plus reduce.
+
+A settings value (`maxOutputTokens`) is not capped: it is sent on the wire with the pass, so the provider reserves exactly that amount.
+
+The reservation is a planning value only. Compaction still sends no output cap of its own, because a hard cap truncates summaries and reasoning models spend it on reasoning.
+
 ### 8.12 Bounded recovery summarizer (Task 117, 0P-F2)
 
-`ContextCompactionEngine._generateRecoverySummary` runs only after the
-ordinary provider request reports `CompactionProviderOverflow`. Its limits
+`ContextCompactionEngine._generateRecoverySummary` runs when the ordinary
+provider request reports `CompactionProviderOverflow`, or without that request
+when the pre-send fit check proves it cannot fit (Task 118b, below). Its limits
 live in `CompactionRecoveryPolicy` (`agent/lib/core/config.dart`; defaults:
 safety ratio `0.80`, at most `16` chunks, minimum pass budget `512` tokens)
 and are injectable through the engine constructor.
@@ -708,8 +769,10 @@ and are injectable through the engine constructor.
 1. **Per-pass budget.** `floor(effectiveInputBudget × safetyRatio)` minus the
    stable system messages, the tool schemas, and the longer of the chunk and
    final instructions, all measured with `CompactionTokenEstimator` (text plus
-   model-facing media). The ratio stays below 1 because chars/4 underestimates
-   Arabic and CJK text.
+   model-facing media). The ratio stays below 1 because the estimate is not an
+   exact tokenizer. Since Task 118b round 5, non-ASCII text is priced by its
+   encoding (below), so the `0.80` margin is kept for tokenizer variance on
+   code, JSON and tool output; it was rechecked and not changed.
 2. **Packing.** The pruned source is split into atomic groups (an assistant
    tool-call batch plus its results, otherwise one message) and greedily
    packed, in order, into chunks that fit the budget.
@@ -738,8 +801,10 @@ and are injectable through the engine constructor.
    `recovery_split_count`, `recovery_reduce_batches`, and
    `recovery_provider_calls`; each pass keeps its ledger entry.
 
-Skipping the ordinary request when it is already estimated to overflow is not
-implemented; the reactive overflow remains the only recovery trigger.
+Recovery has two triggers: the reactive `CompactionProviderOverflow` of the
+ordinary request, and the pre-send fit check (Task 118b), which skips the
+ordinary request when the request plus the output reservation exceeds `W` and
+records `full_pass_skipped: presend_over_window`.
 
 ## 9. Orchestration and Protocol Contract (Task 53d)
 
@@ -882,7 +947,7 @@ The claim transaction binds the last ordinary provider-confirmed call that prece
 - **Applicability & Material Equivalence:** `applicable`, `not_applicable`, or `unknown`. Every value other than `applicable` carries a typed reason: `no_ordinary_call` (no assistant row exists yet), `usage_missing`, `identity_incomplete`, `route_changed`, `material_changed` (a completed boundary was activated after the measurement, so the measured material predates the current projection), and `material_unverified` (material equivalence unverified against active prompts/schemas/messages). In the repository claim transaction, without an engine-level prefix remeasurement and material comparison, applicability fails closed to `unknown` with reason `material_unverified`, never claiming `applicable` on syntactic wire-proof hash validation alone.
 - **Immutability:** the value is written once in the `started` row and carried unchanged through `completeStarted` and `failStarted`. A later ordinary call, retry, restart, or subsequent compaction cannot replace it, so a pending pre-call is never relabelled from a grown request.
 - **Classification of Fork Diagnostics Omission:** When a session is forked, `cloneTerminalOperationsForFork` clones existing terminal compaction operations into the child session with remapped message IDs and new operation UUIDs, but omits `diagnostics_json` (evaluating to `NULL` diagnostics for cloned boundaries in the child session). This omission is intentional and non-blocking: granular diagnostics (`last_pre_compaction_call`, `post_boundary`, `attempts`, `relative_dump_path`) contain parent-session identities (`parent message_id`, `parent run_id`, parent dump files). Omitting unmapped diagnostics prevents parent provenance contamination in the child session while preserving canonical boundary projection (`internal_summary_json`, `retained_tail_tokens`, ranges, route signature).
-- **Classification of Failed Compaction Scalar Persistence (F2):** Failed compaction operations persist `NULL` in table columns (`context_window_tokens`, `effective_input_budget_tokens`, `auto_threshold_tokens`, `estimated_request_tokens_before/after`, `retained_tail_tokens`, `summarization_*`, `duration_ms`), preserving decision parameters in `diagnostics_json.decision_snapshot` and attempt token usage in `diagnostics_json.attempts`. Because `ModelProjectionBuilder` queries only completed boundaries (`findLatestCompleted`), failed boundaries are non-projectable; preserving scalars exclusively in diagnostics is safe and non-blocking for Stage 1.
+- **Failed Compaction Scalar Persistence (F2, revised by Task 118b D4):** Failed operations keep the projection estimate columns NULL (`context_window_tokens`, `effective_input_budget_tokens`, `auto_threshold_tokens`, `estimated_request_tokens_before/after`, `retained_tail_tokens`), because no projection was activated; their decision parameters stay in `diagnostics_json.decision_snapshot`. Their summarization accounting is recorded exactly as for a completed operation: `summarization_attempts` is the number of ledger attempts, and `summarization_input/cached_input/cache_write/output/reasoning_tokens` and `duration_ms` come from the failure's `aggregate_usage`. Before this, a failed operation stored `summarization_attempts=0` and NULL usage while its diagnostics showed the billed attempts (live r2: 2 attempts, 87,881 input). `ModelProjectionBuilder` reads only completed boundaries, and a failed row's metrics stay absent because the before-estimate is NULL.
 - **Classification of No-Progress Pruning Guard (F5):** When tail pruning produces a post-projection estimate not lower than the pre-projection estimate (e.g. when the newest growth turn holds almost all context), `ContextCompactionEngine` returns `projection_still_over_budget`. While semantically representing lack of compaction progress, this failure cause safely aborts ineffective compaction without inventing protocol causes that would require cross-layer enum, translation, and UI changes.
 - **Normal Dump Immutability & Retry Attempt Isolation (F3):** Completed normal-turn request dumps (`capture_state = completed` or `error`) are terminal and cannot be overwritten by subsequent unkeyed auxiliary model calls (such as `TitleService`). Requests in a retry loop maintain attempt-isolated request correlation (`$stepRequestId:retry_$attempt`), preserving both failed attempts (e.g. 429) and completed 200 attempts in distinct files without in-flight dump key collisions.
 
@@ -896,5 +961,5 @@ Post-compaction usage reconciliation binds immutably to the exact first request 
 - **Retry & Route-Failover Finalization:** When a post-boundary turn encounters a same-route transient failure (such as HTTP 429 rate limit with retry budget), the reservation remains `'reserved'` across attempt-isolated retries as long as the boundary identity is unchanged, reconciling confirmed token usage upon retry success. If a same-route retry activates a newer compaction boundary (or the live boundary identity changes), the abandoned boundary reservation is captured and finalized as missing with reason `'no_provider_usage'`. When a failure triggers a handled auto-failover to a different provider or model route (Route A → Route B), the abandoned route's reservation is explicitly finalized as missing with reason `'route_failover'` (`missingReason: 'route_failover'`) immediately upon recovery, before history preparation. This prevents reservations from remaining indefinitely in `'reserved'` status while strictly forbidding fabricated usage attribution from Route B to Route A's boundary. Subscription cancellations (including client disconnects and executor stop requests cancelling the stream), history preparation failures, restart-drain aborts, and unhandled runner errors that exhaust retry budgets are guarded via finally blocks, stream cancellation hooks, and error handlers to finalize unfinalized reservations with `'no_provider_usage'`. Stop acknowledgement no longer waits for generator unwind (cleanup is deadline-bounded by `RunCancellationScope`). Because the cancelled generator may still be suspended at an await (for example a 429 `waitForRetry`) and unwind after acknowledgement, the detached unwind is contained at the stream boundary (`AgentRunner._cancellableTurnStream`): cancellation signals (`RuntimeRecoveryCancelled`, `RateLimitCancelled`, `ProviderRequestCancelledException`) end quietly, any other unwind failure is logged `SEVERE` by error type only, and nothing escapes to the zone as an uncaught error. The streaming reservation holder is stream-scoped per `streamMessage`/`resumeStream` invocation, ensuring cancellation of one stream never cross-finalizes a concurrent or subsequent stream's reservation on the same runner (while production runners remain factory-scoped per event). Both streaming and non-streaming runner paths observe these exact semantics.
 - **Receipt Immutability:** Once post-boundary usage is confirmed or marked missing, subsequent calls with grown history or alternate steps are rejected (`null`) and cannot replace or overwrite the first call's status.
 - **Route Mismatch Rejection:** If the dispatched post-boundary request is on a different route than the compaction operation's `routeSignature`, reconciliation is rejected (`null`) and the status remains unchanged.
-- **Truthful Target Outcome (Stage 1):** In Stage 1, `targetOutcome` evaluates explicitly to `TargetOutcome.unknown` rather than applying unauthorized diagnostic arithmetic (such as blanket 13% ceilings or generalized `+0.03` tolerance formulas). The observed post-boundary occupancy ratio is truthfully recorded as `post_input_ratio = inputTokens / W`, and `decisionSnapshot` captures the configured `target_ratio`, `target_scope: 'usable_budget'`, and context capacity. Target outcome comparison policy and denominator alignment are deferred to Stage 3A.
+- **Target Outcome (Task 118 Stage3A):** The first confirmed post-boundary input decides `targetOutcome`: `met` when it is at most the recorded `target_request_tokens` with `target_scope: context_window` (the complete-request target over `W`), otherwise `not_met`. No tolerance is added: the 13% upper result allowed for the observed live case is an acceptance criterion, not runtime arithmetic. Operations recorded under the earlier `usable_budget` tail-only scope, or without a target, stay `unknown`. The occupancy ratio is recorded as `post_input_ratio = inputTokens / W`.
 - **Legacy Provenance & Unreserved Fail-Closed Protection:** Operations created prior to diagnostic instrumentation (`diagnostics_json == NULL`) fail closed for dispatch reservation, missing usage recording, and post-upgrade reconciliation attempts; subsequent post-upgrade calls are never synthesized or misattributed as the first post-boundary call. Historical confirmed scalars (e.g. 19,182 tokens) remain immutable without synthesizing diagnostics. Unsolicited replies arriving without prior matching dispatch reservation fail closed (`null`) and leave the post-boundary status in its existing pending state.

@@ -285,7 +285,8 @@ void main() {
         systemPrompt: 'system prompt',
         runtimeContext: '',
         toolSchemas: const [],
-        targetRequestTokens: 1000,
+        // Above the complete-request target, so manual compaction has work.
+        targetRequestTokens: 100,
       );
 
       final candidate = await engine.buildCandidate(request, force: true);

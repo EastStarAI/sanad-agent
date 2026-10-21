@@ -358,6 +358,13 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
   void _presentCompactOutcome(SessionCompactResult result) {
     if (result.accepted) return;
+    if (result.noOp) {
+      ToastUtils.showInfo(
+        context,
+        AppLocalizations.of(context)!.compactionNotNeeded,
+      );
+      return;
+    }
     final failure = CompactionFailureFormatter.resolveForResult(
       result,
       l10n: AppLocalizations.of(context),

@@ -456,6 +456,24 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     }
   }
 
+  /// Sends secret values for a `system_request_secret` form. The values go
+  /// only into the response command and are never kept in Client state.
+  Future<void> submitSecretRequest({
+    required DeviceSuspendedRequest request,
+    required Map<String, String> values,
+  }) async {
+    try {
+      await messagesCubit.respondToSuspendedRequest(
+        request,
+        allow: true,
+        scope: 'once',
+        secretValues: values,
+      );
+    } catch (e) {
+      emit(state.copyWith(error: e.toString()));
+    }
+  }
+
   Future<void> answerPendingSuspendedRequest({
     required DeviceSuspendedRequest request,
     required String answer,

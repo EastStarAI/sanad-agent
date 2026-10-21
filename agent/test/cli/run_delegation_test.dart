@@ -823,6 +823,38 @@ void main() {
     );
 
     test(
+      '--allow-all-tools never answers a secret request; it stays pending for the Sanad Client',
+      () async {
+        final oneshot = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = oneshot.run(
+          prompt: 'Needs a secret',
+          session: 'sess-secret-1',
+          allowAllTools: true,
+          outDir: outDir.path,
+          client: fakeClient,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+        await fakeClient.turnDispatched.future.timeout(
+          const Duration(seconds: 5),
+        );
+
+        fakeClient.emitToolPermission(
+          requestId: 'req-secret-1',
+          toolName: 'system_request_secret',
+          sessionId: 'sess-secret-1',
+        );
+        await waitFor(() => _statusIs(outDir, 'needs_input'));
+        expect(fakeClient.permissionResponses, isEmpty);
+        expect(stderrBuf.toString(), contains('Sanad Client'));
+
+        fakeClient.emitTurnComplete(sessionId: 'sess-secret-1');
+        await runFuture;
+      },
+    );
+
+    test(
       'timeout triggers scoped session stop and records timeout in result.json',
       () async {
         final oneshot = OneshotRunner(stdinReader: () async => null);

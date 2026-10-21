@@ -48,8 +48,18 @@ String _validJson() => jsonEncode({
   'remainingWork': 'run tests',
 });
 
+/// Valid JSON with every key, but a string field holds structured data
+/// (live r2 on gpt-4o-mini: `filesAndPaths` was an object).
+String _typedFieldJson(Object value) {
+  final map = jsonDecode(_validJson()) as Map<String, dynamic>;
+  map['filesAndPaths'] = value;
+  return jsonEncode(map);
+}
+
 enum _Shape {
   valid,
+  objectField,
+  listField,
   empty,
   reasoningOnly,
   truncated,
@@ -66,6 +76,9 @@ class _ScriptedAdapter implements LLMAdapter {
   final List<_Shape> script;
   int calls = 0;
 
+  /// The appended compaction instruction of every call, in order.
+  final instructions = <String>[];
+
   @override
   Future<AgentResponse> generateResponse(
     List<Message> history, {
@@ -74,8 +87,27 @@ class _ScriptedAdapter implements LLMAdapter {
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
     final shape = script[calls++];
+    instructions.add(history.last.content ?? '');
     const usage = {'prompt_tokens': 100, 'completion_tokens': 10};
     switch (shape) {
+      case _Shape.objectField:
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: _typedFieldJson({'files': [_privateMarker]}),
+          ),
+          usage: usage,
+          finishReason: LLMFinishReason.stop,
+        );
+      case _Shape.listField:
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: _typedFieldJson([_privateMarker, 'agent/lib/b.dart']),
+          ),
+          usage: usage,
+          finishReason: LLMFinishReason.stop,
+        );
       case _Shape.valid:
         return AgentResponse(
           message: Message(role: MessageRole.assistant, content: _validJson()),
@@ -215,6 +247,95 @@ CompactionEngineRequest _request() => CompactionEngineRequest(
   thresholdRatio: 0.10,
 );
 
+/// A request whose full summary pass is close to the 8000-token window
+/// (Task 118b round 5 pre-send fit check).
+CompactionEngineRequest _nearWindowRequest({required int maxOutputTokens}) {
+  final rows = [
+    IndexedConversationMessage(
+      rowId: 1,
+      message: Message(role: MessageRole.user, content: 'finish the migration'),
+    ),
+    for (var index = 2; index <= 31; index++)
+      IndexedConversationMessage(
+        rowId: index,
+        message: Message(
+          role: MessageRole.assistant,
+          content: 'progress $index ${'word ' * 180}',
+        ),
+      ),
+  ];
+  return CompactionEngineRequest(
+    compactionId: 'cmp-presend',
+    sessionId: 'session-shapes',
+    trigger: CompactionTrigger.auto,
+    sourceRevision: const CompactionHistoryRevision(1),
+    routeSignature: _route,
+    contextWindowTokens: 8_000,
+    timeline: rows,
+    systemPrompt: 'stable system',
+    runtimeContext: '',
+    toolSchemas: const [],
+    providerProjection: [
+      Message(role: MessageRole.system, content: 'stable system'),
+      for (final row in rows) row.message,
+    ],
+    providerRequestOptions: LLMRequestOptions(
+      sessionId: 'session-shapes',
+      requestId: 'compaction:cmp-presend',
+      maxOutputTokens: maxOutputTokens,
+    ),
+    targetRequestTokens: 3_000,
+    thresholdRatio: 0.10,
+  );
+}
+
+/// A request at a 1M window carrying [requestTokens] of history and a
+/// declared [declaredOutput] from route capability (Task 118b review).
+CompactionEngineRequest _largeWindowRequest({
+  required int requestTokens,
+  required int declaredOutput,
+}) {
+  const perRow = 50_000;
+  final rows = [
+    IndexedConversationMessage(
+      rowId: 1,
+      message: Message(role: MessageRole.user, content: 'finish the migration'),
+    ),
+    for (var index = 0; index < requestTokens ~/ perRow; index++)
+      IndexedConversationMessage(
+        rowId: index + 2,
+        message: Message(
+          role: MessageRole.assistant,
+          content: 'x' * (perRow * 4),
+        ),
+      ),
+  ];
+  return CompactionEngineRequest(
+    compactionId: 'cmp-large-window',
+    sessionId: 'session-shapes',
+    trigger: CompactionTrigger.auto,
+    sourceRevision: const CompactionHistoryRevision(1),
+    routeSignature: _route,
+    contextWindowTokens: 1_000_000,
+    timeline: rows,
+    systemPrompt: 'stable system',
+    runtimeContext: '',
+    toolSchemas: const [],
+    providerProjection: [
+      Message(role: MessageRole.system, content: 'stable system'),
+      for (final row in rows) row.message,
+    ],
+    providerRequestOptions: const LLMRequestOptions(
+      sessionId: 'session-shapes',
+      requestId: 'compaction:cmp-large-window',
+    ),
+    targetRequestTokens: 100_000,
+    thresholdRatio: 0.90,
+    outputReservationTokens: declaredOutput,
+    outputReservationSource: 'models_dev',
+  );
+}
+
 void main() {
   late AgentStateDatabase state;
 
@@ -247,6 +368,16 @@ void main() {
     ),
     _Shape.invalidJson: (
       ledgerReason: CompactionFailureCause.summaryInvalidJson,
+      cause: CompactionFailureCause.invalidResponse,
+    ),
+    // Task 118b D3: a field of the wrong type is a schema mismatch, not
+    // unparseable JSON.
+    _Shape.objectField: (
+      ledgerReason: CompactionFailureCause.summarySchemaMismatch,
+      cause: CompactionFailureCause.invalidResponse,
+    ),
+    _Shape.listField: (
+      ledgerReason: CompactionFailureCause.summarySchemaMismatch,
       cause: CompactionFailureCause.invalidResponse,
     ),
     _Shape.toolCall: (
@@ -323,6 +454,126 @@ void main() {
       });
     });
   }
+
+  for (final (shape, kind) in [
+    (_Shape.objectField, 'object'),
+    (_Shape.listField, 'array'),
+  ]) {
+    test(
+      'Task 118b D3: the ${shape.name} correction names the field and the expected type',
+      () async {
+        final adapter = _ScriptedAdapter([shape, _Shape.valid]);
+        await engineFor(adapter).buildCandidate(_request());
+
+        final repair = adapter.instructions.last;
+        expect(repair, contains('filesAndPaths'));
+        expect(repair, contains('must be a JSON string'));
+        expect(repair, contains('not a JSON $kind'));
+        expect(repair, isNot(contains(_privateMarker)));
+        // The targeted repair does not re-list every required field.
+        expect(repair, isNot(contains('present and non-empty')));
+      },
+    );
+  }
+
+  test(
+    'Task 118b: a full pass that cannot fit the window with its output reservation is skipped without a provider call',
+    () async {
+      final adapter = _ScriptedAdapter([
+        for (var i = 0; i < 20; i++) _Shape.valid,
+      ]);
+      final candidate = await engineFor(
+        adapter,
+      ).buildCandidate(_nearWindowRequest(maxOutputTokens: 4_096), force: true);
+
+      expect(candidate, isNotNull);
+      final attempts = candidate!.diagnostics!.attempts;
+      expect(attempts.map((a) => a.passKind), isNot(contains('full')));
+      expect(attempts.first.passKind, 'chunk');
+      expect(adapter.calls, attempts.length);
+      final decision = candidate.diagnostics!.decisionSnapshot!;
+      expect(decision['full_pass_skipped'], 'presend_over_window');
+      expect(decision['output_reservation_tokens'], 4_096);
+      expect(decision['output_reservation_source'], 'settings');
+      expect(
+        (decision['presend_request_tokens'] as int) + 4_096,
+        greaterThan(8_000),
+      );
+    },
+  );
+
+  test(
+    'Task 118b review: a large declared output is capped, so a 0.9 W full pass is still sent',
+    () async {
+      final adapter = _ScriptedAdapter([_Shape.valid]);
+      final candidate = await engineFor(adapter).buildCandidate(
+        _largeWindowRequest(requestTokens: 900_000, declaredOutput: 384_000),
+        force: true,
+      );
+
+      expect(candidate, isNotNull);
+      expect(candidate!.diagnostics!.attempts.first.passKind, 'full');
+      final decision = candidate.diagnostics!.decisionSnapshot!;
+      expect(decision['full_pass_skipped'], isNull);
+    },
+  );
+
+  test(
+    'Task 118b review: a request that cannot fit even with the bounded reservation is skipped',
+    () async {
+      final adapter = _ScriptedAdapter([
+        for (var i = 0; i < 20; i++) _Shape.valid,
+      ]);
+      final candidate = await engineFor(adapter).buildCandidate(
+        _largeWindowRequest(requestTokens: 1_000_000, declaredOutput: 384_000),
+        force: true,
+      );
+
+      expect(candidate, isNotNull);
+      expect(
+        candidate!.diagnostics!.attempts.map((a) => a.passKind),
+        isNot(contains('full')),
+      );
+      final decision = candidate.diagnostics!.decisionSnapshot!;
+      expect(decision['full_pass_skipped'], 'presend_over_window');
+      expect(decision['output_reservation_tokens'], 16_384);
+      expect(decision['output_reservation_source'], 'models_dev');
+      expect(decision['output_reservation_capped'], isTrue);
+    },
+  );
+
+  test(
+    'Task 118b: a full pass that fits the window with its output reservation is sent',
+    () async {
+      final adapter = _ScriptedAdapter([_Shape.valid]);
+      final candidate = await engineFor(
+        adapter,
+      ).buildCandidate(_nearWindowRequest(maxOutputTokens: 256), force: true);
+
+      expect(candidate, isNotNull);
+      expect(candidate!.diagnostics!.attempts.single.passKind, 'full');
+      expect(
+        candidate.diagnostics!.decisionSnapshot!['full_pass_skipped'],
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'Task 118b: the summary instruction states that every value is one string with lists as lines',
+    () {
+      final instruction = CompactionSummaryPrompt.buildJsonInstruction();
+      expect(
+        instruction,
+        contains('Every value except schemaVersion is a single JSON string'),
+      );
+      expect(instruction, contains('write lists as separate lines inside that string'));
+      expect(
+        instruction,
+        contains(r'"filesAndPaths": "agent/lib/a.dart\nagent/lib/b.dart"'),
+      );
+    },
+  );
 
   test('timeout fails at once with its measured duration recorded', () async {
     final adapter = _ScriptedAdapter([_Shape.timeout, _Shape.valid]);

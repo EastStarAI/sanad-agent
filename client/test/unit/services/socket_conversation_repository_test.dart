@@ -485,6 +485,7 @@ class _TestConversationClient implements ConversationClient, AttachmentReplayCli
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) {
     throw UnimplementedError();
   }

@@ -1,10 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/capabilities/execution/direct_execution_backend.dart';
 import 'package:sanad_agent/capabilities/execution/execution_backend.dart';
 import 'package:sanad_agent/capabilities/execution/execution_backend_resolver.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/permissions/process_environment_policy.dart';
+import 'package:sanad_agent/capabilities/secrets/user_secret_vault.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_windows_path/windows_path.dart';
 
@@ -21,6 +24,7 @@ class ShellExecuteTool extends SpecBackedTool {
   final String workspacePath;
   final PermissionManager? _permissionManager;
   final ExecutionBackendResolver _backendResolver;
+  final UserSecretVault _userSecrets;
 
   ShellExecuteTool({
     required this.workspacePath,
@@ -28,7 +32,9 @@ class ShellExecuteTool extends SpecBackedTool {
     WindowsSystemPath? windowsSystemPath,
     ProcessEnvironmentPolicy? processEnvironmentPolicy,
     ExecutionBackendResolver? backendResolver,
+    UserSecretVault? userSecrets,
   }) : _permissionManager = permissionManager,
+       _userSecrets = userSecrets ?? UserSecretVault(),
        _backendResolver =
            backendResolver ??
            ExecutionBackendResolver(
@@ -61,6 +67,13 @@ class ShellExecuteTool extends SpecBackedTool {
           'type': 'string',
           'description':
               'A concise sentence of no more than seven words that explains to the user, in their own language, the purpose or goal of executing this command.',
+        },
+        'secrets': {
+          'type': 'array',
+          'items': {'type': 'string'},
+          'maxItems': maxRequestedSecrets,
+          'description':
+              'Names of stored user secrets to expose to this command as environment variables. Only these are injected; values never appear in the result.',
         },
       },
       'required': ['command', 'description'],
@@ -105,6 +118,34 @@ class ShellExecuteTool extends SpecBackedTool {
         ? args['timeout_ms'] as int
         : int.tryParse(args['timeout_ms']?.toString() ?? '') ?? 60000;
 
+    final secretNames = requestedSecretNames(args);
+    var secretEnvironment = const <String, String>{};
+    if (secretNames.isNotEmpty) {
+      final authority = CommandAuthority.fromStamped(
+        context?.metadata[CommandAuthority.payloadKey],
+      );
+      if (!authority.isOwner) {
+        return _refusal(
+          stopwatch,
+          'Stored secrets can be used only on a turn from the device owner.',
+          terminalReason: 'secret_authority_required',
+          errorCode: ToolResultErrorCode.permissionDenied,
+        );
+      }
+      final resolved = _userSecrets.resolve(secretNames);
+      if (resolved.missing.isNotEmpty) {
+        return _refusal(
+          stopwatch,
+          'No stored secret named ${resolved.missing.join(', ')}. '
+          'Ask the user with system_request_secret first.',
+          terminalReason: 'secret_not_found',
+          errorCode: ToolResultErrorCode.notFound,
+        );
+      }
+      secretEnvironment = resolved.values;
+    }
+    // No `secrets` argument means no user secret: never all of them.
+
     final backend = await _backendResolver.resolve(
       context,
       root: Directory(workspacePath).resolveSymbolicLinksSync(),
@@ -125,9 +166,49 @@ class ShellExecuteTool extends SpecBackedTool {
         timeoutMs: timeoutMs,
         stopwatch: stopwatch,
         context: context,
+        secretEnvironment: secretEnvironment,
       ),
     );
   }
+
+  /// Most secrets one command may request.
+  static const maxRequestedSecrets = 16;
+
+  /// The validated `secrets` argument: explicit names only, never a wildcard.
+  /// A malformed, reserved or oversized list is rejected rather than trimmed.
+  static List<String> requestedSecretNames(Map<String, dynamic> args) {
+    final raw = args['secrets'];
+    if (raw == null) return const [];
+    if (raw is! List || raw.length > maxRequestedSecrets) {
+      throw const FormatException(
+        'secrets must be a list of at most $maxRequestedSecrets secret names.',
+      );
+    }
+    final names = <String>[];
+    for (final item in raw) {
+      if (item is! String || UserSecretVault.nameRejection(item) != null) {
+        throw FormatException('Invalid secret name: $item');
+      }
+      if (!names.contains(item)) names.add(item);
+    }
+    return names;
+  }
+
+  ToolExecutionResult _refusal(
+    Stopwatch stopwatch,
+    String message, {
+    required String terminalReason,
+    required ToolResultErrorCode errorCode,
+  }) => ToolExecutionResult.text(
+    const JsonEncoder.withIndent('  ').convert({
+      'isError': true,
+      'output': message,
+      'duration_ms': stopwatch.elapsedMilliseconds,
+      'terminal_reason': terminalReason,
+    }),
+    isError: true,
+    errorCode: errorCode,
+  );
 
   /// Resolves `cwd` and rejects anything outside the canonical workspace
   /// root, including sibling roots that merely share a name prefix.

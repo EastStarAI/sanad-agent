@@ -13,6 +13,7 @@ class ShellCommandRequest {
     required this.timeoutMs,
     required this.stopwatch,
     this.context,
+    this.secretEnvironment = const {},
   });
 
   final String command;
@@ -20,6 +21,11 @@ class ShellCommandRequest {
   final int timeoutMs;
   final Stopwatch stopwatch;
   final ToolContext? context;
+
+  /// User secrets explicitly requested for this call (Plan 84), keyed by
+  /// environment name. A backend that runs the command injects exactly these
+  /// and redacts their values from every output it reports.
+  final Map<String, String> secretEnvironment;
 }
 
 /// Where a shell command runs. Direct and Protected share one typed result

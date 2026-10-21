@@ -89,7 +89,9 @@ class PermissionManager {
     if (effective != null) {
       final workspacePolicy = effective.policy;
       if (workspacePolicy.permissions.deny.contains(approvalKey)) {
-        throw ToolPermissionDeniedException('Tool ${tool.name} is denied by workspace policy.');
+        throw ToolPermissionDeniedException(
+          'Tool ${tool.name} is denied by workspace policy.',
+        );
       }
       if (workspacePolicy.permissionMode ==
           WorkspacePermissionMode.fullAccess) {
@@ -113,7 +115,9 @@ class PermissionManager {
     }
 
     if (_sessionDeny[context.sessionId]?.contains(approvalKey) ?? false) {
-      throw ToolPermissionDeniedException('Tool ${tool.name} is denied for this session.');
+      throw ToolPermissionDeniedException(
+        'Tool ${tool.name} is denied for this session.',
+      );
     }
 
     final oneShotAllow = _oneShotAllow[context.sessionId];
@@ -177,7 +181,9 @@ class PermissionManager {
           'User denied permission for tool ${tool.name}.\nUser comment: $denyComment',
         );
       } else {
-        throw ToolPermissionDeniedException('User denied permission for tool ${tool.name}.');
+        throw ToolPermissionDeniedException(
+          'User denied permission for tool ${tool.name}.',
+        );
       }
     }
 
@@ -310,6 +316,12 @@ class PermissionManager {
     if (tool.name == 'shell_execute') {
       final command = arguments['command']?.toString().trim();
       if (command != null && command.isNotEmpty) {
+        // A grant never extends to stored secrets it was not given for.
+        final secrets = arguments['secrets'];
+        if (secrets is List && secrets.isNotEmpty) {
+          final names = secrets.map((name) => '$name').toSet().toList()..sort();
+          return 'shell_execute::$command::secrets=${names.join(',')}';
+        }
         return 'shell_execute::$command';
       }
     }

@@ -7,11 +7,13 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
+import 'package:sanad_agent/capabilities/secrets/secret_acquisition.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
+import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 
 import 'local_workspace_runtime_service.dart';
@@ -121,7 +123,12 @@ class SuspendedResumeService {
     }
 
     final isAskUser = checkpoint.toolName == 'system_ask_user';
-    if (isAskUser) {
+    // A secret request resumes from the bridge-sanitized decision only: the
+    // values were stored before this point and are never part of it.
+    final isSecretRequest = checkpoint.toolName == SecretToolNames.request;
+    if (isSecretRequest) {
+      if (!decision.containsKey(SecretAcquisition.outcomeKey)) return false;
+    } else if (isAskUser) {
       final answer = decision['answer']?.toString().trim();
       if (answer == null || answer.isEmpty) {
         return false;
@@ -161,7 +168,7 @@ class SuspendedResumeService {
           );
     await onClaimed?.call();
 
-    if (!isAskUser) {
+    if (!isAskUser && !isSecretRequest) {
       await _permissionManager.applyResolvedDecision(
         permissionPayload: checkpoint.permissionPayload,
         decision: decision,
@@ -170,14 +177,9 @@ class SuspendedResumeService {
 
     final sessionMetadata =
         _sessionManager.getSessionMetadata(checkpoint.sessionId) ?? const {};
-    final runtimeRequest = AgentTurnRequest(
-      sessionId: checkpoint.sessionId,
-      message: '',
-      workspaceId: sessionMetadata['workspace_id']?.toString(),
-      model: sessionMetadata['model']?.toString(),
-      thinkingMode: sessionMetadata['thinking_mode']?.toString(),
-      requestId: sessionMetadata['request_id']?.toString(),
-      metadata: Map<String, dynamic>.from(sessionMetadata),
+    final runtimeRequest = LocalRuntimeOrchestrator.idleRequestFor(
+      checkpoint.sessionId,
+      sessionMetadata,
     );
     final agentRunner = getIt<AgentRunner>(param1: checkpoint.sessionId);
     SessionRunOrchestrator? orchestrator;
@@ -220,7 +222,12 @@ class SuspendedResumeService {
     );
 
     final denyComment = decision['comment']?.toString().trim();
-    final forcedOutput = isAskUser
+    final secretResult = isSecretRequest
+        ? SecretAcquisition.resultFor(decision)
+        : null;
+    final forcedOutput = secretResult != null
+        ? secretResult.text
+        : isAskUser
         ? decision['answer']!.toString()
         : (decision['allowed'] == true
               ? null
@@ -229,12 +236,14 @@ class SuspendedResumeService {
                   if (denyComment != null && denyComment.isNotEmpty)
                     'User comment: $denyComment',
                 ].join('\n'));
-    final forcedIsError = isAskUser ? false : (decision['allowed'] != true);
+    final forcedIsError =
+        secretResult?.isError ??
+        (isAskUser ? false : (decision['allowed'] != true));
     final ownerRunId =
         resumeOwner?.runId ?? sessionMetadata['run_id']?.toString();
     var terminalCommitted = false;
 
-    if (!isAskUser && decision['allowed'] == true) {
+    if (!isAskUser && !isSecretRequest && decision['allowed'] == true) {
       // Crossing this marker means startup must never replay the approved
       // side effect. If the process exits afterward, normal interrupted-tool
       // recovery records an unknown outcome instead.

@@ -210,6 +210,23 @@ void main() {
     );
 
     test(
+      'Task 118: forSession sets the complete-request target over the full window W',
+      () async {
+        final engineRequest = await CompactionRequestFactory.forSession(
+          sessionId: 'test-session',
+          trigger: CompactionTrigger.manual,
+          compactionId: 'cmp-target-w',
+          contextWindowTokens: 258000,
+        );
+
+        expect(engineRequest, isNotNull);
+        // 10% of W=258000, not 10% of the usable input budget (25288).
+        expect(engineRequest!.targetRequestTokens, 25800);
+        expect(engineRequest.targetRatio, 0.10);
+      },
+    );
+
+    test(
       'CompactionRequestFactory.forSession preserves options and thinking directive on manual compaction',
       () async {
         const thinkingDirective = AnthropicBudgetDirective(4096);
