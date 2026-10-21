@@ -13,6 +13,7 @@ import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'package:sanad_agent/interfaces/models/device_control.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
+import 'package:sanad_agent/interfaces/models/workspace_control.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/device_control_command_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
@@ -280,6 +281,35 @@ class TrackingWorkspaceRuntimeService extends LocalWorkspaceRuntimeService {
     calls.add(CanonicalEventTypes.deleteFolder);
     return path;
   }
+
+  @override
+  Future<WorkspaceMutationPreview> previewDeleteFolder(
+    String path, {
+    bool managedRemote = false,
+  }) async {
+    lastManagedRemote = managedRemote;
+    return _trackingPreview(CanonicalEventTypes.deleteFolder, path);
+  }
+
+  @override
+  Future<WorkspaceMutationPreview> previewRelocateWorkspace({
+    required String workspaceId,
+    required String newPath,
+  }) async {
+    // Preview is reached only from the managed-remote relocate branch.
+    lastManagedRemote = true;
+    return _trackingPreview(CanonicalEventTypes.relocateWorkspace, newPath);
+  }
+
+  WorkspaceMutationPreview _trackingPreview(String operation, String path) =>
+      WorkspaceMutationPreview(
+        operation: operation,
+        path: path,
+        fingerprint: 'fp',
+        summary: 'preview',
+        entryCount: 0,
+        truncated: false,
+      );
 
   @override
   Future<Map<String, dynamic>> readMcpSnapshot({String? workspaceId}) async {
@@ -695,6 +725,45 @@ void main() {
           CanonicalEventTypes.browseWorkspaceTree,
         ]);
         expect(workspaceRuntime.lastManagedRemote, isTrue);
+        expect(runtimeBridge.registeredSessionCount, 0);
+      },
+    );
+
+    test(
+      'S19 a cloud payload with managed_remote false is still managed',
+      () async {
+        for (final command in [
+          CanonicalEventTypes.listWorkspaces,
+          CanonicalEventTypes.createWorkspace,
+          CanonicalEventTypes.removeWorkspace,
+          CanonicalEventTypes.relocateWorkspace,
+          CanonicalEventTypes.browseWorkspaceTree,
+          CanonicalEventTypes.createFolder,
+          CanonicalEventTypes.renameFolder,
+          CanonicalEventTypes.deleteFolder,
+        ]) {
+          workspaceRuntime.lastManagedRemote = null;
+          await socket.trigger('execute_command', {
+            'command': command,
+            'device_id': 'test-device-id',
+            'payload': {
+              'request_id': 'req-s19-$command',
+              'session_id': 'sess-123',
+              'managed_remote': false,
+              'workspace_id': 'ws-1',
+              'name': 'n',
+              'new_name': 'n2',
+              'path': '/tmp',
+              'parent_path': '/tmp',
+              'new_path': '/tmp',
+            },
+          });
+          if (command == CanonicalEventTypes.listWorkspaces) {
+            expect(workspaceRuntime.calls, contains(command));
+            continue;
+          }
+          expect(workspaceRuntime.lastManagedRemote, isTrue, reason: command);
+        }
         expect(runtimeBridge.registeredSessionCount, 0);
       },
     );

@@ -140,7 +140,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Test Suite Performance and Ownership QA](docs/qa_maintenance/test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
 - [View Image Tool QA](docs/qa_maintenance/view_image_tool_qa.md): Regression matrix for typed results, user attachments, View Image conversation media, local/remote security, recovery, and pruning.
 - [Windows Release Clean-Machine Validation](docs/qa_maintenance/windows_release_clean_machine.md): Windows 11 release-gate evidence and reusable Windows clean-machine procedure for the unsigned Sanad 1.0.0 candidate.
-- [Remote Workspace Folder Management QA](docs/qa_maintenance/workspace_folder_management_qa.md): Regression matrix for managed-remote workspace create/browse and preserved local native picker behavior.
+- [Remote Workspace Folder Management QA](docs/qa_maintenance/workspace_folder_management_qa.md): Regression matrix for the confined remote workspace picker, managed-root confinement, and preserved local native picker behavior.
 - [Workspace Identity and Change Path QA](docs/qa_maintenance/workspace_identity_relocation_qa.md): Regression coverage for UUID migration, missing folders, rename, Change Path, cache reconciliation, and scoped Settings routing.
 - [خارطة المعمارية والرمز التقني](docs/technical/MOC.md): فهرس وخارطة وثائق المعمارية البرمجية، تصميم قواعد البيانات، وواجهات برمجة التطبيقات.
 - [مواصفات قاعدة البيانات المحلية للوكيل](docs/technical/agent_database_schema.md): تصميم جداول قاعدة البيانات المحلية (SQLite - state.db) التابعة للوكيل sanad-agent لحفظ الجلسات وتفاصيل التعليق.

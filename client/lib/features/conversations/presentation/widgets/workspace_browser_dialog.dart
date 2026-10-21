@@ -3,7 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_command_failure.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
+import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 typedef WorkspaceTreeLoader = Future<WorkspaceTreeSnapshot> Function({String? path});
 typedef WorkspaceFolderCreator =
@@ -17,6 +21,51 @@ typedef WorkspaceFolderRenamer =
       String newName,
     );
 typedef WorkspaceFolderDeleter = Future<void> Function(String path);
+
+/// The four folder-browser operations, all bound to one device.
+///
+/// Built with [WorkspaceBrowserCallbacks.forDevice] for the device being set
+/// up, so every browse and folder command targets that device rather than
+/// whichever device owns the active session.
+class WorkspaceBrowserCallbacks {
+  const WorkspaceBrowserCallbacks({
+    required this.loader,
+    this.onCreateFolder,
+    this.onRenameFolder,
+    this.onDeleteFolder,
+  });
+
+  factory WorkspaceBrowserCallbacks.forDevice(
+    ConversationCacheRepository repository,
+    DeviceConfig device,
+  ) {
+    return WorkspaceBrowserCallbacks(
+      loader: ({path}) => repository.browseWorkspaceTree(device, path: path),
+      onCreateFolder: (parentPath, name) => repository.createFolder(
+        device,
+        parentPath: parentPath,
+        name: name,
+      ),
+      onRenameFolder: (path, newName) => repository.renameFolder(
+        device,
+        path: path,
+        newName: newName,
+      ),
+      onDeleteFolder: (path) => repository.deleteFolder(device, path: path),
+    );
+  }
+
+  final WorkspaceTreeLoader loader;
+  final WorkspaceFolderCreator? onCreateFolder;
+  final WorkspaceFolderRenamer? onRenameFolder;
+  final WorkspaceFolderDeleter? onDeleteFolder;
+}
+
+/// The single folder picker for a device reached remotely.
+///
+/// It lists folders only. The Agent confines a remote browse to its Home's
+/// workspaces root and opens there for an empty path; "Use This Folder" is
+/// disabled at that root, which the Agent also refuses to register.
 
 class WorkspaceBrowserDialog extends StatefulWidget {
   final WorkspaceTreeLoader loader;
@@ -39,8 +88,8 @@ class WorkspaceBrowserDialog extends StatefulWidget {
 class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
   WorkspaceTreeSnapshot? _snapshot;
   bool _isLoading = true;
-  String? _loadError;
-  String? _mutationError;
+  Object? _loadError;
+  Object? _mutationError;
 
   @override
   void initState() {
@@ -65,7 +114,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _loadError = error.toString();
+        _loadError = error;
         _isLoading = false;
       });
     }
@@ -77,6 +126,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
     required String actionLabel,
     String initialValue = '',
   }) {
+    final l10n = AppLocalizations.of(context)!;
     var value = initialValue;
     return showDialog<String>(
       context: context,
@@ -97,7 +147,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
+            child: Text(l10n.cancel),
           ),
           FilledButton(
             key: const Key('workspace_folder_dialog_confirm_button'),
@@ -111,19 +161,25 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
 
   bool _isValidFolderName(String value) {
     final name = value.trim();
-    return name.isNotEmpty && name != '.' && name != '..' && !name.contains('/') && !name.contains(r'\');
+    return name.isNotEmpty &&
+        name != '.' &&
+        name != '..' &&
+        !name.contains('/') &&
+        !name.contains(r'\') &&
+        !name.contains('\u0000');
   }
 
   Future<void> _showCreateFolderDialog(String currentPath) async {
+    final l10n = AppLocalizations.of(context)!;
     final name = await _promptForFolderName(
-      title: 'New Folder',
-      label: 'Folder Name',
-      actionLabel: 'Create',
+      title: l10n.workspaceBrowserNewFolder,
+      label: l10n.workspaceBrowserFolderNameLabel,
+      actionLabel: l10n.workspaceBrowserCreate,
     );
     if (!mounted || name == null) return;
     if (!_isValidFolderName(name)) {
       setState(() {
-        _mutationError = 'Folder name must be a single path segment.';
+        _mutationError = const _InvalidFolderName();
       });
       return;
     }
@@ -138,16 +194,17 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
     String folderPath,
     String currentName,
   ) async {
+    final l10n = AppLocalizations.of(context)!;
     final newName = await _promptForFolderName(
-      title: 'Rename Folder',
-      label: 'New Folder Name',
-      actionLabel: 'Rename',
+      title: l10n.workspaceBrowserRenameFolder,
+      label: l10n.workspaceBrowserNewFolderNameLabel,
+      actionLabel: l10n.workspaceBrowserRename,
       initialValue: currentName,
     );
     if (!mounted || newName == null || newName.trim() == currentName) return;
     if (!_isValidFolderName(newName)) {
       setState(() {
-        _mutationError = 'Folder name must be a single path segment.';
+        _mutationError = const _InvalidFolderName();
       });
       return;
     }
@@ -159,17 +216,16 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
   }
 
   Future<void> _showDeleteFolderDialog(String folderPath, String name) async {
+    final l10n = AppLocalizations.of(context)!;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete Folder'),
-        content: Text(
-          'Delete "$name" and all files and folders inside it? This cannot be undone.',
-        ),
+        title: Text(l10n.workspaceBrowserDeleteFolder),
+        content: Text(l10n.workspaceBrowserDeleteConfirmation(name)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
+            child: Text(l10n.cancel),
           ),
           FilledButton(
             key: const Key('workspace_folder_delete_confirm_button'),
@@ -178,7 +234,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
               backgroundColor: Theme.of(context).colorScheme.error,
               foregroundColor: Theme.of(context).colorScheme.onError,
             ),
-            child: const Text('Delete'),
+            child: Text(l10n.delete),
           ),
         ],
       ),
@@ -206,29 +262,67 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _mutationError = error.toString();
+        _mutationError = error;
         _isLoading = false;
       });
     }
   }
 
+  /// A localized explanation. A known rejection code maps to its own
+  /// message; any other failure shows the localized generic line followed by
+  /// the Agent's reason, so an actionable detail is not lost.
+  String _describeError(
+    AppLocalizations l10n,
+    Object error, {
+    required bool load,
+  }) {
+    if (error is _InvalidFolderName) {
+      return l10n.workspaceBrowserInvalidFolderName;
+    }
+    final code = error is WorkspaceCommandFailure ? error.code : null;
+    return switch (code) {
+      WorkspaceCommandFailure.pathNotAllowed =>
+        l10n.workspaceBrowserErrorPathNotAllowed,
+      WorkspaceCommandFailure.workspaceInUse =>
+        l10n.workspaceBrowserErrorWorkspaceInUse,
+      WorkspaceCommandFailure.staleConfirmation =>
+        l10n.workspaceBrowserErrorStaleConfirmation,
+      _ => _withDetail(
+        load ? l10n.workspaceBrowserErrorLoad : l10n.workspaceBrowserErrorGeneric,
+        error,
+      ),
+    };
+  }
+
+  String _withDetail(String generic, Object error) {
+    final detail = error is StateError ? error.message.trim() : '';
+    return detail.isEmpty ? generic : '$generic\n$detail';
+  }
+
+  /// The managed root itself cannot become a workspace.
+  bool _isAtRoot(WorkspaceTreeSnapshot snapshot) =>
+      snapshot.path.isEmpty ||
+      (snapshot.parentPath == null && snapshot.path == snapshot.rootPath);
+
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     final colorScheme = Theme.of(context).colorScheme;
     final snapshot = _snapshot;
     final directories = snapshot?.entries.where((entry) => entry.isDirectory).toList(growable: false) ?? const [];
     final canGoUp = snapshot?.parentPath != null;
     final canMutateCurrentPath = snapshot != null && snapshot.path.isNotEmpty;
+    final atRoot = snapshot == null || _isAtRoot(snapshot);
 
     return AlertDialog(
       title: Row(
         children: [
-          const Expanded(child: Text('Choose Workspace')),
+          Expanded(child: Text(l10n.workspaceBrowserTitle)),
           if (canMutateCurrentPath && widget.onCreateFolder != null)
             IconButton(
               key: const Key('workspace_browser_new_folder_button'),
               icon: const Icon(Icons.create_new_folder_outlined),
-              tooltip: 'New Folder',
+              tooltip: l10n.workspaceBrowserNewFolder,
               onPressed: _isLoading ? null : () => _showCreateFolderDialog(snapshot.path),
             ),
         ],
@@ -242,10 +336,28 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
             if (snapshot != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
+                // Host paths read left to right in every locale.
+                child: Directionality(
+                  textDirection: TextDirection.ltr,
+                  child: Text(
+                    snapshot.path,
+                    key: const Key('workspace_browser_current_path'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.start,
+                    style: GoogleFonts.inter(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+            if (snapshot != null && atRoot && snapshot.path.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  snapshot.path,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                  l10n.workspaceBrowserRootHint,
+                  key: const Key('workspace_browser_root_hint'),
                   style: GoogleFonts.inter(
                     color: colorScheme.onSurfaceVariant,
                     fontSize: 12,
@@ -256,7 +368,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  _mutationError!,
+                  _describeError(l10n, _mutationError!, load: false),
                   key: const ValueKey('workspace-folder-mutation-error'),
                   style: GoogleFonts.inter(
                     color: colorScheme.error,
@@ -272,7 +384,8 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
               Expanded(
                 child: Center(
                   child: Text(
-                    _loadError!,
+                    _describeError(l10n, _loadError!, load: true),
+                    key: const Key('workspace_browser_load_error'),
                     textAlign: TextAlign.center,
                     style: GoogleFonts.inter(
                       color: colorScheme.error,
@@ -287,11 +400,13 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                   children: [
                     if (canGoUp)
                       ListTile(
+                        key: const Key('workspace_browser_parent_row'),
                         dense: true,
                         contentPadding: EdgeInsets.zero,
-                        leading: const Icon(
+                        leading: Icon(
                           Icons.arrow_upward_outlined,
                           size: 18,
+                          semanticLabel: l10n.workspaceBrowserParentFolder,
                         ),
                         title: const Text('..'),
                         onTap: () => _load(path: snapshot!.parentPath),
@@ -300,7 +415,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                       child: directories.isEmpty
                           ? Center(
                               child: Text(
-                                'No folders found here.',
+                                l10n.workspaceBrowserEmpty,
                                 style: GoogleFonts.inter(
                                   color: colorScheme.onSurfaceVariant,
                                   fontSize: 13,
@@ -345,7 +460,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                                                   Icons.edit_outlined,
                                                   size: 16,
                                                 ),
-                                                tooltip: 'Rename Folder',
+                                                tooltip: l10n.workspaceBrowserRenameFolder,
                                                 onPressed: () => _showRenameFolderDialog(
                                                   entry.path,
                                                   entry.name,
@@ -357,7 +472,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                                                   Icons.delete_outline,
                                                   size: 16,
                                                 ),
-                                                tooltip: 'Delete Folder',
+                                                tooltip: l10n.workspaceBrowserDeleteFolder,
                                                 onPressed: () => _showDeleteFolderDialog(
                                                   entry.path,
                                                   entry.name,
@@ -382,7 +497,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          'Showing the first set of entries for this folder.',
+                          l10n.workspaceBrowserTruncated,
                           style: GoogleFonts.inter(
                             color: colorScheme.onSurfaceVariant,
                             fontSize: 11,
@@ -397,14 +512,21 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
       ),
       actions: [
         TextButton(
+          key: const Key('workspace_browser_cancel_button'),
           onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(l10n.cancel),
         ),
         FilledButton(
-          onPressed: _isLoading || snapshot == null ? null : () => Navigator.of(context).pop(snapshot.path),
-          child: const Text('Use This Folder'),
+          key: const Key('workspace_browser_use_folder_button'),
+          onPressed: _isLoading || snapshot == null || atRoot ? null : () => Navigator.of(context).pop(snapshot.path),
+          child: Text(l10n.workspaceBrowserUseFolder),
         ),
       ],
     );
   }
+}
+
+/// A folder name the dialog rejected before calling the device.
+class _InvalidFolderName {
+  const _InvalidFolderName();
 }

@@ -260,10 +260,8 @@ class LocalWorkspaceRuntimeService {
     if (_db.getWorkspaceById(normalizedId) == null) {
       throw StateError('Workspace not found.');
     }
-    final normalizedPath = await _requireAllowedExistingDirectory(
-      newPath,
-      label: 'Workspace directory',
-    );
+    final normalizedPath = await _fsCoordinator
+        .requireManagedWorkspaceDirectory(newPath);
     return WorkspaceMutationPreview(
       operation: CanonicalEventTypes.relocateWorkspace,
       path: normalizedPath,
@@ -669,53 +667,72 @@ class LocalWorkspaceRuntimeService {
   String get _currentWorkspacePath =>
       _normalizePath(_currentWorkingDirectory ?? Directory.current.path);
 
+  /// Managed-remote (cloud) workspace creation, confined to the managed
+  /// workspaces root. Takes exactly one of [name] (create a direct child of
+  /// the root) or [path] (register an existing folder inside the root, as
+  /// returned by a managed `workspace_tree` reply and revalidated here).
   Future<Map<String, dynamic>> _createManagedRemoteWorkspace({
     String? name,
     String? path,
     String? description,
   }) async {
-    if (path != null && path.trim().isNotEmpty) {
+    final hasName = name != null && name.trim().isNotEmpty;
+    final hasPath = path != null && path.trim().isNotEmpty;
+    if (hasName == hasPath) {
       throw const WorkspaceCommandException(
         WorkspaceCommandErrorCodes.invalidRequest,
-        'Remote workspace creation accepts a name, not a host path.',
+        'Remote workspace creation takes exactly one of a name or a folder.',
       );
     }
-    final folderName = _validateFolderName(name ?? '');
-    final managedRoot = _ensureManagedWorkspacesRoot();
-    final targetPath = p.normalize(p.join(managedRoot, folderName));
-    if (!p.isWithin(managedRoot, targetPath)) {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'Workspace name must stay inside the managed workspaces root.',
+    final trimmedDescription = description?.trim() ?? '';
+    return _serialized(() async {
+      if (hasPath) {
+        final folder = await _fsCoordinator.requireManagedWorkspaceDirectory(
+          path,
+        );
+        final stored = await _storeWorkspace(
+          folder,
+          source: 'existing',
+          displayName: trimmedDescription.isNotEmpty
+              ? trimmedDescription
+              : p.basename(folder),
+        );
+        return _workspacePayload(stored);
+      }
+      final folderName = _validateFolderName(name!);
+      final managedRoot = _fsCoordinator.managedRootPath();
+      final targetPath = p.normalize(p.join(managedRoot, folderName));
+      if (!p.isWithin(managedRoot, targetPath)) {
+        throw const WorkspaceCommandException(
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+          'Workspace name must stay inside the managed workspaces root.',
+        );
+      }
+      final type = await FileSystemEntity.type(targetPath, followLinks: false);
+      if (type == FileSystemEntityType.link) {
+        throw const WorkspaceCommandException(
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+          'Symbolic-link folders cannot be used as a workspace.',
+        );
+      }
+      final existed = type != FileSystemEntityType.notFound;
+      if (!existed) {
+        await Directory(targetPath).create();
+      } else if (type != FileSystemEntityType.directory) {
+        throw const WorkspaceCommandException(
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+          'A file with that workspace name already exists.',
+        );
+      }
+      final stored = await _storeWorkspace(
+        targetPath,
+        source: existed ? 'existing' : 'managed_remote',
+        displayName: trimmedDescription.isNotEmpty
+            ? trimmedDescription
+            : folderName,
       );
-    }
-    if (await FileSystemEntity.type(targetPath, followLinks: false) ==
-        FileSystemEntityType.link) {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'Symbolic-link folders cannot be used as a workspace.',
-      );
-    }
-    final directory = Directory(targetPath);
-    final existed = await directory.exists();
-    if (!existed) {
-      await directory.create();
-    } else if (await FileSystemEntity.type(targetPath, followLinks: false) !=
-        FileSystemEntityType.directory) {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'A file with that workspace name already exists.',
-      );
-    }
-    final displayName = description?.trim().isNotEmpty == true
-        ? description!.trim()
-        : folderName;
-    final stored = await _storeWorkspace(
-      targetPath,
-      source: existed ? 'existing' : 'managed_remote',
-      displayName: displayName,
-    );
-    return _workspacePayload(stored);
+      return _workspacePayload(stored);
+    });
   }
 
   Future<Map<String, dynamic>> _relocateWorkspaceUnchecked({
@@ -728,10 +745,7 @@ class LocalWorkspaceRuntimeService {
       throw StateError('Workspace not found.');
     }
     final normalizedPath = managedRemote
-        ? await _requireAllowedExistingDirectory(
-            newPath,
-            label: 'Workspace directory',
-          )
+        ? await _fsCoordinator.requireManagedWorkspaceDirectory(newPath)
         : _normalizeExistingDirectory(newPath, label: 'Workspace directory');
     final owner = _db.getWorkspaceByPath(normalizedPath);
     if (owner != null && owner['id'] != normalizedId) {
@@ -744,17 +758,8 @@ class LocalWorkspaceRuntimeService {
     return _workspacePayload(workspace);
   }
 
-  String _ensureManagedWorkspacesRoot() =>
-      _fsCoordinator.ensureManagedWorkspacesRoot();
-
   Future<T> _serialized<T>(Future<T> Function() operation) =>
       _fsCoordinator.serialized(operation);
-
-  Future<String> _requireAllowedExistingDirectory(
-    String value, {
-    required String label,
-  }) =>
-      _fsCoordinator.requireAllowedExistingDirectory(value, label: label);
 
   String _fingerprint({
     required String operation,

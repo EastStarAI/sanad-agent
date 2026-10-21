@@ -35,8 +35,10 @@ rejects a non-empty envelope `device_id` that does not match its registered id.
 | `device.runtime.restart` | `device.runtime.restart.accepted` | Safe restart by default. An explicit boolean `force=true` permits supervised restart after a blocked checkpoint. Timeout must be positive when present. |
 
 Workspace and MCP command names stay canonical. Cloud workspace commands are
-admitted as managed-remote (name-based create, constrained browse, preview
-tokens for delete/relocate). Cloud MCP commands dispatch without session
+admitted as managed-remote and confined to the Home workspaces root
+(create by name or by a picked nested folder, root-scoped browse, preview
+tokens for delete/relocate); see
+[Remote Workspace Folder Mutation Protocol](workspace_folder_mutation_protocol.md). Cloud MCP commands dispatch without session
 registration except `replace_mcp_config`, which stays rejected. Save, delete,
 Advanced save, STDIO inspect, and OAuth complete require a revision fingerprint
 and one-time confirmation ticket. Snapshots and logs never include secret
@@ -78,8 +80,9 @@ Every rejection is an `error` event that repeats `request_id` and `device_id`.
 | `duplicate_request` | Same `request_id` already admitted |
 | `stale_confirmation` | Missing, expired, consumed, wrong-device, wrong-operation, or wrong-fingerprint ticket |
 | `confirmation_required` | Apply without a ticket, or a cloud MCP mutation without a confirmation ticket |
-| `path_not_allowed` | Managed-remote path outside allowed roots, symlink, or protected root |
-| `invalid_request` | Missing `request_id`, non-boolean `force`, unbounded timeout, or a remote create that sent a host path |
+| `path_not_allowed` | Managed-remote path outside the Home workspaces root, relative, NUL, raw `..`, a symbolic link at any component, not a folder, or the root itself where a folder inside it is required |
+| `workspace_in_use` | Rename or delete of a folder that is, or contains, a registered workspace |
+| `invalid_request` | Missing `request_id`, non-boolean `force`, unbounded timeout, or a remote create that sent both or neither of `name` and `path` |
 | `device_offline` | Client-side: target socket is not connected |
 | `service_unavailable` | Restart/apply rejected because the Agent is not supervised |
 

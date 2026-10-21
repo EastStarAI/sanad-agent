@@ -9,10 +9,9 @@ This contract applies to `client/lib/features/settings/`.
 - Workspace Settings owns display-name rename and Change Path; sidebar workspace
   rows only navigate to this destination. Change Path uses the shared picker
   boundary and is available only for a confirmed same-desktop local device.
-  Remote devices create workspaces by name and do not open a native
-  host-directory picker. Workspace Overview does not expose the retained
-  remote folder browser; that daemon-backed surface is reserved for a future
-  file-tree experience.
+  Remote devices add workspaces through the confined in-app folder browser
+  owned by the conversations presentation and never open a native
+  host-directory picker. Remote Change Path is not offered here.
 - Remove Workspace deletes only the daemon-owned workspace record after an
   explicit confirmation. It must not delete the host folder, its files, or
   conversation rows.

@@ -10,6 +10,9 @@ class WorkspaceCommandErrorCodes {
       DeviceControlErrorCodes.confirmationRequired;
   static const invalidRequest = DeviceControlErrorCodes.invalidRequest;
   static const pathNotAllowed = 'path_not_allowed';
+
+  /// A rename or delete target is, or contains, a registered workspace.
+  static const workspaceInUse = 'workspace_in_use';
 }
 
 class WorkspaceCommandException implements Exception {

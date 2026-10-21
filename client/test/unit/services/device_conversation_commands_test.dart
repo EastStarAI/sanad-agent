@@ -12,6 +12,7 @@ import 'package:sanad_client/features/conversations/domain/models/turn_replay_re
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_command_failure.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -442,6 +443,83 @@ void main() {
     final workspace = await future;
     expect(workspace.id, 'workspace-2');
     expect(workspace.name, 'remote-notes');
+  });
+
+  test('createWorkspace sends only the picked path for a remote browser pick', () async {
+    final future = commands.createWorkspace(
+      path: '/home/sanad/workspaces/acc-123/parent/picked',
+    );
+
+    expect(socket.capturedCommands.single['command'], 'create_workspace');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(payload['path'], '/home/sanad/workspaces/acc-123/parent/picked');
+    expect(payload.containsKey('name'), isFalse);
+    expect(payload.containsKey('description'), isFalse);
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'workspace_created',
+      'payload': {
+        'request_id': payload['request_id'],
+        'workspace': {
+          'id': 'workspace-3',
+          'name': 'picked',
+          'path': '/home/sanad/workspaces/acc-123/parent/picked',
+        },
+      },
+    });
+
+    final workspace = await future;
+    expect(workspace.name, 'picked');
+  });
+
+  test('browseWorkspaceTree surfaces a coded daemon rejection', () async {
+    final future = commands.browseWorkspaceTree(path: '/etc');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'error',
+      'payload': {
+        'request_id': payload['request_id'],
+        'code': 'path_not_allowed',
+        'message': 'Failed to browse workspace: outside the root.',
+      },
+    });
+
+    await expectLater(
+      future,
+      throwsA(
+        isA<WorkspaceCommandFailure>().having(
+          (error) => error.code,
+          'code',
+          WorkspaceCommandFailure.pathNotAllowed,
+        ),
+      ),
+    );
+  });
+
+  test('folder rename surfaces workspace_in_use as a coded failure', () async {
+    final future = commands.renameFolder(path: '/root/parent', newName: 'moved');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'error',
+      'payload': {
+        'request_id': payload['request_id'],
+        'code': 'workspace_in_use',
+        'message': 'Failed to rename folder: in use.',
+      },
+    });
+
+    await expectLater(
+      future,
+      throwsA(
+        isA<WorkspaceCommandFailure>().having(
+          (error) => error.code,
+          'code',
+          WorkspaceCommandFailure.workspaceInUse,
+        ),
+      ),
+    );
   });
 
   test('createWorkspace sends path and returns the created workspace', () async {

@@ -8,7 +8,9 @@ description: "Living inventory of remaining hard-coded English UI literals in Cl
 Scan of string literals inside `presentation/` and `screens/` files only.
 Bloc/data/daemon/auth-infrastructure literals are protocol, logging, or debug text and are excluded deliberately.
 
-Total affected UI files: 81
+Total affected UI files: 80
+
+Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker) and removed its entry.
 
 ## Files
 
@@ -341,23 +343,6 @@ Total affected UI files: 81
   - `Stop voice session`
   - `Stopping response`
   - `Waiting for message acceptance`
-
-- `lib/features/conversations/presentation/widgets/workspace_browser_dialog.dart` (15 strings)
-  - `Cancel`
-  - `Choose Workspace`
-  - `Create`
-  - `Delete`
-  - `Delete "$name" and all files and folders inside it? This cannot be undone.`
-  - `Delete Folder`
-  - `Folder Name`
-  - `Folder name must be a single path segment.`
-  - `New Folder`
-  - `New Folder Name`
-  - `No folders found here.`
-  - `Rename`
-  - `Rename Folder`
-  - `Showing the first set of entries for this folder.`
-  - `Use This Folder`
 
 - `lib/features/home/presentation/widgets/status_bar.dart` (14 strings)
   - `Add device`
