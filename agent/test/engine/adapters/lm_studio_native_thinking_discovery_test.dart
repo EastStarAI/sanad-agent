@@ -38,7 +38,6 @@ import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
-import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
@@ -47,6 +46,8 @@ import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
+
+import '../../support/thinking_matchers.dart';
 
 const _modelId = 'qwen/qwen3-4b-thinking-2507';
 const _reasoningEvidenceKey = 'lm_studio_reasoning';
@@ -489,13 +490,7 @@ void main() {
             modelId: _modelId,
             selectionId: 'medium',
           ),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
+          sendsNoThinkingField,
         );
         expect(h.chatBodies, isEmpty, reason: 'no lossy dispatch of a level');
       },

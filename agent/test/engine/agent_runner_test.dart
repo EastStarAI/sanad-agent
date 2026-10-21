@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:test/test.dart';
+import 'package:logging/logging.dart';
 import 'package:get_it/get_it.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
@@ -553,6 +554,7 @@ class _AutoFailoverAdapter implements LLMAdapter {
 
 class _RateLimitOnceAdapter implements LLMAdapter {
   int callCount = 0;
+  final List<LLMRequestOptions> capturedOptions = [];
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async => 4096;
@@ -568,6 +570,7 @@ class _RateLimitOnceAdapter implements LLMAdapter {
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
     callCount += 1;
+    capturedOptions.add(options);
     if (callCount == 1) {
       throw const LlmHttpException(
         statusCode: 429,
@@ -698,6 +701,41 @@ class _AlwaysFailingAdapter implements LLMAdapter {
       tools: tools,
       modelOverride: modelOverride,
     );
+  }
+}
+
+class _GatedFailingStreamAdapter implements LLMAdapter {
+  final Completer<void> started = Completer<void>();
+  final Completer<void> release = Completer<void>();
+  int callCount = 0;
+
+  @override
+  Future<int> getContextLimit([String? modelOverride]) async => 4096;
+
+  @override
+  Future<List<ModelOption>> getAvailableModels() async => const [];
+
+  @override
+  Future<AgentResponse> generateResponse(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Stream<AgentResponse> generateStream(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async* {
+    callCount += 1;
+    if (!started.isCompleted) started.complete();
+    await release.future;
+    throw StateError('detached unwind failure');
   }
 }
 
@@ -2272,12 +2310,111 @@ void main() {
           expect(adapter.callCount, 1);
         }
         expect(resetProvider.callCount, 2);
+        expect(resetProvider.capturedOptions, hasLength(2));
+        expect(resetProvider.capturedOptions[0].requestId, isNot(contains(':retry_')));
+        expect(resetProvider.capturedOptions[1].requestId, contains(':retry_1'));
         expect(
           sessionManager.getSession(session.sessionId)?.providerId,
           'provider-e',
         );
       },
     );
+
+    test(
+      'L1: a non-cancellation failure during detached stream unwind is '
+      'surfaced as a severe log, not an uncaught zone error',
+      () async {
+        final adapter = _GatedFailingStreamAdapter();
+        GetIt.I.registerSingleton<AgentRuntimeService>(
+          _GenericRuntimeService(adapter),
+        );
+        final session = sessionManager.createSession('gpt-4o');
+        final runner = AgentRunner(
+          MockAdapter(const []),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+        final records = <LogRecord>[];
+        final previousLevel = Logger.root.level;
+        Logger.root.level = Level.ALL;
+        final logSub = Logger.root.onRecord.listen(records.add);
+        addTearDown(() async {
+          await logSub.cancel();
+          Logger.root.level = previousLevel;
+        });
+
+        final uncaught = <Object>[];
+        final done = Completer<void>();
+        runZonedGuarded(() async {
+          final sub = runner.streamMessage('hi').listen((_) {});
+          await adapter.started.future;
+          await sub.cancel();
+          adapter.release.complete();
+          await runner.debugDetachedTurnStreamUnwind;
+          for (var i = 0; i < 20; i++) {
+            await Future<void>.delayed(Duration.zero);
+          }
+          done.complete();
+        }, (error, stack) {
+          uncaught.add(error);
+          if (!done.isCompleted) done.complete();
+        });
+        await done.future;
+
+        expect(uncaught, isEmpty);
+        expect(
+          records.where(
+            (r) =>
+                r.loggerName == 'AgentRunner' &&
+                r.level >= Level.SEVERE &&
+                r.message.contains('StateError'),
+          ),
+          hasLength(1),
+        );
+        expect(
+          records.any((r) => r.message.contains('detached unwind failure')),
+          isFalse,
+          reason: 'error payloads must not enter logs',
+        );
+      },
+    );
+
+    test('AgentRunner passes attempt-isolated retry request IDs during 429 retry', () async {
+      final state = AgentStateDatabase.inMemory();
+      addTearDown(state.dispose);
+      final repo = ProviderInstanceRepository.fromDatabase(state.db);
+      final resetProvider = _RateLimitOnceAdapter();
+      final runtime = _GenericRuntimeService(resetProvider);
+      GetIt.I.registerSingleton<AgentRuntimeService>(runtime);
+      GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+      GetIt.I.registerSingleton<RuntimeRecoveryService>(
+        RuntimeRecoveryService(
+          repo,
+          ProviderRateLimiter(),
+          autoFailoverEnabled: true,
+          random: Random(1),
+        ),
+      );
+
+      final session = sessionManager.createSession('model-a');
+      sessionManager.updateSessionProviderId(session.sessionId, 'provider-a');
+      final runner = AgentRunner(
+        MockAdapter(const []),
+        registry,
+        sessionManager,
+        existingSessionId: session.sessionId,
+      );
+      runner.setTurnRequestId('test-turn-retry-123');
+
+      final response = await runner.sendMessage('Try this');
+
+      expect(response.content, 'Recovered after the reset window');
+      expect(resetProvider.callCount, 2);
+      expect(resetProvider.capturedOptions, hasLength(2));
+      expect(resetProvider.capturedOptions[0].requestId, 'test-turn-retry-123');
+      expect(resetProvider.capturedOptions[1].requestId, 'test-turn-retry-123:retry_1');
+    });
 
     test('should handle tool call loop', () async {
       final adapter = MockAdapter([
@@ -3491,6 +3628,73 @@ void main() {
           recovery.abort(session.sessionId);
           recovery.clear(session.sessionId, reasonOverride: 'stopped');
           await expectLater(future, throwsA(isA<RuntimeRecoveryCancelled>()));
+        },
+      );
+
+      test(
+        'L1: stopping a stream waiting after 429 never escapes '
+        'RuntimeRecoveryCancelled as an uncaught zone error',
+        () async {
+          final adapter = _AlwaysFailingAdapter(
+            statusCode: 429,
+            body: 'Too Many Requests',
+          );
+          final runtime = _GenericRuntimeService(adapter);
+          GetIt.I.registerSingleton<AgentRuntimeService>(runtime);
+          final session = sessionManager.createSession('gpt-4o');
+          sessionManager.updateSessionProviderId(session.sessionId, 'prov-1');
+          final runner = AgentRunner(
+            MockAdapter(const []),
+            registry,
+            sessionManager,
+            existingSessionId: session.sessionId,
+          );
+          runner.beginAuthoritativeRun('run-stop');
+
+          final uncaught = <Object>[];
+          final forwardedErrors = <Object>[];
+          final done = Completer<void>();
+          runZonedGuarded(() async {
+            final sub = runner.streamMessage('hi').listen(
+              (_) {},
+              onError: forwardedErrors.add,
+            );
+            for (var i = 0; i < 200; i++) {
+              if (recovery.activeNotice(session.sessionId)?.status ==
+                  RuntimeNoticeStatus.waiting) {
+                break;
+              }
+              await Future<void>.delayed(Duration.zero);
+            }
+            expect(
+              recovery.activeNotice(session.sessionId)?.status,
+              RuntimeNoticeStatus.waiting,
+            );
+            // Mirrors SessionTurnExecutor stop: invalidate, cancel the
+            // subscription (stop ack does not await unwind), then release
+            // the recovery wait as `stopped`.
+            runner.requestStop();
+            await sub.cancel();
+            recovery.abort(session.sessionId, runId: 'run-stop');
+            recovery.clear(
+              session.sessionId,
+              runId: 'run-stop',
+              reasonOverride: 'stopped',
+            );
+            await runner.debugDetachedTurnStreamUnwind;
+            for (var i = 0; i < 20; i++) {
+              await Future<void>.delayed(Duration.zero);
+            }
+            done.complete();
+          }, (error, stack) {
+            uncaught.add(error);
+            if (!done.isCompleted) done.complete();
+          });
+          await done.future;
+
+          expect(uncaught, isEmpty);
+          expect(forwardedErrors, isEmpty);
+          expect(adapter.callCount, 1);
         },
       );
     });
@@ -5544,6 +5748,48 @@ model_capabilities:
           expect(
             adapter.lastOptions?.routeCapabilityProfile?.imageSupport,
             RouteImageSupport.supported,
+          );
+        },
+      );
+    });
+
+    group('F1: context usage snapshot provider instance provenance', () {
+      test(
+        'preserves genuine provider instance ID in context usage snapshot when adapter response returns template name',
+        () async {
+          const instanceUuid = '96ce96b5-9d30-4c53-b6be-0e306c346881';
+          const templateName = 'opencode-go';
+
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'Response content',
+              ),
+              provider: templateName, // Adapter reports template name
+              usage: {
+                'input_tokens': 1234,
+                'output_tokens': 56,
+                'total_tokens': 1290,
+              },
+            ),
+          ]);
+
+          final runner = AgentRunner(adapter, registry, sessionManager);
+
+          await runner.sendMessage(
+            'Test message',
+            providerId: instanceUuid,
+            model: 'deepseek-v4.1-flash',
+          );
+
+          final snapshot = await runner.getContextUsageSnapshot();
+          expect(snapshot, isNotNull);
+          expect(
+            snapshot!['provider_instance_id'],
+            equals(instanceUuid),
+            reason:
+                'getContextUsageSnapshot must preserve genuine provider instance ID rather than collapsing to adapter template name',
           );
         },
       );

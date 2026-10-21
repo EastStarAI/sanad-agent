@@ -5,6 +5,8 @@ import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_thinking/session_route_thinking_control.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/models/session_query.dart';
@@ -55,6 +57,7 @@ class SessionQueryHandler {
   final SessionRouteTransitionRepository? _routeTransitions;
   final ThinkingSelectionResolver? _thinkingSelectionResolver;
   final ThinkingRoutePreferenceStore? _thinkingPreferenceStore;
+  final ThinkingRouteSessionSync? _thinkingRouteSessionSync;
   final CompactionBoundaryRepository? _compactionBoundaries;
 
   SessionQueryHandler({
@@ -67,6 +70,7 @@ class SessionQueryHandler {
     SessionRouteTransitionRepository? routeTransitions,
     ThinkingSelectionResolver? thinkingSelectionResolver,
     ThinkingRoutePreferenceStore? thinkingPreferenceStore,
+    ThinkingRouteSessionSync? thinkingRouteSessionSync,
     CompactionBoundaryRepository? compactionBoundaries,
   }) : _sessionManager = sessionManager,
        _bridge = bridge,
@@ -77,6 +81,7 @@ class SessionQueryHandler {
        _routeTransitions = routeTransitions,
        _thinkingSelectionResolver = thinkingSelectionResolver,
        _thinkingPreferenceStore = thinkingPreferenceStore,
+       _thinkingRouteSessionSync = thinkingRouteSessionSync,
        _compactionBoundaries = compactionBoundaries;
 
   Map<String, dynamic> _sessionPayloadFor({
@@ -1017,6 +1022,25 @@ class SessionQueryHandler {
     );
   }
 
+  bool _routeOffersThinkingSelection({
+    required String providerInstanceId,
+    required String modelId,
+    required String selectionId,
+  }) {
+    final resolver = _thinkingSelectionResolver;
+    if (resolver == null) return false;
+    try {
+      resolver.resolve(
+        providerInstanceId: providerInstanceId,
+        modelId: modelId,
+        selectionId: selectionId,
+      );
+      return true;
+    } on ThinkingSelectionException {
+      return false;
+    }
+  }
+
   Map<String, dynamic>? buildSessionPreferencesEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId;
     final model = event.payload['model'] as String?;
@@ -1045,11 +1069,43 @@ class SessionQueryHandler {
       final clearThinking =
           normalizedThinking == null || normalizedThinking.isEmpty;
       effectiveThinkingMode = clearThinking ? null : normalizedThinking;
-      _sessionManager.updateSessionModeling(
-        sessionId,
-        thinkingMode: effectiveThinkingMode,
-        clearThinkingMode: clearThinking,
-      );
+      // The choice applies to the route this request leaves the session on.
+      final routeProvider = (requestedProvider ?? session.providerId)?.trim();
+      final routeModel = (model ?? session.model).trim();
+      final sync = _thinkingRouteSessionSync;
+      final hasRoute =
+          routeProvider != null &&
+          routeProvider.isNotEmpty &&
+          routeModel.isNotEmpty;
+      if (sync != null &&
+          hasRoute &&
+          (clearThinking ||
+              _routeOffersThinkingSelection(
+                providerInstanceId: routeProvider,
+                modelId: routeModel,
+                selectionId: effectiveThinkingMode!,
+              ))) {
+        // Explicit client sets and clears are route-scoped: record them in the
+        // route preference store so neither the next turn nor a later route
+        // round trip restores an older stored choice for this route.
+        effectiveThinkingMode = sync
+            .revalidateAndApplySession(
+              sessionId: sessionId,
+              providerInstanceId: routeProvider,
+              modelId: routeModel,
+              selectionId: effectiveThinkingMode,
+              restorePreserved: false,
+            )
+            .selectionId;
+      } else {
+        // No route-scoped sync, or an option the route does not offer: keep the
+        // row-only write so turn admission validates and corrects it as before.
+        _sessionManager.updateSessionModeling(
+          sessionId,
+          thinkingMode: effectiveThinkingMode,
+          clearThinkingMode: clearThinking,
+        );
+      }
     }
 
     final coordinator = _routeCoordinator;

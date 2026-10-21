@@ -13,6 +13,7 @@ Load only the detailed procedure needed for the current task:
 
 - Read [Public Multi-Runtime Development](references/public-multi-runtime-development.md) before running multiple Agents, Homes, Clients, devices, worktrees, or workspaces concurrently.
 - Read [Local macOS Authentication](references/local-macos-auth-login.md) before automating a fresh macOS Client sign-in through `sanad-dev ui` and `agent-browser`.
+- Read [Daemon CLI Live Acceptance](references/daemon-cli-live-acceptance.md) before executing live agent acceptance tests, multi-phase session turns, or provider/compaction verifications against a background daemon via the CLI.
 
 ## 1. Choose the Development Mode
 

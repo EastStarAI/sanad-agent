@@ -840,14 +840,15 @@ void main() {
       await tester.pumpAndSettle();
 
       // The real narrow composer embeds the resolved control without overflow,
-      // and the declared native default reaches the composer selection path.
+      // and the declared native default is admitted for the open conversation
+      // without writing its preference (G2).
       expect(tester.takeException(), isNull);
       expect(
         find.byKey(const Key('route_thinking_mode_selector_button')),
         findsOneWidget,
       );
-      expect(inputCubit.selectCount, 1);
-      expect(inputCubit.selectedThinkingMode, 'medium');
+      expect(inputCubit.admittedThinkingMode, 'medium');
+      expect(inputCubit.selectCount, 0);
     },
   );
 }
@@ -874,6 +875,13 @@ class _StubSessionCubit extends Cubit<SessionState> implements SessionCubit {
 }
 
 class _StubConversationInputCubit extends Cubit<ConversationInputState> implements ConversationInputCubit {
+  @override
+  void reportRouteThinkingAdmission({
+    required String? providerId,
+    required String? modelId,
+    required bool admitsSelection,
+  }) {}
+
   _StubConversationInputCubit() : super(const ConversationInputState());
 
   CapabilityValueScope? selectedScope;
@@ -896,6 +904,13 @@ class _StubConversationInputCubit extends Cubit<ConversationInputState> implemen
     selectedScope = scope;
     selectedThinkingMode = thinkingMode;
     selectCount++;
+  }
+
+  String? admittedThinkingMode;
+
+  @override
+  void admitRouteThinkingMode(String? thinkingMode) {
+    admittedThinkingMode = thinkingMode;
   }
 
   @override

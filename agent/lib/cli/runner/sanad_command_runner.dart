@@ -101,7 +101,7 @@ class SanadCommandRunner extends CommandRunner<int> {
       )
       ..addOption(
         'thinking-mode',
-        help: 'Explicit reasoning effort (for example: medium)',
+        help: 'Explicit thinking option id for the route (for example: high, off)',
         allowed: cliThinkingModes,
       )
       ..addFlag(

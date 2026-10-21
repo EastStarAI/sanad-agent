@@ -308,6 +308,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
       return;
     }
     final descriptor = _descriptorForSession(session, snapshot);
+    _publishRouteAdmission(cubit, session: session, descriptor: descriptor);
     if (descriptor != null && descriptor.status == ThinkingCapabilityStatus.unknown) {
       // Unknown evidence is not capability proof: keep the user's explicit
       // choice instead of rewriting it on a guess.
@@ -323,11 +324,40 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
       // never loop through the composer state.
       return;
     }
-    // The write is routed through the composer's own selection path, so the
-    // admitted value the next send carries is the same one this control shows.
+    if (sessionId != null && sessionId.isNotEmpty) {
+      // Opening or hydrating an existing conversation is not a user choice:
+      // show the effective value and carry it on the next send, but never
+      // write it to the session or the device (live acceptance 106b r2 G2).
+      cubit.admitRouteThinkingMode(targetSelectionId);
+      return;
+    }
+    // A new-conversation draft has no session to write: the composer's own
+    // selection path keeps the admitted value and the next send in step.
     await cubit.selectThinkingMode(
       scope: widget.capabilities.thinkingModeScope,
       thinkingMode: targetSelectionId,
+    );
+  }
+
+  /// Tells the composer whether this route's resolved control can carry a
+  /// selection. Only an authoritative resolution is published, and only from
+  /// resolution (never from `build`), so rendering stays side-effect-free.
+  void _publishRouteAdmission(
+    ConversationInputCubit cubit, {
+    required Session? session,
+    required ThinkingControlDescriptorDto? descriptor,
+  }) {
+    if (!widget.capabilities.usesModelThinkingControls || !_isAuthoritativeSnapshot) {
+      return;
+    }
+    final state = RouteThinkingControl.selectorState(
+      capabilities: widget.capabilities,
+      descriptor: descriptor,
+    );
+    cubit.reportRouteThinkingAdmission(
+      providerId: RouteThinkingControl.activeProviderId(session: session, inputSlice: widget.inputSlice),
+      modelId: RouteThinkingControl.activeModelId(session: session, inputSlice: widget.inputSlice),
+      admitsSelection: state != RouteThinkingSelectorState.noControl && state != RouteThinkingSelectorState.unknown,
     );
   }
 
@@ -531,8 +561,15 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
         ),
       );
     } else {
-      final currentSelection = _currentSelectionId(session)?.trim();
+      final storedSelection = _currentSelectionId(session)?.trim();
       final isLegacy = selectorState == RouteThinkingSelectorState.legacy;
+      // The control shows the conversation's stored selection, or the route's
+      // own effective selection (its known native default) when nothing valid
+      // is stored. That is exactly what the next send carries, and showing it
+      // never writes it (live acceptance 106b r2 G2).
+      final currentSelection = isLegacy || descriptor == null
+          ? storedSelection
+          : RouteThinkingControl.resolveSelectionId(descriptor: descriptor, selectionId: storedSelection);
       final legacyCheckedId = isLegacy
           ? RouteThinkingControl.checkedMenuEntryId(
               selectionId: currentSelection,
@@ -545,16 +582,19 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
               selectionId: currentSelection,
               legacyModes: const [],
             );
-      // Legacy device lists keep their existing fallback; a model-scoped route
-      // shows its exact admitted option and otherwise an honest "no selection"
-      // prompt, never a synthetic Default chip.
+      // The control always shows a selected value (user rule 2026-10-21): the
+      // exact admitted option, a legacy device-list match, or — when nothing
+      // valid is stored and no layer declares a valid default — the selected
+      // "Provider default" state, which sends no thinking field. There is no
+      // empty or "not selected" state, and the menu still lists only the
+      // declared native options.
       final label =
           RouteThinkingControl.labelForSelection(
             descriptor: descriptor,
             selectionId: currentSelection,
           ) ??
           legacyCheckedId ??
-          l10n.thinkingModeNotSelectedLabel;
+          l10n.thinkingModeProviderDefaultSelectedLabel;
 
       final selectedOption = descriptor?.options.where((option) => option.id == currentSelection).firstOrNull;
       final selectedBudgetAnnotation = selectedOption == null

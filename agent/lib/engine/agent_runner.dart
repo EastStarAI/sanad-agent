@@ -54,6 +54,8 @@ import 'runtime/response_continuation_coordinator.dart';
 import 'runtime/steer_coordinator.dart' as steer_lib;
 import 'runtime/tool_execution_coordinator.dart';
 import 'runtime/run_cancellation_scope.dart';
+import 'runtime/thinking_field_rejection.dart';
+import '../core/provider_thinking/native_thinking_directive.dart';
 import '../evolution/compaction/model_projection_builder.dart';
 import '../evolution/models/compaction_operation_record.dart';
 import '../core/agent_runtime_service.dart';
@@ -248,6 +250,27 @@ class AgentRunner {
 
   RouteCapabilityProfile? _turnCapabilityProfile;
 
+  /// True between turn admission and the end of that turn's entry point.
+  /// Only an admitted turn may move [_turnCapabilityProfile] to a new route.
+  bool _turnCapabilityProfileAdmitted = false;
+
+  static bool _profileMatchesRoute(
+    RouteCapabilityProfile? profile,
+    String? providerInstanceId,
+    String? modelId,
+  ) =>
+      profile != null &&
+      providerInstanceId != null &&
+      modelId != null &&
+      profile.providerInstanceId.trim() == providerInstanceId.trim() &&
+      profile.modelId.trim() == modelId.trim();
+
+  Future<void> _detachedTurnStreamUnwind = Future<void>.value();
+
+  /// Completes once the most recently cancelled turn stream has unwound.
+  @visibleForTesting
+  Future<void> get debugDetachedTurnStreamUnwind => _detachedTurnStreamUnwind;
+
   @visibleForTesting
   RouteCapabilityProfile? get debugTurnCapabilityProfile =>
       _turnCapabilityProfile;
@@ -269,6 +292,7 @@ class AgentRunner {
         );
 
   Future<void> _admitTurnCapabilityProfile() async {
+    _turnCapabilityProfileAdmitted = true;
     final routing = _turnRoute.resolveTurnRouting();
     final pId = routing.providerId;
     final mId = routing.model ?? _turnRoute.effectiveModel;
@@ -360,7 +384,20 @@ class AgentRunner {
     _onPendingSteerChanged = null;
     _onCommitPendingSteerDelivery = null;
     _onRootMessageCommitted = null;
+    _activeProviderInstanceId = null;
     _turnRoute.setTurnRunId(null);
+  }
+
+  String? _activeProviderInstanceId;
+
+  String? get activeProviderInstanceId =>
+      _confirmedInputUsageBaseline?.routeSignature.providerInstanceId ??
+      _pendingInputUsageBaseline?.routeSignature.providerInstanceId ??
+      _activeProviderInstanceId ??
+      _turnRoute.activeProviderInstanceId;
+
+  set activeProviderInstanceId(String? value) {
+    _activeProviderInstanceId = value;
   }
 
   String? get activeModel => _metricsTracker?.activeModel;
@@ -427,7 +464,8 @@ class AgentRunner {
         'reasoning_tokens': usage['reasoning_tokens'],
       'context_window_tokens': ?contextWindowTokens,
       if (activeModel != null) 'model_id': activeModel,
-      if (activeProvider != null) 'provider_instance_id': activeProvider,
+      if (activeProviderInstanceId != null || activeProvider != null)
+        'provider_instance_id': activeProviderInstanceId ?? activeProvider,
       if (_authoritativeRunId != null) 'run_id': _authoritativeRunId,
       if (currentModelStepId != null) 'model_step_id': currentModelStepId,
       // Binds this confirmed usage to the complete ordered wire material and
@@ -484,6 +522,41 @@ class AgentRunner {
         inputTokens: inputTokens,
         cachedTokens: snapshot.cachedTokens,
         routeSignature: pending!.routeSignature,
+      );
+    }
+  }
+
+  void _finalizeCapturedPostBoundaryMissingUsage({
+    required String compactionId,
+    required String requestId,
+    required RouteSignature routeSignature,
+    required String missingReason,
+  }) {
+    if (getIt.isRegistered<CompactionCoordinator>()) {
+      getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
+        compactionId: compactionId,
+        requestId: requestId,
+        observedAt: DateTime.now().toUtc(),
+        missingReason: missingReason,
+        routeSignature: routeSignature,
+      );
+    }
+  }
+
+  void _finalizePostBoundaryMissingUsage({
+    required CompactionOperationRecord? activeBoundary,
+    required String stepRequestId,
+    required String missingReason,
+    RouteSignature? routeSignature,
+  }) {
+    final signature =
+        routeSignature ?? _pendingInputUsageBaseline?.routeSignature;
+    if (activeBoundary != null && signature != null) {
+      _finalizeCapturedPostBoundaryMissingUsage(
+        compactionId: activeBoundary.compactionId,
+        requestId: stepRequestId,
+        routeSignature: signature,
+        missingReason: missingReason,
       );
     }
   }
@@ -994,6 +1067,7 @@ class AgentRunner {
       return response;
     } finally {
       _turnRoute.setTurnRequestId(null);
+      _turnCapabilityProfileAdmitted = false;
     }
   }
 
@@ -1026,31 +1100,91 @@ class AgentRunner {
     }
   }
 
-  LLMRequestOptions _requestOptionsForTurn(String? providerInstanceId) {
+  final SessionThinkingFieldSuppression _localThinkingSuppression =
+      SessionThinkingFieldSuppression();
+
+  SessionThinkingFieldSuppression get _thinkingSuppression =>
+      getIt.isRegistered<SessionThinkingFieldSuppression>()
+      ? getIt<SessionThinkingFieldSuppression>()
+      : _localThinkingSuppression;
+
+  /// When [error] is a 400 that clearly rejects the thinking field the request
+  /// actually carried, records that exact selection value on this route+model
+  /// as rejected for the rest of this session and reports that the same
+  /// request may be retried once without the field. Other selection values on
+  /// the same route stay unaffected.
+  bool _retryWithoutRejectedThinkingField(Object error, String? provider) {
+    if (!ThinkingFieldRejection.matches(error)) return false;
+    final options = _requestOptionsForTurn(provider);
+    final sent = options.thinkingDirective;
+    if (sent == null || sent is UseProviderDefault) return false;
+    final routing = _turnRoute.resolveTurnRouting();
+    final selection = options.thinkingMode;
+    _thinkingSuppression.suppress(
+      sessionId,
+      provider ?? routing.providerId,
+      routing.model ?? _turnRoute.effectiveModel,
+      selection,
+    );
+    // The retry must not pass as the user's choice: record that the requested
+    // level was not applied and the provider default answered instead.
+    _logger.warning(
+      'Provider rejected thinking selection "${selection ?? '?'}" for session '
+      '$sessionId; it was not applied. Retrying once with the provider '
+      'default (no thinking field).',
+    );
+    return true;
+  }
+
+  LLMRequestOptions _requestOptionsForTurn(
+    String? providerInstanceId, {
+    String? requestId,
+  }) {
     final routing = _turnRoute.resolveTurnRouting();
     final pId = providerInstanceId ?? routing.providerId;
     final mId = routing.model ?? _turnRoute.effectiveModel;
 
-    final profile =
-        _turnCapabilityProfile ??
-        (pId != null && mId != null
+    final existingProfile = _turnCapabilityProfile;
+    final matchesRoute = _profileMatchesRoute(existingProfile, pId, mId);
+
+    final profile = matchesRoute
+        ? existingProfile
+        : (pId != null && mId != null
             ? _capabilityResolver.resolveSync(
                 providerInstanceId: pId,
                 modelId: mId,
                 thinkingMode: _turnRoute.effectiveThinkingMode,
               )
             : null);
+    if (_turnCapabilityProfileAdmitted &&
+        existingProfile != null &&
+        !matchesRoute &&
+        profile != null) {
+      _turnCapabilityProfile = profile;
+    }
 
-    final thinkingMode = profile != null
+    // A selection value whose provider rejected the thinking field earlier in
+    // this session is dispatched with the provider default (no thinking
+    // field); other values on the same route are still sent.
+    final selectionId = profile != null
         ? profile.thinkingSelectionId
         : _turnRoute.effectiveThinkingMode;
+    final thinkingSuppressed = _thinkingSuppression.isSuppressed(
+      sessionId,
+      pId,
+      mId,
+      selectionId,
+    );
+    final thinkingMode = thinkingSuppressed ? null : selectionId;
 
     return LLMRequestOptions(
       sessionId: sessionId,
-      requestId: _turnRoute.turnRequestId,
+      requestId: requestId ?? _turnRoute.turnRequestId,
       providerInstanceId: providerInstanceId,
       thinkingMode: thinkingMode,
-      thinkingDirective: profile?.thinkingDirective,
+      thinkingDirective: thinkingSuppressed
+          ? const UseProviderDefault()
+          : profile?.thinkingDirective,
       cancellationScope: _cancellationScope,
       routeCapabilitySnapshot: profile?.rawOverride,
       routeCapabilityProfile: profile,
@@ -1575,6 +1709,11 @@ class AgentRunner {
           _turnRoute.updateTurnThinkingMode(revalidated.selectionId);
         }
         _turnRoute.rewriteQueuedProvider(candidate.id);
+        _turnCapabilityProfile = _capabilityResolver.resolveSync(
+          providerInstanceId: candidate.id,
+          modelId: modelId!,
+          thinkingMode: _turnRoute.effectiveThinkingMode,
+        );
         recovery.emitResuming(
           sessionId: sessionId,
           reason: 'auto_failover',
@@ -1623,6 +1762,30 @@ class AgentRunner {
           throw RuntimeRecoveryRequired(sessionId, reason);
         }
         _turnRoute.refreshFromSession();
+        final routing = _turnRoute.resolveTurnRouting();
+        final pId = routing.providerId;
+        final mId = routing.model ?? _turnRoute.effectiveModel;
+        if (_profileMatchesRoute(_turnCapabilityProfile, pId, mId)) {
+          // Same-route wake (manual retry, queued handoff, or a timer abort
+          // without a provider change): the admitted snapshot stays frozen.
+        } else if (pId != null && mId != null) {
+          if (getIt.isRegistered<ThinkingRouteSessionSync>()) {
+            final revalidated = getIt<ThinkingRouteSessionSync>()
+                .revalidateAndApplySession(
+                  sessionId: sessionId,
+                  providerInstanceId: pId,
+                  modelId: mId,
+                );
+            _turnRoute.updateTurnThinkingMode(revalidated.selectionId);
+          }
+          _turnCapabilityProfile = _capabilityResolver.resolveSync(
+            providerInstanceId: pId,
+            modelId: mId,
+            thinkingMode: _turnRoute.effectiveThinkingMode,
+          );
+        } else {
+          _turnCapabilityProfile = null;
+        }
         return true;
       }
       if (!_claimOwnedAutomaticRetry()) {
@@ -1698,19 +1861,71 @@ class AgentRunner {
 
     if (provider != null && model != null) {
       activeProvider = provider;
+      activeProviderInstanceId = provider;
       activeModel = model;
     }
 
     AgentResponse response;
     final attemptsByProviderInstanceId = <String, int>{};
     final failedProviderInstanceIds = <String>{};
+    var thinkingFieldRetried = false;
+    _DispatchedReservation? dispatchedReservation;
     while (true) {
+      final turnRequestId = _turnRoute.turnRequestId ?? '';
+      final stepRequestId =
+          currentModelStepId != null && currentModelStepId!.isNotEmpty
+              ? '$turnRequestId:$currentModelStepId'
+              : turnRequestId;
+      final providerAttempt = provider == null
+          ? 0
+          : attemptsByProviderInstanceId[provider] ?? 0;
+      final attemptRequestId = providerAttempt == 0
+          ? (turnRequestId.isNotEmpty ? turnRequestId : stepRequestId)
+          : (turnRequestId.isNotEmpty
+              ? '$turnRequestId:retry_$providerAttempt'
+              : '$stepRequestId:retry_$providerAttempt');
+      final activeBoundary = _activeProjectionBoundary;
+      final priorReservation = dispatchedReservation;
+      if (priorReservation != null &&
+          (activeBoundary == null ||
+              activeBoundary.compactionId != priorReservation.compactionId)) {
+        _finalizeCapturedPostBoundaryMissingUsage(
+          compactionId: priorReservation.compactionId,
+          requestId: priorReservation.requestId,
+          routeSignature: priorReservation.routeSignature,
+          missingReason: 'no_provider_usage',
+        );
+        dispatchedReservation = null;
+      }
+
+      void finalizeMissing([String reason = 'no_provider_usage']) {
+        final currentReservation = dispatchedReservation;
+        if (currentReservation != null) {
+          _finalizeCapturedPostBoundaryMissingUsage(
+            compactionId: currentReservation.compactionId,
+            requestId: currentReservation.requestId,
+            routeSignature: currentReservation.routeSignature,
+            missingReason: reason,
+          );
+          dispatchedReservation = null;
+        } else {
+          _finalizePostBoundaryMissingUsage(
+            activeBoundary: activeBoundary,
+            stepRequestId: stepRequestId,
+            missingReason: reason,
+            routeSignature: _pendingInputUsageBaseline?.routeSignature,
+          );
+        }
+      }
+
       try {
         final route = _turnRoute.routeForTurn();
         if (!await _claimProviderRequestAfterRestartDrain()) {
+          finalizeMissing('no_provider_usage');
           return Message(role: MessageRole.assistant);
         }
         _logger.info('🧠 [Agent] Thinking...');
+
         if (LLMRequestDumper.isEnabled) {
           await LLMRequestDumper.dumpRequest(
             sessionId: sessionId,
@@ -1720,52 +1935,44 @@ class AgentRunner {
             provider: provider,
             baseUrl: baseUrl,
             apiKey: apiKey,
+            requestId: attemptRequestId,
           );
         }
-        final turnRequestId = _turnRoute.turnRequestId ?? '';
-        final stepRequestId =
-            currentModelStepId != null && currentModelStepId!.isNotEmpty
-                ? '$turnRequestId:$currentModelStepId'
-                : turnRequestId;
-        final activeBoundary = _activeProjectionBoundary;
-        try {
-          await _stageInputUsageBaseline(
-            requestMessages: effectiveHistory,
-            toolSchemas: tools.map((tool) => tool.toJson()).toList(),
-            providerId: provider,
-            modelId: model,
+        await _stageInputUsageBaseline(
+          requestMessages: effectiveHistory,
+          toolSchemas: tools.map((tool) => tool.toJson()).toList(),
+          providerId: provider,
+          modelId: model,
+        );
+        final pending = _pendingInputUsageBaseline;
+        if (activeBoundary != null &&
+            pending?.routeSignature != null &&
+            getIt.isRegistered<CompactionCoordinator>()) {
+          final reserved = getIt<CompactionCoordinator>().reservePostBoundaryDispatch(
+            compactionId: activeBoundary.compactionId,
+            requestId: stepRequestId,
+            routeSignature: pending!.routeSignature,
+            dispatchedAt: DateTime.now().toUtc(),
           );
-          final pending = _pendingInputUsageBaseline;
-          if (activeBoundary != null &&
-              pending?.routeSignature != null &&
-              getIt.isRegistered<CompactionCoordinator>()) {
-            getIt<CompactionCoordinator>().reservePostBoundaryDispatch(
+          if (reserved) {
+            final dis = _DispatchedReservation(
               compactionId: activeBoundary.compactionId,
               requestId: stepRequestId,
-              routeSignature: pending!.routeSignature,
-              dispatchedAt: DateTime.now().toUtc(),
+              routeSignature: pending.routeSignature,
             );
+            dispatchedReservation = dis;
           }
+        }
+        try {
           response = await route.adapter.generateResponse(
             effectiveHistory,
             tools: tools,
             modelOverride: route.modelOverride,
-            options: _requestOptionsForTurn(provider),
+            options: _requestOptionsForTurn(
+              provider,
+              requestId: attemptRequestId,
+            ),
           );
-        } catch (e) {
-          final pending = _pendingInputUsageBaseline;
-          if (activeBoundary != null &&
-              pending?.routeSignature != null &&
-              getIt.isRegistered<CompactionCoordinator>()) {
-            getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
-              compactionId: activeBoundary.compactionId,
-              requestId: stepRequestId,
-              observedAt: DateTime.now().toUtc(),
-              missingReason: 'no_provider_usage',
-              routeSignature: pending!.routeSignature,
-            );
-          }
-          rethrow;
         } finally {
           if (_stopRequested) _providerRequestInFlight = false;
         }
@@ -1780,7 +1987,17 @@ class AgentRunner {
         _settleProviderRequest();
         _turnRoute.invalidateResolvedRoute();
         if (LLMRequestDumper.isEnabled) {
-          await LLMRequestDumper.recordError(e);
+          await LLMRequestDumper.recordError(e, requestId: attemptRequestId);
+        }
+        if (!thinkingFieldRetried &&
+            _retryWithoutRejectedThinkingField(e, provider)) {
+          // Exactly one retry of the same request without the thinking field.
+          thinkingFieldRetried = true;
+          if (provider != null) {
+            attemptsByProviderInstanceId[provider] =
+                (attemptsByProviderInstanceId[provider] ?? 0) + 1;
+          }
+          continue;
         }
         final sanitizedHistory = _recoverRejectedProviderState(
           e,
@@ -1794,26 +2011,45 @@ class AgentRunner {
         final providerAttempt = provider == null
             ? 0
             : attemptsByProviderInstanceId[provider] ?? 0;
-        final handled = await _handleRuntimeFailure(
-          e,
-          providerInstanceId: provider,
-          modelId: model,
-          attempt: providerAttempt,
-          streamStarted: false,
-          failedProviderInstanceIds: failedProviderInstanceIds,
-          failedProviderProjection: effectiveHistory,
-          failedProviderTools: tools,
-        );
+        final previousProvider = provider;
+        final previousModel = model;
+        bool handled = false;
+        try {
+          handled = await _handleRuntimeFailure(
+            e,
+            providerInstanceId: provider,
+            modelId: model,
+            attempt: providerAttempt,
+            streamStarted: false,
+            failedProviderInstanceIds: failedProviderInstanceIds,
+            failedProviderProjection: effectiveHistory,
+            failedProviderTools: tools,
+          );
+        } catch (failure) {
+          finalizeMissing('no_provider_usage');
+          rethrow;
+        }
         if (!handled) {
+          finalizeMissing('no_provider_usage');
           rethrow;
         }
         if (provider != null) {
           attemptsByProviderInstanceId[provider] = providerAttempt + 1;
         }
-        effectiveHistory = await _prepareProviderHistory(
-          runtimeSystemPrompt: runtimeSystemPrompt,
-        );
         final refreshedRouting = _turnRoute.resolveTurnRouting();
+        final routeChanged = refreshedRouting.providerId != previousProvider ||
+            refreshedRouting.model != previousModel;
+        if (routeChanged) {
+          finalizeMissing('route_failover');
+        }
+        try {
+          effectiveHistory = await _prepareProviderHistory(
+            runtimeSystemPrompt: runtimeSystemPrompt,
+          );
+        } catch (prepError) {
+          finalizeMissing('no_provider_usage');
+          rethrow;
+        }
         model = refreshedRouting.model;
         provider = refreshedRouting.providerId;
         baseUrl = refreshedRouting.baseUrl;
@@ -1822,30 +2058,41 @@ class AgentRunner {
     }
     _turnRoute.invalidateResolvedRoute();
     _updateMetrics(response);
-    final activeBoundary = _activeProjectionBoundary;
-    final pending = _pendingInputUsageBaseline;
-    if (activeBoundary != null &&
-        pending?.routeSignature != null &&
-        getIt.isRegistered<CompactionCoordinator>()) {
-      final responseUsage = response.usage;
-      final snapshot = responseUsage != null
-          ? LlmUsageSnapshot.fromProviderUsage(responseUsage)
-          : null;
-      if (snapshot?.inputTokens == null) {
-        final turnRequestId = _turnRoute.turnRequestId ?? '';
-        final stepRequestId =
-            currentModelStepId != null && currentModelStepId!.isNotEmpty
-                ? '$turnRequestId:$currentModelStepId'
-                : turnRequestId;
-        getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
-          compactionId: activeBoundary.compactionId,
-          requestId: stepRequestId,
-          observedAt: DateTime.now().toUtc(),
-          missingReason: response.usage == null
-              ? 'no_provider_usage'
-              : 'missing_input_tokens',
-          routeSignature: pending!.routeSignature,
+    final responseUsage = response.usage;
+    final snapshot = responseUsage != null
+        ? LlmUsageSnapshot.fromProviderUsage(responseUsage)
+        : null;
+    if (snapshot?.inputTokens == null) {
+      final reason = response.usage == null
+          ? 'no_provider_usage'
+          : 'missing_input_tokens';
+      final remainingReservation = dispatchedReservation;
+      if (remainingReservation != null) {
+        _finalizeCapturedPostBoundaryMissingUsage(
+          compactionId: remainingReservation.compactionId,
+          requestId: remainingReservation.requestId,
+          routeSignature: remainingReservation.routeSignature,
+          missingReason: reason,
         );
+        dispatchedReservation = null;
+      } else {
+        final activeBoundary = _activeProjectionBoundary;
+        final pending = _pendingInputUsageBaseline;
+        if (activeBoundary != null &&
+            pending?.routeSignature != null &&
+            getIt.isRegistered<CompactionCoordinator>()) {
+          final turnRequestId = _turnRoute.turnRequestId ?? '';
+          final stepRequestId =
+              currentModelStepId != null && currentModelStepId!.isNotEmpty
+                  ? '$turnRequestId:$currentModelStepId'
+                  : turnRequestId;
+          _finalizePostBoundaryMissingUsage(
+            activeBoundary: activeBoundary,
+            stepRequestId: stepRequestId,
+            missingReason: reason,
+            routeSignature: pending!.routeSignature,
+          );
+        }
       }
     }
     final responseMessage = response.message.copyWith(
@@ -1912,6 +2159,69 @@ class AgentRunner {
     return responseMessage;
   }
 
+  Stream<String> _cancellableTurnStream(
+    Stream<String> source, {
+    required _StreamReservationHolder holder,
+  }) {
+    late StreamController<String> controller;
+    StreamSubscription<String>? sub;
+
+    controller = StreamController<String>(
+      onListen: () {
+        sub = source.listen(
+          (data) => controller.add(data),
+          onError: (Object e, StackTrace st) => controller.addError(e, st),
+          onDone: () => controller.close(),
+        );
+      },
+      onCancel: () {
+        if (!holder.confirmed) {
+          final res = holder.dispatchedReservation;
+          if (res != null) {
+            holder.dispatchedReservation = null;
+            _finalizeCapturedPostBoundaryMissingUsage(
+              compactionId: res.compactionId,
+              requestId: res.requestId,
+              routeSignature: res.routeSignature,
+              missingReason: 'no_provider_usage',
+            );
+          }
+        }
+        // Stop acknowledgement must not await generator unwind (F3), so the
+        // inner cancel future is detached. A generator suspended at an await
+        // (for example a 429 `waitForRetry`) resumes after cancel and may
+        // throw; that error completes this future with no listener. Contain
+        // it here so a stopped run can never crash the daemon zone.
+        final pending = sub?.cancel();
+        if (pending != null) {
+          _detachedTurnStreamUnwind = pending.then<void>(
+            (_) {},
+            onError: _reportDetachedTurnStreamUnwindError,
+          );
+        }
+      },
+    );
+    return controller.stream;
+  }
+
+  static bool _isCancellationUnwindError(Object error) =>
+      error is RuntimeRecoveryCancelled ||
+      error is RateLimitCancelled ||
+      error is ProviderRequestCancelledException;
+
+  void _reportDetachedTurnStreamUnwindError(Object error, StackTrace stack) {
+    // Cancellation signals are the expected end of a stopped run.
+    if (_isCancellationUnwindError(error)) return;
+    // Real failures still surface. Log the type only: error payloads can
+    // carry provider bodies or user content and must not enter logs.
+    _logger.severe(
+      'Cancelled turn stream failed while unwinding for session $sessionId: '
+      '${error.runtimeType}',
+      null,
+      stack,
+    );
+  }
+
   Stream<String> streamMessage(
     String? userContent, {
     String? requestId,
@@ -1924,6 +2234,40 @@ class AgentRunner {
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
+  }) {
+    final holder = _StreamReservationHolder();
+    return _cancellableTurnStream(
+      _streamMessageCore(
+        userContent,
+        requestId: requestId,
+        runtimeSystemPrompt: runtimeSystemPrompt,
+        providerId: providerId,
+        model: model,
+        thinkingMode: thinkingMode,
+        receivedAt: receivedAt,
+        onToolEvent: onToolEvent,
+        onSteerContinuation: onSteerContinuation,
+        onThoughtDelta: onThoughtDelta,
+        onReasoningDelta: onReasoningDelta,
+        streamReservationHolder: holder,
+      ),
+      holder: holder,
+    );
+  }
+
+  Stream<String> _streamMessageCore(
+    String? userContent, {
+    String? requestId,
+    String? runtimeSystemPrompt,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    DateTime? receivedAt,
+    ToolEventCallback? onToolEvent,
+    void Function()? onSteerContinuation,
+    FutureOr<void> Function(String thought)? onThoughtDelta,
+    FutureOr<void> Function(String reasoning)? onReasoningDelta,
+    _StreamReservationHolder? streamReservationHolder,
   }) async* {
     if (_stopRequested) return;
     _stopRequested = false;
@@ -1964,6 +2308,7 @@ class AgentRunner {
         onThoughtDelta: onThoughtDelta,
         onReasoningDelta: onReasoningDelta,
         preserveModelStepId: true,
+        streamReservationHolder: streamReservationHolder,
       )) {
         final cleanChunk = scrubber.feed(chunk);
         if (cleanChunk.isNotEmpty) {
@@ -1972,6 +2317,7 @@ class AgentRunner {
       }
     } finally {
       _turnRoute.setTurnRequestId(null);
+      _turnCapabilityProfileAdmitted = false;
     }
   }
 
@@ -1985,6 +2331,36 @@ class AgentRunner {
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
+  }) {
+    final holder = _StreamReservationHolder();
+    return _cancellableTurnStream(
+      _resumeStreamCore(
+        requestId: requestId,
+        runtimeSystemPrompt: runtimeSystemPrompt,
+        providerId: providerId,
+        model: model,
+        thinkingMode: thinkingMode,
+        onToolEvent: onToolEvent,
+        onSteerContinuation: onSteerContinuation,
+        onThoughtDelta: onThoughtDelta,
+        onReasoningDelta: onReasoningDelta,
+        streamReservationHolder: holder,
+      ),
+      holder: holder,
+    );
+  }
+
+  Stream<String> _resumeStreamCore({
+    String? requestId,
+    String? runtimeSystemPrompt,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    ToolEventCallback? onToolEvent,
+    void Function()? onSteerContinuation,
+    FutureOr<void> Function(String thought)? onThoughtDelta,
+    FutureOr<void> Function(String reasoning)? onReasoningDelta,
+    _StreamReservationHolder? streamReservationHolder,
   }) async* {
     try {
       await _restoreCheckpointForResume(requestId: requestId);
@@ -2011,6 +2387,7 @@ class AgentRunner {
         onThoughtDelta: onThoughtDelta,
         onReasoningDelta: onReasoningDelta,
         preserveModelStepId: true,
+        streamReservationHolder: streamReservationHolder,
       )) {
         final cleanChunk = scrubber.feed(chunk);
         if (cleanChunk.isNotEmpty) {
@@ -2019,6 +2396,7 @@ class AgentRunner {
       }
     } finally {
       _turnRoute.setTurnRequestId(null);
+      _turnCapabilityProfileAdmitted = false;
     }
   }
 
@@ -2046,6 +2424,7 @@ class AgentRunner {
     ResponseContinuationCoordinator? continuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
+    _StreamReservationHolder? streamReservationHolder,
   }) async* {
     continuation ??= ResponseContinuationCoordinator();
     if (!preserveModelStepId || currentModelStepId == null) {
@@ -2084,17 +2463,85 @@ class AgentRunner {
 
     if (provider != null && model != null) {
       activeProvider = provider;
+      activeProviderInstanceId = provider;
       activeModel = model;
     }
 
     final attemptsByProviderInstanceId = <String, int>{};
     final failedProviderInstanceIds = <String>{};
+    var thinkingFieldRetried = false;
+    _DispatchedReservation? dispatchedReservation;
     while (true) {
-      if (_stopRequested) return;
+      final turnRequestId = _turnRoute.turnRequestId ?? '';
+      final stepRequestId =
+          currentModelStepId != null && currentModelStepId!.isNotEmpty
+              ? '$turnRequestId:$currentModelStepId'
+              : turnRequestId;
+      final providerAttempt = provider == null
+          ? 0
+          : attemptsByProviderInstanceId[provider] ?? 0;
+      final attemptRequestId = providerAttempt == 0
+          ? (turnRequestId.isNotEmpty ? turnRequestId : stepRequestId)
+          : (turnRequestId.isNotEmpty
+              ? '$turnRequestId:retry_$providerAttempt'
+              : '$stepRequestId:retry_$providerAttempt');
+      final activeBoundary = _activeProjectionBoundary;
+      final priorReservation = dispatchedReservation;
+      if (priorReservation != null &&
+          (activeBoundary == null ||
+              activeBoundary.compactionId != priorReservation.compactionId)) {
+        _finalizeCapturedPostBoundaryMissingUsage(
+          compactionId: priorReservation.compactionId,
+          requestId: priorReservation.requestId,
+          routeSignature: priorReservation.routeSignature,
+          missingReason: 'no_provider_usage',
+        );
+        dispatchedReservation = null;
+        if (streamReservationHolder?.dispatchedReservation?.compactionId ==
+            priorReservation.compactionId) {
+          streamReservationHolder?.dispatchedReservation = null;
+        }
+      }
+      var callRecordedUsage = false;
+
+      void finalizeMissingUnlessRecorded([String reason = 'no_provider_usage']) {
+        if (!callRecordedUsage) {
+          final currentReservation = dispatchedReservation;
+          if (currentReservation != null) {
+            _finalizeCapturedPostBoundaryMissingUsage(
+              compactionId: currentReservation.compactionId,
+              requestId: currentReservation.requestId,
+              routeSignature: currentReservation.routeSignature,
+              missingReason: reason,
+            );
+            dispatchedReservation = null;
+            if (streamReservationHolder?.dispatchedReservation?.compactionId ==
+                currentReservation.compactionId) {
+              streamReservationHolder?.dispatchedReservation = null;
+            }
+          } else {
+            _finalizePostBoundaryMissingUsage(
+              activeBoundary: activeBoundary,
+              stepRequestId: stepRequestId,
+              missingReason: reason,
+            );
+          }
+        }
+      }
+
+      if (_stopRequested) {
+        finalizeMissingUnlessRecorded();
+        return;
+      }
+
       try {
         final route = _turnRoute.routeForTurn();
-        if (!await _claimProviderRequestAfterRestartDrain()) return;
+        if (!await _claimProviderRequestAfterRestartDrain()) {
+          finalizeMissingUnlessRecorded();
+          return;
+        }
         _logger.info('🧠 [Agent] Thinking...');
+
         if (LLMRequestDumper.isEnabled) {
           await LLMRequestDumper.dumpRequest(
             sessionId: sessionId,
@@ -2104,134 +2551,138 @@ class AgentRunner {
             provider: provider,
             baseUrl: baseUrl,
             apiKey: apiKey,
+            requestId: attemptRequestId,
           );
         }
-        final turnRequestId = _turnRoute.turnRequestId ?? '';
-        final stepRequestId =
-            currentModelStepId != null && currentModelStepId!.isNotEmpty
-                ? '$turnRequestId:$currentModelStepId'
-                : turnRequestId;
-        final activeBoundary = _activeProjectionBoundary;
-        var callRecordedUsage = false;
-        try {
-          await _stageInputUsageBaseline(
-            requestMessages: effectiveHistory,
-            toolSchemas: tools.map((tool) => tool.toJson()).toList(),
-            providerId: provider,
-            modelId: model,
+        await _stageInputUsageBaseline(
+          requestMessages: effectiveHistory,
+          toolSchemas: tools.map((tool) => tool.toJson()).toList(),
+          providerId: provider,
+          modelId: model,
+        );
+        final pending = _pendingInputUsageBaseline;
+        if (activeBoundary != null &&
+            pending?.routeSignature != null &&
+            getIt.isRegistered<CompactionCoordinator>()) {
+          final reserved = getIt<CompactionCoordinator>().reservePostBoundaryDispatch(
+            compactionId: activeBoundary.compactionId,
+            requestId: stepRequestId,
+            routeSignature: pending!.routeSignature,
+            dispatchedAt: DateTime.now().toUtc(),
           );
-          final pending = _pendingInputUsageBaseline;
-          if (activeBoundary != null &&
-              pending?.routeSignature != null &&
-              getIt.isRegistered<CompactionCoordinator>()) {
-            getIt<CompactionCoordinator>().reservePostBoundaryDispatch(
+          if (reserved) {
+            final dis = _DispatchedReservation(
               compactionId: activeBoundary.compactionId,
               requestId: stepRequestId,
-              routeSignature: pending!.routeSignature,
-              dispatchedAt: DateTime.now().toUtc(),
+              routeSignature: pending.routeSignature,
             );
+            dispatchedReservation = dis;
+            streamReservationHolder?.dispatchedReservation = dis;
+            streamReservationHolder?.confirmed = false;
           }
-          try {
-            await for (final response in route.adapter.generateStream(
-              effectiveHistory,
-              tools: tools,
-              modelOverride: route.modelOverride,
-              options: _requestOptionsForTurn(provider),
-            )) {
-              if (_stopRequested) return;
-              _clearResumingOnProviderProgress();
-              // Any provider event makes a transparent retry unsafe: reasoning,
-              // metadata, or a partial tool call may already be visible or carry
-              // state even when no final-content text has arrived yet.
-              streamStarted = true;
-              final responseUsage = response.usage;
-              if (responseUsage != null) {
-                final snapshot =
-                    LlmUsageSnapshot.fromProviderUsage(responseUsage);
-                if (snapshot.inputTokens != null) {
-                  callRecordedUsage = true;
-                }
+        }
+        var streamFailedWithException = false;
+        try {
+          await for (final response in route.adapter.generateStream(
+            effectiveHistory,
+            tools: tools,
+            modelOverride: route.modelOverride,
+            options: _requestOptionsForTurn(
+              provider,
+              requestId: attemptRequestId,
+            ),
+          )) {
+            if (_stopRequested) {
+              finalizeMissingUnlessRecorded();
+              return;
+            }
+            _clearResumingOnProviderProgress();
+            // Any provider event makes a transparent retry unsafe: reasoning,
+            // metadata, or a partial tool call may already be visible or carry
+            // state even when no final-content text has arrived yet.
+            streamStarted = true;
+            final responseUsage = response.usage;
+            if (responseUsage != null) {
+              final snapshot =
+                  LlmUsageSnapshot.fromProviderUsage(responseUsage);
+              if (snapshot.inputTokens != null) {
+                callRecordedUsage = true;
+                streamReservationHolder?.confirmed = true;
               }
-              _updateMetrics(response);
-              lastMessage = response.message;
-              if (response.finishReason != LLMFinishReason.unknown) {
-                finishReason = response.finishReason;
-              }
-              if (response.message.toolCalls?.isNotEmpty ?? false) {
-                isToolCall = true;
-                accumulatedToolCalls ??= [];
-                accumulatedToolCalls.addAll(response.message.toolCalls!);
-              }
+            }
+            _updateMetrics(response);
+            lastMessage = response.message;
+            if (response.finishReason != LLMFinishReason.unknown) {
+              finishReason = response.finishReason;
+            }
+            if (response.message.toolCalls?.isNotEmpty ?? false) {
+              isToolCall = true;
+              accumulatedToolCalls ??= [];
+              accumulatedToolCalls.addAll(response.message.toolCalls!);
+            }
 
-              if (response.message.thought != null) {
-                final thoughtDelta = response.message.thought!;
-                thought = (thought ?? '') + thoughtDelta;
-                if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
-                  await onThoughtDelta(thoughtDelta);
-                }
+            if (response.message.thought != null) {
+              final thoughtDelta = response.message.thought!;
+              thought = (thought ?? '') + thoughtDelta;
+              if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
+                await onThoughtDelta(thoughtDelta);
               }
-              if (response.message.reasoning != null) {
-                final reasoningDelta = response.message.reasoning!;
-                reasoning = (reasoning ?? '') + reasoningDelta;
-                if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
-                  await onReasoningDelta(reasoningDelta);
-                }
+            }
+            if (response.message.reasoning != null) {
+              final reasoningDelta = response.message.reasoning!;
+              reasoning = (reasoning ?? '') + reasoningDelta;
+              if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
+                await onReasoningDelta(reasoningDelta);
               }
-              if (response.message.providerState != null) {
-                providerState = response.message.providerState;
-              }
-              if (response.message.metadata != null) {
-                accumulatedMessageMetadata.addAll(response.message.metadata!);
-              }
+            }
+            if (response.message.providerState != null) {
+              providerState = response.message.providerState;
+            }
+            if (response.message.metadata != null) {
+              accumulatedMessageMetadata.addAll(response.message.metadata!);
+            }
 
-              final chunk = response.message.content ?? '';
-              fullContent += chunk;
-              if (chunk.isNotEmpty) {
-                yield chunk;
-              }
+            final chunk = response.message.content ?? '';
+            fullContent += chunk;
+            if (chunk.isNotEmpty) {
+              yield chunk;
             }
-            if (!callRecordedUsage &&
-                activeBoundary != null &&
-                pending?.routeSignature != null &&
-                getIt.isRegistered<CompactionCoordinator>()) {
-              getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
-                compactionId: activeBoundary.compactionId,
-                requestId: stepRequestId,
-                observedAt: DateTime.now().toUtc(),
-                missingReason: 'no_provider_usage',
-                routeSignature: pending!.routeSignature,
-              );
-            }
-          } catch (e) {
-            if (!callRecordedUsage &&
-                activeBoundary != null &&
-                pending?.routeSignature != null &&
-                getIt.isRegistered<CompactionCoordinator>()) {
-              getIt<CompactionCoordinator>().recordPostBoundaryMissingUsage(
-                compactionId: activeBoundary.compactionId,
-                requestId: stepRequestId,
-                observedAt: DateTime.now().toUtc(),
-                missingReason: 'no_provider_usage',
-                routeSignature: pending!.routeSignature,
-              );
-            }
-            rethrow;
           }
+        } catch (e) {
+          streamFailedWithException = true;
+          rethrow;
         } finally {
           if (_stopRequested) _providerRequestInFlight = false;
+          if (!streamFailedWithException) {
+            finalizeMissingUnlessRecorded();
+          }
         }
         _lastSuccessfulLlmRoute = LLMRouteSnapshot(
           adapter: _providerAdapterForBackground(route.adapter),
           providerInstanceId: provider,
           modelOverride: route.modelOverride,
         );
-        if (_stopRequested) return;
+        if (_stopRequested) {
+          finalizeMissingUnlessRecorded();
+          return;
+        }
         break;
       } catch (e) {
         _settleProviderRequest();
         _turnRoute.invalidateResolvedRoute();
         if (LLMRequestDumper.isEnabled) {
-          await LLMRequestDumper.recordError(e);
+          await LLMRequestDumper.recordError(e, requestId: attemptRequestId);
+        }
+        if (!thinkingFieldRetried &&
+            !streamStarted &&
+            _retryWithoutRejectedThinkingField(e, provider)) {
+          // Exactly one retry of the same request without the thinking field.
+          thinkingFieldRetried = true;
+          if (provider != null) {
+            attemptsByProviderInstanceId[provider] =
+                (attemptsByProviderInstanceId[provider] ?? 0) + 1;
+          }
+          continue;
         }
         final sanitizedHistory = _recoverRejectedProviderState(
           e,
@@ -2245,26 +2696,45 @@ class AgentRunner {
         final providerAttempt = provider == null
             ? 0
             : attemptsByProviderInstanceId[provider] ?? 0;
-        final handled = await _handleRuntimeFailure(
-          e,
-          providerInstanceId: provider,
-          modelId: model,
-          attempt: providerAttempt,
-          streamStarted: streamStarted,
-          failedProviderInstanceIds: failedProviderInstanceIds,
-          failedProviderProjection: effectiveHistory,
-          failedProviderTools: tools,
-        );
+        final previousProvider = provider;
+        final previousModel = model;
+        bool handled = false;
+        try {
+          handled = await _handleRuntimeFailure(
+            e,
+            providerInstanceId: provider,
+            modelId: model,
+            attempt: providerAttempt,
+            streamStarted: streamStarted,
+            failedProviderInstanceIds: failedProviderInstanceIds,
+            failedProviderProjection: effectiveHistory,
+            failedProviderTools: tools,
+          );
+        } catch (failure) {
+          finalizeMissingUnlessRecorded('no_provider_usage');
+          rethrow;
+        }
         if (!handled) {
+          finalizeMissingUnlessRecorded('no_provider_usage');
           rethrow;
         }
         if (provider != null) {
           attemptsByProviderInstanceId[provider] = providerAttempt + 1;
         }
-        effectiveHistory = await _prepareProviderHistory(
-          runtimeSystemPrompt: runtimeSystemPrompt,
-        );
         final refreshedRouting = _turnRoute.resolveTurnRouting();
+        final routeChanged = refreshedRouting.providerId != previousProvider ||
+            refreshedRouting.model != previousModel;
+        if (routeChanged) {
+          finalizeMissingUnlessRecorded('route_failover');
+        }
+        try {
+          effectiveHistory = await _prepareProviderHistory(
+            runtimeSystemPrompt: runtimeSystemPrompt,
+          );
+        } catch (prepError) {
+          finalizeMissingUnlessRecorded('no_provider_usage');
+          rethrow;
+        }
         model = refreshedRouting.model;
         provider = refreshedRouting.providerId;
         baseUrl = refreshedRouting.baseUrl;
@@ -2324,6 +2794,7 @@ class AgentRunner {
           continuation: continuation,
           onThoughtDelta: onThoughtDelta,
           onReasoningDelta: onReasoningDelta,
+          streamReservationHolder: streamReservationHolder,
         );
       } else {
         if (_steerCoordinator.hasPendingSteers) {
@@ -2342,6 +2813,7 @@ class AgentRunner {
             continuation: continuation,
             onThoughtDelta: onThoughtDelta,
             onReasoningDelta: onReasoningDelta,
+            streamReservationHolder: streamReservationHolder,
           );
           return;
         }
@@ -2355,6 +2827,7 @@ class AgentRunner {
             continuation: continuation,
             onThoughtDelta: onThoughtDelta,
             onReasoningDelta: onReasoningDelta,
+            streamReservationHolder: streamReservationHolder,
           );
           return;
         }
@@ -2395,6 +2868,7 @@ class AgentRunner {
           onSteerContinuation: onSteerContinuation,
           onThoughtDelta: onThoughtDelta,
           onReasoningDelta: onReasoningDelta,
+          streamReservationHolder: streamReservationHolder,
         );
       }
     }
@@ -3002,8 +3476,11 @@ class AgentRunner {
 
   /// Test hook for Plan 53d request options resolution.
   @visibleForTesting
-  LLMRequestOptions debugRequestOptionsForTurn([String? providerInstanceId]) {
-    return _requestOptionsForTurn(providerInstanceId);
+  LLMRequestOptions debugRequestOptionsForTurn([
+    String? providerInstanceId,
+    String? requestId,
+  ]) {
+    return _requestOptionsForTurn(providerInstanceId, requestId: requestId);
   }
 
   /// Builds the same idle provider payload used by an ordinary next request,
@@ -3292,4 +3769,21 @@ class _RunnerSteerCallbacks implements steer_lib.SteerCallbacks {
   @override
   void releasePendingSteerAfterDeliveryFailure(steer_lib.PendingSteer steer) =>
       _runner._releasePendingSteerAfterDeliveryFailure(steer);
+}
+
+class _DispatchedReservation {
+  final String compactionId;
+  final String requestId;
+  final RouteSignature routeSignature;
+
+  const _DispatchedReservation({
+    required this.compactionId,
+    required this.requestId,
+    required this.routeSignature,
+  });
+}
+
+class _StreamReservationHolder {
+  _DispatchedReservation? dispatchedReservation;
+  bool confirmed = false;
 }

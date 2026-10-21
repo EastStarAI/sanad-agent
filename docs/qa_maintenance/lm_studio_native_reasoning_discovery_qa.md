@@ -116,9 +116,9 @@ derivation, descriptor delivery through the production model cache,
 `reasoning_effort` bodies for every advertised option, declared-default metadata
 with provider-default omission and explicit default dispatch, fail-closed
 malformed/probe-failure behavior, and the absence of
-request-time endpoint probes. `agent/test/core/provider_thinking/project_thinking_coverage_test.dart`
-retains the registry-wide claim that an unevidenced `lm-studio` model with no
-native evidence stays `unknown`.
+request-time endpoint probes. `agent/test/core/provider_thinking/layered_thinking_authority_test.dart`
+owns the layered-authority claim that a model with no settings, provider-reported
+or models.dev evidence stays `unknown`.
 
 ## Harness boundaries
 

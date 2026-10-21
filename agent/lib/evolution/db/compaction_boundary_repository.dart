@@ -4,6 +4,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/models/llm_usage_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/llm_request_dumper.dart';
@@ -11,6 +12,7 @@ import 'package:sanad_agent/engine/llm_request_dumper.dart';
 import '../models/compaction_operation_codec.dart';
 import '../models/compaction_operation_record.dart';
 import 'agent_state_database.dart';
+import 'message_history_identity.dart';
 import 'session_history_revision_repository.dart';
 import 'session_projection_revision_repository.dart';
 
@@ -78,6 +80,15 @@ class CompactionBoundaryRepository {
         retainedTailEndFingerprint: tailAnchor?.fingerprint,
         retainedTailEndOccurrence: tailAnchor?.occurrence,
         routeSignature: routeSignature,
+        // Bound once at claim time so a later grown ordinary call can never
+        // replace the pre-call measurement that preceded this boundary.
+        diagnostics: CompactionDurableDiagnostics(
+          lastPreCompactionCall: _preCallAttributionInTransaction(
+            tx,
+            sessionId: sessionId,
+            routeSignature: routeSignature,
+          ),
+        ),
         startedAt: startedAt,
       );
       try {
@@ -90,8 +101,8 @@ class CompactionBoundaryRepository {
             tail_end_anchor_fingerprint, tail_end_anchor_ordinal,
             provider_instance_id, model_id, template_id, protocol,
             normalized_base_url, config_revision, credential_revision,
-            started_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            started_at, diagnostics_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ''', CompactionOperationCodec.insertStartedParams(record: record));
       } on SqliteException catch (error) {
         if (_isStartedConflict(error)) {
@@ -179,7 +190,7 @@ class CompactionBoundaryRepository {
           LLMRequestDumper.getRelativeDumpPath(
             compactionId: candidate.compactionId,
           );
-      final diagnostics = candidate.diagnostics != null
+      final candidateDiagnostics = candidate.diagnostics != null
           ? (candidate.diagnostics!.relativeDumpPath == null && candidateDump != null
               ? candidate.diagnostics!.copyWith(relativeDumpPath: candidateDump)
               : candidate.diagnostics!)
@@ -190,6 +201,11 @@ class CompactionBoundaryRepository {
                 targetOutcome: TargetOutcome.unknown,
               ),
             );
+      // The claim-time pre-call binding is authoritative for the operation.
+      final diagnostics = _withClaimedPreCall(
+        candidateDiagnostics,
+        started.diagnostics,
+      );
       final diagnosticsJson = jsonEncode(diagnostics.toJson());
       tx.db.execute(
         '''
@@ -599,6 +615,12 @@ class CompactionBoundaryRepository {
           relativeDumpPath: dumpPath,
         );
       }
+      final claimedPreCall = started.diagnostics?.lastPreCompactionCall;
+      if (claimedPreCall != null) {
+        effectiveDiagnostics = (effectiveDiagnostics ??
+                const CompactionDurableDiagnostics())
+            .copyWith(lastPreCompactionCall: claimedPreCall);
+      }
       final diagnosticsJson = effectiveDiagnostics != null
           ? jsonEncode(effectiveDiagnostics.toJson())
           : null;
@@ -873,6 +895,182 @@ class CompactionBoundaryRepository {
       [sessionId],
     );
     return rows.map((row) => row['id'] as int).toSet();
+  }
+
+  /// Preserves the claim-time pre-call binding over later diagnostics writes.
+  CompactionDurableDiagnostics _withClaimedPreCall(
+    CompactionDurableDiagnostics diagnostics,
+    CompactionDurableDiagnostics? startedDiagnostics,
+  ) {
+    final claimed = startedDiagnostics?.lastPreCompactionCall;
+    if (claimed == null) return diagnostics;
+    return diagnostics.copyWith(lastPreCompactionCall: claimed);
+  }
+
+  /// Reads the newest ordinary assistant row of the session at claim time.
+  ///
+  /// The row is the boundary's pre-call only if it carries provider-reported
+  /// usage. Missing usage, identity, or material proof stays explicit instead
+  /// of being replaced by an older call, a zero value, or an estimate.
+  CompactionPreCallAttribution _preCallAttributionInTransaction(
+    AgentStateTransaction tx, {
+    required String sessionId,
+    required RouteSignature routeSignature,
+  }) {
+    final rows = tx.db.select(
+      '''
+      SELECT id, message_id, request_id, run_id, data
+      FROM messages
+      WHERE session_id = ? AND history_status = ?
+        AND json_extract(data, '\$.role') = ?
+      ORDER BY id DESC
+      LIMIT 1
+      ''',
+      [sessionId, MessageHistoryIdentity.active, MessageRole.assistant.name],
+    );
+    if (rows.isEmpty) {
+      return const CompactionPreCallAttribution(
+        status: CompactionPreCallStatus.absent,
+        applicability: CompactionPreCallApplicability.unknown,
+        reason: CompactionPreCallReason.noOrdinaryCall,
+      );
+    }
+
+    final row = rows.first;
+    final metadata = _metadataOf(row['data']);
+    final contextUsage = _asMap(metadata?['context_usage']);
+    final providerUsage = _asMap(metadata?['usage']);
+    final usageSnapshot = providerUsage == null
+        ? null
+        : LlmUsageSnapshot.fromProviderUsage(providerUsage);
+    final int? inputTokens;
+    final int? cachedInputTokens;
+    if (contextUsage != null) {
+      inputTokens = CompactionPreCallAttribution.reportedInputTokens(
+        contextUsage['input_tokens'],
+      );
+      cachedInputTokens =
+          CompactionPreCallAttribution.reportedCachedInputTokens(
+            contextUsage['cached_tokens'],
+          );
+    } else {
+      inputTokens = CompactionPreCallAttribution.reportedInputTokens(
+        usageSnapshot?.inputTokens,
+      );
+      cachedInputTokens =
+          CompactionPreCallAttribution.reportedCachedInputTokens(
+            usageSnapshot?.cachedTokens,
+          );
+    }
+    final providerInstanceId =
+        _safeText(contextUsage?['provider_instance_id']) ??
+        _safeText(metadata?['provider_instance_id']) ??
+        _safeText(metadata?['provider']);
+    final modelId =
+        _safeText(contextUsage?['model_id']) ?? _safeText(metadata?['model']);
+    final runId =
+        _safeText(contextUsage?['run_id']) ??
+        _safeText(metadata?['run_id']) ??
+        _safeText(row['run_id']);
+    final modelStepId =
+        _safeText(contextUsage?['model_step_id']) ??
+        _safeText(metadata?['model_step_id']);
+    final turnRequestId =
+        _safeText(contextUsage?['request_id']) ??
+        _safeText(row['request_id']) ??
+        runId;
+    final observedAt = DateTime.tryParse(
+      _safeText(contextUsage?['observed_at']) ?? '',
+    )?.toUtc();
+    final requestId = turnRequestId != null && modelStepId != null
+        ? '$turnRequestId:$modelStepId'
+        : null;
+
+    final String applicability;
+    final String? reason;
+    if (inputTokens == null) {
+      applicability = CompactionPreCallApplicability.unknown;
+      reason = CompactionPreCallReason.usageMissing;
+    } else if (requestId == null ||
+        observedAt == null ||
+        providerInstanceId == null ||
+        modelId == null) {
+      applicability = CompactionPreCallApplicability.unknown;
+      reason = CompactionPreCallReason.identityIncomplete;
+    } else if (providerInstanceId != routeSignature.providerInstanceId ||
+        modelId != routeSignature.modelId) {
+      applicability = CompactionPreCallApplicability.notApplicable;
+      reason = CompactionPreCallReason.routeChanged;
+    } else if (_hasCompletedBoundaryAfter(tx, sessionId, observedAt)) {
+      applicability = CompactionPreCallApplicability.notApplicable;
+      reason = CompactionPreCallReason.materialChanged;
+    } else {
+      // Without current-material comparison (e.g. prospective prefix
+      // remeasurement with active tool schemas), syntactic validity of
+      // wire_proof alone cannot establish unchanged prompt/schema/options.
+      // Applicability fails closed to unknown with material_unverified.
+      applicability = CompactionPreCallApplicability.unknown;
+      reason = CompactionPreCallReason.materialUnverified;
+    }
+
+    return CompactionPreCallAttribution(
+      status: CompactionPreCallStatus.recorded,
+      applicability: applicability,
+      reason: reason,
+      messageId:
+          _safeText(row['message_id']) ?? _safeText(metadata?['message_id']),
+      requestId: requestId,
+      runId: runId,
+      modelStepId: modelStepId,
+      observedAt: observedAt,
+      providerInstanceId: providerInstanceId,
+      modelId: modelId,
+      inputTokens: inputTokens,
+      cachedInputTokens: cachedInputTokens,
+    );
+  }
+
+  /// True when a completed boundary was activated after [observedAt], which
+  /// means the measured pre-call material no longer matches the projection.
+  bool _hasCompletedBoundaryAfter(
+    AgentStateTransaction tx,
+    String sessionId,
+    DateTime observedAt,
+  ) {
+    final rows = tx.db.select(
+      '''
+      SELECT 1 FROM session_compaction_operations
+      WHERE session_id = ? AND status = ? AND completed_at > ?
+      LIMIT 1
+      ''',
+      [
+        sessionId,
+        CompactionStatus.completed.wireValue,
+        observedAt.toUtc().toIso8601String(),
+      ],
+    );
+    return rows.isNotEmpty;
+  }
+
+  static Map<String, dynamic>? _metadataOf(Object? data) {
+    if (data is! String) return null;
+    try {
+      final decoded = jsonDecode(data);
+      if (decoded is! Map) return null;
+      return _asMap(decoded['metadata']);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Map<String, dynamic>? _asMap(Object? value) {
+    if (value is! Map) return null;
+    return Map<String, dynamic>.from(value);
+  }
+
+  static String? _safeText(Object? value) {
+    final text = value?.toString().trim();
+    return text == null || text.isEmpty ? null : text;
   }
 
   bool _isStartedConflict(SqliteException error) {

@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/llm_usage_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
+import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/llm_request_dumper.dart';
@@ -491,6 +493,66 @@ class ContextCompactionEngine {
             cause: CompactionFailureCause.invalidResponse,
             diagnostics: failureDiagnostics(usage: aggregateUsage),
           );
+        } on TimeoutException {
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: passKind,
+            requestId: attemptRequestId,
+            duration: Duration.zero,
+            outcome: 'error',
+            failureReason: CompactionFailureCause.timeout,
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
+          throw CompactionEngineFailure(
+            CompactionFailureReason.summarizationFailed,
+            stage: CompactionFailureStage.provider,
+            cause: CompactionFailureCause.timeout,
+            diagnostics: failureDiagnostics(usage: aggregateUsage),
+          );
+        } on LlmHttpException catch (error) {
+          final isRateLimit = error.statusCode == 429;
+          final cause = isRateLimit
+              ? CompactionFailureCause.rateLimited
+              : CompactionFailureCause.providerError;
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: passKind,
+            requestId: attemptRequestId,
+            duration: Duration.zero,
+            outcome: 'error',
+            failureReason: cause,
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
+          throw CompactionEngineFailure(
+            CompactionFailureReason.summarizationFailed,
+            stage: CompactionFailureStage.provider,
+            cause: cause,
+            diagnostics: failureDiagnostics(usage: aggregateUsage),
+          );
+        } catch (error) {
+          if (error is CompactionEngineFailure) rethrow;
+          final classified = CompactionDiagnostics.classify(error);
+          ledger.add(CompactionSummarizationAttemptRecord(
+            passKind: passKind,
+            requestId: attemptRequestId,
+            duration: Duration.zero,
+            outcome: 'error',
+            failureReason: classified.cause,
+            relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+              compactionId: request.compactionId,
+              requestId: attemptRequestId,
+            ),
+          ));
+          throw CompactionEngineFailure(
+            classified.failureReason,
+            stage: classified.stage,
+            cause: classified.cause,
+            diagnostics: failureDiagnostics(usage: aggregateUsage),
+          );
         }
 
         final passUsage = _CompactionUsage.fromProvider(result.usage);
@@ -924,6 +986,46 @@ class ContextCompactionEngine {
           missingFields: ['valid JSON only; ${error.reason}'],
           partial: anchors.isEmpty,
         );
+      } on TimeoutException {
+        ledger.add(CompactionSummarizationAttemptRecord(
+          passKind: effectivePassKind,
+          requestId: attemptRequestId,
+          duration: Duration.zero,
+          outcome: 'error',
+          failureReason: CompactionFailureCause.timeout,
+          relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+            compactionId: request.compactionId,
+            requestId: attemptRequestId,
+          ),
+        ));
+        throw CompactionEngineFailure(
+          CompactionFailureReason.summarizationFailed,
+          stage: CompactionFailureStage.provider,
+          cause: CompactionFailureCause.timeout,
+          diagnostics: failureDiagnostics(usage: aggregateUsage),
+        );
+      } on LlmHttpException catch (error) {
+        final isRateLimit = error.statusCode == 429;
+        final cause = isRateLimit
+            ? CompactionFailureCause.rateLimited
+            : CompactionFailureCause.providerError;
+        ledger.add(CompactionSummarizationAttemptRecord(
+          passKind: effectivePassKind,
+          requestId: attemptRequestId,
+          duration: Duration.zero,
+          outcome: 'error',
+          failureReason: cause,
+          relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+            compactionId: request.compactionId,
+            requestId: attemptRequestId,
+          ),
+        ));
+        throw CompactionEngineFailure(
+          CompactionFailureReason.summarizationFailed,
+          stage: CompactionFailureStage.provider,
+          cause: cause,
+          diagnostics: failureDiagnostics(usage: aggregateUsage),
+        );
       } on FormatException catch (e) {
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
@@ -939,6 +1041,26 @@ class ContextCompactionEngine {
         instruction = CompactionSummaryPrompt.buildJsonInstruction(
           missingFields: CompactionInternalSummary.requiredSectionKeys,
           partial: anchors.isEmpty,
+        );
+      } catch (error) {
+        if (error is CompactionEngineFailure) rethrow;
+        final classified = CompactionDiagnostics.classify(error);
+        ledger.add(CompactionSummarizationAttemptRecord(
+          passKind: effectivePassKind,
+          requestId: attemptRequestId,
+          duration: Duration.zero,
+          outcome: 'error',
+          failureReason: classified.cause,
+          relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
+            compactionId: request.compactionId,
+            requestId: attemptRequestId,
+          ),
+        ));
+        throw CompactionEngineFailure(
+          classified.failureReason,
+          stage: classified.stage,
+          cause: classified.cause,
+          diagnostics: failureDiagnostics(usage: aggregateUsage),
         );
       }
     }

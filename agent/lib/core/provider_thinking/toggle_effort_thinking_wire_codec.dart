@@ -18,6 +18,9 @@ class ToggleEffortThinkingWireCodec {
     bool enableThinkingWithEffort = false,
   }) {
     switch (directive) {
+      case NativeThinkingEffortDirective(:final effort):
+        body['thinking'] = const {'type': 'enabled'};
+        body['reasoning_effort'] = effort;
       case OpenAiEffortDirective(:final effort):
         if (enableThinkingWithEffort) {
           body['thinking'] = const {'type': 'enabled'};
