@@ -179,6 +179,25 @@ abstract final class CompactionFailureFormatter {
           copy.compactionActionInvalidResponse,
         );
 
+      // Task 118 Stage2: failed summary shapes after bounded attempts.
+      case 'summary_empty':
+        return (
+          copy.compactionFailureSummaryEmpty,
+          copy.compactionActionSummaryEmpty,
+        );
+
+      case 'summary_reasoning_only':
+        return (
+          copy.compactionFailureSummaryReasoningOnly,
+          copy.compactionActionSummaryReasoningOnly,
+        );
+
+      case 'summary_truncated':
+        return (
+          copy.compactionFailureSummaryTruncated,
+          copy.compactionActionSummaryTruncated,
+        );
+
       case 'network_error':
         return (copy.compactionFailureNetwork, copy.compactionActionNetwork);
 
@@ -291,6 +310,9 @@ abstract final class CompactionFailureFormatter {
       'rate_limited' ||
       'overflow' ||
       'invalid_response' ||
+      'summary_empty' ||
+      'summary_reasoning_only' ||
+      'summary_truncated' ||
       'network_error' ||
       'provider_error' ||
       'summarization_failed' => 'provider',

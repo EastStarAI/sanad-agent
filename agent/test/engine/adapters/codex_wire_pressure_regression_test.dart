@@ -42,8 +42,13 @@ import 'package:test/test.dart';
 const _contextWindow = 258_000;
 const _thresholdRatio = 0.9;
 
-/// `(258000 - 4096 - 1024) * 0.9` — the live automatic compaction threshold.
-const _expectedThresholdTokens = 227_592;
+/// `258000 * 0.9` — the automatic threshold over the full window `W`
+/// (Task 118; it was `(258000 - 4096 - 1024) * 0.9 = 227592` before).
+const _expectedThresholdTokens = 232_200;
+
+/// The threshold the live regression actually crossed in production, before
+/// Task 118 moved the nominal threshold onto `W`. Only defect references use it.
+const _historicalLiveThresholdTokens = 227_592;
 
 const _fixtureProviderInstanceId = 'g11-codex-fixture';
 
@@ -371,7 +376,7 @@ void main() {
         expect(legacyEncodedAllowance, greaterThan(90_000));
         expect(
           confirmedInputTokens + legacyEncodedAllowance,
-          greaterThan(_expectedThresholdTokens),
+          greaterThan(_historicalLiveThresholdTokens),
           reason: 'the regression scenario must reproduce the live crossing',
         );
 

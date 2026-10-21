@@ -157,7 +157,16 @@ void main() {
         expect(derived.timeout, const Duration(seconds: 60));
         expect(derived.maxOutputTokens, 1024);
         expect(derived.cancellationScope, same(cancellationScope));
-        expect(derived.watchdogs.connectTimeout, const Duration(seconds: 45));
+        // Task 118: the response-arrival watchdog of a compaction pass is the
+        // central compaction pass timeout, not the normal-turn value.
+        expect(
+          derived.watchdogs.connectTimeout,
+          ModelAwareCompactionPolicy.defaultPassTimeout,
+        );
+        expect(
+          derived.watchdogs.firstByteTimeout,
+          customWatchdogs.firstByteTimeout,
+        );
         expect(derived.attachmentStore, same(attachmentStore));
         expect(derived.requestClientFactory, isNotNull);
       },

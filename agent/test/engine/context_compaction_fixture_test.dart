@@ -71,7 +71,9 @@ CompactionEngineRequest _request({
   required List<IndexedConversationMessage> timeline,
   CompactionInternalSummary? previousSummary,
   RouteSignature? routeSignature,
-  double thresholdRatio = 0.80,
+  // W=4000 leaves a clamped usable input of 3000. Since Task 118 the ratio
+  // applies to W, so 0.60 keeps the former 2400-token trigger (0.80 x 3000).
+  double thresholdRatio = 0.60,
 }) {
   return CompactionEngineRequest(
     compactionId: 'cmp-fixture',
