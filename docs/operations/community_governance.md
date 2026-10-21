@@ -17,7 +17,7 @@ Every new Issue starts with `needs-triage` and one `type/*` label supplied by it
 
 `.github/labels.yml` is the versioned label source. The sync helper validates that names are unique, colors are six-digit hexadecimal values, descriptions are non-empty, and required groups are complete. Its default mode is non-mutating. SANAD-11 applies it after reviewing the target public repository. Labels are not deleted automatically.
 
-Protected positive-review labels are restricted to users with triage/write permission. Governance and `.github/` changes require `maintainer-reviewed`; auth/security boundaries require `security-reviewed`; release, signing, installer, and updater changes require `release-reviewed`. Adding or removing a pull-request label reruns CI.
+Protected positive-review labels are restricted to users with triage/write permission. Governance and `.github/` changes require `maintainer-reviewed`; auth/security boundaries require `security-reviewed`; release, signing, installer, and updater changes require `release-reviewed`. Public CI runs on code events only (`opened`, `synchronize`, `reopened`, `ready_for_review`), so ordinary labels never restart or cancel it. Adding or removing a protected label triggers the small `Protected label review` workflow, which waits for the latest Public CI run of the current head SHA and re-runs only its `Verify protected review labels` job; GitHub re-runs the dependent `All required checks pass` job, which keeps every other job's result from that same run. The protected-label job reads the pull request's labels at run time, never from the event payload. Fork pull requests receive a read-only token, so a maintainer re-runs that job manually after changing a protected label.
 
 ## Pull Request and Branch Model
 
@@ -37,7 +37,7 @@ SANAD-11 consumes these local artifacts:
 - Issue Forms, pull-request template, and CODEOWNERS;
 - the stable CI aggregate check and protected-path gates.
 
-The live application sequence is: create the repository, enable Private Vulnerability Reporting and Discussions, create categories, dry-run then apply labels, verify form destinations, apply repository merge settings and branch protection, open a no-secrets fork test, and confirm label events rerun protected review. Live category IDs and repository rule identifiers are not stored in the source manifest.
+The live application sequence is: create the repository, enable Private Vulnerability Reporting and Discussions, create categories, dry-run then apply labels, verify form destinations, apply repository merge settings and branch protection, open a no-secrets fork test, and confirm a protected-label change re-runs the protected review job while ordinary labels start no Public CI run. Live category IDs and repository rule identifiers are not stored in the source manifest.
 
 ## Discord Handoff
 
