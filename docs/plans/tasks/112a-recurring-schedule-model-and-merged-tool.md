@@ -72,8 +72,11 @@ storage that survives a daemon restart.
 - **D10 — `update` scope.** `update` may change the `task` text and/or the schedule definition and
   recomputes the next instant. `pause`/`resume`, `run-now`, and delivery/reporting targets are out of
   scope.
-- **D11 — Out of scope.** The `sanad schedule` CLI stub, any Client (Flutter) surface, and any
-  client-facing settings UI. The timezone setting is agent-side only in this release.
+- **D11 — Scope boundary.** The `sanad schedule list` CLI is in scope (user 2026-10-21), read-only:
+  it reads the selected Home's `scheduled_tasks` through a read-only SQLite connection and adds no
+  mutation subcommand, because changes stay owned by `CronScheduler` (single writer). Any Client
+  (Flutter) surface and any client-facing settings UI remain out of scope. The timezone setting is
+  agent-side only in this release.
 
 ## Gates
 
@@ -258,6 +261,23 @@ mutation-checked: reverting either makes its test fail).
 | P9 | minor | mixed shapes `interval`+`at`/`in` and `once`+calendar fields were accepted with fields dropped (D2) | rejected with a message naming the conflict |
 | P10 | minor | `once in 30 seconds` summarized as "once in 0 minutes" | summary renders seconds; the legacy `seconds` unit stays accepted for one-shot delays only (main accepted it, B-D4) |
 | P11 | minor | next-run rendering differed per zone (`local` had no designator, `Z` had milliseconds) | one format `YYYY-MM-DDTHH:MM:SS` + `Z`/`±HH:MM` |
+| P12 | minor | live r1: the fallback from an unsupported `SCHEDULE_TIMEZONE` (IANA or invalid) to `local` was silent | `AgentContextAssembler` logs one `WARNING` per distinct rejected value (never per turn) naming it, stating IANA is unsupported in this release and the accepted forms `local`/`±HH:MM` |
+
+### `sanad schedule list` (user scope addition, 2026-10-21)
+
+The hard-coded stub became a real read-only listing (D11 updated). `AgentStateDatabase.readOnlyAtPath`
+opens `state.db` with SQLite `OpenMode.readOnly` plus `PRAGMA query_only = ON` and no bootstrap,
+schema or migration; `ScheduledTaskRepository.inspectScheduledTasks` tolerates a missing table and a
+pre-112 table; the command reuses `ScheduledTaskRecord.fromRow`, `humanRecurrenceSummary` and
+`ScheduleZone.formatInstant`. Text and a stable `--json` shape are documented in
+`docs/technical/sanad_cli_architecture.md` §11. Tests (`agent/test/cli/schedule_list_command_test.dart`)
+cover a Home without a database, an empty Home, a missing table, one row of every kind, the JSON
+shape, a legacy table left unmigrated, and unchanged `state.db`/`state.db-wal` hashes plus an
+unchanged writer `data_version` while a writer holds the database open.
+
+Verification (from `agent/`): `fvm dart analyze` no issues; focused suites (schedule list, command
+runner, date zone incl. the once-per-value warning, migration, state-isolation guard) 49 passed;
+full `fvm dart test` 3,084 passed, 14 skipped, 0 failed.
 
 ### Port verification (2026-10-21, final tree)
 

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import '../core/config.dart';
@@ -220,9 +221,25 @@ class AgentContextAssembler {
     try {
       return ScheduleZone.parse(configured);
     } on ScheduleValidationException {
+      // Warn once per distinct rejected value; the date line is rebuilt every
+      // turn and must not repeat the warning.
+      if (_warnedInvalidZones.add(configured)) {
+        _logger.warning(
+          'SCHEDULE_TIMEZONE "$configured" is not supported; using local. '
+          'IANA zone names are not supported in this release; accepted forms '
+          'are local or ±HH:MM.',
+        );
+      }
       return ScheduleZone.local();
     }
   }
+
+  static final Logger _logger = Logger('AgentContextAssembler');
+  static final Set<String> _warnedInvalidZones = {};
+
+  /// Clears the once-per-value warning memory between tests.
+  @visibleForTesting
+  static void resetZoneWarningsForTesting() => _warnedInvalidZones.clear();
 
   // ── Private helpers ──────────────────────────────────────────────────────
 

@@ -53,6 +53,7 @@ This contract applies to `agent/`.
 ### Persistence and Identity Authority
 - Durable sessions, work items, notices, pending input, provider metadata, and route transitions use one shared agent-state database connection with one repository owner per table.
 - The daemon and in-process standalone CLI acquire the same exclusive state-root ownership lease before opening the agent-state database; a second runtime fails closed and never competes for SQLite.
+- Read-only CLI inspection (`sanad schedule list`) is not a runtime: it takes no lease and opens the agent-state database only through `AgentStateDatabase.readOnlyAtPath`, never migrating or writing it. Schedule mutations stay with the daemon's `CronScheduler`.
 - Admission, terminal commit, failover, stop cleanup, and cross-table execution transitions remain transactional through their aggregate owner.
 - `hardware_id` is persistent local machine identity and is distinct from backend-assigned device ids.
 - `run_id` owns execution, `model_step_id` owns one model invocation, `tool_call_id` pairs tool use/result, raw `request_id` owns command correlation, and opaque `event_id` owns one canonical semantic event. `message_id` owns one persisted history record, `turn_id` owns one execution attempt's history records, and `history_revision` owns compare-and-swap for active-history mutations. Never substitute these identities for one another, for SQLite row ids, or for hydration indexes.

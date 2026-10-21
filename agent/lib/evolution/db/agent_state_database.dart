@@ -89,6 +89,34 @@ class AgentStateDatabase {
     _openAtPath(stateHomePath);
   }
 
+  /// Opens an existing `state.db` under [stateHomePath] strictly read-only for
+  /// CLI inspection while the daemon may own the Home.
+  ///
+  /// The connection uses SQLite `OpenMode.readOnly` plus `PRAGMA query_only`,
+  /// and runs no Home bootstrap, schema creation, migration, WAL switch or
+  /// permission repair, so it never writes the database. Throws
+  /// [SqliteException] when the file does not exist; callers check first.
+  AgentStateDatabase.readOnlyAtPath(String stateHomePath)
+    : _busyRetryWait = sleep {
+    ensureSqliteOverride();
+    _db = sqlite3.open(
+      p.join(stateHomePath, stateDatabaseFileName),
+      mode: OpenMode.readOnly,
+    );
+    _owned = true;
+    try {
+      _db.execute('PRAGMA busy_timeout = 5000');
+      _db.execute('PRAGMA query_only = ON');
+    } catch (_) {
+      _db.dispose();
+      _owned = false;
+      rethrow;
+    }
+  }
+
+  /// File name of the agent-state database inside a state root.
+  static const String stateDatabaseFileName = 'state.db';
+
   /// Opens an in-memory database. Used by tests and ephemeral runtimes.
   AgentStateDatabase.inMemory({
     @visibleForTesting void Function(Duration)? busyRetryWait,

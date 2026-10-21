@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/engine/agent_context_assembler.dart';
@@ -16,6 +17,7 @@ void main() {
     setSanadHomeOverride(tempDir.path);
     setSanadStateHomeOverride(tempDir.path);
     await GetIt.I.reset();
+    AgentContextAssembler.resetZoneWarningsForTesting();
   });
 
   tearDown(() async {
@@ -100,6 +102,40 @@ void main() {
       final assembler = AgentContextAssembler(identity: 'ID')..setVolatile();
       final result = assembler.assemble()!;
       expect(result, contains('(zone: local)'));
+    });
+
+    test('warns once per distinct unsupported zone value', () async {
+      final previousLevel = Logger.root.level;
+      Logger.root.level = Level.ALL;
+      final warnings = <LogRecord>[];
+      final subscription = Logger.root.onRecord
+          .where((r) => r.loggerName == 'AgentContextAssembler')
+          .listen(warnings.add);
+      try {
+        for (var turn = 0; turn < 3; turn++) {
+          expect(
+            AgentContextAssembler.formatDateLine(zoneName: 'Africa/Cairo'),
+            endsWith('(zone: local)'),
+          );
+        }
+        AgentContextAssembler.formatDateLine(zoneName: '+03:00');
+        AgentContextAssembler.formatDateLine(zoneName: 'local');
+        await Future<void>.delayed(Duration.zero);
+        expect(warnings, hasLength(1));
+        expect(warnings.single.level, Level.WARNING);
+        expect(warnings.single.message, contains('"Africa/Cairo"'));
+        expect(warnings.single.message, contains('IANA'));
+        expect(warnings.single.message, contains('local or ±HH:MM'));
+
+        AgentContextAssembler.formatDateLine(zoneName: '+25:00');
+        AgentContextAssembler.formatDateLine(zoneName: '+25:00');
+        await Future<void>.delayed(Duration.zero);
+        expect(warnings, hasLength(2));
+        expect(warnings.last.message, contains('"+25:00"'));
+      } finally {
+        await subscription.cancel();
+        Logger.root.level = previousLevel;
+      }
     });
   });
 }

@@ -2,13 +2,26 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'agent_state_database.dart';
 
+/// Schema shape of `scheduled_tasks` as seen by a read-only inspection.
+enum ScheduledTaskTableShape {
+  /// The table does not exist (a Home that never stored a schedule).
+  missing,
+
+  /// A pre-Task-112 table that has `run_at` but no recurrence columns.
+  legacy,
+
+  /// The current Task 112 table.
+  current,
+}
+
 /// Persistent storage for scheduled tasks (Task 112).
 ///
 /// Owns every read and write of the `scheduled_tasks` table. The table schema
 /// and its additive migration are owned by [AgentStateDatabase]; `run_at` is
 /// a legacy mirror of `next_run_at` kept for older agents, written on every
-/// save and never read here. The only
-/// mutation path above this repository is `CronScheduler` (single writer).
+/// save and read only by the tolerant [inspectScheduledTasks] listing. The
+/// only mutation path above this repository is `CronScheduler` (single
+/// writer).
 class ScheduledTaskRepository {
   final AgentStateDatabase _state;
 
@@ -97,6 +110,47 @@ class ScheduledTaskRepository {
       'SELECT * FROM scheduled_tasks ORDER BY next_run_at ASC',
     );
     return result.map(_rowToMap).toList();
+  }
+
+  /// Read-only listing for inspection surfaces (`sanad schedule list`) that
+  /// may run against a Home the current agent has not migrated.
+  ///
+  /// Issues SELECT/PRAGMA only. A missing table yields
+  /// [ScheduledTaskTableShape.missing]; a pre-Task-112 table (no `next_run_at`)
+  /// yields [ScheduledTaskTableShape.legacy] with absent columns read as null.
+  /// The effective next run follows the migration precedence: a non-blank
+  /// `run_at` wins (an older agent may have written it last), else
+  /// `next_run_at`.
+  ({ScheduledTaskTableShape shape, List<Map<String, dynamic>> rows})
+  inspectScheduledTasks() {
+    final columns = _db
+        .select("PRAGMA table_info('scheduled_tasks')")
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.isEmpty) {
+      return (shape: ScheduledTaskTableShape.missing, rows: const []);
+    }
+    final hasNext = columns.contains('next_run_at');
+    final hasRunAt = columns.contains('run_at');
+    final nextExpr = switch ((hasRunAt, hasNext)) {
+      (true, true) => "COALESCE(NULLIF(TRIM(run_at), ''), next_run_at)",
+      (true, false) => 'run_at',
+      (false, true) => 'next_run_at',
+      (false, false) => 'NULL',
+    };
+    final result = _db.select(
+      'SELECT *, $nextExpr AS effective_next_run_at FROM scheduled_tasks '
+      'ORDER BY effective_next_run_at ASC, id ASC',
+    );
+    return (
+      shape: hasNext
+          ? ScheduledTaskTableShape.current
+          : ScheduledTaskTableShape.legacy,
+      rows: [
+        for (final row in result)
+          {..._rowToMap(row), 'next_run_at': row['effective_next_run_at']},
+      ],
+    );
   }
 
   void deleteScheduledTask(String id) {

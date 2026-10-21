@@ -399,7 +399,7 @@ void main() {
 
         stdoutBuffer.clear();
         expect(await runner.run(['schedule', 'list']), 0);
-        expect(stdoutBuffer.toString(), contains('Scheduled'));
+        expect(stdoutBuffer.toString(), contains('No scheduled tasks'));
       },
     );
   });

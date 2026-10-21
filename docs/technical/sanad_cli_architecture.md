@@ -294,3 +294,34 @@ The Sanad CLI architecture provides a remote execution seam so that `sanad-clien
 - Interrupting the caller (`SIGINT`) forwards `device.cli.cancel`; the remote
   runner terminates the active command, the caller exits with code 130, and the
   remote session run is cancelled.
+
+---
+
+## 11. Schedule Inspection (`sanad schedule list`, Task 112)
+
+`sanad schedule list` reads the `scheduled_tasks` rows of the selected Home directly from its
+`state.db`, without the daemon. It is inspection only: schedule creation, update and cancellation stay
+owned by the daemon's `CronScheduler` (single writer), so the CLI has no mutation subcommand.
+
+- **Home selection:** `--home <path>` names the Home root that holds `state.db`; without it the
+  process state root is used (`SANAD_STATE_HOME`, then `SANAD_HOME`, then the default Home).
+- **Read-only connection:** `AgentStateDatabase.readOnlyAtPath` opens the file with SQLite
+  `OpenMode.readOnly` and sets `PRAGMA query_only = ON`. It runs no Home bootstrap, schema creation,
+  migration, WAL switch or permission repair, and it takes no state-root ownership lease, so it is safe
+  while the daemon runs. A missing `state.db` is reported as empty and is never created. In WAL mode
+  SQLite readers record read marks in the `state.db-shm` shared-memory index; `state.db` and
+  `state.db-wal` stay byte-identical.
+- **Schema tolerance:** `ScheduledTaskRepository.inspectScheduledTasks` issues `PRAGMA`/`SELECT`
+  only. A missing table is empty; a pre-Task-112 table (`run_at` only) is listed with the defaults
+  `once`/`local`/enabled. The effective next run follows the migration precedence: a non-blank
+  `run_at`, else `next_run_at`.
+- **Text output:** columns `ID`, `SCHEDULE` (the schedule model's `humanRecurrenceSummary`, e.g.
+  `daily at 14:52`, `every 10 minutes`, `weekly on mon, wed at 23:45`, `once at …`), `NEXT RUN` in the
+  schedule zone, `ZONE`, `SESSION` (first 8 characters), `ENABLED`, and `LAST` (last status and last run
+  in the schedule zone). An empty listing prints `No scheduled tasks`.
+- **JSON output (`--json`), stable shape:** one object
+  `{"source", "count", "tasks"}` where `source` is `current`, `legacy`, `missing_table` or
+  `missing_database`, and each task has, in order, `id`, `task`, `kind`, `summary`, `zone`,
+  `next_run_at` (in the zone), `next_run_at_utc`, `session_id` (full), `enabled`, `last_status`,
+  `last_run_at` (in the zone) and `last_run_at_utc`.
+- Coverage: `agent/test/cli/schedule_list_command_test.dart`.

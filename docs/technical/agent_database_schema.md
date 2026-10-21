@@ -236,7 +236,7 @@ See `docs/technical/context_compaction.md` §8 for activation CAS and Task 51/52
 ### 3.3. `scheduled_tasks` Table
 Tracks automation tasks and scheduled recurring loops that the daemon runs asynchronously (Task 112a, Decision D8).
 
-Ownership: the table schema and its migration live in `AgentStateDatabase`; every read and write goes through `ScheduledTaskRepository` (`agent/lib/evolution/db/scheduled_task_repository.dart`) behind the `SessionDB` facade, and `CronScheduler` is the only caller that mutates rows.
+Ownership: the table schema and its migration live in `AgentStateDatabase`; every read and write goes through `ScheduledTaskRepository` (`agent/lib/evolution/db/scheduled_task_repository.dart`) behind the `SessionDB` facade, and `CronScheduler` is the only caller that mutates rows. `sanad schedule list` reads the table through a separate read-only connection (`AgentStateDatabase.readOnlyAtPath`) and never migrates it; see `docs/technical/sanad_cli_architecture.md` §11.
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
@@ -250,7 +250,7 @@ Ownership: the table schema and its migration live in `AgentStateDatabase`; ever
 | `month_day` | `INTEGER` | Nullable | Day of month 1..31 (for `monthly`) |
 | `zone` | `TEXT` | Non-null DEFAULT `'local'` | Timezone (`local` or fixed UTC offset `Z`, `+HH:MM`, `-HH:MM`) |
 | `next_run_at` | `TEXT` | Nullable only for rows an older agent inserted (backfilled at the next open); always written by the current agent | ISO8601 UTC timestamp of next scheduled execution; the only column the current agent reads for scheduling |
-| `run_at` | `TEXT` | Nullable on new tables; still `NOT NULL` on tables created before Task 112 | Legacy mirror of `next_run_at`, written on every save and never read by the current agent, so an older agent (rollback) on the same Home keeps working |
+| `run_at` | `TEXT` | Nullable on new tables; still `NOT NULL` on tables created before Task 112 | Legacy mirror of `next_run_at`, written on every save and never read for scheduling (only the read-only `sanad schedule list` inspection reads it, with the migration precedence), so an older agent (rollback) on the same Home keeps working |
 | `created_at` | `TEXT` | Non-null | ISO8601 UTC creation timestamp |
 | `updated_at` | `TEXT` | Nullable only for rows an older agent inserted (backfilled from `created_at` at the next open) | ISO8601 UTC last update timestamp |
 | `last_run_at` | `TEXT` | Nullable | ISO8601 UTC timestamp of previous execution (preserved without change on skipped occurrences) |

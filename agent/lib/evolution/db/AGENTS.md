@@ -9,6 +9,7 @@ This contract applies to `agent/lib/evolution/db/`.
 - Cross-table aggregate mutations execute transactionally through one owning coordinator.
 - Default on-disk connection construction fails closed under `dart test` unless state has been explicitly redirected; tests use in-memory or temporary state and never inherit the user's database.
 - `AgentStateDatabase` owns page-layout statistics and `VACUUM`, and must reject `VACUUM` while it holds an open transaction.
+- `AgentStateDatabase.readOnlyAtPath` is the only inspection handle for a Home another runtime may own: SQLite `OpenMode.readOnly` plus `PRAGMA query_only`, with no bootstrap, schema creation, migration, or WAL switch. Inspection readers must tolerate a missing or older schema rather than migrate it.
 
 ## Concurrency Policy
 - On-disk connections run in WAL journal mode with a 5000ms `busy_timeout`. In-memory connections keep the 5000ms `busy_timeout` only (SQLite cannot enable WAL for `:memory:`).
@@ -21,7 +22,7 @@ This contract applies to `agent/lib/evolution/db/`.
 - Session database responsibilities are decomposed into cohesive owners behind the `SessionDB` facade:
   - `SessionRepository`: session lifecycle, metadata, titles, and workspace records.
   - `SessionMessageRepository`: message replace, append and read, history pages and projection, and originating tool-call lookup. It is the only owner of the history-rewrite algorithm.
-  - `ScheduledTaskRepository`: every `scheduled_tasks` read and write (create/upsert, single read, ordered list, delete); the table schema and its additive migration stay in `AgentStateDatabase`.
+  - `ScheduledTaskRepository`: every `scheduled_tasks` read and write (create/upsert, single read, ordered list, delete) plus the schema-tolerant `inspectScheduledTasks` read (PRAGMA/SELECT only; missing and pre-112 tables) used by read-only inspection; the table schema and its additive migration stay in `AgentStateDatabase`.
   - `SuspendedCheckpointRepository`: suspended checkpoints and work-item state.
   - `SessionForkCommitRepository`: fork, soft-rewind, and root-user commit records.
   - `SessionDB`: delegating facade preserving the public API surface; it holds no SQL of its own and must never carry a second copy of a repository algorithm.
