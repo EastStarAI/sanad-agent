@@ -972,8 +972,13 @@ class ContextCompactionEngine {
           instruction = CompactionSummaryPrompt.buildJsonInstruction(
             missingFields: continuity.missingAnchors,
           );
-        } on FormatException {
-          lastShape = CompactionFailureCause.summaryInvalidJson;
+        } on FormatException catch (error) {
+          final mismatch = error is CompactionSummarySchemaMismatch
+              ? error
+              : null;
+          lastShape = mismatch != null
+              ? CompactionFailureCause.summarySchemaMismatch
+              : CompactionFailureCause.summaryInvalidJson;
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: passKind,
             requestId: attemptRequestId,
@@ -984,7 +989,7 @@ class ContextCompactionEngine {
             outputTokens: passUsage.outputTokens,
             reasoningTokens: passUsage.reasoningTokens,
             outcome: 'invalid_response',
-            failureReason: CompactionFailureCause.summaryInvalidJson,
+            failureReason: lastShape,
             relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
               compactionId: request.compactionId,
               requestId: attemptRequestId,
@@ -992,6 +997,7 @@ class ContextCompactionEngine {
           ));
           instruction = CompactionSummaryPrompt.buildJsonInstruction(
             missingFields: CompactionInternalSummary.requiredSectionKeys,
+            typeMismatches: mismatch?.fields ?? const [],
           );
         }
       }
@@ -1531,8 +1537,13 @@ class ContextCompactionEngine {
           cause: cause,
           diagnostics: failureDiagnostics(usage: aggregateUsage),
         );
-      } on FormatException {
-        lastShape = CompactionFailureCause.summaryInvalidJson;
+      } on FormatException catch (error) {
+        final mismatch = error is CompactionSummarySchemaMismatch
+            ? error
+            : null;
+        lastShape = mismatch != null
+            ? CompactionFailureCause.summarySchemaMismatch
+            : CompactionFailureCause.summaryInvalidJson;
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
           requestId: attemptRequestId,
@@ -1543,7 +1554,7 @@ class ContextCompactionEngine {
           outputTokens: passUsage.outputTokens,
           reasoningTokens: passUsage.reasoningTokens,
           outcome: 'invalid_response',
-          failureReason: CompactionFailureCause.summaryInvalidJson,
+          failureReason: lastShape,
           relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
             compactionId: request.compactionId,
             requestId: attemptRequestId,
@@ -1551,6 +1562,7 @@ class ContextCompactionEngine {
         ));
         instruction = CompactionSummaryPrompt.buildJsonInstruction(
           missingFields: CompactionInternalSummary.requiredSectionKeys,
+          typeMismatches: mismatch?.fields ?? const [],
           partial: anchors.isEmpty,
         );
       } catch (error) {

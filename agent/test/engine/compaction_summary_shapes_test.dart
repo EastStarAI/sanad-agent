@@ -48,8 +48,18 @@ String _validJson() => jsonEncode({
   'remainingWork': 'run tests',
 });
 
+/// Valid JSON with every key, but a string field holds structured data
+/// (live r2 on gpt-4o-mini: `filesAndPaths` was an object).
+String _typedFieldJson(Object value) {
+  final map = jsonDecode(_validJson()) as Map<String, dynamic>;
+  map['filesAndPaths'] = value;
+  return jsonEncode(map);
+}
+
 enum _Shape {
   valid,
+  objectField,
+  listField,
   empty,
   reasoningOnly,
   truncated,
@@ -66,6 +76,9 @@ class _ScriptedAdapter implements LLMAdapter {
   final List<_Shape> script;
   int calls = 0;
 
+  /// The appended compaction instruction of every call, in order.
+  final instructions = <String>[];
+
   @override
   Future<AgentResponse> generateResponse(
     List<Message> history, {
@@ -74,8 +87,27 @@ class _ScriptedAdapter implements LLMAdapter {
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
     final shape = script[calls++];
+    instructions.add(history.last.content ?? '');
     const usage = {'prompt_tokens': 100, 'completion_tokens': 10};
     switch (shape) {
+      case _Shape.objectField:
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: _typedFieldJson({'files': [_privateMarker]}),
+          ),
+          usage: usage,
+          finishReason: LLMFinishReason.stop,
+        );
+      case _Shape.listField:
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: _typedFieldJson([_privateMarker, 'agent/lib/b.dart']),
+          ),
+          usage: usage,
+          finishReason: LLMFinishReason.stop,
+        );
       case _Shape.valid:
         return AgentResponse(
           message: Message(role: MessageRole.assistant, content: _validJson()),
@@ -249,6 +281,16 @@ void main() {
       ledgerReason: CompactionFailureCause.summaryInvalidJson,
       cause: CompactionFailureCause.invalidResponse,
     ),
+    // Task 118b D3: a field of the wrong type is a schema mismatch, not
+    // unparseable JSON.
+    _Shape.objectField: (
+      ledgerReason: CompactionFailureCause.summarySchemaMismatch,
+      cause: CompactionFailureCause.invalidResponse,
+    ),
+    _Shape.listField: (
+      ledgerReason: CompactionFailureCause.summarySchemaMismatch,
+      cause: CompactionFailureCause.invalidResponse,
+    ),
     _Shape.toolCall: (
       ledgerReason: CompactionFailureCause.summaryToolCall,
       cause: CompactionFailureCause.invalidResponse,
@@ -322,6 +364,27 @@ void main() {
         );
       });
     });
+  }
+
+  for (final (shape, kind) in [
+    (_Shape.objectField, 'object'),
+    (_Shape.listField, 'array'),
+  ]) {
+    test(
+      'Task 118b D3: the ${shape.name} correction names the field and the expected type',
+      () async {
+        final adapter = _ScriptedAdapter([shape, _Shape.valid]);
+        await engineFor(adapter).buildCandidate(_request());
+
+        final repair = adapter.instructions.last;
+        expect(repair, contains('filesAndPaths'));
+        expect(repair, contains('must be a JSON string'));
+        expect(repair, contains('not a JSON $kind'));
+        expect(repair, isNot(contains(_privateMarker)));
+        // The targeted repair does not re-list every required field.
+        expect(repair, isNot(contains('present and non-empty')));
+      },
+    );
   }
 
   test('timeout fails at once with its measured duration recorded', () async {

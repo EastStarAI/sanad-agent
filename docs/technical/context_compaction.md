@@ -660,6 +660,9 @@ ledger, diagnostics or logs:
 | `summary_reasoning_only` | visible content is empty after reasoning markup is removed, and reasoning or markup was returned | `summary_reasoning_only` |
 | `summary_empty` | no visible content and no reasoning | `summary_empty` |
 | `summary_invalid_json` | the strict JSON parser rejects the text | `invalid_response` |
+| `summary_schema_mismatch` | valid JSON whose allowlisted field holds a non-string value (object, array, number, boolean or null; Task 118b D3) | `invalid_response` |
+
+A schema mismatch is not normalized: the contract stays strict (no wrong types), and a value is never flattened or trimmed by the agent. Its single correction instead names each mismatched field and its JSON type (for example "the value of filesAndPaths must be a JSON string, not a JSON object") and asks for the whole content in one string, rather than re-listing every required field. Live r2 on OpenRouter `gpt-4o-mini` returned an object for `filesAndPaths`; it had been classified as invalid JSON, and the generic repair then produced broken JSON.
 
 Each shape gets exactly one corrective attempt from the immutable base; the
 failure is stage `provider` with the latest attempt's cause, never a continuity
