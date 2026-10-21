@@ -1100,6 +1100,55 @@ void main() {
     },
   );
 
+  test(
+    'restored identity-only session adopts its stored thinking pick once the authoritative summary arrives',
+    () async {
+      // Client restart: the device preference holds a pick made on another
+      // conversation, while this conversation stored an explicit `max`.
+      await preferencesRepository.setLastProvider(agent.id, 'go-1');
+      await preferencesRepository.setLastModel(agent.id, 'glm-5.2');
+      await preferencesRepository.setLastThinkingMode(agent.id, 'high');
+      final now = DateTime.now();
+      await sessionCubit.selectSession(
+        Session(id: 'session-glm', title: 'Loading...', deviceId: agent.id, createdAt: now, updatedAt: now),
+      );
+
+      final restartedMessagesCubit = _TestSessionMessagesCubit(
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        conversationRepository: conversationRepository,
+        preferencesRepository: preferencesRepository,
+        capabilitiesStore: capabilitiesStore,
+        localToolRuntime: localToolRuntime,
+        workspaceRuntimeContext: workspaceRuntimeContext,
+      );
+      final restartedInputCubit = ConversationInputCubit(messagesCubit: restartedMessagesCubit);
+      await Future<void>.delayed(Duration.zero);
+
+      await sessionCubit.selectSession(
+        Session(
+          id: 'session-glm',
+          title: 'GLM conversation',
+          deviceId: agent.id,
+          createdAt: now,
+          updatedAt: now,
+          modelProvider: 'go-1',
+          model: 'glm-5.2',
+          routeRevision: 3,
+          thinkingMode: 'max',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(restartedInputCubit.state.nextMessageThinkingMode, 'max');
+      // Adopting the stored pick is not a user choice: no device write.
+      expect(preferencesRepository.getLastThinkingMode(agent.id), 'high');
+
+      await restartedInputCubit.close();
+      await restartedMessagesCubit.close();
+    },
+  );
+
   test('authoritative readiness repairs a provider-only route', () async {
     messagesCubit.setNextMessagePreferences(providerId: 'provider-partial');
     await Future<void>.delayed(Duration.zero);
@@ -1193,9 +1242,15 @@ class _TestSessionMessagesCubit extends SessionMessagesCubit {
     String text, {
     MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
     List<Map<String, dynamic>> attachments = const [],
+    bool omitThinkingMode = false,
   }) async {
     if (onSend != null) return onSend!();
-    return super.sendMessage(text, intent: intent, attachments: attachments);
+    return super.sendMessage(
+      text,
+      intent: intent,
+      attachments: attachments,
+      omitThinkingMode: omitThinkingMode,
+    );
   }
 
   void emitState(SessionMessagesState state) {

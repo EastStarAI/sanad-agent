@@ -19,6 +19,17 @@ class OpenAiEffortDirective extends NativeThinkingDirective {
   const OpenAiEffortDirective(this.effort);
 }
 
+/// A native Chat effort that also enables thinking: `thinking: {type: enabled}`
+/// plus `reasoning_effort` (the documented DeepSeek / Z.AI envelope). The
+/// shipped or declared `native_toggle_effort` wire produces it; the route's
+/// Chat codec serializes it the same way on every template that admits the
+/// wire, so the envelope never depends on a model-name table.
+class NativeThinkingEffortDirective extends NativeThinkingDirective {
+  final String effort;
+
+  const NativeThinkingEffortDirective(this.effort);
+}
+
 class ResponsesReasoningDirective extends NativeThinkingDirective {
   final String effort;
   final String summary;

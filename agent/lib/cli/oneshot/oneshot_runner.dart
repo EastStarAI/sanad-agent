@@ -631,6 +631,23 @@ class OneshotRunner {
             if (event.model != null) finalModel = event.model;
             if (event.provider != null) finalProvider = event.provider;
 
+            // A typed rejection before dispatch is a failed turn, never a
+            // completion: report the specific reason and exit non-zero.
+            final rejectionCode = event.errorCode;
+            if (rejectionCode != null && rejectionCode.isNotEmpty) {
+              hasError = true;
+              errorMessage = event.finalMessage.isNotEmpty
+                  ? '$rejectionCode: ${event.finalMessage}'
+                  : rejectionCode;
+              if (!json) {
+                err.writeln('Error: $errorMessage');
+              }
+              if (!completer.isCompleted) {
+                completer.complete(1);
+              }
+              return;
+            }
+
             if (event.finalMessage.isNotEmpty) {
               if (assistantBuffer.isEmpty) {
                 assistantBuffer.write(event.finalMessage);

@@ -160,6 +160,37 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     return name.isEmpty || name == '.' || name == '..' ? 'attachment' : name;
   }
 
+  /// The route whose resolved thinking control cannot carry a selection.
+  ///
+  /// Published by the route's thinking selector once it resolves the
+  /// authoritative descriptor (`noControl` or `unknown`). It is not emitted as
+  /// state and never touches stored thinking preferences.
+  ({String providerId, String modelId})? _routeWithoutThinkingControl;
+
+  /// Records whether the resolved thinking control for the route
+  /// [providerId]/[modelId] can carry a user selection.
+  void reportRouteThinkingAdmission({
+    required String? providerId,
+    required String? modelId,
+    required bool admitsSelection,
+  }) {
+    final provider = providerId?.trim();
+    final model = modelId?.trim();
+    if (provider == null || provider.isEmpty || model == null || model.isEmpty) {
+      return;
+    }
+    _routeWithoutThinkingControl = admitsSelection ? null : (providerId: provider, modelId: model);
+  }
+
+  /// Whether the next send targets a route whose control offers no selection,
+  /// so the hidden carried-over thinking value must not be sent or persisted.
+  bool _routeOmitsThinking() {
+    final route = _routeWithoutThinkingControl;
+    return route != null &&
+        route.providerId == state.nextMessageProviderId?.trim() &&
+        route.modelId == state.nextMessageModel?.trim();
+  }
+
   Future<void> sendMessage(String text, {MessageDeliveryIntent intent = MessageDeliveryIntent.auto}) async {
     final trimmedText = text.trim();
     final attachments = state.draftAttachments;
@@ -187,6 +218,7 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
       final accepted = await messagesCubit.sendMessage(
         trimmedText,
         intent: intent,
+        omitThinkingMode: _routeOmitsThinking(),
         attachments: [
           for (final attachment in attachments)
             {
@@ -393,6 +425,13 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
     }
+  }
+
+  /// Admits the route's effective thinking selection for display and the next
+  /// send without persisting it (see
+  /// [SessionMessagesCubit.admitNextMessageThinkingMode]).
+  void admitRouteThinkingMode(String? thinkingMode) {
+    messagesCubit.admitNextMessageThinkingMode(thinkingMode);
   }
 
   /// Restores a New Conversation draft route. Only a complete provider+model

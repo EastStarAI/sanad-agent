@@ -38,6 +38,7 @@ Load only the references needed for the requested task:
 | Verify local-to-cloud connection switching | [`references/connection-switching.md`](references/connection-switching.md) |
 | Send and verify one conversation through deterministic orchestration plus Jev | [`references/jev-conversation-automation.md`](references/jev-conversation-automation.md) |
 | Test multi-question `system.ask_user` parsing and navigation | [`references/multi-question-ui.md`](references/multi-question-ui.md) |
+| Execute live acceptance or multi-phase turns against a background daemon via CLI | [`../sanad-agentic-developer/references/daemon-cli-live-acceptance.md`](../sanad-agentic-developer/references/daemon-cli-live-acceptance.md) |
 
 For manual or custom live UI work, load both `interactive-ui-testing.md` and `runtime-and-worktrees.md`. The canonical conversation fast path is the explicit exception: its bundled runner imports the reusable Jev layer programmatically, so loading the full Jev skill or manual UI/runtime references before execution is redundant. Load them only to design, modify, or diagnose custom automation.
 

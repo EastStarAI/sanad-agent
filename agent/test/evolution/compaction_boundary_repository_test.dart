@@ -850,6 +850,50 @@ void main() {
     final current = boundaries.findById('cmp-route-mismatch');
     expect(current?.metrics?.providerConfirmedRequestTokensAfter, isNull);
     expect(current?.diagnostics?.postBoundary.status, 'pending');
+
+    // Also test reservePostBoundaryDispatch with route mismatch
+    final reserveRejected = boundaries.reservePostBoundaryDispatch(
+      compactionId: 'cmp-route-mismatch',
+      requestId: 'req-mismatch',
+      routeSignature: differentRoute,
+      dispatchedAt: DateTime.utc(2026, 8, 29, 2, 4),
+    );
+    expect(reserveRejected, isNull);
+    expect(boundaries.findById('cmp-route-mismatch')?.diagnostics?.postBoundary.status, 'pending');
+
+    // Matching reserve succeeds
+    final reserveOk = boundaries.reservePostBoundaryDispatch(
+      compactionId: 'cmp-route-mismatch',
+      requestId: 'req-matched-step',
+      routeSignature: _route(),
+      dispatchedAt: DateTime.utc(2026, 8, 29, 2, 4),
+    );
+    expect(reserveOk, isNotNull);
+    expect(reserveOk!.diagnostics?.postBoundary.status, 'reserved');
+
+    // After matching reservation, route-mismatched reconciliation still fails closed and preserves reservation
+    final reconcileMismatchAfterReserve = boundaries.reconcilePostBoundaryUsage(
+      compactionId: 'cmp-route-mismatch',
+      requestId: 'req-matched-step',
+      observedAt: DateTime.utc(2026, 8, 29, 2, 5),
+      inputTokens: 10_000,
+      routeSignature: differentRoute,
+    );
+    expect(reconcileMismatchAfterReserve, isNull);
+    final afterReconcileMismatch = boundaries.findById('cmp-route-mismatch');
+    expect(afterReconcileMismatch?.diagnostics?.postBoundary.status, 'reserved');
+    expect(afterReconcileMismatch?.metrics?.providerConfirmedRequestTokensAfter, isNull);
+
+    // Route-mismatched missing call also fails closed and preserves reservation
+    final missingMismatchAfterReserve = boundaries.recordPostBoundaryMissingUsage(
+      compactionId: 'cmp-route-mismatch',
+      requestId: 'req-matched-step',
+      observedAt: DateTime.utc(2026, 8, 29, 2, 5),
+      missingReason: 'no_provider_usage',
+      routeSignature: differentRoute,
+    );
+    expect(missingMismatchAfterReserve, isNull);
+    expect(boundaries.findById('cmp-route-mismatch')?.diagnostics?.postBoundary.status, 'reserved');
   });
 
   test('recordPostBoundaryMissingUsage explicitly records missing state', () {
@@ -1674,4 +1718,668 @@ void main() {
       expect(finalPosRow.diagnostics?.postBoundary.requestId, 'turn-1:step-1');
     });
   });
+
+  group('Stage 1 pre-call attribution', () {
+    test('binds the last ordinary provider-confirmed call before the boundary', () {
+      final seeded = _seedPreCallSession(
+        sessions,
+        state,
+        sessionId: 'session-precall-applicable',
+        messages: [
+          Message(role: MessageRole.user, content: 'one'),
+          Message(role: MessageRole.user, content: 'two'),
+          _confirmedAssistantCall(content: 'three'),
+          Message(role: MessageRole.user, content: 'four'),
+        ],
+      );
+      final claim = boundaries.tryClaim(
+        compactionId: 'cmp-precall-applicable',
+        sessionId: 'session-precall-applicable',
+        trigger: CompactionTrigger.auto,
+        sourceRange: seeded.source,
+        retainedTailRange: seeded.tail,
+        routeSignature: _route(),
+        startedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+      expect(claim.outcome, CompactionClaimOutcome.claimed);
+
+      final claimed = _preCallJson(claim.record);
+      expect(claimed, isNotNull);
+      expect(claimed!['status'], 'recorded');
+      expect(claimed['applicability'], CompactionPreCallApplicability.unknown);
+      expect(claimed['reason'], CompactionPreCallReason.materialUnverified);
+      expect(claimed['request_id'], 'run-7:step-7');
+      expect(claimed['model_step_id'], 'step-7');
+      expect(claimed['run_id'], 'run-7');
+      expect(claimed['provider_instance_id'], 'provider-1');
+      expect(claimed['model_id'], 'gpt-4o');
+      expect(claimed['observed_at'], '2026-08-29T00:30:00.000Z');
+      expect(claimed['input_tokens'], 9000);
+      expect(claimed['cached_input_tokens'], 4000);
+      expect(claimed['message_id'], isNotNull);
+
+      final completed = boundaries.completeStarted(
+        candidate: _candidateFor(
+          compactionId: 'cmp-precall-applicable',
+          sessionId: 'session-precall-applicable',
+          revision: claim.record!.sourceHistoryRevision,
+          sourceRange: seeded.source,
+          tailRange: seeded.tail,
+          diagnostics: const CompactionDurableDiagnostics(
+            attempts: [
+              CompactionSummarizationAttemptRecord(
+                passKind: 'full',
+                requestId: 'compaction:cmp-precall-applicable:full:0',
+                duration: Duration(milliseconds: 120),
+                inputTokens: 500,
+                outcome: 'success',
+              ),
+            ],
+          ),
+        ),
+        startedAt: DateTime.utc(2026, 8, 29, 1),
+        completedAt: DateTime.utc(2026, 8, 29, 2),
+      );
+      expect(completed.outcome, CompactionTerminalOutcome.completed);
+
+      // A later grown ordinary call must not replace the bound pre-call value.
+      sessions.replaceMessages('session-precall-applicable', [
+        Message(role: MessageRole.user, content: 'one'),
+        Message(role: MessageRole.user, content: 'two'),
+        _confirmedAssistantCall(content: 'three'),
+        Message(role: MessageRole.user, content: 'four'),
+        _confirmedAssistantCall(
+          content: 'five',
+          inputTokens: 51000,
+          cachedTokens: 9000,
+          runId: 'run-8',
+          modelStepId: 'step-8',
+          observedAt: '2026-08-29T03:00:00.000Z',
+        ),
+      ]);
+
+      final persisted = boundaries.findById('cmp-precall-applicable');
+      final preCall = _preCallJson(persisted);
+      expect(preCall, isNotNull);
+      expect(preCall!['input_tokens'], 9000);
+      expect(preCall['request_id'], 'run-7:step-7');
+      expect(persisted!.diagnostics!.attempts, hasLength(1));
+      expect(persisted.diagnostics!.postBoundary.status, 'pending');
+
+      // Claim-time diagnostics must not block first post-boundary reservation.
+      final reserved = boundaries.reservePostBoundaryDispatch(
+        compactionId: 'cmp-precall-applicable',
+        requestId: 'turn-2:step-1',
+        routeSignature: _route(),
+        dispatchedAt: DateTime.utc(2026, 8, 29, 3, 5),
+      );
+      expect(reserved, isNotNull);
+      expect(reserved!.diagnostics!.postBoundary.status, 'reserved');
+      expect(_preCallJson(reserved)!['input_tokens'], 9000);
+    });
+
+    test('leaves an absent pre-call unknown with an explicit reason', () {
+      final seeded = _seedPreCallSession(
+        sessions,
+        state,
+        sessionId: 'session-precall-absent',
+        messages: [
+          Message(role: MessageRole.user, content: 'one'),
+          Message(role: MessageRole.user, content: 'two'),
+          Message(role: MessageRole.user, content: 'three'),
+          Message(role: MessageRole.user, content: 'four'),
+        ],
+      );
+      final claim = boundaries.tryClaim(
+        compactionId: 'cmp-precall-absent',
+        sessionId: 'session-precall-absent',
+        trigger: CompactionTrigger.manual,
+        sourceRange: seeded.source,
+        retainedTailRange: seeded.tail,
+        routeSignature: _route(),
+        startedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+      expect(claim.outcome, CompactionClaimOutcome.claimed);
+
+      final preCall = _preCallJson(claim.record);
+      expect(preCall, isNotNull);
+      expect(preCall!['status'], 'absent');
+      expect(preCall['applicability'], 'unknown');
+      expect(preCall['reason'], 'no_ordinary_call');
+      expect(preCall['input_tokens'], isNull);
+      expect(preCall['cached_input_tokens'], isNull);
+      expect(preCall.containsKey('input_tokens'), isFalse);
+    });
+
+    test('keeps a last call without confirmed usage unknown, never an older value', () {
+      final seeded = _seedPreCallSession(
+        sessions,
+        state,
+        sessionId: 'session-precall-missing-usage',
+        messages: [
+          Message(role: MessageRole.user, content: 'one'),
+          Message(role: MessageRole.user, content: 'two'),
+          _confirmedAssistantCall(content: 'three'),
+          Message(role: MessageRole.user, content: 'four'),
+          Message(
+            role: MessageRole.assistant,
+            content: 'five',
+            metadata: {
+              'run_id': 'run-9',
+              'model_step_id': 'step-9',
+              'usage': {'input_tokens': 0},
+            },
+          ),
+        ],
+      );
+      final claim = boundaries.tryClaim(
+        compactionId: 'cmp-precall-missing-usage',
+        sessionId: 'session-precall-missing-usage',
+        trigger: CompactionTrigger.auto,
+        sourceRange: seeded.source,
+        retainedTailRange: seeded.tail,
+        routeSignature: _route(),
+        startedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+      expect(claim.outcome, CompactionClaimOutcome.claimed);
+
+      final preCall = _preCallJson(claim.record);
+      expect(preCall, isNotNull);
+      expect(preCall!['status'], 'recorded');
+      expect(preCall['applicability'], 'unknown');
+      expect(preCall['reason'], 'usage_missing');
+      expect(preCall['run_id'], 'run-9');
+      expect(preCall['model_step_id'], 'step-9');
+      expect(preCall.containsKey('input_tokens'), isFalse);
+      expect(preCall.containsKey('cached_input_tokens'), isFalse);
+    });
+
+    test('marks route change not applicable while keeping observed usage', () {
+      final seeded = _seedPreCallSession(
+        sessions,
+        state,
+        sessionId: 'session-precall-route',
+        messages: [
+          Message(role: MessageRole.user, content: 'one'),
+          Message(role: MessageRole.user, content: 'two'),
+          _confirmedAssistantCall(content: 'three'),
+          Message(role: MessageRole.user, content: 'four'),
+        ],
+      );
+      final claim = boundaries.tryClaim(
+        compactionId: 'cmp-precall-route',
+        sessionId: 'session-precall-route',
+        trigger: CompactionTrigger.auto,
+        sourceRange: seeded.source,
+        retainedTailRange: seeded.tail,
+        routeSignature: _routeWithModel('gpt-4.1'),
+        startedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+      expect(claim.outcome, CompactionClaimOutcome.claimed);
+
+      final preCall = _preCallJson(claim.record);
+      expect(preCall, isNotNull);
+      expect(preCall!['status'], 'recorded');
+      expect(preCall['applicability'], 'not_applicable');
+      expect(preCall['reason'], 'route_changed');
+      expect(preCall['input_tokens'], 9000);
+      expect(preCall['provider_instance_id'], 'provider-1');
+      expect(preCall['model_id'], 'gpt-4o');
+    });
+
+    test('marks material change not applicable after a newer activated boundary', () {
+      final seeded = _seedPreCallSession(
+        sessions,
+        state,
+        sessionId: 'session-precall-material',
+        messages: [
+          Message(role: MessageRole.user, content: 'one'),
+          Message(role: MessageRole.user, content: 'two'),
+          _confirmedAssistantCall(content: 'three'),
+          Message(role: MessageRole.user, content: 'four'),
+        ],
+      );
+      final firstClaim = boundaries.tryClaim(
+        compactionId: 'cmp-precall-material-1',
+        sessionId: 'session-precall-material',
+        trigger: CompactionTrigger.auto,
+        sourceRange: seeded.source,
+        retainedTailRange: seeded.tail,
+        routeSignature: _route(),
+        startedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+      expect(
+        _preCallJson(firstClaim.record)!['applicability'],
+        CompactionPreCallApplicability.unknown,
+      );
+      expect(
+        _preCallJson(firstClaim.record)!['reason'],
+        CompactionPreCallReason.materialUnverified,
+      );
+      boundaries.completeStarted(
+        candidate: _candidateFor(
+          compactionId: 'cmp-precall-material-1',
+          sessionId: 'session-precall-material',
+          revision: firstClaim.record!.sourceHistoryRevision,
+          sourceRange: seeded.source,
+          tailRange: seeded.tail,
+        ),
+        startedAt: DateTime.utc(2026, 8, 29, 1),
+        completedAt: DateTime.utc(2026, 8, 29, 2),
+      );
+
+      // No ordinary call was made after the first boundary, so the newest
+      // confirmed call predates the newly activated material.
+      final secondClaim = boundaries.tryClaim(
+        compactionId: 'cmp-precall-material-2',
+        sessionId: 'session-precall-material',
+        trigger: CompactionTrigger.auto,
+        sourceRange: seeded.source,
+        retainedTailRange: seeded.tail,
+        routeSignature: _route(),
+        startedAt: DateTime.utc(2026, 8, 29, 3),
+      );
+      expect(secondClaim.outcome, CompactionClaimOutcome.claimed);
+
+      final preCall = _preCallJson(secondClaim.record);
+      expect(preCall, isNotNull);
+      expect(preCall!['status'], 'recorded');
+      expect(preCall['applicability'], 'not_applicable');
+      expect(preCall['reason'], 'material_changed');
+      expect(preCall['input_tokens'], 9000);
+    });
+
+    test('restoration after restart keeps the same pre-call binding', () {
+      final tempDir = Directory.systemTemp.createTempSync('precall_restart_');
+      try {
+        final db1 = AgentStateDatabase.atPath(tempDir.path);
+        final sessions1 = SessionDB.fromState(db1);
+        final revisions1 = SessionHistoryRevisionRepository(db1);
+        final boundaries1 = CompactionBoundaryRepository(db1, revisions1);
+        final seeded = _seedPreCallSession(
+          sessions1,
+          db1,
+          sessionId: 'session-precall-restart',
+          messages: [
+            Message(role: MessageRole.user, content: 'one'),
+            Message(role: MessageRole.user, content: 'two'),
+            _confirmedAssistantCall(content: 'three'),
+            Message(role: MessageRole.user, content: 'four'),
+          ],
+        );
+        final claim = boundaries1.tryClaim(
+          compactionId: 'cmp-precall-restart',
+          sessionId: 'session-precall-restart',
+          trigger: CompactionTrigger.manual,
+          sourceRange: seeded.source,
+          retainedTailRange: seeded.tail,
+          routeSignature: _route(),
+          startedAt: DateTime.utc(2026, 8, 29, 1),
+        );
+        boundaries1.completeStarted(
+          candidate: _candidateFor(
+            compactionId: 'cmp-precall-restart',
+            sessionId: 'session-precall-restart',
+            revision: claim.record!.sourceHistoryRevision,
+            sourceRange: seeded.source,
+            tailRange: seeded.tail,
+          ),
+          startedAt: DateTime.utc(2026, 8, 29, 1),
+          completedAt: DateTime.utc(2026, 8, 29, 2),
+        );
+        final beforeRestart = boundaries1
+            .findById('cmp-precall-restart')
+            ?.diagnostics
+            ?.lastPreCompactionCall;
+        expect(beforeRestart, isNotNull);
+        db1.dispose();
+
+        final db2 = AgentStateDatabase.atPath(tempDir.path);
+        final revisions2 = SessionHistoryRevisionRepository(db2);
+        final boundaries2 = CompactionBoundaryRepository(db2, revisions2);
+        final restored = boundaries2
+            .findById('cmp-precall-restart')
+            ?.diagnostics
+            ?.lastPreCompactionCall;
+        expect(restored, beforeRestart);
+        expect(restored!.applicability, CompactionPreCallApplicability.unknown);
+        expect(restored.reason, CompactionPreCallReason.materialUnverified);
+        expect(restored.status, CompactionPreCallStatus.recorded);
+        expect(restored.inputTokens, 9000);
+        expect(restored.cachedInputTokens, 4000);
+        expect(restored.requestId, 'run-7:step-7');
+        expect(restored.observedAt, DateTime.utc(2026, 8, 29, 0, 30));
+        expect(restored.messageId, isNotNull);
+        db2.dispose();
+      } finally {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test(
+      'fails closed to unknown/material_unverified without current-material comparison even with valid wire_proof format',
+      () {
+        final seeded = _seedPreCallSession(
+          sessions,
+          state,
+          sessionId: 'session-precall-syntactic-proof',
+          messages: [
+            Message(role: MessageRole.user, content: 'one'),
+            Message(role: MessageRole.user, content: 'two'),
+            _confirmedAssistantCall(
+              content: 'three',
+              wireProof:
+                  'v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            ),
+            Message(role: MessageRole.user, content: 'four'),
+          ],
+        );
+        final claim = boundaries.tryClaim(
+          compactionId: 'cmp-precall-syntactic-proof',
+          sessionId: 'session-precall-syntactic-proof',
+          trigger: CompactionTrigger.manual,
+          sourceRange: seeded.source,
+          retainedTailRange: seeded.tail,
+          routeSignature: _route(),
+          startedAt: DateTime.utc(2026, 8, 29, 1),
+        );
+        expect(claim.outcome, CompactionClaimOutcome.claimed);
+        final preCall = _preCallJson(claim.record);
+        expect(preCall, isNotNull);
+        expect(preCall!['status'], 'recorded');
+        // Syntactic validity of wire_proof does not establish current-material equivalence;
+        // repository must fail closed to unknown with material_unverified, never applicable.
+        expect(preCall['applicability'], CompactionPreCallApplicability.unknown);
+        expect(preCall['reason'], CompactionPreCallReason.materialUnverified);
+        expect(preCall['input_tokens'], 9000);
+      },
+    );
+
+    test(
+      'leaves missing input tokens missing when context_usage snapshot exists, never splicing mutable usage totals',
+      () {
+        final seeded = _seedPreCallSession(
+          sessions,
+          state,
+          sessionId: 'session-precall-no-splice',
+          messages: [
+            Message(role: MessageRole.user, content: 'one'),
+            Message(role: MessageRole.user, content: 'two'),
+            Message(
+              role: MessageRole.assistant,
+              content: 'three',
+              metadata: {
+                'run_id': 'run-probe-1',
+                'model_step_id': 'step-1',
+                // Mutable turn-level aggregate has input_tokens: 25000
+                'usage': {'input_tokens': 25000, 'output_tokens': 120},
+                // Authoritative per-call snapshot exists, but input_tokens is missing
+                'context_usage': {
+                  'cached_tokens': 4000,
+                  'output_tokens': 120,
+                  'observed_at': '2026-08-29T00:30:00.000Z',
+                  'provider_instance_id': 'provider-1',
+                  'model_id': 'gpt-4o',
+                  'run_id': 'run-probe-1',
+                  'model_step_id': 'step-1',
+                  'request_id': 'run-probe-1',
+                  'wire_proof':
+                      'v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                },
+              },
+            ),
+            Message(role: MessageRole.user, content: 'four'),
+          ],
+        );
+        final claim = boundaries.tryClaim(
+          compactionId: 'cmp-precall-no-splice',
+          sessionId: 'session-precall-no-splice',
+          trigger: CompactionTrigger.auto,
+          sourceRange: seeded.source,
+          retainedTailRange: seeded.tail,
+          routeSignature: _route(),
+          startedAt: DateTime.utc(2026, 8, 29, 1),
+        );
+        expect(claim.outcome, CompactionClaimOutcome.claimed);
+        final preCall = _preCallJson(claim.record);
+        expect(preCall, isNotNull);
+        expect(preCall!['status'], 'recorded');
+        // Missing input tokens in context_usage must stay missing: never spliced from usage
+        expect(preCall.containsKey('input_tokens'), isFalse);
+        expect(preCall['cached_input_tokens'], 4000);
+        expect(preCall['applicability'], CompactionPreCallApplicability.unknown);
+        expect(preCall['reason'], CompactionPreCallReason.usageMissing);
+        expect(preCall['request_id'], 'run-probe-1:step-1');
+      },
+    );
+
+    test(
+      'F1: pre-call attribution evaluates to unknown/material_unverified when genuine instance UUID matches route signature',
+      () {
+        const genuineInstanceId = '96ce96b5-9d30-4c53-b6be-0e306c346881';
+        const modelId = 'deepseek-v4.1-flash';
+
+        final seeded = _seedPreCallSession(
+          sessions,
+          state,
+          sessionId: 'session-f1-match',
+          messages: [
+            Message(role: MessageRole.user, content: 'one'),
+            Message(role: MessageRole.user, content: 'two'),
+            _confirmedAssistantCall(
+              content: 'three',
+              providerInstanceId: genuineInstanceId,
+              modelId: modelId,
+            ),
+            Message(role: MessageRole.user, content: 'four'),
+          ],
+        );
+
+        final claim = boundaries.tryClaim(
+          compactionId: 'cmp-f1-match',
+          sessionId: 'session-f1-match',
+          trigger: CompactionTrigger.manual,
+          sourceRange: seeded.source,
+          retainedTailRange: seeded.tail,
+          routeSignature: const RouteSignature(
+            providerInstanceId: genuineInstanceId,
+            templateId: 'opencode-go',
+            protocol: 'openai_compatible',
+            normalizedBaseUrl: 'https://api.example.com/v1',
+            modelId: modelId,
+            configRevision: 1,
+            credentialRevision: 1,
+          ),
+          startedAt: DateTime.utc(2026, 8, 29, 1),
+        );
+
+        expect(claim.outcome, CompactionClaimOutcome.claimed);
+        final preCall = _preCallJson(claim.record);
+        expect(preCall, isNotNull);
+        expect(preCall!['status'], 'recorded');
+        expect(preCall['provider_instance_id'], genuineInstanceId);
+        expect(preCall['model_id'], modelId);
+        expect(preCall['applicability'], CompactionPreCallApplicability.unknown);
+        expect(preCall['reason'], CompactionPreCallReason.materialUnverified);
+      },
+    );
+
+    test(
+      'F1: pre-call attribution evaluates to not_applicable/route_changed when distinct instances share the same template',
+      () {
+        const instanceA = '96ce96b5-9d30-4c53-b6be-0e306c346881';
+        const instanceB = '11111111-2222-3333-4444-555555555555';
+        const modelId = 'deepseek-v4.1-flash';
+
+        final seeded = _seedPreCallSession(
+          sessions,
+          state,
+          sessionId: 'session-f1-distinct',
+          messages: [
+            Message(role: MessageRole.user, content: 'one'),
+            Message(role: MessageRole.user, content: 'two'),
+            _confirmedAssistantCall(
+              content: 'three',
+              providerInstanceId: instanceA,
+              modelId: modelId,
+            ),
+            Message(role: MessageRole.user, content: 'four'),
+          ],
+        );
+
+        // Claim with instanceB (same template opencode-go, but distinct instance UUID)
+        final claim = boundaries.tryClaim(
+          compactionId: 'cmp-f1-distinct',
+          sessionId: 'session-f1-distinct',
+          trigger: CompactionTrigger.manual,
+          sourceRange: seeded.source,
+          retainedTailRange: seeded.tail,
+          routeSignature: const RouteSignature(
+            providerInstanceId: instanceB,
+            templateId: 'opencode-go',
+            protocol: 'openai_compatible',
+            normalizedBaseUrl: 'https://api.example.com/v1',
+            modelId: modelId,
+            configRevision: 1,
+            credentialRevision: 1,
+          ),
+          startedAt: DateTime.utc(2026, 8, 29, 1),
+        );
+
+        expect(claim.outcome, CompactionClaimOutcome.claimed);
+        final preCall = _preCallJson(claim.record);
+        expect(preCall, isNotNull);
+        expect(preCall!['status'], 'recorded');
+        expect(preCall['provider_instance_id'], instanceA);
+        expect(
+          preCall['applicability'],
+          CompactionPreCallApplicability.notApplicable,
+        );
+        expect(preCall['reason'], CompactionPreCallReason.routeChanged);
+      },
+    );
+  });
+}
+
+const String _wireProofFixture =
+    'v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+Map<String, dynamic>? _preCallJson(CompactionOperationRecord? record) {
+  return record?.diagnostics?.lastPreCompactionCall?.toJson();
+}
+
+RouteSignature _routeWithModel(String modelId) {
+  return RouteSignature(
+    providerInstanceId: 'provider-1',
+    templateId: 'openai',
+    protocol: 'openai_compatible',
+    normalizedBaseUrl: 'https://api.example.com/v1',
+    modelId: modelId,
+    configRevision: 1,
+    credentialRevision: 1,
+  );
+}
+
+Message _confirmedAssistantCall({
+  required String content,
+  int inputTokens = 9000,
+  int? cachedTokens = 4000,
+  String observedAt = '2026-08-29T00:30:00.000Z',
+  String providerInstanceId = 'provider-1',
+  String modelId = 'gpt-4o',
+  String runId = 'run-7',
+  String modelStepId = 'step-7',
+  String wireProof = _wireProofFixture,
+}) {
+  return Message(
+    role: MessageRole.assistant,
+    content: content,
+    metadata: {
+      'run_id': runId,
+      'model_step_id': modelStepId,
+      'usage': {'input_tokens': inputTokens, 'output_tokens': 120},
+      'context_usage': {
+        'input_tokens': inputTokens,
+        'cached_tokens': ?cachedTokens,
+        'output_tokens': 120,
+        'observed_at': observedAt,
+        'provider_instance_id': providerInstanceId,
+        'model_id': modelId,
+        'run_id': runId,
+        'model_step_id': modelStepId,
+        'wire_proof': wireProof,
+      },
+    },
+  );
+}
+
+({CompactionMessageRange source, CompactionMessageRange tail})
+_seedPreCallSession(
+  SessionDB sessions,
+  AgentStateDatabase state, {
+  required String sessionId,
+  required List<Message> messages,
+}) {
+  final now = DateTime.utc(2026, 8, 29);
+  sessions.saveSession(
+    SessionState(
+      sessionId: sessionId,
+      model: 'gpt-4o',
+      createdAt: now,
+      updatedAt: now,
+      lastUserMessageAt: now,
+    ),
+  );
+  sessions.replaceMessages(sessionId, messages);
+  final ids = state.db
+      .select('SELECT id FROM messages WHERE session_id = ? ORDER BY id', [
+        sessionId,
+      ])
+      .map((row) => row['id'] as int)
+      .toList(growable: false);
+  return (
+    source: CompactionMessageRange(
+      start: CompactionMessageIdentity(ids[0]),
+      end: CompactionMessageIdentity(ids[1]),
+    ),
+    tail: CompactionMessageRange(
+      start: CompactionMessageIdentity(ids[2]),
+      end: CompactionMessageIdentity(ids[3]),
+    ),
+  );
+}
+
+CompactionCandidate _candidateFor({
+  required String compactionId,
+  required String sessionId,
+  required CompactionHistoryRevision revision,
+  required CompactionMessageRange sourceRange,
+  required CompactionMessageRange tailRange,
+  CompactionDurableDiagnostics? diagnostics,
+}) {
+  const summary = CompactionInternalSummary(
+    currentGoal: 'Goal',
+    remainingWork: 'Work left',
+  );
+  return CompactionCandidate(
+    compactionId: compactionId,
+    sessionId: sessionId,
+    trigger: CompactionTrigger.auto,
+    sourceRevision: revision,
+    sourceRange: sourceRange,
+    retainedTailRange: tailRange,
+    internalSummary: summary,
+    continuityResult: CompactionContinuityResult.fromSummary(summary),
+    metrics: CompactionMetrics(
+      contextWindowTokens: 128_000,
+      estimatedRequestTokensBefore: 90_000,
+      estimatedRequestTokensAfter: 20_000,
+      retainedTailTokens: 5_000,
+      duration: const Duration(seconds: 2),
+      summarizationInputTokens: 1_200,
+      summarizationAttempts: 1,
+    ),
+    routeSignature: _route(),
+    diagnostics: diagnostics,
+  );
 }

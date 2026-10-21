@@ -99,7 +99,8 @@ class ThinkingControlOption {
     'is_provider_default': isProviderDefault,
     // A budget option's token count is positive by contract; anything else is
     // not a budget and stays absent instead of shipping a meaningless zero.
-    if (budgetTokens != null && budgetTokens! > 0) 'budget_tokens': budgetTokens,
+    if (budgetTokens != null && budgetTokens! > 0)
+      'budget_tokens': budgetTokens,
   };
 
   factory ThinkingControlOption.fromMap(Map<String, dynamic> map) {
@@ -153,6 +154,12 @@ class ThinkingControlDescriptor {
   /// truthful metadata; it is not an omission selection. Omitting the control
   /// stays the separate provider-Default contract that emits no request field.
   final String? defaultOptionId;
+
+  /// Authority layer that supplied [defaultOptionId] (`config_override`,
+  /// `endpoint_declared`, `provider_reported`, `shipped_default`, `models_dev`,
+  /// `models_dev_canonical`), or `null` when no default is known. It differs
+  /// from the options' layer when a lower layer filled a missing default.
+  final String? defaultSource;
   final String capabilityRevision;
   final String source;
   final DateTime? observedAt;
@@ -162,6 +169,7 @@ class ThinkingControlDescriptor {
     this.kind,
     this.options = const [],
     this.defaultOptionId,
+    this.defaultSource,
     required this.capabilityRevision,
     required this.source,
     this.observedAt,
@@ -183,6 +191,7 @@ class ThinkingControlDescriptor {
     if (kind != null) 'kind': kind!.wireValue,
     'options': options.map((option) => option.toMap()).toList(),
     if (defaultOptionId != null) 'default_option_id': defaultOptionId,
+    if (defaultSource != null) 'default_source': defaultSource,
     'capability_revision': capabilityRevision,
     'source': source,
     if (observedAt != null)
@@ -203,6 +212,7 @@ class ThinkingControlDescriptor {
           )
           .toList(growable: false),
       defaultOptionId: map['default_option_id'] as String?,
+      defaultSource: map['default_source'] as String?,
       capabilityRevision: map['capability_revision'] as String? ?? 'unknown',
       source: map['source'] as String? ?? 'unknown',
       observedAt: _parseUtcDate(map['observed_at']),
@@ -240,6 +250,7 @@ class ThinkingControlDescriptor {
     ThinkingControlKind? kind,
     List<ThinkingControlOption>? options,
     String? defaultOptionId,
+    String? defaultSource,
     String? capabilityRevision,
     String? source,
     DateTime? observedAt,
@@ -249,6 +260,7 @@ class ThinkingControlDescriptor {
       kind: kind ?? this.kind,
       options: options ?? this.options,
       defaultOptionId: defaultOptionId ?? this.defaultOptionId,
+      defaultSource: defaultSource ?? this.defaultSource,
       capabilityRevision: capabilityRevision ?? this.capabilityRevision,
       source: source ?? this.source,
       observedAt: observedAt ?? this.observedAt,

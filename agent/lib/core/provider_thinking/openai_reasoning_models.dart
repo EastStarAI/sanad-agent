@@ -43,8 +43,7 @@ class CodexNativeReasoningSchema {
       final rawSlug = metadata['slug'] ?? metadata['id'];
       if (rawSlug != null) {
         if (rawSlug is! String) return null;
-        if (rawSlug != expectedModelId &&
-            rawSlug != OpenAiReasoningModels._canonicalize(expectedModelId)) {
+        if (rawSlug != expectedModelId) {
           return null;
         }
       }
@@ -89,73 +88,22 @@ class CodexNativeReasoningSchema {
   }
 }
 
+/// Provider-reported OpenAI/Codex reasoning facts.
+///
+/// Capability comes only from the exact model's own discovery item
+/// ([CodexNativeReasoningSchema]); there is no model-name table.
 class OpenAiReasoningModels {
   OpenAiReasoningModels._();
 
-  static const Map<String, List<String>> _exactModelTiers = {
-    // o1
-    'o1': ['medium', 'high'],
-    'o1-2024-12-17': ['medium', 'high'],
-    // o3-mini
-    'o3-mini': ['low', 'medium', 'high'],
-    'o3-mini-2025-01-31': ['low', 'medium', 'high'],
-    // o3
-    'o3': ['low', 'medium', 'high'],
-    // Codex / GPT reasoning
-    // https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini.md
-    'gpt-5.1-codex-mini': ['low', 'medium', 'high', 'xhigh'],
-    // https://developers.openai.com/api/docs/models/gpt-5.2-codex.md
-    'gpt-5.2-codex': ['low', 'medium', 'high', 'xhigh'],
-    // https://developers.openai.com/api/docs/models/gpt-5.6-sol.md:
-    // Model ID: gpt-5.6-sol.
-    // Reasoning.effort supports: none, low, medium (default), high, xhigh, and max.
-    'gpt-5.6-sol': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
-    // https://developers.openai.com/api/docs/models/gpt-6-astra.md and
-    // https://developers.openai.com/api/docs/guides/reasoning.md:
-    // Model ID: gpt-6-astra. Reasoning.effort supports low, medium, high, xhigh, and max. Rejects none.
-    'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max'],
-  };
-
-  static const Map<String, String> _exactModelDefaults = {
-    // Documented legacy OpenAI reasoning defaults:
-    // reasoning_effort defaults to medium for o1 and o3-mini.
-    'o1': 'medium',
-    'o1-2024-12-17': 'medium',
-    'o3-mini': 'medium',
-    'o3-mini-2025-01-31': 'medium',
-    'o3': 'medium',
-    // https://developers.openai.com/api/docs/models/gpt-5.6-sol.md:
-    // Model ID: gpt-5.6-sol. Reasoning.effort supports: none, low, medium (default), high, xhigh, and max.
-    'gpt-5.6-sol': 'medium',
-    // Note: gpt-5.1-codex-mini, gpt-5.2-codex, and gpt-6-astra document supported effort
-    // tiers but do NOT document an exact default reasoning level in official docs.
-    // Their defaults remain null (provider-managed omission).
-  };
-
-  static const Map<String, String> _explicitAliases = {
-    'openai/o1': 'o1',
-    'openai/o1-2024-12-17': 'o1-2024-12-17',
-    'openai/o3-mini': 'o3-mini',
-    'openai/o3-mini-2025-01-31': 'o3-mini-2025-01-31',
-    'openai/o3': 'o3',
-    'openai/gpt-5.6-sol': 'gpt-5.6-sol',
-    'openai/gpt-6-astra': 'gpt-6-astra',
-  };
+  static CodexNativeReasoningSchema? _schema(
+    String modelId,
+    Map<String, Object?>? metadata,
+  ) => CodexNativeReasoningSchema.tryParse(metadata, expectedModelId: modelId);
 
   static bool isEvidencedModel(
     String modelId, {
     Map<String, Object?>? metadata,
-  }) {
-    final parsed = CodexNativeReasoningSchema.tryParse(
-      metadata,
-      expectedModelId: modelId,
-    );
-    if (parsed != null) {
-      return true;
-    }
-    final canonical = _canonicalize(modelId);
-    return _exactModelTiers.containsKey(canonical);
-  }
+  }) => _schema(modelId, metadata) != null;
 
   static bool supportsReasoningControls(ThinkingPolicyContext context) {
     // Reasoning output and user-selectable thinking controls are independent
@@ -166,32 +114,12 @@ class OpenAiReasoningModels {
   static List<String> effortOptionIdsForModel(
     String modelId, {
     Map<String, Object?>? metadata,
-  }) {
-    final parsed = CodexNativeReasoningSchema.tryParse(
-      metadata,
-      expectedModelId: modelId,
-    );
-    if (parsed != null) {
-      return parsed.supportedEfforts;
-    }
-    final canonical = _canonicalize(modelId);
-    return _exactModelTiers[canonical] ?? const [];
-  }
+  }) => _schema(modelId, metadata)?.supportedEfforts ?? const [];
 
   static String? defaultEffortIdForModel(
     String modelId, {
     Map<String, Object?>? metadata,
-  }) {
-    final parsed = CodexNativeReasoningSchema.tryParse(
-      metadata,
-      expectedModelId: modelId,
-    );
-    if (parsed != null) {
-      return parsed.defaultEffort;
-    }
-    final canonical = _canonicalize(modelId);
-    return _exactModelDefaults[canonical];
-  }
+  }) => _schema(modelId, metadata)?.defaultEffort;
 
   static String labelForEffortId(String effortId) {
     return openAiEffortTierLabels[effortId] ?? effortId;
@@ -206,10 +134,5 @@ class OpenAiReasoningModels {
       modelId,
       metadata: metadata,
     ).contains(effortId);
-  }
-
-  static String _canonicalize(String modelId) {
-    final trimmed = modelId.trim();
-    return _explicitAliases[trimmed] ?? trimmed;
   }
 }

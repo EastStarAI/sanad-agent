@@ -8,6 +8,7 @@ import 'thinking_selection_errors.dart';
 
 class ThinkingRoutePreferenceStore {
   static const preferenceKey = 'thinking_route';
+  static const routePreferencesKey = 'thinking_route_preferences';
   static const correctionKey = 'thinking_correction';
 
   final SessionManager _sessions;
@@ -23,6 +24,40 @@ class ThinkingRoutePreferenceStore {
     return ThinkingRoutePreference.fromMap(Map<String, dynamic>.from(raw));
   }
 
+  ThinkingRoutePreference? readForRoute(
+    String sessionId, {
+    required String providerInstanceId,
+    required String modelId,
+  }) {
+    final routes = _readRoutePreferencesMap(sessionId);
+    final raw = routes['$providerInstanceId::$modelId'];
+    if (raw is Map) {
+      return ThinkingRoutePreference.fromMap(Map<String, dynamic>.from(raw));
+    }
+    final active = read(sessionId);
+    if (active != null &&
+        active.providerInstanceId == providerInstanceId &&
+        active.modelId == modelId) {
+      return active;
+    }
+    return null;
+  }
+
+  Map<String, dynamic> _readRoutePreferencesMap(String sessionId) {
+    final metadata = _sessions.getSessionMetadata(sessionId);
+    final raw = metadata?[routePreferencesKey];
+    if (raw is Map) {
+      return Map<String, dynamic>.from(raw);
+    }
+    final active = read(sessionId);
+    if (active != null) {
+      return {
+        '${active.providerInstanceId}::${active.modelId}': active.toMap(),
+      };
+    }
+    return {};
+  }
+
   ThinkingRouteCorrection? readCorrection(String sessionId) {
     final metadata = _sessions.getSessionMetadata(sessionId);
     final raw = metadata?[correctionKey];
@@ -36,8 +71,12 @@ class ThinkingRoutePreferenceStore {
     required String sessionId,
     required ThinkingRoutePreference preference,
   }) {
+    final routes = _readRoutePreferencesMap(sessionId);
+    routes['${preference.providerInstanceId}::${preference.modelId}'] =
+        preference.toMap();
     _mergeMetadata(sessionId, {
       preferenceKey: preference.toMap(),
+      routePreferencesKey: routes,
       correctionKey: null,
     });
   }
@@ -46,9 +85,25 @@ class ThinkingRoutePreferenceStore {
     required String sessionId,
     required String reason,
     String? previousSelectionId,
+    String? providerInstanceId,
+    String? modelId,
   }) {
+    final routes = _readRoutePreferencesMap(sessionId);
+    final active = read(sessionId);
+    if (providerInstanceId != null && modelId != null) {
+      routes.remove('$providerInstanceId::$modelId');
+    } else if (active != null) {
+      routes.remove('${active.providerInstanceId}::${active.modelId}');
+    }
+    final shouldClearActive = providerInstanceId == null ||
+        modelId == null ||
+        (active != null &&
+            active.providerInstanceId == providerInstanceId &&
+            active.modelId == modelId);
+
     _mergeMetadata(sessionId, {
-      preferenceKey: null,
+      if (shouldClearActive) preferenceKey: null,
+      routePreferencesKey: routes,
       correctionKey: ThinkingRouteCorrection(
         reason: reason,
         previousSelectionId: previousSelectionId,

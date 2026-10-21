@@ -1646,6 +1646,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       requestedWorkspaceId: requestedWorkspaceId,
     );
     final payloadModel = turnRequest.model;
+    var thinkingRouteRevalidated = false;
 
     if (isNewSession) {
       final initialTitle = _resolveInitialSessionTitle(event);
@@ -1727,6 +1728,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           getIt.isRegistered<ThinkingRouteSessionSync>() &&
           (priorModel != payloadModel ||
               provider != existingSession.providerId)) {
+        thinkingRouteRevalidated = true;
         final corrected = getIt<ThinkingRouteSessionSync>()
             .revalidateAndApplySession(
               sessionId: event.sessionId,
@@ -1739,6 +1741,20 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           thinkingMode: corrected.selectionId,
         );
       }
+    }
+
+    // A turn that echoes the already-persisted session preference carries an
+    // inherited selection; the target route must not reject it (Task 115).
+    if (existingSession != null &&
+        !thinkingRouteRevalidated &&
+        getIt.isRegistered<ThinkingRouteSessionSync>()) {
+      turnRequest = getIt<ThinkingRouteSessionSync>()
+          .revalidateCarriedTurnSelection(
+            turnRequest,
+            persistedSelection: existingSession.thinkingMode,
+            sessionProviderInstanceId: existingSession.providerId,
+            sessionModelId: existingSession.model,
+          );
     }
 
     if (existingSession != null &&

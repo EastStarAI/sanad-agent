@@ -5,6 +5,8 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:test/test.dart';
 
+import '../../support/thinking_matchers.dart';
+
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
@@ -18,7 +20,6 @@ import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
-import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
@@ -67,6 +68,24 @@ class TestAgentRuntimeService extends AgentRuntimeService {
     if (adapterOverride != null) return adapterOverride!;
     return super.adapterFor(signature);
   }
+}
+
+/// The serving vendor's models.dev entries this suite relies on (the catalog
+/// layer of the capability authority; no model-name table is consulted).
+Map<String, dynamic>? _modelsDevFixture(String templateId, String modelId) {
+  if (templateId != 'openai') return null;
+  return switch (modelId) {
+    'o3' || 'o3-mini' => {
+      'reasoning': true,
+      'reasoning_options': [
+        {
+          'type': 'effort',
+          'values': ['low', 'medium', 'high'],
+        },
+      ],
+    },
+    _ => null,
+  };
 }
 
 void main() {
@@ -198,7 +217,9 @@ void main() {
       cacheService = ProviderModelCacheService(
         repo,
         runtime,
-        buildDefaultThinkingCapabilityAssembler(),
+        buildDefaultThinkingCapabilityAssembler(
+          modelsDevLookup: _modelsDevFixture,
+        ),
         cooldown: const Duration(seconds: 2),
       );
     });
@@ -372,9 +393,11 @@ void main() {
           manual: true,
         );
 
+        // No layer reports a control: absence of evidence is `unknown`, never
+        // a positive `unsupported` claim.
         expect(
           models.first.thinkingControl!.status,
-          ThinkingCapabilityStatus.unsupported,
+          ThinkingCapabilityStatus.unknown,
         );
         expect(models.first.supportsReasoningOutput, isTrue);
       },
@@ -584,7 +607,9 @@ void main() {
           ),
         );
 
-        final assembler = buildDefaultThinkingCapabilityAssembler();
+        final assembler = buildDefaultThinkingCapabilityAssembler(
+          modelsDevLookup: _modelsDevFixture,
+        );
         final instance = repo.findById('inst-facts')!;
 
         // A source-backed exact model fact (`o3-mini`) and a live-probe-derived
@@ -594,7 +619,7 @@ void main() {
           model: ModelOption(value: 'o3-mini', label: 'o3-mini'),
         );
         expect(modelOwnedFact.status, ThinkingCapabilityStatus.supported);
-        expect(modelOwnedFact.source, 'profile');
+        expect(modelOwnedFact.source, ThinkingCapabilityAssembler.shippedDefaultSource);
 
         final liveEvidence = ThinkingControlDescriptor(
           status: ThinkingCapabilityStatus.supported,
@@ -651,7 +676,10 @@ void main() {
           retainedFact.thinkingControl!.status,
           ThinkingCapabilityStatus.supported,
         );
-        expect(retainedFact.thinkingControl!.source, 'profile');
+        expect(
+          retainedFact.thinkingControl!.source,
+          ThinkingCapabilityAssembler.shippedDefaultSource,
+        );
 
         // Live-probe evidence keeps its authoritative failure provenance.
         final invalidatedLive = refreshed.firstWhere(
@@ -692,13 +720,7 @@ void main() {
             modelId: 'probable-local',
             selectionId: 'on',
           ),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
+          sendsNoThinkingField,
         );
       },
     );
@@ -759,7 +781,9 @@ void main() {
         final serviceWithCatalog = ProviderModelCacheService(
           repo,
           runtime,
-          buildDefaultThinkingCapabilityAssembler(),
+          buildDefaultThinkingCapabilityAssembler(
+          modelsDevLookup: _modelsDevFixture,
+        ),
           config: config,
           modelsDevService: modelsDev,
         );
@@ -888,6 +912,7 @@ model_capabilities:
       assembler = ThinkingCapabilityAssembler(
         buildProviderThinkingRegistry(),
         config,
+        _modelsDevFixture,
       );
       resolver = ThinkingSelectionResolver(
         instances: repo,
@@ -931,7 +956,10 @@ model_capabilities:
           instance: inst,
           model: ModelOption(value: 'o3-mini', label: 'o3-mini'),
         );
-        expect(enriched.thinkingControl!.source, 'profile');
+        expect(
+          enriched.thinkingControl!.source,
+          ThinkingCapabilityAssembler.shippedDefaultSource,
+        );
         seedCache(inst, [enriched]);
         failRefreshAdapter();
 
@@ -941,7 +969,10 @@ model_capabilities:
           retained.thinkingControl!.status,
           ThinkingCapabilityStatus.supported,
         );
-        expect(retained.thinkingControl!.source, 'profile');
+        expect(
+          retained.thinkingControl!.source,
+          ThinkingCapabilityAssembler.shippedDefaultSource,
+        );
         expect(
           repo.readModelCache(inst.id, 'models')!['source'],
           equals('cache_stale'),
@@ -1000,13 +1031,7 @@ model_capabilities:
           modelId: 'declared-fixture',
           selectionId: 'high',
         ),
-        throwsA(
-          isA<ThinkingSelectionException>().having(
-            (e) => e.code,
-            'code',
-            ThinkingSelectionErrorCode.capabilityUnknown,
-          ),
-        ),
+        sendsNoThinkingField,
       );
     });
 

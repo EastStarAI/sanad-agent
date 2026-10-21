@@ -407,6 +407,175 @@ class CompactionPostBoundaryStatus {
   }
 }
 
+/// Presence of the last ordinary provider-confirmed call before the boundary.
+abstract final class CompactionPreCallStatus {
+  static const recorded = 'recorded';
+  static const absent = 'absent';
+}
+
+/// Whether the bound pre-call still describes the current route/material.
+abstract final class CompactionPreCallApplicability {
+  static const applicable = 'applicable';
+  static const notApplicable = 'not_applicable';
+  static const unknown = 'unknown';
+}
+
+/// Allowlisted, redaction-safe reasons behind a pre-call attribution value.
+abstract final class CompactionPreCallReason {
+  static const noOrdinaryCall = 'no_ordinary_call';
+  static const usageMissing = 'usage_missing';
+  static const identityIncomplete = 'identity_incomplete';
+  static const routeChanged = 'route_changed';
+  static const materialChanged = 'material_changed';
+  static const materialUnverified = 'material_unverified';
+}
+
+/// Immutable attribution of the last ordinary provider-confirmed call that
+/// preceded one compaction boundary (Task 106 Stage 1).
+///
+/// Only provider-reported values are carried. A missing value stays absent
+/// instead of becoming zero or an estimate, and [applicability] states whether
+/// the measurement still matches the boundary's route and material.
+@immutable
+class CompactionPreCallAttribution {
+  final String status;
+  final String applicability;
+  final String? reason;
+  final String? messageId;
+  final String? requestId;
+  final String? runId;
+  final String? modelStepId;
+  final DateTime? observedAt;
+  final String? providerInstanceId;
+  final String? modelId;
+  final int? inputTokens;
+  final int? cachedInputTokens;
+
+  const CompactionPreCallAttribution({
+    required this.status,
+    required this.applicability,
+    this.reason,
+    this.messageId,
+    this.requestId,
+    this.runId,
+    this.modelStepId,
+    this.observedAt,
+    this.providerInstanceId,
+    this.modelId,
+    this.inputTokens,
+    this.cachedInputTokens,
+  }) : assert(status == CompactionPreCallStatus.recorded ||
+            status == CompactionPreCallStatus.absent),
+       assert(applicability == CompactionPreCallApplicability.applicable ||
+            applicability == CompactionPreCallApplicability.notApplicable ||
+            applicability == CompactionPreCallApplicability.unknown),
+       assert(inputTokens == null || inputTokens > 0),
+       assert(cachedInputTokens == null || cachedInputTokens >= 0);
+
+  Map<String, dynamic> toJson() => {
+    'status': status,
+    'applicability': applicability,
+    'reason': ?reason,
+    'message_id': ?messageId,
+    'request_id': ?requestId,
+    'run_id': ?runId,
+    'model_step_id': ?modelStepId,
+    'observed_at': ?observedAt?.toUtc().toIso8601String(),
+    'provider_instance_id': ?providerInstanceId,
+    'model_id': ?modelId,
+    'input_tokens': ?inputTokens,
+    'cached_input_tokens': ?cachedInputTokens,
+  };
+
+  factory CompactionPreCallAttribution.fromJson(Map<String, dynamic> json) {
+    return CompactionPreCallAttribution(
+      status: _knownStatus(json['status'] as String?),
+      applicability: _knownApplicability(json['applicability'] as String?),
+      reason: json['reason'] as String?,
+      messageId: json['message_id'] as String?,
+      requestId: json['request_id'] as String?,
+      runId: json['run_id'] as String?,
+      modelStepId: json['model_step_id'] as String?,
+      observedAt: json['observed_at'] != null
+          ? DateTime.tryParse(json['observed_at'] as String)
+          : null,
+      providerInstanceId: json['provider_instance_id'] as String?,
+      modelId: json['model_id'] as String?,
+      inputTokens: reportedInputTokens(json['input_tokens']),
+      cachedInputTokens: reportedCachedInputTokens(json['cached_input_tokens']),
+    );
+  }
+
+  /// Provider-reported input tokens. Missing, negative, or zero values are
+  /// unknown: an input measurement of zero is never a confirmed context size.
+  static int? reportedInputTokens(Object? value) =>
+      _reportedTokens(value, allowZero: false);
+
+  /// Provider-reported cached input tokens. A genuine zero stays zero because
+  /// it is a provider statement that nothing was served from cache.
+  static int? reportedCachedInputTokens(Object? value) =>
+      _reportedTokens(value, allowZero: true);
+
+  static int? _reportedTokens(Object? value, {required bool allowZero}) {
+    if (value is! num) return null;
+    final tokens = value.toInt();
+    if (tokens < 0) return null;
+    if (!allowZero && tokens == 0) return null;
+    return tokens;
+  }
+
+  /// Unrecognized persisted values fail safe instead of failing the row parse:
+  /// a written record still describes a call, and its applicability is unknown.
+  static String _knownStatus(String? value) =>
+      value == CompactionPreCallStatus.absent
+      ? CompactionPreCallStatus.absent
+      : CompactionPreCallStatus.recorded;
+
+  static String _knownApplicability(String? value) {
+    return switch (value) {
+      CompactionPreCallApplicability.applicable =>
+        CompactionPreCallApplicability.applicable,
+      CompactionPreCallApplicability.notApplicable =>
+        CompactionPreCallApplicability.notApplicable,
+      _ => CompactionPreCallApplicability.unknown,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CompactionPreCallAttribution &&
+          runtimeType == other.runtimeType &&
+          status == other.status &&
+          applicability == other.applicability &&
+          reason == other.reason &&
+          messageId == other.messageId &&
+          requestId == other.requestId &&
+          runId == other.runId &&
+          modelStepId == other.modelStepId &&
+          observedAt?.toUtc() == other.observedAt?.toUtc() &&
+          providerInstanceId == other.providerInstanceId &&
+          modelId == other.modelId &&
+          inputTokens == other.inputTokens &&
+          cachedInputTokens == other.cachedInputTokens;
+
+  @override
+  int get hashCode => Object.hash(
+    status,
+    applicability,
+    reason,
+    messageId,
+    requestId,
+    runId,
+    modelStepId,
+    observedAt?.toUtc(),
+    providerInstanceId,
+    modelId,
+    inputTokens,
+    cachedInputTokens,
+  );
+}
+
 /// Durable diagnostics record stored as JSON in session_compaction_operations (Task 106).
 @immutable
 class CompactionDurableDiagnostics {
@@ -414,7 +583,7 @@ class CompactionDurableDiagnostics {
   final List<CompactionSummarizationAttemptRecord> attempts;
   final Map<String, int?> aggregateUsage;
   final Map<String, dynamic>? decisionSnapshot;
-  final Map<String, dynamic>? lastPreCompactionCall;
+  final CompactionPreCallAttribution? lastPreCompactionCall;
   final CompactionPostBoundaryStatus postBoundary;
 
   const CompactionDurableDiagnostics({
@@ -431,7 +600,7 @@ class CompactionDurableDiagnostics {
     'attempts': attempts.map((a) => a.toJson()).toList(),
     'aggregate_usage': aggregateUsage,
     'decision_snapshot': ?decisionSnapshot,
-    'last_pre_compaction_call': ?lastPreCompactionCall,
+    'last_pre_compaction_call': ?lastPreCompactionCall?.toJson(),
     'post_boundary': postBoundary.toJson(),
   };
 
@@ -450,7 +619,9 @@ class CompactionDurableDiagnostics {
           ? Map<String, dynamic>.from(json['decision_snapshot'] as Map)
           : null,
       lastPreCompactionCall: json['last_pre_compaction_call'] != null
-          ? Map<String, dynamic>.from(json['last_pre_compaction_call'] as Map)
+          ? CompactionPreCallAttribution.fromJson(
+              Map<String, dynamic>.from(json['last_pre_compaction_call'] as Map),
+            )
           : null,
       postBoundary: json['post_boundary'] != null
           ? CompactionPostBoundaryStatus.fromJson(
@@ -465,7 +636,7 @@ class CompactionDurableDiagnostics {
     List<CompactionSummarizationAttemptRecord>? attempts,
     Map<String, int?>? aggregateUsage,
     Map<String, dynamic>? decisionSnapshot,
-    Map<String, dynamic>? lastPreCompactionCall,
+    CompactionPreCallAttribution? lastPreCompactionCall,
     CompactionPostBoundaryStatus? postBoundary,
   }) {
     return CompactionDurableDiagnostics(

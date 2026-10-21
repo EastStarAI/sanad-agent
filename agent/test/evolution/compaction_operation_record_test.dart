@@ -150,5 +150,98 @@ void main() {
         isTrue,
       );
     });
+
+    test('missing source end marks boundary ineligible with source_end_missing reason', () {
+      // _candidate() has sourceRange: 1..3, sourceRevision: 4.
+      final boundary = CompactionOperationRecord.fromCandidate(
+        candidate: _candidate(),
+        startedAt: DateTime.utc(2026, 8, 29),
+        completedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+
+      // Source start 1 exists, source end 3 is missing.
+      expect(
+        CompactionBoundaryValidity.ineligibilityReason(
+          boundary: boundary,
+          existingMessageRowIds: {1, 4, 5, 6},
+          currentRevision: const SessionHistoryRevision(5),
+        ),
+        'source_end_missing',
+      );
+      expect(
+        CompactionBoundaryValidity.isProjectionEligible(
+          boundary: boundary,
+          existingMessageRowIds: {1, 4, 5, 6},
+          currentRevision: const SessionHistoryRevision(5),
+        ),
+        isFalse,
+      );
+    });
+
+    test('detects impossible row ordering as ineligible', () {
+      final boundary = CompactionOperationRecord.fromCandidate(
+        candidate: _candidate(),
+        startedAt: DateTime.utc(2026, 8, 29),
+        completedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+
+      // Missing source start with present source end is impossible under prefix deletion.
+      expect(
+        CompactionBoundaryValidity.ineligibilityReason(
+          boundary: boundary,
+          existingMessageRowIds: {3, 4, 5, 6},
+          currentRevision: const SessionHistoryRevision(5),
+        ),
+        'impossible_ordering_source_start_missing',
+      );
+
+      // Missing tail start with present tail end is impossible under prefix deletion.
+      expect(
+        CompactionBoundaryValidity.ineligibilityReason(
+          boundary: boundary,
+          existingMessageRowIds: {1, 2, 3, 6},
+          currentRevision: const SessionHistoryRevision(5),
+        ),
+        'impossible_ordering_tail_start_missing',
+      );
+    });
+
+    test('identifies missing ranges and future revision ineligibility', () {
+      final boundary = CompactionOperationRecord.fromCandidate(
+        candidate: _candidate(),
+        startedAt: DateTime.utc(2026, 8, 29),
+        completedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+
+      // Both source endpoints missing.
+      expect(
+        CompactionBoundaryValidity.ineligibilityReason(
+          boundary: boundary,
+          existingMessageRowIds: {4, 5, 6},
+          currentRevision: const SessionHistoryRevision(5),
+        ),
+        'source_range_missing',
+      );
+
+      // Tail start missing.
+      expect(
+        CompactionBoundaryValidity.ineligibilityReason(
+          boundary: boundary,
+          existingMessageRowIds: {1, 2, 3},
+          currentRevision: const SessionHistoryRevision(5),
+        ),
+        'tail_start_missing',
+      );
+
+      // Future history revision.
+      expect(
+        CompactionBoundaryValidity.ineligibilityReason(
+          boundary: boundary,
+          existingMessageRowIds: {1, 2, 3, 4, 5, 6},
+          currentRevision: const SessionHistoryRevision(3),
+        ),
+        'history_revision_future',
+      );
+    });
   });
 }

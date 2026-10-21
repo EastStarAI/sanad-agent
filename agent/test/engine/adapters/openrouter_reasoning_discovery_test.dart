@@ -48,6 +48,8 @@ import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
 
+import '../../support/thinking_matchers.dart';
+
 /// A genuinely unknown synthetic aggregator model: absent from the models.dev
 /// catalog's reasoning facts, absent from every shipped effort catalog, and
 /// carrying no reasoning-suggestive name. Its only path to a supported control
@@ -63,8 +65,7 @@ const _caseModelId = 'SynthVendor/Relay-Mystery-9';
 /// Unknown synthetic id whose name merely suggests reasoning output.
 const _suggestiveModelId = 'synthvendor/o3-reasoning-mystery-9';
 
-/// Catalog-evidenced OpenAI reasoning model used only as an intrinsic-knowledge
-/// control (`openAiEffortTierLabels`/`OpenAiReasoningModels` exact table).
+/// Model whose only control evidence is its models.dev catalog entry.
 const _evidencedModelId = 'openai/o3-mini';
 
 const _declaredControlKey = 'thinking_control';
@@ -200,7 +201,10 @@ class _Harness {
 /// The minimal models.dev catalog that admits the synthetic aggregator models to
 /// production discovery (production OpenRouter discovery filters non-catalog
 /// ids), with no reasoning facts of its own.
-Map<String, Object?> _devCatalog(Iterable<String> ids) {
+Map<String, Object?> _devCatalog(
+  Iterable<String> ids, {
+  Map<String, Map<String, Object?>> reasoningFacts = const {},
+}) {
   return {
     'openrouter': {
       'models': {
@@ -209,6 +213,7 @@ Map<String, Object?> _devCatalog(Iterable<String> ids) {
             'name': id,
             'tool_call': true,
             'limit': {'context': 262144},
+            ...?reasoningFacts[id],
           },
       },
     },
@@ -226,6 +231,7 @@ Future<_Harness> _openHarness({
   String? configYaml,
   List<String>? agenticIds,
   String profileName = 'openrouter',
+  Map<String, Map<String, Object?>> reasoningFacts = const {},
 }) async {
   final scratch = Directory.systemTemp.createTempSync('sanad-openrouter-');
   setSanadHomeOverride(scratch.path);
@@ -296,7 +302,9 @@ Future<_Harness> _openHarness({
   });
 
   final catalog = _devCatalog(
-    agenticIds ?? const [_modelId, _siblingModelId, _caseModelId],
+    agenticIds ??
+        [_modelId, _siblingModelId, _caseModelId, ...reasoningFacts.keys],
+    reasoningFacts: reasoningFacts,
   );
   final modelsDevClient = MockClient((request) async {
     modelsDevRequests.add(request.url.toString());
@@ -319,7 +327,11 @@ Future<_Harness> _openHarness({
   );
 
   final registry = buildProviderThinkingRegistry();
-  final assembler = ThinkingCapabilityAssembler(registry, config);
+  final assembler = ThinkingCapabilityAssembler(
+    registry,
+    config,
+    modelsDevService.modelEntrySync,
+  );
   final cacheService = ProviderModelCacheService(
     repo,
     _StaticAdapterRuntimeService(config, repo, adapter),
@@ -1025,7 +1037,7 @@ void main() {
         );
         expect(
           () => omitted.resolve(selectionId: 'high'),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
         );
       },
     );
@@ -1195,10 +1207,7 @@ void main() {
           expect(model.thinkingControl!.options, isEmpty);
           expect(model.thinkingControl!.defaultOptionId, isNull);
 
-          expect(
-            () => h.resolve(selectionId: 'low'),
-            throwsA(isA<ThinkingSelectionException>()),
-          );
+          expect(() => h.resolve(selectionId: 'low'), sendsNoThinkingField);
           expect(h.chatBodies, isEmpty);
         }
       },
@@ -1223,19 +1232,30 @@ void main() {
           unknownModel.modelMetadata.containsKey(_rawEvidenceKey),
           isFalse,
         );
-        // Existing aggregator authority: an unevidenced model on the
-        // openai_chat_effort delegate declares no selectable control.
+        // No settings, provider-reported or models.dev evidence: unknown,
+        // never a fabricated `unsupported`.
         expect(
           unknownModel.thinkingControl!.status,
-          ThinkingCapabilityStatus.unsupported,
+          ThinkingCapabilityStatus.unknown,
         );
-        expect(unknownModel.thinkingControl!.source, 'profile');
+        expect(unknownModel.thinkingControl!.source, 'unconfigured');
 
-        // The same absence must not veto genuine intrinsic catalog knowledge.
+        // The same absence must not veto the serving vendor's models.dev facts.
         final evidenced = await _openHarness(
           wire: _Wire(
             items: [_item(id: _evidencedModelId, includeReasoning: false)],
           ),
+          reasoningFacts: const {
+            _evidencedModelId: {
+              'reasoning': true,
+              'reasoning_options': [
+                {
+                  'type': 'effort',
+                  'values': ['low', 'medium', 'high'],
+                },
+              ],
+            },
+          },
         );
         addTearDown(evidenced.dispose);
         await evidenced.refresh();
@@ -1253,7 +1273,10 @@ void main() {
           evidencedModel.thinkingControl!.options.map((o) => o.id).toList(),
           ['low', 'medium', 'high'],
         );
-        expect(evidencedModel.thinkingControl!.source, 'profile');
+        // The shipped default (layer 3) for this exact id answers before the
+        // models.dev entry (layer 4); the facts agree.
+        expect(evidencedModel.thinkingControl!.source, 'shipped_default');
+        expect(evidencedModel.thinkingControl!.defaultOptionId, 'medium');
 
         // A names-only item that merely suggests reasoning output authorizes no
         // selectable control.
@@ -1279,7 +1302,7 @@ void main() {
         expect(suggestiveModel.thinkingControl!.options, isEmpty);
         expect(
           () => suggestive.resolve(selectionId: 'high'),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
         );
         expect(suggestive.chatBodies, isEmpty);
       },
@@ -1313,16 +1336,7 @@ void main() {
         expect(model.modelMetadata.containsKey(_declaredControlKey), isFalse);
         expect(model.thinkingControl!.status, ThinkingCapabilityStatus.unknown);
         expect(model.thinkingControl!.options, isEmpty);
-        expect(
-          () => h.resolve(selectionId: 'high'),
-          throwsA(
-            isA<ThinkingSelectionException>().having(
-              (e) => e.code,
-              'code',
-              ThinkingSelectionErrorCode.capabilityUnknown,
-            ),
-          ),
-        );
+        expect(() => h.resolve(selectionId: 'high'), sendsNoThinkingField);
         expect(h.chatBodies, isEmpty);
       },
     );
@@ -1388,10 +1402,16 @@ void main() {
       ], reason: 'the documented set wins over the intrinsic catalog ladder');
       expect(descriptor.defaultOptionId, 'max');
       expect(descriptor.source, 'endpoint_declared');
+      // A tier outside the documented set clamps to the nearest lower
+      // documented level; it never escalates.
       expect(
-        () => h.resolve(selectionId: 'medium', model: _evidencedModelId),
+        h.resolve(selectionId: 'medium', model: _evidencedModelId).selectionId,
+        'minimal',
+      );
+      expect(
+        () => h.resolve(selectionId: 'none', model: _evidencedModelId),
         throwsA(isA<ThinkingSelectionException>()),
-        reason: 'an intrinsic tier outside the documented set is refused',
+        reason: 'nothing lower than the documented set exists to clamp to',
       );
       expect(
         (await h.send(
@@ -1431,7 +1451,11 @@ void main() {
         allDescriptor.options.map((o) => o.id).toList(),
         _documentedGatewayEfforts,
       );
-      expect(allDescriptor.defaultOptionId, isNull);
+      // The gateway declares no default; the shipped record for the exact id
+      // fills its documented `medium`, one of the gateway options (default
+      // fill, 2026-10-21). Options still come only from the gateway.
+      expect(allDescriptor.defaultOptionId, 'medium');
+      expect(allDescriptor.defaultSource, 'shipped_default');
       expect(
         (await allValues.send(
           selectionId: 'none',
@@ -1491,13 +1515,7 @@ void main() {
         for (final stale in ['low', 'medium', 'high', 'none']) {
           expect(
             () => h.resolve(selectionId: stale, model: _evidencedModelId),
-            throwsA(
-              isA<ThinkingSelectionException>().having(
-                (e) => e.code,
-                'code',
-                ThinkingSelectionErrorCode.capabilityUnknown,
-              ),
-            ),
+            sendsNoThinkingField,
             reason: 'stale intrinsic tier $stale must not dispatch',
           );
         }
@@ -1634,7 +1652,7 @@ void main() {
       }
       expect(
         () => conflicting.resolve(selectionId: 'high', model: _modelId),
-        throwsA(isA<ThinkingSelectionException>()),
+        sendsNoThinkingField,
       );
       expect(conflicting.chatBodies, isEmpty);
 
@@ -1701,7 +1719,7 @@ void main() {
         }
         expect(
           () => mixed.resolve(selectionId: 'high', model: _modelId),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
         );
         expect(mixed.chatBodies, isEmpty);
       }
@@ -1780,16 +1798,8 @@ void main() {
         'enabled': true,
         'effort': 'low',
       });
-      expect(
-        () => h.resolve(selectionId: 'high'),
-        throwsA(
-          isA<ThinkingSelectionException>().having(
-            (e) => e.code,
-            'code',
-            ThinkingSelectionErrorCode.optionUnavailable,
-          ),
-        ),
-      );
+      // `high` is not in the override's set: it clamps down to `low`.
+      expect(h.resolve(selectionId: 'high').selectionId, 'low');
 
       // Removing the override returns the route to its discovered declaration
       // through the existing refresh boundary.
@@ -1906,7 +1916,7 @@ void main() {
           expect(descriptor.options, isEmpty);
           expect(
             () => h.resolve(model: _evidencedModelId, selectionId: 'high'),
-            throwsA(isA<ThinkingSelectionException>()),
+            sendsNoThinkingField,
           );
           expect(h.chatBodies, isEmpty);
         }
@@ -1941,7 +1951,7 @@ void main() {
         expect(descriptor.options, isEmpty);
         expect(
           () => h.resolve(model: _evidencedModelId, selectionId: 'high'),
-          throwsA(isA<ThinkingSelectionException>()),
+          sendsNoThinkingField,
         );
         expect(h.chatBodies, isEmpty);
       },
@@ -1986,7 +1996,7 @@ void main() {
           }
           expect(
             () => h.resolve(model: _evidencedModelId, selectionId: 'medium'),
-            throwsA(isA<ThinkingSelectionException>()),
+            sendsNoThinkingField,
           );
           expect(h.chatBodies, isEmpty);
         }

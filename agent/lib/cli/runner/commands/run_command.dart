@@ -46,7 +46,7 @@ class RunCommand extends SanadCommand {
       )
       ..addOption(
         'thinking-mode',
-        help: 'Explicit reasoning effort (for example: medium)',
+        help: 'Explicit thinking option id for the route (for example: high, off)',
         allowed: cliThinkingModes,
       )
       ..addOption(
@@ -91,8 +91,14 @@ class RunCommand extends SanadCommand {
     String effectivePrompt = '';
     if (briefFile != null && briefFile.trim().isNotEmpty) {
       if (optPrompt.isNotEmpty || restPrompt.isNotEmpty) {
+        final extras = [
+          if (optPrompt.isNotEmpty) '--prompt',
+          for (final arg in restArgs) '"$arg"',
+        ].join(', ');
         stderrSink.writeln(
-          'Error: Mutually exclusive: cannot specify both --brief-file and a positional/option prompt.',
+          'Error: --brief-file cannot be combined with a prompt; unexpected '
+          'argument(s): $extras. Check that every option value follows its '
+          'option (for example --thinking-mode off).',
         );
         return 2;
       }

@@ -1,10 +1,10 @@
-/// Red/green regression for exact OpenCode Go `deepseek-v4.1-flash` thinking.
+/// DeepSeek official wire contract on OpenCode Go `deepseek-v4.1-flash`.
 ///
-/// Confirmed regression: selecting OpenCode Go / exact `deepseek-v4.1-flash`
-/// made the client thinking selector disappear. The exact model had no
-/// DeepSeek model-owned facts, so route resolution fell back to OpenCode Go's
-/// generic OpenAI effort policy, which returns `unsupported` for an
-/// unevidenced model and hides the selector.
+/// Restored for the 5-layer thinking authority (live-r1): the facts now come
+/// from the shipped defaults (layer 3, `agent/model_capability_defaults.yaml`,
+/// `native_toggle_effort`), never from a model-name table in Dart, and they
+/// win over the `opencode-go` models.dev entry (which reports only
+/// `low/high/max` with no Off and no default).
 ///
 /// Grounding (official, read-only):
 /// - https://www.deepseek.com/en/news/deepseek-v4-1-flash/ — V4.1-Flash is live
@@ -35,7 +35,7 @@ import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
-import 'package:sanad_agent/core/provider_thinking/deepseek_model_catalog.dart';
+import 'package:sanad_agent/core/provider_thinking/generated_model_capability_defaults.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
@@ -92,7 +92,24 @@ void main() {
       expect(getSanadHome(), tempHome.path);
 
       final registry = buildProviderThinkingRegistry();
-      assembler = ThinkingCapabilityAssembler(registry, isolatedConfig);
+      // The real Test Home `opencode-go` models.dev entry for this model.
+      assembler = ThinkingCapabilityAssembler(
+        registry,
+        isolatedConfig,
+        (templateId, modelId) =>
+            templateId == 'opencode-go' && modelId == v41FlashModelId
+            ? const {
+                'reasoning': true,
+                'interleaved': {'field': 'reasoning_content'},
+                'reasoning_options': [
+                  {
+                    'type': 'effort',
+                    'values': ['low', 'high', 'max'],
+                  },
+                ],
+              }
+            : null,
+      );
       resolver = ThinkingSelectionResolver(
         instances: repo,
         cacheResolver: ThinkingControlCacheResolver(repo),
@@ -128,18 +145,15 @@ void main() {
     });
 
     test(
-      'exact V4.1 Flash resolves model-owned DeepSeek toggle/effort, not Go generic effort',
+      'exact V4.1 Flash resolves the shipped DeepSeek toggle/effort over models.dev',
       () {
-        expect(DeepSeekModelCatalog.isEvidencedModel(v41FlashModelId), isTrue);
-        expect(
-          DeepSeekModelCatalog.thinkingKindForModel(v41FlashModelId),
-          DeepSeekRouteThinkingKind.toggleEffort,
-        );
+        final shipped = modelCapabilityDefaults[v41FlashModelId]!;
+        expect(shipped.source, startsWith('https://'));
+        expect(shipped.thinkingControl['wire'], 'native_toggle_effort');
         expect(
           ThinkingRoutePolicy.policyIdFor(goInstance, modelId: v41FlashModelId),
-          'deepseek_thinking',
-          reason:
-              'exact model-owned facts must win over OpenCode Go generic policy',
+          'openai_chat_effort',
+          reason: 'the policy id is a route label; it never reads the model id',
         );
 
         final descriptor = assembler.assemble(
@@ -237,11 +251,8 @@ void main() {
             'is_provider_default': false,
           },
         ]);
-        expect(
-          wire['capability_revision'],
-          contains('deepseek_thinking:$v41FlashModelId'),
-        );
-        expect(wire['source'], 'profile');
+        expect(wire['capability_revision'], contains('shipped_'));
+        expect(wire['source'], 'shipped_default');
       },
     );
 
@@ -301,7 +312,10 @@ void main() {
           realV41Tiers,
         );
         expect(resolved.descriptor.defaultOptionId, 'high');
-        expect((resolved.directive as OpenAiEffortDirective).effort, 'high');
+        expect(
+          (resolved.directive as NativeThinkingEffortDirective).effort,
+          'high',
+        );
       },
     );
 
@@ -329,17 +343,33 @@ void main() {
         );
         expect(
           resolved.directive,
-          isA<OpenAiEffortDirective>(),
-          reason: '$effort must produce a real effort directive',
+          isA<NativeThinkingEffortDirective>(),
+          reason: '$effort must enable thinking with the exact effort',
         );
-        expect((resolved.directive as OpenAiEffortDirective).effort, effort);
+        expect(
+          (resolved.directive as NativeThinkingEffortDirective).effort,
+          effort,
+        );
       }
 
+      // A documented request alias is never a distinct tier: an unoffered
+      // `medium` clamps down to the nearest lower real tier, `low`.
+      final clamped = resolver.resolve(
+        providerInstanceId: goInstance.id,
+        modelId: v41FlashModelId,
+        selectionId: 'medium',
+      );
+      expect(clamped.selectionId, 'low');
+      expect(
+        (clamped.directive as NativeThinkingEffortDirective).effort,
+        'low',
+      );
+      // `none` is never a clamp target and is not an offered option.
       expect(
         () => resolver.resolve(
           providerInstanceId: goInstance.id,
           modelId: v41FlashModelId,
-          selectionId: 'medium',
+          selectionId: 'none',
         ),
         throwsA(
           isA<ThinkingSelectionException>().having(
@@ -348,16 +378,15 @@ void main() {
             ThinkingSelectionErrorCode.optionUnavailable,
           ),
         ),
-        reason: 'a remapped alias is never a valid distinct selection',
       );
     });
 
-    test('near-IDs stay fail-closed and keep the selector hidden on Go', () {
+    test('near-IDs stay unknown and never send a thinking field on Go', () {
       for (final nearId in v41NearIds) {
         expect(
-          DeepSeekModelCatalog.isEvidencedModel(nearId),
+          modelCapabilityDefaults.containsKey(nearId),
           isFalse,
-          reason: '$nearId must not be an evidenced DeepSeek model',
+          reason: '$nearId must not be a shipped DeepSeek record',
         );
         expect(
           ThinkingRoutePolicy.policyIdFor(goInstance, modelId: nearId),
@@ -370,19 +399,21 @@ void main() {
         );
         expect(
           descriptor.status,
-          ThinkingCapabilityStatus.unsupported,
-          reason: '$nearId must remain unsupported on OpenCode Go',
+          ThinkingCapabilityStatus.unknown,
+          reason: '$nearId has no reported set on OpenCode Go',
         );
         expect(descriptor.isSelectable, isFalse);
         expect(descriptor.options, isEmpty);
         expect(
-          () => resolver.resolve(
-            providerInstanceId: goInstance.id,
-            modelId: nearId,
-            selectionId: 'high',
-          ),
-          throwsA(isA<ThinkingSelectionException>()),
-          reason: '$nearId must reject a selection before provider dispatch',
+          resolver
+              .resolve(
+                providerInstanceId: goInstance.id,
+                modelId: nearId,
+                selectionId: 'high',
+              )
+              .directive,
+          isA<UseProviderDefault>(),
+          reason: '$nearId must never put a thinking field on the wire',
         );
       }
     });
@@ -472,17 +503,17 @@ void main() {
         // No control-free request may be polluted by thinking fields.
         expect(capturedBodies, hasLength(5));
 
-        // 4. A near-ID selection is rejected before any HTTP dispatch.
-        final callsBefore = capturedBodies.length;
+        // 4. A near-ID selection carries no thinking directive at all.
         expect(
-          () => resolver.resolve(
-            providerInstanceId: goInstance.id,
-            modelId: 'deepseek-v4.1-flash-x',
-            selectionId: 'high',
-          ),
-          throwsA(isA<ThinkingSelectionException>()),
+          resolver
+              .resolve(
+                providerInstanceId: goInstance.id,
+                modelId: 'deepseek-v4.1-flash-x',
+                selectionId: 'high',
+              )
+              .directive,
+          isA<UseProviderDefault>(),
         );
-        expect(capturedBodies, hasLength(callsBefore));
       },
     );
   });

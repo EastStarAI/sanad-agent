@@ -14,7 +14,6 @@ import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler
 import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_stale_evidence.dart';
-import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/adapters/ollama_adapter.dart';
@@ -22,6 +21,8 @@ import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
+
+import '../../support/thinking_matchers.dart';
 
 /// Production-wired regressions for native Ollama thinking facts whose live
 /// probe evidence is older than [ThinkingControlStaleEvidence.liveEvidenceTtl].
@@ -206,13 +207,7 @@ void main() {
     return chatBodies.single;
   }
 
-  final throwsThinkingUnknown = throwsA(
-    isA<ThinkingSelectionException>().having(
-      (error) => error.code,
-      'code',
-      ThinkingSelectionErrorCode.capabilityUnknown,
-    ),
-  );
+  final throwsThinkingUnknown = sendsNoThinkingField;
 
   setUp(() {
     state = AgentStateDatabase.inMemory();
@@ -351,13 +346,7 @@ void main() {
           modelId: modelId,
           selectionId: 'off',
         ),
-        throwsA(
-          isA<ThinkingSelectionException>().having(
-            (error) => error.code,
-            'code',
-            ThinkingSelectionErrorCode.capabilityUnknown,
-          ),
-        ),
+        sendsNoThinkingField,
       );
       expect(chatBodies, isEmpty);
     },
@@ -491,13 +480,7 @@ void main() {
           modelId: modelId,
           selectionId: 'off',
         ),
-        throwsA(
-          isA<ThinkingSelectionException>().having(
-            (error) => error.code,
-            'code',
-            ThinkingSelectionErrorCode.capabilityUnknown,
-          ),
-        ),
+        sendsNoThinkingField,
       );
       expect(chatBodies, isEmpty);
     },
@@ -570,13 +553,7 @@ void main() {
           modelId: modelId,
           selectionId: 'on',
         ),
-        throwsA(
-          isA<ThinkingSelectionException>().having(
-            (error) => error.code,
-            'code',
-            ThinkingSelectionErrorCode.capabilityUnknown,
-          ),
-        ),
+        sendsNoThinkingField,
       );
     },
   );
