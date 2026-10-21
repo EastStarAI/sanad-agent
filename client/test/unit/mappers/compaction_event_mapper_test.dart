@@ -156,6 +156,38 @@ void main() {
     expect(event.contextUsage?.contextWindowTokens, 128000);
   });
 
+  // Task 118b D2: after a restart and reopen the tile is rebuilt from the
+  // history row, which must keep the threshold the operation row holds.
+  test('history and confirmed live rows keep the automatic threshold', () {
+    final payload = {
+      'session_id': 'session-1',
+      'compaction_id': 'cmp-threshold',
+      'trigger': 'manual',
+      'status': 'completed',
+      'context_window_tokens': 1000000,
+      'auto_threshold_tokens': 900000,
+      'estimated_request_tokens_before': 108235,
+      'estimated_request_tokens_after': 54800,
+      'provider_confirmed_request_tokens_after': 63687,
+      'completed_at': '2026-10-21T18:10:00.000Z',
+    };
+    final history = mapper.mapHistory([
+      {
+        'id': 'context_compaction:cmp-threshold:completed',
+        'type': 'context_compaction.completed',
+        'created_at': '2026-10-21T18:10:00.000Z',
+        ...payload,
+      },
+    ]).single;
+    final live = mapper.mapLiveEvent({
+      'event': 'context_compaction.completed',
+      'payload': payload,
+    })!;
+
+    expect(history.metadata?['auto_threshold_tokens'], 900000);
+    expect(live.metadata?['auto_threshold_tokens'], 900000);
+  });
+
   test('maps live failure event with failure_stage and failure_cause', () {
     final live = mapper.mapLiveEvent({
       'event': 'context_compaction.failed',
