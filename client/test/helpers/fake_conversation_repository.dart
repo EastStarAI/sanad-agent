@@ -67,6 +67,10 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
   final List<Map<String, String?>> sentMessageRequests = [];
   final List<List<Map<String, dynamic>>> sentAttachmentRequests = [];
   bool failAttachmentAdmission = false;
+
+  /// Awaited before attachment admission resolves, to order it against other
+  /// client work in tests.
+  Future<void> Function()? beforeAttachmentAdmission;
   final List<Map<String, String?>> steerMessageRequests = [];
   final List<String?> stoppedSessionIds = [];
   final List<Map<String, String?>> retriedRuntimeNotices = [];
@@ -310,6 +314,7 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
     MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
   }) async {
     sentAttachmentRequests.add(attachments);
+    await beforeAttachmentAdmission?.call();
     if (failAttachmentAdmission) {
       throw StateError('Attachment admission failed.');
     }

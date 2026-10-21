@@ -27,7 +27,9 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
 
   final SessionMessagesCubit messagesCubit;
   StreamSubscription? _messagesSubscription;
-  final Map<String, ({List<DraftAttachment> attachments, String? error})> _draftsByScope = {};
+  /// Draft attachments per device/session scope. The attachment error is
+  /// transient feedback and is deliberately not part of this cache.
+  final Map<String, List<DraftAttachment>> _draftsByScope = {};
   String _draftScope = '';
 
   ConversationInputCubit({
@@ -46,22 +48,25 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     });
   }
 
+  /// The draft scope key for a device/session (New conversation when
+  /// [sessionId] is empty).
+  static String draftScopeKey({required String? deviceId, required String? sessionId}) =>
+      '${deviceId ?? ''}\u0000${sessionId ?? ''}';
+
+  /// The draft scope the composer is currently bound to.
+  String get draftScope => _draftScope;
+
   void setDraftScope({required String? deviceId, required String? sessionId}) {
-    final nextScope = '${deviceId ?? ''}\u0000${sessionId ?? ''}';
+    final nextScope = draftScopeKey(deviceId: deviceId, sessionId: sessionId);
     if (nextScope == _draftScope) return;
     if (_draftScope.isNotEmpty) {
-      _draftsByScope[_draftScope] = (
-        attachments: state.draftAttachments,
-        error: state.attachmentError,
-      );
+      _draftsByScope[_draftScope] = state.draftAttachments;
     }
     _draftScope = nextScope;
-    final restored = _draftsByScope[nextScope];
     emit(
       state.copyWith(
-        draftAttachments: restored?.attachments ?? const [],
-        attachmentError: restored?.error,
-        clearAttachmentError: restored?.error == null,
+        draftAttachments: _draftsByScope[nextScope] ?? const [],
+        clearAttachmentError: true,
       ),
     );
   }
@@ -76,55 +81,43 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     required Uint8List bytes,
     required DraftAttachmentSource source,
     required Capability capability,
+    String? scope,
   }) async {
-    if (!capability.supportsAttachments) {
-      emit(
-        state.copyWith(
-          attachmentError: 'Attachments are not supported by this agent.',
-        ),
-      );
+    // A multi-file paste/drop completes into the scope that started it, even
+    // when the composer rebinds to another conversation while files are read.
+    final target = scope ?? _draftScope;
+    final current = _scopeAttachments(target);
+    final rejection = DraftAttachmentPolicy.check(
+      capability: capability,
+      existingCount: current.length,
+      existingBytes: current.fold<int>(0, (sum, item) => sum + item.sizeBytes),
+      nextBytes: bytes.length,
+    );
+    if (rejection != null) {
+      if (target == _draftScope) emit(state.copyWith(attachmentError: rejection));
       return;
     }
-    final current = state.draftAttachments;
-    if (bytes.length > capability.attachmentMaxFileBytes) {
-      emit(state.copyWith(attachmentError: 'Each attachment must be 5 MiB or smaller.'));
-      return;
-    }
-    if (current.length >= capability.attachmentMaxFilesPerMessage) {
-      emit(state.copyWith(attachmentError: 'A message accepts at most 4 attachments.'));
-      return;
-    }
-    final total = current.fold<int>(0, (sum, item) => sum + item.sizeBytes) + bytes.length;
-    if (total > capability.attachmentMaxTotalBytesPerMessage) {
-      emit(state.copyWith(attachmentError: 'Attachments must total 20 MiB or less per message.'));
-      return;
-    }
+    // The same file pasted or dropped twice stays one attachment.
+    if (_containsSameContent(current, bytes)) return;
     final item = DraftAttachment(
       id: const Uuid().v4(),
       name: _safeDraftName(name),
       bytes: bytes,
       source: source,
     );
-    emit(
-      state.copyWith(
-        draftAttachments: List.unmodifiable([...current, item]),
-        clearAttachmentError: true,
-      ),
-    );
+    _setScopeAttachments(target, [...current, item]);
+    if (target == _draftScope) emit(state.copyWith(clearAttachmentError: true));
     await Future<void>.delayed(Duration.zero);
-    emit(
-      state.copyWith(
-        draftAttachments: List.unmodifiable([
-          for (final attachment in state.draftAttachments)
-            attachment.id == item.id
-                ? attachment.copyWith(
-                    status: DraftAttachmentStatus.ready,
-                    clearError: true,
-                  )
-                : attachment,
-        ]),
-      ),
-    );
+    if (isClosed) return;
+    _setScopeAttachments(target, [
+      for (final attachment in _scopeAttachments(target))
+        attachment.id == item.id
+            ? attachment.copyWith(
+                status: DraftAttachmentStatus.ready,
+                clearError: true,
+              )
+            : attachment,
+    ]);
   }
 
   void removeDraftAttachment(String id) {
@@ -136,6 +129,14 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         clearAttachmentError: true,
       ),
     );
+  }
+
+  void setAttachmentError(DraftAttachmentError error) {
+    emit(state.copyWith(attachmentError: error));
+  }
+
+  void clearAttachmentError() {
+    emit(state.copyWith(clearAttachmentError: true));
   }
 
   void retryDraftAttachment(String id) {
@@ -153,6 +154,13 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         clearAttachmentError: true,
       ),
     );
+  }
+
+  static bool _containsSameContent(List<DraftAttachment> attachments, Uint8List bytes) {
+    final sameSize = attachments.where((item) => item.bytes.length == bytes.length).toList(growable: false);
+    if (sameSize.isEmpty) return false;
+    final digest = sha256.convert(bytes);
+    return sameSize.any((item) => sha256.convert(item.bytes) == digest);
   }
 
   static String _safeDraftName(String input) {
@@ -214,6 +222,8 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
       return;
     }
 
+    // Sending is a new user action: earlier rejection feedback is stale.
+    if (state.attachmentError != null) emit(state.copyWith(clearAttachmentError: true));
     try {
       final accepted = await messagesCubit.sendMessage(
         trimmedText,
@@ -229,14 +239,26 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
             },
         ],
       );
+      if (!accepted && attachments.isNotEmpty) {
+        // A refused first send in a New conversation has already created the
+        // session and moved the text there: the attachments move with it, so
+        // nothing submitted stays behind in the New draft.
+        final createdScope = _createdSessionScope(submittedScope);
+        if (createdScope != null) _moveDraftAttachments(submittedIds, from: submittedScope, to: createdScope);
+        // Never refuse silently: the attachments stay in the draft and the
+        // composer states that the send did not go through.
+        if (_draftScope == submittedScope || _draftScope == createdScope) {
+          emit(state.copyWith(attachmentError: const DraftAttachmentError(DraftAttachmentErrorKind.sendFailed)));
+        }
+      }
       if (accepted && attachments.isNotEmpty) {
         final cached = _draftsByScope[submittedScope];
         if (cached != null) {
-          final remaining = cached.attachments.where((item) => !submittedIds.contains(item.id)).toList(growable: false);
+          final remaining = cached.where((item) => !submittedIds.contains(item.id)).toList(growable: false);
           if (remaining.isEmpty) {
             _draftsByScope.remove(submittedScope);
           } else {
-            _draftsByScope[submittedScope] = (attachments: List.unmodifiable(remaining), error: cached.error);
+            _draftsByScope[submittedScope] = List.unmodifiable(remaining);
           }
         }
         if (_draftScope == submittedScope) {
@@ -249,6 +271,43 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
     }
+  }
+
+  /// The scope of the session a New-conversation send at [submittedScope]
+  /// created, or `null` when the send targeted an existing session or created
+  /// none.
+  String? _createdSessionScope(String submittedScope) {
+    final separator = submittedScope.indexOf('\u0000');
+    if (separator < 0 || separator != submittedScope.length - 1) return null;
+    final created = messagesCubit.state.activeSessionId?.trim();
+    if (created == null || created.isEmpty) return null;
+    return '${submittedScope.substring(0, separator)}\u0000$created';
+  }
+
+  List<DraftAttachment> _scopeAttachments(String scope) =>
+      scope == _draftScope ? state.draftAttachments : _draftsByScope[scope] ?? const [];
+
+  void _setScopeAttachments(String scope, List<DraftAttachment> attachments) {
+    final value = List<DraftAttachment>.unmodifiable(attachments);
+    if (scope == _draftScope) {
+      emit(state.copyWith(draftAttachments: value));
+    } else if (value.isEmpty) {
+      _draftsByScope.remove(scope);
+    } else {
+      _draftsByScope[scope] = value;
+    }
+  }
+
+  /// Moves the attachments with [ids] from scope [from] to scope [to],
+  /// wherever each scope currently lives (the active state or the cache).
+  void _moveDraftAttachments(Set<String> ids, {required String from, required String to}) {
+    final source = _scopeAttachments(from);
+    final moving = source.where((item) => ids.contains(item.id)).toList(growable: false);
+    if (moving.isEmpty) return;
+    _setScopeAttachments(from, source.where((item) => !ids.contains(item.id)).toList(growable: false));
+    final target = _scopeAttachments(to);
+    final present = target.map((item) => item.id).toSet();
+    _setScopeAttachments(to, [...target, ...moving.where((item) => !present.contains(item.id))]);
   }
 
   /// Applies the daemon-owned route, preserving user intent unless the caller

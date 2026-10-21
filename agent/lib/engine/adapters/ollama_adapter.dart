@@ -371,6 +371,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       messageToWire: _messageToWire,
       supportsImageInput: supportsImages,
       verifiedAttachments: verifiedAttachments,
+      attachmentStore: options.attachmentStore,
     );
   }
 

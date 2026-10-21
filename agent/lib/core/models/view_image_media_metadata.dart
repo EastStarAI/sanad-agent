@@ -81,13 +81,22 @@ class ViewImageMediaMetadata {
     _ => 'view-image.png',
   };
 
+  /// Tools whose successful result may carry one projected image block and
+  /// therefore publish canonical media metadata (`view_image` and the
+  /// screenshot tool, which share the same media card and relay path).
+  static const Set<String> mediaToolNames = {'view_image', 'system_screenshot'};
+
+  /// Whether [toolName] is a media-bearing tool owned by this projection.
+  static bool isMediaTool(String? toolName) =>
+      toolName != null && mediaToolNames.contains(toolName);
+
   static ViewImageMediaMetadata? project({
     required String sessionId,
     required String? toolName,
     required String? toolCallId,
     required ToolExecutionResult? result,
   }) {
-    if (toolName != 'view_image' ||
+    if (!isMediaTool(toolName) ||
         toolCallId == null ||
         toolCallId.isEmpty ||
         result == null ||

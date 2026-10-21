@@ -1,10 +1,54 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/utils/app_platform.dart';
+
+class _FakeLoader implements UserAttachmentMediaLoader {
+  static final Uint8List _png = Uint8List.fromList(
+    base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    ),
+  );
+
+  _FakeLoader({this.shouldFail = false});
+  final bool shouldFail;
+  final List<String> loadedIds = [];
+
+  @override
+  ViewImageMediaLoad loadAttachment({
+    required UserMessageAttachment attachment,
+    required String sessionId,
+  }) {
+    loadedIds.add(attachment.id);
+    if (shouldFail) {
+      return ViewImageMediaLoad(
+        bytes: Future.error(Exception('Failed to load')),
+        cancel: () {},
+      );
+    }
+    return ViewImageMediaLoad(
+      bytes: Future.value(_png),
+      cancel: () {},
+    );
+  }
+}
+
+UserMessageAttachment existingImage({bool isAvailable = true}) => UserMessageAttachment(
+  id: 'existing-image-1',
+  mediaId: 'media-existing-image-1',
+  safeName: 'photo.png',
+  mimeType: 'image/png',
+  sizeBytes: 68,
+  sha256: 'a' * 64,
+  isImage: true,
+  isAvailable: isAvailable,
+);
 
 void main() {
   setUp(() => AppPlatform.overrideIsMobile = null);
@@ -244,5 +288,124 @@ void main() {
     expect(addCalls, 1);
     expect(removed, ['existing-1']);
     expect(retried, ['failed-1']);
+  });
+
+  testWidgets('EventTile inline edit renders thumbnail with userAttachmentMediaLoader and sessionId', (tester) async {
+    final controller = TextEditingController(text: 'edited message');
+    addTearDown(controller.dispose);
+    final loader = _FakeLoader();
+
+    final attachments = [InlineEditAttachment.existing(existingImage())];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: EventTile(
+            event: event,
+            sessionId: 'session-1',
+            userAttachmentMediaLoader: loader,
+            canReplay: true,
+            isEditing: true,
+            editController: controller,
+            editAttachments: attachments,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('inline_edit_attachment_rail')), findsOneWidget);
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_existing-image-1'));
+    expect(chip, findsOneWidget);
+    expect(loader.loadedIds, ['existing-image-1']);
+    expect(find.descendant(of: chip, matching: find.byType(Image)), findsOneWidget);
+  });
+
+  testWidgets('EventTile inline edit falls back to icon when userAttachmentMediaLoader fails', (tester) async {
+    final controller = TextEditingController(text: 'edited message');
+    addTearDown(controller.dispose);
+    final loader = _FakeLoader(shouldFail: true);
+
+    final attachments = [InlineEditAttachment.existing(existingImage())];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: EventTile(
+            event: event,
+            sessionId: 'session-1',
+            userAttachmentMediaLoader: loader,
+            canReplay: true,
+            isEditing: true,
+            editController: controller,
+            editAttachments: attachments,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_existing-image-1'));
+    expect(chip, findsOneWidget);
+    expect(loader.loadedIds, ['existing-image-1']);
+    expect(find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)), findsOneWidget);
+    expect(find.descendant(of: chip, matching: find.byType(Image)), findsNothing);
+  });
+
+  testWidgets('EventTile inline edit never requests an unavailable existing attachment', (tester) async {
+    final controller = TextEditingController(text: 'edited message');
+    addTearDown(controller.dispose);
+    final loader = _FakeLoader();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: EventTile(
+            event: event,
+            sessionId: 'session-1',
+            userAttachmentMediaLoader: loader,
+            canReplay: true,
+            isEditing: true,
+            editController: controller,
+            editAttachments: [InlineEditAttachment.existing(existingImage(isAvailable: false))],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_existing-image-1'));
+    expect(chip, findsOneWidget);
+    expect(loader.loadedIds, isEmpty);
+    expect(find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)), findsOneWidget);
+  });
+
+  testWidgets('EventTile inline edit rebuild with a new loader instance does not refetch', (tester) async {
+    final controller = TextEditingController(text: 'edited message');
+    addTearDown(controller.dispose);
+    final firstLoader = _FakeLoader();
+    final secondLoader = _FakeLoader();
+
+    Widget host(UserAttachmentMediaLoader loader) => MaterialApp(
+      home: Scaffold(
+        body: EventTile(
+          event: event,
+          sessionId: 'session-1',
+          userAttachmentMediaLoader: loader,
+          canReplay: true,
+          isEditing: true,
+          editController: controller,
+          editAttachments: [InlineEditAttachment.existing(existingImage())],
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(host(firstLoader));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(host(secondLoader));
+    await tester.pumpAndSettle();
+
+    expect(firstLoader.loadedIds, ['existing-image-1']);
+    expect(secondLoader.loadedIds, isEmpty);
   });
 }

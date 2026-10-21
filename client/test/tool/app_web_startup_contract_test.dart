@@ -6,9 +6,11 @@ void main() {
   test('application startup guards native platform access on Web', () {
     final source = File('lib/app.dart').readAsStringSync();
 
-    expect(source, contains('AppPlatform.isMacOS'));
+    // Platform branches go through the Web-safe AppPlatform facade; startup
+    // never imports dart:io or reads the native Platform class directly.
+    expect(source, contains('AppPlatform.'));
     expect(source, isNot(contains("import 'dart:io';")));
-    expect(source, isNot(contains('if (Platform.isMacOS)')));
+    expect(source, isNot(contains(RegExp(r'(?<![A-Za-z])Platform\.is'))));
   });
 
   test('Web authentication bridge is external and loads before Flutter', () {

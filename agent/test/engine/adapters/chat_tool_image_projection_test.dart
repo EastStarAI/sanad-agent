@@ -241,6 +241,110 @@ void main() {
   );
 
   test(
+    'system_screenshot image result projects detached user context image_url on vision model wire',
+    () async {
+      final screenshotHistory = [
+        Message(role: MessageRole.user, content: 'Take a screenshot'),
+        Message(
+          role: MessageRole.assistant,
+          toolCalls: [
+            ToolCall(
+              id: 'shot-call',
+              name: 'system_screenshot',
+              arguments: const {'monitor_number': 1},
+            ),
+          ],
+        ),
+        Message(
+          role: MessageRole.tool,
+          toolCallId: 'shot-call',
+          content: 'Screenshot taken successfully from monitor 1',
+          toolResult: ToolExecutionResult(
+            blocks: [
+              ToolTextBlock(
+                text: 'Screenshot taken successfully from monitor 1',
+              ),
+              ToolImageBlock(
+                dataBase64: base64Encode([10, 20, 30]),
+                mimeType: 'image/png',
+                width: 128,
+                height: 64,
+                detail: ToolImageDetail.auto,
+              ),
+            ],
+          ),
+        ),
+      ];
+
+      final subject = adapter();
+      await subject.generateResponse(screenshotHistory);
+
+      expect(requests, hasLength(1));
+      final messages = requests.single['messages'] as List;
+      expect(messages, hasLength(4));
+      expect(messages[0]['role'], 'user');
+      expect(messages[1]['role'], 'assistant');
+      expect(messages[2]['role'], 'tool');
+      expect(messages[2]['tool_call_id'], 'shot-call');
+      expect(messages[3]['role'], 'user');
+      final content = messages[3]['content'] as List;
+      expect(content.last['type'], 'image_url');
+      expect(
+        content.last['image_url']['url'],
+        'data:image/png;base64,${base64Encode([10, 20, 30])}',
+      );
+      expect(content.last['image_url']['detail'], 'auto');
+    },
+  );
+
+  test(
+    'system_screenshot with image fails closed on non-vision model route',
+    () async {
+      final screenshotHistory = [
+        Message(role: MessageRole.user, content: 'Take a screenshot'),
+        Message(
+          role: MessageRole.assistant,
+          toolCalls: [
+            ToolCall(
+              id: 'shot-call',
+              name: 'system_screenshot',
+              arguments: const {'monitor_number': 1},
+            ),
+          ],
+        ),
+        Message(
+          role: MessageRole.tool,
+          toolCallId: 'shot-call',
+          content: 'Screenshot taken successfully from monitor 1',
+          toolResult: ToolExecutionResult(
+            blocks: [
+              ToolTextBlock(
+                text: 'Screenshot taken successfully from monitor 1',
+              ),
+              ToolImageBlock(
+                dataBase64: base64Encode([10, 20, 30]),
+                mimeType: 'image/png',
+                width: 128,
+                height: 64,
+                detail: ToolImageDetail.auto,
+              ),
+            ],
+          ),
+        ),
+      ];
+
+      expect(
+        () => adapter().generateResponse(
+          screenshotHistory,
+          modelOverride: 'text-model',
+        ),
+        throwsA(isA<UnsupportedError>()),
+      );
+      expect(requests, isEmpty);
+    },
+  );
+
+  test(
     'multiple image results preserve batch and image order across replay',
     () async {
       final source = history();

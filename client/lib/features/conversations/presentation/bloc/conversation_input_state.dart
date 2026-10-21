@@ -7,11 +7,66 @@ import 'package:sanad_client/features/conversations/domain/models/device_workspa
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
+import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
 enum DraftAttachmentSource { picker, paste, drop }
 
 enum DraftAttachmentStatus { validating, uploading, ready, failed }
+
+enum DraftAttachmentErrorKind { unsupported, tooLarge, tooMany, totalTooLarge, sendFailed, readFailed }
+
+/// Transient, typed attachment rejection. Presentation localizes it with the
+/// [limit] that was actually enforced; it is never part of a cached draft.
+class DraftAttachmentError extends Equatable {
+  const DraftAttachmentError(this.kind, {this.limit = 0});
+
+  final DraftAttachmentErrorKind kind;
+
+  /// Bytes for [DraftAttachmentErrorKind.tooLarge]/[DraftAttachmentErrorKind.totalTooLarge],
+  /// a file count for [DraftAttachmentErrorKind.tooMany], unused otherwise.
+  final int limit;
+
+  @override
+  List<Object?> get props => [kind, limit];
+}
+
+/// The one draft-attachment admission rule shared by the composer and the
+/// inline editor. Limits come from the agent [Capability], falling back to the
+/// canonical defaults when the agent advertises none.
+abstract final class DraftAttachmentPolicy {
+  static int maxFileBytes(Capability capability) => capability.attachmentMaxFileBytes > 0
+      ? capability.attachmentMaxFileBytes
+      : Capability.defaultAttachmentMaxFileBytes;
+
+  static int maxFiles(Capability capability) => capability.attachmentMaxFilesPerMessage > 0
+      ? capability.attachmentMaxFilesPerMessage
+      : Capability.defaultAttachmentMaxFilesPerMessage;
+
+  static int maxTotalBytes(Capability capability) => capability.attachmentMaxTotalBytesPerMessage > 0
+      ? capability.attachmentMaxTotalBytesPerMessage
+      : Capability.defaultAttachmentMaxTotalBytesPerMessage;
+
+  /// Rejection for adding [nextBytes] to [existingCount] retained files of
+  /// [existingBytes] total, or `null` when admissible.
+  static DraftAttachmentError? check({
+    required Capability capability,
+    required int existingCount,
+    required int existingBytes,
+    required int nextBytes,
+  }) {
+    if (!capability.supportsAttachments) return const DraftAttachmentError(DraftAttachmentErrorKind.unsupported);
+    final fileLimit = maxFileBytes(capability);
+    if (nextBytes > fileLimit) return DraftAttachmentError(DraftAttachmentErrorKind.tooLarge, limit: fileLimit);
+    final countLimit = maxFiles(capability);
+    if (existingCount >= countLimit) return DraftAttachmentError(DraftAttachmentErrorKind.tooMany, limit: countLimit);
+    final totalLimit = maxTotalBytes(capability);
+    if (existingBytes + nextBytes > totalLimit) {
+      return DraftAttachmentError(DraftAttachmentErrorKind.totalTooLarge, limit: totalLimit);
+    }
+    return null;
+  }
+}
 
 class DraftAttachment extends Equatable {
   const DraftAttachment({
@@ -72,7 +127,7 @@ class ConversationInputState extends Equatable {
   final SessionAttentionState? attentionState;
   final bool isAwaitingMessageAcceptance;
   final List<DraftAttachment> draftAttachments;
-  final String? attachmentError;
+  final DraftAttachmentError? attachmentError;
   final List<CanonicalEvent> queuedMessages;
   final Set<String> queuedMutationRequestIds;
   final Set<String> pendingSteerCancellationRequestIds;
@@ -142,7 +197,7 @@ class ConversationInputState extends Equatable {
     bool clearAttentionState = false,
     bool? isAwaitingMessageAcceptance,
     List<DraftAttachment>? draftAttachments,
-    String? attachmentError,
+    DraftAttachmentError? attachmentError,
     bool clearAttachmentError = false,
     List<CanonicalEvent>? queuedMessages,
     Set<String>? queuedMutationRequestIds,

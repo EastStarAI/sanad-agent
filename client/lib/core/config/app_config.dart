@@ -104,4 +104,12 @@ class AppConfig {
   static const String sanadDevWorktreeBranch = String.fromEnvironment(
     'SANAD_DEV_WORKTREE_BRANCH',
   );
+
+  /// Upper bound, in mebibytes, of the process-wide in-memory conversation
+  /// media byte cache shared by thumbnails, galleries, the lightbox, and
+  /// image download. Keys always carry the transport and device identity.
+  static const int conversationMediaCacheMegabytes = int.fromEnvironment(
+    'SANAD_CONVERSATION_MEDIA_CACHE_MB',
+    defaultValue: 64,
+  );
 }

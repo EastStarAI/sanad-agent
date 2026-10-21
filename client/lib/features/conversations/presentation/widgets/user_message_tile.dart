@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
@@ -12,9 +13,16 @@ import 'package:sanad_client/utils/link_utils.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/file_reference_link.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/multiline_submission_shortcuts.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/media/image_lightbox.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/l10n/app_localizations_en.dart';
+// ignore: depend_on_referenced_packages
+import 'package:markdown/markdown.dart' as md;
+import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 
 enum InlineEditAttachmentStatus { ready, failed }
 
@@ -32,6 +40,7 @@ class InlineEditAttachment {
     required this.sizeBytes,
     required this.isImage,
     required this.isExisting,
+    this.attachment,
     this.bytes,
     this.status = InlineEditAttachmentStatus.ready,
     this.error,
@@ -43,6 +52,7 @@ class InlineEditAttachment {
     sizeBytes: attachment.sizeBytes,
     isImage: attachment.isImage,
     isExisting: true,
+    attachment: attachment,
   );
 
   final String id;
@@ -50,6 +60,11 @@ class InlineEditAttachment {
   final int sizeBytes;
   final bool isImage;
   final bool isExisting;
+
+  /// The canonical attachment an existing edit item references; its preview
+  /// loads through the same media loader as the message bubble. New items
+  /// carry their local [bytes] instead and have no canonical attachment.
+  final UserMessageAttachment? attachment;
   final Uint8List? bytes;
   final InlineEditAttachmentStatus status;
   final String? error;
@@ -57,6 +72,7 @@ class InlineEditAttachment {
 
 class UserMessageTile extends StatefulWidget {
   final CanonicalEvent event;
+  final String? sessionId;
   final Future<void> Function(String requestId)? onCancelPendingSteer;
   final bool isCancellingPendingSteer;
   final bool canReplay;
@@ -74,9 +90,14 @@ class UserMessageTile extends StatefulWidget {
   final ValueChanged<String>? onRemoveEditAttachment;
   final ValueChanged<String>? onRetryEditAttachment;
 
+  /// Dismisses [editAttachmentError]; `null` hides the close control.
+  final VoidCallback? onDismissEditAttachmentError;
+  final Future<void> Function(String? url)? onOpenUrl;
+
   const UserMessageTile({
     super.key,
     required this.event,
+    this.sessionId,
     this.onCancelPendingSteer,
     this.isCancellingPendingSteer = false,
     this.canReplay = false,
@@ -93,6 +114,8 @@ class UserMessageTile extends StatefulWidget {
     this.onAddEditAttachment,
     this.onRemoveEditAttachment,
     this.onRetryEditAttachment,
+    this.onDismissEditAttachmentError,
+    this.onOpenUrl,
   });
 
   @override
@@ -102,10 +125,23 @@ class UserMessageTile extends StatefulWidget {
 class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProviderStateMixin {
   bool _isExpanded = false;
 
+  String get _effectiveSessionId => widget.sessionId ?? widget.event.sessionId ?? '';
+
   void _toggleExpanded() {
     setState(() {
       _isExpanded = !_isExpanded;
     });
+  }
+
+  Future<void> _handleOpenUrl(String? url) async {
+    if (url == null || url.toLowerCase().startsWith('file://')) {
+      return;
+    }
+    if (widget.onOpenUrl != null) {
+      await widget.onOpenUrl!(url);
+    } else {
+      await openExternalUrl(url);
+    }
   }
 
   @override
@@ -129,7 +165,10 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
     final screenWidth = MediaQuery.sizeOf(context).width;
     final maxBubbleWidth = (screenWidth - 88).clamp(100.0, double.infinity);
 
-    final span = TextSpan(text: widget.event.text, style: textStyle);
+    final span = TextSpan(
+      text: UserMessageLinkBuilder.measurableText(widget.event.text),
+      style: textStyle,
+    );
     final tp = TextPainter(text: span, textDirection: textDirection);
     tp.layout(maxWidth: maxBubbleWidth);
 
@@ -141,9 +180,13 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
 
     final markdownWidget = MarkdownBody(
       data: widget.event.text,
+      softLineBreak: true,
       styleSheet: MarkdownStyleHelper.getStyleSheet(context).copyWith(p: textStyle),
-      onTapLink: (text, href, title) => unawaited(openExternalUrl(href)),
-      builders: {'code': AppInlineCodeBuilder(context)},
+      onTapLink: (text, href, title) => unawaited(_handleOpenUrl(href)),
+      builders: {
+        'code': AppInlineCodeBuilder(context),
+        'a': UserMessageLinkBuilder(context, onOpenUrl: _handleOpenUrl),
+      },
     );
 
     return Align(
@@ -182,7 +225,7 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                           if (attachments.isNotEmpty) ...[
                             _UserAttachmentGrid(
                               attachments: attachments,
-                              sessionId: widget.event.sessionId ?? '',
+                              sessionId: _effectiveSessionId,
                               loader: widget.attachmentMediaLoader,
                             ),
                             if (widget.event.text.isNotEmpty) const SizedBox(height: 10),
@@ -441,25 +484,12 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (attachment.isImage && attachment.bytes != null)
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: Image.memory(
-                          attachment.bytes!,
-                          width: 28,
-                          height: 28,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => const Icon(
-                            Icons.image_outlined,
-                            size: 22,
-                          ),
-                        ),
-                      )
-                    else
-                      Icon(
-                        attachment.isImage ? Icons.image_outlined : Icons.insert_drive_file_outlined,
-                        size: 22,
-                      ),
+                    _InlineEditAttachmentThumbnail(
+                      key: ValueKey('inline_edit_attachment_thumbnail_${attachment.id}'),
+                      attachment: attachment,
+                      sessionId: _effectiveSessionId,
+                      loader: widget.attachmentMediaLoader,
+                    ),
                     const SizedBox(width: 6),
                     Flexible(
                       child: Column(
@@ -522,17 +552,191 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
       ),
       if (widget.editAttachmentError case final error?) ...[
         const SizedBox(height: 6),
-        Text(
-          error,
-          key: const Key('inline_edit_attachment_error'),
-          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                error,
+                key: const Key('inline_edit_attachment_error'),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+            if (widget.onDismissEditAttachmentError case final dismiss?)
+              IconButton(
+                key: const Key('inline_edit_attachment_error_dismiss'),
+                tooltip: (AppLocalizations.of(context) ?? AppLocalizationsEn()).attachmentErrorDismiss,
+                visualDensity: VisualDensity.compact,
+                onPressed: dismiss,
+                icon: Icon(Icons.close, size: 16, color: Theme.of(context).colorScheme.error),
+              ),
+          ],
         ),
       ],
     ],
   );
 }
 
-class _UserAttachmentGrid extends StatelessWidget {
+class _InlineEditAttachmentThumbnail extends StatefulWidget {
+  const _InlineEditAttachmentThumbnail({
+    super.key,
+    required this.attachment,
+    required this.sessionId,
+    this.loader,
+  });
+
+  final InlineEditAttachment attachment;
+  final String sessionId;
+  final UserAttachmentMediaLoader? loader;
+
+  @override
+  State<_InlineEditAttachmentThumbnail> createState() => _InlineEditAttachmentThumbnailState();
+}
+
+class _InlineEditAttachmentThumbnailState extends State<_InlineEditAttachmentThumbnail> {
+  ViewImageMediaLoad? _load;
+
+  @override
+  void initState() {
+    super.initState();
+    _startLoad();
+  }
+
+  @override
+  void didUpdateWidget(covariant _InlineEditAttachmentThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Reload only for a different logical resource; a rebuilt parent that
+    // passes a new loader instance must not issue another Agent request.
+    if (oldWidget.attachment.id != widget.attachment.id ||
+        oldWidget.attachment.attachment?.mediaId != widget.attachment.attachment?.mediaId ||
+        oldWidget.attachment.bytes != widget.attachment.bytes ||
+        oldWidget.sessionId != widget.sessionId) {
+      _load?.cancel();
+      _load = null;
+      _startLoad();
+    }
+  }
+
+  void _startLoad() {
+    _load?.cancel();
+    _load = null;
+    if (!widget.attachment.isImage || widget.attachment.bytes != null) {
+      return;
+    }
+    // Only a canonical, available reference is ever requested; identity is
+    // never synthesized for a reference the client does not hold.
+    final userAttachment = widget.attachment.attachment;
+    if (userAttachment == null || !userAttachment.isAvailable || widget.sessionId.isEmpty) {
+      return;
+    }
+    // Same loader resolution as the message bubble's attachment card.
+    final loader = widget.loader ?? ViewImageMediaRepository.local();
+    try {
+      _load = loader.loadAttachment(
+        attachment: userAttachment,
+        sessionId: widget.sessionId,
+      );
+    } catch (_) {
+      _load = null;
+    }
+  }
+
+  void _retry() {
+    setState(() {
+      _startLoad();
+    });
+  }
+
+  @override
+  void dispose() {
+    _load?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.attachment.isImage) {
+      return FileExtensionIcon(fileName: widget.attachment.name, size: 22);
+    }
+
+    if (widget.attachment.bytes != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Image.memory(
+          widget.attachment.bytes!,
+          width: 28,
+          height: 28,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => const Icon(
+            Icons.image_outlined,
+            size: 22,
+          ),
+        ),
+      );
+    }
+
+    final load = _load;
+    if (load == null) {
+      return GestureDetector(
+        onTap: _retry,
+        child: const Icon(
+          Icons.image_outlined,
+          size: 22,
+        ),
+      );
+    }
+
+    return FutureBuilder<Uint8List>(
+      future: load.bytes,
+      initialData: load.cachedBytes,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return GestureDetector(
+            onTap: _retry,
+            child: const Icon(
+              Icons.image_outlined,
+              size: 22,
+            ),
+          );
+        }
+        final bytes = snapshot.data;
+        if (bytes == null) {
+          return const SizedBox(
+            width: 28,
+            height: 28,
+            child: Center(
+              child: SizedBox(
+                width: 14,
+                height: 14,
+                child: AppProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Image.memory(
+            bytes,
+            width: 28,
+            height: 28,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => GestureDetector(
+              onTap: _retry,
+              child: const Icon(
+                Icons.image_outlined,
+                size: 22,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Attachment grid of one user message. Its image attachments form one
+/// [LightboxGroup], so the lightbox navigates them in message order.
+class _UserAttachmentGrid extends StatefulWidget {
   const _UserAttachmentGrid({
     required this.attachments,
     required this.sessionId,
@@ -542,6 +746,32 @@ class _UserAttachmentGrid extends StatelessWidget {
   final List<UserMessageAttachment> attachments;
   final String sessionId;
   final UserAttachmentMediaLoader? loader;
+
+  @override
+  State<_UserAttachmentGrid> createState() => _UserAttachmentGridState();
+}
+
+class _UserAttachmentGridState extends State<_UserAttachmentGrid> {
+  final LightboxGroup _lightboxGroup = LightboxGroup();
+
+  void _syncOrder() => _lightboxGroup.setOrder([
+    for (final attachment in widget.attachments)
+      if (attachment.isImage) attachment.id,
+  ]);
+
+  @override
+  void initState() {
+    super.initState();
+    _syncOrder();
+  }
+
+  @override
+  void didUpdateWidget(covariant _UserAttachmentGrid oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncOrder();
+  }
+
+  List<UserMessageAttachment> get attachments => widget.attachments;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -559,8 +789,9 @@ class _UserAttachmentGrid extends StatelessWidget {
       itemBuilder: (context, index) => _UserAttachmentCard(
         key: ValueKey('user_attachment_${attachments[index].id}'),
         attachment: attachments[index],
-        sessionId: sessionId,
-        loader: loader,
+        sessionId: widget.sessionId,
+        loader: widget.loader,
+        lightboxGroup: _lightboxGroup,
       ),
     ),
   );
@@ -572,11 +803,13 @@ class _UserAttachmentCard extends StatefulWidget {
     required this.attachment,
     required this.sessionId,
     this.loader,
+    this.lightboxGroup,
   });
 
   final UserMessageAttachment attachment;
   final String sessionId;
   final UserAttachmentMediaLoader? loader;
+  final LightboxGroup? lightboxGroup;
 
   @override
   State<_UserAttachmentCard> createState() => _UserAttachmentCardState();
@@ -584,6 +817,7 @@ class _UserAttachmentCard extends StatefulWidget {
 
 class _UserAttachmentCardState extends State<_UserAttachmentCard> {
   ViewImageMediaLoad? _load;
+  LightboxImage? _lightboxImage;
   ViewImageMediaLoad? _fileLoad;
   bool _isOpeningFile = false;
   bool _fileUnavailable = false;
@@ -600,28 +834,54 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
     if (oldWidget.attachment.mediaId != widget.attachment.mediaId ||
         oldWidget.attachment.isAvailable != widget.attachment.isAvailable ||
         oldWidget.sessionId != widget.sessionId) {
+      _unregister(oldWidget.lightboxGroup, oldWidget.attachment.id);
       _load?.cancel();
       _fileLoad?.cancel();
       _isOpeningFile = false;
       _fileUnavailable = false;
       _startLoad();
+    } else if (oldWidget.lightboxGroup != widget.lightboxGroup || oldWidget.attachment.id != widget.attachment.id) {
+      _unregister(oldWidget.lightboxGroup, oldWidget.attachment.id);
+      _register();
     }
   }
 
   void _startLoad() {
     _load = null;
+    _lightboxImage = null;
     if (!widget.attachment.isImage || !widget.attachment.isAvailable || widget.sessionId.isEmpty) {
       return;
     }
     final loader = widget.loader ?? ViewImageMediaRepository.local();
-    _load = loader.loadAttachment(
+    final load = loader.loadAttachment(
       attachment: widget.attachment,
       sessionId: widget.sessionId,
     );
+    _load = load;
+    _lightboxImage = _lightboxImageFor(load.bytes, load.cachedBytes);
+    _register();
+  }
+
+  LightboxImage _lightboxImageFor(Future<Uint8List> bytes, Uint8List? cachedBytes) => LightboxImage(
+    bytes: bytes,
+    cachedBytes: cachedBytes,
+    semanticLabel: 'Full-size attached image ${widget.attachment.safeName}',
+    preferredFileName: widget.attachment.safeName,
+  );
+
+  void _register() {
+    final image = _lightboxImage;
+    if (image != null) widget.lightboxGroup?.register(widget.attachment.id, image);
+  }
+
+  void _unregister(LightboxGroup? group, String id) {
+    final image = _lightboxImage;
+    if (image != null) group?.unregister(id, image);
   }
 
   @override
   void dispose() {
+    _unregister(widget.lightboxGroup, widget.attachment.id);
     _load?.cancel();
     _fileLoad?.cancel();
     super.dispose();
@@ -634,6 +894,7 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
     if (load == null) return _unavailableCard(context);
     return FutureBuilder<Uint8List>(
       future: load.bytes,
+      initialData: load.cachedBytes,
       builder: (context, snapshot) {
         if (snapshot.hasError) return _unavailableCard(context);
         final bytes = snapshot.data;
@@ -660,6 +921,7 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
               child: Image.memory(
                 bytes,
                 fit: BoxFit.cover,
+                gaplessPlayback: true,
                 semanticLabel: 'Attached image ${widget.attachment.safeName}',
                 errorBuilder: (_, _, _) => _unavailableCard(context),
               ),
@@ -692,7 +954,7 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 else
-                  const Icon(Icons.insert_drive_file_outlined, size: 28),
+                  FileExtensionIcon(fileName: widget.attachment.safeName, size: 28),
                 const SizedBox(height: 6),
                 Text(
                   widget.attachment.safeName,
@@ -772,35 +1034,200 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
     ),
   );
 
-  Future<void> _showImage(BuildContext context, Uint8List bytes) => showDialog<void>(
-    context: context,
-    builder: (dialogContext) => Dialog(
-      key: const Key('user_attachment_lightbox'),
-      child: Stack(
+  Future<void> _showImage(BuildContext context, Uint8List bytes) {
+    final opening = openLightboxGroup(
+      widget.lightboxGroup,
+      widget.attachment.id,
+      _lightboxImageFor(Future<Uint8List>.value(bytes), bytes),
+    );
+    return showImageLightbox(
+      context,
+      images: opening.images,
+      initialIndex: opening.index,
+      dialogKey: const Key('user_attachment_lightbox'),
+      closeKey: const Key('user_attachment_lightbox_close'),
+    );
+  }
+}
+
+/// Renders a file reference inside a user message as an inline chip
+/// displaying [FileExtensionIcon] + the file name, without navigation.
+class UserMessageFileChip extends StatelessWidget {
+  final String fileName;
+  final String fullPath;
+
+  const UserMessageFileChip({
+    super.key,
+    required this.fileName,
+    required this.fullPath,
+  });
+
+  static String extractFileName({required String href, String? text}) {
+    final cleanText = text?.trim();
+    if (cleanText != null &&
+        cleanText.isNotEmpty &&
+        !cleanText.toLowerCase().startsWith('file://') &&
+        !cleanText.contains('/') &&
+        !cleanText.contains('\\')) {
+      return cleanText;
+    }
+    try {
+      final uri = Uri.tryParse(href);
+      if (uri != null && uri.pathSegments.isNotEmpty) {
+        final last = uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+        if (last.isNotEmpty) {
+          return Uri.decodeComponent(last);
+        }
+      }
+    } catch (_) {}
+
+    final unescaped = Uri.decodeFull(href.replaceFirst(RegExp(r'^file:\/\/', caseSensitive: false), ''));
+    final segments = unescaped.split(RegExp(r'[/\\]'));
+    final last = segments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+    return last.isNotEmpty ? last : href;
+  }
+
+  static String extractFullPath(String href) {
+    try {
+      final uri = Uri.tryParse(href);
+      if (uri != null) {
+        if (uri.isScheme('file')) {
+          try {
+            return uri.toFilePath();
+          } catch (_) {
+            return Uri.decodeFull(uri.path);
+          }
+        }
+        return Uri.decodeFull(uri.path.isNotEmpty ? uri.path : href);
+      }
+    } catch (_) {}
+    return href.toLowerCase().startsWith('file://') ? Uri.decodeFull(href.substring(7)) : href;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
+    final chipBackground = isDark
+        ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.6)
+        : colorScheme.surfaceContainerHighest.withValues(alpha: 0.4);
+    final chipBorder = colorScheme.outline.withValues(alpha: 0.25);
+
+    Widget chip = Container(
+      key: const Key('user_message_file_chip'),
+      padding: const EdgeInsetsDirectional.fromSTEB(6, 2, 8, 2),
+      margin: const EdgeInsetsDirectional.only(end: 4, top: 1, bottom: 1),
+      decoration: BoxDecoration(
+        color: chipBackground,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: chipBorder, width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          InteractiveViewer(
-            minScale: 0.5,
-            maxScale: 5,
-            child: Center(
-              child: Image.memory(
-                bytes,
-                fit: BoxFit.contain,
-                semanticLabel: 'Full-size attached image ${widget.attachment.safeName}',
-              ),
-            ),
+          FileExtensionIcon(
+            fileName: fileName,
+            size: 15,
           ),
-          PositionedDirectional(
-            top: 8,
-            end: 8,
-            child: IconButton(
-              key: const Key('user_attachment_lightbox_close'),
-              tooltip: 'Close attachment preview',
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              icon: const Icon(Icons.close),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              fileName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: (theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w500,
+                color: colorScheme.onSurface,
+              ),
             ),
           ),
         ],
       ),
-    ),
+    );
+
+    if (fullPath.isNotEmpty) {
+      chip = Tooltip(
+        message: fullPath,
+        child: chip,
+      );
+    }
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {},
+      child: chip,
+    );
+  }
+}
+
+/// Custom Markdown element builder for links (`<a>`) inside user messages.
+///
+/// `file://` scheme links are rendered as inert [UserMessageFileChip] chips,
+/// while non-`file://` links remain clickable and open via [onOpenUrl].
+class UserMessageLinkBuilder extends MarkdownElementBuilder {
+  final BuildContext context;
+  final Future<void> Function(String? url) onOpenUrl;
+
+  UserMessageLinkBuilder(this.context, {required this.onOpenUrl});
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final href = element.attributes['href'];
+    if (href != null && href.toLowerCase().startsWith('file://')) {
+      final fileName = UserMessageFileChip.extractFileName(
+        href: href,
+        text: element.textContent,
+      );
+      final fullPath = UserMessageFileChip.extractFullPath(href);
+      return Text.rich(
+        TextSpan(
+          children: [
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: UserMessageFileChip(
+                fileName: fileName,
+                fullPath: fullPath,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Every widget returned here must stay a `Text` so the markdown builder
+    // merges it into the surrounding paragraph; any other widget type is laid
+    // out as a separate `Wrap` child and breaks the inline text flow.
+    final text = element.textContent;
+    final style = preferredStyle ?? parentStyle;
+    if (href == null || href.isEmpty) {
+      return Text.rich(TextSpan(text: text, style: style));
+    }
+    // Ordinary links keep the stylesheet's own link style and tap behavior
+    // (registering an `a` builder removes the package's default recognizer).
+    return Text.rich(
+      TextSpan(
+        text: text,
+        style: style,
+        mouseCursor: SystemMouseCursors.click,
+        recognizer: TapGestureRecognizer()..onTap = () => unawaited(onOpenUrl(href)),
+      ),
+    );
+  }
+
+  /// Approximates the rendered text of a user message for line measurement:
+  /// a `file://` reference renders as a compact icon + name chip, so its raw
+  /// percent-encoded URI must not count toward the collapsed-line budget.
+  static String measurableText(String text) => text.replaceAllMapped(
+    FileReferenceLink.pattern,
+    (match) => '\u2003${FileReferenceLink.unescapeLabel(match.group(1) ?? '')}',
   );
 }

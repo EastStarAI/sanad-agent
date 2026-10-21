@@ -21,6 +21,11 @@ final class HostedBinaryRelay {
   final AttachmentStore _store;
   final List<Message> Function(String sessionId) _historyLoader;
   final Map<String, _HostedUpload> _uploads = {};
+
+  /// Uploads whose staged file is still being created. Socket.IO does not
+  /// await listeners, so a chunk or commit may arrive before `_start` has
+  /// registered its upload; those handlers wait here instead of rejecting.
+  final Map<String, Future<_HostedUpload?>> _starting = {};
   final Set<String> _activeMediaRoutes = {};
   final Set<String> _cancelledMediaRoutes = {};
 
@@ -35,6 +40,7 @@ final class HostedBinaryRelay {
   }
 
   Future<void> _disconnect() async {
+    await Future.wait(_starting.values.toList(growable: false));
     final active = _uploads.values.toList(growable: false);
     _uploads.clear();
     _cancelledMediaRoutes.addAll(_activeMediaRoutes);
@@ -81,26 +87,45 @@ final class HostedBinaryRelay {
         turnTotalBytes is! int ||
         turnTotalBytes < size ||
         turnTotalBytes > UserAttachmentPolicy.maxTotalBytesPerMessage ||
-        _uploads.containsKey(uploadId)) {
+        _uploads.containsKey(uploadId) ||
+        _starting.containsKey(uploadId)) {
       _result(socket, uploadId ?? '', 'rejected', error: 'invalid_request');
       return;
     }
+    final starting = () async {
+      try {
+        final upload = await _store.create(
+          fileName: name,
+          declaredMime: mime,
+          expectedSize: size,
+          expectedSha256: hash,
+        );
+        return _uploads[uploadId] = _HostedUpload(
+          upload: upload,
+          sessionId: sessionId,
+          requestId: requestId,
+          chunkCount: chunkCount,
+        );
+      } on Object {
+        _result(socket, uploadId, 'rejected', error: 'unavailable');
+        return null;
+      }
+    }();
+    _starting[uploadId] = starting;
     try {
-      final upload = await _store.create(
-        fileName: name,
-        declaredMime: mime,
-        expectedSize: size,
-        expectedSha256: hash,
-      );
-      _uploads[uploadId] = _HostedUpload(
-        upload: upload,
-        sessionId: sessionId,
-        requestId: requestId,
-        chunkCount: chunkCount,
-      );
-    } on Object {
-      _result(socket, uploadId, 'rejected', error: 'unavailable');
+      await starting;
+    } finally {
+      if (identical(_starting[uploadId], starting)) _starting.remove(uploadId);
     }
+  }
+
+  /// The registered upload for [uploadId], waiting for a start still in
+  /// progress.
+  Future<_HostedUpload?> _uploadFor(String? uploadId) async {
+    if (uploadId == null) return null;
+    final starting = _starting[uploadId];
+    if (starting != null) await starting;
+    return _uploads[uploadId];
   }
 
   Future<void> _chunk(io.Socket socket, Object? raw) async {
@@ -109,7 +134,7 @@ final class HostedBinaryRelay {
     final bytes = data?['data'];
     final index = data?['index'];
     final hash = data?['sha256'];
-    final state = uploadId == null ? null : _uploads[uploadId];
+    final state = await _uploadFor(uploadId);
     if (!_base(data) ||
         state == null ||
         bytes is! List<int> ||
@@ -139,7 +164,7 @@ final class HostedBinaryRelay {
   Future<void> _commit(io.Socket socket, Object? raw) async {
     final data = _map(raw);
     final uploadId = _id(data?['upload_id']);
-    final state = uploadId == null ? null : _uploads[uploadId];
+    final state = await _uploadFor(uploadId);
     if (!_base(data) || state == null || state.nextIndex != state.chunkCount) {
       _result(socket, uploadId ?? '', 'rejected', error: 'invalid_request');
       return;
@@ -161,7 +186,7 @@ final class HostedBinaryRelay {
 
   Future<void> _cancel(Object? raw) async {
     final uploadId = _id(_map(raw)?['upload_id']);
-    final state = uploadId == null ? null : _uploads.remove(uploadId);
+    final state = await _uploadFor(uploadId) == null ? null : _uploads.remove(uploadId);
     if (state != null) await _store.cancel(state.upload);
   }
 

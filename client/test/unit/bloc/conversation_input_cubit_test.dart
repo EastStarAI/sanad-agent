@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:async';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'dart:io';
 
@@ -351,7 +353,8 @@ void main() {
     ]) {
       await inputCubit.addDraftAttachment(
         name: entry.$1,
-        bytes: Uint8List.fromList(const [1, 2, 3]),
+        // Distinct content per source: identical bytes are one attachment.
+        bytes: Uint8List.fromList([1, 2, 3 + entry.$2.index]),
         source: entry.$2,
         capability: capability,
       );
@@ -367,7 +370,10 @@ void main() {
       'drop.bin',
     ]);
     expect(admitted.map((entry) => entry['size_bytes']), everyElement(3));
-    expect(admitted.map((entry) => entry['data_base64']), everyElement('AQID'));
+    expect(admitted.map((entry) => entry['data_base64']), [
+      for (final source in [DraftAttachmentSource.paste, DraftAttachmentSource.picker, DraftAttachmentSource.drop])
+        base64Encode([1, 2, 3 + source.index]),
+    ]);
     expect(
       admitted.map((entry) => entry['sha256']),
       everyElement(hasLength(64)),
@@ -1201,6 +1207,213 @@ void main() {
       preferencesRepository.getLastModel(agent.id),
       'model-reconfigured',
     );
+  });
+
+  group('draft attachment error is transient feedback (114 live defect)', () {
+    const capability = Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: 5 * 1024 * 1024,
+      attachmentMaxFilesPerMessage: 4,
+      attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+    );
+
+    Future<void> addOversized() => inputCubit.addDraftAttachment(
+      name: 'huge.png',
+      bytes: Uint8List(5 * 1024 * 1024 + 1),
+      source: DraftAttachmentSource.picker,
+      capability: capability,
+    );
+
+    Future<void> addValid([String name = 'small.png']) => inputCubit.addDraftAttachment(
+      name: name,
+      bytes: Uint8List.fromList(const [1, 2, 3]),
+      source: DraftAttachmentSource.picker,
+      capability: capability,
+    );
+
+    Future<void> readyRoute() async {
+      messagesCubit.emitState(
+        const SessionMessagesState(nextMessageProviderId: 'provider-1', nextMessageModel: 'model-1'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await inputCubit.selectModel(scope: CapabilityValueScope.message, providerId: 'provider-1', model: 'model-1');
+      inputCubit.selectWorkspace(workspace);
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('user repro: oversized add, remove another attachment, switch away and back, error stays gone', () async {
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-a');
+      await addValid();
+      await addOversized();
+      expect(inputCubit.state.attachmentError, isNotNull);
+
+      inputCubit.removeDraftAttachment(inputCubit.state.draftAttachments.single.id);
+      expect(inputCubit.state.attachmentError, isNull);
+
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-b');
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-a');
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    test('switching sessions clears the error and never restores it from the draft cache', () async {
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-a');
+      await addValid();
+      await addOversized();
+      expect(inputCubit.state.attachmentError, isNotNull);
+
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-b');
+      expect(inputCubit.state.attachmentError, isNull);
+
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-a');
+      expect(inputCubit.state.attachmentError, isNull, reason: 'the error is not part of the draft');
+      expect(inputCubit.state.draftAttachments, hasLength(1), reason: 'the attachments themselves are restored');
+    });
+
+    test('the next successful add clears it', () async {
+      await addOversized();
+      expect(inputCubit.state.attachmentError, isNotNull);
+      await addValid();
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    test('a text-only send clears it', () async {
+      await readyRoute();
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+      await addOversized();
+      expect(inputCubit.state.attachmentError, isNotNull);
+
+      await inputCubit.sendMessage('hello');
+      expect(conversationRepository.sentMessages, ['hello']);
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    Future<void> lunaRoute() async {
+      messagesCubit.emitState(
+        const SessionMessagesState(nextMessageProviderId: 'openai-codex', nextMessageModel: 'gpt-6-luna'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await inputCubit.selectModel(
+        scope: CapabilityValueScope.message,
+        providerId: 'openai-codex',
+        model: 'gpt-6-luna',
+      );
+      inputCubit.selectWorkspace(workspace);
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    Future<void> addMix() async {
+      for (final (name, bytes) in [
+        ('My (1) [v2].pdf', const [0x25, 0x50, 0x44, 0x46]),
+        ('photo114.heic', const [0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]),
+        ('img114_blue.png', const [0x89, 0x50, 0x4E, 0x47]),
+      ]) {
+        await inputCubit.addDraftAttachment(
+          name: name,
+          bytes: Uint8List.fromList(bytes),
+          source: DraftAttachmentSource.paste,
+          capability: capability,
+        );
+      }
+    }
+
+    test('PDF+HEIC+PNG on a luna-like route is handed to the agent, never refused in the client (114 D4)', () async {
+      await lunaRoute();
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      await addMix();
+
+      await inputCubit.sendMessage('describe these');
+
+      expect(conversationRepository.sentAttachmentRequests.single.map((item) => item['name']), [
+        'My (1) [v2].pdf',
+        'photo114.heic',
+        'img114_blue.png',
+      ]);
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    test('a failed attachment send shows a reason and keeps the draft (114 D4)', () async {
+      await lunaRoute();
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: 'existing-session');
+      await addMix();
+      conversationRepository.failAttachmentAdmission = true;
+
+      await inputCubit.sendMessage('describe these');
+
+      expect(conversationRepository.sentAttachmentRequests, hasLength(1));
+      expect(inputCubit.state.attachmentError, isNotNull, reason: 'a refused send is never silent');
+      expect(inputCubit.state.draftAttachments, hasLength(3), reason: 'the draft is kept for a retry');
+    });
+
+    test('a refused first send in a new conversation moves its attachments with the text (114 D2)', () async {
+      await lunaRoute();
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      await addMix();
+      conversationRepository.failAttachmentAdmission = true;
+
+      await inputCubit.sendMessage('describe these');
+
+      final created = messagesCubit.state.activeSessionId;
+      expect(created, isNotNull, reason: 'the first send created the session and moved the text there');
+      // The composer follows the created session.
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: created);
+      expect(inputCubit.state.draftAttachments, hasLength(3), reason: 'attachments travel with the text');
+
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      expect(
+        inputCubit.state.draftAttachments,
+        isEmpty,
+        reason: 'nothing submitted may reappear in the next new conversation',
+      );
+    });
+
+    test('the move also holds when the composer already switched to the created session (114 D2)', () async {
+      await lunaRoute();
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      await addMix();
+      // Admission completes only after the composer followed the new session.
+      final admissionGate = Completer<void>();
+      conversationRepository.beforeAttachmentAdmission = () => admissionGate.future;
+      conversationRepository.failAttachmentAdmission = true;
+      final follow = messagesCubit.stream.listen((state) {
+        final created = state.activeSessionId;
+        if (created != null && !admissionGate.isCompleted) {
+          inputCubit.setDraftScope(deviceId: agent.id, sessionId: created);
+          admissionGate.complete();
+        }
+      });
+      addTearDown(follow.cancel);
+
+      await inputCubit.sendMessage('describe these');
+
+      final created = messagesCubit.state.activeSessionId!;
+      expect(inputCubit.state.draftAttachments, hasLength(3), reason: 'shown in the created session composer');
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      expect(inputCubit.state.draftAttachments, isEmpty);
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: created);
+      expect(inputCubit.state.draftAttachments, hasLength(3));
+    });
+
+    test('pasting the same file twice keeps one attachment in the draft (114 minor)', () async {
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: 'session-a');
+      await addValid('img114_red.png');
+      await addValid('img114_red.png');
+      await addValid('renamed-copy.png');
+      expect(inputCubit.state.draftAttachments, hasLength(1), reason: 'identical bytes are one attachment');
+
+      await inputCubit.addDraftAttachment(
+        name: 'other.png',
+        bytes: Uint8List.fromList(const [9, 9, 9]),
+        source: DraftAttachmentSource.paste,
+        capability: capability,
+      );
+      expect(inputCubit.state.draftAttachments, hasLength(2));
+    });
+
+    test('an explicit dismiss clears it', () async {
+      await addOversized();
+      inputCubit.clearAttachmentError();
+      expect(inputCubit.state.attachmentError, isNull);
+    });
   });
 }
 

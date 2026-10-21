@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -22,6 +21,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/tools/w
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/ask_user_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/generic_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/skill_load_tool_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/view_image_tool_card.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_fork_event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
@@ -48,15 +48,18 @@ class EventTile extends StatefulWidget {
   final ToolWaitingIndicator waitingIndicator;
   final ViewImageMediaLoader? viewImageMediaLoader;
   final UserAttachmentMediaLoader? userAttachmentMediaLoader;
+  final String? sessionId;
   final List<InlineEditAttachment> editAttachments;
   final String? editAttachmentError;
   final Future<void> Function()? onAddEditAttachment;
   final ValueChanged<String>? onRemoveEditAttachment;
   final ValueChanged<String>? onRetryEditAttachment;
+  final VoidCallback? onDismissEditAttachmentError;
 
   const EventTile({
     super.key,
     required this.event,
+    this.sessionId,
     this.isExpanded,
     this.onToggleExpanded,
     this.onCancelPendingSteer,
@@ -80,6 +83,7 @@ class EventTile extends StatefulWidget {
     this.onAddEditAttachment,
     this.onRemoveEditAttachment,
     this.onRetryEditAttachment,
+    this.onDismissEditAttachmentError,
   });
 
   @override
@@ -129,7 +133,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       _isExpanded =
           widget.event.kind == EventKind.userMessage ||
           widget.event.kind == EventKind.finalAnswer ||
-          widget.event.toolName == 'view_image';
+          widget.event.isMediaToolEvent;
     }
 
     if (_isExpanded) {
@@ -205,6 +209,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       case EventKind.userMessage:
         return UserMessageTile(
           event: widget.event,
+          sessionId: widget.sessionId ?? widget.event.sessionId,
           onCancelPendingSteer: widget.onCancelPendingSteer,
           isCancellingPendingSteer: widget.isCancellingPendingSteer,
           canReplay: widget.canReplay,
@@ -221,6 +226,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           onAddEditAttachment: widget.onAddEditAttachment,
           onRemoveEditAttachment: widget.onRemoveEditAttachment,
           onRetryEditAttachment: widget.onRetryEditAttachment,
+          onDismissEditAttachmentError: widget.onDismissEditAttachmentError,
         );
       case EventKind.informational:
         if (widget.event.metadata?['informational_kind'] == 'session_fork') {
@@ -760,22 +766,14 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   Widget _buildToolContent() {
     final toolName = widget.event.toolName ?? '';
     final category = ToolPresentationHelper.cleanToolTitle(toolName);
-    final media = widget.event.viewImageMedia;
-    if (toolName == 'view_image') {
-      if (widget.event.status == EventStatus.running) {
-        return _buildViewImageRunning(context);
-      }
-      if (widget.event.isError) {
-        return _buildViewImageError(context);
-      }
-      if (media != null) {
-        return _ViewImageToolTile(
-          media: media,
-          sessionId: widget.event.sessionId ?? '',
-          loader: widget.viewImageMediaLoader,
-        );
-      }
-      return const _UnavailableViewImage();
+    // A completed `system_screenshot` without media metadata is a text-only
+    // outcome (route without image input, or a capture rejected by the image
+    // policy) and keeps the regular tool presentation below.
+    if (widget.event.rendersAsMediaCard) {
+      return ViewImageToolCard(
+        event: widget.event,
+        loader: widget.viewImageMediaLoader,
+      );
     }
 
     // A terminal result can arrive before its matching tool-use input during
@@ -847,262 +845,5 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     }
     return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7);
   }
-
-  Widget _buildViewImageRunning(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: Row(
-        children: [
-          const SizedBox(
-            width: 14,
-            height: 14,
-            child: AppProgressIndicator(strokeWidth: 2),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            'Executing tool...',
-            style: GoogleFonts.roboto(
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildViewImageError(BuildContext context) {
-    final errorColor = Theme.of(context).colorScheme.error;
-    final message = _safeViewImageErrorMessage(widget.event);
-
-    return Container(
-      key: const Key('view_image_error'),
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: errorColor.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.error_outline_rounded, size: 16, color: errorColor),
-              const SizedBox(width: 8),
-              Text(
-                'Image Inspection Failed',
-                style: GoogleFonts.outfit(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: errorColor,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            message,
-            key: const Key('view_image_error_message'),
-            style: GoogleFonts.firaCode(
-              fontSize: 11,
-              color: errorColor,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _safeViewImageErrorMessage(CanonicalEvent event) {
-    if (event.text.trim().isNotEmpty) {
-      final trimmed = event.text.trim();
-      if (!_looksLikePayload(trimmed)) {
-        return trimmed;
-      }
-    }
-    final toolResult = event.tool?['toolResult'];
-    if (toolResult is Map && toolResult['blocks'] is List) {
-      final blocks = toolResult['blocks'] as List;
-      final textParts = <String>[];
-      for (final b in blocks) {
-        if (b is Map && b['type'] == 'text' && b['text'] != null) {
-          final t = b['text'].toString().trim();
-          if (t.isNotEmpty && !_looksLikePayload(t)) textParts.add(t);
-        }
-      }
-      if (textParts.isNotEmpty) return textParts.join('\n');
-    }
-    final output = event.toolOutput;
-    if (output is String && output.trim().isNotEmpty) {
-      final trimmed = output.trim();
-      if (!_looksLikePayload(trimmed)) {
-        return trimmed;
-      }
-    }
-    return 'Image inspection failed.';
-  }
-
-  bool _looksLikePayload(String text) {
-    return text.startsWith('{') ||
-        text.startsWith('[') ||
-        text.startsWith('data:image') ||
-        text.startsWith('base64');
-  }
 }
 
-class _ViewImageToolTile extends StatefulWidget {
-  const _ViewImageToolTile({
-    required this.media,
-    required this.sessionId,
-    this.loader,
-  });
-
-  final ViewImageMedia media;
-  final String sessionId;
-  final ViewImageMediaLoader? loader;
-
-  @override
-  State<_ViewImageToolTile> createState() => _ViewImageToolTileState();
-}
-
-class _ViewImageToolTileState extends State<_ViewImageToolTile> {
-  ViewImageMediaLoad? _load;
-
-  @override
-  void initState() {
-    super.initState();
-    _startLoad();
-  }
-
-  @override
-  void didUpdateWidget(covariant _ViewImageToolTile oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.media.mediaId != widget.media.mediaId ||
-        oldWidget.media.isAvailable != widget.media.isAvailable ||
-        oldWidget.sessionId != widget.sessionId) {
-      _load?.cancel();
-      _startLoad();
-    }
-  }
-
-  void _startLoad() {
-    _load = null;
-    if (!widget.media.isAvailable || widget.sessionId.isEmpty) return;
-    final loader = widget.loader ?? ViewImageMediaRepository.local();
-    _load = loader.load(media: widget.media, sessionId: widget.sessionId);
-  }
-
-  @override
-  void dispose() {
-    _load?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final load = _load;
-    if (load == null) return const _UnavailableViewImage();
-    return FutureBuilder<Uint8List>(
-      future: load.bytes,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) return const _UnavailableViewImage();
-        final bytes = snapshot.data;
-        if (bytes == null) {
-          return const SizedBox(
-            key: Key('view_image_loading'),
-            height: 120,
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-        return Semantics(
-          button: true,
-          label: 'Open View Image preview',
-          child: InkWell(
-            key: const Key('view_image_thumbnail'),
-            borderRadius: BorderRadius.circular(12),
-            onTap: () => _showLightbox(context, bytes),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                minWidth: 160,
-                minHeight: 120,
-                maxHeight: 280,
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: AspectRatio(
-                  aspectRatio: widget.media.width / widget.media.height,
-                  child: Image.memory(
-                    bytes,
-                    fit: BoxFit.contain,
-                    semanticLabel: 'View Image thumbnail',
-                    errorBuilder: (_, _, _) => const _UnavailableViewImage(),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _showLightbox(BuildContext context, Uint8List bytes) {
-    return showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (dialogContext) => Dialog(
-        key: const Key('view_image_lightbox'),
-        insetPadding: const EdgeInsets.all(24),
-        child: Stack(
-          children: [
-            Semantics(
-              label: 'View Image full-size preview',
-              child: InteractiveViewer(
-                minScale: 0.5,
-                maxScale: 5,
-                child: Center(
-                  child: Image.memory(
-                    bytes,
-                    fit: BoxFit.contain,
-                    semanticLabel: 'View Image full-size preview',
-                  ),
-                ),
-              ),
-            ),
-            PositionedDirectional(
-              top: 8,
-              end: 8,
-              child: IconButton(
-                key: const Key('view_image_lightbox_close'),
-                tooltip: 'Close image preview',
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                icon: const Icon(Icons.close),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _UnavailableViewImage extends StatelessWidget {
-  const _UnavailableViewImage();
-
-  @override
-  Widget build(BuildContext context) => Container(
-    key: const Key('view_image_unavailable'),
-    constraints: const BoxConstraints(minHeight: 96),
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: Semantics(
-      label: 'View Image unavailable',
-      child: const Text('Image unavailable'),
-    ),
-  );
-}
