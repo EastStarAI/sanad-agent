@@ -621,6 +621,12 @@ route_revision
 updated_at
 ```
 
+The Client renders a timeline notice only for `source: auto_failover`;
+`session_history` projects the same set. An automatic failover records
+`anchor_message_id`, the newest durable message when it committed, and history
+inserts the notice right after that row, so a reload shows it where it
+appeared live (see `docs/technical/agent_database_schema.md`).
+
 The event uses one canonical `event_id` across local/cloud fan-out. Clients may
 keep a temporary pending selection, but persist and synchronize the model chip
 only from this confirmation and only when its independent `route_revision` is

@@ -326,6 +326,21 @@ class SessionManager {
     );
   }
 
+  String? latestActiveMessageId(String sessionId) =>
+      _db.latestActiveMessageId(sessionId);
+
+  int? activeRowIdForMessageId(String sessionId, String messageId) =>
+      _db.activeRowIdForMessageId(sessionId, messageId);
+
+  int? legacyRouteNoticeAnchorRowId(
+    String sessionId,
+    String requestId,
+    DateTime at,
+  ) => _db.legacyRouteNoticeAnchorRowId(sessionId, requestId, at);
+
+  int? lastActiveForkCopiedRowId(String sessionId) =>
+      _db.lastActiveForkCopiedRowId(sessionId);
+
   /// Persists last-turn metrics (usage, model, context_tokens, etc.) alongside
   /// the session so they are returned with thread history.
   void saveSessionMetadata(String sessionId, Map<String, dynamic> metadata) {

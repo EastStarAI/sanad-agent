@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/driver/ui_inspection_state.dart';
 import 'package:sanad_client/driver/ui_inspection_text.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 
@@ -376,6 +377,8 @@ void main() {
           if (semanticsButton == true) {
             data['button'] = true;
           }
+          final enabled = inspectableElementEnabled(element);
+          if (enabled != null) data['enabled'] = enabled;
 
           if (includeBounds) {
             final renderObject = element.renderObject;
@@ -453,6 +456,8 @@ void main() {
           if (tooltipValue != null && tooltipValue.trim().isNotEmpty) {
             data['tooltip'] = tooltipValue;
           }
+          final enabled = inspectableWidgetEnabled(widget);
+          if (enabled != null) data['enabled'] = enabled;
 
           if (includeBounds) {
             final renderObject = element.renderObject;

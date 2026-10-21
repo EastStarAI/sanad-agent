@@ -294,6 +294,41 @@ void main() {
       expect(element.toJson()['button'], isTrue);
     });
 
+    test('UI element round-trips enabled state and omits it when unknown', () {
+      final disabled = UiElement.fromJson(const {
+        'type': 'IconButton',
+        'key': 'workspace_browser_rename_button:alpha',
+        'enabled': false,
+      });
+      expect(disabled.enabled, isFalse);
+      expect(disabled.toJson()['enabled'], isFalse);
+
+      final enabled = UiElement.fromJson(const {
+        'type': 'InkWell',
+        'key': 'permission_option_once',
+        'enabled': true,
+      });
+      expect(enabled.toJson()['enabled'], isTrue);
+
+      final plain = UiElement.fromJson(const {'type': 'Text', 'text': 'Hi'});
+      expect(plain.enabled, isNull);
+      expect(plain.toJson().containsKey('enabled'), isFalse);
+    });
+
+    test('driver snapshots project keyed and interactive enabled state', () {
+      final driverSource = File('lib/driver_main.dart').readAsStringSync();
+      final inspectStart = driverSource.indexOf(
+        "registerExtension('ext.sanad_client.inspect_ui'",
+      );
+      final inspectEnd = driverSource.indexOf(
+        "registerExtension('ext.sanad_client.enter_text'",
+      );
+      final inspect = driverSource.substring(inspectStart, inspectEnd);
+      expect(inspect, contains('inspectableElementEnabled(element)'));
+      expect(inspect, contains('inspectableWidgetEnabled(widget)'));
+      expect(inspect, contains("data['enabled']"));
+    });
+
     test('batch step accepts documented aliases', () {
       final step = BatchStep.fromJson(const {
         'action': 'scroll',

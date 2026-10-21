@@ -97,6 +97,23 @@ terminal accumulator and starting the next model step. History hydration maps
 the persisted `superseded_by_steer` assistant message to the same completed
 thought, preserving live/history order instead of dropping visible content.
 
+### Terminal classification in history
+
+History hydration, session search, and the live path agree on one notion of a
+terminal reply, owned by `TerminalAssistantClassifier`
+(`agent/lib/evolution/db/terminal_assistant_classifier.dart`). A candidate is
+an assistant row with no tool calls that no steer superseded. A candidate is
+the turn's terminal reply when it carries the durable `terminal_work_item_id`
+stamp, or when the next active row of the **same session** is absent or a
+root user input. The fetched page boundary never decides it: the history page
+carries the first active row after its newest row (`followingMessage`).
+
+A terminal reply hydrates as `final_answer` with its identity fields
+(`message_id`, `turn_id`) and statistics (`usage`, `model`, `model_display`,
+`provider`, `context_tokens`, `context_usage`, `runtime_ms`). That is what the
+footer and Fork need. Commentary followed by more assistant output in the same
+turn, or by a steer, stays a `thought` with a copy action only.
+
 ## Client Mapping and Identity
 
 | Wire event | Client kind | Timeline identity prefix |

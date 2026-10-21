@@ -91,6 +91,7 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
   final List<String> removedWorkspaceIds = [];
   final List<Map<String, String?>> slashCommandSearchRequests = [];
   final List<Map<String, String?>> browseWorkspaceTreeRequests = [];
+  final List<Map<String, String>> folderMutations = [];
   final List<Map<String, String?>> permissionResponses = [];
   List<SlashCommandEntry> slashCommandResults = const [];
   WorkspaceTreeSnapshot? workspaceTreeSnapshot;
@@ -742,20 +743,36 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
     DeviceConfig agent, {
     required String parentPath,
     required String name,
-  }) async {}
+  }) async {
+    folderMutations.add({
+      'op': 'create',
+      'device_id': agent.id,
+      'path': parentPath,
+      'name': name,
+    });
+  }
 
   @override
   Future<void> renameFolder(
     DeviceConfig agent, {
     required String path,
     required String newName,
-  }) async {}
+  }) async {
+    folderMutations.add({
+      'op': 'rename',
+      'device_id': agent.id,
+      'path': path,
+      'name': newName,
+    });
+  }
 
   @override
   Future<void> deleteFolder(
     DeviceConfig agent, {
     required String path,
-  }) async {}
+  }) async {
+    folderMutations.add({'op': 'delete', 'device_id': agent.id, 'path': path});
+  }
 
   @override
   Future<List<CanonicalEvent>> loadSessionHistory(DeviceConfig agent, String sessionId) async {

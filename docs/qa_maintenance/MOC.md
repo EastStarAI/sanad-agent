@@ -20,6 +20,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
 - [Jev Sanad UI Automation](jev_sanad_ui_automation.md): Safety boundary and verification matrix for the Client Tester-owned conversation runner with narrow Jev verification.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
+- [Third-Party Skills Install QA](third_party_skills_install_qa.md): `sanad skills add/remove/update` source parsing, archive safety, provenance, bundled/hand-copied collisions, and scope precedence for user-installed skills.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.
 - [View Image Tool QA](view_image_tool_qa.md): Regression coverage for secure image loading, user attachment admission, composer/timeline/edit UX, local/remote media hydration, multimodal codecs, recovery, pruning, and binary-safe projections.
@@ -42,7 +43,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect and steer-drop confirmation, root-turn identity, navigation cancellation, and current route selection.
 - [Conversation Fork QA](conversation_fork_qa.md): Coverage for materialized fork, lineage, parent/child independence, and delete behavior.
 - [Remote Device Control QA](remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management, starting from the current cloud freeze.
-- [Remote Workspace Folder Management QA](workspace_folder_management_qa.md): Coverage for local native picker continuity and managed-remote create/browse.
+- [Remote Workspace Folder Management QA](workspace_folder_management_qa.md): Coverage for local native picker continuity and the confined remote workspace picker.
 - [Remote MCP Management Boundary QA](remote_mcp_management_qa.md): Coverage for cloud MCP configuration admission, redaction, confirmation tickets, local continuity, and preserved MCP tool use in cloud-origin turns.
 - [Workspace Identity and Change Path QA](workspace_identity_relocation_qa.md): Coverage for UUID migration, missing folders, scoped Settings routing, display rename, path repair, and cache reconciliation.
 - [Live Context Usage Indicator QA](live_context_usage_indicator_qa.md): Regression coverage for exact latest-provider values, cached-input visibility, tool-loop updates, session isolation, and history restoration.

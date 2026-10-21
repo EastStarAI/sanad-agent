@@ -38,6 +38,8 @@ This contract applies to `agent/lib/evolution/`.
 
 ## Scheduling
 - Persist scheduled tasks and restore them on startup.
+- `CronScheduler` is the single writer of schedules; tools and other callers read through it and never write the repository directly. Cancel and update are owner-scoped to the originating session; listing is device-wide.
+- A recurring dispatch persists the advanced next instant and outcome before it emits the run event (at-most-once). A run event emitted before the gateway subscribes is held and delivered on subscription, never silently dropped.
 - Scheduled events preserve originating session identity and enter through normal gateway/orchestrator admission.
 - Scheduler and curator tests remain isolated from provider-instance routing unless explicitly under test.
 

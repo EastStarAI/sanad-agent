@@ -31,6 +31,9 @@ import 'package:sanad_client/features/provider_setup/data/provider_setup_client.
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_tree_entry.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
 import 'package:sanad_client/utils/workspace_picker_helper.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
@@ -60,7 +63,7 @@ void main() {
     await getIt.reset();
     ConversationInputPanel.debugPickDirectoryPath = null;
     WorkspacePickerHelper.debugOnRemoteDisabled = null;
-    WorkspacePickerHelper.debugRemoteWorkspaceName = null;
+    WorkspacePickerHelper.debugRemoteBrowserPick = null;
     socket = FakeSanadSocketService();
     socket.autoCapabilitiesPayload = const {
       'supports_workspaces': true,
@@ -103,7 +106,7 @@ void main() {
     ConversationInputPanel.debugPickDirectoryPath = null;
     ConversationInputPanel.debugOnValidationError = null;
     WorkspacePickerHelper.debugOnRemoteDisabled = null;
-    WorkspacePickerHelper.debugRemoteWorkspaceName = null;
+    WorkspacePickerHelper.debugRemoteBrowserPick = null;
     await sessionMessagesCubit.close();
     await sessionCubit.close();
     await agentCubit.close();
@@ -943,36 +946,90 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
   });
 
-  testWidgets('creates a remote workspace by name without a host path', (tester) async {
-    socket.setConnected(true);
-    var pickerCalled = false;
-    ConversationInputPanel.debugPickDirectoryPath = () async {
-      pickerCalled = true;
-      return '/remote/workspace';
-    };
-    WorkspacePickerHelper.debugRemoteWorkspaceName = () async => 'remote-notes';
+  testWidgets(
+    'opens the managed browser for a remote device and creates the workspace from the picked nested path',
+    (tester) async {
+      socket.setConnected(true);
+      var pickerCalled = false;
+      ConversationInputPanel.debugPickDirectoryPath = () async {
+        pickerCalled = true;
+        return '/remote/workspace';
+      };
+      const root = '/managed/workspaces';
+      WorkspaceTreeSnapshot folder(String path, String? parent, List<String> children) {
+        return WorkspaceTreeSnapshot(
+          workspaceId: '',
+          rootPath: root,
+          path: path,
+          parentPath: parent,
+          entries: [
+            for (final child in children)
+              WorkspaceTreeEntry(
+                name: child,
+                path: '$path/$child',
+                relativePath: '',
+                isDirectory: true,
+              ),
+          ],
+          truncated: false,
+        );
+      }
 
-    await pumpTestApp(
-      tester,
-      agentCubit: agentCubit,
-      sessionCubit: sessionCubit,
-      sessionMessagesCubit: sessionMessagesCubit,
-      capabilities: capabilities,
-      child: ConversationInputPanel(onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {}),
-    );
-    await tester.pumpAndSettle();
+      conversationRepository.browseWorkspaceTreeHandler = ({agent, workspaceId, path}) async {
+        return switch (path) {
+          '$root/acc-123' => folder('$root/acc-123', root, ['picked']),
+          '$root/acc-123/picked' => folder('$root/acc-123/picked', '$root/acc-123', []),
+          _ => folder(root, null, ['acc-123']),
+        };
+      };
 
-    await tester.tap(find.byKey(const Key('workspace_selector_btn')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Add New Workspace'));
-    await tester.pumpAndSettle();
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        conversationCacheRepository: cacheRepository,
+        child: ConversationInputPanel(onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {}),
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.text('Choose Workspace'), findsNothing);
-    expect(pickerCalled, isFalse);
-    expect(conversationRepository.browseWorkspaceTreeRequests, isEmpty);
-    expect(conversationRepository.createdWorkspaces.single, containsPair('name', 'remote-notes'));
-    expect(conversationRepository.createdWorkspaces.single['path'], isNull);
-  });
+      await tester.tap(find.byKey(const Key('workspace_selector_btn')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add New Workspace'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(WorkspaceBrowserDialog), findsOneWidget);
+      expect(find.byKey(const Key('remote_workspace_name_input')), findsNothing);
+      FilledButton useButton() => tester.widget<FilledButton>(
+        find.byKey(const Key('workspace_browser_use_folder_button')),
+      );
+      expect(useButton().onPressed, isNull);
+
+      await tester.tap(find.text('acc-123'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('picked'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('workspace_browser_use_folder_button')));
+      await tester.pumpAndSettle();
+
+      expect(pickerCalled, isFalse);
+      expect(
+        conversationRepository.browseWorkspaceTreeRequests.map((request) => request['path']).toList(),
+        [null, '$root/acc-123', '$root/acc-123/picked'],
+      );
+      expect(
+        conversationRepository.browseWorkspaceTreeRequests.map((request) => request['device_id']).toSet(),
+        {agent.id},
+      );
+      final created = conversationRepository.createdWorkspaces.single;
+      expect(created['path'], '$root/acc-123/picked');
+      expect(created['name'], isNull);
+      expect(created['device_id'], agent.id);
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
 
   testWidgets(
     '20 resize/theme/rebuild/remount cycles add zero Agent requests after initial load',

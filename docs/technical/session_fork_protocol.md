@@ -98,15 +98,23 @@ rows roll back together.
 
 ## History-only fork event
 
-A forked child history ends with one derived `session.forked` row. Its stable
+A forked child history carries one derived `session.forked` row. Its stable
 `event_id` is `fork_<child_session_id>` and its payload exposes only non-secret
 lineage fields needed by the client. The row is synthesized from the child
 session lineage during `session_history`; it is not persisted in `messages` and
 is therefore outside `AgentRunner` history and every LLM model projection.
 
+The row follows the last active row the fork copied: the newest active child
+row with `origin_message_id` set. Post-fork rows never carry an origin, so the
+position is page-independent: the marker sits between the copied prefix and
+the first post-fork turn, before any compaction marker the child later anchors
+there, and it is emitted only on the page that holds that row (exactly once
+across all pages). A legacy child whose copied rows carry no origin keeps the
+former tail-page placement.
+
 The client maps this row to an informational timeline marker styled like the
-context-compaction event. Opening a forked child aligns the timeline to this
-trailing marker after hydration.
+context-compaction event. Opening a fresh child (marker still trailing) aligns
+the timeline to the marker; a continued child opens like any session.
 
 ## Naming
 

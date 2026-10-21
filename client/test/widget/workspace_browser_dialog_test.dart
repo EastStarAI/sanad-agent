@@ -5,6 +5,9 @@ import 'package:sanad_client/features/conversations/domain/models/workspace_tree
 import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_command_failure.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 void main() {
   testWidgets('navigates folders and returns the selected path', (tester) async {
@@ -45,6 +48,8 @@ void main() {
     String? selectedPath;
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: kSupportedLocales,
         home: Builder(
           builder: (context) => Scaffold(
             body: Center(
@@ -120,6 +125,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: kSupportedLocales,
         home: Builder(
           builder: (context) => Scaffold(
             body: Center(
@@ -248,7 +255,11 @@ void main() {
       find.byKey(const ValueKey('workspace-folder-mutation-error')),
       findsOneWidget,
     );
-    expect(find.textContaining('permission denied'), findsOneWidget);
+    // An uncoded failure keeps the Agent's reason under the localized line.
+    expect(
+      find.text('The device could not complete this folder action.\npermission denied'),
+      findsOneWidget,
+    );
     expect(find.text('apps'), findsWidgets);
   });
 
@@ -301,6 +312,130 @@ void main() {
     expect(find.byTooltip('Rename Folder'), findsNothing);
     expect(find.byTooltip('Delete Folder'), findsNothing);
   });
+
+  testWidgets('disables Use This Folder at the managed root', (tester) async {
+    await _openBrowser(tester, loader: ({path}) async {
+      return path == '/root/apps' ? _nestedSnapshot : _rootSnapshot;
+    });
+
+    FilledButton useButton() => tester.widget<FilledButton>(
+      find.byKey(const Key('workspace_browser_use_folder_button')),
+    );
+    expect(useButton().onPressed, isNull);
+    expect(find.byKey(const Key('workspace_browser_parent_row')), findsNothing);
+    expect(find.byKey(const Key('workspace_browser_root_hint')), findsOneWidget);
+
+    await tester.tap(find.text('apps').first);
+    await tester.pumpAndSettle();
+    expect(useButton().onPressed, isNotNull);
+    expect(find.byKey(const Key('workspace_browser_parent_row')), findsOneWidget);
+    expect(find.byKey(const Key('workspace_browser_root_hint')), findsNothing);
+  });
+
+  testWidgets('explains workspace_in_use and path_not_allowed rejections', (
+    tester,
+  ) async {
+    await _openBrowser(
+      tester,
+      loader: ({path}) async => _rootSnapshot,
+      onRenameFolder: (path, name) async {
+        throw WorkspaceCommandFailure(
+          'Failed to rename folder: in use.',
+          code: WorkspaceCommandFailure.workspaceInUse,
+        );
+      },
+      onDeleteFolder: (path) async {
+        throw WorkspaceCommandFailure(
+          'Failed to delete folder: outside.',
+          code: WorkspaceCommandFailure.pathNotAllowed,
+        );
+      },
+    );
+
+    await tester.tap(find.byTooltip('Rename Folder'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), 'moved');
+    await tester.tap(find.widgetWithText(FilledButton, 'Rename'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'This folder is or contains a workspace. Remove that workspace first.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byTooltip('Delete Folder'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        "This folder is outside the device's workspaces folder or cannot be used.",
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Failed to'), findsNothing);
+  });
+
+  testWidgets('a rejected browse shows a localized load error', (tester) async {
+    await _openBrowser(
+      tester,
+      loader: ({path}) async {
+        throw WorkspaceCommandFailure(
+          'Failed to browse workspace: outside.',
+          code: WorkspaceCommandFailure.pathNotAllowed,
+        );
+      },
+    );
+
+    expect(find.byKey(const Key('workspace_browser_load_error')), findsOneWidget);
+    expect(
+      find.text(
+        "This folder is outside the device's workspaces folder or cannot be used.",
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('renders Arabic strings with an LTR path line', (tester) async {
+    await _openBrowser(
+      tester,
+      locale: const Locale('ar'),
+      loader: ({path}) async {
+        return path == '/root/apps' ? _nestedSnapshot : _rootSnapshot;
+      },
+      onCreateFolder: (parentPath, name) async {},
+      onRenameFolder: (path, name) async {},
+      onDeleteFolder: (path) async {},
+    );
+
+    final ar = await AppLocalizations.delegate.load(const Locale('ar'));
+    expect(find.text(ar.workspaceBrowserTitle), findsOneWidget);
+    expect(find.text(ar.workspaceBrowserUseFolder), findsOneWidget);
+    expect(find.text(ar.cancel), findsOneWidget);
+    expect(find.byTooltip(ar.workspaceBrowserNewFolder), findsOneWidget);
+    expect(find.byTooltip(ar.workspaceBrowserRenameFolder), findsOneWidget);
+    expect(find.byTooltip(ar.workspaceBrowserDeleteFolder), findsOneWidget);
+    expect(find.text('Choose Workspace'), findsNothing);
+
+    final dialogDirection = Directionality.of(
+      tester.element(find.text(ar.workspaceBrowserTitle)),
+    );
+    expect(dialogDirection, TextDirection.rtl);
+    final pathDirection = Directionality.of(
+      tester.element(find.byKey(const Key('workspace_browser_current_path'))),
+    );
+    expect(pathDirection, TextDirection.ltr);
+
+    await tester.tap(find.text('apps').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('workspace_browser_parent_row')), findsOneWidget);
+    expect(find.text('..'), findsOneWidget);
+
+    await tester.tap(find.byTooltip(ar.workspaceBrowserDeleteFolder));
+    await tester.pumpAndSettle();
+    expect(find.text(ar.workspaceBrowserDeleteConfirmation('child')), findsOneWidget);
+  });
 }
 
 const _repoSnapshot = WorkspaceTreeSnapshot(
@@ -325,9 +460,13 @@ Future<void> _openBrowser(
   WorkspaceFolderCreator? onCreateFolder,
   WorkspaceFolderRenamer? onRenameFolder,
   WorkspaceFolderDeleter? onDeleteFolder,
+  Locale? locale,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: locale,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(
         builder: (context) => Scaffold(
           body: Center(
@@ -355,3 +494,35 @@ Future<void> _openBrowser(
   await tester.tap(find.text('Open'));
   await tester.pumpAndSettle();
 }
+
+const _rootSnapshot = WorkspaceTreeSnapshot(
+  workspaceId: '',
+  rootPath: '/root',
+  path: '/root',
+  parentPath: null,
+  entries: [
+    WorkspaceTreeEntry(
+      name: 'apps',
+      path: '/root/apps',
+      relativePath: 'apps',
+      isDirectory: true,
+    ),
+  ],
+  truncated: false,
+);
+
+const _nestedSnapshot = WorkspaceTreeSnapshot(
+  workspaceId: '',
+  rootPath: '/root',
+  path: '/root/apps',
+  parentPath: '/root',
+  entries: [
+    WorkspaceTreeEntry(
+      name: 'child',
+      path: '/root/apps/child',
+      relativePath: 'apps/child',
+      isDirectory: true,
+    ),
+  ],
+  truncated: false,
+);

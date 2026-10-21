@@ -39,3 +39,4 @@ This contract applies to `agent/lib/evolution/db/runtime/`.
 - Route rewrite covers every non-terminal work item.
 - Automatic failover atomically validates current owner, notice, request, and expected provider before claiming resuming and rewriting session/work routes.
 - Snapshot provider display names into durable route transitions so history remains readable after provider rename/delete.
+- Automatic failover persists the caller-supplied `anchor_message_id` in the same transaction as the transition; the coordinator never reads the `messages` table itself.

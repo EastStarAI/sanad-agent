@@ -22,6 +22,7 @@ import 'package:sanad_client/features/conversations/data/repositories/conversati
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/queued_messages_box.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
 import 'package:sanad_client/utils/workspace_picker_helper.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
@@ -848,9 +849,15 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   }
 
   Future<void> _pickAndCreateWorkspace(DeviceConfig? activeAgent) async {
+    final repository = _draftRepository;
     final selected = await WorkspacePickerHelper.promptCreateWorkspace(
       context: context,
       device: activeAgent,
+      // Every remote browse and folder command targets the device the
+      // workspace is being added to.
+      remoteBrowser: activeAgent == null || repository == null
+          ? null
+          : WorkspaceBrowserCallbacks.forDevice(repository, activeAgent),
       debugLocalPath: ConversationInputPanel.debugPickDirectoryPath,
     );
     if (!mounted || selected == null) {

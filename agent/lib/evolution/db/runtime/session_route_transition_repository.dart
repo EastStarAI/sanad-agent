@@ -28,8 +28,8 @@ class SessionRouteTransitionRepository {
         session_id, route_revision, event_id, source,
         previous_provider_instance_id, provider_instance_id,
         previous_provider_display_name, provider_display_name,
-        model, reason, request_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        model, reason, request_id, anchor_message_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ''',
       [
         transition.sessionId,
@@ -43,6 +43,7 @@ class SessionRouteTransitionRepository {
         transition.model,
         transition.reason,
         transition.requestId,
+        transition.anchorMessageId,
         transition.createdAt.toUtc().toIso8601String(),
       ],
     );

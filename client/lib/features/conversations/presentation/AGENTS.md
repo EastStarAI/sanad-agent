@@ -53,8 +53,13 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - A locally valid runtime action is consumed from the composer as soon as dispatch starts: clear its text, close suggestions, and persist the cleared draft independently of the daemon outcome. Typed failure feedback remains visible but must not restore command text as though it were an unsent user message.
 - Desktop file drops insert paths at the current valid editor selection, replace selected text, and leave the caret immediately after the inserted paths; only an invalid selection falls back to the end.
 - Route every workspace-path picker entry through the shared picker helper. Use
-  the native folder picker only for a confirmed same-desktop local device;
-  remote selection shows the security notice and sends no filesystem command.
+  the native folder picker only for a confirmed same-desktop local device. A
+  remote add-workspace opens the confined in-app `WorkspaceBrowserDialog`
+  (folders only) bound to the device being configured through
+  `WorkspaceBrowserCallbacks.forDevice`, never to the active session's device;
+  it returns a folder the device reported and creates the workspace from that
+  path. "Use This Folder" stays disabled at the device's workspaces root, and
+  rejections render localized text keyed by the daemon error code.
 
 ## Delivery Controls
 - Enter/send emits typed automatic intent; Command+Enter and Control+Enter emit typed queue intent.

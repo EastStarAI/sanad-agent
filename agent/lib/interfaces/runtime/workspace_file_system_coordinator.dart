@@ -54,6 +54,13 @@ class WorkspaceFileSystemCoordinator {
     int maxEntries = 200,
     bool managedRemote = false,
   }) async {
+    if (managedRemote) {
+      return _browseManaged(
+        workspaceId: workspaceId,
+        path: path,
+        maxEntries: maxEntries,
+      );
+    }
     final trimmedPath = path?.trim();
     if (trimmedPath == null || trimmedPath.isEmpty) {
       if (workspaceId != null && workspaceId.trim().isNotEmpty) {
@@ -64,9 +71,6 @@ class WorkspaceFileSystemCoordinator {
         if (workspace == null || resolvedWorkspacePath == null) {
           throw StateError('Workspace not found or its folder is unavailable.');
         }
-        if (managedRemote) {
-          await _assertAllowedRemotePath(resolvedWorkspacePath);
-        }
         return _buildDirectorySnapshot(
           directory: Directory(resolvedWorkspacePath),
           workspaceId: workspace['id'] as String,
@@ -74,11 +78,7 @@ class WorkspaceFileSystemCoordinator {
           path: resolvedWorkspacePath,
           parentPath: null,
           maxEntries: maxEntries,
-          hideInternal: managedRemote,
         );
-      }
-      if (managedRemote) {
-        return _browseAllowedRemoteRoots(maxEntries: maxEntries);
       }
       return _browseSystemRoots(maxEntries: maxEntries);
     }
@@ -88,15 +88,6 @@ class WorkspaceFileSystemCoordinator {
     var workspacePath = '';
     var rootPath = _rootPathFor(requestedPath);
     var parentPath = _parentPathFor(requestedPath, rootPath: rootPath);
-
-    if (managedRemote) {
-      await _assertAllowedRemotePath(requestedPath);
-      final allowedRoot = await _containingAllowedRoot(requestedPath);
-      rootPath = allowedRoot ?? requestedPath;
-      parentPath = requestedPath == rootPath
-          ? null
-          : _parentPathFor(requestedPath, rootPath: rootPath);
-    }
 
     if (workspaceId != null && workspaceId.trim().isNotEmpty) {
       final workspace = _getWorkspaceRecordById(workspaceId);
@@ -129,7 +120,44 @@ class WorkspaceFileSystemCoordinator {
       path: requestedPath,
       parentPath: parentPath,
       maxEntries: maxEntries,
-      hideInternal: managedRemote,
+    );
+  }
+
+  /// Managed-remote browse: confined to the managed workspaces root.
+  ///
+  /// An empty path opens the root itself. A `workspace_id` scope is allowed
+  /// only for a workspace that resolves inside the root.
+  Future<Map<String, dynamic>> _browseManaged({
+    required String? workspaceId,
+    required String? path,
+    required int maxEntries,
+  }) async {
+    final hasPath = path != null && path.trim().isNotEmpty;
+    var rootPath = managedRootPath();
+    var scopedWorkspaceId = '';
+    if (workspaceId != null && workspaceId.trim().isNotEmpty) {
+      final workspace = _getWorkspaceRecordById(workspaceId);
+      final resolvedWorkspacePath = await _resolveWorkspacePathById(
+        workspaceId,
+      );
+      if (workspace == null || resolvedWorkspacePath == null) {
+        throw StateError('Workspace not found or its folder is unavailable.');
+      }
+      rootPath = await resolveManagedDirectory(resolvedWorkspacePath);
+      scopedWorkspaceId = workspace['id'] as String;
+    }
+    final target = hasPath ? await resolveManagedDirectory(path) : rootPath;
+    if (!_isWithinRoot(root: rootPath, target: target)) {
+      throw StateError('Requested path is outside the selected workspace.');
+    }
+    return _buildDirectorySnapshot(
+      directory: Directory(target),
+      workspaceId: scopedWorkspaceId,
+      rootPath: rootPath,
+      path: target,
+      parentPath: p.equals(target, rootPath) ? null : p.dirname(target),
+      maxEntries: maxEntries,
+      managed: true,
     );
   }
 
@@ -165,10 +193,12 @@ class WorkspaceFileSystemCoordinator {
     required String path,
     required String? parentPath,
     required int maxEntries,
-    bool hideInternal = false,
+    bool managed = false,
   }) async {
     final entities = <FileSystemEntity>[];
     await for (final entity in directory.list(followLinks: false)) {
+      // Managed listings never report links, so no target is disclosed.
+      if (managed && entity is Link) continue;
       entities.add(entity);
     }
     entities.sort((left, right) {
@@ -185,11 +215,13 @@ class WorkspaceFileSystemCoordinator {
 
     final items = <Map<String, dynamic>>[];
     for (final entity in entities.take(maxEntries)) {
-      final entry = await _buildTreeEntry(entity, rootPath: rootPath);
+      final entry = await _buildTreeEntry(
+        entity,
+        rootPath: rootPath,
+        // Managed entry paths are lexical children of the validated listing.
+        lexicalPath: managed ? p.join(path, p.basename(entity.path)) : null,
+      );
       if (entry == null) {
-        continue;
-      }
-      if (hideInternal && _isSanadInternalHidden(entry['path'] as String)) {
         continue;
       }
       items.add(entry);
@@ -208,10 +240,11 @@ class WorkspaceFileSystemCoordinator {
   Future<Map<String, dynamic>?> _buildTreeEntry(
     FileSystemEntity entity, {
     required String rootPath,
+    String? lexicalPath,
   }) async {
     try {
       final stat = await entity.stat();
-      final entityPath = normalizePath(entity.path);
+      final entityPath = lexicalPath ?? normalizePath(entity.path);
       return {
         'name': _entryDisplayName(entityPath),
         'path': entityPath,
@@ -302,10 +335,7 @@ class WorkspaceFileSystemCoordinator {
     return _serialized(() async {
       final folderName = validateFolderName(name);
       final normalizedParent = managedRemote
-          ? await requireAllowedExistingDirectory(
-              parentPath,
-              label: 'Parent directory',
-            )
+          ? await resolveManagedDirectory(parentPath)
           : normalizeExistingDirectory(parentPath, label: 'Parent directory');
       final targetPath = p.normalize(p.join(normalizedParent, folderName));
       if (!p.isWithin(normalizedParent, targetPath)) {
@@ -342,10 +372,6 @@ class WorkspaceFileSystemCoordinator {
           FileSystemEntityType.notFound) {
         throw StateError('A file or folder with that name already exists.');
       }
-      if (managedRemote) {
-        await _assertAllowedRemotePath(p.dirname(sourcePath));
-      }
-
       final renamed = await Directory(sourcePath).rename(targetPath);
       return normalizePath(renamed.path);
     });
@@ -430,6 +456,22 @@ class WorkspaceFileSystemCoordinator {
     String value, {
     bool managedRemote = false,
   }) async {
+    if (managedRemote) {
+      final resolved = await resolveManagedDirectory(value);
+      if (p.equals(resolved, managedRootPath())) {
+        throw const WorkspaceCommandException(
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+          'The managed workspaces root cannot be renamed or deleted.',
+        );
+      }
+      final stateHome = _stateHomeInside(managedRootPath());
+      if (stateHome != null &&
+          _isWithinRoot(root: resolved, target: stateHome)) {
+        throw _notAllowed('This folder contains Sanad state.');
+      }
+      await _assertNoWorkspaceInside(resolved);
+      return resolved;
+    }
     _rejectUnsafePathString(value);
     final trimmed = value.trim();
     if (trimmed.isEmpty) {
@@ -453,16 +495,23 @@ class WorkspaceFileSystemCoordinator {
     if (_isFileSystemRoot(normalized)) {
       throw StateError('Filesystem roots cannot be renamed or deleted.');
     }
-    if (managedRemote) {
-      await _assertAllowedRemotePath(normalized);
-      if (await _isProtectedRemoteRoot(normalized)) {
+    await _assertNoWorkspaceInside(normalized);
+    return normalized;
+  }
+
+  /// Refuses a rename/delete target that is, or contains, a registered
+  /// workspace, so a workspace path is never broken behind its record.
+  Future<void> _assertNoWorkspaceInside(String target) async {
+    for (final workspace in await _readStoredWorkspaces()) {
+      final workspacePath = workspace['path'] as String?;
+      if (workspacePath == null || workspacePath.trim().isEmpty) continue;
+      if (_isWithinRoot(root: target, target: workspacePath)) {
         throw const WorkspaceCommandException(
-          WorkspaceCommandErrorCodes.pathNotAllowed,
-          'Protected workspace roots cannot be renamed or deleted.',
+          WorkspaceCommandErrorCodes.workspaceInUse,
+          'This folder is or contains a workspace. Remove the workspace first.',
         );
       }
     }
-    return normalized;
   }
 
   bool _isFileSystemRoot(String path) {
@@ -495,130 +544,93 @@ class WorkspaceFileSystemCoordinator {
     }
   }
 
-  Future<Map<String, dynamic>> _browseAllowedRemoteRoots({
-    required int maxEntries,
-  }) async {
-    final roots = await _allowedRemoteRoots();
-    final entries = <Map<String, dynamic>>[];
-    for (final root in roots.take(maxEntries)) {
-      final entry = await _buildTreeEntry(Directory(root), rootPath: '');
-      if (entry != null && !_isSanadInternalHidden(root)) {
-        entries.add(entry);
-      }
-    }
-    return {
-      'workspace_id': '',
-      'root_path': '',
-      'path': '',
-      'parent_path': null,
-      'entries': entries,
-      'truncated': roots.length > maxEntries,
-    };
-  }
+  /// The managed workspaces root of the runtime Home, as a real path.
+  ///
+  /// Derived from the injected Home on every call, never from a fixed
+  /// directory name, so a custom or test Home moves the root with it.
+  String managedRootPath() => normalizePath(ensureManagedWorkspacesRoot());
 
-  Future<List<String>> _allowedRemoteRoots() async {
-    final roots = <String>{};
-    final managed = normalizePath(ensureManagedWorkspacesRoot());
-    roots.add(managed);
-    for (final workspace in await _readStoredWorkspaces()) {
-      final path = workspace['path'] as String?;
-      if (path == null || path.trim().isEmpty) continue;
-      if (!Directory(path).existsSync()) continue;
-      final normalized = normalizePath(path);
-      if (_isSanadInternalHidden(normalized)) continue;
-      if (_isWithinRoot(root: managed, target: normalized)) continue;
-      roots.add(normalized);
-    }
-    return roots.toList(growable: false);
-  }
-
-  Future<String?> _containingAllowedRoot(String path) async {
-    final normalized = normalizePath(path);
-    for (final root in await _allowedRemoteRoots()) {
-      if (_isWithinRoot(root: root, target: normalized)) {
-        return root;
-      }
-    }
-    return null;
-  }
-
-  Future<void> _assertAllowedRemotePath(String path) async {
-    _rejectUnsafePathString(path);
-    final type = await FileSystemEntity.type(path, followLinks: false);
-    if (type == FileSystemEntityType.link) {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'Symbolic-link folders cannot be browsed or changed here.',
-      );
-    }
-    final normalized = normalizePath(path);
-    if (_isSanadInternalHidden(normalized) || _isFileSystemRoot(normalized)) {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'That path is outside the allowed workspace roots.',
-      );
-    }
-    if (await _containingAllowedRoot(normalized) == null) {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'That path is outside the allowed workspace roots.',
-      );
-    }
-  }
-
-  Future<String> requireAllowedExistingDirectory(
+  /// Validates a managed-remote (cloud) path and returns its real path.
+  ///
+  /// The path must be absolute, NUL-free, free of raw `..` segments, and
+  /// resolve to an existing directory inside the managed workspaces root
+  /// without crossing a symbolic link at any component below that root.
+  /// Every rejection is a coded [WorkspaceCommandErrorCodes.pathNotAllowed],
+  /// except a missing folder, which is a not-found [StateError].
+  Future<String> resolveManagedDirectory(
     String value, {
-    required String label,
+    bool allowRoot = true,
   }) async {
-    _rejectUnsafePathString(value);
-    final normalized = normalizeExistingDirectory(value, label: label);
-    await _assertAllowedRemotePath(normalized);
-    return normalized;
-  }
-
-  Future<bool> _isProtectedRemoteRoot(String path) async {
-    final normalized = normalizePath(path);
-    if (normalized == normalizePath(ensureManagedWorkspacesRoot())) {
-      return true;
+    if (value.contains('\u0000')) {
+      throw _notAllowed('The path contains an invalid character.');
     }
-    if (normalized == normalizePath(_sanadHome)) {
-      return true;
+    final trimmed = value.trim();
+    if (trimmed.isEmpty || !p.isAbsolute(trimmed)) {
+      throw _notAllowed('The path must be absolute.');
     }
-    final stateHome = normalizePath(getSanadStateHome());
-    if (normalized == stateHome) {
-      return true;
+    if (p.split(trimmed).contains('..')) {
+      throw _notAllowed('The path must not contain "..".');
     }
-    for (final workspace in await _readStoredWorkspaces()) {
-      final workspacePath = workspace['path'] as String?;
-      if (workspacePath == null) continue;
-      if (normalizePath(workspacePath) == normalized) {
-        return true;
+    final lexical = p.normalize(trimmed);
+    final rootLexical = p.normalize(ensureManagedWorkspacesRoot());
+    final rootReal = normalizePath(rootLexical);
+    String? relative;
+    for (final base in {rootReal, rootLexical}) {
+      if (p.equals(base, lexical)) {
+        relative = '';
+        break;
+      }
+      if (p.isWithin(base, lexical)) {
+        relative = p.relative(lexical, from: base);
+        break;
       }
     }
-    return false;
+    if (relative == null) {
+      throw _notAllowed('That path is outside the managed workspaces root.');
+    }
+    var current = rootReal;
+    if (relative.isNotEmpty) {
+      for (final segment in p.split(relative)) {
+        current = p.join(current, segment);
+        final type = await FileSystemEntity.type(current, followLinks: false);
+        if (type == FileSystemEntityType.link) {
+          throw _notAllowed('Symbolic links cannot be used here.');
+        }
+        if (type == FileSystemEntityType.notFound) {
+          throw StateError('That folder does not exist.');
+        }
+        if (type != FileSystemEntityType.directory) {
+          throw _notAllowed('That path is not a folder.');
+        }
+      }
+    }
+    if (!allowRoot && p.equals(current, rootReal)) {
+      throw _notAllowed('Choose a folder inside the workspaces root.');
+    }
+    final stateHome = _stateHomeInside(rootReal);
+    if (stateHome != null && _isWithinRoot(root: stateHome, target: current)) {
+      throw _notAllowed('That path is outside the managed workspaces root.');
+    }
+    return current;
   }
 
-  bool _isSanadInternalHidden(String path) {
-    final normalized = normalizePath(path);
-    final home = normalizePath(_sanadHome);
-    final managed = normalizePath(
-      p.join(home, SanadHomeBootstrap.managedWorkspacesDirectoryName),
-    );
-    if (normalized == managed ||
-        _isWithinRoot(root: managed, target: normalized)) {
-      return false;
-    }
-    if (normalized == home || _isWithinRoot(root: home, target: normalized)) {
-      return true;
-    }
+  /// A folder strictly inside the managed root that may become, or be
+  /// relocated to as, a workspace.
+  Future<String> requireManagedWorkspaceDirectory(String value) =>
+      resolveManagedDirectory(value, allowRoot: false);
+
+  /// The state home when it is configured inside the managed root, an
+  /// unusual layout; `null` for the normal layout where it lies outside.
+  String? _stateHomeInside(String rootReal) {
     final stateHome = normalizePath(getSanadStateHome());
-    if (stateHome != home &&
-        (normalized == stateHome ||
-            _isWithinRoot(root: stateHome, target: normalized))) {
-      return true;
-    }
-    return false;
+    return p.isWithin(rootReal, stateHome) ? stateHome : null;
   }
+
+  WorkspaceCommandException _notAllowed(String message) =>
+      WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        message,
+      );
 
   void _rejectUnsafePathString(String value) {
     if (value.contains('\u0000')) {

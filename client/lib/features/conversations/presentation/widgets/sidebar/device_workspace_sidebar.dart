@@ -21,6 +21,7 @@ import '../../../domain/models/session_search.dart';
 import '../../../domain/models/sidebar_conversation_group.dart';
 import '../../../../../utils/toast_utils.dart';
 import '../../../../../utils/workspace_picker_helper.dart';
+import '../workspace_browser_dialog.dart';
 import '../../bloc/session_cubit.dart';
 import '../../bloc/session_messages_cubit.dart';
 import '../../bloc/session_sidebar_cubit.dart';
@@ -286,6 +287,10 @@ class _SidebarBody extends StatelessWidget {
       final selected = await WorkspacePickerHelper.promptCreateWorkspace(
         context: context,
         device: device,
+        remoteBrowser: WorkspaceBrowserCallbacks.forDevice(
+          cacheRepository,
+          device,
+        ),
         debugLocalPath: DeviceWorkspaceSidebar.debugPickDirectoryPath,
       );
       if (selected == null) return;

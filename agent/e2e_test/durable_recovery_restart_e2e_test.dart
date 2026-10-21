@@ -53,8 +53,10 @@ void main() {
         // Pre-script the fake LLM: first request returns a 429 so the
         // orchestrator emits a real waiting notice. After a forced process
         // restart, the restored resume_at timer must issue the second request
-        // without a manual Retry command.
-        h.fakeLlm.enqueueRateLimit(retryAfterSeconds: 5);
+        // without a manual Retry command. Retry-After must outlast the daemon
+        // restart so the restored work item is still waiting when inspected;
+        // a resume_at that already elapsed is resumed immediately on restore.
+        h.fakeLlm.enqueueRateLimit(retryAfterSeconds: 15);
         h.fakeLlm.enqueueText('gate-f-recovered');
 
         final client1 = await h.startFirstDaemon();
@@ -481,14 +483,15 @@ void main() {
 
         final client = await h.startFirstDaemon();
         try {
-          final answers = <String>[];
-          for (var i = 0; i < 3; i++) {
-            final answer = await client.waitForFinalAnswer(
-              sessionId: sessionId,
-              timeout: const Duration(seconds: 60),
-            );
-            answers.add(answer);
-          }
+          // Startup restore drains queue-only work before any Client attaches,
+          // so live final_answer events can precede the connection. FIFO order
+          // is asserted from durable history, which is the authoritative
+          // record of the drained turns.
+          final answers = await client.waitForFinalAnswersInHistory(
+            sessionId: sessionId,
+            expectedCount: 3,
+            timeout: const Duration(seconds: 60),
+          );
           expect(
             answers,
             equals(<String>[
@@ -677,9 +680,9 @@ void main() {
             matching: sequence.terminal,
           );
 
-          // Long cancelled shell output may trigger a compaction request before
-          // the fresh turn. Script both deterministic provider calls.
-          h.fakeLlm.enqueueText('compaction-summary-after-stop');
+          // The fake provider confirms a tiny input usage, which is
+          // authoritative for pressure (context_compaction_design.md), so the
+          // fresh turn issues exactly one ordinary request and no compaction.
           h.fakeLlm.enqueueText('new-turn-after-stop');
           await client1.sendThink(
             sessionId: sessionId,
@@ -906,10 +909,12 @@ void main() {
 
           final client2 = await h.startSecondDaemon();
           try {
+            // An ordinary tool permission takes an allow/deny decision only;
+            // an `answer` is rejected as INVALID_INTERVENTION_KIND
+            // (docs/technical/sanad_cli_architecture.md).
             await client2.sendPermissionResponse(
               sessionId: sessionId,
               requestId: permissionRequestId,
-              answer: 'Allow once',
             );
             expect(
               await client2.waitForFinalAnswer(
@@ -948,7 +953,9 @@ void main() {
           },
           toolCallId: toolCallId,
         );
-        h.fakeLlm.enqueueText('compaction-summary-after-tool-crash');
+        // Confirmed tiny input usage keeps the resumed request below the
+        // compaction threshold, so the unknown-outcome continuation is the
+        // next ordinary provider call.
         h.fakeLlm.enqueueText('tool-unknown-outcome-resumed');
         final client1 = await h.startFirstDaemon();
         final sessionId = 'gate-f-f212-${_unique()}';
@@ -1962,10 +1969,12 @@ class _TestClient {
     );
   }
 
+  /// Allows a suspended request. [answer] is only for `system_ask_user`
+  /// clarifications; ordinary tool permissions must omit it.
   Future<void> sendPermissionResponse({
     required String sessionId,
     required String requestId,
-    required String answer,
+    String? answer,
   }) async {
     _send(<String, dynamic>{
       'type': 'execute_command',
@@ -1976,7 +1985,7 @@ class _TestClient {
         'allowed': true,
         'scope': 'once',
         'decision': 'allow',
-        'answer': answer,
+        'answer': ?answer,
       },
     });
   }
@@ -2091,6 +2100,37 @@ class _TestClient {
     }
     throw TimeoutException(
       'Timed out waiting for final_answer on $sessionId',
+      timeout,
+    );
+  }
+
+  /// Polls durable history until [expectedCount] final answers exist and
+  /// returns their contents in history order.
+  Future<List<String>> waitForFinalAnswersInHistory({
+    required String sessionId,
+    required int expectedCount,
+    required Duration timeout,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    var answers = const <String>[];
+    while (DateTime.now().isBefore(deadline)) {
+      final history = await loadSessionHistory(
+        sessionId: sessionId,
+        requestId: 'final-answers-${_unique()}',
+        timeout: deadline.difference(DateTime.now()),
+      );
+      answers = (history['messages'] as List? ?? const [])
+          .whereType<Map>()
+          .where((message) => message['type'] == 'final_answer')
+          .map((message) => message['content']?.toString().trim() ?? '')
+          .where((content) => content.isNotEmpty)
+          .toList(growable: false);
+      if (answers.length >= expectedCount) return answers;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    throw TimeoutException(
+      'Timed out waiting for $expectedCount final answers on $sessionId '
+      '(found ${answers.length})',
       timeout,
     );
   }
