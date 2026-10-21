@@ -61,6 +61,13 @@ stopped Agent without manual commands or elevation.
 11. **Single installer source (Q3, coordinator decision).** The CLI recovery
     guidance and the Client `DeviceInstallGuide` take installer URLs and
     commands only from `OfficialAgentInstaller`.
+12. **Service definition refresh (Q4, coordinator decision).** After a
+    verified replacement of a stopped Agent, the existing macOS/Linux
+    registration is reused unless the new Agent's read-only
+    `sanad service definition` reports a difference in executable,
+    arguments, `SANAD_HOME`, or recorded `SANAD_SERVICE_INSTANCE`; then it is
+    re-registered exactly once. Windows keeps refreshing its task once per
+    registration.
 
 ## Port Mapping (PR #211 → `fix/107-port`)
 
@@ -132,7 +139,8 @@ owner. The port is a transplant with review fixes, not a merge.
 
 ### G6 — Live acceptance (open)
 - [x] macOS r1 (`b2b0eecb`, Test Home `~/.sanad-qa107`, instance `qa107`): L2, L3, L6, L7 PASS; L4 core behavior passed but the result was reported as a failure (D17); L2 left `sanad.rollback` (D18).
-- [ ] macOS r2 of L2 and L4 after D17/D18.
+- [x] L4 live: skipped by user decision (2026-10-21); covered by tests (`aaa7212d`).
+- [x] L2 rollback removal (D18): covered by tests; L2 itself passed live in macOS r1.
 - [ ] L1 and L5 on Ubuntu with the current code. The Ubuntu evidence on PR #211 covers the old 107 code only and does not count.
 
 ## Acceptance Criteria
@@ -181,4 +189,4 @@ Logs live under `temp/107/` in the worktree (gitignored).
 1. Resolved (coordinator decision): version and usage queries are pure. `agent/test/cli/pure_cli_queries_test.dart` runs ten queries against an empty Home and state Home and asserts both stay empty (red `temp/107/q1-red.log`, green `temp/107/q1-green.log`).
 2. Resolved by coordinator review: a started, healthy newer Agent is a success (`newerAgentInUse`) with an informational notice (D17).
 3. Resolved (coordinator decision): `DeviceInstallGuide` uses `OfficialAgentInstaller.pairingCommand`; the PowerShell token is now escaped (`'` → `''`), which the old literal did not do. Red `temp/107/q3-red.log`, green `temp/107/q3-green.log`.
-4. When the bootstrap installer replaces a stopped Agent with a registered service, the existing service definition is reused. Should a version change force re-registration so the unit/plist/task matches the new Agent?
+4. Resolved (coordinator decision): compare the installed definition with the new Agent's and re-register once only on a difference (`agent/test/core/setup/service_definition_inspector_test.dart`, client `service definition after replacing…` group; red `temp/107/q4-agent-red.log`, `temp/107/q4-client-red.log`; green `temp/107/q4-agent-green.log`, `temp/107/q4-client-green.log`).

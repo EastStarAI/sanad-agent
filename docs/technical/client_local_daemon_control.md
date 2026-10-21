@@ -40,7 +40,13 @@ it the stopped Agent instead of starting the service first:
    `agentVersion`). An incompatible or non-starting newer executable is
    `downgradeRejected`.
 4. Register the service when needed, start it, and wait for target-version
-   health. A failure after replacing an existing executable restores the
+   health. After a verified replacement on macOS or Linux, an existing
+   registration is reused unless the new executable's read-only
+   `sanad service definition` report says the installed plist or systemd user
+   unit differs from the one it would generate (executable, arguments,
+   `SANAD_HOME`, and the plist's `SANAD_SERVICE_INSTANCE`); then the service is
+   re-registered exactly once. An unknown report reuses the registration.
+   Windows refreshes its Scheduled Task on every registration. A failure after replacing an existing executable restores the
    previous copy (see [Release and Update Architecture](update_architecture.md));
    success removes the `.rollback` copy.
 

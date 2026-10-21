@@ -14,7 +14,7 @@ import 'package:sanad_release_contract/release_contract.dart';
 ///   installation ([realInstallFromHelpProbe] records that hazard);
 /// - `service install --user-scope` fails before v1.0.16.
 class FakeAgentCli {
-  FakeAgentCli(this.version, {this.serviceInstallFailure, this.versionOutput});
+  FakeAgentCli(this.version, {this.serviceInstallFailure, this.versionOutput, this.definitionMatches = true});
 
   /// Version of the executable currently on disk; tests change it when a fake
   /// bootstrap replaces the binary.
@@ -25,6 +25,10 @@ class FakeAgentCli {
 
   /// Overrides the complete `--version` stdout.
   String? versionOutput;
+
+  /// What `service definition` reports for an installed service; null makes
+  /// the command unknown, as on releases before it existed.
+  bool? definitionMatches;
 
   final List<List<String>> calls = [];
   bool realInstallFromHelpProbe = false;
@@ -79,6 +83,11 @@ class FakeAgentCli {
       if (failure != null) return ProcessResult(1, 1, '', failure);
       serviceInstalled = true;
       return ProcessResult(1, 0, 'Service operation completed successfully.', '');
+    }
+    if (arguments.length == 2 && arguments[0] == 'service' && arguments[1] == 'definition') {
+      final matches = definitionMatches;
+      if (matches == null) return ProcessResult(1, 64, '', 'Could not find a subcommand named "definition".');
+      return ProcessResult(1, 0, '{"platform":"linux","supported":true,"installed":true,"matches":$matches}', '');
     }
     if (arguments.length == 2 && arguments[0] == 'service' && arguments[1] == 'start') {
       started = true;

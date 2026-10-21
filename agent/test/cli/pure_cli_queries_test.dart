@@ -42,6 +42,7 @@ void main() {
     ['service', 'install', '--help'],
     ['chat', '--help'],
     ['update', '-h'],
+    ['service', 'definition'],
   ];
 
   for (final query in queries) {

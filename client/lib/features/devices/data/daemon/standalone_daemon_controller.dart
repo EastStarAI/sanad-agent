@@ -420,7 +420,10 @@ class StandaloneDaemonController implements LocalDaemonController {
       );
     }
 
-    final outcome = await _registerAndStartService() ?? await _waitForTargetVersion(targetVersion);
+    final refreshRegistration = replacesExisting && await _installedDefinitionDiffers();
+    final outcome =
+        await _registerAndStartService(forceRegistration: refreshRegistration) ??
+        await _waitForTargetVersion(targetVersion);
     if (outcome.isSuccess) {
       // The replacement is healthy at the target; a rollback is no longer possible.
       await _discardRollback();
@@ -460,10 +463,28 @@ class StandaloneDaemonController implements LocalDaemonController {
     }
   }
 
-  /// Registers the service when needed and starts it. Returns null on success
-  /// or the failing lifecycle result.
-  Future<AgentLifecycleResult?> _registerAndStartService() async {
-    if (!isServiceInstalled() || _isWindows) {
+  /// Whether the registered launchd/systemd definition differs from the one
+  /// the newly installed agent would generate (`sanad service definition`).
+  /// Windows always refreshes its task, and an unknown answer reuses the
+  /// existing registration so it is never repeated needlessly.
+  Future<bool> _installedDefinitionDiffers() async {
+    if (_isWindows || !isServiceInstalled()) return false;
+    final probe = await _probeExecutable(getExecutablePath(), const ['service', 'definition']);
+    if (probe == null || probe.exitCode != 0) return false;
+    try {
+      final report = jsonDecode(probe.stdout.toString());
+      final differs = report is Map && report['installed'] == true && report['matches'] == false;
+      if (differs) _logger.info('Registered service definition differs from the updated agent; re-registering.');
+      return differs;
+    } on FormatException {
+      return false;
+    }
+  }
+
+  /// Registers the service when needed (or when [forceRegistration]) and
+  /// starts it. Returns null on success or the failing lifecycle result.
+  Future<AgentLifecycleResult?> _registerAndStartService({bool forceRegistration = false}) async {
+    if (forceRegistration || !isServiceInstalled() || _isWindows) {
       final registration = await registerService();
       if (!registration.succeeded) {
         return AgentLifecycleResult(

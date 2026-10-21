@@ -191,6 +191,9 @@ sanad service restart
 sanad service uninstall
 ```
 
+`sanad service definition` prints, as JSON, whether the registered service
+definition matches the one this Agent would install. It is read-only.
+
 Closing Sanad Client does not stop an installed agent service. Active or
 scheduled work can continue on the device while the service is running.
 

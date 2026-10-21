@@ -55,6 +55,8 @@ Test Home and a unique service instance.
 | L6 | macOS, `SANAD_RELEASE_ARTIFACT_MIRROR_URL` build pointing at a mirror serving a re-signed or unsigned candidate with matching manifest size/SHA-256 | **Run Sanad Locally** or `sanad update` | `trust_failed` with `stage=publisher_requirement` or `stage=codesign_verification`; no user path in the message; previous executable unchanged |
 | L7 | any trust failure from L6 via `sanad update` | read the CLI output | the platform-appropriate official installer command and the service-restart warning |
 
+L4 live is skipped by user decision (2026-10-21); it is covered by automated tests (`aaa7212d`). L2's rollback removal is covered by automated tests; L2 itself passed live in macOS r1.
+
 L1–L5 need a real install or registration and therefore the isolation above.
 L6 needs a private mirror candidate as described under isolated candidate
 verification in the update architecture; it never touches a public release.

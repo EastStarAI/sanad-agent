@@ -399,6 +399,36 @@ void main() {
       expect(executable.readAsStringSync(), 'agent 1.0.18');
     });
 
+    group('service definition after replacing a stopped agent with a registered service', () {
+      Iterable<List<String>> registrations(FakeAgentCli cli) =>
+          cli.calls.where((call) => call.length >= 2 && call[0] == 'service' && call[1] == 'install');
+
+      for (final (matches, expectedRegistrations) in [(true, 0), (null, 0), (false, 1)]) {
+        test('definition matches=$matches registers $expectedRegistrations time(s)', () async {
+          registerLinuxService();
+          executable.writeAsStringSync('agent 1.0.15');
+          final cli = FakeAgentCli('1.0.15', definitionMatches: matches);
+          final controller = controllerFor(cli, installer: replacingInstaller(cli));
+
+          final result = await controller.updateDaemon(targetVersion: '1.0.17');
+
+          expect(result.status, AgentLifecycleStatus.ready);
+          expect(cli.calls, anyElement(equals(['service', 'definition'])), reason: 'the new binary is asked');
+          expect(registrations(cli), hasLength(expectedRegistrations));
+        });
+      }
+
+      test('a reused compatible agent is not re-checked', () async {
+        registerLinuxService();
+        executable.writeAsStringSync('agent 1.0.17');
+        final cli = FakeAgentCli('1.0.17', definitionMatches: false);
+        final controller = controllerFor(cli);
+
+        expect((await controller.updateDaemon(targetVersion: '1.0.17')).status, AgentLifecycleStatus.ready);
+        expect(cli.calls, isNot(anyElement(equals(['service', 'definition']))));
+      });
+    });
+
     test('a hung executable probe is bounded and treated as unknown', () async {
       executable.writeAsStringSync('agent hung');
       final cli = FakeAgentCli('1.0.17');

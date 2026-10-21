@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import '../../../core/setup/service_definition_inspector.dart';
 import '../../../core/setup/service_manager.dart';
 import '../sanad_command.dart';
 
@@ -37,6 +39,7 @@ class ServiceCommand extends SanadCommand {
         customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
       ),
     );
+    addSubcommand(ServiceDefinitionCommand(customAction: customAction));
     addSubcommand(
       ServiceRestartCommand(
         onService: onService,
@@ -215,5 +218,24 @@ class ServiceRestartCommand extends SanadCommand {
     }
     final result = await ServiceManager.restart();
     return result.success ? 0 : 1;
+  }
+}
+
+/// Read-only report comparing the installed service definition with the one
+/// this Agent would install. It never writes, registers, or starts anything.
+class ServiceDefinitionCommand extends SanadCommand {
+  ServiceDefinitionCommand({super.customAction});
+
+  @override
+  String get name => 'definition';
+
+  @override
+  String get description =>
+      'Print, as JSON, whether the installed service definition matches this Agent';
+
+  @override
+  Future<int> execute() async {
+    stdoutSink.writeln(jsonEncode(ServiceDefinitionInspector.report()));
+    return 0;
   }
 }

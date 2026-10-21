@@ -340,7 +340,8 @@ class SanadCommandRunner extends CommandRunner<int> {
   }
 
   /// Guards early daemon execution before Home bootstrap and process supervisor startup.
-  /// Whether [arguments] only print version or usage text.
+  /// Whether [arguments] only print version or usage text, or the read-only
+  /// `service definition` report.
   ///
   /// Such queries run before any Sanad Home preparation and never create or
   /// write anything there: installed-agent probes (`--version`,
@@ -359,6 +360,9 @@ class SanadCommandRunner extends CommandRunner<int> {
     if (results['version'] == true || results['help'] == true) return true;
     final name = results.command?.name;
     if (name == 'version' || name == 'help') return true;
+    if (name == 'service' && results.command?.command?.name == 'definition') {
+      return true;
+    }
     for (
       var command = results.command;
       command != null;
