@@ -176,6 +176,7 @@ Logs live under `temp/107/` in the worktree (gitignored).
 - D17/D18 round (red first, `temp/107/l4-red.log`: 6 behavioral failures with the API stub; green `temp/107/l4-green-focused.log`: `+88`):
   - Client full `+1780 ~1` (`temp/107/client-full-r2.log`); analyzers clean (`temp/107/*-analyze-r2.log`).
   - Agent full first run hit one known-racy, 107-unrelated test (`test/cli/run_delegation_test.dart` reads `result.json` before it exists; 3/3 green alone) (`temp/107/agent-full-r2.log`); rerun `+3065 ~14` all passed (`temp/107/agent-full-r2b.log`).
+- Round 3 (Q1/Q3/Q4, coordinator decisions): agent full `+3083 ~14` (`temp/107/agent-full-r3.log`), client full `+1786 ~1` (`temp/107/client-full-r3.log`), Agent, release contract, and Client analyzers clean (`temp/107/*-analyze-r3.log`).
 - `scripts/lint_wiki.dart`: only the existing `third_party_skills_install_qa.md` indexing error, also present on `origin/main`.
 - `shellcheck`: not installed; installer scripts are unchanged by this task, and neither supports a dry run.
 
