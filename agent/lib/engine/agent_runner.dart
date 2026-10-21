@@ -13,6 +13,7 @@ import '../core/models/llm_usage_snapshot.dart';
 import '../capabilities/registry/tools_registry.dart';
 import '../capabilities/models/tool_schema.dart';
 import '../capabilities/tools/memory_tool.dart';
+import 'adapters/provider_history_projection_exception.dart';
 import 'adapters/llm_adapter.dart';
 import 'adapters/llm_request_options.dart';
 import '../core/di.dart';
@@ -1525,6 +1526,28 @@ class AgentRunner {
         reason: reason,
         title: 'Image input not supported',
         message: error.userMessage,
+        providerInstanceId: providerInstanceId,
+        providerDisplayName: displayName,
+        requestId: _turnRoute.turnRequestId,
+        retryAfter: null,
+        forceBlocked: true,
+        runId: _authoritativeRunId,
+      );
+      throw RuntimeRecoveryRequired(sessionId, reason);
+    }
+    // History with no truthful wire representation for this route is rejected
+    // before dispatch: no failover, retry, thinking change or history change.
+    if (error is ProviderHistoryProjectionException) {
+      const reason = RuntimeFailureReason.invalidRequest;
+      final displayName = recovery.providerDisplayName(providerInstanceId);
+      recovery.reportFailure(
+        sessionId: sessionId,
+        reason: reason,
+        title: 'Conversation history not supported by this model',
+        message: error.userMessage(
+          providerDisplayName: displayName ?? 'this provider',
+          modelId: modelId,
+        ),
         providerInstanceId: providerInstanceId,
         providerDisplayName: displayName,
         requestId: _turnRoute.turnRequestId,

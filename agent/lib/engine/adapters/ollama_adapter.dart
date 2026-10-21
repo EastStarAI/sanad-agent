@@ -236,6 +236,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     required LLMRequestOptions options,
     List<ToolSchema>? tools,
     bool stream = false,
+    // Native Ollama projects only portable fields and never replays reasoning,
+    // so it has no history shape to reject (Task 116 D6).
+    bool enforceProjection = true,
   }) async {
     final messages = await _prepareMessages(
       history,

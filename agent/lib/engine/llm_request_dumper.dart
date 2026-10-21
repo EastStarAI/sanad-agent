@@ -787,11 +787,19 @@ class LLMRequestDumper {
     }
   }
 
-  /// Mask sensitive API keys, keeping only the first 8 and last 4 characters.
+  /// Records only credential presence. No prefix or suffix of a credential
+  /// is ever written: providers issue keys without recognizable prefixes, so
+  /// any retained fragment is an unbounded partial disclosure (Task 116).
   static String? _maskApiKey(String? key) {
     if (key == null || key.isEmpty) return null;
-    if (key.length <= 12) return '***';
-    return '${key.substring(0, 8)}...${key.substring(key.length - 4)}';
+    return '***';
+  }
+
+  /// Masks a scalar value stored under a credential-bearing field or header
+  /// name, keeping only the non-secret `Bearer` scheme marker.
+  static Object? _maskSensitiveScalar(Object? value) {
+    if (value is! String || value.isEmpty) return value;
+    return value.toLowerCase().startsWith('bearer ') ? 'Bearer ***' : '***';
   }
 
   /// Serialize error objects including custom status code and response body details.
@@ -848,6 +856,11 @@ class LLMRequestDumper {
           if (child is String) {
             return MapEntry(key, _sanitizeNativeImage(child));
           }
+        }
+        if (key is String &&
+            child is String &&
+            _redactor.isSensitiveFieldName(key)) {
+          return MapEntry(key, _maskSensitiveScalar(child));
         }
         return MapEntry(key, _sanitizePayload(child));
       });

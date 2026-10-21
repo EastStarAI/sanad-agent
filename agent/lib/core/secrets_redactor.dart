@@ -34,7 +34,7 @@ class SecretsRedactor {
     caseSensitive: false,
   );
   static final RegExp _sensitiveFieldName = RegExp(
-    r'^(authorization|x-api-key|x-amz-security-token|api[_-]?key|apikey|secret|secrets|token|password|access[_-]?token|refresh[_-]?token)$',
+    r'^(authorization|proxy-authorization|x-api-key|x-goog-api-key|x-amz-security-token|api[_-]?key|apikey|secret|secrets|token|password|access[_-]?token|refresh[_-]?token)$',
     caseSensitive: false,
   );
 
@@ -57,6 +57,10 @@ class SecretsRedactor {
     out = out.replaceAllMapped(_jsonField, (m) => '"${m[1]}": "***"');
     return out;
   }
+
+  /// Whether [key] names a credential-bearing field or header (for example
+  /// `Authorization`, `x-api-key`, `api-key`, `api_key`, `token`).
+  bool isSensitiveFieldName(String key) => _sensitiveFieldName.hasMatch(key);
 
   /// Recursively redacts secret-shaped substrings from JSON-compatible values.
   ///
