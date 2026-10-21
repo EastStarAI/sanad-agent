@@ -341,14 +341,14 @@ class SessionRecoveryRestorer {
           item.continuationMetadata['currently_executing_tools'] as List? ??
               const [],
         );
-        final suspendedToolCallIds =
-            suspendedToolCallIdsBySession[sessionId] ?? const <String>{};
-        // A pending user-input wait that was claimed but never resolved must
-        // return to `waiting` rather than inherit unknown-outcome tool
-        // recovery, which would terminalize the unresolved question.
-        if (_isUnresolvedInteractiveWait(executingTools, suspendedToolCallIds)) {
+        final decisionReadyToolCallIds =
+            decisionReadyToolCallIdsBySession[sessionId] ?? const <String>{};
+        final hasRecoverableDecision =
+            executingTools.isNotEmpty &&
+            executingTools.every(decisionReadyToolCallIds.contains);
+        if (hasRecoverableDecision) {
           _logger.info(
-            'Reclassifying interrupted interactive wait for work item '
+            'Reclassifying interrupted resolved input for work item '
             '${item.workItemId} to waiting before reclaim.',
           );
           store.transitionWorkItemState(
@@ -358,14 +358,19 @@ class SessionRecoveryRestorer {
           );
           continue;
         }
-        final decisionReadyToolCallIds =
-            decisionReadyToolCallIdsBySession[sessionId] ?? const <String>{};
-        final hasRecoverableDecision =
-            executingTools.isNotEmpty &&
-            executingTools.every(decisionReadyToolCallIds.contains);
-        if (hasRecoverableDecision) {
+        final suspendedToolCallIds =
+            suspendedToolCallIdsBySession[sessionId] ?? const <String>{};
+        // Checked after the decision-ready branch: the suspended set also
+        // holds `decision_ready` ids. A pending user-input wait that was
+        // claimed but never answered must return to `waiting` rather than
+        // inherit unknown-outcome tool recovery, which would terminalize the
+        // unresolved question.
+        if (_isUnresolvedInteractiveWait(
+          executingTools,
+          suspendedToolCallIds,
+        )) {
           _logger.info(
-            'Reclassifying interrupted resolved input for work item '
+            'Reclassifying interrupted interactive wait for work item '
             '${item.workItemId} to waiting before reclaim.',
           );
           store.transitionWorkItemState(

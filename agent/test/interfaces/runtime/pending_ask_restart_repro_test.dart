@@ -8,6 +8,7 @@
 // database so the exact persisted shapes written by the real runtime flow
 // through startup recovery.
 
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
@@ -78,6 +79,7 @@ void main() {
     SessionWorkState workItemState = SessionWorkState.running,
     String toolName = 'system_ask_user',
     bool withCheckpoint = true,
+    String checkpointStatus = 'awaiting_permission',
   }) async {
     sessionManager.saveSessionHistory(sessionId, [
       Message(
@@ -110,7 +112,10 @@ void main() {
           requestId: requestId,
           toolCallId: toolCallId,
           toolName: toolName,
-          status: 'awaiting_permission',
+          status: checkpointStatus,
+          resolvedDecision: checkpointStatus == 'decision_ready'
+              ? const {'answer': 'staging'}
+              : null,
           toolArguments: const {
             'questions': [
               {'question': 'Which target?', 'options': <String>[]},
@@ -153,6 +158,25 @@ void main() {
     );
   }
 
+  /// Runs startup recovery and returns the restorer's log messages.
+  Future<List<String>> restoreCapturingRestorerLogs([
+    SessionRunOrchestrator? orchestrator,
+  ]) async {
+    final previousLevel = Logger.root.level;
+    Logger.root.level = Level.ALL;
+    final messages = <String>[];
+    final subscription = Logger.root.onRecord
+        .where((record) => record.loggerName == 'SessionRecoveryRestorer')
+        .listen((record) => messages.add(record.message));
+    try {
+      await (orchestrator ?? SessionRunOrchestrator()).restorePersistedState();
+    } finally {
+      await subscription.cancel();
+      Logger.root.level = previousLevel;
+    }
+    return messages;
+  }
+
   bool historyHasToolResultFor(String id) => sessionManager
       .getSession(sessionId)!
       .messages
@@ -185,23 +209,20 @@ void main() {
     },
   );
 
-  test(
-    'restored interactive wait stays answerable after restart',
-    () async {
-      await seedKilledMidAsk();
-      final orchestrator = SessionRunOrchestrator();
-      await orchestrator.restorePersistedState();
+  test('restored interactive wait stays answerable after restart', () async {
+    await seedKilledMidAsk();
+    final orchestrator = SessionRunOrchestrator();
+    await orchestrator.restorePersistedState();
 
-      // The pending question stays discoverable for clients after restart.
-      final pending = await checkpointStore.getByRequestId(requestId);
-      expect(pending?.toolName, 'system_ask_user');
-      expect(pending?.sessionId, sessionId);
-      expect(
-        (pending?.permissionPayload['questions'] as List?)?.length,
-        greaterThan(0),
-      );
-    },
-  );
+    // The pending question stays discoverable for clients after restart.
+    final pending = await checkpointStore.getByRequestId(requestId);
+    expect(pending?.toolName, 'system_ask_user');
+    expect(pending?.sessionId, sessionId);
+    expect(
+      (pending?.permissionPayload['questions'] as List?)?.length,
+      greaterThan(0),
+    );
+  });
 
   test(
     'abrupt kill while claiming the wait does not terminalize the pending ask',
@@ -211,8 +232,14 @@ void main() {
       // call never re-ran. The pending question must survive as a wait.
       await seedKilledMidAsk(workItemState: SessionWorkState.resuming);
 
-      final orchestrator = SessionRunOrchestrator();
-      await orchestrator.restorePersistedState();
+      final logs = await restoreCapturingRestorerLogs();
+      expect(
+        logs,
+        contains(
+          'Reclassifying interrupted interactive wait for work item '
+          '$workItemId to waiting before reclaim.',
+        ),
+      );
 
       final workItem = persisted.findWorkItem(workItemId);
       expect(
@@ -231,6 +258,52 @@ void main() {
       expect(historyHasToolResultFor(toolCallId), isFalse);
     },
   );
+
+  test('abrupt kill while reclaiming a resolved decision still reaches the '
+      'decision-ready branch', () async {
+    // The suspended set also contains `decision_ready` ids, so the
+    // unresolved-wait guard must not shadow the decision-ready branch: an
+    // answered decision keeps its own outcome (`waiting`, answer intact)
+    // and its own diagnostic.
+    await seedKilledMidAsk(
+      workItemState: SessionWorkState.resuming,
+      checkpointStatus: 'decision_ready',
+    );
+
+    // Production wires the persisted-decision resumer, which is what makes
+    // startup list `decision_ready` checkpoints at all. It accepts the reclaim
+    // without claiming so the reclassified state stays observable.
+    final logs = await restoreCapturingRestorerLogs(
+      SessionRunOrchestrator(
+        resumePersistedSuspendedDecision:
+            ({required checkpoint, required emitResponse}) async => true,
+      ),
+    );
+
+    expect(
+      logs,
+      contains(
+        'Reclassifying interrupted resolved input for work item '
+        '$workItemId to waiting before reclaim.',
+      ),
+    );
+    expect(
+      logs.where((m) => m.contains('Reclassifying interrupted interactive')),
+      isEmpty,
+    );
+    final workItem = persisted.findWorkItem(workItemId);
+    expect(workItem?.state, SessionWorkState.waiting);
+    expect(
+      workItem
+          ?.continuationMetadata['auto_recover_interrupted_tools_as_unknown'],
+      isNull,
+    );
+    expect(
+      (await checkpointStore.getByRequestId(requestId))?.status,
+      'decision_ready',
+    );
+    expect(historyHasToolResultFor(toolCallId), isFalse);
+  });
 
   test(
     'abrupt kill mid-permission-prompt restores the prompt as a wait',

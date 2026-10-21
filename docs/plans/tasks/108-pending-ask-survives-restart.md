@@ -41,6 +41,8 @@ Error: Tool execution was interrupted before completion could be confirmed. The 
 
 **Fix (G1):** extract `_isUnresolvedInteractiveWait(executingTools, suspendedToolCallIds)` and apply it in all three classification sites, closing the `resuming` hole and de-duplicating the previously repeated predicate. Mixed batches (some tools side-effected, some checkpoint-pending) keep today's ambiguous behavior by design.
 
+**Ordering correction (2026-10-21):** the suspended set holds every non-`executing_tool` checkpoint, including `decision_ready`. In the `resuming` loop the new guard therefore shadowed the existing decision-ready branch (same `waiting` outcome, but that branch and its diagnostic became unreachable). The guard now runs after the decision-ready check. A pure reorder was chosen over a narrower `awaiting_permission`-only set because the suspended set is shared by the `running`, `blocked`, and provable-waiting checks, where including answered decisions is intended; a second set would split that one definition.
+
 ### G1 — Fix
 - [x] Exclude user-interaction tool calls (`system_ask_user`, permission-gated tools awaiting a decision) from ambiguous/unknown terminalization during resume classification.
 - [x] Route them to the existing suspended-checkpoint / pending-input restore path so the question is re-armed as pending.
@@ -50,10 +52,11 @@ Error: Tool execution was interrupted before completion could be confirmed. The 
 - [x] Unit/integration coverage: pending `system_ask_user` across forced shutdown → restore as pending (`agent/test/interfaces/runtime/pending_ask_restart_repro_test.dart`).
 - [x] Same coverage for a pending permission request.
 - [x] Coverage that non-idempotent tools with real side effects are not restored as waits.
+- [x] Coverage that a `resuming` owner whose checkpoint is `decision_ready` still reaches the decision-ready branch (outcome and diagnostic), proven failing before the ordering correction.
 
 ### G3 — Verification and docs
 - [x] `fvm dart analyze` clean in `agent/`.
-- [x] Focused tests pass; full fast agent suite passes (2084 tests).
+- [x] Focused tests pass; full fast agent suite passes (2084 tests on the original base; re-verified after the main merge, see Evidence).
 - [x] Update owning `AGENTS.md` / `docs/` statements that this behavior makes stale (incremental reverse documentation DoD).
 - [x] Run `graphify update .` after code changes.
 
@@ -70,4 +73,17 @@ Error: Tool execution was interrupted before completion could be confirmed. The 
 - [x] Documentation updated in the same session as the code change.
 - [x] Regression coverage exists for all three acceptance scenarios above.
 - [ ] PR delivered from this branch referencing plan 108 and issue #213.
-- [ ] Live behavioral verification on a managed runtime (pending user confirmation).
+- [ ] Live behavioral verification on a managed runtime (pending user confirmation; plan below).
+
+## Integration Evidence
+
+- 2026-10-21: merged `origin/main` (`f77f0571`) into the branch with no textual conflicts. Main's startup compaction-orphan reconciliation and the 106b/116/117 runtime changes do not touch `resuming` classification and compose with this guard.
+- After the merge and the ordering correction: `fvm dart analyze` clean; `pending_ask_restart_repro_test.dart` 6/6; `test/interfaces/runtime/` 114 passed; full agent suite 2923 passed, 14 skipped.
+
+## Live-check Plan (isolated Test Home)
+
+1. From the 108 worktree, start the worktree-scoped runtime with `sanad-dev run` and confirm with `sanad-dev status` that its Sanad Home is the worktree-isolated Test Home, never the primary or a shared test Home. A provider must be configured in that Home.
+2. Prompt the model to call `system_ask_user` and confirm the question is pending. Optional read-only evidence: work item `running`/`waiting` with the ask id in `currently_executing_tools`; checkpoint `awaiting_permission`.
+3. Abrupt stop: resolve the PID listening on that runtime's daemon port, verify it is the daemon child of the `HotRestartManager` supervisor and that its `SANAD_HOME` is the Test Home, then send `SIGKILL` to that PID only. The supervisor treats the non-zero exit as a crash and respawns the daemon with the same Home and ports. Without a supervisor, use `sanad-dev stop` and `sanad-dev run` from the same worktree.
+4. Pass: bounded agent logs show no interruption result and no blocked notice; the client still shows the pending question; answering it resumes and completes the turn with the answer as the tool result.
+5. Repeat with a second kill before answering, with a pending tool-permission prompt, and (best effort, racy) with a graceful `sanad-dev restart agent` immediately followed by the verified kill to hit the `resuming` path.
