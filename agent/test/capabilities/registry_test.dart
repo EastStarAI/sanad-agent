@@ -3,6 +3,7 @@ import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/runtime/spec_backed_tool.dart';
+import 'package:sanad_agent/capabilities/tools/schedule_task_tool.dart';
 
 class MockTool extends SpecBackedTool {
   @override
@@ -83,6 +84,39 @@ void main() {
       expect(schema.toJson().containsKey('permissions'), isFalse);
       expect(schema.toJson().containsKey('source'), isFalse);
       expect(schema.toJson().containsKey('execution'), isFalse);
+    });
+
+    test('lookup-only alias resolves tool, spec, and replay safety while catalog stays single', () {
+      final scheduleTool = ScheduleTaskTool();
+      registry.registerTool(scheduleTool);
+
+      // 1. Alias lookup resolves correctly
+      expect(registry.getTool('schedule_task'), same(scheduleTool));
+      expect(registry.getTool('list_scheduled_tasks'), same(scheduleTool));
+      expect(registry.getSpec('list_scheduled_tasks')?.name, 'schedule_task');
+      expect(registry.isRestartReplaySafe('list_scheduled_tasks'), isFalse);
+
+      // 2. Catalog stays single: alias does not create a second tool or spec entry
+      expect(registry.allTools.length, 1);
+      expect(registry.allSpecs.length, 1);
+      expect(registry.toRegisterAllToolsPayload().length, 1);
+      expect(
+        registry.toRegisterAllToolsPayload().single['name'],
+        'schedule_task',
+      );
+      expect(
+        registry.searchableTools().map((s) => s.name),
+        contains('schedule_task'),
+      );
+      expect(
+        registry.searchableTools().map((s) => s.name),
+        isNot(contains('list_scheduled_tasks')),
+      );
+
+      // 3. Cloning registry preserves the lookup-only alias
+      final clone = registry.copy();
+      expect(clone.getTool('list_scheduled_tasks'), isNotNull);
+      expect(clone.allTools.length, 1);
     });
   });
 }

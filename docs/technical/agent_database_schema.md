@@ -73,9 +73,20 @@ erDiagram
     scheduled_tasks {
         text id PK
         text task
-        text run_at
         text session_id
+        text kind
+        integer interval_minutes
+        text at_time
+        text weekdays
+        integer month_day
+        text zone
+        text next_run_at
+        text run_at
         text created_at
+        text updated_at
+        text last_run_at
+        text last_status
+        integer enabled
     }
     
     suspended_checkpoints {
@@ -224,15 +235,36 @@ Indexes (B1):
 See `docs/technical/context_compaction.md` §8 for activation CAS and Task 51/52 invalidation rules.
 
 ### 3.3. `scheduled_tasks` Table
-Tracks automation tasks and scheduled loops that the daemon runs asynchronously.
+Tracks automation tasks and scheduled recurring loops that the daemon runs asynchronously (Task 112a, Decision D8).
+
+Ownership: the table schema and its migration live in `AgentStateDatabase`; every read and write goes through `ScheduledTaskRepository` (`agent/lib/evolution/db/scheduled_task_repository.dart`) behind the `SessionDB` facade, and `CronScheduler` is the only caller that mutates rows. `sanad schedule list` reads the table through a separate read-only connection (`AgentStateDatabase.readOnlyAtPath`) and never migrates it; see `docs/technical/sanad_cli_architecture.md` §11.
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
 | `id` | `TEXT` | Primary Key | Unique task identifier |
-| `task` | `TEXT` | Non-null | Task details or command payload |
-| `run_at` | `TEXT` | Non-null | ISO8601 scheduled execution time |
+| `task` | `TEXT` | Non-null | Task details or command prompt to execute |
 | `session_id` | `TEXT` | Non-null | Originating conversation thread |
-| `created_at` | `TEXT` | Non-null | ISO8601 creation timestamp |
+| `kind` | `TEXT` | Non-null DEFAULT `'once'` | Recurrence kind (`once`, `interval`, `daily`, `weekly`, `monthly`) |
+| `interval_minutes` | `INTEGER` | Nullable | Interval duration in minutes (for `interval`) |
+| `at_time` | `TEXT` | Nullable | Wall-clock `HH:MM` time (for `daily`, `weekly`, `monthly`) |
+| `weekdays` | `TEXT` | Nullable | Comma-separated weekdays e.g. `mon,wed,fri` (for `weekly`) |
+| `month_day` | `INTEGER` | Nullable | Day of month 1..31 (for `monthly`) |
+| `zone` | `TEXT` | Non-null DEFAULT `'local'` | Timezone (`local` or fixed UTC offset `Z`, `+HH:MM`, `-HH:MM`) |
+| `next_run_at` | `TEXT` | Nullable only for rows an older agent inserted (backfilled at the next open); always written by the current agent | ISO8601 UTC timestamp of next scheduled execution; the only column the current agent reads for scheduling |
+| `run_at` | `TEXT` | Nullable on new tables; still `NOT NULL` on tables created before Task 112 | Legacy mirror of `next_run_at`, written on every save and never read for scheduling (only the read-only `sanad schedule list` inspection reads it, with the migration precedence), so an older agent (rollback) on the same Home keeps working |
+| `created_at` | `TEXT` | Non-null | ISO8601 UTC creation timestamp |
+| `updated_at` | `TEXT` | Nullable only for rows an older agent inserted (backfilled from `created_at` at the next open) | ISO8601 UTC last update timestamp |
+| `last_run_at` | `TEXT` | Nullable | ISO8601 UTC timestamp of previous execution (preserved without change on skipped occurrences) |
+| `last_status` | `TEXT` | Nullable | Status of previous execution (`fired`, `skipped_missed`, `error`) |
+| `enabled` | `INTEGER` | Non-null DEFAULT `1` | 1 if schedule is active (pause/resume is out of scope in this release; reserved for future lifecycle control) |
+
+#### Migration Note (Task 112a)
+Pre-existing rows from earlier versions migrate automatically via an idempotent guarded migration:
+- The migration is strictly additive: no column is renamed, dropped, or tightened. `run_at` is kept (and keeps its legacy `NOT NULL` on old tables); `next_run_at` and the D8 columns are added beside it as nullable or defaulted columns, so the pre-112 `INSERT (id, task, run_at, session_id, created_at)`, its `ON CONFLICT` upsert, and `SELECT ... ORDER BY run_at` keep working for an older agent on the same Home.
+- At every open, `next_run_at` takes the value of `run_at` wherever they differ (current writes keep them equal, so a difference means an older agent wrote last), and `run_at` is filled from `next_run_at` where it is empty.
+- Rows default to `kind = 'once'`, `zone = 'local'`, `enabled = 1`, and `updated_at = created_at`.
+- An index `idx_scheduled_tasks_next_run` is created on `next_run_at ASC`.
+- Repeated migration execution is an idempotent no-op.
 
 ### 3.4. `suspended_checkpoints` Table
 Persists agent execution states when suspended for manual user approvals or clarifying questions.
@@ -650,9 +682,12 @@ Stores durable informational route transitions. `SessionRouteTransitionRepositor
 | `source` | `TEXT` | Non-null, CHECK constraint | `user`, `recovery`, or `auto_failover` |
 | `previous_provider_instance_id` | `TEXT` | Nullable | Provider route before the mutation |
 | `provider_instance_id` | `TEXT` | Non-null | Confirmed provider route after the mutation |
+| `previous_provider_display_name` | `TEXT` | Nullable | Display name snapshot of the previous provider |
+| `provider_display_name` | `TEXT` | Nullable | Display name snapshot of the confirmed provider |
 | `model` | `TEXT` | Non-null | Confirmed exact model identifier |
 | `reason` | `TEXT` | Nullable | Machine-readable mutation reason |
 | `request_id` | `TEXT` | Nullable | Triggering request identity |
+| `anchor_message_id` | `TEXT` | Nullable (additive) | `message_id` of the newest active message when an automatic failover committed; history inserts the notice right after it. Null for legacy rows and route changes outside a turn |
 | `created_at` | `TEXT` | Non-null | UTC ISO8601 transition timestamp |
 
 `PRIMARY KEY (session_id, route_revision)` prevents two logical transitions from sharing a session revision. The unique `event_id` prevents the same logical event from being recorded under another session or revision. No route event is generated by schema migration.

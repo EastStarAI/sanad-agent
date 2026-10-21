@@ -535,6 +535,65 @@ void main() {
     );
   });
 
+  List<CanonicalEvent> continuedForkTimeline() => [
+    for (var i = 0; i < 1000; i += 1)
+      _event(
+        'fork-old-$i',
+        EventKind.finalAnswer,
+        'fork old answer $i',
+        eventId: 'history:session-1:$i:final_answer:0',
+      ),
+    CanonicalEvent(
+      id: 'fork_child-2',
+      kind: EventKind.informational,
+      text: 'Conversation forked',
+      timestamp: DateTime.utc(2026, 8, 31),
+      metadata: const {
+        'informational_kind': 'session_fork',
+        'fork_sequence': 1,
+      },
+    ),
+    for (var i = 0; i < 30; i += 1) ...[
+      _event('child-user-$i', EventKind.userMessage, 'child prompt $i'),
+      _event('child-answer-$i', EventKind.finalAnswer, 'child answer $i'),
+    ],
+  ];
+
+  testWidgets('continued fork child (marker no longer trailing) opens at its latest prompt', (tester) async {
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: continuedForkTimeline(),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('child prompt 29'), findsOneWidget);
+    expect(find.text('Conversation forked'), findsNothing);
+  });
+
+  testWidgets('continued fork child restores a saved position above the marker', (tester) async {
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: continuedForkTimeline(),
+      initialViewportAnchorEventId: 'history:session-1:500:final_answer:0',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('fork old answer 500'), findsOneWidget);
+    expect(find.text('child answer 29'), findsNothing);
+  });
+
   testWidgets('restores a saved event for an idle session', (tester) async {
     final messages = [
       for (var i = 0; i < 1000; i += 1) _event('old-$i', EventKind.finalAnswer, 'old answer $i'),

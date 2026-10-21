@@ -390,6 +390,117 @@ class SessionMessageRepository {
     return rows.isEmpty ? null : persistedMessageFromRow(rows.first).message;
   }
 
+  /// The `message_id` of the newest active row, i.e. the last durable
+  /// timeline position at the time of the call (route-transition anchor).
+  String? latestActiveMessageId(String sessionId) {
+    final rows = _db.select(
+      '''
+      SELECT message_id FROM messages
+      WHERE session_id = ?
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id DESC
+      LIMIT 1
+      ''',
+      [sessionId],
+    );
+    if (rows.isEmpty) return null;
+    final id = rows.first['message_id'] as String?;
+    return id == null || id.isEmpty ? null : id;
+  }
+
+  /// Row id of the active row carrying [messageId], or null when that
+  /// identity is absent or superseded.
+  int? activeRowIdForMessageId(String sessionId, String messageId) {
+    final rows = _db.select(
+      '''
+      SELECT id FROM messages
+      WHERE session_id = ? AND message_id = ?
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id DESC
+      LIMIT 1
+      ''',
+      [sessionId, messageId],
+    );
+    return rows.isEmpty ? null : rows.first['id'] as int;
+  }
+
+  /// Row id of the active root user row that accepted [requestId].
+  int? activeRootRowIdForRequest(String sessionId, String requestId) {
+    final rows = _db.select(
+      '''
+      SELECT id FROM messages
+      WHERE session_id = ? AND request_id = ?
+        AND (input_kind IS NULL OR input_kind = 'root_turn')
+        AND json_extract(data, '\$.role') = 'user'
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id ASC
+      LIMIT 1
+      ''',
+      [sessionId, requestId],
+    );
+    return rows.isEmpty ? null : rows.first['id'] as int;
+  }
+
+  /// Session-scoped anchor for a legacy route notice without
+  /// `anchor_message_id`: the newest active tool-result row of [requestId]'s
+  /// turn whose `terminal_at` is no later than [at], else the turn's root user
+  /// row. Null when the request has no active root row. Page-independent, so
+  /// the notice lands on exactly one page.
+  int? legacyRouteNoticeAnchorRowId(
+    String sessionId,
+    String requestId,
+    DateTime at,
+  ) {
+    final rootRowId = activeRootRowIdForRequest(sessionId, requestId);
+    if (rootRowId == null) return null;
+    final nextRoot = _db.select(
+      '''
+      SELECT MIN(id) AS id FROM messages
+      WHERE session_id = ? AND id > ?
+        AND (input_kind IS NULL OR input_kind = 'root_turn')
+        AND json_extract(data, '\$.role') = 'user'
+        AND (history_status = 'active' OR history_status IS NULL)
+      ''',
+      [sessionId, rootRowId],
+    );
+    final turnEnd = nextRoot.isEmpty ? null : nextRoot.first['id'] as int?;
+    final toolRows = _db.select(
+      '''
+      SELECT id, json_extract(data, '\$.metadata.terminal_at') AS terminal_at
+      FROM messages
+      WHERE session_id = ? AND id > ? ${turnEnd == null ? '' : 'AND id < ?'}
+        AND json_extract(data, '\$.role') = 'tool'
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id DESC
+      ''',
+      [sessionId, rootRowId, ?turnEnd],
+    );
+    for (final row in toolRows) {
+      final terminalAt = DateTime.tryParse(
+        row['terminal_at']?.toString() ?? '',
+      );
+      if (terminalAt != null && !terminalAt.isAfter(at)) {
+        return row['id'] as int;
+      }
+    }
+    return rootRowId;
+  }
+
+  /// Row id of the newest active row copied by a fork (`origin_message_id`
+  /// set): the end of a child's copied prefix. Post-fork rows never carry an
+  /// origin, so the answer is page-independent.
+  int? lastActiveForkCopiedRowId(String sessionId) {
+    final rows = _db.select(
+      '''
+      SELECT MAX(id) AS id FROM messages
+      WHERE session_id = ? AND origin_message_id IS NOT NULL
+        AND (history_status = 'active' OR history_status IS NULL)
+      ''',
+      [sessionId],
+    );
+    return rows.isEmpty ? null : rows.first['id'] as int?;
+  }
+
   PersistedMessage persistedMessageFromRow(Row row) {
     return PersistedMessage(
       rowId: row['id'] as int,

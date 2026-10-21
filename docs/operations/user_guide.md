@@ -417,6 +417,10 @@ sanad models
 
 # Inspect configured AI providers
 sanad providers
+
+# List scheduled tasks of the selected Home (read-only; add --json for scripts)
+sanad schedule list
+sanad schedule list --json --home /path/to/home
 ```
 
 ## Included skills

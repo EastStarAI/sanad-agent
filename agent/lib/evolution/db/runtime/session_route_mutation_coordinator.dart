@@ -67,6 +67,7 @@ class SessionRouteMutationCoordinator {
     required String model,
     required String reason,
     String? requestId,
+    String? anchorMessageId,
     bool publish = false,
   }) {
     if (workItemId == null || runId == null || generation == null) return null;
@@ -150,6 +151,7 @@ class SessionRouteMutationCoordinator {
           model: normalizedModel,
           reason: reason,
           requestId: requestId,
+          anchorMessageId: anchorMessageId,
           createdAt: updatedAt,
         ),
         transaction: tx,
@@ -194,6 +196,7 @@ class SessionRouteMutationCoordinator {
     required SessionRouteSource source,
     String? reason,
     String? requestId,
+    String? anchorMessageId,
     bool publish = false,
   }) {
     final normalizedProvider = providerInstanceId.trim();
@@ -280,6 +283,7 @@ class SessionRouteMutationCoordinator {
           model: normalizedModel,
           reason: reason,
           requestId: requestId,
+          anchorMessageId: anchorMessageId,
           createdAt: updatedAt,
         ),
         transaction: tx,

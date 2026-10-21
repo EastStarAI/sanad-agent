@@ -1659,6 +1659,10 @@ class AgentRunner
   void saveHistory() => _saveHistory();
 
   @override
+  String? latestPersistedMessageId() =>
+      sessionManager.latestActiveMessageId(sessionId);
+
+  @override
   String assembleSystemPrompt() => contextAssembler.assemble() ?? '';
 
   @override

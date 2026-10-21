@@ -35,14 +35,18 @@ All items share one `run_id`. The three assistant segments have distinct `model_
 16. Live and history tool execution events maintain identical error status parity (a tool failing with an error in the live run is hydrated as a tool error event in history).
 17. User Stop during a running tool publishes `tool_result.status = cancelled` live and hydrates the same run/generation/revision, reason, cleanup outcome, start time, and terminal time after reload; repeated Stop or late success does not add a second terminal revision, and `stopped` defensively closes any same-run tool that missed the terminal packet without leaving a spinner.
 18. After a Local Gateway session is bound to a logical conversation device id, an unrelated hardware-scoped command on the same WebSocket cannot retag subsequent `tool_use`, `tool_result`, execution-state, or final-answer events. The client EventRouter receives them on the original session device stream without requiring navigation or history hydration.
+19. An automatic failover renders its `session_route_transition` notice after the last row the user saw live (for a failover after a tool step: after that tool result, before the next model output). Reloaded history places it in the same position with the same `route_<session>_<revision>` identity, text and `auto_failover` source; a live-plus-reload merge keeps one notice. Paged history shows it once, on the page holding its anchor. User and recovery route changes produce no notice either live or in history.
+20. A continued fork child keeps `session.forked` between the copied prefix and the post-fork turns on reload and on every page edge, and opens like any session rather than at the marker.
 
 ## Automated ownership
 
 - Agent translation/history coverage: `agent/test/interfaces/sanad_bridge_test.dart`
 - Agent run and tool lifecycle: `agent/test/engine/agent_runner_test.dart`
+- Agent informational-event placement and paging (fork marker, failover anchor, legacy fallback): `agent/test/interfaces/platforms/sanad_gateway/session_informational_event_order_test.dart`; live failover anchor through the runner: `agent/test/engine/route_transition_anchor_test.dart`
 - Tagged reasoning parser and OpenAI-compatible streaming: `agent/test/engine/adapters/tagged_reasoning_parser_test.dart`, `agent/test/engine/adapters_test.dart`
 - Client mapping/state cleanup: `client/test/unit/models/canonical_event_test.dart`
 - Client history hydration: `client/test/unit/services/device_conversation_commands_test.dart`
+- Client failover-notice live/history parity: `client/test/unit/stores/informational_event_parity_test.dart`; fork opening position: `client/test/widget/brain_activity_view_scroll_test.dart`
 - Client Stop fallback and live terminal ordering: `client/test/unit/services/device_conversation_event_handler_test.dart`
 - Client cancelled-state presentation: `client/test/widget/tool_group_tile_test.dart`
 - Client failure/retry presentation: `client/test/unit/bloc/session_cubit_test.dart`

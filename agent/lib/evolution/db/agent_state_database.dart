@@ -89,6 +89,34 @@ class AgentStateDatabase {
     _openAtPath(stateHomePath);
   }
 
+  /// Opens an existing `state.db` under [stateHomePath] strictly read-only for
+  /// CLI inspection while the daemon may own the Home.
+  ///
+  /// The connection uses SQLite `OpenMode.readOnly` plus `PRAGMA query_only`,
+  /// and runs no Home bootstrap, schema creation, migration, WAL switch or
+  /// permission repair, so it never writes the database. Throws
+  /// [SqliteException] when the file does not exist; callers check first.
+  AgentStateDatabase.readOnlyAtPath(String stateHomePath)
+    : _busyRetryWait = sleep {
+    ensureSqliteOverride();
+    _db = sqlite3.open(
+      p.join(stateHomePath, stateDatabaseFileName),
+      mode: OpenMode.readOnly,
+    );
+    _owned = true;
+    try {
+      _db.execute('PRAGMA busy_timeout = 5000');
+      _db.execute('PRAGMA query_only = ON');
+    } catch (_) {
+      _db.dispose();
+      _owned = false;
+      rethrow;
+    }
+  }
+
+  /// File name of the agent-state database inside a state root.
+  static const String stateDatabaseFileName = 'state.db';
+
   /// Opens an in-memory database. Used by tests and ephemeral runtimes.
   AgentStateDatabase.inMemory({
     @visibleForTesting void Function(Duration)? busyRetryWait,
@@ -482,14 +510,34 @@ class AgentStateDatabase {
     ''');
 
     // ── scheduled_tasks ───────────────────────────────────────────────────
+    // Additive and rollback-safe (Task 112): `run_at` stays and mirrors
+    // `next_run_at` on every write, and every column an older agent's INSERT
+    // omits is nullable or defaulted, so an older agent on the same Home keeps
+    // inserting and reading `run_at` successfully.
     db.execute('''
       CREATE TABLE IF NOT EXISTS scheduled_tasks (
         id TEXT PRIMARY KEY,
         task TEXT NOT NULL,
-        run_at TEXT NOT NULL,
+        run_at TEXT,
         session_id TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        kind TEXT NOT NULL DEFAULT 'once',
+        interval_minutes INTEGER,
+        at_time TEXT,
+        weekdays TEXT,
+        month_day INTEGER,
+        zone TEXT NOT NULL DEFAULT 'local',
+        next_run_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        last_run_at TEXT,
+        last_status TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1
       );
+    ''');
+    _migrateScheduledTasks(db);
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run
+      ON scheduled_tasks(next_run_at ASC);
     ''');
 
     // ── workspaces ────────────────────────────────────────────────────────
@@ -825,6 +873,12 @@ class AgentStateDatabase {
       db,
       'ALTER TABLE session_route_transitions '
       'ADD COLUMN provider_display_name TEXT',
+    );
+    // Task 78: causal history anchor for automatic-failover notices.
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_route_transitions '
+      'ADD COLUMN anchor_message_id TEXT',
     );
     db.execute('''
       CREATE INDEX IF NOT EXISTS idx_session_route_transitions_created
@@ -1312,6 +1366,94 @@ class AgentStateDatabase {
       FROM user_attachments_v1;
     ''');
     db.execute('DROP TABLE user_attachments_v1');
+  }
+
+  @visibleForTesting
+  static void migrateScheduledTasks(Database db) => _migrateScheduledTasks(db);
+
+  static void _migrateScheduledTasks(Database db) {
+    if (!_tableExists(db, 'scheduled_tasks')) return;
+
+    // Never rename or drop: `run_at` is the column older agents read and
+    // write. `next_run_at` is added beside it.
+    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN run_at TEXT');
+    _safeAddColumn(db, 'ALTER TABLE scheduled_tasks ADD COLUMN next_run_at TEXT');
+
+    _safeAddColumn(
+      db,
+      "ALTER TABLE scheduled_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'once'",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN interval_minutes INTEGER',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN at_time TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN weekdays TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN month_day INTEGER',
+    );
+    _safeAddColumn(
+      db,
+      "ALTER TABLE scheduled_tasks ADD COLUMN zone TEXT NOT NULL DEFAULT 'local'",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN updated_at TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN last_run_at TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN last_status TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE scheduled_tasks ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1',
+    );
+
+    // Current writes keep both columns equal, so a difference means an older
+    // agent wrote `run_at` last (insert or upsert); take its value. Runs at
+    // every open, after any rollback period.
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET next_run_at = run_at
+      WHERE run_at IS NOT NULL AND TRIM(run_at) <> ''
+        AND (next_run_at IS NULL OR next_run_at <> run_at);
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET run_at = next_run_at
+      WHERE (run_at IS NULL OR TRIM(run_at) = '') AND next_run_at IS NOT NULL;
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET kind = 'once'
+      WHERE kind IS NULL OR TRIM(kind) = '';
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET zone = 'local'
+      WHERE zone IS NULL OR TRIM(zone) = '';
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET enabled = 1
+      WHERE enabled IS NULL;
+    ''');
+    db.execute('''
+      UPDATE scheduled_tasks
+      SET updated_at = created_at
+      WHERE updated_at IS NULL OR TRIM(updated_at) = '';
+    ''');
   }
 
   static void _safeAddColumn(Database db, String ddl) {
