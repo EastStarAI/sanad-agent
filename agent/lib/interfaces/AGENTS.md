@@ -7,7 +7,9 @@ This contract applies to `agent/lib/interfaces/`.
 - Connect runtime execution to external platforms through typed, asynchronous, non-blocking boundaries.
 - Keep platform transport, runtime admission, canonical protocol translation, and durable domain state in separate owners.
 - `GatewayManager` routes responses; it must not classify runtime work or inspect event names to infer delivery.
-- `SessionRunOrchestrator` admits and coordinates work; it must not own provider adapters, protocol parsing, or table-specific SQL.
+- `SessionRunOrchestrator` admits and coordinates work; it must not own provider adapters, protocol parsing, or table-specific SQL. It delegates controlled restart checkpointing to `SessionRestartCheckpointManager`, stop/cancellation and tool terminalization to `SessionStopCoordinator`, and session/workspace metadata resolution to `SessionMetadataResolver`.
+- `SessionStopCoordinator` owns per-session stop, cancellation, tool terminalization, stop-draft recovery, and queue draining (`requestStopAll` stays on the orchestrator and dispatches through its own `requestStop`), including preserving an interactive user-input wait across a managed daemon stop (`preserveInteractiveWait`/`preserveInteractiveWaits`). Startup recovery restores that wait instead of recording an unknown tool outcome.
+- `LocalWorkspaceRuntimeService` provides high-level workspace operations; it delegates MCP lifecycle, OAuth, config mutations, and inspection to `WorkspaceMcpCoordinator`, and delegates directory tree browsing, folder mutations, preview tokens, path confinement boundaries, and the managed workspaces root to `WorkspaceFileSystemCoordinator`, whose bodies are the host's former bodies moved verbatim (null-byte, symbolic-link and filesystem-root rejection, the Sanad Home boundary check, and the browse payload shape must not drift). It keeps ownership of the resources it creates: disposal drains pending filesystem mutations before releasing its MCP runtime manager, OAuth service, and local databases.
 - Platform adapters translate transport lifecycle only; they must not duplicate shared Sanad protocol or runtime workflows.
 
 ## Failure Isolation

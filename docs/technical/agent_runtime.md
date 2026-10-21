@@ -411,7 +411,7 @@ Handlers receive `orchestrator`, `runtimeRecovery`, `config`, `agentRuntime`, `p
 
 #### AgentRunner (`agent/lib/engine/`)
 
-`agent_runner.dart` (1210 lines after the split, was 1919, −37%) owns the model loop, `history`, and `_currentTurnStartIndex` as the **single source of truth**. Cohesive details are delegated to collaborators under `engine/runtime/`:
+`agent_runner.dart` (≈2.0k lines) owns the model loop, `history`, and `_currentTurnStartIndex` as the **single source of truth**, plus the host state its coordinators read through explicit host interfaces. Cohesive details are delegated to collaborators under `engine/runtime/`:
 
 | Collaborator | Owns | Lines |
 |---|---|---|
@@ -419,20 +419,29 @@ Handlers receive `orchestrator`, `runtimeRecovery`, `config`, `agentRuntime`, `p
 | `ContinuationCheckpointCoordinator` | per-turn checkpoint build/restore on the active `SessionWorkItem`; Gate D.1/D.2/D.3 replay-safety rules | ~288 |
 | `TurnRouteState` | per-turn provider/model route override; session-persisted route stays in `SessionManager` | ~252 |
 | `SteerCoordinator` | pending steer queue (volatile), drain before LLM call, inject into tool messages, supersede late steer | ~221 |
+| `RunnerStreamCoordinator` | the cancellable streaming turn and its detached unwind, streaming consumption, token decoding, reasoning deltas, per-attempt request ids and post-boundary reservations, the one-shot thinking-field retry, the in-stream tool loop, live steering, the per-turn capability admission call and reset, post-commit image-history pruning | ~863 |
+| `RunnerRecoveryCoordinator` | provider error classification, retry budget, automatic failover with capability-profile re-resolve, redacted recovery notices, image, provider-history-projection and thinking rejection notices, contained overflow compaction, thinking-route revalidation on failover and retry wake | ~595 |
+| `RunnerContextProjector` | multi-tier context assembly, pre-execution plugins, effective history projection with its active compaction boundary, agent-local attachment projection | ~245 |
+| `RunnerResumeCoordinator` | checkpoint restore on resume, ambiguous interrupted tools, automatic unknown-outcome neutralization, pending tool-batch replay | ~196 |
+| `RunnerAdmissionGate` | provider admission, in-flight state, atomic restart drain, stop state, cancellation scope lifecycle | ~96 |
+| `RunnerCompactionOrchestrator` | preflight compaction threshold/timeline/seed, cooldown and per-run breaker, pending and confirmed input baselines with wire proof, post-boundary usage reconciliation, dispatch reservations and missing-usage finalization | ~641 |
 
-Collaborators read live state via `CheckpointContext` and mutate history via `ToolExecutionCallbacks` / `SteerCallbacks` — they never hold a `history` reference or create a parallel source of truth.
+Collaborators read live state through `CheckpointContext` and mutate history via `ToolExecutionCallbacks` / `SteerCallbacks`, or through the runner's `Runner*Host` interfaces — they never hold a `history` reference or create a parallel source of truth. `ToolEventCallback` is the single tool-event contract (with optional timing fields) shared by the host and the coordinators. The per-attempt `DispatchedReservation` and turn-scoped `StreamReservationHolder` types live in `post_boundary_usage_reservation.dart` and are shared by the host's non-stream loop, the stream coordinator and the compaction orchestrator. The host keeps the non-stream dispatch loop, request options with thinking-field suppression, and compaction request options built by `CompactionRequestFactory`.
 
 #### SessionRunOrchestrator (`agent/lib/interfaces/runtime/`)
 
-`session_run_orchestrator.dart` (935 lines after the split, was 1732, −46%) is the lifecycle coordinator and the atomic owner of the `Stop` transition. Specialized lifecycle steps are in dedicated coordinators:
+`session_run_orchestrator.dart` (≈1.8k lines) is the lifecycle coordinator. Specialized lifecycle steps are in dedicated coordinators:
 
 | Coordinator | Owns | Lines |
 |---|---|---|
 | `SessionQueueCoordinator` | in-memory `_pendingEvents`, SQLite queue persistence + route overrides on queued/non-terminal work | ~163 |
 | `SessionRecoveryRestorer` | daemon startup recovery, crash classification (re-queue vs block by `tool_replay_safety`), timer/notice rehydration, queue-only bootstrap | ~371 |
 | `SessionTurnExecutor` | single turn execution, listener subscriptions via `ActiveRun`, tool-event emission, exception routing, title-update delegation | ~483 |
+| `SessionStopCoordinator` | per-session stop, cancellation, tool terminalization, stop-draft recovery, queue draining, and preserving an interactive user-input wait across a managed daemon stop | ~382 |
+| `SessionRestartCheckpointManager` | controlled-restart draining, safe checkpoint polling, interrupted provider-request cancellation | ~291 |
+| `SessionMetadataResolver` | session title, workspace association, and metadata resolution from inbound gateway events | ~128 |
 
-`Stop` stays under direct Orchestrator coordination — separating it would risk double `clear` and distributed ownership, which the refactor plan explicitly forbids. Request-id extraction and provider/model route resolution live in the stateless `session_turn_request_helpers.dart` sibling, so the queue coordinator does not import the orchestrator and the runtime dependency graph remains acyclic.
+`LocalWorkspaceRuntimeService` (≈769 lines) keeps the high-level workspace operations and delegates MCP configuration/OAuth/inspection to `WorkspaceMcpCoordinator` (~668) and tree browsing, folder mutations, preview tokens, path confinement and the managed workspaces root to `WorkspaceFileSystemCoordinator` (~673), whose bodies are the host's former bodies moved verbatim. It remains the owner of the resources it creates, so disposal drains pending filesystem mutations before releasing them. Request-id extraction and provider/model route resolution live in the stateless `session_turn_request_helpers.dart` sibling, so the queue coordinator does not import the orchestrator and the runtime dependency graph remains acyclic.
 
 #### Persistence Repositories (`agent/lib/evolution/db/`)
 
@@ -440,9 +449,11 @@ See §5.3 above. `persisted_runtime_state_repository.dart` (631 lines after the 
 
 #### Verification status
 
-- `fvm dart analyze lib/` — 0 issues.
-- `fvm dart test test/interfaces/ test/core/provider_runtime/ --concurrency=1` — 327 tests pass.
-- `fvm dart test test/engine/ --concurrency=1` — 117 tests pass.
+- `fvm dart analyze` (agent, lib + test) — 0 issues; `fvm flutter analyze` (client, lib + test) — 0 issues.
+- `fvm dart test` (agent, full suite) — 2,956 passed, 14 skipped, 0 failed (Task 110 port onto `6a832396`).
+- `fvm flutter test` (client, full suite) — 1,729 passed, 0 failed.
+- The two suites must not run concurrently: running them in parallel produced one transient failure in the Agent suite, while serial runs passed with an identical count.
+- Each `Runner*Host` boundary is covered by a focused suite as well: `runner_admission_gate_test.dart` for admission/stop/cancellation-scope, `agent_runner_test.dart` for capability freezing and continuation checkpoints, `thinking_selection_rejection_test.dart` for local rejection notices, and `unsupported_image_tool_recovery_test.dart` for attachment projection and image-capability failures. Port guards pin main behaviour in the owners: `compaction_streaming_usage_reconciliation_test.dart` (last-chunk usage confirms the baseline; history projection rejection never fails over or retries), `runner_recovery_coordinator_test.dart`, `session_message_repository_in_place_rewrite_test.dart`, and the managed-browse guards in `local_workspace_runtime_service_test.dart`.
 - `fvm dart test test/evolution/ --concurrency=1` — 67 tests pass (46 pre-existing + 21 new Gate E repository tests).
 - No `getIt` calls remain inside any extracted handler, coordinator, or repository — confirmed by `search_grep "getIt(|GetIt"` across all four extracted directories (0 hits).
 - No bidirectional imports between extracted units in the same layer (e.g. handlers do not import each other; `runtime/` collaborators do not import the orchestrator). Shared request-route helpers are stateless sibling functions rather than a child→parent import.
