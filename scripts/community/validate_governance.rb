@@ -133,7 +133,14 @@ workflow = File.read(File.join(ROOT, '.github/workflows/ci.yml'))
   fail_validation("CI is missing #{job} job") unless workflow.match?(/^  #{Regexp.escape(job)}:/)
 end
 fail_validation('aggregate check name is unstable') unless workflow.include?('name: All required checks pass')
-fail_validation('CI must rerun review gates when labels change') unless workflow.include?('labeled') && workflow.include?('unlabeled')
+fail_validation('Public CI must not restart on label events') if workflow.include?('labeled')
+fail_validation('protected-label job must read current labels at run time') unless workflow.include?('pulls/$PR_NUMBER') && !workflow.include?('github.event.pull_request.labels')
+protected_labels_workflow = File.read(File.join(ROOT, '.github/workflows/protected-labels.yml'))
+fail_validation('protected-label changes must re-run the protected review job') unless protected_labels_workflow.include?('types: [labeled, unlabeled]') && protected_labels_workflow.include?('REVIEW_JOB: Verify protected review labels') && protected_labels_workflow.include?('/rerun"')
+fail_validation('only Public CI may emit the required aggregate check') if protected_labels_workflow.match?(/^\s*name: All required checks pass/)
+%w[maintainer-reviewed security-reviewed release-reviewed].each do |label|
+  fail_validation("protected label #{label} is not wired to both workflows") unless workflow.include?(label) && protected_labels_workflow.scan(%("#{label}")).length == 2
+end
 fail_validation('fork PRs must not use pull_request_target') if workflow.include?('pull_request_target')
 fail_validation('CI must not require the organization-licensed Gitleaks Action') if workflow.include?('gitleaks/gitleaks-action') || workflow.include?('GITLEAKS_LICENSE')
 fail_validation('Gitleaks archive must be checksum verified before execution') unless workflow.include?('sha256sum --check')
