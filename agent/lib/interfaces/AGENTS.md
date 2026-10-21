@@ -9,7 +9,7 @@ This contract applies to `agent/lib/interfaces/`.
 - `GatewayManager` routes responses; it must not classify runtime work or inspect event names to infer delivery.
 - `SessionRunOrchestrator` admits and coordinates work; it must not own provider adapters, protocol parsing, or table-specific SQL. It delegates controlled restart checkpointing to `SessionRestartCheckpointManager`, stop/cancellation and tool terminalization to `SessionStopCoordinator`, and session/workspace metadata resolution to `SessionMetadataResolver`. The restart checkpoint and provider-cancellation timeouts are owned by `SessionRestartCheckpointManager` and the run-stop cleanup timeout by `SessionStopCoordinator.defaultRunStopCleanupTimeout`; the orchestrator's same-named statics only alias them, so a value changes in its owner alone.
 - `SessionStopCoordinator` owns per-session stop, cancellation, tool terminalization, stop-draft recovery, and queue draining (`requestStopAll` stays on the orchestrator and dispatches through its own `requestStop`), including preserving an interactive user-input wait across a managed daemon stop (`preserveInteractiveWait`/`preserveInteractiveWaits`). Startup recovery restores that wait instead of recording an unknown tool outcome.
-- `LocalWorkspaceRuntimeService` provides high-level workspace operations; it delegates MCP lifecycle, OAuth, config mutations, and inspection to `WorkspaceMcpCoordinator` (which requires the host's MCP runtime manager and OAuth service and never builds its own), and delegates directory tree browsing, folder mutations, preview tokens, path confinement boundaries, and the managed workspaces root to `WorkspaceFileSystemCoordinator`, whose bodies are the host's former bodies moved verbatim (null-byte, symbolic-link and filesystem-root rejection, the Sanad Home boundary check, and the browse payload shape must not drift). It keeps ownership of the resources it creates: disposal drains pending filesystem mutations before releasing its MCP runtime manager, OAuth service, and local databases.
+- `LocalWorkspaceRuntimeService` provides high-level workspace operations; it delegates MCP lifecycle, OAuth, config mutations, and inspection to `WorkspaceMcpCoordinator` (which requires the host's MCP runtime manager and OAuth service and never builds its own), and delegates directory tree browsing, folder mutations, preview tokens, path confinement boundaries, and the managed workspaces root to `WorkspaceFileSystemCoordinator`. That coordinator owns the single managed-remote path resolver; local-mode null-byte, symbolic-link and filesystem-root rejection and the browse payload shape must not drift. It keeps ownership of the resources it creates: disposal drains pending filesystem mutations before releasing its MCP runtime manager, OAuth service, and local databases.
 - Platform adapters translate transport lifecycle only; they must not duplicate shared Sanad protocol or runtime workflows.
 
 ## Failure Isolation
@@ -33,9 +33,12 @@ This contract applies to `agent/lib/interfaces/`.
   workspace, and MCP management commands are admitted without new capability
   flags. Root-document `replace_mcp_config` remains rejected on cloud.
 - Authenticated Local Gateway health exposes only non-secret runtime facts needed for lifecycle verification, including binary version and whether the cloud adapter has completed authoritative registration; socket connection alone is not registration.
-- Cloud filesystem navigation is managed-remote: name-based create under
-  `SANAD_HOME/workspaces`, browse limited to that root and registered workspace
-  roots, and preview tokens for recursive delete and relocate.
+- Cloud filesystem navigation is managed-remote and confined to the runtime
+  Home's `workspaces` root: empty browse opens that root, create takes exactly
+  one of a name or a selected folder inside it, folder mutations stay inside it
+  and refuse a folder containing a workspace, and recursive delete and relocate
+  need preview tokens. Registered workspaces outside the root keep working for
+  chat and tools but are not browsable or mutable from the cloud.
 - Cloud MCP configuration listing, inspection, import/export, Advanced JSON,
   OAuth, and reviewed mutations use the same daemon handlers as local. Secret
   values stay out of snapshots, logs, and events. Cloud-origin turns still

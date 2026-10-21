@@ -138,10 +138,34 @@ G0 adopts the plan locked decisions as the owner-approved filesystem model:
 - Arbitrary existing host-directory picker remains out of scope.
 - Existing workspace UUIDs and conversation identity do not change.
 
-Today local `createWorkspace` still accepts a host path and empty-path browse
-lists OS roots (`/` or Windows drives). Cloud-admitted calls use managed-remote
-mode instead: name-based create under `SANAD_HOME/workspaces`, allowed-root
-browse, and preview tokens for delete/relocate.
+Task 123 (2026-10-21) tightens and extends this model; it supersedes the
+G0 browse and create bullets above:
+
+- The single allowed root is the runtime Home's `<SANAD_HOME>/workspaces`,
+  derived from the injected Home (never a fixed directory name). Registered
+  workspaces outside it are no longer browsable, mutable, or relocation
+  targets from the cloud; chat and tools in them keep working by id.
+- Every managed path must be absolute, NUL-free, free of raw `..` segments,
+  and an existing directory inside the root with no symbolic link at any
+  component below it. Listings omit links and never realpath an entry, so no
+  link target is disclosed.
+- Remote create takes exactly one of a `name` or a `path` to an existing
+  folder strictly inside the root, picked in the in-app browser and
+  revalidated by the daemon.
+- Rename and delete refuse a folder that is or contains a registered
+  workspace (`workspace_in_use`).
+- `managed_remote` is injected only by the cloud adapter; a client-sent
+  `managed_remote: false` cannot downgrade a cloud command.
+
+Residual risk: each mutation revalidates on the serialized queue immediately
+before the filesystem call, but a check-then-act window remains between that
+check and the system call. Exploiting it needs a local process on the Agent
+machine that swaps a folder for a link at that instant, which is outside the
+remote threat model; the delete fingerprint still binds the confirmed target.
+
+Local `createWorkspace` still accepts a host path and empty-path local browse
+lists OS roots (`/` or Windows drives). Those behaviors are never used for
+cloud-admitted calls.
 
 ## Capability-specific threats
 
@@ -167,10 +191,12 @@ browse, and preview tokens for delete/relocate.
 
 ### Remote workspaces
 
-- Name-based create under managed root. Browse cannot walk above the allowed
-  root. Destructive ops need preview + one-time token. Race, symlink, and
-  root-delete attempts fail closed. Lost-success recovery re-reads snapshot
-  rather than repeating delete.
+- Create by name or by a picked nested folder, both inside the Home
+  workspaces root only. Browse cannot walk above that root. Destructive ops
+  need preview + one-time token. Traversal, relative, NUL, link (final or
+  middle component), race, root-delete, and workspace-ancestor attempts fail
+  closed (`path_not_allowed` / `workspace_in_use`). Lost-success recovery
+  re-reads the snapshot rather than repeating delete.
 
 ### Remote MCP
 
@@ -234,8 +260,8 @@ Command: `agent/test/interfaces/server_sanad_gateway_platform_security_test.dart
 ### G5 — Client UX
 
 - Pass: check/update/restart target the selected device; remote workspace
-  create stays in the managed root while browser APIs remain constrained for
-  future File Tree use; MCP forms with redaction and offline
+  create stays in the managed root (Task 123 later made the confined browser
+  the remote add-workspace picker); MCP forms with redaction and offline
   states; no presentation transport branching; widget tests for confirm,
   double-submit, reconnect, lost-success; English copy only.
 - Fail: Settings calling `LocalDaemonController` for a cloud device.

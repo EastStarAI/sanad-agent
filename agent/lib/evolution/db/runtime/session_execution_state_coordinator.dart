@@ -914,6 +914,9 @@ class SessionExecutionStateCoordinator {
         durableResult,
         sqliteId: matchingMessageId,
       );
+      // The in-place stamp changes durable history: revision-keyed history
+      // caches must not keep serving the unstamped copy.
+      SessionHistoryRevisionRepository.bumpDatabase(transaction.db, sessionId);
     }
   }
 

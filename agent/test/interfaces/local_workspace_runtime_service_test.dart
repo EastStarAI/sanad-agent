@@ -267,16 +267,17 @@ void main() {
     });
 
     test(
-      'empty managed browse lists allowed roots, not filesystem root',
+      'empty managed browse opens the managed root, not filesystem root',
       () async {
         await service.createWorkspace(name: 'notes', managedRemote: true);
         final snapshot = await service.browseWorkspaceTree(managedRemote: true);
         final entries = snapshot['entries'] as List<dynamic>;
         final paths = entries.map((entry) => entry['path']).toSet();
 
-        expect(snapshot['path'], isEmpty);
+        expect(snapshot['root_path'], managedRoot);
+        expect(snapshot['path'], managedRoot);
         expect(snapshot['parent_path'], isNull);
-        expect(paths, contains(managedRoot));
+        expect(paths, contains('$managedRoot/notes'));
         expect(paths, isNot(contains(Platform.pathSeparator)));
         expect(paths, isNot(contains(tempDir.resolveSymbolicLinksSync())));
       },
@@ -324,13 +325,14 @@ void main() {
       expect(readme.containsKey('is_directory'), isFalse);
     });
 
-    test('managed roots list no workspace nested in the managed root', () async {
+    test('managed root listing stays inside the managed root', () async {
       await service.createWorkspace(name: 'notes', managedRemote: true);
       final snapshot = await service.browseWorkspaceTree(managedRemote: true);
       final paths = (snapshot['entries'] as List<dynamic>)
-          .map((entry) => entry['path'])
+          .map((entry) => entry['path'] as String)
           .toList();
-      expect(paths, [managedRoot]);
+      expect(paths, ['$managedRoot/notes']);
+      expect(paths.every((path) => p.isWithin(managedRoot, path)), isTrue);
       expect(snapshot['truncated'], isFalse);
     });
 

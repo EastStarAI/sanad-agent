@@ -291,8 +291,11 @@ Workspace configuration can override a user-level capability with the same
 name. Inherited entries remain identifiable so the user can see their origin.
 Workspace Overview offers record-only removal behind a confirmation that
 explicitly preserves the host folder, its files, and existing conversations.
-Remote folder browsing is not exposed there; its constrained runtime remains
-reserved for a future conversation-side file tree.
+On a device reached over the cloud, Add New Workspace opens an in-app folder
+browser that stays inside that device's workspaces folder: the user can
+browse, create, rename and delete folders there and pick any nested folder as
+the workspace. A folder that holds a workspace cannot be renamed or deleted.
+A local device keeps the native folder picker.
 
 ## Connection states
 

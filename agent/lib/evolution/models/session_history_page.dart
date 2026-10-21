@@ -214,6 +214,11 @@ class SessionHistoryPage {
   final int historyRevision;
   final int persistedBytes;
 
+  /// The first active row of the same session after the page's newest row, or
+  /// null when the page reaches the tail. It lets callers classify the page's
+  /// last row with session scope instead of page scope.
+  final Message? followingMessage;
+
   const SessionHistoryPage({
     required this.messages,
     required this.hasMore,
@@ -222,5 +227,6 @@ class SessionHistoryPage {
     this.nextNewerCursor,
     required this.historyRevision,
     this.persistedBytes = 0,
+    this.followingMessage,
   });
 }

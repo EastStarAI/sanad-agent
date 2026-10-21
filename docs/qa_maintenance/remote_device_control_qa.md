@@ -60,13 +60,13 @@ Automated owners:
 
 | Area | Pass | Fail |
 |---|---|---|
-| Managed root | Identity prepare creates `SANAD_HOME/workspaces` and rejects a symlink | Managed root is a link or missing |
-| Name-based create | Remote create uses name/description only under the managed root | Client absolute path becomes the cloud workspace root |
-| Browse | Empty managed browse lists allowed roots only; internals and `/` are hidden | Empty browse lists `/` or Home |
-| Folder ops | create/rename/delete stay inside allowed roots after canonical checks | Traversal, symlink, or root deletion mutates |
+| Managed root | Identity prepare creates `<SANAD_HOME>/workspaces` and rejects a symlink | Managed root is a link or missing |
+| Create | Remote create takes a name, or (Task 123) a picked folder strictly inside the root | Client absolute path outside the root becomes a workspace |
+| Browse | Empty managed browse opens the root itself (Task 123); outside registered workspaces, internals and `/` are rejected | Empty browse lists `/`, Home, or an outside workspace |
+| Folder ops | create/rename/delete stay inside the root; a folder containing a workspace is `workspace_in_use` | Traversal, link, root deletion, or ancestor rename mutates |
 | Confirmation | Delete/relocate require a one-time preview token; stale tokens fail closed | Consumed token deletes again |
 | Record removal | Remove deletes only the workspace row and preserves the directory, files, sessions, and messages | Removal reaches filesystem deletion or cascades conversation data |
-| Client | Remote create is a name dialog; Workspace Overview hides Browse folders and confirms record-only removal | Remote create opens an OS picker or removal has ambiguous destructive copy |
+| Client | Remote create opens the confined in-app browser (Task 123); Workspace Overview confirms record-only removal | Remote create opens an OS picker or removal has ambiguous destructive copy |
 
 Automated owners:
 
@@ -102,7 +102,7 @@ Automated owners:
 | Area | Pass | Fail |
 |---|---|---|
 | Selected device | Overview Check/Update/Restart use `DeviceControlClient` for the inspected device | Settings call `LocalDaemonController` or the local daemon for a cloud device |
-| Remote workspace | Name-based create and constrained browse; Change Path stays local-only | Remote create sends a host path; browse lists `/` or Home |
+| Remote workspace | Confined in-app browser pick (Task 123); Change Path stays local-only | Remote create sends a path outside the root; browse lists `/` or Home |
 | MCP settings | Offline devices show a reconnect message and disable Add/Test/Edit/Remove; delete reloads snapshot on failure | Mutations fire while offline; a timed-out delete retries automatically |
 | English copy | All new labels and dialogs are English | Arabic UI strings |
 

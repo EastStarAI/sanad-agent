@@ -26,6 +26,9 @@ import 'package:sanad_client/features/devices/presentation/bloc/device_capabilit
 import 'package:sanad_client/features/home/presentation/widgets/conversation_workspace_layout.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/utils/app_platform.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_tree_entry.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
 
 import '../helpers/fake_device_repository.dart';
 import '../helpers/fake_conversation_repository.dart';
@@ -361,6 +364,84 @@ void main() {
     expect(row.device.id, cloud.id);
     expect((agentCubit.state as DeviceActive).activeAgent.id, device.id);
   });
+
+  testWidgets(
+    'remote add-workspace browses and creates on the sidebar device, not the active session device',
+    (tester) async {
+      final remote = DeviceConfig(id: 'remote-device', name: 'Sanad Agent Test2 (macOS)', isOnline: true);
+      agentRepository.seedAgents([device, remote], activeAgentId: device.id);
+      agentCubit.emitState(DeviceActive(activeAgent: device, agents: [device, remote]));
+      await sessionCubit.selectSession(
+        Session(
+          id: 's-scoped',
+          title: 'Scoped chat',
+          deviceId: device.id,
+          workspaceId: 'ws-1',
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+        ),
+      );
+      await tester.idle();
+      cacheStore.setActiveDevice(remote.id);
+      await tester.idle();
+      const root = '/remote-home/workspaces';
+      conversationRepository.browseWorkspaceTreeHandler = ({agent, workspaceId, path}) async {
+        if (path == '$root/projects') {
+          return const WorkspaceTreeSnapshot(
+            workspaceId: '',
+            rootPath: root,
+            path: '$root/projects',
+            parentPath: root,
+            entries: [],
+            truncated: false,
+          );
+        }
+        return const WorkspaceTreeSnapshot(
+          workspaceId: '',
+          rootPath: root,
+          path: root,
+          parentPath: null,
+          entries: [
+            WorkspaceTreeEntry(name: 'projects', path: '$root/projects', relativePath: '', isDirectory: true),
+          ],
+          truncated: false,
+        );
+      };
+
+      await pumpSidebar(tester);
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('sidebar_create_workspace_btn')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(WorkspaceBrowserDialog), findsOneWidget);
+      await tester.tap(find.byKey(const Key('workspace_browser_new_folder_button')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextFormField), 'fresh');
+      await tester.tap(find.byKey(const Key('workspace_folder_dialog_confirm_button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('projects'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('workspace_browser_use_folder_button')));
+      await tester.pumpAndSettle();
+
+      expect(conversationRepository.browseWorkspaceTreeRequests, isNotEmpty);
+      expect(
+        conversationRepository.browseWorkspaceTreeRequests.map((request) => request['device_id']).toSet(),
+        {remote.id},
+      );
+      expect(conversationRepository.folderMutations.single, {
+        'op': 'create',
+        'device_id': remote.id,
+        'path': root,
+        'name': 'fresh',
+      });
+      final created = conversationRepository.createdWorkspaces.single;
+      expect(created['device_id'], remote.id);
+      expect(created['path'], '$root/projects');
+      expect(created['name'], isNull);
+      expect((agentCubit.state as DeviceActive).activeAgent.id, device.id);
+    },
+  );
 
   testWidgets('background refresh with cached rows has no loading chrome', (tester) async {
     await pumpSidebar(tester);

@@ -108,6 +108,28 @@ void main() {
     },
   );
 
+  test('an older unstamped reply that ends its turn anchors as a final '
+      'answer, matching history classification (Task 111)', () {
+    saveSession(
+      'legacy',
+      title: 'Conversation',
+      messages: [
+        Message(role: MessageRole.user, content: 'first question'),
+        Message(role: MessageRole.assistant, content: 'legacy needle answer'),
+        Message(role: MessageRole.user, content: 'second question'),
+        Message(role: MessageRole.assistant, content: 'latest answer'),
+      ],
+    );
+
+    final hit = db
+        .searchSessions(SessionSearchRequest(query: 'legacy needle'))
+        .hits
+        .single;
+
+    expect(hit.snippet, contains('legacy needle'));
+    expect(hit.anchorEventId, matches(r'^history:legacy:\d+:final_answer:0$'));
+  });
+
   test('searches visible assistant thought text with a thought anchor', () {
     saveSession(
       'thought-session',

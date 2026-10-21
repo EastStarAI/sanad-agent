@@ -8,6 +8,7 @@ import 'package:sanad_client/features/conversations/domain/models/device_workspa
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_command_failure.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/data/mappers/device_event_mapper.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_command_gateway.dart';
@@ -706,6 +707,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
+    _throwIfWorkspaceError(result, 'Failed to browse workspace tree');
     if (result != null) {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       return WorkspaceTreeSnapshot.fromJson(payload);
@@ -738,6 +740,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
+    _throwIfWorkspaceError(result, 'Failed to create workspace');
     if (result != null) {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       final workspace = payload['workspace'];
@@ -824,11 +827,7 @@ class ConversationCommands {
       );
     }
     final response = result == null ? null : (result['payload'] as Map<String, dynamic>? ?? result);
-    if (result?['event'] == 'error') {
-      throw StateError(
-        response?['message']?.toString() ?? 'Failed to update workspace',
-      );
-    }
+    _throwIfWorkspaceError(result, 'Failed to update workspace');
     final workspace = response?['workspace'];
     if (workspace is Map) {
       return DeviceWorkspace.fromJson(Map<String, dynamic>.from(workspace));
@@ -943,10 +942,24 @@ class ConversationCommands {
     if (event == expectedEvent) {
       return;
     }
+    _throwIfWorkspaceError(result, fallbackMessage);
     final payload = result?['payload'];
     final message = payload is Map ? payload['message'] : null;
     throw StateError(message?.toString() ?? fallbackMessage);
   }
+  /// Throws a coded [WorkspaceCommandFailure] when [result] is an Agent
+  /// `error` response, so presentation can localize the rejection.
+  void _throwIfWorkspaceError(
+    Map<String, dynamic>? result,
+    String fallbackMessage,
+  ) {
+    final failure = WorkspaceCommandFailure.fromErrorResponse(
+      result,
+      fallbackMessage: fallbackMessage,
+    );
+    if (failure != null) throw failure;
+  }
+
 
   Future<List<CanonicalEvent>> loadSessionHistory(
     String sessionId, {

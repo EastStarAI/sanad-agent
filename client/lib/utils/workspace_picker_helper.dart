@@ -19,8 +19,11 @@ class WorkspacePickerHelper {
   @visibleForTesting
   static ValueChanged<String>? debugOnRemoteDisabled;
 
+  /// Replaces the remote folder browser in tests. It receives the exact
+  /// device-bound callbacks the real dialog would use and returns the pick.
   @visibleForTesting
-  static Future<String?> Function()? debugRemoteWorkspaceName;
+  static Future<String?> Function(WorkspaceBrowserCallbacks callbacks)?
+  debugRemoteBrowserPick;
 
   /// Opens the native picker locally. Remote Change Path stays host-local only.
   static Future<String?> pickWorkspacePath({
@@ -42,11 +45,14 @@ class WorkspacePickerHelper {
     return null;
   }
 
-  /// Local devices pick a host folder. Remote devices create by name under the
-  /// daemon-managed workspaces root.
+  /// Local devices pick a host folder with the native picker. Remote devices
+  /// pick a folder inside the device's managed workspaces root through the
+  /// in-app browser; every browse and folder command goes through
+  /// [remoteBrowser], which must be bound to [device].
   static Future<WorkspaceCreateRequest?> promptCreateWorkspace({
     required BuildContext context,
     required DeviceConfig? device,
+    WorkspaceBrowserCallbacks? remoteBrowser,
     Future<String?> Function()? debugLocalPath,
   }) async {
     final isLocal = AppPlatform.isDesktop && device?.isLocalReachable == true;
@@ -60,63 +66,30 @@ class WorkspacePickerHelper {
       return WorkspaceCreateRequest(path: path.trim());
     }
 
-    final name = debugRemoteWorkspaceName != null
-        ? await debugRemoteWorkspaceName!()
-        : await _promptRemoteWorkspaceName(context);
-    if (name == null || name.trim().isEmpty) return null;
-    return WorkspaceCreateRequest(name: name.trim());
-  }
-
-  static Future<void> openRemoteFolderBrowser({
-    required BuildContext context,
-    required WorkspaceTreeLoader loader,
-    WorkspaceFolderCreator? onCreateFolder,
-    WorkspaceFolderRenamer? onRenameFolder,
-    WorkspaceFolderDeleter? onDeleteFolder,
-  }) {
-    return showDialog<void>(
+    if (device == null || remoteBrowser == null) return null;
+    final picked = await openRemoteFolderBrowser(
       context: context,
-      builder: (dialogContext) => WorkspaceBrowserDialog(
-        loader: loader,
-        onCreateFolder: onCreateFolder,
-        onRenameFolder: onRenameFolder,
-        onDeleteFolder: onDeleteFolder,
-      ),
+      callbacks: remoteBrowser,
     );
+    if (picked == null || picked.trim().isEmpty) return null;
+    return WorkspaceCreateRequest(path: picked.trim());
   }
 
-  static Future<String?> _promptRemoteWorkspaceName(BuildContext context) {
-    var value = '';
+  /// Opens the confined in-app folder browser and returns the picked folder,
+  /// a path the device itself reported, or `null` when cancelled.
+  static Future<String?> openRemoteFolderBrowser({
+    required BuildContext context,
+    required WorkspaceBrowserCallbacks callbacks,
+  }) {
+    final debugPick = debugRemoteBrowserPick;
+    if (debugPick != null) return debugPick(callbacks);
     return showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('New Workspace'),
-        content: TextFormField(
-          key: const Key('remote_workspace_name_input'),
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Workspace name',
-            helperText: 'Created on the device under its managed workspaces folder.',
-          ),
-          onChanged: (nextValue) => value = nextValue,
-          onFieldSubmitted: (nextValue) {
-            if (nextValue.trim().isNotEmpty) {
-              Navigator.pop(dialogContext, nextValue.trim());
-            }
-          },
-        ),
-        actions: [
-          TextButton(
-            key: const Key('remote_workspace_cancel_button'),
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const Key('remote_workspace_create_button'),
-            onPressed: () => Navigator.pop(dialogContext, value.trim()),
-            child: const Text('Create'),
-          ),
-        ],
+      builder: (dialogContext) => WorkspaceBrowserDialog(
+        loader: callbacks.loader,
+        onCreateFolder: callbacks.onCreateFolder,
+        onRenameFolder: callbacks.onRenameFolder,
+        onDeleteFolder: callbacks.onDeleteFolder,
       ),
     );
   }

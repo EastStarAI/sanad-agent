@@ -238,7 +238,9 @@ assistant result, and performs `running|resuming -> completed` in one SQLite
 transaction. `SessionTurnExecutor` may emit the final transport event only
 after that owner returns `committed`. A `stale_owner` or
 `recovery_owns_state` result is silent; it cannot produce a final answer or a
-follow-on error. A persistence failure produces one controlled error before
+follow-on error. The unstamped durable reply still hydrates from history as a
+`final_answer` when it ends its turn (session-scoped terminal classification,
+Task 111). A persistence failure produces one controlled error before
 any final and leaves the work item non-terminal for restart recovery.
 
 `waiting -> completed` and `blocked -> completed` remain forbidden. If
@@ -441,7 +443,7 @@ Collaborators read live state through `CheckpointContext` and mutate history via
 | `SessionRestartCheckpointManager` | controlled-restart draining, safe checkpoint polling, interrupted provider-request cancellation | ~291 |
 | `SessionMetadataResolver` | session title, workspace association, and metadata resolution from inbound gateway events | ~128 |
 
-`LocalWorkspaceRuntimeService` (≈769 lines) keeps the high-level workspace operations and delegates MCP configuration/OAuth/inspection to `WorkspaceMcpCoordinator` (~668) and tree browsing, folder mutations, preview tokens, path confinement and the managed workspaces root to `WorkspaceFileSystemCoordinator` (~673), whose bodies are the host's former bodies moved verbatim. It remains the owner of the resources it creates, so disposal drains pending filesystem mutations before releasing them. Request-id extraction and provider/model route resolution live in the stateless `session_turn_request_helpers.dart` sibling, so the queue coordinator does not import the orchestrator and the runtime dependency graph remains acyclic.
+`LocalWorkspaceRuntimeService` (≈769 lines) keeps the high-level workspace operations and delegates MCP configuration/OAuth/inspection to `WorkspaceMcpCoordinator` (~668) and tree browsing, folder mutations, preview tokens, path confinement and the managed workspaces root to `WorkspaceFileSystemCoordinator` (~670), which also owns the single managed-remote path resolver confining cloud access to the Home `workspaces` root (Task 123; see [Remote Workspace Folder Mutation Protocol](workspace_folder_mutation_protocol.md)). It remains the owner of the resources it creates, so disposal drains pending filesystem mutations before releasing them. Request-id extraction and provider/model route resolution live in the stateless `session_turn_request_helpers.dart` sibling, so the queue coordinator does not import the orchestrator and the runtime dependency graph remains acyclic.
 
 #### Persistence Repositories (`agent/lib/evolution/db/`)
 
