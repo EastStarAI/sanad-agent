@@ -573,11 +573,26 @@ class SessionCubit extends Cubit<SessionState> {
 
     final cacheRepository = conversationCacheRepository;
     final selectedSession = state.selectedSession;
-    final previousSession = selectedSession?.deviceId == agent.id
+    // Leaving a conversation open on this device: the new draft takes that
+    // conversation's full route (provider, model and its own thinking) — the
+    // standing product rule for a user-initiated New chat.
+    final leavesOpenSession = selectedSession?.deviceId == agent.id;
+    // Otherwise (Client startup, a route entry or a device switch) nothing
+    // is being left: a persisted draft that already holds a complete route is
+    // the user's own and wins, including its explicit thinking. The
+    // last-selected session seeds the route only when there is no complete
+    // draft route (Task 122 D1).
+    final persistedDraft = leavesOpenSession ? null : cacheRepository?.newConversationDraft(agent.id);
+    final keepPersistedDraft = persistedDraft?.hasCompleteRoute == true;
+    final previousSession = leavesOpenSession
         ? selectedSession
+        : keepPersistedDraft
+        ? null
         : cacheRepository?.lastSelectedSession(agent.id);
     final requestedWorkspaceId = workspaceId?.trim();
-    final restoredWorkspaceId = previousSession?.workspaceId?.trim();
+    final restoredWorkspaceId = keepPersistedDraft
+        ? persistedDraft?.workspaceId?.trim()
+        : previousSession?.workspaceId?.trim();
     final canRestoreWorkspace =
         restoredWorkspaceId?.isNotEmpty == true &&
         cacheRepository?.containsWorkspace(agent.id, restoredWorkspaceId!) == true;
@@ -617,6 +632,19 @@ class SessionCubit extends Cubit<SessionState> {
     // only as a complete pair. A half route (e.g. a cache-decoded session that
     // has not yet refreshed its provider) clears all three so the device route
     // or readiness default applies instead.
+    if (keepPersistedDraft) {
+      // Only the workspace follows the resolved destination; the persisted
+      // route and thinking stay exactly as the user left them.
+      cacheRepository?.setNewConversationDraft(
+        agent.id,
+        workspaceId: targetWorkspaceId,
+        clearWorkspace: targetWorkspaceId == null,
+        clearPermissionMode: true,
+      );
+      emit(state.copyWith(clearSelectedSession: true));
+      historyController.navigateTo(destination);
+      return destination;
+    }
     final inheritRoute = ConversationDraft.isCompleteRoute(
       previousSession?.modelProvider,
       previousSession?.model,

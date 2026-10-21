@@ -257,6 +257,48 @@ void main() {
     expect(sessionMessagesCubit.state.nextMessageThinkingMode, 'max');
   });
 
+  testWidgets('D2: an admitted route default is carried for the next send but never persisted into the draft', (
+    tester,
+  ) async {
+    final inputCubit = _TestConversationInputCubit(messagesCubit: sessionMessagesCubit);
+    sessionMessagesCubit.setNextMessagePreferences(providerId: 'provider-go', model: 'glm-5.2');
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      conversationInputCubit: inputCubit,
+      capabilities: capabilities,
+      conversationCacheRepository: cacheRepository,
+      child: ConversationInputPanel(onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {}),
+    );
+    await tester.pump();
+
+    final devicePrefBefore = sessionMessagesCubit.preferencesRepository.getLastThinkingMode(agent.id);
+    // What the route control does for a draft whose route declares Max.
+    inputCubit.admitRouteThinkingMode('max');
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(inputCubit.state.nextMessageThinkingMode, 'max', reason: 'the next send carries the shown default');
+    var draft = cacheRepository.newConversationDraft(agent.id);
+    expect(draft.providerId, 'provider-go');
+    expect(draft.model, 'glm-5.2');
+    expect(
+      draft.thinkingMode,
+      devicePrefBefore,
+      reason: 'a default fill is never persisted into the draft; only the explicit carried value is',
+    );
+    expect(draft.thinkingMode, isNot('max'));
+    expect(sessionMessagesCubit.preferencesRepository.getLastThinkingMode(agent.id), devicePrefBefore);
+
+    // Only an explicit pick is persisted.
+    await inputCubit.selectThinkingMode(scope: CapabilityValueScope.message, thinkingMode: 'high');
+    await tester.pump(const Duration(milliseconds: 600));
+    draft = cacheRepository.newConversationDraft(agent.id);
+    expect(draft.thinkingMode, 'high');
+    expect(sessionMessagesCubit.preferencesRepository.getLastThinkingMode(agent.id), 'high');
+  });
+
   testWidgets('loading an existing session never shows the New Conversation draft', (tester) async {
     cacheRepository.setNewConversationDraft(
       agent.id,
@@ -1159,7 +1201,16 @@ void main() {
 class _TestConversationInputCubit extends ConversationInputCubit {
   _TestConversationInputCubit({required super.messagesCubit});
 
+  bool _usesEmittedState = false;
+
+  /// A state emitted by this fake stands for explicit user choices, so its
+  /// thinking value is the explicit one a New Conversation draft persists.
+  @override
+  String? get explicitNextMessageThinkingMode =>
+      _usesEmittedState ? state.nextMessageThinkingMode : super.explicitNextMessageThinkingMode;
+
   void emitSessionMessagesState(SessionMessagesState state) {
+    _usesEmittedState = true;
     emit(
       ConversationInputState(
         isProcessing: state.isProcessing,

@@ -1754,6 +1754,130 @@ void main() {
     await cubit.close();
   });
 
+  group('Task 122 New Conversation route ownership', () {
+    late ConversationCacheStore cacheStore;
+    late ConversationCacheRepository cacheRepository;
+
+    Session goSession(String id, {required String model, String? thinkingMode}) => session.copyWith(
+      id: id,
+      modelProvider: 'provider-go',
+      model: model,
+      thinkingMode: thinkingMode,
+    );
+
+    // Session A: Go glm-5.2 with an explicit High. Session B: the same route
+    // with NULL thinking (its chip shows the route default, Max).
+    late Session sessionA;
+    late Session sessionB;
+
+    Future<SessionCubit> buildCubit() async {
+      sessionA = goSession('session-a', model: 'glm-5.2', thinkingMode: 'high');
+      sessionB = goSession('session-b', model: 'glm-5.2');
+      client.initialSessions.addAll([sessionA, sessionB]);
+      socket.setConnected(true);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      cacheStore = ConversationCacheStore();
+      cacheRepository = ConversationCacheRepository(cache: cacheStore, transport: conversationRepository);
+      final cubit = SessionCubit(
+        agentCubit: agentCubit,
+        socketService: socket,
+        conversationRepository: conversationRepository,
+        conversationCacheRepository: cacheRepository,
+      );
+      await Future<void>.delayed(Duration.zero);
+      return cubit;
+    }
+
+    test('D1 (live cases 2 and 4a): startup keeps a persisted complete draft route and its explicit thinking', () async {
+      final cubit = await buildCubit();
+      // The user picked flash and an explicit Low on the draft before the restart.
+      cacheStore.setNewConversationDraft(
+        agent.id,
+        providerId: 'provider-go',
+        model: 'deepseek-v4.1-flash',
+        thinkingMode: 'low',
+      );
+      // The last-selected session holds another route.
+      final lastSession = goSession('session-pro', model: 'deepseek-v4-pro', thinkingMode: 'high');
+      cacheStore.applySessionCreated(agent.id, lastSession);
+      cacheStore.recordLastDestination(
+        ConversationDestination.session(deviceId: agent.id, sessionId: lastSession.id),
+      );
+      expect(cubit.state.selectedSession, isNull, reason: 'startup: nothing is open yet');
+
+      await cubit.startNewChat(agent);
+      await Future<void>.delayed(Duration.zero);
+
+      final draft = cacheRepository.newConversationDraft(agent.id);
+      expect(draft.providerId, 'provider-go');
+      expect(draft.model, 'deepseek-v4.1-flash', reason: 'the user-chosen draft route wins over the last session');
+      expect(draft.thinkingMode, 'low', reason: 'the explicit draft thinking is never replaced');
+      await cubit.close();
+    });
+
+    test('D1: startup seeds the draft from the last session only when the draft has no complete route', () async {
+      final cubit = await buildCubit();
+      final lastSession = goSession('session-pro', model: 'deepseek-v4-pro', thinkingMode: 'high');
+      cacheStore.applySessionCreated(agent.id, lastSession);
+      cacheStore.recordLastDestination(
+        ConversationDestination.session(deviceId: agent.id, sessionId: lastSession.id),
+      );
+
+      await cubit.startNewChat(agent);
+      await Future<void>.delayed(Duration.zero);
+
+      final draft = cacheRepository.newConversationDraft(agent.id);
+      expect(draft.providerId, 'provider-go');
+      expect(draft.model, 'deepseek-v4-pro');
+      expect(draft.thinkingMode, 'high');
+      await cubit.close();
+    });
+
+    test('New chat from an open session with an explicit High copies its full route over an existing draft', () async {
+      final cubit = await buildCubit();
+      cacheStore.setNewConversationDraft(
+        agent.id,
+        providerId: 'provider-go',
+        model: 'deepseek-v4.1-flash',
+        thinkingMode: 'low',
+      );
+      await cubit.selectSession(sessionA);
+      await Future<void>.delayed(Duration.zero);
+      expect(cubit.state.selectedSession?.id, sessionA.id);
+
+      await cubit.startNewChat(agent);
+      await Future<void>.delayed(Duration.zero);
+
+      final draft = cacheRepository.newConversationDraft(agent.id);
+      expect(draft.providerId, 'provider-go');
+      expect(draft.model, 'glm-5.2');
+      expect(draft.thinkingMode, 'high', reason: "the open session's explicit value is a user choice");
+      await cubit.close();
+    });
+
+    test('D2: New chat from an open session with NULL thinking carries null, never the route default', () async {
+      final cubit = await buildCubit();
+      cacheStore.setNewConversationDraft(
+        agent.id,
+        providerId: 'provider-go',
+        model: 'deepseek-v4.1-flash',
+        thinkingMode: 'low',
+      );
+      await cubit.selectSession(sessionB);
+      await Future<void>.delayed(Duration.zero);
+      expect(cubit.state.selectedSession?.id, sessionB.id);
+
+      await cubit.startNewChat(agent);
+      await Future<void>.delayed(Duration.zero);
+
+      final draft = cacheRepository.newConversationDraft(agent.id);
+      expect(draft.providerId, 'provider-go');
+      expect(draft.model, 'glm-5.2');
+      expect(draft.thinkingMode, isNull, reason: 'the same route default resolves from null');
+      await cubit.close();
+    });
+  });
+
   test('startNewChat never copies half a route from a provider-less cached session', () async {
     socket.setConnected(true);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
@@ -1764,10 +1888,11 @@ void main() {
     );
     expect(halfRouteSession.modelProvider, isNull);
     final cacheStore = ConversationCacheStore();
+    // The persisted draft holds no complete route of its own (a complete one
+    // would win at startup, Task 122 D1), so the cached session seeds it.
     cacheStore.setNewConversationDraft(
       agent.id,
       text: 'keep my draft',
-      providerId: 'stale-provider',
       model: 'stale-model',
       thinkingMode: 'stale-thinking',
     );
