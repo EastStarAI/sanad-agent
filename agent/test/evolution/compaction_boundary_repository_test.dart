@@ -772,6 +772,68 @@ void main() {
     expect(persisted.diagnostics!.decisionSnapshot?['target_ratio'], 0.10);
   });
 
+  test(
+    'Task 118b D4: a failed operation records its attempts and billed usage in the accounting columns',
+    () {
+      final claim = boundaries.tryClaim(
+        compactionId: 'cmp-failed-accounting',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        sourceRange: _sourceRange(),
+        retainedTailRange: _tailRange(),
+        routeSignature: _route(),
+        startedAt: DateTime.utc(2026, 10, 21, 1),
+      );
+      expect(claim.outcome, CompactionClaimOutcome.claimed);
+
+      boundaries.failStarted(
+        compactionId: 'cmp-failed-accounting',
+        failureReason: CompactionFailureReason.summarizationFailed,
+        completedAt: DateTime.utc(2026, 10, 21, 1, 1),
+        diagnostics: const CompactionDurableDiagnostics(
+          attempts: [
+            CompactionSummarizationAttemptRecord(
+              passKind: 'full',
+              requestId: 'compaction:cmp-failed-accounting:full:0',
+              duration: Duration(seconds: 9),
+              inputTokens: 43925,
+              outputTokens: 440,
+              outcome: 'invalid_response',
+              failureReason: 'summary_schema_mismatch',
+            ),
+            CompactionSummarizationAttemptRecord(
+              passKind: 'repair',
+              requestId: 'compaction:cmp-failed-accounting:repair:1',
+              duration: Duration(seconds: 8),
+              inputTokens: 43956,
+              outputTokens: 455,
+              outcome: 'invalid_response',
+              failureReason: 'summary_invalid_json',
+            ),
+          ],
+          aggregateUsage: {
+            'input_tokens': 87881,
+            'cached_input_tokens': 1920,
+            'output_tokens': 895,
+            'duration_ms': 17000,
+          },
+        ),
+      );
+
+      final row = state.db.select(
+        'SELECT * FROM session_compaction_operations WHERE compaction_id = ?',
+        ['cmp-failed-accounting'],
+      ).single;
+      expect(row['status'], 'failed');
+      expect(row['summarization_attempts'], 2);
+      expect(row['summarization_input_tokens'], 87881);
+      expect(row['summarization_cached_input_tokens'], 1920);
+      expect(row['summarization_output_tokens'], 895);
+      expect(row['summarization_reasoning_tokens'], isNull);
+      expect(row['duration_ms'], 17000);
+    },
+  );
+
   test('reconcilePostBoundaryUsage leaves targetOutcome unknown when target_ratio is absent', () {
     final startedAt = DateTime.utc(2026, 8, 29, 1);
     final claim = boundaries.tryClaim(

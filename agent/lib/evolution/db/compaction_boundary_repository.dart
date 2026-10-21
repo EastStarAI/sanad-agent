@@ -640,12 +640,24 @@ class CompactionBoundaryRepository {
       final diagnosticsJson = effectiveDiagnostics != null
           ? jsonEncode(effectiveDiagnostics.toJson())
           : null;
+      // Task 118b D4: a failed operation accounts for its summarization
+      // attempts and billed usage in the same columns a completed one does.
+      // The before/after estimate columns stay NULL, so no projection metrics
+      // are implied for a failed operation.
+      final usage = diagnostics?.aggregateUsage ?? const <String, int?>{};
       tx.db.execute(
         '''
         UPDATE session_compaction_operations
         SET status = ?, failure_reason = ?, failure_detail_json = ?,
             diagnostics_json = COALESCE(?, diagnostics_json),
-            completed_at = ?
+            completed_at = ?,
+            summarization_attempts = ?,
+            summarization_input_tokens = ?,
+            summarization_cached_input_tokens = ?,
+            summarization_cache_write_tokens = ?,
+            summarization_output_tokens = ?,
+            summarization_reasoning_tokens = ?,
+            duration_ms = COALESCE(?, duration_ms)
         WHERE compaction_id = ? AND status = ?
         ''',
         [
@@ -654,6 +666,13 @@ class CompactionBoundaryRepository {
           detailJson,
           diagnosticsJson,
           completedAt.toUtc().toIso8601String(),
+          diagnostics?.attempts.length ?? 0,
+          usage['input_tokens'],
+          usage['cached_input_tokens'],
+          usage['cache_write_tokens'],
+          usage['output_tokens'],
+          usage['reasoning_tokens'],
+          usage['duration_ms'],
           compactionId,
           CompactionStatus.started.wireValue,
         ],
