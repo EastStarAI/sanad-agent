@@ -501,8 +501,6 @@ class SessionShowCommand extends _BaseSessionSubcommand {
     }
   }
 
-  /// Builds a bounded, reviewer-focused message/tool count summary without
-  /// copying any message/history content into the output.
   /// The latest compaction lifecycle row of hydrated history, so a caller can
   /// poll a compaction that outlived `sanad session compact` (Task 125).
   static Map<String, dynamic>? _latestCompaction(
@@ -520,6 +518,8 @@ class SessionShowCommand extends _BaseSessionSubcommand {
     return null;
   }
 
+  /// Builds a bounded, reviewer-focused message/tool count summary without
+  /// copying any message/history content into the output.
   static Map<String, dynamic> _summarizeMessages(
     List<Map<String, dynamic>> messages,
   ) {
