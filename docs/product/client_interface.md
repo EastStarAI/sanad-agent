@@ -159,14 +159,42 @@ Composer suggestions have distinct interaction types. A no-argument runtime
 action is available only from a leading slash and executes as soon as the user
 chooses it with Enter or the pointer. A skill can be inserted at any slash
 position and remains in the draft until the next submit. These behaviors come
-from the suggestion type rather than a hard-coded command name; inline `@`
-file references can therefore be added later as a separate insertion type.
+from the suggestion type rather than a hard-coded command name.
 
-Dragging and dropping files of any type onto the composer area captures their full local paths and inserts them at the current caret, replacing an active text selection and leaving the caret after the inserted paths. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback. A newly presented New Conversation focuses the message field automatically, and clicking any blank non-control area of the composer transfers focus to that field so typing can begin without targeting the text line precisely.
+A newly presented New Conversation focuses the message field automatically, and
+clicking any blank non-control area of the composer transfers focus to that field
+so typing can begin without targeting the text line precisely. During a drag-over
+action, the composer card displays a highlighted primary border and a matching
+subtle background tint for clear visual feedback; raw path insertion no longer
+exists.
 
-The composer accepts files through image paste, drag-and-drop, and a File Picker opened by the `+` button on the left beside Permission Mode. All three inputs create the same attachment rail above the text field. Image tiles show a thumbnail, safe name, size, status, and remove action; other files use compact icon cards with the same controls. Drag-over keeps the highlighted primary border and subtle tint.
+The composer accepts files through image paste, drag-and-drop, and a File Picker
+opened by the `+` button on the left beside Permission Mode, which now share one
+behavior. Provider-safe images (PNG, JPEG, WebP, GIF) up to 5 MiB become
+attachment-rail items above the text field. Other image formats and non-image
+files become inline file tokens (displaying a file-type icon and name) when the
+active agent runs on the same machine; the token exports as `[name](file:///…)`
+on send, with no count or size cap because nothing is uploaded. When targeting a
+same-machine agent, an image above 5 MiB becomes a token instead of a rejection.
+On a remote agent, those same files become attachment-rail items (up to 5 MiB,
+with a clear rejection above). "Same machine" means a desktop client whose
+active agent shares this machine's hardware identity; web and mobile clients,
+and agents with unknown identity, are always treated as remote. Keyboard paste
+(Cmd/Ctrl+V) uses this routing only while the message field has focus; plain
+text paste is unchanged. File-token names and paths are escaped in the exported
+link, so names with brackets and paths with parentheses survive send and draft
+restore, where a saved draft turns its file links back into tokens.
 
-Each file is limited to 5 MiB regardless of type, with at most four files and 20 MiB total per message. Validation or remote transfer shows progress, and Send remains unavailable until every attachment is ready. A failed item preserves the draft and offers Retry or Remove. On a remote device, the client never sends its local path as runtime input: the file must be admitted on the agent first. Missing hosted attachment capability disables remote attachment admission with a clear error rather than embedding bytes in the conversation command.
+Attachment limits (5 MiB per file, at most four files, and 20 MiB total per
+message) apply to the rail only. Image tiles on the rail show a thumbnail, safe
+name, size, status, and remove action; other files admitted to the rail use
+compact icon cards with the same controls. Validation or remote transfer shows
+progress, and Send remains unavailable until every attachment is ready. A failed
+item preserves the draft and offers Retry or Remove. On a remote device, the
+client never sends its local path as runtime input: the file must be admitted on
+the agent first. Missing hosted attachment capability disables remote attachment
+admission with a clear error rather than embedding bytes in the conversation
+command.
 
 A workspace created elsewhere in the client appears on the selector's first
 opening; users never need to close and reopen the menu to refresh it.

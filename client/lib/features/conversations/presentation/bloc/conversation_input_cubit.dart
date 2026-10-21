@@ -71,6 +71,11 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     emit(state.copyWith(isAwaitingMessageAcceptance: isPending));
   }
 
+  /// Draft-attachment rejection copy shared by the cubit and the composer
+  /// input router so both surfaces report the same reason.
+  static const String attachmentsUnsupportedError = 'Attachments are not supported by this agent.';
+  static const String attachmentTooLargeError = 'Each attachment must be 5 MiB or smaller.';
+
   Future<void> addDraftAttachment({
     required String name,
     required Uint8List bytes,
@@ -80,22 +85,32 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     if (!capability.supportsAttachments) {
       emit(
         state.copyWith(
-          attachmentError: 'Attachments are not supported by this agent.',
+          attachmentError: attachmentsUnsupportedError,
         ),
       );
       return;
     }
     final current = state.draftAttachments;
-    if (bytes.length > capability.attachmentMaxFileBytes) {
-      emit(state.copyWith(attachmentError: 'Each attachment must be 5 MiB or smaller.'));
+    final maxFileBytes = capability.attachmentMaxFileBytes > 0
+        ? capability.attachmentMaxFileBytes
+        : Capability.defaultAttachmentMaxFileBytes;
+    final maxFiles = capability.attachmentMaxFilesPerMessage > 0
+        ? capability.attachmentMaxFilesPerMessage
+        : Capability.defaultAttachmentMaxFilesPerMessage;
+    final maxTotalBytes = capability.attachmentMaxTotalBytesPerMessage > 0
+        ? capability.attachmentMaxTotalBytesPerMessage
+        : Capability.defaultAttachmentMaxTotalBytesPerMessage;
+
+    if (bytes.length > maxFileBytes) {
+      emit(state.copyWith(attachmentError: attachmentTooLargeError));
       return;
     }
-    if (current.length >= capability.attachmentMaxFilesPerMessage) {
+    if (current.length >= maxFiles) {
       emit(state.copyWith(attachmentError: 'A message accepts at most 4 attachments.'));
       return;
     }
     final total = current.fold<int>(0, (sum, item) => sum + item.sizeBytes) + bytes.length;
-    if (total > capability.attachmentMaxTotalBytesPerMessage) {
+    if (total > maxTotalBytes) {
       emit(state.copyWith(attachmentError: 'Attachments must total 20 MiB or less per message.'));
       return;
     }
@@ -136,6 +151,14 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         clearAttachmentError: true,
       ),
     );
+  }
+
+  void setAttachmentError(String error) {
+    emit(state.copyWith(attachmentError: error));
+  }
+
+  void clearAttachmentError() {
+    emit(state.copyWith(clearAttachmentError: true));
   }
 
   void retryDraftAttachment(String id) {

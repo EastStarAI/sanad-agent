@@ -13,6 +13,7 @@ import 'package:sanad_client/utils/link_utils.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/file_reference_link.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/multiline_submission_shortcuts.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
@@ -1002,14 +1003,11 @@ class UserMessageLinkBuilder extends MarkdownElementBuilder {
     );
   }
 
-  static final RegExp _fileLinkPattern = RegExp(
-    r'\[([^\]]*)\]\(\s*<?file:(?:[^()\s>]|\([^()\s]*\))*>?\s*\)',
-    caseSensitive: false,
-  );
-
   /// Approximates the rendered text of a user message for line measurement:
   /// a `file://` reference renders as a compact icon + name chip, so its raw
   /// percent-encoded URI must not count toward the collapsed-line budget.
-  static String measurableText(String text) =>
-      text.replaceAllMapped(_fileLinkPattern, (match) => '\u2003${match.group(1) ?? ''}');
+  static String measurableText(String text) => text.replaceAllMapped(
+    FileReferenceLink.pattern,
+    (match) => '\u2003${FileReferenceLink.unescapeLabel(match.group(1) ?? '')}',
+  );
 }
