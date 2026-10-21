@@ -115,6 +115,11 @@ class FileExtensionIcon extends StatelessWidget {
       case 'webp':
       case 'ico':
       case 'bmp':
+      case 'heic':
+      case 'heif':
+      case 'tif':
+      case 'tiff':
+      case 'avif':
         return 'assets/file_icons/image.svg';
       case 'zip':
       case 'tar':

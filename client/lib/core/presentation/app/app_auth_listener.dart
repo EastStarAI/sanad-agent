@@ -7,6 +7,7 @@ import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/conversations/data/repositories/conversation_media_byte_cache.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
@@ -22,9 +23,12 @@ class AppAuthListener extends StatefulWidget {
   final ConversationCacheRepository conversationCacheRepository;
   final ConversationCachePersistor conversationCachePersistor;
   final GlobalKey<NavigatorState> navigatorKey;
+
+  /// Conversation media bytes; hosted entries are bound to the signed-in account.
+  final ConversationMediaByteCache mediaByteCache;
   final Widget child;
 
-  const AppAuthListener({
+  AppAuthListener({
     super.key,
     required this.authService,
     required this.socketService,
@@ -34,8 +38,9 @@ class AppAuthListener extends StatefulWidget {
     required this.conversationCacheRepository,
     required this.conversationCachePersistor,
     required this.navigatorKey,
+    ConversationMediaByteCache? mediaByteCache,
     required this.child,
-  });
+  }) : mediaByteCache = mediaByteCache ?? ConversationMediaByteCache.shared;
 
   @override
   State<AppAuthListener> createState() => _AppAuthListenerState();
@@ -130,6 +135,8 @@ class _AppAuthListenerState extends State<AppAuthListener> {
     return BlocListener<AuthCubit, AuthState>(
       listener: (context, state) {
         if (state is AuthAuthenticated) {
+          // Hosted media bytes never outlive the account that fetched them.
+          widget.mediaByteCache.bindAccount(state.userId);
           unawaited(widget.authService.syncExternalSession(state.accessToken));
           unawaited(widget.syncAuthContext());
           // A login cycle may have released Client CLI endpoint ownership while
@@ -152,6 +159,7 @@ class _AppAuthListenerState extends State<AppAuthListener> {
               .where((deviceId) => deviceId != localDeviceId)
               .toSet();
           widget.conversationCacheRepository.clearCloudUserScope(cloudDeviceIds);
+          widget.mediaByteCache.bindAccount(null);
           unawaited(widget.conversationCachePersistor.flush());
           context.read<DeviceConnectionCoordinator>().clearEventDeduplicationState();
           unawaited(context.read<DeviceCubit>().resetForLogout());

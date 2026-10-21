@@ -6,6 +6,7 @@ import '../../core/models/tool_call.dart';
 import '../../core/models/tool_execution_result.dart';
 import '../../core/models/user_attachment.dart';
 import '../../evolution/attachments/attachment_store.dart';
+import 'user_attachment_wire_discloser.dart';
 
 abstract final class ToolResultWireCodec {
   static bool hasImages(List<Message> history) => history.any(
@@ -17,9 +18,7 @@ abstract final class ToolResultWireCodec {
                 true) ||
         (message.role == MessageRole.user &&
             message.attachments.any(
-              (att) =>
-                  att.kind == UserAttachmentKind.image ||
-                  att.mimeType.toLowerCase().startsWith('image/'),
+              UserAttachmentWireDiscloser.isProviderSafeImage,
             )),
   );
 
@@ -103,24 +102,34 @@ abstract final class ToolResultWireCodec {
     required Map<String, dynamic> Function(Message) messageToWire,
     required bool supportsImageInput,
     Map<String, String>? verifiedAttachments,
+    AttachmentStore? attachmentStore,
   }) {
     final output = <Map<String, dynamic>>[];
     for (var index = 0; index < history.length;) {
       final message = history[index];
       if (message.role == MessageRole.user) {
-        final wire = messageToWire(message);
-        if (supportsImageInput && message.attachments.isNotEmpty) {
+        final partition = UserAttachmentWireDiscloser.partition(
+          message.attachments,
+        );
+        final effectiveText = UserAttachmentWireDiscloser.discloseContent(
+          originalContent: message.content,
+          nonSafeAttachments: partition.disclosedFiles,
+          attachmentStore: attachmentStore,
+        );
+        final wire = messageToWire(
+          partition.hasDisclosedFiles
+              ? message.copyWith(content: effectiveText)
+              : message,
+        );
+        if (supportsImageInput && partition.hasSafeImages) {
           final userImages = <String>[];
-          for (final att in message.attachments) {
-            if (att.kind == UserAttachmentKind.image ||
-                att.mimeType.toLowerCase().startsWith('image/')) {
-              final b64 = userAttachmentBase64(
-                att,
-                preloadedBase64: verifiedAttachments,
-              );
-              if (b64 != null) {
-                userImages.add(b64);
-              }
+          for (final att in partition.safeImages) {
+            final b64 = userAttachmentBase64(
+              att,
+              preloadedBase64: verifiedAttachments,
+            );
+            if (b64 != null) {
+              userImages.add(b64);
             }
           }
           if (userImages.isNotEmpty) {
@@ -360,10 +369,9 @@ abstract final class ToolResultWireCodec {
     UserAttachment attachment, {
     required AttachmentStore? attachmentStore,
   }) async {
-    if (attachment.kind != UserAttachmentKind.image &&
-        !attachment.mimeType.toLowerCase().startsWith('image/')) {
+    if (!UserAttachmentWireDiscloser.isProviderSafeImage(attachment)) {
       throw StateError(
-        'Attachment "${attachment.safeName}" (${attachment.id}) is not an image attachment.',
+        'Attachment "${attachment.safeName}" (${attachment.id}) is not a provider-safe image attachment.',
       );
     }
 
@@ -396,8 +404,7 @@ abstract final class ToolResultWireCodec {
     for (final message in history) {
       if (message.role == MessageRole.user) {
         for (final att in message.attachments) {
-          if (att.kind == UserAttachmentKind.image ||
-              att.mimeType.toLowerCase().startsWith('image/')) {
+          if (UserAttachmentWireDiscloser.isProviderSafeImage(att)) {
             result[att.id] = await readVerifiedUserAttachmentBase64(
               att,
               attachmentStore: attachmentStore,

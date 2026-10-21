@@ -159,14 +159,49 @@ Composer suggestions have distinct interaction types. A no-argument runtime
 action is available only from a leading slash and executes as soon as the user
 chooses it with Enter or the pointer. A skill can be inserted at any slash
 position and remains in the draft until the next submit. These behaviors come
-from the suggestion type rather than a hard-coded command name; inline `@`
-file references can therefore be added later as a separate insertion type.
+from the suggestion type rather than a hard-coded command name.
 
-Dragging and dropping files of any type onto the composer area captures their full local paths and inserts them at the current caret, replacing an active text selection and leaving the caret after the inserted paths. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback. A newly presented New Conversation focuses the message field automatically, and clicking any blank non-control area of the composer transfers focus to that field so typing can begin without targeting the text line precisely.
+A newly presented New Conversation focuses the message field automatically, and
+clicking any blank non-control area of the composer transfers focus to that field
+so typing can begin without targeting the text line precisely. During a drag-over
+action, the composer card displays a highlighted primary border and a matching
+subtle background tint for clear visual feedback; raw path insertion no longer
+exists.
 
-The composer accepts files through image paste, drag-and-drop, and a File Picker opened by the `+` button on the left beside Permission Mode. All three inputs create the same attachment rail above the text field. Image tiles show a thumbnail, safe name, size, status, and remove action; other files use compact icon cards with the same controls. Drag-over keeps the highlighted primary border and subtle tint.
+The composer accepts files through image paste, drag-and-drop, and a File Picker
+opened by the `+` button on the left beside Permission Mode, which now share one
+behavior. Provider-safe images (PNG, JPEG, WebP, GIF) up to 5 MiB become
+attachment-rail items above the text field. Other image formats and non-image
+files become inline file tokens (displaying a file-type icon and name) when the
+active agent runs on the same machine; the token exports as a Markdown link (label: the file name;
+destination: its `file:///…` URL) on send, with no count or size cap because nothing is uploaded. When targeting a
+same-machine agent, an image above 5 MiB becomes a token instead of a rejection.
+On a remote agent, those same files become attachment-rail items (up to 5 MiB,
+with a clear rejection above). "Same machine" means a desktop client whose
+active agent shares this machine's hardware identity; web and mobile clients,
+and agents with unknown identity, are always treated as remote. Keyboard paste
+(Cmd/Ctrl+V) uses this routing only while the message field has focus; plain
+text paste is unchanged. File-token names and paths are escaped in the exported
+link, so names with brackets and paths with parentheses survive send and draft
+restore, where a saved draft turns its file links back into tokens.
 
-Each file is limited to 5 MiB regardless of type, with at most four files and 20 MiB total per message. Validation or remote transfer shows progress, and Send remains unavailable until every attachment is ready. A failed item preserves the draft and offers Retry or Remove. On a remote device, the client never sends its local path as runtime input: the file must be admitted on the agent first. Missing hosted attachment capability disables remote attachment admission with a clear error rather than embedding bytes in the conversation command.
+Attachment limits (by default 5 MiB per file, at most four files, and 20 MiB
+total per message, or the limits the agent advertises) apply to the rail only.
+A rejected file shows a short localized message stating the limit that applied,
+with a close control. The message is temporary: it disappears when dismissed,
+when any attachment is removed, after the next successful add, on Send, and when
+switching to another conversation, and it never comes back with a restored
+draft. The inline message editor behaves the same way. Image tiles on the rail show a thumbnail, safe
+name, size, status, and remove action; other files admitted to the rail use
+compact cards with the same controls and the same file-type icon as file
+references. Sent messages and the inline message editor show non-image
+attachments with that file-type icon too. Validation or remote transfer shows
+progress, and Send remains unavailable until every attachment is ready. A failed
+item preserves the draft and offers Retry or Remove. On a remote device, the
+client never sends its local path as runtime input: the file must be admitted on
+the agent first. Missing hosted attachment capability disables remote attachment
+admission with a clear error rather than embedding bytes in the conversation
+command.
 
 A workspace created elsewhere in the client appears on the selector's first
 opening; users never need to close and reopen the menu to refresh it.
@@ -181,13 +216,35 @@ The conversation timeline renders Markdown, code, reasoning summaries, tool
 activity, permission requests, recovery notices, and final responses. User
 messages render ordered image thumbnails and file cards above their text;
 activating an image opens an accessible lightbox, while supported files use a
-safe preview and other files use an authenticated download. Internal agent
+safe preview and other files use an authenticated download. Single line breaks
+typed with Shift+Enter stay visible as line breaks in the user message instead
+of collapsing into spaces, and `file://` file references render as inert
+icon-and-name chips (full path in the tooltip) that never navigate, while
+ordinary `http`/`https` links keep their existing style and open behavior. Chips
+and links flow inline with the surrounding paragraph, and the collapsed
+"Read more" measure counts a file reference by its displayed name rather than
+its raw URI. Internal agent
 paths and media credentials are never displayed.
 
 A `view_image` tool row is titled `View Image` and places its thumbnail directly
 below the title. It loads only near the viewport and opens the full image on
 activation. Local and remote routes present the same row; expired or pruned
-media leaves the row visible with `Image no longer available`. Multiline
+media leaves the row visible with `Image no longer available`.
+
+When several images sit together (a gallery of consecutive View Image or
+screenshot results, or the images attached to one message), the lightbox shows
+previous/next arrows and a `2 / 5` counter. It stops at the first and last
+image rather than wrapping. Arrows follow reading direction, so in Arabic the
+next image is on the left, and the keyboard Left/Right arrows move toward the
+arrow on that side. A single image shows no arrows. A Download button saves the
+shown image to the Downloads folder on macOS, Windows, and Linux under its
+attachment name, or `image-<date>-<time>` for tool images. An existing file is
+never replaced: a ` (1)` style number is added instead. A short localized
+message names the saved file or reports the failure. On Web the browser
+downloads the image; on mobile the button is hidden. Images already seen are
+kept in a bounded in-memory cache per device, so returning to a conversation,
+gallery, or lightbox shows them immediately without loading again. Images from
+cloud devices are forgotten on sign-out or when another account signs in. Multiline
 Markdown code blocks keep programming languages and untyped `Code` content LTR,
 opening long lines from the left even when they contain Arabic strings. Fenced
 `text` blocks detect their own content direction and open from the right for

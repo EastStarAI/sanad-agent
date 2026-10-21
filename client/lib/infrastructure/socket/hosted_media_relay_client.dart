@@ -175,13 +175,17 @@ class HostedMediaRelayClient {
     String uploadId,
     bool Function(Map<String, dynamic>) accepted,
   ) async {
+    // A terminal rejection may arrive while any phase (start, chunk) is still
+    // waiting; it ends the upload at once instead of waiting for the timeout.
+    bool rejected(Map<String, dynamic> event) =>
+        event['_event'] == 'attachment_upload_error' ||
+        (event['state'] == 'terminal' && event['outcome'] != 'accepted');
     final event = await _attachmentRelayController.stream
         .firstWhere(
-          (event) =>
-              event['upload_id'] == uploadId && (event['_event'] == 'attachment_upload_error' || accepted(event)),
+          (event) => event['upload_id'] == uploadId && (rejected(event) || accepted(event)),
         )
         .timeout(const Duration(seconds: 30));
-    if (event['_event'] == 'attachment_upload_error') {
+    if (rejected(event)) {
       throw StateError('Attachment admission failed: ${event['error_code']}');
     }
     return event;

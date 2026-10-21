@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:super_clipboard/super_clipboard.dart';
@@ -17,6 +16,10 @@ import 'package:sanad_client/features/conversations/presentation/bloc/session_cu
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/composer_input_router.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/draft_attachment_error_text.dart';
+import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
+import 'package:sanad_client/l10n/app_localizations_en.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/provider_route_label.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
@@ -78,6 +81,7 @@ class ConversationInputComposer extends StatelessWidget {
   final GlobalKey<PopupMenuButtonState<String>> agentSelectorKey;
   final Future<void> Function(DeviceConfig? activeAgent) onPickAndCreateWorkspace;
   final Future<List<XFile>> Function()? pickAttachmentFiles;
+  final Future<ClipboardReader?> Function()? readClipboard;
 
   final int maxLines;
 
@@ -99,6 +103,7 @@ class ConversationInputComposer extends StatelessWidget {
     required this.agentSelectorKey,
     required this.onPickAndCreateWorkspace,
     this.pickAttachmentFiles,
+    this.readClipboard,
     this.maxLines = 8,
     this.sessionId,
   });
@@ -149,9 +154,13 @@ class ConversationInputComposer extends StatelessWidget {
               ),
               const SizedBox(height: 10),
             ],
-            _AttachmentPasteListener(
+            _ComposerPasteCapture(
+              chatController: chatController,
               chatFocusNode: chatFocusNode,
+              agentSlice: agentSlice,
               capabilities: capabilities,
+              readClipboard: readClipboard,
+              sessionId: sessionId,
               child: _UnifiedComposerContainer(
                 chatController: chatController,
                 chatFocusNode: chatFocusNode,
@@ -214,81 +223,208 @@ class ConversationInputComposer extends StatelessWidget {
   }
 }
 
-class _AttachmentPasteListener extends StatefulWidget {
-  const _AttachmentPasteListener({
-    required this.chatFocusNode,
-    required this.capabilities,
-    required this.child,
-  });
-
-  final FocusNode chatFocusNode;
-  final Capability capabilities;
-  final Widget child;
-
-  @override
-  State<_AttachmentPasteListener> createState() => _AttachmentPasteListenerState();
+class ComposerPasteIntent extends Intent {
+  const ComposerPasteIntent();
 }
 
-class _AttachmentPasteListenerState extends State<_AttachmentPasteListener> {
-  ClipboardEvents? _events;
+/// Routes Cmd/Ctrl+V to the composer paste pipeline only while the message
+/// field owns focus. When it does not, the action is disabled so the shortcut
+/// falls through to the focused field's own paste behavior.
+class _ComposerPasteAction extends Action<ComposerPasteIntent> {
+  _ComposerPasteAction({required this.isComposerFocused, required this.onPaste});
+
+  final bool Function() isComposerFocused;
+  final VoidCallback onPaste;
 
   @override
-  void initState() {
-    super.initState();
-    _events = ClipboardEvents.instance;
-    _events?.registerPasteEventListener(_onPasteEvent);
-  }
+  bool isEnabled(ComposerPasteIntent intent) => isComposerFocused();
 
   @override
-  void dispose() {
-    _events?.unregisterPasteEventListener(_onPasteEvent);
-    super.dispose();
+  Object? invoke(ComposerPasteIntent intent) {
+    onPaste();
+    return null;
+  }
+}
+
+class _ComposerPasteCapture extends StatefulWidget {
+  const _ComposerPasteCapture({
+    this.sessionId,
+    required this.chatController,
+    required this.chatFocusNode,
+    required this.agentSlice,
+    required this.capabilities,
+    required this.child,
+    this.readClipboard,
+  });
+
+  final SlashCommandTextController chatController;
+  final FocusNode chatFocusNode;
+  final ConversationInputAgentSlice agentSlice;
+  final Capability capabilities;
+  final Widget child;
+  final Future<ClipboardReader?> Function()? readClipboard;
+
+  /// The conversation this composer shows; a paste completes into its draft.
+  final String? sessionId;
+
+  @override
+  State<_ComposerPasteCapture> createState() => _ComposerPasteCaptureState();
+}
+
+class _ComposerPasteCaptureState extends State<_ComposerPasteCapture> {
+  static const List<FileFormat> _supportedImageFormats = [
+    Formats.png,
+    Formats.jpeg,
+    Formats.webp,
+    Formats.gif,
+    Formats.tiff,
+    Formats.bmp,
+    Formats.heic,
+    Formats.heif,
+    Formats.svg,
+    Formats.ico,
+  ];
+
+  static String _extensionForFormat(FileFormat format) {
+    if (format == Formats.png) return 'png';
+    if (format == Formats.jpeg) return 'jpg';
+    if (format == Formats.webp) return 'webp';
+    if (format == Formats.gif) return 'gif';
+    if (format == Formats.tiff) return 'tiff';
+    if (format == Formats.bmp) return 'bmp';
+    if (format == Formats.heic) return 'heic';
+    if (format == Formats.heif) return 'heif';
+    if (format == Formats.svg) return 'svg';
+    if (format == Formats.ico) return 'ico';
+    return 'png';
   }
 
-  void _onPasteEvent(ClipboardReadEvent event) {
-    if (!widget.chatFocusNode.hasFocus) return;
-    unawaited(_readImage(awaitReader: event.getClipboardReader));
-  }
+  Future<void> _handlePaste(BuildContext context) async {
+    // Bind the paste to the conversation shown now: clipboard reads are async
+    // and the composer may rebind before every file is routed.
+    final draftScope = ConversationInputCubit.draftScopeKey(
+      deviceId: widget.agentSlice.activeAgent?.id,
+      sessionId: widget.sessionId,
+    );
+    final readerFuture = widget.readClipboard?.call() ?? SystemClipboard.instance?.read();
 
-  Future<void> _readImage({
-    required Future<ClipboardReader> Function() awaitReader,
-  }) async {
+    if (readerFuture == null) {
+      _fallbackTextPaste();
+      return;
+    }
+
     try {
-      final reader = await awaitReader();
-      for (final item in reader.items) {
-        if (!item.canProvide(Formats.png)) continue;
-        final bytes = await item.readFileBytes(Formats.png);
-        if (!mounted || bytes == null) return;
-        await context.read<ConversationInputCubit>().addDraftAttachment(
-          name: 'pasted-image.png',
-          bytes: bytes,
-          source: DraftAttachmentSource.paste,
-          capability: widget.capabilities,
-        );
+      final reader = await readerFuture;
+      if (reader == null || !mounted) {
+        _fallbackTextPaste();
         return;
       }
+
+      final hasFileOrImage = reader.items.any(
+        (item) => item.canProvide(Formats.fileUri) || _supportedImageFormats.any(item.canProvide),
+      );
+
+      if (!hasFileOrImage) {
+        _fallbackTextPaste();
+        return;
+      }
+
+      final items = <ComposerRoutableItem>[];
+      final seenPaths = <String>{};
+      var unreadable = 0;
+
+      // Each clipboard item is read on its own: one unreadable item is
+      // reported and never discards the other pasted files.
+      for (final item in reader.items) {
+        try {
+          final routable = await _readClipboardItem(item, seenPaths);
+          if (routable != null) items.add(routable);
+        } catch (_) {
+          unreadable++;
+        }
+      }
+
+      if (items.isEmpty && unreadable > 0) {
+        _maybeInputCubit(context)?.setAttachmentError(const DraftAttachmentError(DraftAttachmentErrorKind.readFailed));
+        return;
+      }
+      if (items.isEmpty) {
+        _fallbackTextPaste();
+        return;
+      }
+
+      final cubit = _maybeInputCubit(context);
+      if (cubit != null) {
+        await ComposerInputRouter.routeItems(
+          items: items,
+          controller: widget.chatController,
+          inputCubit: cubit,
+          activeAgent: widget.agentSlice.activeAgent,
+          capability: widget.capabilities,
+          source: DraftAttachmentSource.paste,
+          draftScope: draftScope,
+        );
+        if (unreadable > 0) {
+          cubit.setAttachmentError(const DraftAttachmentError(DraftAttachmentErrorKind.readFailed));
+        }
+      }
+      widget.chatFocusNode.requestFocus();
     } catch (_) {
-      // Normal text paste must remain unaffected when image extraction fails.
+      _fallbackTextPaste();
     }
   }
 
-  KeyEventResult _onKeyEvent(FocusNode _, KeyEvent event) {
-    if (_events != null || event is! KeyDownEvent) return KeyEventResult.ignored;
-    final isPaste =
-        event.logicalKey == LogicalKeyboardKey.keyV &&
-        (HardwareKeyboard.instance.isMetaPressed || HardwareKeyboard.instance.isControlPressed);
-    final clipboard = SystemClipboard.instance;
-    if (isPaste && clipboard != null) {
-      unawaited(_readImage(awaitReader: clipboard.read));
+  /// Reads one clipboard item into a routable item, or `null` when it holds
+  /// nothing attachable. Throws when the item cannot be read.
+  Future<ComposerRoutableItem?> _readClipboardItem(ClipboardDataReader item, Set<String> seenPaths) async {
+    if (item.canProvide(Formats.fileUri)) {
+      final uri = await item.readValue(Formats.fileUri);
+      if (uri == null || !uri.isScheme('file')) return null;
+      final filePath = uri.toFilePath();
+      return seenPaths.add(filePath) ? ComposerRoutableItem.fromFilePathSync(filePath) : null;
     }
-    return KeyEventResult.ignored;
+    for (final format in _supportedImageFormats) {
+      if (!item.canProvide(format)) continue;
+      final bytes = await item.readFileBytes(format);
+      if (bytes != null && bytes.isNotEmpty) {
+        return ComposerRoutableItem.fromImageBytes(
+          bytes: bytes,
+          formatName: _extensionForFormat(format),
+          suggestedName: await item.getSuggestedName(),
+        );
+      }
+    }
+    return null;
+  }
+
+  void _fallbackTextPaste() {
+    final focusContext = widget.chatFocusNode.context;
+    if (focusContext != null && focusContext.mounted) {
+      Actions.maybeInvoke(
+        focusContext,
+        const PasteTextIntent(SelectionChangedCause.keyboard),
+      );
+    }
   }
 
   @override
-  Widget build(BuildContext context) => Focus(
-    onKeyEvent: _onKeyEvent,
-    child: widget.child,
-  );
+  Widget build(BuildContext context) {
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.keyV, meta: true): ComposerPasteIntent(),
+        SingleActivator(LogicalKeyboardKey.keyV, control: true): ComposerPasteIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          ComposerPasteIntent: _ComposerPasteAction(
+            isComposerFocused: () => widget.chatFocusNode.hasFocus,
+            onPaste: () => unawaited(_handlePaste(context)),
+          ),
+        },
+        child: widget.child,
+      ),
+    );
+  }
 }
 
 extension on DataReader {
@@ -319,7 +455,7 @@ class _AttachmentRail extends StatelessWidget {
   });
 
   final List<DraftAttachment> attachments;
-  final String? error;
+  final DraftAttachmentError? error;
   final Color borderColor;
   final Color dimTextColor;
 
@@ -359,7 +495,7 @@ class _AttachmentRail extends StatelessWidget {
                                     errorBuilder: (_, _, _) => const Icon(Symbols.image, size: 20),
                                   ),
                                 )
-                              : const Icon(Symbols.draft, size: 20),
+                              : Center(child: FileExtensionIcon(fileName: attachment.name, size: 20)),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
@@ -398,19 +534,47 @@ class _AttachmentRail extends StatelessWidget {
                   ),
               ],
             ),
-          if (error != null) ...[
+          if (error case final error?) ...[
             const SizedBox(height: 6),
-            Text(
-              error!,
-              key: const Key('attachment_error'),
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontSize: 12,
-              ),
+            _AttachmentErrorLine(
+              error: error,
+              onDismiss: () => context.read<ConversationInputCubit>().clearAttachmentError(),
             ),
           ],
         ],
       ),
+    );
+  }
+}
+
+/// Transient attachment rejection with an explicit dismiss control.
+class _AttachmentErrorLine extends StatelessWidget {
+  const _AttachmentErrorLine({required this.error, required this.onDismiss});
+
+  final DraftAttachmentError error;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context) ?? AppLocalizationsEn();
+    final color = Theme.of(context).colorScheme.error;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            DraftAttachmentErrorText.describe(l10n, error),
+            key: const Key('attachment_error'),
+            style: TextStyle(color: color, fontSize: 12),
+          ),
+        ),
+        IconButton(
+          key: const Key('attachment_error_dismiss'),
+          tooltip: l10n.attachmentErrorDismiss,
+          onPressed: onDismiss,
+          icon: Icon(Symbols.close, size: 16, color: color),
+          visualDensity: VisualDensity.compact,
+        ),
+      ],
     );
   }
 }
@@ -474,6 +638,7 @@ class _UnifiedComposerContainer extends StatelessWidget {
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (inputSlice.pendingSuspendedRequest != null)
             Padding(
@@ -579,16 +744,7 @@ class _UnifiedComposerContainer extends StatelessWidget {
       onTap: chatFocusNode.requestFocus,
       child: composerCard,
     );
-    if (!capabilities.supportsAttachments) return focusSurface;
-    return DropTarget(
-      onDragDone: (details) async {
-        for (final file in details.files) {
-          await _addFile(context, file, DraftAttachmentSource.drop);
-        }
-        chatFocusNode.requestFocus();
-      },
-      child: focusSurface,
-    );
+    return focusSurface;
   }
 
   Widget _buildAttachmentRail(BuildContext context) {
@@ -609,23 +765,23 @@ class _UnifiedComposerContainer extends StatelessWidget {
 
   Future<void> _pickFiles(BuildContext context) async {
     final files = await (pickAttachmentFiles ?? openFiles)();
+    final items = <ComposerRoutableItem>[];
     for (final file in files) {
-      await _addFile(context, file, DraftAttachmentSource.picker);
+      items.add(await ComposerRoutableItem.fromXFile(file));
+    }
+    final cubit = _maybeInputCubit(context);
+    if (cubit != null && items.isNotEmpty) {
+      await ComposerInputRouter.routeItems(
+        items: items,
+        controller: chatController,
+        inputCubit: cubit,
+        activeAgent: agentSlice.activeAgent,
+        capability: capabilities,
+        source: DraftAttachmentSource.picker,
+        draftScope: ConversationInputCubit.draftScopeKey(deviceId: agentSlice.activeAgent?.id, sessionId: sessionId),
+      );
     }
     chatFocusNode.requestFocus();
-  }
-
-  Future<void> _addFile(
-    BuildContext context,
-    XFile file,
-    DraftAttachmentSource source,
-  ) async {
-    await context.read<ConversationInputCubit>().addDraftAttachment(
-      name: file.name,
-      bytes: await file.readAsBytes(),
-      source: source,
-      capability: capabilities,
-    );
   }
 
   Widget _buildBottomRow(BuildContext context) {

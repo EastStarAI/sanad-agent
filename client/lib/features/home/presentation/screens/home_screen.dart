@@ -22,6 +22,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/session_si
 import 'package:sanad_client/features/conversations/presentation/bloc/session_search_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_app_bar.dart';
+import 'package:sanad_client/features/devices/presentation/bloc/device_capabilities_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
@@ -793,6 +794,7 @@ class _MainContent extends StatelessWidget {
       composerSessionId: composerSessionId,
       viewImageMediaLoader: mediaLoaders.viewImage,
       userAttachmentMediaLoader: mediaLoaders.attachment,
+      attachmentCapability: () => context.read<DeviceCapabilitiesCubit>().state.getForAgent(presentedDeviceId ?? ''),
       initialViewportAnchorEventId: viewportAnchorEventId,
       followLatestOnOpen: hasActiveWork,
       activityEligible: activityEligible,

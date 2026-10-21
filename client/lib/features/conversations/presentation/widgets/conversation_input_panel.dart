@@ -15,7 +15,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/compaction_failure_formatter.dart';
-import 'package:sanad_client/features/conversations/presentation/utils/composer_text_editing.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/composer_input_router.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/skill_composer_utils.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
@@ -607,15 +607,8 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
   void _setComposerText(String text) {
     _isSettingDraftText = true;
-    _chatController.text = text;
+    _chatController.setDraftText(text);
     _isSettingDraftText = false;
-  }
-
-  void _insertDroppedPaths(Iterable<String> paths) {
-    final next = insertDroppedPathsAtSelection(_chatController.value, paths);
-    if (next == _chatController.value) return;
-    _chatController.value = next;
-    _chatFocusNode.requestFocus();
   }
 
   String? _deviceIdFromState(DeviceState deviceState) {
@@ -762,11 +755,25 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
           _isDragging = false;
         });
       },
-      onDragDone: (details) {
+      onDragDone: (details) async {
         setState(() {
           _isDragging = false;
         });
-        _insertDroppedPaths(details.files.map((file) => file.path));
+        final items = details.files.map(ComposerRoutableItem.fromXFileSync).toList();
+        if (items.isEmpty) return;
+        final deviceState = context.read<DeviceCubit>().state;
+        final activeAgent = deviceState is DeviceActive ? deviceState.activeAgent : null;
+        final capabilities = context.read<DeviceCapabilitiesCubit>().state.getForAgent(activeAgent?.id ?? '');
+        await ComposerInputRouter.routeItems(
+          items: items,
+          controller: _chatController,
+          inputCubit: _inputCubit,
+          activeAgent: activeAgent,
+          capability: capabilities,
+          source: DraftAttachmentSource.drop,
+          draftScope: ConversationInputCubit.draftScopeKey(deviceId: activeAgent?.id, sessionId: widget.sessionId),
+        );
+        _chatFocusNode.requestFocus();
       },
       child: Container(
         margin: const EdgeInsets.only(left: 8, right: 8, bottom: 8),

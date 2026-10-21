@@ -13,6 +13,7 @@ import 'package:sanad_client/features/conversations/domain/models/device_suspend
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
@@ -1200,7 +1201,10 @@ void main() {
       id: 'agent-1',
       name: 'SanadAgent',
       isOnline: true,
-      metadata: const {'is_local_reachable': true},
+      metadata: const {
+        'is_local_reachable': true,
+        'is_local_candidate': true,
+      },
     );
     agentRepository.seedAgents([agent], activeAgentId: agent.id);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
@@ -1231,11 +1235,14 @@ void main() {
     );
     await tester.pump();
 
-    // Verify input text is updated to the file path
+    // Verify input text represents a file token (no raw absolute path text in controller.text)
     final textFieldFinder = find.byKey(const Key('chat_input'));
     expect(textFieldFinder, findsOneWidget);
     final TextField textField1 = tester.widget(textFieldFinder);
-    expect(textField1.controller?.text, '/path/to/first_file.txt ');
+    final controller1 = textField1.controller as SlashCommandTextController;
+    expect(controller1.text.contains('/path/to/first_file.txt'), isFalse);
+    expect(controller1.fileTokensByMarker, hasLength(1));
+    expect(controller1.exportPlainText(), '[first_file.txt](file:///path/to/first_file.txt) ');
 
     // 2. Drop multiple files on a non-empty input
     dropTarget.onDragDone?.call(
@@ -1251,7 +1258,13 @@ void main() {
     await tester.pump();
 
     final TextField textField2 = tester.widget(textFieldFinder);
-    expect(textField2.controller?.text, '/path/to/first_file.txt /path/to/second_file.jpg /path/to/third_file.png ');
+    final controller2 = textField2.controller as SlashCommandTextController;
+    expect(controller2.text.contains('/path/to/second_file.jpg'), isFalse);
+    expect(controller2.fileTokensByMarker, hasLength(3));
+    expect(
+      controller2.exportPlainText(),
+      '[first_file.txt](file:///path/to/first_file.txt) [second_file.jpg](file:///path/to/second_file.jpg) [third_file.png](file:///path/to/third_file.png) ',
+    );
   });
 }
 

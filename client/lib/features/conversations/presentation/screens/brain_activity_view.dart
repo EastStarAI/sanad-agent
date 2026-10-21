@@ -24,6 +24,11 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
+import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/draft_attachment_error_text.dart';
+import 'package:sanad_client/features/devices/domain/models/capability.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/l10n/app_localizations_en.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -67,6 +72,11 @@ class BrainActivityView extends StatefulWidget {
   final Future<void> Function()? onLoadNewerHistory;
   final Future<void> Function(String eventId)? onLoadAnchoredHistory;
   final Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles;
+
+  /// The presented device's attachment capability, read when an inline-edit
+  /// attachment is validated so it enforces the same limits as the composer.
+  /// `null` applies the canonical default limits.
+  final Capability Function()? attachmentCapability;
   final ViewImageMediaLoader? viewImageMediaLoader;
   final UserAttachmentMediaLoader? userAttachmentMediaLoader;
 
@@ -95,6 +105,7 @@ class BrainActivityView extends StatefulWidget {
     this.onLoadNewerHistory,
     this.onLoadAnchoredHistory,
     this.pickEditAttachmentFiles,
+    this.attachmentCapability,
     this.viewImageMediaLoader,
     this.userAttachmentMediaLoader,
   });
@@ -133,7 +144,9 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   late final ValueNotifier<DateTime> _clockNotifier = ValueNotifier<DateTime>(DateTime.now());
   Timer? _clockTimer;
   final Set<String> _pendingEntranceEventIds = {};
-  TextEditingController? _editController;
+  /// Renders file references as icon+name chips, like the composer, and
+  /// exports them back to their exact link text on save.
+  SlashCommandTextController? _editController;
   String? _editingEventId;
   List<InlineEditAttachment> _editAttachments = const [];
   String? _editAttachmentError;
@@ -415,14 +428,14 @@ class _BrainActivityViewState extends State<BrainActivityView> {
 
   bool _isEventExpanded(CanonicalEvent event) =>
       _expandedEventIds.contains(event.id) ||
-      (!_explicitlyInteractedEventIds.contains(event.id) && event.toolName == 'view_image');
+      (!_explicitlyInteractedEventIds.contains(event.id) && event.isMediaToolEvent);
 
   bool _isToolGroupExpanded(ConversationTimelineItem item) {
     final id = _toolGroupExpansionId(item);
     if (_explicitlyInteractedToolGroupIds.contains(id)) {
       return _expandedEventIds.contains(id);
     }
-    if (item.events.any((event) => event.toolName == 'view_image')) return true;
+    if (item.events.any((event) => event.isMediaToolEvent)) return true;
     final firstEventId = item.events.firstOrNull?.id;
     if (firstEventId != null) {
       return _expandedEventIds.contains(firstEventId);
@@ -968,7 +981,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   void _beginInlineEdit(CanonicalEvent event) {
     _editController?.dispose();
     setState(() {
-      _editController = TextEditingController(text: event.text);
+      _editController = SlashCommandTextController()..setDraftText(event.text);
       _editingEventId = event.id;
       _editAttachments = List.unmodifiable(
         event.userAttachments.map(InlineEditAttachment.existing),
@@ -993,7 +1006,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     } on Object {
       if (mounted) {
         setState(
-          () => _editAttachmentError = 'Could not open the selected attachment.',
+          () => _editAttachmentError = _attachmentL10n.attachmentErrorOpenFailed,
         );
       }
       return;
@@ -1037,27 +1050,42 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     return selections;
   }
 
+  /// Fallback when no device capability is wired: the canonical limits.
+  static const Capability _defaultAttachmentCapability = Capability(supportsAttachments: true);
+
   String? _inlineAttachmentValidationError(
     int nextBytes, {
     String? excludingId,
   }) {
     final retained = _editAttachments.where((attachment) => attachment.id != excludingId).toList(growable: false);
-    if (retained.length >= 4) {
-      return 'A message accepts at most 4 attachments.';
-    }
-    if (nextBytes > 5 * 1024 * 1024) {
-      return 'Each attachment must be 5 MiB or smaller.';
-    }
-    final total =
-        retained.fold<int>(
-          0,
-          (sum, item) => sum + item.sizeBytes,
-        ) +
-        nextBytes;
-    if (total > 20 * 1024 * 1024) {
-      return 'Attachments must total 20 MiB or less per message.';
-    }
-    return null;
+    final rejection = DraftAttachmentPolicy.check(
+      // Inline edit edits an already-admitted turn, so it always admits
+      // attachments and applies only the device's size and count limits.
+      capability: _inlineAttachmentLimits(),
+      existingCount: retained.length,
+      existingBytes: retained.fold<int>(0, (sum, item) => sum + item.sizeBytes),
+      nextBytes: nextBytes,
+    );
+    if (rejection == null) return null;
+    return DraftAttachmentErrorText.describe(_attachmentL10n, rejection);
+  }
+
+  AppLocalizations get _attachmentL10n => AppLocalizations.of(context) ?? AppLocalizationsEn();
+
+  Capability _inlineAttachmentLimits() {
+    final capability = widget.attachmentCapability?.call();
+    if (capability == null) return _defaultAttachmentCapability;
+    return Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: capability.attachmentMaxFileBytes,
+      attachmentMaxFilesPerMessage: capability.attachmentMaxFilesPerMessage,
+      attachmentMaxTotalBytesPerMessage: capability.attachmentMaxTotalBytesPerMessage,
+    );
+  }
+
+  void _dismissInlineEditAttachmentError() {
+    if (_editAttachmentError == null) return;
+    setState(() => _editAttachmentError = null);
   }
 
   static String _safeAttachmentName(String input) {
@@ -1079,7 +1107,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     if (index < 0) return;
     final item = _editAttachments[index];
     final error = item.bytes == null
-        ? 'Could not read the selected attachment.'
+        ? _attachmentL10n.attachmentErrorReadFailed
         : _inlineAttachmentValidationError(
             item.bytes!.length,
             excludingId: item.id,
@@ -1094,6 +1122,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
               sizeBytes: item.sizeBytes,
               isImage: item.isImage,
               isExisting: item.isExisting,
+              attachment: item.attachment,
               bytes: item.bytes,
               status: error == null ? InlineEditAttachmentStatus.ready : InlineEditAttachmentStatus.failed,
               error: error,
@@ -1521,6 +1550,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       builder: (context, pendingToolName) => EventTile(
         key: ValueKey(event.id),
         event: event,
+        sessionId: widget.sessionId,
         viewImageMediaLoader: widget.viewImageMediaLoader,
         userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
         waitingIndicator: event.status == EventStatus.running && pendingToolName == event.toolName
@@ -1548,17 +1578,18 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         onAddEditAttachment: _editingEventId == event.id ? _addInlineEditAttachments : null,
         onRemoveEditAttachment: _editingEventId == event.id ? _removeInlineEditAttachment : null,
         onRetryEditAttachment: _editingEventId == event.id ? _retryInlineEditAttachment : null,
+        onDismissEditAttachmentError: _editingEventId == event.id ? _dismissInlineEditAttachmentError : null,
         onBeginEdit: canReplay ? () => _beginInlineEdit(event) : null,
         onCancelEdit: _cancelInlineEdit,
         onSubmitEdit: canReplay
             ? () async {
-                final text = _editController?.text.trim() ?? '';
+                final text = _editController?.exportPlainText().trim() ?? '';
                 if (text.isEmpty && _editAttachments.isEmpty) return;
                 if (_editAttachments.any(
                   (attachment) => attachment.status == InlineEditAttachmentStatus.failed,
                 )) {
                   setState(() {
-                    _editAttachmentError = 'Remove or retry failed attachments before sending.';
+                    _editAttachmentError = _attachmentL10n.attachmentErrorResolveFailedBeforeSend;
                   });
                   return;
                 }

@@ -215,6 +215,69 @@ void main() {
     },
   );
 
+  test(
+    'admits multi-file uploads whose chunks arrive before staging finished (114 D4)',
+    () async {
+      // Socket.IO listeners are not awaited: a gateway may forward the first
+      // chunk and the commit while the Agent is still creating the staged
+      // upload. Several files (e.g. PDF + HEIC + PNG) widen that window.
+      final files = [
+        for (final (index, text) in ['%PDF-1.3 doc', 'heic-bytes', 'png-bytes'].indexed)
+          (index: index, bytes: utf8.encode(text)),
+      ];
+      final total = files.fold<int>(0, (sum, file) => sum + file.bytes.length);
+      final pending = <Future<void>>[];
+      for (final file in files) {
+        final hash = sha256.convert(file.bytes).toString();
+        final id = 'upload-race-${file.index}';
+        pending.add(
+          socket.receive('attachment_upload_start', {
+            'version': 'v1',
+            'upload_id': id,
+            'device_id': 'device-a',
+            'session_id': 'session-a',
+            'request_id': 'request-race',
+            'name': 'file-${file.index}',
+            'mime_type': 'application/octet-stream',
+            'size_bytes': file.bytes.length,
+            'sha256': hash,
+            'chunk_count': 1,
+            'file_index': file.index,
+            'turn_file_count': files.length,
+            'turn_total_bytes': total,
+          }),
+        );
+        pending.add(
+          socket.receive('attachment_upload_chunk', {
+            'version': 'v1',
+            'upload_id': id,
+            'index': 0,
+            'sha256': hash,
+            'data': file.bytes,
+          }),
+        );
+        pending.add(
+          socket.receive('attachment_upload_commit', {
+            'version': 'v1',
+            'upload_id': id,
+          }),
+        );
+      }
+      await Future.wait(pending);
+
+      final results = [
+        for (final entry in socket.emitted)
+          if (entry.$1 == 'attachment_upload_result') entry.$2 as Map,
+      ];
+      expect(results, hasLength(files.length));
+      expect(
+        results.map((result) => result['outcome']),
+        everyElement('accepted'),
+        reason: results.toString(),
+      );
+    },
+  );
+
   test('rejects an out-of-sequence or hash-mismatched chunk', () async {
     final bytes = utf8.encode('payload');
     await socket.receive('attachment_upload_start', {

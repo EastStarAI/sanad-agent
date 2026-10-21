@@ -65,23 +65,6 @@ class MainFlutterWindow: NSWindow {
              }
         }
 
-        let pasteEventChannel = FlutterMethodChannel(name: "com.eaststarai.sanad/pasteEvents", binaryMessenger: flutterViewController.engine.binaryMessenger)
-        let pasteMonitorMask: NSEvent.EventTypeMask = [.keyDown]
-        NSEvent.addLocalMonitorForEvents(matching: pasteMonitorMask) { event in
-            if event.keyCode == 9 && event.modifierFlags.contains(.command) {
-                let pasteboard = NSPasteboard.general
-                let items = pasteboard.pasteboardItems?.compactMap { $0.string(forType: .string) } ?? []
-                let clipboardPreview = items.first ?? ""
-                pasteEventChannel.invokeMethod("onExternalPaste", arguments: [
-                    "text": clipboardPreview,
-                    "timestamp": Date().timeIntervalSince1970,
-                ])
-                // Suppress the original Cmd+V event so Flutter's EditableText does not handle it.
-                return nil
-            }
-            return event
-        }
-
         RegisterGeneratedPlugins(registry: flutterViewController)
 
         super.awakeFromNib()

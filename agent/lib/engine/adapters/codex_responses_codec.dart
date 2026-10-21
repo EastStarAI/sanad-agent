@@ -8,6 +8,8 @@ import '../../core/models/tool_call.dart';
 import '../../core/provider_thinking/openai_thinking_wire_codec.dart';
 import 'llm_request_options.dart';
 import 'tool_result_wire_codec.dart';
+import 'user_attachment_wire_discloser.dart';
+import '../../evolution/attachments/attachment_store.dart';
 
 class CodexResponsesException implements Exception {
   final String message;
@@ -71,6 +73,7 @@ class CodexResponsesCodec {
     final input = _historyToInput(
       history,
       preloadedAttachments: preloadedAttachments,
+      attachmentStore: options.attachmentStore,
     );
     final reasoning = <String, dynamic>{};
     OpenAiThinkingWireCodec.applyResponsesReasoning(
@@ -348,6 +351,7 @@ class CodexResponsesCodec {
   List<Map<String, dynamic>> _historyToInput(
     List<Message> history, {
     Map<String, String>? preloadedAttachments,
+    AttachmentStore? attachmentStore,
   }) {
     final input = <Map<String, dynamic>>[];
     final seenReasoningIds = <String>{};
@@ -369,10 +373,18 @@ class CodexResponsesCodec {
       }
 
       if (message.role == MessageRole.user) {
+        final partition = UserAttachmentWireDiscloser.partition(
+          message.attachments,
+        );
+        final effectiveText = UserAttachmentWireDiscloser.discloseContent(
+          originalContent: message.content,
+          nonSafeAttachments: partition.disclosedFiles,
+          attachmentStore: attachmentStore,
+        );
         final content = <Map<String, dynamic>>[
-          {'type': 'input_text', 'text': message.content ?? ''},
+          {'type': 'input_text', 'text': effectiveText},
         ];
-        for (final att in message.attachments) {
+        for (final att in partition.safeImages) {
           final b64 =
               preloadedAttachments?[att.id] ??
               ToolResultWireCodec.userAttachmentBase64(

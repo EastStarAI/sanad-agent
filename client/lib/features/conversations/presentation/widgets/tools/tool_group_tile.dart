@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
+import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/responsive_media_gallery.dart';
 
 class ToolGroupTile extends StatefulWidget {
   const ToolGroupTile({
@@ -199,20 +201,29 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                for (final event in widget.item.events)
-                                  EventTile(
-                                    key: ValueKey(
-                                      'tool-group-child:${event.id}',
+                                for (final item in _partitionToolGroupEvents(widget.item.events))
+                                  switch (item) {
+                                    _SingleToolItem(:final event) => EventTile(
+                                      key: ValueKey(
+                                        'tool-group-child:${event.id}',
+                                      ),
+                                      event: event,
+                                      viewImageMediaLoader: widget.viewImageMediaLoader,
+                                      userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
+                                      isExpanded: widget.expandedChildEventIds.contains(event.id),
+                                      onToggleExpanded: (expanded) => widget.onChildToggleExpanded(
+                                        event.id,
+                                        expanded,
+                                      ),
                                     ),
-                                    event: event,
-                                    viewImageMediaLoader: widget.viewImageMediaLoader,
-                                    userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
-                                    isExpanded: widget.expandedChildEventIds.contains(event.id),
-                                    onToggleExpanded: (expanded) => widget.onChildToggleExpanded(
-                                      event.id,
-                                      expanded,
+                                    _MediaGalleryItem(:final events) => ResponsiveMediaGallery(
+                                      key: ValueKey(
+                                        'tool-group-gallery:${events.first.id}',
+                                      ),
+                                      events: events,
+                                      viewImageMediaLoader: widget.viewImageMediaLoader,
                                     ),
-                                  ),
+                                  },
                               ],
                             ),
                           ),
@@ -387,3 +398,42 @@ class _AnimatedMetricState extends State<_AnimatedMetric> {
     );
   }
 }
+
+sealed class _ToolGroupBodyItem {}
+
+class _SingleToolItem extends _ToolGroupBodyItem {
+  _SingleToolItem(this.event);
+  final CanonicalEvent event;
+}
+
+class _MediaGalleryItem extends _ToolGroupBodyItem {
+  _MediaGalleryItem(this.events);
+  final List<CanonicalEvent> events;
+}
+
+List<_ToolGroupBodyItem> _partitionToolGroupEvents(List<CanonicalEvent> events) {
+  final items = <_ToolGroupBodyItem>[];
+  var index = 0;
+  while (index < events.length) {
+    if (ResponsiveMediaGallery.isMediaToolEvent(events[index])) {
+      final run = <CanonicalEvent>[events[index]];
+      var next = index + 1;
+      while (next < events.length &&
+          ResponsiveMediaGallery.isMediaToolEvent(events[next])) {
+        run.add(events[next]);
+        next++;
+      }
+      if (run.length > 1) {
+        items.add(_MediaGalleryItem(List.unmodifiable(run)));
+      } else {
+        items.add(_SingleToolItem(run.single));
+      }
+      index = next;
+    } else {
+      items.add(_SingleToolItem(events[index]));
+      index++;
+    }
+  }
+  return items;
+}
+

@@ -2,7 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/features/devices/domain/models/capability.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
+import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
@@ -32,14 +37,34 @@ class _FakeAttachmentLoader implements UserAttachmentMediaLoader {
     ),
   );
 
+  _FakeAttachmentLoader({
+    this.shouldFail = false,
+    this.onLoad,
+  });
+
+  bool shouldFail;
+  final ViewImageMediaLoad Function(UserMessageAttachment attachment, String sessionId)? onLoad;
+  final List<String> loadedIds = [];
+  int cancelCount = 0;
+
   @override
   ViewImageMediaLoad loadAttachment({
     required UserMessageAttachment attachment,
     required String sessionId,
   }) {
+    loadedIds.add(attachment.id);
+    if (onLoad != null) {
+      return onLoad!(attachment, sessionId);
+    }
+    if (shouldFail) {
+      return ViewImageMediaLoad(
+        bytes: Future.error(Exception('Failed to load attachment media')),
+        cancel: () => cancelCount += 1,
+      );
+    }
     return ViewImageMediaLoad(
       bytes: Future.value(_png),
-      cancel: () {},
+      cancel: () => cancelCount += 1,
     );
   }
 }
@@ -119,6 +144,8 @@ void main() {
     WidgetTester tester, {
     required List<CanonicalEvent> initialMessages,
     Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles,
+    UserAttachmentMediaLoader? userAttachmentMediaLoader,
+    Capability Function()? attachmentCapability,
   }) async {
     await pumpTestApp(
       tester,
@@ -129,8 +156,9 @@ void main() {
         sessionId: 'session-1',
         composerSessionId: 'session-1',
         visualState: ConversationVisualState.activeSession,
-        userAttachmentMediaLoader: _FakeAttachmentLoader(),
+        userAttachmentMediaLoader: userAttachmentMediaLoader ?? _FakeAttachmentLoader(),
         pickEditAttachmentFiles: pickEditAttachmentFiles,
+        attachmentCapability: attachmentCapability,
       ),
       agentCubit: agentCubit,
       sessionCubit: sessionCubit,
@@ -570,5 +598,328 @@ void main() {
     // History revision updated in sessionCubit
     expect(sessionCubit.state.selectedSession?.historyRevision, 42);
   });
-}
 
+  testWidgets('existing image attachment displays real thumbnail in inline edit rail', (tester) async {
+    final loader = _FakeAttachmentLoader();
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      userAttachmentMediaLoader: loader,
+    );
+
+    loader.loadedIds.clear();
+
+    // Begin inline edit
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('inline_edit_attachment_rail')), findsOneWidget);
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_att-photo-1'));
+    expect(chip, findsOneWidget);
+
+    // Loader was called for the existing image attachment
+    expect(loader.loadedIds, ['att-photo-1']);
+
+    // Real thumbnail (Image) is rendered inside the attachment chip, not generic icon
+    expect(
+      find.descendant(of: chip, matching: find.byType(Image)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)),
+      findsNothing,
+    );
+  });
+
+  testWidgets('loader failure falls back to generic icon without breaking rail and supports retry', (tester) async {
+    final loader = _FakeAttachmentLoader(shouldFail: true);
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      userAttachmentMediaLoader: loader,
+    );
+
+    // Begin inline edit
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('inline_edit_attachment_rail')), findsOneWidget);
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_att-photo-1'));
+    expect(chip, findsOneWidget);
+
+    // Loader failed, so generic image icon is shown as fallback
+    expect(
+      find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: chip, matching: find.byType(Image)),
+      findsNothing,
+    );
+
+    // Rail remains completely functional
+    expect(find.text('Ready · existing'), findsOneWidget);
+
+    // Tap retry on the fallback icon to reload
+    loader.shouldFail = false;
+    await tester.tap(
+      find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)),
+    );
+    await tester.pumpAndSettle();
+
+    // Now rendered as thumbnail
+    expect(
+      find.descendant(of: chip, matching: find.byType(Image)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)),
+      findsNothing,
+    );
+  });
+
+  testWidgets('cancelling inline edit invokes cancel on in-flight thumbnail load', (tester) async {
+    final completer = Completer<Uint8List>();
+    var callCount = 0;
+    var canceled = 0;
+    final loader = _FakeAttachmentLoader(
+      onLoad: (attachment, sessionId) {
+        callCount++;
+        if (callCount == 1) {
+          // Initial user message card render
+          return ViewImageMediaLoad(
+            bytes: Future.value(_FakeAttachmentLoader._png),
+            cancel: () {},
+          );
+        }
+        // Second call is from inline edit thumbnail
+        return ViewImageMediaLoad(
+          bytes: completer.future,
+          cancel: () => canceled++,
+        );
+      },
+    );
+
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      userAttachmentMediaLoader: loader,
+    );
+
+    // Initial message settled
+    expect(callCount, 1);
+
+    // Tap edit message
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pump();
+
+    // Loader was called for the inline edit thumbnail
+    expect(callCount, 2);
+    expect(find.byType(AppProgressIndicator), findsOneWidget);
+
+    // Cancel edit
+    await tester.tap(find.text('Cancel'));
+    completer.complete(_FakeAttachmentLoader._png);
+    await tester.pumpAndSettle();
+
+    // Editor is closed and cancel was invoked
+    expect(find.byKey(const Key('inline_message_editor')), findsNothing);
+    expect(canceled, 1);
+  });
+
+  testWidgets('new image attachment with local bytes displays thumbnail directly without calling loader', (tester) async {
+    final loader = _FakeAttachmentLoader();
+    final newBytes = Uint8List.fromList([1, 2, 3]);
+
+    await pumpView(
+      tester,
+      initialMessages: [
+        CanonicalEvent(
+          id: 'user-no-attachments',
+          kind: EventKind.userMessage,
+          text: 'no attachments message',
+          sessionId: 'session-1',
+          timestamp: DateTime.utc(2026, 10, 13),
+          metadata: const {
+            'request_id': 'req-root-no-att',
+            'message_id': 'msg-root-no-att',
+            'turn_id': 'turn-root-no-att',
+            'replay_eligible': true,
+            'input_kind': 'root_turn',
+            'history_status': 'active',
+          },
+        ),
+      ],
+      userAttachmentMediaLoader: loader,
+      pickEditAttachmentFiles: () async => [
+        InlineEditAttachmentSelection(name: 'added_photo.png', bytes: newBytes),
+      ],
+    );
+
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    // Add new attachment
+    await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('added_photo.png'), findsOneWidget);
+    expect(find.text('Ready · new'), findsOneWidget);
+
+    // New attachment renders Image from local bytes directly without loader
+    expect(loader.loadedIds, isEmpty);
+    expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('existing non-image file attachment renders file icon and does not invoke loader', (tester) async {
+    final loader = _FakeAttachmentLoader();
+    final fileEvent = CanonicalEvent(
+      id: 'user-msg-file',
+      kind: EventKind.userMessage,
+      text: 'document attached',
+      sessionId: 'session-1',
+      timestamp: DateTime.utc(2026, 10, 13),
+      metadata: const {
+        'request_id': 'req-root-file',
+        'message_id': 'msg-root-file',
+        'turn_id': 'turn-root-file',
+        'replay_eligible': true,
+        'input_kind': 'root_turn',
+        'history_status': 'active',
+        'attachments': [
+          {
+            'schemaVersion': 1,
+            'id': 'att-doc-1',
+            'safeName': 'report.pdf',
+            'mimeType': 'application/pdf',
+            'sizeBytes': 2048,
+            'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'kind': 'file',
+            'mediaId': 'med-doc-1',
+            'status': 'available',
+          },
+        ],
+      },
+    );
+
+    await pumpView(
+      tester,
+      initialMessages: [fileEvent],
+      userAttachmentMediaLoader: loader,
+    );
+
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_att-doc-1'));
+    expect(chip, findsOneWidget);
+    expect(find.descendant(of: chip, matching: find.byType(FileExtensionIcon)), findsOneWidget);
+    expect(find.descendant(of: chip, matching: find.byIcon(Icons.insert_drive_file_outlined)), findsNothing);
+    expect(loader.loadedIds, isEmpty);
+  });
+
+  testWidgets('inline edit oversized add shows a dismissible error that clears on remove and next valid add', (tester) async {
+    var picks = [InlineEditAttachmentSelection(name: 'huge.png', bytes: Uint8List(5 * 1024 * 1024 + 1))];
+    await pumpView(tester, initialMessages: [initialUserEvent], pickEditAttachmentFiles: () async => picks);
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    Future<void> add() async {
+      await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+      await tester.pumpAndSettle();
+    }
+
+    Finder error() => find.byKey(const Key('inline_edit_attachment_error'));
+
+    // Explicit dismiss.
+    await add();
+    expect(tester.widget<Text>(error()).data, 'Each attachment must be 5 MiB or smaller.');
+    await tester.tap(find.byKey(const Key('inline_edit_attachment_error_dismiss')));
+    await tester.pumpAndSettle();
+    expect(error(), findsNothing);
+
+    // Next valid add clears a fresh rejection.
+    await add();
+    expect(error(), findsOneWidget);
+    picks = [InlineEditAttachmentSelection(name: 'small.txt', bytes: Uint8List.fromList(const [1]))];
+    await add();
+    expect(error(), findsNothing);
+
+    // Removing an attachment clears a fresh rejection.
+    picks = [InlineEditAttachmentSelection(name: 'huge2.png', bytes: Uint8List(5 * 1024 * 1024 + 1))];
+    await add();
+    expect(error(), findsOneWidget);
+    await tester.tap(find.byTooltip('Remove attachment').last);
+    await tester.pumpAndSettle();
+    expect(error(), findsNothing);
+  });
+
+  testWidgets('inline edit enforces the device attachment limits, not the defaults', (tester) async {
+    const oneMiB = 1024 * 1024;
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      attachmentCapability: () => const Capability(supportsAttachments: true, attachmentMaxFileBytes: oneMiB),
+      pickEditAttachmentFiles: () async => [InlineEditAttachmentSelection(name: 'two.png', bytes: Uint8List(2 * oneMiB))],
+    );
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<Text>(find.byKey(const Key('inline_edit_attachment_error'))).data,
+      'Each attachment must be 1 MiB or smaller.',
+      reason: 'a 2 MiB file passes the 5 MiB default but not this device limit',
+    );
+  });
+
+  testWidgets('inline edit picker failure shows the localized open-failure message', (tester) async {
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      pickEditAttachmentFiles: () async => throw StateError('picker unavailable'),
+    );
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+    await tester.pumpAndSettle();
+
+    final en = lookupAppLocalizations(const Locale('en'));
+    final ar = lookupAppLocalizations(const Locale('ar'));
+    expect(tester.widget<Text>(find.byKey(const Key('inline_edit_attachment_error'))).data, en.attachmentErrorOpenFailed);
+    for (final (english, arabic) in [
+      (en.attachmentErrorOpenFailed, ar.attachmentErrorOpenFailed),
+      (en.attachmentErrorReadFailed, ar.attachmentErrorReadFailed),
+      (en.attachmentErrorResolveFailedBeforeSend, ar.attachmentErrorResolveFailedBeforeSend),
+    ]) {
+      expect(arabic, isNot(english), reason: 'every inline attachment message has an Arabic translation');
+    }
+  });
+
+  testWidgets('inline edit shows file tokens as chips and round-trips them unchanged (114 D1)', (tester) async {
+    const link = '[plain114.txt](file:///Users/me/scratch/plain114.txt)';
+    final event = CanonicalEvent(
+      id: initialUserEvent.id,
+      kind: EventKind.userMessage,
+      text: 'Read $link please',
+      sessionId: 'session-1',
+      timestamp: initialUserEvent.timestamp,
+      metadata: initialUserEvent.metadata,
+    );
+    await pumpView(tester, initialMessages: [event]);
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    final editor = find.byKey(const Key('inline_message_editor'));
+    final field = tester.widget<TextField>(editor);
+    expect(field.controller!.text, isNot(contains('file://')), reason: 'no raw path in the edit field');
+    expect(field.controller!.text, isNot(contains('plain114.txt](')));
+    expect(field.controller, isA<SlashCommandTextController>());
+    expect((field.controller! as SlashCommandTextController).fileTokensByMarker.values.single.fileName, 'plain114.txt');
+
+    await tester.tap(find.text('Send'));
+    await tester.pumpAndSettle();
+    expect(conversationRepository.replayWithAttachmentRequests.single['message'], 'Read $link please');
+  });
+}

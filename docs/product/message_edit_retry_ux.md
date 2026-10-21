@@ -47,6 +47,7 @@ same rule before Stop or history mutation, so an older client cannot bypass it.
 ## Attachments during edit
 
 - An editable user turn restores its ordered image thumbnails and file cards above the multiline input. Existing attachments are ready references and are not uploaded again.
+- Existing image attachments show their real thumbnail in the edit rail, loaded asynchronously through the same media loader and session as the message bubble. Only an available canonical reference is requested; an unavailable one keeps the generic image icon without a request. While loading, an inline progress indicator fills the thumbnail slot. A failed load falls back to the generic image icon without breaking the rail or disabling actions, and tapping that icon retries. Rebuilding the conversation does not refetch an unchanged thumbnail, and closing the edit cancels in-flight loads. New attachments keep their local preview.
 - The user may remove an existing attachment or add a new one through paste, drag/drop, or the `+` File Picker beside Permission Mode.
 - Every new file follows the 5 MiB per-file, four-file, and 20 MiB aggregate limits. Save remains disabled while validation or upload is pending.
 - A failed new attachment keeps the inline edit and original canonical bubble intact, with Retry and Remove actions. Cancel discards attachment edits and restores the original message without cleanup of files it still references.

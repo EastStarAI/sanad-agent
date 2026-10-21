@@ -27,6 +27,7 @@ import 'tagged_reasoning_parser.dart';
 import 'tool_result_wire_codec.dart';
 import 'chat_reasoning_replay_policy.dart';
 import 'provider_history_projection_exception.dart';
+import 'user_attachment_wire_discloser.dart';
 import '../llm_request_dumper.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 
@@ -917,11 +918,17 @@ class BaseAnthropicAdapter
         });
       } else {
         final List<dynamic> userParts = [];
+        dynamic content;
         if (m.attachments.isNotEmpty) {
-          if (m.content != null && m.content!.isNotEmpty) {
-            userParts.add({'type': 'text', 'text': m.content!});
-          }
-          for (final att in m.attachments) {
+          final partition = UserAttachmentWireDiscloser.partition(
+            m.attachments,
+          );
+          final effectiveText = UserAttachmentWireDiscloser.discloseContent(
+            originalContent: m.content,
+            nonSafeAttachments: partition.disclosedFiles,
+            attachmentStore: options.attachmentStore,
+          );
+          for (final att in partition.safeImages) {
             final b64 =
                 verifiedAttachments?[att.id] ??
                 ToolResultWireCodec.userAttachmentBase64(
@@ -939,11 +946,18 @@ class BaseAnthropicAdapter
               });
             }
           }
+          if (partition.hasSafeImages && userParts.isNotEmpty) {
+            if (effectiveText.isNotEmpty) {
+              userParts.insert(0, {'type': 'text', 'text': effectiveText});
+            }
+            content = userParts;
+          } else {
+            content = effectiveText;
+          }
+        } else {
+          content = m.content ?? '';
         }
-        wireMessages.add({
-          'role': 'user',
-          'content': userParts.isNotEmpty ? userParts : (m.content ?? ''),
-        });
+        wireMessages.add({'role': 'user', 'content': content});
       }
     }
 

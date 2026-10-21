@@ -494,6 +494,111 @@
       }
     }
   },
+  "lightboxPreviousImage": "Previous image",
+  "@lightboxPreviousImage": {
+    "description": "Tooltip for the lightbox button that shows the previous image in the group (reading-direction start side)."
+  },
+  "lightboxNextImage": "Next image",
+  "@lightboxNextImage": {
+    "description": "Tooltip for the lightbox button that shows the next image in the group (reading-direction end side)."
+  },
+  "lightboxCounter": "{current} / {total}",
+  "@lightboxCounter": {
+    "description": "Position of the shown image within its lightbox group, for example 2 / 5.",
+    "placeholders": {
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "lightboxClose": "Close image preview",
+  "@lightboxClose": {
+    "description": "Tooltip for the button that closes the image lightbox."
+  },
+  "lightboxDownload": "Download image",
+  "@lightboxDownload": {
+    "description": "Tooltip for the lightbox button that saves the shown image to the Downloads folder."
+  },
+  "lightboxDownloadSaved": "Saved {fileName} to Downloads",
+  "@lightboxDownloadSaved": {
+    "description": "Shown after the lightbox image was written to the Downloads folder.",
+    "placeholders": {
+      "fileName": {
+        "type": "String"
+      }
+    }
+  },
+  "lightboxDownloadStarted": "Downloading {fileName}",
+  "@lightboxDownloadStarted": {
+    "description": "Shown on Web after the browser download of the lightbox image was triggered.",
+    "placeholders": {
+      "fileName": {
+        "type": "String"
+      }
+    }
+  },
+  "lightboxDownloadFailed": "Couldn't save the image",
+  "@lightboxDownloadFailed": {
+    "description": "Shown when saving the lightbox image to Downloads failed."
+  },
+  "lightboxImageUnavailable": "Image unavailable",
+  "@lightboxImageUnavailable": {
+    "description": "Shown in the lightbox when the selected image's bytes could not be loaded."
+  },
+  "attachmentErrorUnsupported": "Attachments are not supported by this agent.",
+  "@attachmentErrorUnsupported": {
+    "description": "Composer feedback when the agent does not accept attachments."
+  },
+  "attachmentErrorTooLarge": "Each attachment must be {limit} or smaller.",
+  "@attachmentErrorTooLarge": {
+    "description": "Composer feedback for a file over the agent's per-file limit; {limit} is a formatted size such as 5 MiB.",
+    "placeholders": {
+      "limit": {
+        "type": "String"
+      }
+    }
+  },
+  "attachmentErrorTooMany": "A message accepts at most {count} attachments.",
+  "@attachmentErrorTooMany": {
+    "description": "Composer feedback when the agent's per-message attachment count is reached.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "attachmentErrorTotalTooLarge": "Attachments must total {limit} or less per message.",
+  "@attachmentErrorTotalTooLarge": {
+    "description": "Composer feedback for exceeding the agent's per-message total size; {limit} is a formatted size such as 20 MiB.",
+    "placeholders": {
+      "limit": {
+        "type": "String"
+      }
+    }
+  },
+  "attachmentErrorDismiss": "Dismiss",
+  "@attachmentErrorDismiss": {
+    "description": "Tooltip of the close control that dismisses an attachment error."
+  },
+  "attachmentErrorOpenFailed": "Could not open the selected attachment.",
+  "@attachmentErrorOpenFailed": {
+    "description": "Inline message editor: the attachment picker could not open the chosen files."
+  },
+  "attachmentErrorReadFailed": "Could not read the selected attachment.",
+  "@attachmentErrorReadFailed": {
+    "description": "Inline message editor: a retried attachment has no readable bytes."
+  },
+  "attachmentErrorResolveFailedBeforeSend": "Remove or retry failed attachments before sending.",
+  "@attachmentErrorResolveFailedBeforeSend": {
+    "description": "Inline message editor: Send is blocked while an attachment is in the failed state."
+  },
+  "attachmentErrorSendFailed": "The message with attachments could not be sent. Your text and files are kept; try again.",
+  "@attachmentErrorSendFailed": {
+    "description": "Composer feedback when admitting or sending attachments failed; the draft is kept."
+  },
   "workspaceBrowserTitle": "Choose Workspace",
   "workspaceBrowserNewFolder": "New Folder",
   "workspaceBrowserFolderNameLabel": "Folder Name",
