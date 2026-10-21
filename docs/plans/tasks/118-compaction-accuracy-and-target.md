@@ -48,8 +48,8 @@ Both predate Task 117 and were observed during its live acceptance on a Test Hom
 ## Gates
 
 - [ ] Stage2 red → green for each failed-summary shape, with attempt accounting and localized safe feedback.
-- [ ] 3A deterministic paired regressions with fixture-scoped provider receipts; feasible and infeasible target cases; Client metrics consistent with `W`.
-- [ ] 3B runner/daemon regressions for below-threshold, true pressure, drift and restart non-repeat.
+- [x] 3A deterministic paired regressions with fixture-scoped provider receipts; feasible and infeasible target cases; Client metrics consistent with `W` (118b writer; review pending).
+- [x] 3B runner/daemon regressions for below-threshold, true pressure, drift and restart non-repeat (118b writer; review pending).
 - [ ] Owning docs: `docs/technical/context_compaction.md`, `docs/agent_engine/context_compaction_design.md`, `docs/qa_maintenance/context_compaction_qa.md`.
 - [ ] Independent review and delegated Sanad live acceptance on the Test Home (large-context route `OpenCode Go / deepseek-v4.1-flash`) with a bounded call and token budget; validate the first actual post-input. Meet 10% (13% allowed upper result for the observed case) or report measured infeasibility.
 
@@ -96,6 +96,34 @@ Gates at this round: agent `fvm dart analyze` clean (`r2-analyze.log`); 118 focu
 
 Still remaining: Stage3A (finding 3 of the live run: `target_scope` stays `usable_budget`), the Stage3B audit items listed in round 1, independent review and the Stage3A live acceptance.
 
+### Round 2 — 118b writer, 2026-10-21 (base `66e21c47`, branch `feat/118b-compaction-target`)
+
+One commit per item; each was red first, then green. Logs are under `temp/118b/` in the writer worktree (gitignored).
+
+| Item | What changed | Red → green evidence |
+|---|---|---|
+| 1. Stage3A complete-request target | The target is `floor(targetRatio × W)` for the whole next request from every caller (`CompactionTargetPolicy`). Before selection, the engine measures two things with the route's wire meter: the fixed overhead (leading instructions plus tools, kept intact) and the current request. The coordinator builds the meter from the adapter's `WireInputUsageMeasurer`. The tail budget is `target − overhead − summary reservation`: the previous summary's transmitted size, or 2048 for the instruction's two pages. After summarization the request is measured again in its transmitted form. The decision snapshot then records the estimated outcome and feasibility (`target_scope: context_window`). A tail above the target is a measured `not_met`, no longer a failure; nothing is trimmed to fit. The first confirmed post-input decides `target_outcome`. Manual and overflow "before" is the active projection, never the hidden canonical head. | `item1-red.log` (5 failures: scope `usable_budget`, no feasibility, factory 25288, outcome `unknown` ×2), `item1-green.log` |
+| 2. Replay-aware tail selection | Each candidate tail is priced as transmitted: the wire estimate, with the span between provider receipts that the adapter proves against the current request priced at the confirmed input difference. The receipt reader is shared with the restart restore. Opaque replay outside a proven span is counted as `unproven_replay_items`: not zero, not priced from ciphertext, and never a `met` estimate. Fixture-scoped pair from Task 106: A (4 replay items, 8 pairs, estimated 20031, provider 19689) and B (23 replay items, 39 pairs, 20666 versus 32557). Covered cases: stale, foreign-model and missing receipts; the newest replay item; feasible and infeasible targets. | `item2-red.log` (case B: item-1 code selects a tail whose provider cost 19982 exceeds the 12685 budget), `item2-red-compile.log`, `item2-green.log` (9 passed) |
+| 3. Client metrics on `W` | The detail card's before, after and threshold percentages use `W`; the usable-input line is removed. | `item3-red.log` (2 failures), `item3-green.log` (13 passed) |
+| 4. Stage3B regressions | Runner: after a completed compaction and a restart, the pre-boundary receipt in the retained tail is not restored and does not repeat compaction. Green on the base; a seeded mutation that skips the proof turns it red. Daemon F.53.11: one compaction under true pressure, no repeat across a restart and two follow-ups, and a small sibling never compacts. F.53.11 is a regression lock: green on `66e21c47`, and the mutation does not discriminate it. The audit of the existing drift, cache, image and restore suites is in `docs/qa_maintenance/context_compaction_qa.md`. | `item4-red-mutation-proof-ignored.log`, `item4-green-runner.log`, `item4-red-mutation-daemon.log` (non-discriminating, reported) |
+| 5. `projection_still_over_budget` on very small sessions | Cause, reproduced on `66e21c47`: a manual `/compact` of a session already within the target paid for a summary larger than the rows it replaced. The no-progress guard then rejected it with an "over budget" cause. Fix: a manual compaction within the target is `no_op` before any claim or provider call. Auto and overflow are unaffected. The Client shows a localized neutral not-needed notice (en/ar). Fixtures that modelled small sessions under large targets now use targets their sessions exceed. | `item5-red.log`, `item5-red-base-66e21c47.log`, `item5-green.log`, `item5-client-red.log`, `item5-client-green.log` |
+
+Gates at this round:
+
+- Agent `fvm dart analyze` clean.
+- Full agent suite +3217 ~14 (`final-agent-suite.log`; baseline +3199 ~14).
+- Daemon E2E 11/11 with `--concurrency=1` (`final-daemon-e2e.log`; baseline 10/10).
+- Client `fvm flutter analyze` clean; full Client suite +1882 ~1 (`final-client-suite.log`).
+- `scripts/lint_wiki.dart` passes.
+
+Findings reported, not changed:
+
+- The transmitted summary projection (`CompactionSummaryProjection.format`) omits the required `criticalContext` and `latestUserRequest` fields that the engine's own `formatSummary` includes. The engine now measures the transmitted form. Whether the projection should carry those fields is a decision outside this task.
+- A session above the target whose summary still makes no progress keeps the documented F5 `projection_still_over_budget` classification.
+- Task 117's optional "re-anchor boundary endpoints by `message_id`" slice names 118 as its destination but is not in this task's scope list; it was not implemented.
+
+Still remaining: independent review and the Stage3A live acceptance on the Test Home.
+
 ## Delivery Split
 
 Task 118 is delivered in two PRs. This file stays in `docs/plans/tasks/` until 118b lands.
@@ -121,8 +149,8 @@ Live acceptance on a Test Home:
 - The round 2 accounting fix is proven by tests only; it is simple and test-provable, so no live rerun was needed.
 - The second `context_compaction.completed` event is the planned republish by `reconcilePostBoundaryUsage`, which predates 118.
 
-### 118b — open
+### 118b — writer complete, review and live acceptance pending
 
-- Stage3A: the complete-request target against `W`, replay-aware tail selection, and Client metrics on `W`.
+- Stage3A: the complete-request target against `W`, replay-aware tail selection, and Client metrics on `W` (round 2 — 118b writer).
 - The rest of Stage3B (the audit items listed in round 1).
 - `projection_still_over_budget` on very small sessions (moved-in item 3).
