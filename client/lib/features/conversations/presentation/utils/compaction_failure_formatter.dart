@@ -154,6 +154,12 @@ abstract final class CompactionFailureFormatter {
       case 'projection_still_over_budget':
         return (copy.compactionFailureBudget, copy.compactionActionBudget);
 
+      case 'recovery_capacity_exceeded':
+        return (
+          copy.compactionFailureRecoveryCapacity,
+          copy.compactionActionRecoveryCapacity,
+        );
+
       // Provider
       case 'timeout':
         return (copy.compactionFailureTimeout, copy.compactionActionTimeout);
@@ -276,7 +282,10 @@ abstract final class CompactionFailureFormatter {
       'route_resolution_failed' ||
       'preparation_failed' => 'preparation',
 
-      'tool_result_malformed' || 'pruning_failed' || 'projection_still_over_budget' => 'pruning',
+      'tool_result_malformed' ||
+      'pruning_failed' ||
+      'projection_still_over_budget' ||
+      'recovery_capacity_exceeded' => 'pruning',
 
       'timeout' ||
       'rate_limited' ||

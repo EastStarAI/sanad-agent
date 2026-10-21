@@ -1,8 +1,13 @@
+import 'dart:convert';
+
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/engine/history_image_pruner.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_summary_projection.dart';
 import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
@@ -56,6 +61,17 @@ void main() {
     sessions.dispose();
     state.dispose();
   });
+
+  /// Structural mid-history insert (a healed tool result in production): the
+  /// only rewrite that still re-inserts the suffix after Task 117.
+  void insertMidHistory(int index, Message inserted) {
+    final loaded = sessions.getMessages('session-1');
+    sessions.replaceMessages('session-1', [
+      ...loaded.take(index),
+      inserted,
+      ...loaded.skip(index),
+    ]);
+  }
 
   test('without boundary projection returns full canonical history', () {
     sessions.replaceMessages('session-1', [
@@ -209,22 +225,26 @@ void main() {
       Message(role: MessageRole.user, content: 'tail-2'),
       Message(role: MessageRole.user, content: 'after'),
     ]);
+    // A structural mid-history insert re-inserts the suffix (Task 117), so
+    // the session's ordered rows carry numeric AUTOINCREMENT gaps.
+    final loaded = sessions.getMessages('session-1');
     sessions.replaceMessages('session-1', [
-      Message(role: MessageRole.user, content: 'old-1'),
-      Message(role: MessageRole.user, content: 'old-2 edited'),
-      Message(role: MessageRole.assistant, content: 'tail-1 edited'),
-      Message(role: MessageRole.user, content: 'tail-2 edited'),
-      Message(role: MessageRole.user, content: 'after edited'),
+      loaded[0],
+      Message(role: MessageRole.user, content: 'inserted'),
+      loaded[1].copyWith(content: 'old-2 edited'),
+      loaded[2].copyWith(content: 'tail-1 edited'),
+      loaded[3].copyWith(content: 'tail-2 edited'),
+      loaded[4].copyWith(content: 'after edited'),
     ]);
     final timeline = builder.loadCanonicalTimeline('session-1').messages;
-    expect(timeline.map((entry) => entry.rowId), [1, 6, 7, 8, 9]);
+    expect(timeline.map((entry) => entry.rowId), [1, 6, 7, 8, 9, 10]);
     final source = CompactionMessageRange(
       start: CompactionMessageIdentity(timeline[0].rowId),
-      end: CompactionMessageIdentity(timeline[1].rowId),
+      end: CompactionMessageIdentity(timeline[2].rowId),
     );
     final tail = CompactionMessageRange(
-      start: CompactionMessageIdentity(timeline[2].rowId),
-      end: CompactionMessageIdentity(timeline[3].rowId),
+      start: CompactionMessageIdentity(timeline[3].rowId),
+      end: CompactionMessageIdentity(timeline[4].rowId),
     );
     final startedAt = DateTime.utc(2026, 8, 29, 1);
     final claim = boundaries.tryClaim(
@@ -720,7 +740,7 @@ void main() {
     expect(projection.conversationMessages.first.content, contains('Keep'));
   });
 
-  test('semantic history updates still invalidate the old boundary', () {
+  test('semantic in-place updates inside the source range keep the boundary (Task 117)', () {
     final canonical = [
       Message(role: MessageRole.user, content: 'old-1'),
       Message(role: MessageRole.user, content: 'old-2'),
@@ -784,9 +804,25 @@ void main() {
       canonical[3],
     ]);
 
+    // Identity-aligned rows are updated in place, so every endpoint survives
+    // and the summarized range keeps driving the projection.
+    expect(
+      builder
+          .loadCanonicalTimeline('session-1')
+          .messages
+          .map((entry) => entry.rowId),
+      ids,
+    );
     final projection = builder.buildForSession('session-1');
-    expect(projection.usesCompactionBoundary, isFalse);
-    expect(projection.conversationMessages.first.content, 'edited-old-1');
+    expect(projection.activeBoundary?.compactionId, 'cmp-semantic-change');
+    expect(
+      projection.conversationMessages.first.content,
+      contains('Old summarized goal'),
+    );
+    expect(
+      projection.conversationMessages.map((message) => message.content),
+      isNot(contains('edited-old-1')),
+    );
   });
 
   test('canonical timeline query returns full history independently', () {
@@ -860,14 +896,14 @@ void main() {
     final initialProj = builder.buildForSession('session-1');
     expect(initialProj.usesCompactionBoundary, isTrue);
 
-    // Realistic rewrite starting at index 1: root-prompt unchanged, subsequent rows replaced.
+    // Structural insert at index 1: root-prompt keeps its row, every later
+    // row is re-inserted, so the source end and tail start disappear.
+    insertMidHistory(
+      1,
+      Message(role: MessageRole.user, content: 'inserted-inside-source'),
+    );
     sessions.replaceMessages('session-1', [
-      canonical[0],
-      canonical[1].copyWith(content: 'assistant-1 pruned/edited'),
-      canonical[2],
-      canonical[3],
-      canonical[4],
-      canonical[5],
+      ...sessions.getMessages('session-1'),
       Message(role: MessageRole.user, content: 'new-turn-after-rewrite'),
     ]);
 
@@ -1002,20 +1038,11 @@ void main() {
     expect(projBefore.activeBoundary?.compactionId, 'cmp-newer');
     expect(projBefore.conversationMessages.first.content, contains('Newer goal'));
 
-    // Rewrite modifying messages starting at index 4 (m5 onwards)
-    // Rows 1..4 remain unchanged with their original identities (1, 2, 3, 4).
-    // cmp-newer (source 1..6) has source end 6 missing => superseded by rev 2 bump.
+    // Structural insert at index 4 (before m5): rows 1..4 keep their ids,
+    // m5 onwards is re-inserted.
+    // cmp-newer (source 1..6) has source end 6 missing => ineligible.
     // cmp-older (source 1..2, tail 3..4) has all endpoints present => eligible!
-    sessions.replaceMessages('session-1', [
-      canonical[0],
-      canonical[1],
-      canonical[2],
-      canonical[3],
-      canonical[4].copyWith(content: 'm5 edited'),
-      canonical[5],
-      canonical[6],
-      canonical[7],
-    ]);
+    insertMidHistory(4, Message(role: MessageRole.user, content: 'inserted'));
 
     final projAfter = builder.buildForSession('session-1');
     expect(projAfter.usesCompactionBoundary, isTrue);
@@ -1026,7 +1053,8 @@ void main() {
         contains('Older goal'),
         'm3',
         'm4',
-        'm5 edited',
+        'inserted',
+        'm5',
         'm6',
         'm7',
         'm8',
@@ -1259,13 +1287,12 @@ void main() {
       completedAt: startedAt.add(const Duration(seconds: 1)),
     );
 
-    // Rewrite starting at index 1 so source start (ids[0]) exists but source end (ids[1]) is removed.
-    sessions.replaceMessages('session-1', [
-      canonical[0],
-      canonical[1].copyWith(content: 'edited message'),
-      canonical[2],
-      canonical[3],
-    ]);
+    // Structural insert at index 1 so source start (ids[0]) exists but
+    // source end (ids[1]) is re-inserted under a new row id.
+    insertMidHistory(
+      1,
+      Message(role: MessageRole.user, content: 'edited message'),
+    );
 
     final logRecords = <String>[];
     final sub = Logger('ModelProjectionBuilder').onRecord.listen((rec) {
@@ -1348,13 +1375,12 @@ void main() {
       completedAt: startedAt.add(const Duration(seconds: 1)),
     );
 
-    // Rewrite starting at index 1 so source start exists but source end is removed.
-    sessions.replaceMessages('session-1', [
-      canonical[0],
-      canonical[1].copyWith(content: 'edited message'),
-      canonical[2],
-      canonical[3],
-    ]);
+    // Structural insert at index 1 so source start exists but source end is
+    // re-inserted under a new row id.
+    insertMidHistory(
+      1,
+      Message(role: MessageRole.user, content: 'edited message'),
+    );
 
     final logRecords = <String>[];
     final sub = Logger('ModelProjectionBuilder').onRecord.listen((rec) {
@@ -1496,5 +1522,242 @@ void main() {
     expect(auditRows, hasLength(1));
     expect(auditRows.first.compactionId, 'cmp-prod-lockout');
     expect(auditRows.first.sourceHistoryRevision.value, 945);
+  });
+
+  group('Task 117 identity-aligned rewrites inside a summarized range', () {
+    // Source range rows 0..3 (a tool image batch), retained tail rows 4..9.
+    List<Message> canonical() => [
+      Message(
+        role: MessageRole.user,
+        content: 'inspect the screenshot',
+        metadata: const {'request_id': 'r-117'},
+      ),
+      Message(
+        role: MessageRole.assistant,
+        toolCalls: [
+          ToolCall(id: 'img-1', name: 'view_image', arguments: const {}),
+        ],
+      ),
+      Message(
+        role: MessageRole.tool,
+        toolCallId: 'img-1',
+        toolResult: ToolExecutionResult(
+          blocks: [
+            ToolTextBlock(text: 'screenshot'),
+            ToolImageBlock(
+              dataBase64: base64.encode(const [1, 2, 3, 4]),
+              mimeType: 'image/png',
+              width: 1,
+              height: 1,
+              detail: ToolImageDetail.high,
+            ),
+          ],
+        ),
+      ),
+      Message(
+        role: MessageRole.assistant,
+        content: 'done-1',
+        providerState: const LLMProviderState(
+          namespace: 'openai_responses',
+          issuer: 'https://api.example.com/v1',
+          data: {'encrypted_content': 'opaque'},
+        ),
+      ),
+      Message(role: MessageRole.user, content: 'u2'),
+      Message(role: MessageRole.assistant, content: 'done-2'),
+      Message(role: MessageRole.user, content: 'u3'),
+      Message(role: MessageRole.assistant, content: 'done-3'),
+      Message(role: MessageRole.user, content: 'u4'),
+      Message(role: MessageRole.assistant, content: 'done-4'),
+    ];
+
+    List<int> rowIds() => builder
+        .loadCanonicalTimeline('session-1')
+        .messages
+        .map((entry) => entry.rowId)
+        .toList(growable: false);
+
+    String completeBoundary(List<int> ids) {
+      const compactionId = 'cmp-117';
+      final source = CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[0]),
+        end: CompactionMessageIdentity(ids[3]),
+      );
+      final tail = CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[4]),
+        end: CompactionMessageIdentity(ids[9]),
+      );
+      final startedAt = DateTime.utc(2026, 10, 21);
+      final claim = boundaries.tryClaim(
+        compactionId: compactionId,
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.auto,
+        sourceRange: source,
+        retainedTailRange: tail,
+        routeSignature: _route(),
+        startedAt: startedAt,
+      );
+      const summary = CompactionInternalSummary(
+        currentGoal: 'Summarized screenshot goal',
+        remainingWork: 'Continue from the tail',
+      );
+      final result = boundaries.completeStarted(
+        candidate: CompactionCandidate(
+          compactionId: compactionId,
+          sessionId: 'session-1',
+          trigger: CompactionTrigger.auto,
+          sourceRevision: claim.record!.sourceHistoryRevision,
+          sourceRange: source,
+          retainedTailRange: tail,
+          internalSummary: summary,
+          continuityResult: CompactionContinuityResult.fromSummary(summary),
+          metrics: CompactionMetrics(
+            contextWindowTokens: 400_000,
+            estimatedRequestTokensBefore: 320_000,
+            estimatedRequestTokensAfter: 40_000,
+            retainedTailTokens: 10_000,
+          ),
+          routeSignature: _route(),
+        ),
+        startedAt: startedAt,
+        completedAt: startedAt.add(const Duration(seconds: 1)),
+      );
+      expect(result.outcome, CompactionTerminalOutcome.completed);
+      return compactionId;
+    }
+
+    void expectBoundaryProjected(String compactionId, List<int> ids) {
+      expect(rowIds(), ids);
+      final projection = builder.buildForSession('session-1');
+      expect(projection.activeBoundary?.compactionId, compactionId);
+      expect(
+        projection.conversationMessages.first.content,
+        contains('Summarized screenshot goal'),
+      );
+      expect(
+        projection.conversationMessages.skip(1).map((m) => m.content),
+        ['u2', 'done-2', 'u3', 'done-3', 'u4', 'done-4'],
+      );
+    }
+
+    test('T5 image pruning inside the source range keeps the boundary', () {
+      sessions.replaceMessages('session-1', canonical());
+      final ids = rowIds();
+      final compactionId = completeBoundary(ids);
+
+      final pruned = HistoryImagePruner.prune(
+        sessions.getMessages('session-1'),
+      );
+      expect(pruned.changed, isTrue);
+      sessions.replaceMessages('session-1', pruned.messages);
+
+      final stored = sessions.getMessages('session-1')[2].toolResult!;
+      expect(stored.blocks.whereType<ToolImageBlock>(), isEmpty);
+      expectBoundaryProjected(compactionId, ids);
+    });
+
+    test('T6 provider-state clearing inside the source range keeps the '
+        'boundary', () {
+      sessions.replaceMessages('session-1', canonical());
+      final ids = rowIds();
+      final compactionId = completeBoundary(ids);
+
+      final loaded = sessions.getMessages('session-1');
+      sessions.replaceMessages('session-1', [
+        ...loaded.take(3),
+        loaded[3].copyWith(clearProviderState: true),
+        ...loaded.skip(4),
+      ]);
+
+      expect(sessions.getMessages('session-1')[3].providerState, isNull);
+      expectBoundaryProjected(compactionId, ids);
+    });
+
+    test('T7 a structural insert inside the source range makes the boundary '
+        'ineligible without lockout and keeps the inserted row', () {
+      sessions.replaceMessages('session-1', canonical());
+      final ids = rowIds();
+      completeBoundary(ids);
+
+      insertMidHistory(
+        3,
+        Message(
+          role: MessageRole.tool,
+          toolCallId: 'img-orphan',
+          content: 'interrupted',
+          metadata: const {'status': 'interrupted'},
+        ),
+      );
+
+      final after = rowIds();
+      expect(after, hasLength(11));
+      expect(after.take(3), ids.take(3));
+      final projection = builder.buildForSession('session-1');
+      expect(projection.usesCompactionBoundary, isFalse);
+      expect(projection.conversationMessages, hasLength(11));
+      expect(projection.conversationMessages[3].content, 'interrupted');
+      final record = boundaries.listCompletedForSession('session-1').single;
+      expect(record.sourceRange.end.rowId, ids[3]);
+      expect(record.retainedTailRange.start.rowId, ids[4]);
+    });
+  });
+
+  test('T8 legacy affected shape stays ineligible and keeps its rows across '
+      'a normal history save', () {
+    state.db.execute(
+      "UPDATE sessions SET history_revision = 1373 WHERE session_id = 'session-1'",
+    );
+    state.db.execute(
+      '''
+      INSERT INTO messages (id, session_id, data, history_status) VALUES
+        (29575340, 'session-1', '{"role":"user","content":"Root prompt"}', 'active'),
+        (29579131, 'session-1', '{"role":"assistant","content":"Rewritten response"}', 'active')
+      ''',
+    );
+    state.db.execute(
+      '''
+      INSERT INTO session_compaction_operations (
+        compaction_id, session_id, trigger, status, source_history_revision,
+        source_start_message_id, source_end_message_id,
+        tail_start_message_id, tail_end_message_id,
+        provider_instance_id, model_id, template_id, protocol,
+        normalized_base_url, config_revision, credential_revision,
+        context_window_tokens, estimated_request_tokens_before,
+        estimated_request_tokens_after, retained_tail_tokens,
+        internal_summary_json, started_at, completed_at
+      ) VALUES (
+        'cmp-legacy', 'session-1', 'manual', 'completed', 945,
+        29575340, 29576050, 29576051, 29576299,
+        'provider-1', 'gpt-4o', 'openai', 'openai_compatible',
+        'https://api.example.com/v1', 1, 1, 258000, 220000, 25000, 5000,
+        '{"currentGoal":"Production goal","remainingWork":"Production work"}',
+        '2026-10-20T10:00:00Z', '2026-10-20T10:01:00Z'
+      )
+      ''',
+    );
+    final recordBefore = state.db.select(
+      "SELECT * FROM session_compaction_operations WHERE compaction_id = 'cmp-legacy'",
+    ).single;
+
+    sessions.replaceMessages('session-1', [
+      ...sessions.getMessages('session-1'),
+      Message(role: MessageRole.user, content: 'Next user turn'),
+    ]);
+
+    // Legacy rows without message_id align by position and keep their ids.
+    expect(
+      sessions.getPersistedMessages('session-1').map((entry) => entry.rowId),
+      containsAllInOrder([29575340, 29579131]),
+    );
+    final projection = builder.buildForSession('session-1');
+    expect(projection.usesCompactionBoundary, isFalse);
+    expect(
+      projection.conversationMessages.map((message) => message.content),
+      ['Root prompt', 'Rewritten response', 'Next user turn'],
+    );
+    final recordAfter = state.db.select(
+      "SELECT * FROM session_compaction_operations WHERE compaction_id = 'cmp-legacy'",
+    ).single;
+    expect(Map.of(recordAfter), Map.of(recordBefore));
   });
 }

@@ -426,6 +426,35 @@ class ModelAwareCompactionPolicy extends CompactionPolicy {
   }
 }
 
+/// Limits of the bounded recovery summarizer that runs when the ordinary
+/// provider-backed compaction request overflows (Task 117, 0P-F2).
+class CompactionRecoveryPolicy {
+  static const defaults = CompactionRecoveryPolicy(
+    passBudgetSafetyRatio: 0.80,
+    maxChunks: 16,
+    minPassBudgetTokens: 512,
+  );
+
+  /// Fraction of the effective input budget one recovery pass may use. Kept
+  /// below 1 because the chars-per-token estimate underestimates Arabic and
+  /// CJK text.
+  final double passBudgetSafetyRatio;
+
+  /// Maximum number of source chunks one recovery may summarize. A source
+  /// that needs more fails before any recovery provider call.
+  final int maxChunks;
+
+  /// Smallest usable per-pass source budget after the stable system prompt,
+  /// tool schemas, and instruction are reserved.
+  final int minPassBudgetTokens;
+
+  const CompactionRecoveryPolicy({
+    required this.passBudgetSafetyRatio,
+    required this.maxChunks,
+    required this.minPassBudgetTokens,
+  });
+}
+
 class ThinkingControlOverride {
   final ThinkingCapabilityStatus status;
   final String? wire;

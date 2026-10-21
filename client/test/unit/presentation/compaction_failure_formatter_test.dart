@@ -70,6 +70,23 @@ void main() {
         overBudget.nextAction,
         'Shorten earlier messages or start a new session.',
       );
+
+      // Task 117: bounded recovery refuses a source over its chunk capacity.
+      final overCapacity = CompactionFailureFormatter.resolve(
+        cause: 'recovery_capacity_exceeded',
+        failureReason: 'summarization_failed',
+      );
+      expect(
+        overCapacity.explanation,
+        "This conversation is too large to summarize within the model's "
+        'context window.',
+      );
+      expect(
+        overCapacity.nextAction,
+        'Start a new session, or switch to a model with a larger context '
+        'window.',
+      );
+      expect(overCapacity.stage, 'pruning');
     });
 
     test('distinguishes validation and persistence failures', () {
