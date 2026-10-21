@@ -71,11 +71,12 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 | Scenario | CLI Command | Expected Runtime Behavior | Exit Code |
 |---|---|---|---|
-| Request compaction for session | `sanad session compact <session-id>` | Daemon receives `session.compact` query and emits admission message (`Compaction request accepted for session <session-id>`). Single dispatch, no retry on timeout. | 0 |
+| Request compaction for session | `sanad session compact <session-id>` | Daemon receives the correlated `session.compact` query and replies after compaction finishes (`SessionRunOrchestrator.handleCompactCommand` awaits `runCompaction`); the CLI prints `Compaction request accepted for session <session-id>` for a completed compaction. Single dispatch, no retry on timeout. | 0 |
 | Request compaction in JSON mode | `sanad session compact <session-id> --json` | Outputs JSON object containing `session_id`, `outcome` (`accepted` / `dispatched` / `no_op` / `failed`), and correlated IDs (`compaction_id`, `request_id`). | 0 |
 | Compaction request rejected or busy | `sanad session compact <session-id> --json` | Returns JSON object with failure outcome (`failed`, `session_busy`, `compaction_in_progress`), `failure_reason`, and `exit_code: 1`. | 1 |
-| Query timeout or connection failure | `sanad session compact <session-id> --json` | Fails closed after single dispatch attempt without retrying; returns JSON error with `exit_code: 1`. | 1 |
+| Query timeout or connection failure | `sanad session compact <session-id> --json` | Fails closed after single dispatch attempt without retrying; returns JSON error with `exit_code: 1`. A timeout is not a compaction failure: the daemon may still be compacting. | 1 |
 | Missing or malformed daemon response | `sanad session compact <session-id> --json` | Rejects malformed payload; returns `outcome: failed`, `failure_reason: missing_outcome`, and `exit_code: 1`. | 1 |
+| REPL `/compact` slow or timed out (Task 119) | `/compact` inside `sanad` REPL | Exactly one `session.compact` dispatch, never resent. A timeout renders the neutral notice `Compaction may still be running…`, never an error, `dispatched` or success; `accepted` renders as completed, and busy or failure outcomes render with their reason. Covered by `agent/test/cli/slash_command_handler_test.dart` group `/compact outcomes (Task 119)`. | 0 |
 | Compact session missing argument | `sanad session compact` | Error message `Error: Session ID is required.` and usage instructions. | 1 |
 
 ---

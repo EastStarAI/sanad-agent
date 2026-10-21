@@ -81,8 +81,8 @@ class PortalAuthClient {
   }) : _dio =
            dio ??
            (Dio()
-             ..options.connectTimeout = const Duration(seconds: 5)
-             ..options.receiveTimeout = const Duration(seconds: 5)),
+             ..options.connectTimeout = const Duration(seconds: 15)
+             ..options.receiveTimeout = const Duration(seconds: 15)),
        _postOverride = postOverride;
 
   static String get portalUrl => AppConfig.portalUrl;

@@ -11,6 +11,13 @@ class MockWebSocket implements WebSocket {
   final _incomingController = StreamController<dynamic>();
   final List<String> sentMessages = [];
   bool _closed = false;
+
+  /// Daemon reply payload for `session.compact`; null simulates a reply that
+  /// outlives the acknowledgement window.
+  Map<String, dynamic>? compactReplyPayload = const {
+    'outcome': 'success',
+    'compaction_id': 'compact-101',
+  };
   final Completer<void> _doneCompleter = Completer<void>();
 
   void emitFromServer(dynamic data) {
@@ -59,16 +66,14 @@ class MockWebSocket implements WebSocket {
             );
           });
         } else if (command == 'session.compact') {
+          final reply = compactReplyPayload;
+          if (reply == null) return;
           scheduleMicrotask(() {
             emitFromServer(
               jsonEncode({
                 'type': 'session.compact_result',
                 'request_id': reqId,
-                'payload': {
-                  'request_id': reqId,
-                  'outcome': 'success',
-                  'compaction_id': 'compact-101',
-                },
+                'payload': {'request_id': reqId, ...reply},
               }),
             );
           });
@@ -570,6 +575,83 @@ void main() {
         isTrue,
       );
       expect(stdoutBuf.toString(), contains('Context compacted successfully'));
+    });
+
+    group('/compact outcomes (Task 119)', () {
+      CliSlashCommandHandler compactHandler() => CliSlashCommandHandler.create(
+        sessionId: 'sess-compact-119',
+        currentModel: 'claude-3-7-sonnet',
+        client: client,
+        stdoutSink: stdoutBuf,
+        stderrSink: stderrBuf,
+        enableAnsi: false,
+        compactAcknowledgementTimeout: const Duration(milliseconds: 20),
+      );
+
+      int compactDispatches() => mockSocket.sentMessages
+          .where((m) => m.contains('"session.compact"'))
+          .length;
+
+      String output() => '$stdoutBuf$stderrBuf';
+
+      test('timeout dispatches once and renders a neutral still-running notice', () async {
+        mockSocket.compactReplyPayload = null;
+
+        await compactHandler().handle('/compact');
+        // Give any fire-and-forget fallback a chance to be sent.
+        await Future<void>.delayed(Duration.zero);
+
+        expect(compactDispatches(), 1, reason: 'never resend session.compact');
+        expect(
+          stdoutBuf.toString(),
+          contains('Compaction may still be running'),
+        );
+        expect(output(), isNot(contains('successfully')));
+        expect(output(), isNot(contains('dispatched')));
+        expect(output(), isNot(contains('Failed to compact')));
+      });
+
+      test('accepted renders as completed', () async {
+        mockSocket.compactReplyPayload = const {
+          'outcome': 'accepted',
+          'compaction_id': 'cmp-1',
+        };
+
+        await compactHandler().handle('/compact');
+
+        expect(compactDispatches(), 1);
+        expect(stdoutBuf.toString(), contains('Context compacted successfully'));
+        expect(output(), isNot(contains('finished with outcome')));
+      });
+
+      test('failure renders its outcome and reason', () async {
+        mockSocket.compactReplyPayload = const {
+          'outcome': 'failed',
+          'failure_reason': 'summarization_failed',
+        };
+
+        await compactHandler().handle('/compact');
+
+        expect(
+          output(),
+          contains('finished with outcome "failed": summarization_failed'),
+        );
+        expect(output(), isNot(contains('successfully')));
+      });
+
+      test('busy rejection renders its outcome', () async {
+        mockSocket.compactReplyPayload = const {
+          'outcome': 'session_busy',
+          'failure_reason': 'session_busy',
+        };
+
+        await compactHandler().handle('/compact');
+
+        expect(
+          output(),
+          contains('finished with outcome "session_busy": session_busy'),
+        );
+      });
     });
 
     test('/steer sends steer command to client with notice', () async {

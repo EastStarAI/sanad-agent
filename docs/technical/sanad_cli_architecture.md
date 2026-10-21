@@ -182,7 +182,7 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
 | `/session` | | Inspect session details, create new (`/session new`), list, or history |
 | `/skills` | | List installed and bundled agent skills with status |
 | `/mcp` | | List configured Model Context Protocol (MCP) servers and connection status |
-| `/compact` | | Trigger session context compaction (`session.compact`, Plan 53) |
+| `/compact` | | Trigger session context compaction (`session.compact`, Plan 53). One correlated dispatch, never resent; a timeout renders a neutral still-running notice (Task 119) |
 | `/steer <text>` | | Direct execution mid-flight; applies instructions at next step boundary |
 | `/queue <text>` | | Enqueue prompt to execute after active turn completes (`delivery_intent: queue`) |
 | `/stop` | | Cleanly interrupt active turn (also triggers on `Ctrl+C` during turns) |
@@ -199,7 +199,8 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
    - Sends `stop` command to the gateway for the active session.
    - Aborts ongoing turn cleanly and prevents orphan background processes.
 3. **Session Context Compaction (`/compact`):**
-   - Sends `session.compact` command to trigger the compaction coordinator (Plan 53).
+   - Sends one correlated `session.compact` query (`CliSlashCommandHandler._handleCompact` in `agent/lib/cli/repl/slash_command_handler.dart`, `resendOnTimeout: false`) to trigger the compaction coordinator (Plan 53).
+   - The daemon replies after compaction finishes, so `accepted` renders as completed and busy, in-progress or failure outcomes render with their reason. A timeout (`SlashCommandContext.defaultCompactAcknowledgementTimeout`, 10 s) is not a failure: the REPL renders a neutral notice that compaction may still be running and never resends (Task 119).
    - Summarizes past turns and prunes obsolete tool results while preserving the current goal.
 
 ---
@@ -227,7 +228,7 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
 | `list` | `sanad session list [--json]` | Lists active sessions discovered via the gateway. Appends `[Pending intervention]` when a session is suspended awaiting tool approval or user input. |
 | `show` | `sanad session show <session-id> [--json] [--include-messages]` | Authoritative session inspection. Exposes status (`needs_input`, `needs_permission`, `running`, `idle`), owner identities, in-flight execution details, pending request payloads, the effective route, timestamps, and message/tool count summaries. By default the projection is **bounded** and excludes the full messages payload; pass `--include-messages` to opt in to the complete conversation/history. |
 | `stop` | `sanad session stop <session-id> [--json]` | Halts execution strictly for the specified session, leaving other active sessions untouched. |
-| `compact` | `sanad session compact <session-id> [--json] [--timeout <seconds>]` | Requests manual context compaction admission from the daemon for the specified session. Emits structured admission status (`accepted`, `dispatched`, `no_op`, `failed`). Does not wait for compaction execution completion. Dispatches exactly once without retry on timeout. |
+| `compact` | `sanad session compact <session-id> [--json] [--timeout <seconds>]` | Requests manual context compaction for the specified session through a correlated `session.compact` query (`LocalGatewayCliClient.compactSession` with `resendOnTimeout: false`, `agent/lib/cli/runner/commands/session_command.dart`). The daemon replies only after compaction finishes (`SessionRunOrchestrator.handleCompactCommand` awaits `runCompaction`), so the CLI waits for the terminal outcome (`accepted` = completed, `no_op`, or a failure/rejection) up to `--timeout` (default 5 s). Dispatches exactly once; a timeout exits 1 without retry while the daemon may still be compacting. `dispatched` occurs only on the resend-on-timeout path, which this subcommand disables. |
 | `answer` | `sanad session answer <session-id> -r <req-id> --answer <text> [--file <path>] [--json]` | Explicit resolution path for pending `system_ask_user` questions. Accepts direct text or JSON/text file payload. |
 | `permission` | `sanad session permission <session-id> -r <req-id> (--allow \| --deny) [--decision allow\|deny] [--scope once\|session\|workspace] [--comment <text>] [--file <path>] [--json]` | Explicit decision path for gated tool approvals. Accepts boolean flags or a structured JSON file payload. Aliases: `permit`, `decide`. |
 | `new` | `sanad session new` | Generates and outputs a fresh UUID session identifier. |
