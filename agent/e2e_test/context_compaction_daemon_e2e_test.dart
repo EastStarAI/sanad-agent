@@ -371,8 +371,14 @@ void main() {
   );
 
   test(
-    'F.53.6 rejected thinking preparation leaves daemon, history and stored choice intact',
+    'F.53.6 persisted unsupported thinking choice compacts with the provider default and keeps the stored choice',
     () async {
+      // A persisted session thinking preference that the active route does
+      // not offer is a carried-over preference: the daemon admits the work
+      // with the provider default and records a route-scoped correction
+      // instead of rejecting it (docs/technical/provider_protocol.md, thinking
+      // admission). The pre-claim rejection path for genuinely invalid
+      // selections stays covered by compaction_failure_containment_test.dart.
       final h = await _CompactionHarness.create();
       try {
         final sessionId = 'plan53-thinking-${_unique()}';
@@ -390,17 +396,17 @@ void main() {
 
         final client = await h.startDaemon();
         try {
-          final rejection = await client.sendCompact(
+          final result = await client.sendCompact(
             sessionId: sessionId,
             requestId: 'compact-thinking-${_unique()}',
             timeout: const Duration(seconds: 30),
           );
-          expect(rejection['outcome'], 'failed');
-          expect(rejection['failure_reason'], 'summarization_failed');
-          expect(rejection['failure_stage'], 'preparation');
           expect(
-            rejection['failure_cause'],
-            'thinking_capability_unsupported',
+            result['outcome'],
+            'accepted',
+            reason:
+                'carried unsupported thinking must not reject compaction: '
+                '${result['failure_cause'] ?? result}',
           );
 
           // The daemon stays responsive on the same session.
@@ -429,10 +435,9 @@ void main() {
         }
 
         expect(await h.daemonStillRunning(), isTrue);
-        // The stored user choice is never lowered or cleared by the failure.
+        // The stored user choice is never lowered or cleared by admission.
         expect(await h.storedThinkingMode(sessionId), 'high');
-        // The pre-claim rejection invents no started operation or history row.
-        expect(await h.compactionLifecycleRowCount(sessionId), 0);
+        expect(await h.compactionLifecycleRowCount(sessionId), greaterThan(0));
       } finally {
         await h.dispose();
       }

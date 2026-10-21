@@ -22,6 +22,9 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Message body identity | User and assistant Markdown each render exactly one event-scoped `*_message_body:<eventId>` key |
 | Batch message-body evidence | `message_bodies` returns only event-scoped user/assistant bodies, at most the latest 50, with total count and explicit truncation metadata |
 | Markdown consolidation | Multi-block Markdown text is joined in display order on the keyed message-body row without duplicate descendant rows |
+| Element enabled state | Buttons, icon buttons, list tiles, ink wells, popup menus, and text fields report `enabled` from their live callbacks (keyed wrappers resolve the first descendant control); widgets without enabled state omit the field, and human output marks only disabled rows `(disabled)` |
+| Workspace browser driver keys | Each folder row exposes `workspace_browser_folder_row:<name>`, and its rename/delete buttons expose `workspace_browser_rename_button:<name>` / `workspace_browser_delete_button:<name>`; mutation buttons are absent at the managed root |
+| Permission card driver keys | Options expose `permission_option_once`, `permission_option_session`, `permission_option_workspace`, and `permission_option_deny`; the deny comment and submit expose `permission_deny_comment_input` and `permission_deny_submit_button` |
 | Analyzer and formatter | All changed Client and script sources pass |
 
 ## Managed Runtime Coverage
@@ -43,6 +46,7 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Fresh macOS authentication | After UI-driven sign-out and sign-in, `auth-url` for the explicit macOS VM can be captured directly into a temporary shell variable, opened in the automation browser, unset, and followed by a Client snapshot proving Cloud reconnection |
 | Completed or absent authentication | The same explicit VM returns a nonzero `auth-url` result after the in-memory challenge is cleared |
 | Tooltip-wrapped action | Actionable child contains the inherited tooltip |
+| Disabled keyed control | `ui snapshot` and `ui find` report `enabled: false` (JSON) or `(disabled)` (human) for a keyed control whose callback is absent, and `enabled: true` once it becomes actionable |
 | Selected semantic action | Keyed output reports semantic label, button role, and selected state without duplicate wrapper rows |
 | Obscured text field | Snapshot omits its current value |
 | Missing `--within` scope | Fails; it never broadens to the complete tree |
