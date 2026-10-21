@@ -1094,6 +1094,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
               sizeBytes: item.sizeBytes,
               isImage: item.isImage,
               isExisting: item.isExisting,
+              attachment: item.attachment,
               bytes: item.bytes,
               status: error == null ? InlineEditAttachmentStatus.ready : InlineEditAttachmentStatus.failed,
               error: error,
@@ -1521,6 +1522,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       builder: (context, pendingToolName) => EventTile(
         key: ValueKey(event.id),
         event: event,
+        sessionId: widget.sessionId,
         viewImageMediaLoader: widget.viewImageMediaLoader,
         userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
         waitingIndicator: event.status == EventStatus.running && pendingToolName == event.toolName

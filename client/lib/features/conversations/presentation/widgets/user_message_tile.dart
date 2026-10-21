@@ -37,6 +37,7 @@ class InlineEditAttachment {
     required this.sizeBytes,
     required this.isImage,
     required this.isExisting,
+    this.attachment,
     this.bytes,
     this.status = InlineEditAttachmentStatus.ready,
     this.error,
@@ -48,6 +49,7 @@ class InlineEditAttachment {
     sizeBytes: attachment.sizeBytes,
     isImage: attachment.isImage,
     isExisting: true,
+    attachment: attachment,
   );
 
   final String id;
@@ -55,6 +57,11 @@ class InlineEditAttachment {
   final int sizeBytes;
   final bool isImage;
   final bool isExisting;
+
+  /// The canonical attachment an existing edit item references; its preview
+  /// loads through the same media loader as the message bubble. New items
+  /// carry their local [bytes] instead and have no canonical attachment.
+  final UserMessageAttachment? attachment;
   final Uint8List? bytes;
   final InlineEditAttachmentStatus status;
   final String? error;
@@ -62,6 +69,7 @@ class InlineEditAttachment {
 
 class UserMessageTile extends StatefulWidget {
   final CanonicalEvent event;
+  final String? sessionId;
   final Future<void> Function(String requestId)? onCancelPendingSteer;
   final bool isCancellingPendingSteer;
   final bool canReplay;
@@ -83,6 +91,7 @@ class UserMessageTile extends StatefulWidget {
   const UserMessageTile({
     super.key,
     required this.event,
+    this.sessionId,
     this.onCancelPendingSteer,
     this.isCancellingPendingSteer = false,
     this.canReplay = false,
@@ -108,6 +117,8 @@ class UserMessageTile extends StatefulWidget {
 
 class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProviderStateMixin {
   bool _isExpanded = false;
+
+  String get _effectiveSessionId => widget.sessionId ?? widget.event.sessionId ?? '';
 
   void _toggleExpanded() {
     setState(() {
@@ -207,7 +218,7 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                           if (attachments.isNotEmpty) ...[
                             _UserAttachmentGrid(
                               attachments: attachments,
-                              sessionId: widget.event.sessionId ?? '',
+                              sessionId: _effectiveSessionId,
                               loader: widget.attachmentMediaLoader,
                             ),
                             if (widget.event.text.isNotEmpty) const SizedBox(height: 10),
@@ -466,25 +477,12 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (attachment.isImage && attachment.bytes != null)
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: Image.memory(
-                          attachment.bytes!,
-                          width: 28,
-                          height: 28,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => const Icon(
-                            Icons.image_outlined,
-                            size: 22,
-                          ),
-                        ),
-                      )
-                    else
-                      Icon(
-                        attachment.isImage ? Icons.image_outlined : Icons.insert_drive_file_outlined,
-                        size: 22,
-                      ),
+                    _InlineEditAttachmentThumbnail(
+                      key: ValueKey('inline_edit_attachment_thumbnail_${attachment.id}'),
+                      attachment: attachment,
+                      sessionId: _effectiveSessionId,
+                      loader: widget.attachmentMediaLoader,
+                    ),
                     const SizedBox(width: 6),
                     Flexible(
                       child: Column(
@@ -555,6 +553,165 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
       ],
     ],
   );
+}
+
+class _InlineEditAttachmentThumbnail extends StatefulWidget {
+  const _InlineEditAttachmentThumbnail({
+    super.key,
+    required this.attachment,
+    required this.sessionId,
+    this.loader,
+  });
+
+  final InlineEditAttachment attachment;
+  final String sessionId;
+  final UserAttachmentMediaLoader? loader;
+
+  @override
+  State<_InlineEditAttachmentThumbnail> createState() => _InlineEditAttachmentThumbnailState();
+}
+
+class _InlineEditAttachmentThumbnailState extends State<_InlineEditAttachmentThumbnail> {
+  ViewImageMediaLoad? _load;
+
+  @override
+  void initState() {
+    super.initState();
+    _startLoad();
+  }
+
+  @override
+  void didUpdateWidget(covariant _InlineEditAttachmentThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Reload only for a different logical resource; a rebuilt parent that
+    // passes a new loader instance must not issue another Agent request.
+    if (oldWidget.attachment.id != widget.attachment.id ||
+        oldWidget.attachment.attachment?.mediaId != widget.attachment.attachment?.mediaId ||
+        oldWidget.attachment.bytes != widget.attachment.bytes ||
+        oldWidget.sessionId != widget.sessionId) {
+      _load?.cancel();
+      _load = null;
+      _startLoad();
+    }
+  }
+
+  void _startLoad() {
+    _load?.cancel();
+    _load = null;
+    if (!widget.attachment.isImage || widget.attachment.bytes != null) {
+      return;
+    }
+    // Only a canonical, available reference is ever requested; identity is
+    // never synthesized for a reference the client does not hold.
+    final userAttachment = widget.attachment.attachment;
+    if (userAttachment == null || !userAttachment.isAvailable || widget.sessionId.isEmpty) {
+      return;
+    }
+    // Same loader resolution as the message bubble's attachment card.
+    final loader = widget.loader ?? ViewImageMediaRepository.local();
+    try {
+      _load = loader.loadAttachment(
+        attachment: userAttachment,
+        sessionId: widget.sessionId,
+      );
+    } catch (_) {
+      _load = null;
+    }
+  }
+
+  void _retry() {
+    setState(() {
+      _startLoad();
+    });
+  }
+
+  @override
+  void dispose() {
+    _load?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.attachment.isImage) {
+      return const Icon(
+        Icons.insert_drive_file_outlined,
+        size: 22,
+      );
+    }
+
+    if (widget.attachment.bytes != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Image.memory(
+          widget.attachment.bytes!,
+          width: 28,
+          height: 28,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => const Icon(
+            Icons.image_outlined,
+            size: 22,
+          ),
+        ),
+      );
+    }
+
+    final load = _load;
+    if (load == null) {
+      return GestureDetector(
+        onTap: _retry,
+        child: const Icon(
+          Icons.image_outlined,
+          size: 22,
+        ),
+      );
+    }
+
+    return FutureBuilder<Uint8List>(
+      future: load.bytes,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return GestureDetector(
+            onTap: _retry,
+            child: const Icon(
+              Icons.image_outlined,
+              size: 22,
+            ),
+          );
+        }
+        final bytes = snapshot.data;
+        if (bytes == null) {
+          return const SizedBox(
+            width: 28,
+            height: 28,
+            child: Center(
+              child: SizedBox(
+                width: 14,
+                height: 14,
+                child: AppProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Image.memory(
+            bytes,
+            width: 28,
+            height: 28,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => GestureDetector(
+              onTap: _retry,
+              child: const Icon(
+                Icons.image_outlined,
+                size: 22,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _UserAttachmentGrid extends StatelessWidget {

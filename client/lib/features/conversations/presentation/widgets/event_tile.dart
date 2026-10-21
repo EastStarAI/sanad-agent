@@ -48,6 +48,7 @@ class EventTile extends StatefulWidget {
   final ToolWaitingIndicator waitingIndicator;
   final ViewImageMediaLoader? viewImageMediaLoader;
   final UserAttachmentMediaLoader? userAttachmentMediaLoader;
+  final String? sessionId;
   final List<InlineEditAttachment> editAttachments;
   final String? editAttachmentError;
   final Future<void> Function()? onAddEditAttachment;
@@ -57,6 +58,7 @@ class EventTile extends StatefulWidget {
   const EventTile({
     super.key,
     required this.event,
+    this.sessionId,
     this.isExpanded,
     this.onToggleExpanded,
     this.onCancelPendingSteer,
@@ -205,6 +207,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       case EventKind.userMessage:
         return UserMessageTile(
           event: widget.event,
+          sessionId: widget.sessionId ?? widget.event.sessionId,
           onCancelPendingSteer: widget.onCancelPendingSteer,
           isCancellingPendingSteer: widget.isCancellingPendingSteer,
           canReplay: widget.canReplay,

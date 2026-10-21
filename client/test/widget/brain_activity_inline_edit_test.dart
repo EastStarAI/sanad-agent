@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
@@ -32,14 +33,34 @@ class _FakeAttachmentLoader implements UserAttachmentMediaLoader {
     ),
   );
 
+  _FakeAttachmentLoader({
+    this.shouldFail = false,
+    this.onLoad,
+  });
+
+  bool shouldFail;
+  final ViewImageMediaLoad Function(UserMessageAttachment attachment, String sessionId)? onLoad;
+  final List<String> loadedIds = [];
+  int cancelCount = 0;
+
   @override
   ViewImageMediaLoad loadAttachment({
     required UserMessageAttachment attachment,
     required String sessionId,
   }) {
+    loadedIds.add(attachment.id);
+    if (onLoad != null) {
+      return onLoad!(attachment, sessionId);
+    }
+    if (shouldFail) {
+      return ViewImageMediaLoad(
+        bytes: Future.error(Exception('Failed to load attachment media')),
+        cancel: () => cancelCount += 1,
+      );
+    }
     return ViewImageMediaLoad(
       bytes: Future.value(_png),
-      cancel: () {},
+      cancel: () => cancelCount += 1,
     );
   }
 }
@@ -119,6 +140,7 @@ void main() {
     WidgetTester tester, {
     required List<CanonicalEvent> initialMessages,
     Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles,
+    UserAttachmentMediaLoader? userAttachmentMediaLoader,
   }) async {
     await pumpTestApp(
       tester,
@@ -129,7 +151,7 @@ void main() {
         sessionId: 'session-1',
         composerSessionId: 'session-1',
         visualState: ConversationVisualState.activeSession,
-        userAttachmentMediaLoader: _FakeAttachmentLoader(),
+        userAttachmentMediaLoader: userAttachmentMediaLoader ?? _FakeAttachmentLoader(),
         pickEditAttachmentFiles: pickEditAttachmentFiles,
       ),
       agentCubit: agentCubit,
@@ -569,6 +591,224 @@ void main() {
 
     // History revision updated in sessionCubit
     expect(sessionCubit.state.selectedSession?.historyRevision, 42);
+  });
+
+  testWidgets('existing image attachment displays real thumbnail in inline edit rail', (tester) async {
+    final loader = _FakeAttachmentLoader();
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      userAttachmentMediaLoader: loader,
+    );
+
+    loader.loadedIds.clear();
+
+    // Begin inline edit
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('inline_edit_attachment_rail')), findsOneWidget);
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_att-photo-1'));
+    expect(chip, findsOneWidget);
+
+    // Loader was called for the existing image attachment
+    expect(loader.loadedIds, ['att-photo-1']);
+
+    // Real thumbnail (Image) is rendered inside the attachment chip, not generic icon
+    expect(
+      find.descendant(of: chip, matching: find.byType(Image)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)),
+      findsNothing,
+    );
+  });
+
+  testWidgets('loader failure falls back to generic icon without breaking rail and supports retry', (tester) async {
+    final loader = _FakeAttachmentLoader(shouldFail: true);
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      userAttachmentMediaLoader: loader,
+    );
+
+    // Begin inline edit
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('inline_edit_attachment_rail')), findsOneWidget);
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_att-photo-1'));
+    expect(chip, findsOneWidget);
+
+    // Loader failed, so generic image icon is shown as fallback
+    expect(
+      find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: chip, matching: find.byType(Image)),
+      findsNothing,
+    );
+
+    // Rail remains completely functional
+    expect(find.text('Ready · existing'), findsOneWidget);
+
+    // Tap retry on the fallback icon to reload
+    loader.shouldFail = false;
+    await tester.tap(
+      find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)),
+    );
+    await tester.pumpAndSettle();
+
+    // Now rendered as thumbnail
+    expect(
+      find.descendant(of: chip, matching: find.byType(Image)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: chip, matching: find.byIcon(Icons.image_outlined)),
+      findsNothing,
+    );
+  });
+
+  testWidgets('cancelling inline edit invokes cancel on in-flight thumbnail load', (tester) async {
+    final completer = Completer<Uint8List>();
+    var callCount = 0;
+    var canceled = 0;
+    final loader = _FakeAttachmentLoader(
+      onLoad: (attachment, sessionId) {
+        callCount++;
+        if (callCount == 1) {
+          // Initial user message card render
+          return ViewImageMediaLoad(
+            bytes: Future.value(_FakeAttachmentLoader._png),
+            cancel: () {},
+          );
+        }
+        // Second call is from inline edit thumbnail
+        return ViewImageMediaLoad(
+          bytes: completer.future,
+          cancel: () => canceled++,
+        );
+      },
+    );
+
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      userAttachmentMediaLoader: loader,
+    );
+
+    // Initial message settled
+    expect(callCount, 1);
+
+    // Tap edit message
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pump();
+
+    // Loader was called for the inline edit thumbnail
+    expect(callCount, 2);
+    expect(find.byType(AppProgressIndicator), findsOneWidget);
+
+    // Cancel edit
+    await tester.tap(find.text('Cancel'));
+    completer.complete(_FakeAttachmentLoader._png);
+    await tester.pumpAndSettle();
+
+    // Editor is closed and cancel was invoked
+    expect(find.byKey(const Key('inline_message_editor')), findsNothing);
+    expect(canceled, 1);
+  });
+
+  testWidgets('new image attachment with local bytes displays thumbnail directly without calling loader', (tester) async {
+    final loader = _FakeAttachmentLoader();
+    final newBytes = Uint8List.fromList([1, 2, 3]);
+
+    await pumpView(
+      tester,
+      initialMessages: [
+        CanonicalEvent(
+          id: 'user-no-attachments',
+          kind: EventKind.userMessage,
+          text: 'no attachments message',
+          sessionId: 'session-1',
+          timestamp: DateTime.utc(2026, 10, 13),
+          metadata: const {
+            'request_id': 'req-root-no-att',
+            'message_id': 'msg-root-no-att',
+            'turn_id': 'turn-root-no-att',
+            'replay_eligible': true,
+            'input_kind': 'root_turn',
+            'history_status': 'active',
+          },
+        ),
+      ],
+      userAttachmentMediaLoader: loader,
+      pickEditAttachmentFiles: () async => [
+        InlineEditAttachmentSelection(name: 'added_photo.png', bytes: newBytes),
+      ],
+    );
+
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    // Add new attachment
+    await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('added_photo.png'), findsOneWidget);
+    expect(find.text('Ready · new'), findsOneWidget);
+
+    // New attachment renders Image from local bytes directly without loader
+    expect(loader.loadedIds, isEmpty);
+    expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('existing non-image file attachment renders file icon and does not invoke loader', (tester) async {
+    final loader = _FakeAttachmentLoader();
+    final fileEvent = CanonicalEvent(
+      id: 'user-msg-file',
+      kind: EventKind.userMessage,
+      text: 'document attached',
+      sessionId: 'session-1',
+      timestamp: DateTime.utc(2026, 10, 13),
+      metadata: const {
+        'request_id': 'req-root-file',
+        'message_id': 'msg-root-file',
+        'turn_id': 'turn-root-file',
+        'replay_eligible': true,
+        'input_kind': 'root_turn',
+        'history_status': 'active',
+        'attachments': [
+          {
+            'schemaVersion': 1,
+            'id': 'att-doc-1',
+            'safeName': 'report.pdf',
+            'mimeType': 'application/pdf',
+            'sizeBytes': 2048,
+            'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'kind': 'file',
+            'mediaId': 'med-doc-1',
+            'status': 'available',
+          },
+        ],
+      },
+    );
+
+    await pumpView(
+      tester,
+      initialMessages: [fileEvent],
+      userAttachmentMediaLoader: loader,
+    );
+
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    final chip = find.byKey(const ValueKey('inline_edit_attachment_att-doc-1'));
+    expect(chip, findsOneWidget);
+    expect(find.descendant(of: chip, matching: find.byIcon(Icons.insert_drive_file_outlined)), findsOneWidget);
+    expect(loader.loadedIds, isEmpty);
   });
 }
 
