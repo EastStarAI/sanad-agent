@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
@@ -248,6 +250,41 @@ void main() {
       await pumpEventQueue();
 
       expect(messagesCubit.state.selectedWorkspace?.id, workspace.id);
+    });
+
+    // Task 110 port guard: close() awaits the workspace-policy subscription
+    // cancel, as the cubit did before the workspace coordinator was extracted.
+    test('close awaits the workspace policy subscription cancel', () async {
+      final cancelGate = Completer<void>();
+      var cancelCalls = 0;
+      conversationRepository.onWorkspacePolicyCancel = () {
+        cancelCalls++;
+        return cancelGate.future;
+      };
+      final session = Session(
+        id: 'sess-close-cancel',
+        title: 'Close Cancel Session',
+        deviceId: localAgent.id,
+        workspaceId: 'exec_root:/local/project',
+        workspacePath: '/local/project',
+        metadata: {'execution_root': '/local/project'},
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      conversationRepository.seedSessions(localAgent, [session]);
+      await sessionCubit.selectSession(session);
+      await pumpEventQueue();
+      expect(cancelCalls, 0);
+
+      var closed = false;
+      final closing = messagesCubit.close().then((_) => closed = true);
+      await pumpEventQueue();
+      expect(cancelCalls, 1);
+      expect(closed, isFalse);
+
+      cancelGate.complete();
+      await closing;
+      expect(closed, isTrue);
     });
   });
 }

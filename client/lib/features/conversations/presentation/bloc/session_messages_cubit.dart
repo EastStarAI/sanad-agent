@@ -1553,7 +1553,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     await _queuedMessagesSubscription?.cancel();
     await _stopRecoverySubscription?.cancel();
     await _attentionSubscription?.cancel();
-    _workspaceCoordinator.dispose();
+    await _workspaceCoordinator.dispose();
     return super.close();
   }
 }

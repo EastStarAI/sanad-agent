@@ -862,8 +862,16 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
     return updated;
   }
 
+  /// When set, each policy watch gets its own stream whose cancel runs this
+  /// hook, so a test can hold the subscription cancel open.
+  Future<void> Function()? onWorkspacePolicyCancel;
+
   @override
   Stream<WorkspacePolicy> watchWorkspacePolicy(DeviceConfig agent, String workspaceId) {
+    final onCancel = onWorkspacePolicyCancel;
+    if (onCancel != null) {
+      return StreamController<WorkspacePolicy>(onCancel: onCancel).stream;
+    }
     return _policyController(workspaceId).stream;
   }
 

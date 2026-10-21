@@ -510,7 +510,7 @@ class SessionWorkspaceCoordinator {
     unawaited(_workspacePolicySubscription?.cancel());
   }
 
-  void dispose() {
-    unawaited(_workspacePolicySubscription?.cancel());
+  Future<void> dispose() async {
+    await _workspacePolicySubscription?.cancel();
   }
 }
