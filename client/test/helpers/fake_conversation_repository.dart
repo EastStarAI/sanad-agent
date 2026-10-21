@@ -852,7 +852,7 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
       'scope': scope,
       'comment': comment,
       'answer': answer,
-      'secret_names': secretValues?.keys.join(','),
+      if (secretValues != null) 'secret_names': secretValues.keys.join(','),
     });
     _pendingSuspendedByAgentId[agent.id] = null;
     _pendingSuspensionController(agent.id).add(null);
