@@ -493,5 +493,33 @@
         "type": "String"
       }
     }
-  }
+  },
+  "workspaceBrowserTitle": "Choose Workspace",
+  "workspaceBrowserNewFolder": "New Folder",
+  "workspaceBrowserFolderNameLabel": "Folder Name",
+  "workspaceBrowserCreate": "Create",
+  "workspaceBrowserRenameFolder": "Rename Folder",
+  "workspaceBrowserNewFolderNameLabel": "New Folder Name",
+  "workspaceBrowserRename": "Rename",
+  "workspaceBrowserDeleteFolder": "Delete Folder",
+  "workspaceBrowserDeleteConfirmation": "Delete \"{name}\" and all files and folders inside it? This cannot be undone.",
+  "@workspaceBrowserDeleteConfirmation": {
+    "description": "Workspace browser delete confirmation for one folder",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspaceBrowserUseFolder": "Use This Folder",
+  "workspaceBrowserParentFolder": "Parent folder",
+  "workspaceBrowserRootHint": "Choose or create a folder inside the device's workspaces folder.",
+  "workspaceBrowserEmpty": "No folders found here.",
+  "workspaceBrowserTruncated": "Showing the first set of entries for this folder.",
+  "workspaceBrowserInvalidFolderName": "Folder name must be a single path segment.",
+  "workspaceBrowserErrorPathNotAllowed": "This folder is outside the device's workspaces folder or cannot be used.",
+  "workspaceBrowserErrorWorkspaceInUse": "This folder is or contains a workspace. Remove that workspace first.",
+  "workspaceBrowserErrorStaleConfirmation": "The folder changed before the action finished. Review it and try again.",
+  "workspaceBrowserErrorGeneric": "The device could not complete this folder action.",
+  "workspaceBrowserErrorLoad": "Could not open this folder on the device."
 }
