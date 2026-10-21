@@ -9,6 +9,7 @@ import '../models/session_history_page.dart';
 import 'agent_state_database.dart';
 import 'message_history_identity.dart';
 import 'session_history_revision_repository.dart';
+import 'terminal_assistant_classifier.dart';
 
 /// Originating tool-call context resolved from persisted session history.
 class OriginatingToolCallContext {
@@ -61,6 +62,10 @@ class SessionMessageRepository {
   /// insertion, removal, reorder, or identity change) re-inserts the remaining
   /// suffix, because `messages.id` is the only ordering key. The suffix delete
   /// is scoped to the replaced active rows, so superseded audit rows survive.
+  /// A replacement with the same `message_id` as a stored row that carries the
+  /// terminal stamp keeps that stamp (see
+  /// [TerminalAssistantClassifier.carryForwardStamp]); only the terminal
+  /// commit writes it, and a rewrite from an older copy must not erase it.
   /// Duplicate `message_id`s fail with [StateError] before any write.
   List<Message> _replaceMessagesInDatabase(
     Database db,
@@ -71,10 +76,25 @@ class SessionMessageRepository {
     final existingIdentities = existing
         .map((entry) => MessageHistoryIdentity.read(entry.message))
         .toList(growable: false);
-    final assigned = MessageHistoryIdentity.assignIdentities(
-      messages,
-      existingActive: existingIdentities,
-    );
+    final stampedById = <String, Message>{
+      for (var i = 0; i < existing.length; i++)
+        if (existingIdentities[i].messageId.isNotEmpty &&
+            TerminalAssistantClassifier.hasStamp(existing[i].message))
+          existingIdentities[i].messageId: existing[i].message,
+    };
+    final assigned = [
+      for (final message in MessageHistoryIdentity.assignIdentities(
+        messages,
+        existingActive: existingIdentities,
+      ))
+        switch (stampedById[MessageHistoryIdentity.read(message).messageId]) {
+          final stored? => TerminalAssistantClassifier.carryForwardStamp(
+            stored: stored,
+            replacement: message,
+          ),
+          null => message,
+        },
+    ];
     MessageHistoryIdentity.requireUniqueMessageIds(assigned);
     var alignedLength = 0;
     final comparableLength = existing.length < assigned.length
@@ -350,7 +370,24 @@ class SessionMessageRepository {
       nextNewerCursor: nextNewerCursor,
       historyRevision: historyRevision,
       persistedBytes: persistedBytes,
+      followingMessage: newest == null
+          ? null
+          : _firstActiveMessageAfter(sessionId, newest.rowId),
     );
+  }
+
+  Message? _firstActiveMessageAfter(String sessionId, int rowId) {
+    final rows = _db.select(
+      '''
+      SELECT * FROM messages
+      WHERE session_id = ? AND id > ?
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id ASC
+      LIMIT 1
+      ''',
+      [sessionId, rowId],
+    );
+    return rows.isEmpty ? null : persistedMessageFromRow(rows.first).message;
   }
 
   PersistedMessage persistedMessageFromRow(Row row) {

@@ -9,6 +9,7 @@ import '../models/session_search.dart';
 import '../models/session_state.dart';
 import 'agent_state_database.dart';
 import 'session_message_repository.dart';
+import 'terminal_assistant_classifier.dart';
 
 /// Persistent storage for workspaces and sessions (lifecycle, metadata, titles).
 class SessionRepository {
@@ -308,21 +309,8 @@ class SessionRepository {
                json_extract(m.data, '\$.thought') AS thought,
                json_extract(m.data, '\$.reasoning') AS reasoning,
                COALESCE(json_array_length(json_extract(m.data, '\$.toolCalls')), 0) AS tool_count,
-               CASE
-                 WHEN json_extract(m.data, '\$.metadata.terminal_work_item_id') IS NOT NULL THEN 1
-                 WHEN json_extract(m.data, '\$.role') = 'assistant'
-                      AND COALESCE(json_array_length(json_extract(m.data, '\$.toolCalls')), 0) = 0
-                      AND m.id = (
-                        SELECT MAX(m2.id)
-                        FROM messages m2
-                        WHERE m2.session_id = m.session_id
-                          AND (m2.history_status = 'active' OR m2.history_status IS NULL)
-                          AND json_extract(m2.data, '\$.role') = 'assistant'
-                          AND COALESCE(json_array_length(json_extract(m2.data, '\$.toolCalls')), 0) = 0
-                          AND COALESCE(json_extract(m2.data, '\$.metadata.superseded_by_steer'), 0) != 1
-                      ) THEN 1
-                 ELSE 0
-               END AS is_terminal
+               CASE WHEN ${TerminalAssistantClassifier.sqlIsTerminal('m')}
+                 THEN 1 ELSE 0 END AS is_terminal
         FROM messages m
         WHERE (m.history_status = 'active' OR m.history_status IS NULL)
           AND COALESCE(json_extract(m.data, '\$.metadata.superseded_by_steer'), 0) != 1
