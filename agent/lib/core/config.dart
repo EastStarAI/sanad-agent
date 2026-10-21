@@ -525,6 +525,7 @@ class ThinkingControlOverride {
       'google_thinking',
       'nim_kimi_thinking',
       'nim_qwen_thinking',
+      'native_toggle_effort',
     };
     if (!knownWires.contains(wire.trim())) {
       throw FormatException('Unknown wire policy: $wire');
@@ -548,6 +549,13 @@ class ThinkingControlOverride {
       final optVal = optEntry.value;
       if (wire == 'anthropic_budget') {
         final optKeyLower = optKey.toLowerCase();
+        // The documented Messages disable is `thinking: {type: disabled}`,
+        // declared as an exact Boolean `false` on an off/none key. A numeric
+        // value can never disable thinking.
+        if ((optKeyLower == 'off' || optKeyLower == 'none') && optVal == false) {
+          options[optKey] = false;
+          continue;
+        }
         if (optKeyLower == 'off' || optKeyLower == 'none') {
           throw FormatException(
             'anthropic_budget wire does not support disabling thinking (off/none option prohibited).',
@@ -561,6 +569,56 @@ class ThinkingControlOverride {
           );
         }
         options[optKey] = optVal.toInt();
+      } else if (wire == 'native_toggle_effort') {
+        // A native Chat envelope: `thinking: {type: enabled|disabled}` for the
+        // Boolean toggle, plus `reasoning_effort` with thinking enabled for an
+        // effort. Off/on carry exact Booleans; an effort id carries its own
+        // canonical effort value (never a Boolean and never a remap).
+        final optKeyLower = optKey.toLowerCase();
+        if (optVal is bool) {
+          if ((optKeyLower == 'off' || optKeyLower == 'none') && optVal) {
+            throw FormatException(
+              'Option "$optKey" cannot map to active toggle value "$optVal". Off/none must disable thinking.',
+            );
+          }
+          if (optKeyLower == 'on' && !optVal) {
+            throw FormatException(
+              'Option "$optKey" cannot map to disabled toggle value "$optVal".',
+            );
+          }
+          if (ThinkingWireVocabulary.isAdmittedEffortTier(optKeyLower)) {
+            throw FormatException(
+              'Option "$optKey" cannot map to Boolean "$optVal": a canonical '
+              'effort id must carry its own canonical effort value.',
+            );
+          }
+          options[optKey] = optVal;
+          continue;
+        }
+        if (optVal is! String ||
+            !ThinkingWireVocabulary.effortTierIds.contains(
+              optVal.trim().toLowerCase(),
+            )) {
+          throw FormatException(
+            'native_toggle_effort option "$optKey" value "$optVal" must be a boolean or a positive effort (allowed: ${ThinkingWireVocabulary.effortTierIds.join(', ')})',
+          );
+        }
+        final trimmedVal = optVal.trim().toLowerCase();
+        if (optKeyLower == 'off' || optKeyLower == 'none' || optKeyLower == 'on') {
+          throw FormatException(
+            'Option "$optKey" cannot map to effort "$optVal"; toggle ids carry Booleans.',
+          );
+        }
+        if (!ThinkingWireVocabulary.canonicalEffortMatches(
+          optionId: optKey,
+          value: trimmedVal,
+        )) {
+          throw FormatException(
+            'Option "$optKey" cannot map to effort "$optVal": a canonical '
+            'effort id must carry its own canonical value.',
+          );
+        }
+        options[optKey] = trimmedVal;
       } else if (wire == 'toggle_effort') {
         final optKeyLower = optKey.toLowerCase();
         final bool isEnabled;

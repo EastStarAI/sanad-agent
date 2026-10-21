@@ -2,11 +2,11 @@
 id: 116
 title: Per-request provider-compatible conversation projection and cross-provider continuation
 status: planned
-gate: 106-consolidated-queue-stage-5
+gate: design-complete-implementation-wave-2
 created: 2026-10-18
-parent_task: 106
-depends_on: [115]
-delivery_pr: 210
+parent_task: none (detached from 106)
+depends_on: []
+delivery: own PR
 ---
 
 # Task 116 — Provider-Compatible Conversation Projection and Continuation
@@ -17,11 +17,15 @@ Ensure every request projects the same canonical conversation into the selected 
 
 ## Intake and Authorization
 
-- The user supplied an external investigation of a failure observed while working in Task 106's worktree. The initial intake was record-only; the 2026-10-19 user amendment now authorizes this scoped repair within the [Task 106 consolidated repair queue](docs/plans/tasks/done/106-compaction-resilience-and-token-estimation-repair.md).
-- Work in `.agent/worktrees/106-compaction-resilience-and-token-estimation-repair`, with one writer and delivery through existing Draft PR 210. This is stage 5, after stage 4 / Task 115 has independent review, automated and Test Home live acceptance, a pushed checkpoint and exact-SHA green CI. Record that checkpoint, not an assumed `main` merge; no separate worktree or PR is planned.
-- Keep reasoning replay distinct from thinking-capability admission and pressure estimation even though they share a delivery vehicle. An upstream replay failure after admission is not automatically a compaction-estimation cause. Any proven blocking dependency requiring an earlier repair must first be reflected in Task 106's queue.
-- Live acceptance uses the separately managed Task 106 source pair and user-designated Test Home (`.sanad-test` under the user home), preserving the normal pre-PR201 conversation runtime. After review, automated and principal live acceptance, scoped commit/push is authorized; await exact-SHA green CI before final combined acceptance. No merge, protected label, runtime source switch, credential copy or new provider is authorized.
+- The user supplied an external investigation of a failure observed while working in Task 106's worktree. The initial intake was record-only; the 2026-10-19 user amendment authorized this scoped repair, originally within [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-estimation-repair.md).
+- Detached from Task 106 on 2026-10-21 and delivered in its own PR. Task 115 is complete ([record](docs/plans/tasks/done/115-post-201-provider-thinking-route-admission-regression.md)), so there is no remaining admission dependency. [Task 120](docs/plans/tasks/120-opencode-go-per-model-protocol.md) depends on this task and must keep provider-state issuers stable for unchanged Chat routes.
+- Keep reasoning replay distinct from thinking-capability admission and pressure estimation. An upstream replay failure after admission is not automatically a compaction-estimation cause. Any proven blocking dependency on another task must be recorded here before work proceeds.
+- Live acceptance uses this task's own worktree source and the user-designated Test Home (`.sanad-test` under user home), preserving the normal conversation runtime; rediscover runtime ownership before live work. No merge, protected label, runtime source switch, credential copy or new provider is implied by this plan.
 - The report is not independent verification by the coordinating principal. Its counts, causal claims and proposed remedies remain hypotheses until the exact request, canonical rows and current source are correlated.
+
+## Design
+
+A read-only design report (adapter/protocol inventory, correlated DeepSeek-on-OpenCode-Go mechanism, fetched vendor evidence, smallest owning-boundary design, wire-fixture plan and file ownership versus Tasks 117 and 120) exists in the coordinator's records. It is input, not accepted policy. Implementation is wave 2. It has no file overlap with [Task 117](docs/plans/tasks/117-session-history-integrity.md); the shared contract is that `providerState` and `metadata` stay opaque and round-trip byte-identically through history rewrites, and 116 adds keys only, never columns or `SessionDB` changes.
 
 ## Expanded User Scope and Live Verification — 2026-10-19
 
@@ -43,6 +47,11 @@ Ensure every request projects the same canonical conversation into the selected 
 - Reported retained tail: rows 29578000–29578779. The report attributes some incompatible history to earlier Codex responses and some to same-provider zero-reasoning turns.
 - A later successful dump from a different session reportedly had 14 messages, 5 assistants, all 5 with `reasoning_content`. This is not a controlled before/after comparison: both session and history shape differ.
 
+## Parallel Preparation Result — 2026-10-20
+
+- Bounded triage identifies adapter/projection owners as disjoint from106 Stage1 and115 admission; Task 115 has since been delivered. No 116 product writer is dispatched yet.
+- The triage's blanket empty `reasoning_content` recommendation for foreign/no-state tool history is **not accepted**. Its linked URLs do not establish pinned, exact-route permission for empty-vs-absent semantics or foreign-history representation. Establish these separately; preserve issuer isolation and every supported adapter/protocol family's coverage rather than reducing the task to DeepSeek.
+
 ## Hypotheses to Verify
 
 1. `BaseOpenAIAdapter._messageToWire` correctly rejects foreign namespace/issuer state, but the target route may require an additional, explicitly evidenced history representation for assistant tool-call messages.
@@ -61,7 +70,7 @@ Relevant owners: `agent/lib/engine/adapters/base_openai_adapter.dart`, typed pro
 
 ## Gates and Acceptance
 
-- [ ] Activate in the existing Task 106 worktree after Task 115's accepted, live-tested, pushed and exact-SHA CI-green checkpoint; record SHA and sole-writer/reviewer/Test Home readiness.
+- [ ] Perform bounded source/owner/dependency preparation now; record exact base and disjoint files before implementation. No product/runtime/model changes during preparation. Record sole-writer/reviewer/Test Home readiness.
 - [ ] Independently correlate the exact failing request with canonical rows and source; verify all reported counts and distinguish same-provider, foreign-provider and genuinely zero-reasoning cases.
 - [ ] Inventory existing supported adapter/protocol families and materially distinct route policies; pin only the protocol evidence needed for their disputed wire requirements, including DeepSeek/OpenCode Go empty-vs-absent reasoning. Do not infer one provider's semantics from another or start a broad reference-research campaign.
 - [ ] Agree the smallest owning-boundary design before delegating implementation; define a specific safe rejection if required historical material cannot be represented truthfully.
@@ -69,4 +78,4 @@ Relevant owners: `agent/lib/engine/adapters/base_openai_adapter.dart`, typed pro
 - [ ] Cover both the reported large history and a minimal zero-reasoning tool-call sequence; a small fresh-session success alone is insufficient.
 - [ ] Run affected analyzers/focused suites and necessary daemon integration, then freeze required fast suites once with unique logs, exit status and timings.
 - [ ] Obtain user-designated independent review and principal daemon-backed CLI live acceptance on Test Home using existing authorized configured providers, including same-session provider changes, minimal and large-history tool/reasoning cases and post-compaction continuation. Keep the matched Client open for observation and perform only the necessary UI-specific checks. Report live-tested routes separately from fixture-only coverage; unavailable authentication/quota is a visible gap, not permission to add providers or claim success. Update owning design/QA docs and graph.
-- [ ] Commit/push the reviewed, automatically and live-accepted repair to PR 210 under Task 106's staged authorization; record exact-SHA green CI and remaining work before final combined acceptance. No main merge, protected label or runtime source handoff is inferred.
+- [ ] Deliver the reviewed, automatically and live-accepted repair in this task's own PR; record exact-SHA green CI and remaining work. No main merge, protected label or runtime source handoff is inferred.

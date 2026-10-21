@@ -53,14 +53,14 @@ Deterministic validation ensures invalid or contradictory options fail early wit
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `--brief-file` / `-b` | Path | Conditional | Path to file containing the task prompt. Avoids argv length limits and shell escaping. |
-| Positional prompt / stdin | Text / Pipe | Conditional | One-shot prompt or redirected standard input. Mutually exclusive with `--brief-file`. |
+| Positional prompt / stdin | Text / Pipe | Conditional | One-shot prompt or redirected standard input. Cannot be combined with `--brief-file`; the exit-2 error names each unexpected argument (often a value given to a flag that takes none). |
 | `--workspace` / `-w` | String | Alternative | Registered persistent workspace used for conversation identity and continuity. It may accompany `--execution-root`. |
 | `--execution-root` | Path | Alternative | Existing directory used as the filesystem/tool context. When combined with `--workspace`, it targets an isolated worktree without registering another logical workspace. |
 | `--out-dir` / `-o` | Path | Optional | Output directory where structured artifacts (`result.json`, `events.jsonl`) are written. |
 | `--session` / `-s` | UUID | Optional | Pre-allocated session identifier; generated automatically if omitted. |
 | `--provider` | String | Optional | LLM provider override. |
 | `--model` / `-m` | String | Optional | Model name override. |
-| `--thinking-mode` | Enum | Optional | Explicit reasoning effort such as `medium`; forwarded unchanged to the daemon. Legacy `--thinking` remains a shorthand for `deep`. |
+| `--thinking-mode` | Enum | Optional | Explicit thinking option id such as `medium`, `off` or `on` (the product option ids plus legacy aliases); forwarded unchanged to the daemon, which validates it against the route before dispatch. A rejected value fails the run with exit `1` and the specific code. Legacy `--thinking` remains a shorthand for `deep`. |
 | `--timeout` | Seconds | Optional | Whole number of seconds (1–86400). Scoped session stop is triggered upon expiry. |
 | `--events` | Flag | Optional | Streams real-time NDJSON events to standard output. |
 | `--allow-all-tools` | Flag | Optional | Auto-approves ordinary tool execution requests. Questions (`system_ask_user`) remain pending. |

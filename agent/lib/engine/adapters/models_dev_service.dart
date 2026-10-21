@@ -244,6 +244,25 @@ class ModelsDevService {
     } catch (_) {}
   }
 
+  /// The serving vendor's exact entry for [model], read synchronously from the
+  /// hydrated memory/disk cache (no network). [provider] is the route template
+  /// id, mapped through [providerToModelsDev]. Only the exact model key of that
+  /// one vendor matches: no case folding, suffix, alias or cross-vendor
+  /// inference, because thinking controls are a property of the serving
+  /// provider. Returns `null` when the catalog is not loaded or has no entry.
+  Map<String, dynamic>? modelEntrySync(String provider, String model) {
+    _ensureDiskCacheLoadedSync();
+    if (_cache.isEmpty) return null;
+    final vendor =
+        providerToModelsDev[provider.toLowerCase()] ?? provider.toLowerCase();
+    final vendorData = _cache[vendor];
+    if (vendorData is! Map) return null;
+    final models = vendorData['models'];
+    if (models is! Map) return null;
+    final entry = models[model];
+    return entry is Map ? Map<String, dynamic>.from(entry) : null;
+  }
+
   /// Check if a model supports reasoning.
   Future<bool> supportsReasoning(String provider, String model) async {
     final mdata = await _getModelData(provider, model);

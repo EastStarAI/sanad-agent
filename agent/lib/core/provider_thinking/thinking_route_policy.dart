@@ -4,108 +4,29 @@ library;
 import '../provider_runtime/provider_instance.dart';
 import '../provider_runtime/provider_protocol_constants.dart';
 import '../../engine/adapters/provider_profile.dart';
-import 'anthropic_model_catalog.dart';
-import 'anthropic_thinking_policy.dart';
-import 'codex_responses_effort_thinking_policy.dart';
-import 'deepseek_model_catalog.dart';
-import 'deepseek_thinking_policy.dart';
-import 'gpt_oss_model_catalog.dart';
-import 'compatible_chat_effort_facts.dart';
 import 'thinking_wire_dialect.dart';
-import 'kimi_thinking_policy.dart';
-import 'nim_thinking_policy.dart';
-import 'openai_chat_effort_thinking_policy.dart';
-import 'openai_reasoning_models.dart';
-import 'xai_model_catalog.dart';
-import 'zai_model_catalog.dart';
-import 'zai_thinking_policy.dart';
 
 class ThinkingRoutePolicy {
   ThinkingRoutePolicy._();
 
   static const unknownPolicyId = 'unknown';
 
-  /// Resolves the thinking policy id for [instance] and optional [modelId].
+  /// Resolves the thinking policy id for [instance].
   ///
-  /// Aggregators retain their dedicated upstream policy.
-  /// Exact evidenced model knowledge takes precedence on compatible API modes
-  /// across factory kinds, custom instances, and local routes (model-only contract).
-  ///
-  /// For custom instances or templates without a dedicated thinking policy
-  /// (effectiveThinkingPolicyId == 'unknown'), exact evidenced model knowledge
-  /// is resolved when the route's API mode is compatible.
-  ///
-  /// Chat Claude on chat_completions is preserved as NOT native Anthropic wire
-  /// unless an explicit compatible declaration is configured.
-  ///
-  /// Unknown routes fail closed to [unknownPolicyId] per Plan 29 §3.10.
+  /// The id is a property of the route (template and actual API mode), never of
+  /// the model name: it labels the request wire dialect and, for the
+  /// provider-reported policies, the item schema that may carry capability.
+  /// [modelId] is accepted for call-site compatibility and is not consulted.
   static String policyIdFor(ProviderInstance instance, {String? modelId}) {
     final template = resolveTemplate(instance);
-    final apiMode = apiModeFor(instance, template);
-
-    // Dedicated upstream aggregators retain their aggregator policy so that
-    // aggregator wire serialization is not bypassed.
+    if (instance.isCustom) {
+      return switch (apiModeFor(instance, template)) {
+        'anthropic_messages' => 'anthropic_thinking',
+        _ => 'openai_chat_effort',
+      };
+    }
     final templatePolicyId = template.effectiveThinkingPolicyId;
-    if (!instance.isCustom && templatePolicyId == 'aggregator_upstream') {
-      return 'aggregator_upstream';
-    }
-
-    // Exact evidenced model knowledge takes precedence on compatible API modes (model-only contract).
-    if (modelId != null) {
-      if (apiMode == 'chat_completions' || apiMode == 'chat') {
-        final dialect = wireDialectFor(instance);
-        // The hosted NIM catalog owns its own documented per-model contracts;
-        // they are selected before any first-party extension can leak onto it.
-        if (dialect == ThinkingWireDialect.nimChat &&
-            NimThinkingPolicy.isEvidencedModel(modelId)) {
-          return NimThinkingPolicy.policyIdentifier;
-        }
-        // First-party native envelopes only on evidenced native dialects.
-        if (dialect.allowsFirstPartyNativeEnvelope) {
-          if (KimiThinkingPolicy.isEvidencedModel(modelId)) {
-            return KimiThinkingPolicy.policyIdentifier;
-          }
-          if (DeepSeekModelCatalog.isEvidencedModel(modelId)) {
-            return DeepSeekThinkingPolicy.policyIdentifier;
-          }
-          if (ZaiModelCatalog.isEvidencedModel(modelId)) {
-            return ZaiThinkingPolicy.policyIdentifier;
-          }
-        }
-        // Documented standard-effort facts remain available on the compatible
-        // wire, without the family's native envelope or disable.
-        if (dialect == ThinkingWireDialect.compatibleChat &&
-            CompatibleChatEffortFacts.isEvidencedModel(modelId)) {
-          return OpenAiChatEffortThinkingPolicy.policyIdentifier;
-        }
-        if (OpenAiReasoningModels.isEvidencedModel(modelId)) {
-          return OpenAiChatEffortThinkingPolicy.policyIdentifier;
-        }
-        // Exact xAI Grok facts use the documented Chat `reasoning_effort` field.
-        if (XaiModelCatalog.supportsEffort(modelId)) {
-          return OpenAiChatEffortThinkingPolicy.policyIdentifier;
-        }
-        // Exact `gpt-oss` facts are intrinsic model facts on the compatible
-        // Chat reasoning-effort mode.
-        if (GptOssModelCatalog.isGroundedModelId(modelId)) {
-          return OpenAiChatEffortThinkingPolicy.policyIdentifier;
-        }
-      } else if (apiMode == 'anthropic_messages' || apiMode == 'messages') {
-        if (AnthropicModelCatalog.isEvidencedModel(modelId)) {
-          return AnthropicThinkingPolicy.policyIdentifier;
-        }
-      } else if (apiMode == 'codex_responses' || apiMode == 'responses') {
-        if (OpenAiReasoningModels.isEvidencedModel(modelId)) {
-          return CodexResponsesEffortThinkingPolicy.policyIdentifier;
-        }
-      }
-    }
-
-    if (!instance.isCustom && templatePolicyId != unknownPolicyId) {
-      return templatePolicyId;
-    }
-
-    return unknownPolicyId;
+    return templatePolicyId.isEmpty ? unknownPolicyId : templatePolicyId;
   }
 
   /// Resolves the effective provider template for thinking policy lookup.
@@ -165,7 +86,38 @@ class ThinkingRoutePolicy {
   }) {
     final p = protocol.trim().toLowerCase();
     final m = apiMode.trim().toLowerCase();
+    // The aggregator owns one nested `reasoning` envelope that carries every
+    // typed effort, level, budget and disable directive, so any typed wire
+    // except the template-kwargs serializers is admissible there.
+    final isAggregatorChat =
+        !isCustom &&
+        ThinkingWireDialectFacts.aggregatorTemplateIds.contains(
+          (templateId ?? '').trim(),
+        ) &&
+        _isOpenAiCompatibleChat(protocol, apiMode);
+    if (isAggregatorChat &&
+        wire != 'nim_kimi_thinking' &&
+        wire != 'nim_qwen_thinking') {
+      return const {
+        'openai_chat_effort',
+        'codex_responses_effort',
+        'toggle_effort',
+        'native_toggle_effort',
+        'anthropic_adaptive',
+        'anthropic_budget',
+        'google_thinking',
+      }.contains(wire);
+    }
     switch (wire) {
+      case 'native_toggle_effort':
+        // The native `thinking.type` envelope is evidenced only on first-party
+        // and verified partner Chat dialects.
+        if (!_isOpenAiCompatibleChat(protocol, apiMode)) return false;
+        return ThinkingWireDialectFacts.forTemplate(
+          templateId ?? '',
+          isCustom: isCustom,
+          apiMode: apiMode,
+        ).allowsFirstPartyNativeEnvelope;
       case 'nim_kimi_thinking':
       case 'nim_qwen_thinking':
         // These wires are serialized by the template-kwargs codec, which the

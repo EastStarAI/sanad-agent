@@ -25,6 +25,10 @@ class LLMRequestDumper {
   /// Invariant: Compaction requests NEVER modify or read this path.
   static String? lastDumpFilePath;
 
+  /// The path of the currently in-flight unkeyed normal-turn request dump, if any.
+  /// Cleared to null once the unkeyed request reaches terminal state (completed or error).
+  static String? _activeUnkeyedNormalDumpPath;
+
   /// Active normal-turn dump file paths keyed by requestId.
   static final Map<String, String> _activeNormalDumps = {};
 
@@ -38,6 +42,7 @@ class LLMRequestDumper {
   /// Resets internal dump file tracking state for test isolation.
   static void resetForTesting() {
     lastDumpFilePath = null;
+    _activeUnkeyedNormalDumpPath = null;
     environmentOverride = null;
     _activeNormalDumps.clear();
     _activeCompactionDumps.clear();
@@ -179,13 +184,17 @@ class LLMRequestDumper {
     }
     if (requestId != null && requestId.isNotEmpty) {
       _activeNormalDumps.remove(requestId);
+    } else {
+      _activeUnkeyedNormalDumpPath = null;
     }
   }
 
   static String _formatTimestamp(DateTime now) {
+    final ms = now.millisecond.toString().padLeft(3, '0');
+    final us = (now.microsecond % 1000).toString().padLeft(3, '0');
     return '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_'
         '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}_'
-        '${now.millisecond.toString().padLeft(2, '0')}';
+        '${ms}_$us';
   }
 
   /// Check if the request dumper is enabled via the `DUMP_REQUESTS` environment variable.
@@ -262,8 +271,8 @@ class LLMRequestDumper {
       );
 
       final boundary = SanadHomeBootstrap.state();
-      final String fileName;
-      final String relativePath;
+      String fileName;
+      String relativePath;
       String? key;
 
       if (isCompaction) {
@@ -277,6 +286,13 @@ class LLMRequestDumper {
           '_',
         );
         fileName = 'request_dump_${safeSessionId}_$timestamp.json';
+        relativePath = p.join('request_dumps', fileName);
+      }
+
+      if (boundary.fileExists(relativePath)) {
+        final ext = p.extension(fileName);
+        final base = p.basenameWithoutExtension(fileName);
+        fileName = '${base}_${DateTime.now().microsecondsSinceEpoch}$ext';
         relativePath = p.join('request_dumps', fileName);
       }
 
@@ -347,6 +363,8 @@ class LLMRequestDumper {
         lastDumpFilePath = fullPath;
         if (requestId != null && requestId.isNotEmpty) {
           _activeNormalDumps[requestId] = fullPath;
+        } else {
+          _activeUnkeyedNormalDumpPath = fullPath;
         }
       }
 
@@ -368,6 +386,7 @@ class LLMRequestDumper {
     Object? body,
     String? requestId,
     String? compactionId,
+    String? sessionId,
     String? provider,
     String? model,
     String? baseUrl,
@@ -426,16 +445,64 @@ class LLMRequestDumper {
         return targetPath;
       }
     } else {
-      if (requestId != null && _activeNormalDumps.containsKey(requestId)) {
-        targetPath = _activeNormalDumps[requestId];
+      if (requestId != null && requestId.isNotEmpty) {
+        if (_activeNormalDumps.containsKey(requestId)) {
+          targetPath = _activeNormalDumps[requestId];
+        } else {
+          // Keyed request ID was supplied, but is unknown or already terminal.
+          // Fail closed: never attach to a different active request or unkeyed dump.
+          return null;
+        }
       } else {
-        targetPath = lastDumpFilePath;
+        if (_activeUnkeyedNormalDumpPath != null) {
+          targetPath = _activeUnkeyedNormalDumpPath;
+        } else {
+          // Auto-create independent unkeyed dump file on actual request if no preceding dumpRequest call
+          final now = DateTime.now();
+          final timestamp = _formatTimestamp(now);
+          final sid = sessionId ?? 'auxiliary';
+          final safeSessionId = sid.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+          var fileName = 'request_dump_${safeSessionId}_$timestamp.json';
+          var relativePath = p.join('request_dumps', fileName);
+          if (boundary.fileExists(relativePath)) {
+            final ext = p.extension(fileName);
+            final base = p.basenameWithoutExtension(fileName);
+            fileName = '${base}_${DateTime.now().microsecondsSinceEpoch}$ext';
+            relativePath = p.join('request_dumps', fileName);
+          }
+
+          final rawPayload = <String, dynamic>{
+            'timestamp': now.toIso8601String(),
+            'session_id': sid,
+            'provider': ?provider,
+            'model': ?model,
+            'base_url': baseUrl ?? url.origin,
+            'protocol': ?protocol,
+            'stream': ?stream,
+            if (safeOptions != null && safeOptions.isNotEmpty)
+              'options': safeOptions,
+            'capture_state': 'request_sent',
+            'request': {
+              'method': 'POST',
+              'url': url.toString(),
+              'headers': headers,
+              'body': ?body,
+            },
+          };
+
+          final sanitizedPayload = _sanitizePayload(rawPayload);
+          final jsonString =
+              const JsonEncoder.withIndent('  ').convert(sanitizedPayload);
+          await boundary.writeConfigText(relativePath, jsonString);
+
+          targetPath = boundary.child(relativePath);
+          _activeUnkeyedNormalDumpPath = targetPath;
+          lastDumpFilePath = targetPath;
+          return targetPath;
+        }
       }
       if (targetPath == null) {
         return null;
-      }
-      if (requestId != null && requestId.isNotEmpty) {
-        _activeNormalDumps[requestId] = targetPath;
       }
     }
 
@@ -510,10 +577,19 @@ class LLMRequestDumper {
         return null;
       }
     } else {
-      if (requestId != null && _activeNormalDumps.containsKey(requestId)) {
-        targetPath = _activeNormalDumps[requestId];
+      if (requestId != null && requestId.isNotEmpty) {
+        if (_activeNormalDumps.containsKey(requestId)) {
+          targetPath = _activeNormalDumps[requestId];
+        } else {
+          // Keyed request ID is unknown or already terminal. Fail closed.
+          return null;
+        }
       } else {
-        targetPath = lastDumpFilePath;
+        if (_activeUnkeyedNormalDumpPath != null) {
+          targetPath = _activeUnkeyedNormalDumpPath;
+        } else {
+          return null;
+        }
       }
       if (targetPath == null) {
         return null;
@@ -543,8 +619,12 @@ class LLMRequestDumper {
         if (_completedCompactionDumps.length > _maxCompletedCompactionDumps) {
           _completedCompactionDumps.remove(_completedCompactionDumps.keys.first);
         }
-      } else if (requestId != null) {
-        _activeNormalDumps.remove(requestId);
+      } else {
+        if (requestId != null && requestId.isNotEmpty) {
+          _activeNormalDumps.remove(requestId);
+        } else if (_activeUnkeyedNormalDumpPath == targetPath) {
+          _activeUnkeyedNormalDumpPath = null;
+        }
       }
 
       return targetPath;
@@ -591,14 +671,26 @@ class LLMRequestDumper {
         return null;
       }
     } else {
-      if (requestId != null && _activeNormalDumps.containsKey(requestId)) {
-        targetPath = _activeNormalDumps[requestId];
+      if (requestId != null && requestId.isNotEmpty) {
+        if (_activeNormalDumps.containsKey(requestId)) {
+          targetPath = _activeNormalDumps[requestId];
+        } else {
+          // Keyed request ID is unknown or already terminal. Fail closed.
+          return null;
+        }
       } else {
-        targetPath = lastDumpFilePath;
+        if (_activeUnkeyedNormalDumpPath != null) {
+          targetPath = _activeUnkeyedNormalDumpPath;
+        } else {
+          _logger.fine(
+            'Attempted to dump LLM response, but lastDumpFilePath is null.',
+          );
+          return null;
+        }
       }
       if (targetPath == null) {
         _logger.fine(
-          'Attempted to dump LLM response, but lastDumpFilePath is null.',
+          'Attempted to dump LLM response, but active normal dump path is null.',
         );
         return null;
       }
@@ -640,9 +732,14 @@ class LLMRequestDumper {
 
       final isTruncated = finishReason == 'length' ||
           finishReason == 'incomplete' ||
-          (responsePayload is Map && responsePayload['partial_message'] != null);
+          finishReason == 'max_tokens' ||
+          (responsePayload is Map &&
+              (responsePayload['partial_message'] != null ||
+                  responsePayload['truncated'] == true));
       final isError = (statusCode != null && statusCode != 200) ||
-          (responsePayload is Map && responsePayload['error'] != null);
+          (responsePayload is Map && responsePayload['error'] != null) ||
+          finishReason == 'failed' ||
+          finishReason == 'cancelled';
 
       if (isError) {
         data['capture_state'] = 'error';
@@ -675,8 +772,12 @@ class LLMRequestDumper {
         if (_completedCompactionDumps.length > _maxCompletedCompactionDumps) {
           _completedCompactionDumps.remove(_completedCompactionDumps.keys.first);
         }
-      } else if (requestId != null) {
-        _activeNormalDumps.remove(requestId);
+      } else {
+        if (requestId != null && requestId.isNotEmpty) {
+          _activeNormalDumps.remove(requestId);
+        } else if (_activeUnkeyedNormalDumpPath == targetPath) {
+          _activeUnkeyedNormalDumpPath = null;
+        }
       }
 
       return targetPath;

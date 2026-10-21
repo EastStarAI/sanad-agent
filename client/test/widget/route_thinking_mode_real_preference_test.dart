@@ -27,17 +27,16 @@ import '../helpers/fake_device_preferences_repository.dart';
 import '../helpers/fake_device_repository.dart';
 import '../helpers/fake_socket.dart';
 
-/// Proves that the thinking control's auto-admitted native default reaches the
-/// real composer preference path instead of a stub.
+/// Proves that opening or hydrating a conversation never writes thinking
+/// preferences (live acceptance 106b r2 G2), while the thinking control still
+/// shows the conversation's persisted selection or, when it has none, the
+/// route's native default.
 ///
-/// The control dispatches through the real `ConversationInputCubit
-/// .selectThinkingMode`, which writes through the real `SessionMessagesCubit`,
-/// so the admitted value is asserted where the next send actually reads it
-/// (`nextMessageThinkingMode`), where it is persisted for the device
-/// (`IDevicePreferencesRepository`), and which conversation received it
-/// (`updateSessionPreferences`). A stub argument is never treated as an outgoing
-/// request here; menu/route routing stays covered by
-/// `route_thinking_mode_selector_test.dart`.
+/// The control runs over the real `ConversationInputCubit` and
+/// `SessionMessagesCubit`, so the displayed/next-send value is asserted where
+/// the next send reads it (`nextMessageThinkingMode`), the device preference in
+/// `IDevicePreferencesRepository`, and every `update_session_preferences` in the
+/// fake repository. Only an explicit menu choice may write.
 const mediumDefaultDescriptor = ThinkingControlDescriptorDto(
   status: ThinkingCapabilityStatus.supported,
   kind: ThinkingControlKind.effort,
@@ -47,6 +46,17 @@ const mediumDefaultDescriptor = ThinkingControlDescriptorDto(
     ThinkingControlOptionDto(id: 'low', label: 'Low'),
     ThinkingControlOptionDto(id: 'medium', label: 'Medium'),
     ThinkingControlOptionDto(id: 'high', label: 'High'),
+  ],
+);
+
+/// A glm-5.2-like route on OpenCode Go: High/Max only, default Max, no Medium.
+const maxDefaultDescriptor = ThinkingControlDescriptorDto(
+  status: ThinkingCapabilityStatus.supported,
+  kind: ThinkingControlKind.effort,
+  defaultOptionId: 'max',
+  options: [
+    ThinkingControlOptionDto(id: 'high', label: 'High'),
+    ThinkingControlOptionDto(id: 'max', label: 'Max', isProviderDefault: true),
   ],
 );
 
@@ -82,7 +92,7 @@ void main() {
   /// Two unset conversations plus one that already carries an explicit Off, all
   /// on the same provider/model route.
   List<Session> seededSessions() {
-    Session build(String id, {String? thinkingMode}) {
+    Session build(String id, {String? thinkingMode, String model = 'model-a'}) {
       return Session(
         id: id,
         title: id,
@@ -90,7 +100,7 @@ void main() {
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
         modelProvider: 'provider-1',
-        model: 'model-a',
+        model: model,
         thinkingMode: thinkingMode,
       );
     }
@@ -100,12 +110,14 @@ void main() {
       build('unset-b'),
       build('off-a', thinkingMode: 'off'),
       build('off-b'),
+      build('low-a', thinkingMode: 'low'),
+      build('glm-medium', thinkingMode: 'medium', model: 'model-glm'),
     ];
   }
 
   Session sessionById(String id) => seededSessions().firstWhere((s) => s.id == id);
 
-  ModelCacheSnapshotDto snapshotFor(String modelId, ThinkingControlDescriptorDto descriptor) {
+  ModelCacheSnapshotDto snapshotFor(Map<String, ThinkingControlDescriptorDto> descriptors) {
     return ModelCacheSnapshotDto(
       instances: [
         ModelCacheInstanceDto(
@@ -114,20 +126,20 @@ void main() {
           status: 'ready',
           isDefault: true,
           cacheStatus: 'fetched',
-          models: [ModelCacheModelDto(id: modelId, thinkingControl: descriptor)],
+          models: [
+            for (final entry in descriptors.entries)
+              ModelCacheModelDto(id: entry.key, thinkingControl: entry.value),
+          ],
         ),
       ],
       recent: const [],
     );
   }
 
-  /// Sessions written by the real `updateSessionPreferences`, filtered to one
-  /// thinking value and the conversation that owned it.
-  List<Map<String, Object?>> thinkingWritesFor(String sessionId, String thinkingMode) {
-    return conversationRepository.updatedSessionPreferences
-        .where((entry) => entry['session_id'] == sessionId && entry['thinking_mode'] == thinkingMode)
-        .toList();
-  }
+  /// Every thinking write sent through the real `updateSessionPreferences`.
+  List<Map<String, String?>> thinkingWrites() => conversationRepository.updatedSessionPreferences
+      .where((entry) => entry.containsKey('thinking_mode') && entry['thinking_mode'] != null)
+      .toList();
 
   /// Builds the real composer stack inside the running test, so its streams are
   /// delivered by the widget test's own asynchronous zone.
@@ -205,7 +217,11 @@ void main() {
     // the composer sees a route that declares model thinking controls.
     await capabilitiesStore.ensureFreshForAgent(agent, force: true);
     getIt.registerSingleton<ProviderSetupClient>(
-      _StubProviderSetupClient()..snapshotResult = snapshotFor('model-a', mediumDefaultDescriptor),
+      _StubProviderSetupClient()
+        ..snapshotResult = snapshotFor({
+          'model-a': mediumDefaultDescriptor,
+          'model-glm': maxDefaultDescriptor,
+        }),
     );
   });
 
@@ -273,98 +289,105 @@ void main() {
   }
 
   testWidgets(
-    'an unset same-route conversation admits its own default into real next-send and persisted state',
+    'G2: opening an unset conversation shows the route default without writing it',
     (tester) async {
       buildStack();
       await sessionCubit.selectSession(sessionById('unset-a'));
       await pumpControl(tester);
 
       expect(inputCubit.state.activeSessionId, 'unset-a');
+      expect(find.byKey(const Key('chip_Medium')), findsOneWidget);
       expect(
         inputCubit.state.nextMessageThinkingMode,
         'medium',
-        reason: 'the admitted default is the value the next send reads',
+        reason: 'the shown default is the value the next send carries',
       );
-      expect(preferencesRepository.getLastThinkingMode(agent.id), 'medium');
-      expect(find.byKey(const Key('chip_Medium')), findsOneWidget);
-      expect(thinkingWritesFor('unset-a', 'medium'), hasLength(1));
+      expect(thinkingWrites(), isEmpty, reason: 'opening never writes preferences');
+      expect(sessionCubit.state.selectedSession?.thinkingMode, isNull);
+      expect(
+        preferencesRepository.getLastThinkingMode(agent.id),
+        isNull,
+        reason: 'hydration is not a user choice for the device either',
+      );
 
-      // A fresh conversation on the same route stores no choice, so it must
-      // admit the route native default on its own.
+      // Another unset conversation on the same route: still no write.
       await sessionCubit.selectSession(sessionById('unset-b'));
       await settle(tester);
-
       expect(inputCubit.state.activeSessionId, 'unset-b');
       expect(inputCubit.state.nextMessageThinkingMode, 'medium');
-      expect(
-        thinkingWritesFor('unset-b', 'medium'),
-        hasLength(1),
-        reason: 'the new conversation receives its own admitted default',
-      );
-      expect(
-        thinkingWritesFor('unset-a', 'medium'),
-        hasLength(1),
-        reason: 'the earlier conversation is not written again by the switch',
-      );
+      expect(thinkingWrites(), isEmpty);
 
-      // Switching back leaves the first conversation exactly as it was.
       await sessionCubit.selectSession(sessionById('unset-a'));
       await settle(tester);
-
-      expect(inputCubit.state.activeSessionId, 'unset-a');
-      expect(inputCubit.state.nextMessageThinkingMode, 'medium');
-      expect(sessionCubit.state.selectedSession?.thinkingMode, 'medium');
-      expect(thinkingWritesFor('unset-b', 'medium'), hasLength(1));
+      expect(sessionCubit.state.selectedSession?.thinkingMode, isNull);
+      expect(thinkingWrites(), isEmpty);
     },
   );
 
   testWidgets(
-    'an explicit Off survives the real preference path while an unset conversation admits the default',
+    'G2: opening a conversation with a persisted explicit Low keeps it and writes nothing',
+    (tester) async {
+      buildStack();
+      await sessionCubit.selectSession(sessionById('low-a'));
+      await pumpControl(tester);
+
+      expect(find.byKey(const Key('chip_Low')), findsOneWidget);
+      expect(inputCubit.state.nextMessageThinkingMode, 'low');
+      expect(sessionCubit.state.selectedSession?.thinkingMode, 'low');
+      expect(thinkingWrites(), isEmpty);
+    },
+  );
+
+  testWidgets(
+    'G2: a persisted value the route does not offer is shown as the route '
+    'default and is not rewritten on open',
+    (tester) async {
+      buildStack();
+      await sessionCubit.selectSession(sessionById('glm-medium'));
+      await pumpControl(tester);
+
+      expect(find.byKey(const Key('chip_Max')), findsOneWidget);
+      expect(inputCubit.state.nextMessageThinkingMode, 'max');
+      expect(
+        thinkingWrites(),
+        isEmpty,
+        reason: 'the agent revalidates the stored value at turn admission',
+      );
+      expect(sessionCubit.state.selectedSession?.thinkingMode, 'medium');
+    },
+  );
+
+  testWidgets(
+    'an explicit Off survives a switch, and an explicit menu choice is the only write',
     (tester) async {
       buildStack();
       await sessionCubit.selectSession(sessionById('off-a'));
       await pumpControl(tester);
 
       expect(inputCubit.state.activeSessionId, 'off-a');
-      expect(
-        inputCubit.state.nextMessageThinkingMode,
-        'off',
-        reason: 'an explicit Off is the value the next send carries',
-      );
-      expect(
-        preferencesRepository.getLastThinkingMode(agent.id),
-        isNot('medium'),
-        reason: 'an explicit Off is never replaced by the route default for the device',
-      );
+      expect(inputCubit.state.nextMessageThinkingMode, 'off');
       expect(find.byKey(const Key('chip_Off')), findsOneWidget);
-      expect(
-        thinkingWritesFor('off-a', 'medium'),
-        isEmpty,
-        reason: 'a valid explicit Off is never rewritten, not even to the default',
-      );
 
       await sessionCubit.selectSession(sessionById('off-b'));
       await settle(tester);
-
       expect(inputCubit.state.activeSessionId, 'off-b');
       expect(inputCubit.state.nextMessageThinkingMode, 'medium');
-      expect(thinkingWritesFor('off-b', 'medium'), hasLength(1));
-      expect(
-        thinkingWritesFor('off-a', 'medium'),
-        isEmpty,
-        reason: 'the unset conversation never writes the default onto its sibling',
-      );
 
       await sessionCubit.selectSession(sessionById('off-a'));
       await settle(tester);
-
-      expect(
-        inputCubit.state.nextMessageThinkingMode,
-        'off',
-        reason: 'the first conversation own explicit Off comes back with it',
-      );
+      expect(inputCubit.state.nextMessageThinkingMode, 'off');
       expect(sessionCubit.state.selectedSession?.thinkingMode, 'off');
-      expect(find.byKey(const Key('chip_Off')), findsOneWidget);
+      expect(thinkingWrites(), isEmpty);
+
+      // The user explicitly picks High: exactly that one write happens.
+      await inputCubit.selectThinkingMode(
+        scope: CapabilityValueScope.session,
+        thinkingMode: 'high',
+      );
+      await settle(tester);
+      expect(thinkingWrites(), hasLength(1));
+      expect(thinkingWrites().single['session_id'], 'off-a');
+      expect(thinkingWrites().single['thinking_mode'], 'high');
     },
   );
 }

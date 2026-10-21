@@ -24,6 +24,8 @@ import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart'
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
+import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/core/setup/setup_helpers.dart';
 import 'package:sanad_agent/core/utils/terminal_prompts.dart';
@@ -111,7 +113,13 @@ class CliProviderServices {
            ProviderModelCacheService(
              instanceRepo ?? ProviderInstanceRepository.inMemory(),
              getIt<AgentRuntimeService>(),
-             buildDefaultThinkingCapabilityAssembler(),
+             getIt.isRegistered<ThinkingCapabilityAssembler>()
+                 ? getIt<ThinkingCapabilityAssembler>()
+                 : buildDefaultThinkingCapabilityAssembler(
+                     modelsDevLookup: getIt.isRegistered<ModelsDevService>()
+                         ? getIt<ModelsDevService>().modelEntrySync
+                         : null,
+                   ),
            ),
        recentSelection =
            recentSelection ??

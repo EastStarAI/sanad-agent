@@ -1,3 +1,4 @@
+import 'package:sanad_agent/engine/runtime/thinking_field_rejection.dart';
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
@@ -335,6 +336,11 @@ void setupDI() {
     () => getIt<AgentRuntimeService>().defaultAdapter(),
   );
 
+  // Session-scoped, in-memory record of routes whose provider rejected the
+  // thinking field (reactive 400 recovery); never persisted.
+  getIt.registerLazySingleton<SessionThinkingFieldSuppression>(
+    () => SessionThinkingFieldSuppression(),
+  );
   getIt.registerLazySingleton<ProviderThinkingRegistry>(
     () => buildProviderThinkingRegistry(),
   );
@@ -342,6 +348,9 @@ void setupDI() {
     () => ThinkingCapabilityAssembler(
       getIt<ProviderThinkingRegistry>(),
       getIt<Config>(),
+      getIt.isRegistered<ModelsDevService>()
+          ? getIt<ModelsDevService>().modelEntrySync
+          : null,
     ),
   );
 

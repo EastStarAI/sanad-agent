@@ -1,3 +1,4 @@
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
@@ -28,6 +29,7 @@ void main() {
   late ModelProjectionBuilder builder;
 
   setUp(() {
+    ModelProjectionBuilder.resetLoggedInvalidations();
     state = AgentStateDatabase.inMemory();
     sessions = SessionDB.fromState(state);
     boundaries = CompactionBoundaryRepository(
@@ -797,5 +799,702 @@ void main() {
     expect(timeline.messages, hasLength(2));
     expect(timeline.messages.first.rowId, 1);
     expect(timeline.messages.last.rowId, 2);
+  });
+
+  test('history rewrite inside source range supersedes boundary without lockout', () {
+    final canonical = [
+      Message(role: MessageRole.user, content: 'root-prompt'),
+      Message(role: MessageRole.assistant, content: 'assistant-1'),
+      Message(role: MessageRole.user, content: 'user-2'),
+      Message(role: MessageRole.assistant, content: 'assistant-2'),
+      Message(role: MessageRole.user, content: 'user-3'),
+      Message(role: MessageRole.assistant, content: 'assistant-3'),
+    ];
+    sessions.replaceMessages('session-1', canonical);
+    final initialTimeline = builder.loadCanonicalTimeline('session-1').messages;
+    expect(initialTimeline, hasLength(6));
+    final sourceRange = CompactionMessageRange(
+      start: CompactionMessageIdentity(initialTimeline[0].rowId),
+      end: CompactionMessageIdentity(initialTimeline[3].rowId),
+    );
+    final tailRange = CompactionMessageRange(
+      start: CompactionMessageIdentity(initialTimeline[4].rowId),
+      end: CompactionMessageIdentity(initialTimeline[5].rowId),
+    );
+    final startedAt = DateTime.utc(2026, 8, 31);
+    final claim = boundaries.tryClaim(
+      compactionId: 'cmp-lockout',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.manual,
+      sourceRange: sourceRange,
+      retainedTailRange: tailRange,
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Compacted goal',
+      remainingWork: 'Remaining work',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-lockout',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        sourceRevision: claim.record!.sourceHistoryRevision,
+        sourceRange: sourceRange,
+        retainedTailRange: tailRange,
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: startedAt.add(const Duration(seconds: 1)),
+    );
+
+    final initialProj = builder.buildForSession('session-1');
+    expect(initialProj.usesCompactionBoundary, isTrue);
+
+    // Realistic rewrite starting at index 1: root-prompt unchanged, subsequent rows replaced.
+    sessions.replaceMessages('session-1', [
+      canonical[0],
+      canonical[1].copyWith(content: 'assistant-1 pruned/edited'),
+      canonical[2],
+      canonical[3],
+      canonical[4],
+      canonical[5],
+      Message(role: MessageRole.user, content: 'new-turn-after-rewrite'),
+    ]);
+
+    final projection = builder.buildForSession('session-1');
+    expect(projection.usesCompactionBoundary, isFalse);
+    expect(projection.conversationMessages.first.content, 'root-prompt');
+    expect(projection.conversationMessages.last.content, 'new-turn-after-rewrite');
+
+    // Completed boundary row remains intact in the database for audit.
+    final completedBoundaries = boundaries.listCompletedForSession('session-1');
+    expect(completedBoundaries, hasLength(1));
+    expect(completedBoundaries.first.compactionId, 'cmp-lockout');
+  });
+
+  test('superseded boundary projects next eligible older boundary if present', () {
+    final canonical = [
+      Message(role: MessageRole.user, content: 'm1'),
+      Message(role: MessageRole.assistant, content: 'm2'),
+      Message(role: MessageRole.user, content: 'm3'),
+      Message(role: MessageRole.assistant, content: 'm4'),
+      Message(role: MessageRole.user, content: 'm5'),
+      Message(role: MessageRole.assistant, content: 'm6'),
+      Message(role: MessageRole.user, content: 'm7'),
+      Message(role: MessageRole.assistant, content: 'm8'),
+    ];
+    sessions.replaceMessages('session-1', canonical);
+    final initialIds = builder
+        .loadCanonicalTimeline('session-1')
+        .messages
+        .map((entry) => entry.rowId)
+        .toList();
+    expect(initialIds, [1, 2, 3, 4, 5, 6, 7, 8]);
+
+    // Boundary 1 (older): source 1..2, tail 3..4 at rev 1
+    final claim1 = boundaries.tryClaim(
+      compactionId: 'cmp-older',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.auto,
+      sourceRange: CompactionMessageRange(
+        start: const CompactionMessageIdentity(1),
+        end: const CompactionMessageIdentity(2),
+      ),
+      retainedTailRange: CompactionMessageRange(
+        start: const CompactionMessageIdentity(3),
+        end: const CompactionMessageIdentity(4),
+      ),
+      routeSignature: _route(),
+      startedAt: DateTime.utc(2026, 8, 31, 1),
+    );
+    const summary1 = CompactionInternalSummary(
+      currentGoal: 'Older goal',
+      remainingWork: 'Older work',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-older',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.auto,
+        sourceRevision: claim1.record!.sourceHistoryRevision,
+        sourceRange: CompactionMessageRange(
+          start: const CompactionMessageIdentity(1),
+          end: const CompactionMessageIdentity(2),
+        ),
+        retainedTailRange: CompactionMessageRange(
+          start: const CompactionMessageIdentity(3),
+          end: const CompactionMessageIdentity(4),
+        ),
+        internalSummary: summary1,
+        continuityResult: CompactionContinuityResult.fromSummary(summary1),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 300_000,
+          estimatedRequestTokensAfter: 30_000,
+          retainedTailTokens: 5_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: DateTime.utc(2026, 8, 31, 1),
+      completedAt: DateTime.utc(2026, 8, 31, 1, 30),
+    );
+
+    // Boundary 2 (newer): source 1..6, tail 7..8 at rev 1
+    final claim2 = boundaries.tryClaim(
+      compactionId: 'cmp-newer',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.auto,
+      sourceRange: CompactionMessageRange(
+        start: const CompactionMessageIdentity(1),
+        end: const CompactionMessageIdentity(6),
+      ),
+      retainedTailRange: CompactionMessageRange(
+        start: const CompactionMessageIdentity(7),
+        end: const CompactionMessageIdentity(8),
+      ),
+      routeSignature: _route(),
+      startedAt: DateTime.utc(2026, 8, 31, 2),
+    );
+    const summary2 = CompactionInternalSummary(
+      currentGoal: 'Newer goal',
+      remainingWork: 'Newer work',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-newer',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.auto,
+        sourceRevision: claim2.record!.sourceHistoryRevision,
+        sourceRange: CompactionMessageRange(
+          start: const CompactionMessageIdentity(1),
+          end: const CompactionMessageIdentity(6),
+        ),
+        retainedTailRange: CompactionMessageRange(
+          start: const CompactionMessageIdentity(7),
+          end: const CompactionMessageIdentity(8),
+        ),
+        internalSummary: summary2,
+        continuityResult: CompactionContinuityResult.fromSummary(summary2),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 350_000,
+          estimatedRequestTokensAfter: 35_000,
+          retainedTailTokens: 5_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: DateTime.utc(2026, 8, 31, 2),
+      completedAt: DateTime.utc(2026, 8, 31, 2, 30),
+    );
+
+    // Before rewrite, newer boundary is active
+    final projBefore = builder.buildForSession('session-1');
+    expect(projBefore.activeBoundary?.compactionId, 'cmp-newer');
+    expect(projBefore.conversationMessages.first.content, contains('Newer goal'));
+
+    // Rewrite modifying messages starting at index 4 (m5 onwards)
+    // Rows 1..4 remain unchanged with their original identities (1, 2, 3, 4).
+    // cmp-newer (source 1..6) has source end 6 missing => superseded by rev 2 bump.
+    // cmp-older (source 1..2, tail 3..4) has all endpoints present => eligible!
+    sessions.replaceMessages('session-1', [
+      canonical[0],
+      canonical[1],
+      canonical[2],
+      canonical[3],
+      canonical[4].copyWith(content: 'm5 edited'),
+      canonical[5],
+      canonical[6],
+      canonical[7],
+    ]);
+
+    final projAfter = builder.buildForSession('session-1');
+    expect(projAfter.usesCompactionBoundary, isTrue);
+    expect(projAfter.activeBoundary?.compactionId, 'cmp-older');
+    expect(
+      projAfter.conversationMessages.map((m) => m.content).toList(),
+      [
+        contains('Older goal'),
+        'm3',
+        'm4',
+        'm5 edited',
+        'm6',
+        'm7',
+        'm8',
+      ],
+    );
+  });
+
+  test('impossible row ordering (missing source start) marks boundary ineligible without throwing', () {
+    final canonical = [
+      Message(role: MessageRole.user, content: 'user-1'),
+      Message(role: MessageRole.assistant, content: 'assistant-1'),
+      Message(role: MessageRole.user, content: 'user-2'),
+      Message(role: MessageRole.assistant, content: 'assistant-2'),
+    ];
+    sessions.replaceMessages('session-1', canonical);
+    final ids = builder
+        .loadCanonicalTimeline('session-1')
+        .messages
+        .map((entry) => entry.rowId)
+        .toList();
+
+    final startedAt = DateTime.utc(2026, 8, 31);
+    final claim = boundaries.tryClaim(
+      compactionId: 'cmp-impossible-order',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.manual,
+      sourceRange: CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[0]),
+        end: CompactionMessageIdentity(ids[1]),
+      ),
+      retainedTailRange: CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[2]),
+        end: CompactionMessageIdentity(ids[3]),
+      ),
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Goal',
+      remainingWork: 'Work',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-impossible-order',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        sourceRevision: claim.record!.sourceHistoryRevision,
+        sourceRange: CompactionMessageRange(
+          start: CompactionMessageIdentity(ids[0]),
+          end: CompactionMessageIdentity(ids[1]),
+        ),
+        retainedTailRange: CompactionMessageRange(
+          start: CompactionMessageIdentity(ids[2]),
+          end: CompactionMessageIdentity(ids[3]),
+        ),
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: startedAt.add(const Duration(seconds: 1)),
+    );
+
+    // Simulate an impossible ordering (source start missing, source end present).
+    state.db.execute(
+      'DELETE FROM messages WHERE session_id = ? AND id = ?',
+      ['session-1', ids[0]],
+    );
+
+    // Must NOT throw on the hot path for anchor states; falls back to full canonical history.
+    final projection = builder.buildForSession('session-1');
+    expect(projection.usesCompactionBoundary, isFalse);
+    expect(
+      projection.conversationMessages.map((m) => m.content),
+      containsAllInOrder(['assistant-1', 'user-2', 'assistant-2']),
+    );
+  });
+
+  test('missing retained-tail start falls back to full canonical history instead of throwing', () async {
+    final canonical = [
+      Message(role: MessageRole.user, content: 'u1'),
+      Message(role: MessageRole.assistant, content: 'a1'),
+      Message(role: MessageRole.user, content: 'u2'),
+      Message(role: MessageRole.assistant, content: 'a2'),
+    ];
+    sessions.replaceMessages('session-1', canonical);
+    final ids = builder
+        .loadCanonicalTimeline('session-1')
+        .messages
+        .map((entry) => entry.rowId)
+        .toList();
+
+    final startedAt = DateTime.utc(2026, 8, 31);
+    final claim = boundaries.tryClaim(
+      compactionId: 'cmp-tail-gone',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.manual,
+      sourceRange: CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[0]),
+        end: CompactionMessageIdentity(ids[1]),
+      ),
+      retainedTailRange: CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[2]),
+        end: CompactionMessageIdentity(ids[3]),
+      ),
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Goal',
+      remainingWork: 'Work',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-tail-gone',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        sourceRevision: claim.record!.sourceHistoryRevision,
+        sourceRange: CompactionMessageRange(
+          start: CompactionMessageIdentity(ids[0]),
+          end: CompactionMessageIdentity(ids[1]),
+        ),
+        retainedTailRange: CompactionMessageRange(
+          start: CompactionMessageIdentity(ids[2]),
+          end: CompactionMessageIdentity(ids[3]),
+        ),
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: startedAt.add(const Duration(seconds: 1)),
+    );
+
+    // Both tail rows removed: source intact, tail start and end gone.
+    state.db.execute(
+      'DELETE FROM messages WHERE session_id = ? AND id >= ?',
+      ['session-1', ids[2]],
+    );
+
+    final logRecords = <String>[];
+    final sub = Logger('ModelProjectionBuilder').onRecord.listen(
+      (rec) => logRecords.add(rec.message),
+    );
+    final projection = builder.buildForSession('session-1');
+    await sub.cancel();
+
+    expect(projection.usesCompactionBoundary, isFalse);
+    expect(
+      projection.conversationMessages.map((m) => m.content).toList(),
+      ['u1', 'a1'],
+    );
+    expect(logRecords, [
+      'Compaction boundary invalidated: compaction_id=cmp-tail-gone, '
+          'reason=tail_start_missing',
+    ]);
+  });
+
+  test('every invalidated completed boundary emits one bounded sanitized log line (R2)', () {
+    final canonical = [
+      Message(role: MessageRole.user, content: 'private user message'),
+      Message(role: MessageRole.assistant, content: 'private assistant message'),
+      Message(role: MessageRole.user, content: 'tail user'),
+      Message(role: MessageRole.assistant, content: 'tail assistant'),
+    ];
+    sessions.replaceMessages('session-1', canonical);
+    final ids = builder
+        .loadCanonicalTimeline('session-1')
+        .messages
+        .map((entry) => entry.rowId)
+        .toList();
+
+    final startedAt = DateTime.utc(2026, 8, 31);
+    final claim = boundaries.tryClaim(
+      compactionId: 'cmp-log-test',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.manual,
+      sourceRange: CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[0]),
+        end: CompactionMessageIdentity(ids[1]),
+      ),
+      retainedTailRange: CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[2]),
+        end: CompactionMessageIdentity(ids[3]),
+      ),
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Sanitized Goal',
+      remainingWork: 'Sanitized Work',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-log-test',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        sourceRevision: claim.record!.sourceHistoryRevision,
+        sourceRange: CompactionMessageRange(
+          start: CompactionMessageIdentity(ids[0]),
+          end: CompactionMessageIdentity(ids[1]),
+        ),
+        retainedTailRange: CompactionMessageRange(
+          start: CompactionMessageIdentity(ids[2]),
+          end: CompactionMessageIdentity(ids[3]),
+        ),
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: startedAt.add(const Duration(seconds: 1)),
+    );
+
+    // Rewrite starting at index 1 so source start (ids[0]) exists but source end (ids[1]) is removed.
+    sessions.replaceMessages('session-1', [
+      canonical[0],
+      canonical[1].copyWith(content: 'edited message'),
+      canonical[2],
+      canonical[3],
+    ]);
+
+    final logRecords = <String>[];
+    final sub = Logger('ModelProjectionBuilder').onRecord.listen((rec) {
+      logRecords.add(rec.message);
+    });
+
+    final projection = builder.buildForSession('session-1');
+    sub.cancel();
+
+    expect(projection.usesCompactionBoundary, isFalse);
+    expect(logRecords, hasLength(1));
+    expect(
+      logRecords.first,
+      'Compaction boundary invalidated: compaction_id=cmp-log-test, reason=source_end_missing',
+    );
+    // Verified sanitized: no user message content in the log line.
+    expect(logRecords.first, isNot(contains('private user message')));
+    expect(logRecords.first, isNot(contains('edited message')));
+  });
+
+  test('repeated buildForSession calls emit each invalidation at most once per process (compactionId, reason)', () {
+    final canonical = [
+      Message(role: MessageRole.user, content: 'user message'),
+      Message(role: MessageRole.assistant, content: 'assistant message'),
+      Message(role: MessageRole.user, content: 'tail user'),
+      Message(role: MessageRole.assistant, content: 'tail assistant'),
+    ];
+    sessions.replaceMessages('session-1', canonical);
+    final ids = builder
+        .loadCanonicalTimeline('session-1')
+        .messages
+        .map((entry) => entry.rowId)
+        .toList();
+
+    final startedAt = DateTime.utc(2026, 8, 31);
+    final claim = boundaries.tryClaim(
+      compactionId: 'cmp-dedup-test',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.manual,
+      sourceRange: CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[0]),
+        end: CompactionMessageIdentity(ids[1]),
+      ),
+      retainedTailRange: CompactionMessageRange(
+        start: CompactionMessageIdentity(ids[2]),
+        end: CompactionMessageIdentity(ids[3]),
+      ),
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Goal',
+      remainingWork: 'Work',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-dedup-test',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        sourceRevision: claim.record!.sourceHistoryRevision,
+        sourceRange: CompactionMessageRange(
+          start: CompactionMessageIdentity(ids[0]),
+          end: CompactionMessageIdentity(ids[1]),
+        ),
+        retainedTailRange: CompactionMessageRange(
+          start: CompactionMessageIdentity(ids[2]),
+          end: CompactionMessageIdentity(ids[3]),
+        ),
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: startedAt.add(const Duration(seconds: 1)),
+    );
+
+    // Rewrite starting at index 1 so source start exists but source end is removed.
+    sessions.replaceMessages('session-1', [
+      canonical[0],
+      canonical[1].copyWith(content: 'edited message'),
+      canonical[2],
+      canonical[3],
+    ]);
+
+    final logRecords = <String>[];
+    final sub = Logger('ModelProjectionBuilder').onRecord.listen((rec) {
+      logRecords.add(rec.message);
+    });
+
+    // Simulate 4 calls to buildForSession during a single turn/request
+    builder.buildForSession('session-1');
+    builder.buildForSession('session-1');
+    builder.buildForSession('session-1');
+    builder.buildForSession('session-1');
+    sub.cancel();
+
+    expect(
+      logRecords,
+      hasLength(1),
+      reason: 'Repeated calls must emit at most once per process per (compactionId, reason)',
+    );
+    expect(
+      logRecords.single,
+      'Compaction boundary invalidated: compaction_id=cmp-dedup-test, reason=source_end_missing',
+    );
+  });
+
+  test('every canonical row removal via replaceMessages bumps history_revision (R7)', () {
+    final historyRepo = SessionHistoryRevisionRepository(state);
+    expect(historyRepo.read('session-1')?.value, 0);
+
+    // Initial 5 messages: bumps revision to 1.
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'm1'),
+      Message(role: MessageRole.assistant, content: 'm2'),
+      Message(role: MessageRole.user, content: 'm3'),
+      Message(role: MessageRole.assistant, content: 'm4'),
+      Message(role: MessageRole.user, content: 'm5'),
+    ]);
+    expect(historyRepo.read('session-1')?.value, 1);
+
+    // Row removal (shortening list removes tail rows id >= existing[3]): bumps revision to 2.
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'm1'),
+      Message(role: MessageRole.assistant, content: 'm2'),
+      Message(role: MessageRole.user, content: 'm3'),
+    ]);
+    expect(historyRepo.read('session-1')?.value, 2);
+
+    // Mid-history rewrite (message 2 edited, deletes rows id >= existing[1] and reinserts): bumps revision to 3.
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'm1'),
+      Message(role: MessageRole.assistant, content: 'm2 edited'),
+      Message(role: MessageRole.user, content: 'm3'),
+    ]);
+    expect(historyRepo.read('session-1')?.value, 3);
+
+    // Unconditional bump: even an identical replacement without changes bumps revision to 4.
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'm1'),
+      Message(role: MessageRole.assistant, content: 'm2 edited'),
+      Message(role: MessageRole.user, content: 'm3'),
+    ]);
+    expect(historyRepo.read('session-1')?.value, 4);
+  });
+
+  test('recovers session matching production lockout shape without database edits', () {
+    // Exact shape from coordinator intake:
+    // Session has history revision 1373.
+    // Completed boundary at revision 945:
+    // source: 29575340..29576050
+    // tail: 29576051..29576299
+    // Active rows: 29575340, 29579131, 29579132
+    state.db.execute(
+      '''
+      UPDATE sessions
+      SET history_revision = 1373
+      WHERE session_id = 'session-1'
+      ''',
+    );
+    state.db.execute(
+      '''
+      INSERT INTO messages (
+        id, session_id, data, history_status
+      ) VALUES
+        (29575340, 'session-1', '{"role":"user","content":"Root prompt"}', 'active'),
+        (29579131, 'session-1', '{"role":"assistant","content":"Rewritten response"}', 'active'),
+        (29579132, 'session-1', '{"role":"user","content":"Next user turn"}', 'active')
+      ''',
+    );
+    state.db.execute(
+      '''
+      INSERT INTO session_compaction_operations (
+        compaction_id, session_id, trigger, status,
+        source_history_revision,
+        source_start_message_id, source_end_message_id,
+        tail_start_message_id, tail_end_message_id,
+        provider_instance_id, model_id, template_id, protocol,
+        normalized_base_url, config_revision, credential_revision,
+        context_window_tokens, estimated_request_tokens_before,
+        estimated_request_tokens_after, retained_tail_tokens,
+        internal_summary_json, started_at, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ''',
+      [
+        'cmp-prod-lockout',
+        'session-1',
+        CompactionTrigger.manual.wireValue,
+        CompactionStatus.completed.wireValue,
+        945,
+        29575340,
+        29576050,
+        29576051,
+        29576299,
+        'provider-1',
+        'gpt-4o',
+        'openai',
+        'openai_compatible',
+        'https://api.example.com/v1',
+        1,
+        1,
+        258_000,
+        220_000,
+        25_000,
+        5_000,
+        '{"currentGoal":"Production goal","remainingWork":"Production work"}',
+        '2026-10-20T10:00:00Z',
+        '2026-10-20T10:01:00Z',
+      ],
+    );
+
+    // On next load, projection must succeed without throwing and project full canonical history.
+    final projection = builder.buildForSession('session-1');
+    expect(projection.usesCompactionBoundary, isFalse);
+    expect(projection.conversationMessages, hasLength(3));
+    expect(projection.conversationMessages[0].content, 'Root prompt');
+    expect(projection.conversationMessages[1].content, 'Rewritten response');
+    expect(projection.conversationMessages[2].content, 'Next user turn');
+
+    // The boundary row remains untouched in the DB for audit.
+    final auditRows = boundaries.listCompletedForSession('session-1');
+    expect(auditRows, hasLength(1));
+    expect(auditRows.first.compactionId, 'cmp-prod-lockout');
+    expect(auditRows.first.sourceHistoryRevision.value, 945);
   });
 }

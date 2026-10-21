@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:meta/meta.dart';
 import 'package:logging/logging.dart';
 import 'package:http/http.dart' as http;
 
@@ -256,6 +257,9 @@ class BaseOpenAIAdapter
           }
           if (profile.name == 'openrouter') {
             resolvedOptions = _withOpenRouterReasoning(resolvedOptions);
+          }
+          if (profile.name == 'kimi') {
+            resolvedOptions = _withKimiReasoning(resolvedOptions);
           }
           _availableModelsSource = 'live';
           _lastModelsException = null;
@@ -548,6 +552,115 @@ class BaseOpenAIAdapter
   /// adopting an unrelated intrinsic ladder. Model-owned image, reasoning-output,
   /// context and other discovery facts stay untouched: only `thinking_control`
   /// is published, and no documented value is copied, adapted or remapped.
+  /// Enriches discovered Kimi/Moonshot models with the reasoning declaration
+  /// the provider's own `GET /models` item reports.
+  ///
+  /// Only the registered `kimi` template consumes this schema, and only from
+  /// each model's own item: no model-name or URL inference. A declaration is
+  /// written only when the evidence is complete and self-consistent:
+  /// `supports_reasoning: true`, thinking type `only` (thinking always on, so no
+  /// Off option is declared), and a finite positive effort set with an optional
+  /// default from `think_efforts` and/or `reasoning.effort`; when both forms are
+  /// present they must agree. Anything else leaves discovery untouched so the
+  /// existing route policy keeps owning the descriptor. Efforts dispatch on the
+  /// Chat `reasoning_effort` field with their exact declared value.
+  List<ModelOption> _withKimiReasoning(List<ModelOption> options) {
+    return options.map((option) {
+      if (option.modelMetadata.containsKey('thinking_control')) return option;
+      final declaration = kimiThinkingControlFromDiscovery(
+        option.modelMetadata,
+      );
+      if (declaration == null) return option;
+      return option.copyWith(
+        supportsReasoning: true,
+        modelMetadata: {
+          ...option.modelMetadata,
+          'thinking_control': declaration,
+        },
+      );
+    }).toList();
+  }
+
+  /// Validates one Kimi `/models` item and returns the owned
+  /// `openai_chat_effort` declaration, or `null` when the evidence is absent,
+  /// malformed, inconsistent, or not an always-on (`only`) effort contract.
+  @visibleForTesting
+  static Map<String, Object?>? kimiThinkingControlFromDiscovery(
+    Map<String, Object?> item,
+  ) {
+    if (item['supports_reasoning'] != true) return null;
+
+    final topType = item['supports_thinking_type'];
+    final reasoning = item['reasoning'];
+    if (item.containsKey('reasoning') && reasoning is! Map) return null;
+    final nestedType = reasoning is Map ? reasoning['type'] : null;
+    if (topType == null && nestedType == null) return null;
+    if (topType != null && topType is! String) return null;
+    if (nestedType != null && nestedType is! String) return null;
+    if (topType != null && nestedType != null && topType != nestedType) {
+      return null;
+    }
+    final thinkingType = ((topType ?? nestedType) as String).trim();
+    if (thinkingType != 'only') return null;
+
+    ({List<String> efforts, String? defaultEffort})? parse(
+      Object? rawEfforts,
+      Object? rawDefault,
+    ) {
+      if (rawEfforts is! List || rawEfforts.isEmpty) return null;
+      final efforts = <String>[];
+      for (final entry in rawEfforts) {
+        if (entry is! String) return null;
+        final value = entry.trim();
+        // `only` cannot disable thinking, so a disabling effort is malformed.
+        if (value == 'none' ||
+            !ThinkingWireVocabulary.isAdmittedEffort(value) ||
+            efforts.contains(value)) {
+          return null;
+        }
+        efforts.add(value);
+      }
+      if (rawDefault != null) {
+        if (rawDefault is! String || !efforts.contains(rawDefault.trim())) {
+          return null;
+        }
+      }
+      return (efforts: efforts, defaultEffort: (rawDefault as String?)?.trim());
+    }
+
+    ({List<String> efforts, String? defaultEffort})? fromThinkEfforts;
+    if (item.containsKey('think_efforts')) {
+      final raw = item['think_efforts'];
+      if (raw is! Map || raw['support'] != true) return null;
+      fromThinkEfforts = parse(raw['valid_efforts'], raw['default_effort']);
+      if (fromThinkEfforts == null) return null;
+    }
+    ({List<String> efforts, String? defaultEffort})? fromReasoning;
+    if (reasoning is Map && reasoning.containsKey('effort')) {
+      final raw = reasoning['effort'];
+      if (raw is! Map) return null;
+      fromReasoning = parse(raw['valid'], raw['default']);
+      if (fromReasoning == null) return null;
+    }
+    final declared = fromThinkEfforts ?? fromReasoning;
+    if (declared == null) return null;
+    if (fromThinkEfforts != null && fromReasoning != null) {
+      final a = {...fromThinkEfforts.efforts};
+      final b = {...fromReasoning.efforts};
+      if (a.length != b.length ||
+          !a.containsAll(b) ||
+          fromThinkEfforts.defaultEffort != fromReasoning.defaultEffort) {
+        return null;
+      }
+    }
+    return {
+      'status': 'supported',
+      'wire': 'openai_chat_effort',
+      'options': {for (final effort in declared.efforts) effort: effort},
+      'default_option': ?declared.defaultEffort,
+    };
+  }
+
   static const _openRouterUnresolvedControl = <String, Object?>{
     'status': 'unknown',
   };

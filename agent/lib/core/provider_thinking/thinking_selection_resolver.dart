@@ -30,13 +30,35 @@ class ThinkingSelectionResolution {
   });
 }
 
+/// Ordered positive effort ladder used to clamp a requested level.
+const _effortLadder = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+/// Clamps [requested] to the nearest *lower* level the route supports.
+///
+/// Never escalates and never falls to an Off/none option. Returns `null` when
+/// [requested] is not a ladder level or no lower supported level exists.
+String? clampThinkingSelection({
+  required String requested,
+  required Iterable<String> optionIds,
+}) {
+  final requestedIndex = _effortLadder.indexOf(requested.trim().toLowerCase());
+  if (requestedIndex < 0) return null;
+  final supported = optionIds.toSet();
+  for (var index = requestedIndex - 1; index >= 0; index--) {
+    final candidate = _effortLadder[index];
+    if (supported.contains(candidate)) return candidate;
+  }
+  return null;
+}
+
 class ThinkingSelectionResolver {
   final ProviderInstanceRepository _instances;
   final ThinkingControlCacheResolver _cacheResolver;
   final ThinkingCapabilityAssembler _assembler;
   final ProviderThinkingRegistry _registry;
-  final Config? _config;
 
+  /// [config] is accepted for call-site compatibility; the settings layer is
+  /// read through [assembler], which owns the layered authority.
   ThinkingSelectionResolver({
     required ProviderInstanceRepository instances,
     required ThinkingControlCacheResolver cacheResolver,
@@ -46,8 +68,7 @@ class ThinkingSelectionResolver {
   }) : _instances = instances,
        _cacheResolver = cacheResolver,
        _assembler = assembler,
-       _registry = registry,
-       _config = config;
+       _registry = registry;
 
   ThinkingSelectionResolution resolve({
     required String providerInstanceId,
@@ -82,14 +103,17 @@ class ThinkingSelectionResolver {
       );
     }
     if (descriptor.status == ThinkingCapabilityStatus.unknown) {
-      throw ThinkingSelectionException(
-        code: ThinkingSelectionErrorCode.capabilityUnknown,
-        message:
-            'Thinking controls are unavailable for the active model route.',
+      // No authority layer reports a set: the selection passes through
+      // unchanged (never clamped or rejected) and the turn is admitted with
+      // the provider default, sending no thinking field.
+      return ThinkingSelectionResolution(
+        selectionId: trimmed,
+        descriptor: descriptor,
+        directive: const UseProviderDefault(),
       );
     }
 
-    final resolvedSelectionId =
+    var resolvedSelectionId =
         migrateLegacyThinkingSelectionId(
           selectionId: trimmed,
           descriptor: descriptor,
@@ -97,10 +121,18 @@ class ThinkingSelectionResolver {
         trimmed;
 
     if (!descriptor.containsOptionId(resolvedSelectionId)) {
-      throw ThinkingSelectionException(
-        code: ThinkingSelectionErrorCode.optionUnavailable,
-        message: 'The selected thinking option is unavailable for this route.',
+      final clamped = clampThinkingSelection(
+        requested: resolvedSelectionId,
+        optionIds: descriptor.options.map((option) => option.id),
       );
+      if (clamped == null) {
+        throw ThinkingSelectionException(
+          code: ThinkingSelectionErrorCode.optionUnavailable,
+          message:
+              'The selected thinking option is unavailable for this route.',
+        );
+      }
+      resolvedSelectionId = clamped;
     }
 
     return _buildResolution(
@@ -117,27 +149,40 @@ class ThinkingSelectionResolver {
     required ThinkingControlDescriptor descriptor,
     required String? selectionId,
   }) {
-    final override = _config?.modelAwarePolicy
-        .capabilityOverrideFor(model.value)
-        ?.thinkingControl;
-
-    if (override != null) {
+    final layer = _assembler.resolveLayer(instance: instance, model: model);
+    if (layer is ThinkingControlRecordLayer) {
       return _buildResolutionFromControlOverride(
-        control: override,
+        control: layer.control,
         descriptor: descriptor,
         instance: instance,
         selectionId: selectionId,
       );
     }
 
-    final rawDeclared = model.modelMetadata['thinking_control'];
-    final declaredOverride = ThinkingControlOverride.tryParse(rawDeclared);
-    if (declaredOverride != null) {
-      return _buildResolutionFromControlOverride(
-        control: declaredOverride,
+    if (layer is ThinkingModelsDevLayer) {
+      final effectiveSelection = selectionId?.trim();
+      if (effectiveSelection == null || effectiveSelection.isEmpty) {
+        return ThinkingSelectionResolution(
+          selectionId: null,
+          descriptor: descriptor,
+          directive: const UseProviderDefault(),
+        );
+      }
+      final directive = layer.evidence.directiveFor(
+        layer.wire,
+        effectiveSelection,
+      );
+      if (directive == null) {
+        throw ThinkingSelectionException(
+          code: ThinkingSelectionErrorCode.optionUnavailable,
+          message:
+              'The selected thinking option is unavailable for this route.',
+        );
+      }
+      return ThinkingSelectionResolution(
+        selectionId: effectiveSelection,
         descriptor: descriptor,
-        instance: instance,
-        selectionId: selectionId,
+        directive: directive,
       );
     }
 
@@ -231,6 +276,7 @@ class ThinkingSelectionResolver {
         _ => AnthropicAdaptiveDirective(optionVal.toString()),
       },
       'anthropic_budget' => switch (optionVal) {
+        false => const ThinkingToggleDirective(enabled: false),
         num n when n >= 1024 => AnthropicBudgetDirective(n.toInt()),
         _ => throw ThinkingSelectionException(
           code: ThinkingSelectionErrorCode.optionUnavailable,
@@ -270,6 +316,15 @@ class ThinkingSelectionResolver {
           message:
               'Self-hosted NIM Qwen value must be boolean/on/off or one of '
               'low, medium, xhigh.',
+        ),
+      },
+      'native_toggle_effort' => switch (optionVal) {
+        false => const ThinkingToggleDirective(enabled: false),
+        true => const ThinkingToggleDirective(enabled: true),
+        String effort => NativeThinkingEffortDirective(effort),
+        _ => throw ThinkingSelectionException(
+          code: ThinkingSelectionErrorCode.optionUnavailable,
+          message: 'Native toggle/effort value must be boolean or an effort.',
         ),
       },
       'toggle_effort' => switch (optionVal) {

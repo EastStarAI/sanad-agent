@@ -1,0 +1,775 @@
+# Shipped thinking-capability defaults (layer 3 of the thinking authority).
+#
+# Same schema as the `model_capabilities` section of $SANAD_HOME/config.yaml:
+# entries are keyed by exact model id and carry one `thinking_control` record.
+# Extra data-only fields per entry:
+#   source:          documentation URL the facts come from (required).
+#   note:            optional free-text provenance note.
+#   aliases:         additional exact ids that share this record.
+#   routes:          route class where the record applies (default by wire):
+#                      any    - wherever the wire is compatible (effort wires
+#                               follow the route between Chat and Responses);
+#                      native - first-party/partner native Chat dialects and
+#                               the aggregator;
+#                      first_party - like native, but never on a partner
+#                               Chat route (OpenCode Go): there the serving
+#                               route's own models.dev entry answers. Use it
+#                               when the partner's serving evidence contradicts
+#                               the first-party record;
+#                      google - the Gemini template and the aggregator;
+#                      nim    - the hosted NVIDIA NIM catalog only.
+#                    Defaults: native_toggle_effort -> native,
+#                    google_thinking -> google, nim_* -> nim, else any.
+#   compatible_chat: positive_efforts - on a generic compatible Chat route the
+#                    record degrades to its positive efforts with no Off and
+#                    no default (the native envelope is not evidenced there).
+#
+# Facts were carried from the model-name tables removed after git 2607a342
+# (agent/lib/core/provider_thinking/*_catalog.dart and *_policy.dart).
+# Regenerate: fvm dart run tool/generate_model_capability_defaults.dart
+schema_version: 1
+model_capabilities:
+  "o1":
+    source: "https://developers.openai.com/api/docs/guides/reasoning"
+    aliases: ["openai/o1"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        medium: "medium"
+        high: "high"
+      default_option: medium
+  "o1-2024-12-17":
+    source: "https://developers.openai.com/api/docs/guides/reasoning"
+    aliases: ["openai/o1-2024-12-17"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        medium: "medium"
+        high: "high"
+      default_option: medium
+  "o3-mini":
+    source: "https://developers.openai.com/api/docs/guides/reasoning"
+    aliases: ["openai/o3-mini"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: medium
+  "o3-mini-2025-01-31":
+    source: "https://developers.openai.com/api/docs/guides/reasoning"
+    aliases: ["openai/o3-mini-2025-01-31"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: medium
+  "o3":
+    source: "https://developers.openai.com/api/docs/guides/reasoning"
+    aliases: ["openai/o3"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: medium
+  "gpt-5.1-codex-mini":
+    source: "https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini.md"
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+        xhigh: "xhigh"
+  "gpt-5.2-codex":
+    source: "https://developers.openai.com/api/docs/models/gpt-5.2-codex.md"
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+        xhigh: "xhigh"
+  "gpt-5.6-sol":
+    source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol.md"
+    aliases: ["openai/gpt-5.6-sol"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        none: "none"
+        low: "low"
+        medium: "medium"
+        high: "high"
+        xhigh: "xhigh"
+        max: "max"
+      default_option: medium
+  "gpt-6-astra":
+    source: "https://developers.openai.com/api/docs/models/gpt-6-astra.md"
+    aliases: ["openai/gpt-6-astra"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+        xhigh: "xhigh"
+        max: "max"
+  "gpt-oss-120b":
+    source: "https://openai.com/index/introducing-gpt-oss/"
+    aliases: ["openai/gpt-oss-120b"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+  "gpt-oss-20b":
+    source: "https://openai.com/index/introducing-gpt-oss/"
+    aliases: ["openai/gpt-oss-20b"]
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+  "grok-4.5":
+    source: "https://docs.x.ai/developers/model-capabilities/text/reasoning.md"
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: high
+  "grok-4.6":
+    source: "https://docs.x.ai/developers/model-capabilities/text/reasoning.md"
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+        xhigh: "xhigh"
+      default_option: high
+  "grok-4.7":
+    source: "https://docs.x.ai/developers/model-capabilities/text/reasoning.md"
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+        xhigh: "xhigh"
+      default_option: high
+  "grok-4.20-0309-non-reasoning":
+    source: "https://docs.x.ai/developers/model-capabilities/text/reasoning.md"
+    note: "Documented non-reasoning variant: no request-time control."
+    thinking_control:
+      status: unsupported
+  "kimi-k3":
+    source: "https://platform.kimi.ai/docs/guide/use-thinking-models"
+    routes: native
+    compatible_chat: positive_efforts
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: max
+  "kimi-k2.6":
+    source: "https://platform.kimi.ai/docs/guide/use-thinking-models"
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        on: true
+        off: false
+      default_option: on
+  "kimi-k2.7-code":
+    source: "https://platform.kimi.ai/docs/guide/use-thinking-models"
+    note: "Always-on reasoning; runtime adjustment is rejected upstream."
+    routes: native
+    thinking_control:
+      status: unsupported
+  "kimi-k2.7-code-highspeed":
+    source: "https://platform.kimi.ai/docs/guide/use-thinking-models"
+    note: "Always-on reasoning; runtime adjustment is rejected upstream."
+    routes: native
+    thinking_control:
+      status: unsupported
+  "moonshot-v1-8k":
+    source: "https://platform.kimi.ai/docs/guide/use-thinking-models"
+    note: "Legacy Moonshot model without thinking controls."
+    routes: native
+    thinking_control:
+      status: unsupported
+  "moonshot-v1-32k":
+    source: "https://platform.kimi.ai/docs/guide/use-thinking-models"
+    note: "Legacy Moonshot model without thinking controls."
+    routes: native
+    thinking_control:
+      status: unsupported
+  "moonshot-v1-128k":
+    source: "https://platform.kimi.ai/docs/guide/use-thinking-models"
+    note: "Legacy Moonshot model without thinking controls."
+    routes: native
+    thinking_control:
+      status: unsupported
+  "deepseek-reasoner":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    note: "Fixed reasoner: intrinsic reasoning without a request-time control."
+    aliases: ["deepseek/deepseek-reasoner", "deepseek-ai/deepseek-reasoner"]
+    routes: native
+    thinking_control:
+      status: unsupported
+  "deepseek-r1":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    note: "Fixed reasoner: intrinsic reasoning without a request-time control."
+    aliases: ["deepseek/deepseek-r1", "deepseek-ai/deepseek-r1", "deepseek-ai/DeepSeek-R1"]
+    routes: native
+    thinking_control:
+      status: unsupported
+  "deepseek-r1-zero":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    note: "Fixed reasoner: intrinsic reasoning without a request-time control."
+    aliases: ["deepseek/deepseek-r1-zero", "deepseek-ai/deepseek-r1-zero"]
+    routes: native
+    thinking_control:
+      status: unsupported
+  "deepseek-chat":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    aliases: ["deepseek/deepseek-chat", "deepseek-ai/deepseek-chat"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+      default_option: on
+  "deepseek-v3":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    aliases: ["deepseek/deepseek-v3", "deepseek-ai/deepseek-v3", "deepseek-ai/DeepSeek-V3"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+      default_option: on
+  "deepseek-chat-v3":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    aliases: ["deepseek/deepseek-chat-v3", "deepseek-ai/deepseek-chat-v3"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+      default_option: on
+  "deepseek-v4":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    aliases: ["deepseek/deepseek-v4", "deepseek-ai/deepseek-v4"]
+    compatible_chat: positive_efforts
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: high
+  "deepseek-v4-pro":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    aliases: ["deepseek/deepseek-v4-pro"]
+    compatible_chat: positive_efforts
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: high
+  "deepseek-v4-flash":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    aliases: ["deepseek/deepseek-v4-flash"]
+    compatible_chat: positive_efforts
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: high
+  "deepseek-flash":
+    source: "https://api-docs.deepseek.com/guides/thinking_mode"
+    aliases: ["deepseek/deepseek-flash", "deepseek-ai/deepseek-flash"]
+    compatible_chat: positive_efforts
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: high
+  "deepseek-v4.1-flash":
+    source: "https://www.deepseek.com/en/news/deepseek-v4-1-flash/"
+    note: "Also listed by https://opencode.ai/docs/go/ (OpenCode is an official partner)."
+    compatible_chat: positive_efforts
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: high
+  "glm-4.5":
+    source: "https://docs.z.ai/guides/llm/glm-4.5"
+    note: "Hybrid thinking: the provider-managed default is not a selected member."
+    aliases: ["z-ai/glm-4.5", "zai/glm-4.5"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+  "glm-4.5-air":
+    source: "https://docs.z.ai/guides/llm/glm-4.5"
+    note: "Hybrid thinking: the provider-managed default is not a selected member."
+    aliases: ["z-ai/glm-4.5-air", "zai/glm-4.5-air"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+  "glm-4.7":
+    source: "https://docs.z.ai/guides/capabilities/thinking-mode"
+    aliases: ["z-ai/glm-4.7", "zai/glm-4.7"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+      default_option: on
+  "glm-5":
+    source: "https://docs.z.ai/guides/capabilities/thinking-mode"
+    aliases: ["z-ai/glm-5", "zai/glm-5"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+      default_option: on
+  "glm-5.1":
+    source: "https://docs.z.ai/guides/capabilities/thinking-mode"
+    aliases: ["z-ai/glm-5.1", "zai/glm-5.1"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+      default_option: on
+  "glm-4.7-flash":
+    source: "https://docs.z.ai/guides/capabilities/thinking-mode"
+    aliases: ["z-ai/glm-4.7-flash", "zai/glm-4.7-flash"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        on: true
+      default_option: on
+  "glm-5.2":
+    source: "https://docs.z.ai/guides/capabilities/thinking-mode"
+    note: "OpenCode Go serves glm-5.2 thinking-only: it rejects thinking disabled with HTTP 400 and its models.dev entry lists efforts high/max with no toggle (live acceptance 106b r2 G1). The record therefore applies on first-party routes only."
+    aliases: ["z-ai/glm-5.2", "zai/glm-5.2"]
+    routes: first_party
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        high: "high"
+        max: "max"
+      default_option: max
+  "glm-5.3":
+    source: "https://docs.z.ai/guides/llm/glm-5.3"
+    note: "Forced thinking: Off is rejected."
+    aliases: ["z-ai/glm-5.3", "zai/glm-5.3"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: max
+  "glm-5.3-flash":
+    source: "https://docs.z.ai/guides/llm/glm-5.3"
+    note: "Forced thinking: Off is rejected."
+    aliases: ["z-ai/glm-5.3-flash", "zai/glm-5.3-flash"]
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: max
+  "glm-4-plus":
+    source: "https://docs.z.ai/guides/capabilities/thinking-mode"
+    note: "Standard non-thinking GLM model."
+    aliases: ["z-ai/glm-4-plus", "zai/glm-4-plus"]
+    routes: native
+    thinking_control:
+      status: unsupported
+  "glm-4-flash":
+    source: "https://docs.z.ai/guides/capabilities/thinking-mode"
+    note: "Standard non-thinking GLM model."
+    aliases: ["z-ai/glm-4-flash", "zai/glm-4-flash"]
+    routes: native
+    thinking_control:
+      status: unsupported
+  "glm-4-9b":
+    source: "https://docs.z.ai/guides/capabilities/thinking-mode"
+    note: "Standard non-thinking GLM model."
+    aliases: ["z-ai/glm-4-9b", "zai/glm-4-9b"]
+    routes: native
+    thinking_control:
+      status: unsupported
+  "claude-opus-4-5":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["claude-opus-4.5", "anthropic/claude-opus-4.5", "anthropic/claude-opus-4-5"]
+    thinking_control:
+      status: supported
+      wire: anthropic_budget
+      options:
+        off: false
+        low: 2048
+        medium: 8192
+        high: 16384
+  "claude-sonnet-4-5":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["claude-sonnet-4.5", "anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4-5"]
+    thinking_control:
+      status: supported
+      wire: anthropic_budget
+      options:
+        off: false
+        low: 2048
+        medium: 8192
+        high: 16384
+  "claude-haiku-4-5":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["claude-haiku-4.5", "anthropic/claude-haiku-4.5", "anthropic/claude-haiku-4-5"]
+    thinking_control:
+      status: supported
+      wire: anthropic_budget
+      options:
+        off: false
+        low: 2048
+        medium: 8192
+        high: 16384
+  "claude-3-7-sonnet":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["claude-3.7-sonnet", "claude-3-7-sonnet-20250219", "claude-3.7-sonnet-20250219", "claude-3.7-sonnet:thinking", "anthropic/claude-3-7-sonnet", "anthropic/claude-3.7-sonnet", "anthropic/claude-3-7-sonnet-20250219", "anthropic/claude-3.7-sonnet:thinking"]
+    thinking_control:
+      status: supported
+      wire: anthropic_budget
+      options:
+        off: false
+        low: 2048
+        medium: 8192
+        high: 16384
+  "claude-opus-4-6":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["claude-opus-4.6", "anthropic/claude-opus-4.6", "anthropic/claude-opus-4-6"]
+    thinking_control:
+      status: supported
+      wire: anthropic_adaptive
+      options:
+        off: false
+        low: "low"
+        medium: "medium"
+        high: "high"
+  "claude-sonnet-4-6":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["claude-sonnet-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-sonnet-4-6"]
+    thinking_control:
+      status: supported
+      wire: anthropic_adaptive
+      options:
+        off: false
+        low: "low"
+        medium: "medium"
+        high: "high"
+  "claude-mythos-preview":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["anthropic/claude-mythos-preview"]
+    thinking_control:
+      status: supported
+      wire: anthropic_adaptive
+      options:
+        off: false
+        low: "low"
+        medium: "medium"
+        high: "high"
+  "claude-opus-4-8":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["claude-opus-4.8", "anthropic/claude-opus-4.8", "anthropic/claude-opus-4-8"]
+    thinking_control:
+      status: supported
+      wire: anthropic_adaptive
+      options:
+        off: false
+        low: "low"
+        medium: "medium"
+        high: "high"
+        max: "max"
+  "claude-opus-4-7":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["claude-opus-4.7", "anthropic/claude-opus-4.7", "anthropic/claude-opus-4-7"]
+    thinking_control:
+      status: supported
+      wire: anthropic_adaptive
+      options:
+        off: false
+        low: "low"
+        medium: "medium"
+        high: "high"
+        max: "max"
+  "claude-sonnet-5":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    aliases: ["anthropic/claude-sonnet-5"]
+    thinking_control:
+      status: supported
+      wire: anthropic_adaptive
+      options:
+        off: false
+        low: "low"
+        medium: "medium"
+        high: "high"
+        max: "max"
+  "claude-fable-5":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    note: "Always adaptive: no explicit Off."
+    aliases: ["anthropic/claude-fable-5"]
+    thinking_control:
+      status: supported
+      wire: anthropic_adaptive
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+        max: "max"
+  "claude-mythos-5":
+    source: "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    note: "Always adaptive: no explicit Off."
+    aliases: ["anthropic/claude-mythos-5"]
+    thinking_control:
+      status: supported
+      wire: anthropic_adaptive
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+        max: "max"
+  "gemini-4-argon":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    aliases: ["google/gemini-4-argon"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: medium
+  "gemini-3.8-flash":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    aliases: ["google/gemini-3.8-flash"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: medium
+  "gemini-3.6-flash":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    aliases: ["google/gemini-3.6-flash"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        minimal: "minimal"
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: medium
+  "gemini-3.5-flash-lite":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    aliases: ["google/gemini-3.5-flash-lite"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        minimal: "minimal"
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: minimal
+  "gemini-3-flash-preview":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    aliases: ["google/gemini-3-flash-preview"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        minimal: "minimal"
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: high
+  "gemini-3.1-pro-preview":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    aliases: ["google/gemini-3.1-pro-preview"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        low: "low"
+        medium: "medium"
+        high: "high"
+      default_option: high
+  "gemini-3-pro-preview":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    aliases: ["google/gemini-3-pro-preview"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        low: "low"
+        high: "high"
+      default_option: high
+  "gemini-2.5-flash":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    note: "Budget model; omitted budget is model-managed dynamic, so no default."
+    aliases: ["google/gemini-2.5-flash"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        off: 0
+        low: 1024
+        medium: 8192
+        high: 24576
+  "gemini-2.5-pro":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    note: "Always-on budget model: no Off; no default."
+    aliases: ["google/gemini-2.5-pro"]
+    thinking_control:
+      status: supported
+      wire: google_thinking
+      options:
+        low: 1024
+        medium: 8192
+        high: 24576
+  "gemini-1.5-pro":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    note: "Gemini model without request-time thinking control."
+    aliases: ["google/gemini-1.5-pro"]
+    routes: google
+    thinking_control:
+      status: unsupported
+  "gemini-1.5-flash":
+    source: "https://ai.google.dev/gemini-api/docs/thinking"
+    note: "Gemini model without request-time thinking control."
+    aliases: ["google/gemini-1.5-flash"]
+    routes: google
+    thinking_control:
+      status: unsupported
+  "deepseek-ai/deepseek-v4-flash":
+    source: "https://docs.api.nvidia.com/nim/reference/deepseek-ai-deepseek-v4-flash-infer"
+    routes: nim
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        none: "none"
+        high: "high"
+        max: "max"
+      default_option: high
+  "deepseek-ai/deepseek-v4-pro":
+    source: "https://docs.api.nvidia.com/nim/reference/deepseek-ai-deepseek-v4-pro-infer"
+    routes: nim
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        none: "none"
+        high: "high"
+        max: "max"
+      default_option: high
+  "moonshotai/kimi-k3":
+    source: "https://docs.api.nvidia.com/nim/reference/moonshotai-kimi-k3-infer"
+    routes: nim
+    thinking_control:
+      status: supported
+      wire: openai_chat_effort
+      options:
+        low: "low"
+        high: "high"
+        max: "max"
+      default_option: max
+  "moonshotai/kimi-k2.6":
+    source: "https://docs.api.nvidia.com/nim/reference/moonshotai-kimi-k2-6-infer"
+    thinking_control:
+      status: supported
+      wire: nim_kimi_thinking
+      options:
+        on: true
+        off: false
+  "qwen/qwen3.5-122b-a10b":
+    source: "docs/qa_maintenance/nvidia_thinking_wire_qa.md (git 2607a342) hosted NIM reference pages"
+    note: "Hosted NIM chat_template_kwargs enable_thinking; per-model reference URL was not recorded in git."
+    thinking_control:
+      status: supported
+      wire: nim_qwen_thinking
+      options:
+        on: true
+        off: false

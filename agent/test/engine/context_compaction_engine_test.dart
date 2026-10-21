@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
@@ -1156,6 +1157,50 @@ void main() {
           expect(attempt1.reasoningTokens, 30);
           expect(attempt1.outcome, 'success');
           expect(attempt1.failureReason, isNull);
+        },
+      );
+
+      test(
+        'per-attempt summarization ledger records provider error and timeout attempts with pass kind and diagnostics',
+        () async {
+          final timeoutSummarizer = _TestProviderSummarizer([
+            (req) => throw TimeoutException('gateway timed out after 30s'),
+          ]);
+
+          final engine = ContextCompactionEngine(summarizer: timeoutSummarizer);
+          final timeline = _timeline();
+          final projection = [
+            Message(role: MessageRole.system, content: 'system prompt'),
+            for (final item in timeline) item.message,
+          ];
+
+          CompactionEngineFailure? capturedFailure;
+          try {
+            await engine.buildCandidate(
+              _request(
+                timeline: timeline,
+                providerProjection: projection,
+              ),
+            );
+          } on CompactionEngineFailure catch (failure) {
+            capturedFailure = failure;
+          }
+
+          expect(capturedFailure, isNotNull);
+          expect(capturedFailure!.stage, CompactionFailureStage.provider);
+          expect(capturedFailure.cause, CompactionFailureCause.timeout);
+
+          final diag = capturedFailure.diagnostics;
+          expect(diag, isNotNull);
+          expect(diag!.attempts, hasLength(1));
+
+          final attempt = diag.attempts.first;
+          expect(attempt.passKind, 'full');
+          expect(attempt.requestId, 'compaction:cmp-engine:full:0');
+          expect(attempt.outcome, 'error');
+          expect(attempt.failureReason, 'timeout');
+          expect(attempt.inputTokens, isNull);
+          expect(attempt.outputTokens, isNull);
         },
       );
     });

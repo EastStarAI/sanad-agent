@@ -10,6 +10,13 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/utils/app_platform.dart';
 
 class _TestConversationInputCubit extends Cubit<ConversationInputState> implements ConversationInputCubit {
+  @override
+  void reportRouteThinkingAdmission({
+    required String? providerId,
+    required String? modelId,
+    required bool admitsSelection,
+  }) {}
+
   final List<String> approvedScopes = [];
   final List<String?> deniedComments = [];
   final List<String> answers = [];

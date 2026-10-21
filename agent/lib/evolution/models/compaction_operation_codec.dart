@@ -146,6 +146,9 @@ abstract final class CompactionOperationCodec {
       route.configRevision,
       route.credentialRevision,
       record.startedAt.toUtc().toIso8601String(),
+      record.diagnostics == null
+          ? null
+          : jsonEncode(record.diagnostics!.toJson()),
     ];
   }
 
