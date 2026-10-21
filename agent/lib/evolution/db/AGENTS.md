@@ -43,7 +43,8 @@ This contract applies to `agent/lib/evolution/db/`.
 - Compaction claims persist only a redacted semantic fingerprint and occurrence for the retained-tail end; history hydration uses it to relocate the same logical anchor after suffix row ids are rewritten.
 - Removing a workspace record must not cascade into sessions or messages;
   their stable workspace reference remains historical conversation metadata.
-- Preserve raw request identity on accepted user messages and route transitions.
+- Preserve raw request identity on accepted user messages and route transitions. An automatic-failover transition also stores `anchor_message_id`, the newest active row's `message_id` at commit time, so history can place the notice where it appeared live; `message_id` (not `messages.id`) keeps the anchor valid across in-place rewrites.
+- `SessionMessageRepository` owns the narrow lookups history placement needs (`latestActiveMessageId`, `activeRowIdForMessageId`, `activeRootRowIdForRequest`, `lastActiveForkCopiedRowId`). Post-fork rows never carry `origin_message_id`, so the newest active copied row is the end of a child's copied prefix.
 - Persist `message_id`, `turn_id`, `history_status`, `input_kind`, and
   `origin_message_id` as first-class message columns. Normal reads return
   `active` rows only; superseded rows stay stored.

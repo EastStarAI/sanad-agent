@@ -33,11 +33,15 @@ description: "Quality assurance matrix for materialized conversation fork, linea
   the client sidebar preserves that position while opening the child.
 - Restart repairs forks created by older builds when copied message recency left
   their ordering timestamp older than `created_at`; they then appear first.
-- Child history contains exactly one trailing `session.forked` row with stable
-  `fork_<child_session_id>` identity, including after reconnect/restart.
+- Child history contains exactly one `session.forked` row with stable
+  `fork_<child_session_id>` identity, including after reconnect/restart. It
+  follows the copied prefix: after the child continues, it stays before the
+  post-fork turns, and across paged history it appears once, on the page that
+  holds the last copied row (also when that row ends a page).
 - The marker uses the context-compaction divider/icon/label/tooltip layout.
-- Opening the child after hydration scrolls to the tail so the marker is visible,
-  even when the copied prefix is long or an older viewport anchor exists.
+- Opening a fresh child after hydration scrolls to the tail so the marker is
+  visible, even when the copied prefix is long or an older viewport anchor
+  exists. A continued child opens at its saved position or latest prompt.
 - The marker is absent from the persisted `messages` table and from every LLM
   request projection.
 
