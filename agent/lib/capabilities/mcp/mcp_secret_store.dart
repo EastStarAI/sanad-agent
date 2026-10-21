@@ -1,17 +1,30 @@
 import 'dart:convert';
 
+import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:uuid/uuid.dart';
 
+/// MCP secret values addressed by opaque `mcp-secret://` references.
+///
+/// When this process opened the Agent vault for the Home (daemon and CLI
+/// startup), values live in its `mcp:` namespace. A Home this process never
+/// opened (temporary test or tool Homes) keeps the legacy owner-only file.
 class McpSecretStore {
   McpSecretStore({String? homeDirectoryPath})
-    : _boundary = SanadHomeBootstrap.atRoot(
+    : _homePath = homeDirectoryPath?.trim().isNotEmpty == true
+          ? homeDirectoryPath!.trim()
+          : getSanadHome(),
+      _boundary = SanadHomeBootstrap.atRoot(
         homeDirectoryPath?.trim().isNotEmpty == true
             ? homeDirectoryPath!.trim()
             : getSanadHome(),
         scope: SanadHomeScope.identity,
       );
+
+  final String _homePath;
+
+  SecretVaults? get _vault => SecretVaults.forHome(_homePath);
 
   static const _fileName = 'mcp_secrets.json';
   static const _prefix = 'mcp-secret://';
@@ -19,6 +32,14 @@ class McpSecretStore {
 
   Future<String> put(String value, {String? existingRef}) async {
     if (value.isEmpty) throw const FormatException('Secret value is required.');
+    final vault = _vault;
+    if (vault != null) {
+      final reference = isReference(existingRef)
+          ? existingRef!
+          : '$_prefix${const Uuid().v4()}';
+      await vault.put(vault.mcp, {reference: value});
+      return reference;
+    }
     final secrets = _readAll();
     final reference = isReference(existingRef)
         ? existingRef!
@@ -33,11 +54,15 @@ class McpSecretStore {
 
   String? resolve(String? reference) {
     if (!isReference(reference)) return null;
+    final vault = _vault;
+    if (vault != null) return vault.mcp.read(reference!);
     return _readAll()[reference];
   }
 
   Future<void> remove(String? reference) async {
     if (!isReference(reference)) return;
+    final vault = _vault;
+    if (vault != null) return vault.remove(vault.mcp, [reference!]);
     final secrets = _readAll();
     if (secrets.remove(reference) != null) await _writeAll(secrets);
   }
@@ -47,6 +72,24 @@ class McpSecretStore {
     Map<String, String> existingRefs = const {},
   }) async {
     if (values.isEmpty) return const {};
+    final vault = _vault;
+    if (vault != null) {
+      final references = <String, String>{};
+      final entries = <String, String>{};
+      for (final entry in values.entries) {
+        if (entry.value.isEmpty) {
+          throw FormatException('Secret value for ${entry.key} is required.');
+        }
+        final existing = existingRefs[entry.key];
+        final reference = isReference(existing)
+            ? existing!
+            : '$_prefix${const Uuid().v4()}';
+        references[entry.key] = reference;
+        entries[reference] = entry.value;
+      }
+      await vault.put(vault.mcp, entries);
+      return references;
+    }
     final secrets = _readAll();
     final references = <String, String>{};
     for (final entry in values.entries) {
@@ -71,6 +114,14 @@ class McpSecretStore {
   }
 
   Map<String, String> resolveMany(Map<String, String> references) {
+    final vault = _vault;
+    if (vault != null) {
+      return {
+        for (final entry in references.entries)
+          if (vault.mcp.read(entry.value) != null)
+            entry.key: vault.mcp.read(entry.value)!,
+      };
+    }
     final secrets = _readAll();
     return {
       for (final entry in references.entries)

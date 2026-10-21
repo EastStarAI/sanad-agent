@@ -406,6 +406,12 @@ sanad ws policy
 sanad ws policy full_access
 ```
 
+The Agent stores workspace security policy itself; files inside the workspace
+cannot change it. Any of your signed-in clients, local or through the cloud,
+and the CLI can turn on Full Access, choose Direct Developer execution, or
+allow host tool discovery. Protected execution currently has no isolated
+backend, so a workspace set to Protected does not run shell commands.
+
 ### Diagnostics & Inspection
 
 ```bash

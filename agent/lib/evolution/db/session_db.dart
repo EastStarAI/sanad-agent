@@ -30,6 +30,10 @@ export 'suspended_checkpoint_repository.dart';
 class SessionDB {
   final AgentStateDatabase? _disposeOwnedState;
 
+  /// The shared connection every repository of this facade uses. Aggregate
+  /// owners compose cross-table transactions on it.
+  final AgentStateDatabase state;
+
   final SessionRepository _sessionRepository;
   final SessionMessageRepository _messageRepository;
   final ScheduledTaskRepository _scheduledTaskRepository;
@@ -72,6 +76,7 @@ class SessionDB {
     SessionMessageRepository messages,
     SessionRepository sessions,
   ) : this._internal(
+          state: state,
           disposeOwnedState: disposeOwnedState,
           sessionRepository: sessions,
           messageRepository: messages,
@@ -85,6 +90,7 @@ class SessionDB {
         );
 
   SessionDB._internal({
+    required this.state,
     required AgentStateDatabase? disposeOwnedState,
     required SessionRepository sessionRepository,
     required SessionMessageRepository messageRepository,

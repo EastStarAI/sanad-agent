@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
+import 'package:sanad_agent/capabilities/tools/system/host_capability_discovery_tool.dart';
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
@@ -7,11 +10,8 @@ import 'package:path/path.dart' as p;
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:test/test.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
-import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
@@ -22,10 +22,11 @@ import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
+import '../support/memory_workspace_policy_store.dart';
 
 class FakeMcpRuntimeManager extends McpRuntimeManager {
   FakeMcpRuntimeManager()
-    : super(settingsStore: const SanadSettingsStore(homeDirectoryPath: '/tmp'));
+    : super();
 
   String? lastToolName;
   Map<String, dynamic>? lastArguments;
@@ -151,7 +152,7 @@ void main() {
     late ToolsRegistry registry;
     late FakeMcpRuntimeManager fakeMcpManager;
     late FakePlatformRuntimeBridge fakePlatformBridge;
-    late WorkspacePolicyStore policyStore;
+    late MemoryWorkspacePolicyStore policyStore;
     late NoopCheckpointStore checkpointStore;
     late List<String> admittedAttachmentPaths;
     late LocalRuntimeCatalog catalog;
@@ -189,9 +190,7 @@ Use the review skill.''');
       registry = ToolsRegistry();
       fakeMcpManager = FakeMcpRuntimeManager();
       fakePlatformBridge = FakePlatformRuntimeBridge();
-      policyStore = WorkspacePolicyStore(
-        settingsStore: SanadSettingsStore(homeDirectoryPath: tempDir.path),
-      );
+      policyStore = MemoryWorkspacePolicyStore();
       checkpointStore = NoopCheckpointStore();
       admittedAttachmentPaths = [];
       catalog = LocalRuntimeCatalog(
@@ -205,7 +204,124 @@ Use the review skill.''');
         platformRuntimeBridge: fakePlatformBridge,
         admittedAttachmentPathsResolver: (sessionId) async =>
             admittedAttachmentPaths,
+        workspacePolicyStore: policyStore,
       );
+    });
+
+    group('project env files', () {
+      const secret = 'sk-test-project-value-000000000000';
+
+      Future<ToolsRegistry> registryWithEnv() async {
+        File('${workspaceDir.path}/.env').writeAsStringSync(
+          '# local settings\nAPI_TOKEN=$secret\nexport DB_URL="postgres://u:$secret@db"\n'
+          'MULTI="line one\n$secret"\n',
+        );
+        File('${workspaceDir.path}/.env.example').writeAsStringSync(
+          'API_TOKEN=replace-me\n',
+        );
+        final tools = await catalog.buildTools(
+          registry: registry,
+          request: AgentTurnRequest(
+            sessionId: 'thread-env',
+            message: 'read env',
+            workspaceId: workspaceDir.path,
+          ),
+        );
+        registry.registerTools(tools);
+        return registry;
+      }
+
+      test('file_read keeps names and comments but never values', () async {
+        final tools = await registryWithEnv();
+        final read = await tools.getTool('file_read')!.execute({
+          'path': '.env',
+        });
+        expect(read, isNot(contains(secret)));
+        expect(read, contains('API_TOKEN=<redacted>'));
+        expect(read, contains('export DB_URL=<redacted>'));
+        expect(read, contains('# local settings'));
+
+        final template = await tools.getTool('file_read')!.execute({
+          'path': '.env.example',
+        });
+        expect(template, contains('replace-me'));
+      });
+
+      test('search_grep cannot find or reveal a value', () async {
+        final tools = await registryWithEnv();
+        final byValue = await tools.getTool('search_grep')!.execute({
+          'pattern': secret,
+        });
+        expect(byValue, isNot(contains(secret)));
+        expect(byValue, isNot(contains('.env:')));
+        final byName = await tools.getTool('search_grep')!.execute({
+          'pattern': 'API_TOKEN',
+        });
+        expect(byName, contains('API_TOKEN=<redacted>'));
+        expect(byName, isNot(contains(secret)));
+      });
+    });
+
+    group('host capability discovery presence', () {
+      Future<Set<String>> toolNames(String authority) async {
+        final tools = await catalog.buildTools(
+          registry: ToolsRegistry(),
+          request: AgentTurnRequest(
+            sessionId: 'thread-discovery',
+            message: 'which tools exist',
+            workspaceId: workspaceDir.path,
+            metadata: {CommandAuthority.payloadKey: authority},
+          ),
+        );
+        return tools.map((tool) => tool.schema.name).toSet();
+      }
+
+      const discovery = HostCapabilityDiscoveryTool.toolName;
+
+      test('is redundant beside a Direct host shell', () async {
+        final names = await toolNames('owner');
+        expect(names, contains('shell_execute'));
+        expect(names, isNot(contains(discovery)));
+      });
+
+      test('appears for a local owner in Protected execution', () async {
+        await policyStore.seed(
+          workspaceDir.path,
+          const WorkspacePolicy(executionMode: ExecutionMode.protected),
+        );
+        expect(await toolNames('owner'), contains(discovery));
+      });
+
+      test('is absent for an unverified caller even in Protected', () async {
+        await policyStore.seed(
+          workspaceDir.path,
+          const WorkspacePolicy(executionMode: ExecutionMode.protected),
+        );
+        expect(await toolNames('unverified'), isNot(contains(discovery)));
+        expect(await toolNames('OWNER'), isNot(contains(discovery)));
+      });
+
+      test('is absent when the owner disabled it, even with Full Access', () async {
+        await policyStore.seed(
+          workspaceDir.path,
+          const WorkspacePolicy(
+            executionMode: ExecutionMode.protected,
+            permissionMode: WorkspacePermissionMode.fullAccess,
+            hostDiscoveryPolicy: HostDiscoveryPolicy.disabled,
+          ),
+        );
+        expect(await toolNames('owner'), isNot(contains(discovery)));
+      });
+
+      test('follows a policy change on the next turn of the same session', () async {
+        await policyStore.seed(
+          workspaceDir.path,
+          const WorkspacePolicy(executionMode: ExecutionMode.protected),
+        );
+        expect(await toolNames('owner'), contains(discovery));
+        await policyStore.seed(workspaceDir.path, const WorkspacePolicy());
+        expect(await toolNames('owner'), isNot(contains(discovery)));
+      });
     });
 
     tearDown(() async {
@@ -655,7 +771,7 @@ Use the review skill.''');
         ..writeAsStringSync('allowed');
       final externalImage = File('${tempDir.path}/full-access.png')
         ..writeAsBytesSync(img.encodePng(img.Image(width: 2, height: 1)));
-      await policyStore.savePolicy(
+      await policyStore.seed(
         workspaceDir.path,
         const WorkspacePolicy(
           permissionMode: WorkspacePermissionMode.fullAccess,

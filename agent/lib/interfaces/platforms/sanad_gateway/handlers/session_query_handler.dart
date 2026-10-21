@@ -392,6 +392,9 @@ class SessionQueryHandler {
           'tool': resolvedToolContext.toolName ?? 'Unknown Tool',
           'output': visibleContent,
           'isError': isError,
+          // Same key as the live tool_result: the typed outcome (for example
+          // permission_denied) so a reopened conversation shows "Not run".
+          'errorCode': ?message.toolResult?.errorCodeWire,
           'status':
               message.metadata?['status']?.toString() ??
               (isError ? 'error' : 'done'),

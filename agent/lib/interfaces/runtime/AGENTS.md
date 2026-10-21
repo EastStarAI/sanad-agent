@@ -80,6 +80,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Restored waiting work recreates a real auto-resume callback and claims suspended ownership before publishing resuming/cleared state.
 - A failed resume preserves controllable ownership and cannot silently strand work.
 - A crashed running checkpoint with explicit resume intent remains resume work through FIFO; ordinary queued messages remain new turns.
+- A turn reconstructed from durable work restores the ingress-stamped `command_authority` from its stored command payload, so a recovered owner turn keeps its owner-only tool set and its provider request matches the predecessor.
 
 ## Pending Steer and Draft Recovery
 - Reserve pending steer durably before it enters history; delivery publishes only after history, durable steer identity, causal placement anchor, lifecycle state, and history revision commit atomically.

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/permissions/workspace_security_policy_repository.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_oauth_service.dart';
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
@@ -108,6 +109,12 @@ class LocalWorkspaceRuntimeService {
     return _localDb ??= SessionDB.fromState(localState);
   }
 
+  /// The Agent state database that owns this service's workspace records.
+  ///
+  /// It is always the connection of this service's [SessionDB], so aggregate
+  /// mutations (workspace removal with its security policy) commit together.
+  AgentStateDatabase get stateDatabase => _db.state;
+
   static const List<Map<String, String>> _defaultSlashCommands = [
     {
       'command': 'compact',
@@ -213,7 +220,15 @@ class LocalWorkspaceRuntimeService {
     if (normalizedId.isEmpty) {
       throw const FormatException('Workspace id is required.');
     }
-    if (!_db.removeWorkspace(normalizedId)) {
+    // The workspace record and its security policy (mode, grants) are
+    // removed together so a removed workspace leaves no authority behind.
+    final state = stateDatabase;
+    final removed = state.transaction((_) {
+      if (!_db.removeWorkspace(normalizedId)) return false;
+      WorkspaceSecurityPolicyRepository(state).deleteForWorkspace(normalizedId);
+      return true;
+    });
+    if (!removed) {
       throw StateError('Workspace not found.');
     }
     return normalizedId;

@@ -1,3 +1,5 @@
+import 'package:sanad_agent/core/auth/secret_vault.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'dart:async';
 
 import 'package:uuid/uuid.dart';
@@ -56,6 +58,8 @@ class StandaloneCliTurnClient implements CliTurnClient {
     }
     await SanadHomeBootstrap.prepareAll();
     final ownership = await SanadRuntimeOwnership.acquire();
+    // The selected Home may differ from the one the CLI entry opened.
+    await SecretVaults.open();
     try {
       if (!getIt.isRegistered<SessionRunOrchestrator>()) {
         setupDI();
@@ -129,20 +133,23 @@ class StandaloneCliTurnClient implements CliTurnClient {
       throw StateError('Standalone CLI runtime is already disposed.');
     }
     final requestId = request.requestId ?? const Uuid().v4();
-    final effectiveRequest = request.requestId == null
-        ? AgentTurnRequest(
-            sessionId: request.sessionId,
-            message: request.message,
-            workspaceId: request.effectiveWorkspaceId,
-            model: request.model,
-            providerInstanceId: request.providerInstanceId,
-            providerId: request.providerId,
-            thinkingMode: request.thinkingMode,
-            requestId: requestId,
-            deliveryIntent: request.deliveryIntent,
-            metadata: request.metadata,
-          )
-        : request;
+    // In-process turns carry the authority of the calling zone; a remote CLI
+    // relay runs this client as an unverified caller.
+    final effectiveRequest = AgentTurnRequest(
+      sessionId: request.sessionId,
+      message: request.message,
+      workspaceId: request.effectiveWorkspaceId,
+      model: request.model,
+      providerInstanceId: request.providerInstanceId,
+      providerId: request.providerId,
+      thinkingMode: request.thinkingMode,
+      requestId: requestId,
+      deliveryIntent: request.deliveryIntent,
+      metadata: CommandAuthority.stampTurnMetadata(
+        request.metadata,
+        CommandAuthority.current,
+      ),
+    );
     final payload = <String, dynamic>{
       'session_id': effectiveRequest.sessionId,
       'message': effectiveRequest.message,

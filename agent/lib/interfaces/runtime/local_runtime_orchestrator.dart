@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/user_attachment.dart';
@@ -77,6 +78,11 @@ class LocalRuntimeOrchestrator {
         metadata['permission_mode'] == 'full_access') {
       metadata['permission_mode'] = 'default_mode';
     }
+    // Session metadata is merged across turns; always record this turn's
+    // authority so an earlier owner stamp can never carry over.
+    metadata[CommandAuthority.payloadKey] = CommandAuthority.fromStamped(
+      request.metadata[CommandAuthority.payloadKey],
+    ).value;
 
     if (workspaceId != null && workspaceId.startsWith('exec_root:')) {
       return metadata;

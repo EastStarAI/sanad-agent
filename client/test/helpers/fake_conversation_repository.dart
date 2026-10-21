@@ -884,6 +884,10 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
     return updated;
   }
 
+  /// Simulates a `workspace.policy_changed` broadcast from another client.
+  void emitWorkspacePolicyChange(String workspaceId, WorkspacePolicy policy) =>
+      _policyController(workspaceId).add(policy);
+
   /// When set, each policy watch gets its own stream whose cancel runs this
   /// hook, so a test can hold the subscription cancel open.
   Future<void> Function()? onWorkspacePolicyCancel;

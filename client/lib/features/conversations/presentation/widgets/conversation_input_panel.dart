@@ -20,6 +20,7 @@ import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/skill_composer_utils.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/full_access_confirmation_dialog.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/queued_messages_box.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
@@ -876,35 +877,5 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     ToastUtils.showSuccess(context, 'Workspace selected: ${workspace.name}');
   }
 
-  Future<bool> _confirmFullAccess() async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        final colorScheme = Theme.of(dialogContext).colorScheme;
-        return AlertDialog(
-          title: const Text('Enable Full Access?'),
-          content: Text(
-            'Full Access lets Sanad Agent run local tools in this workspace without repeated approval prompts.',
-            style: TextStyle(
-              color: colorScheme.onSurface,
-              fontSize: 13,
-              height: 1.5,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Enable'),
-            ),
-          ],
-        );
-      },
-    );
-
-    return result ?? false;
-  }
+  Future<bool> _confirmFullAccess() => FullAccessConfirmationDialog.show(context);
 }

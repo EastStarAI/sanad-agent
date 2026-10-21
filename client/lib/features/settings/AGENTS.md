@@ -19,6 +19,13 @@ This contract applies to `client/lib/features/settings/`.
 - Keep `/agents` as a redirect to the selected device Overview; do not recreate a separate Manage Devices surface.
 - Keep workspace destinations in primary Settings navigation. Show a bounded initial set with Show all / Show less rather than another navigation hierarchy.
 
+## Workspace Security
+- Workspace execution mode and host discovery are Agent-owned. `WorkspaceSecurityCard` reads and changes them only through `WorkspaceSecurityClient` (`DeviceCommandClient`, explicit device), sends only the changed axis with the revision on screen, and reloads Agent truth after any rejection.
+- Follow `workspace.policy_changed` (`WorkspaceSecurityClient.watch`) so a change made by another client or the CLI shows without a restart; keep the last read `canWiden`, which the broadcast does not carry.
+- Security card segments keep the driver keys `workspace_security_mode_<direct|protected>` and `workspace_security_discovery_<owner_only|disabled>` on their labels, with `Semantics(selected:)` so driver snapshots report the selected value.
+- A `stale_revision` rejection reloads Agent truth and shows the localized refresh message; the composer toggle retries once on the fresh revision before showing it. Never fail a policy change silently.
+- Disable choices the Agent reports it would reject (`canWiden: false`); never cache policy as authority or retry a rejected mutation automatically.
+
 ## Device Scope
 - Selecting a device inside Settings changes inspection context only.
 - Update the active conversation device only through an explicit Set as active action delegated to `DeviceCubit`.

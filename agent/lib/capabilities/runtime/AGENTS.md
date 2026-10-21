@@ -23,6 +23,8 @@ This contract applies to `agent/lib/capabilities/runtime/`.
 - Use focused handlers for read, write, edit, glob, grep, and tree operations; do not recreate a monolithic workspace service. Migrated handlers own typed `executeResult` output and retain `execute` only as an exact text projection while the runtime catalog callback boundary remains textual.
 - Resolve and canonicalize every workspace-tool path before host access. Internal paths execute directly; external paths require an explicit `PermissionManager` decision unless workspace policy is `full_access`, and authorization remains bound to the canonical target.
 - Recursive workspace search skips common generated/dependency trees and unreadable non-UTF-8 candidates rather than failing the entire query.
+- Project environment files are redacted by `ProjectEnvRedactor` in every model-visible read and search projection; search matches the redacted text so it cannot confirm a value.
+- The catalog adds `host_capability_discovery` only for a workspace turn with stamped `owner` authority, an `owner_only` policy, and no tool that already reaches the host `PATH`; otherwise the schema is omitted entirely.
 - Return host-root and parent navigation metadata for remote browsing rather than requiring client path inference.
 - Workspace creation accepts explicit path and derives display name from basename when name is absent.
 

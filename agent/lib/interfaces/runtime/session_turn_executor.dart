@@ -335,6 +335,7 @@ class SessionTurnExecutor {
                     DateTime? startedAt,
                     DateTime? terminalAt,
                     int? runtimeMs,
+                    String? errorCode,
                   }) async {
                     await _emitToolEvent(
                       owner: owner,
@@ -350,6 +351,7 @@ class SessionTurnExecutor {
                       startedAt: startedAt,
                       terminalAt: terminalAt,
                       runtimeMs: runtimeMs,
+                      errorCode: errorCode,
                       onResetFullContent: () => fullContent = '',
                     );
                   },
@@ -392,6 +394,7 @@ class SessionTurnExecutor {
                     DateTime? startedAt,
                     DateTime? terminalAt,
                     int? runtimeMs,
+                    String? errorCode,
                   }) async {
                     await _emitToolEvent(
                       owner: owner,
@@ -407,6 +410,7 @@ class SessionTurnExecutor {
                       startedAt: startedAt,
                       terminalAt: terminalAt,
                       runtimeMs: runtimeMs,
+                      errorCode: errorCode,
                       onResetFullContent: () => fullContent = '',
                     );
                   },
@@ -838,6 +842,7 @@ class SessionTurnExecutor {
     DateTime? startedAt,
     DateTime? terminalAt,
     int? runtimeMs,
+    String? errorCode,
     required void Function() onResetFullContent,
   }) async {
     if (!ownsRun(owner) || !owner.cancellationScope.isPublicationOpen) {
@@ -887,6 +892,7 @@ class SessionTurnExecutor {
             'started_at': ?startedAt?.toIso8601String(),
             'terminal_at': ?terminalAt?.toIso8601String(),
             'runtime_ms': ?runtimeMs,
+            'error_code': ?errorCode,
           },
         ),
         isComplete: false,

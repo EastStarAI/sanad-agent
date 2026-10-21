@@ -1,3 +1,4 @@
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -121,6 +122,10 @@ class CliPlatform extends BasePlatform {
           sessionId: _sessionId,
           message: input,
           workspaceId: workspaceId,
+          metadata: CommandAuthority.stampTurnMetadata(
+            const {},
+            CommandAuthority.current,
+          ),
         ),
       ),
     );
