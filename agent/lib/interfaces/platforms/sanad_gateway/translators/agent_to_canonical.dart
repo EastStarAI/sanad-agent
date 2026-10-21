@@ -81,7 +81,7 @@ class AgentToCanonical {
             toolCallId: response.toolCallId,
             result: response.message.toolResult,
           ) ??
-          (response.toolName == 'view_image' &&
+          (ViewImageMediaMetadata.isMediaTool(response.toolName) &&
                   !response.isToolError &&
                   !response.isToolCancelled
               ? ViewImageMediaMetadata.fromPublicJson(

@@ -415,14 +415,14 @@ class _BrainActivityViewState extends State<BrainActivityView> {
 
   bool _isEventExpanded(CanonicalEvent event) =>
       _expandedEventIds.contains(event.id) ||
-      (!_explicitlyInteractedEventIds.contains(event.id) && event.toolName == 'view_image');
+      (!_explicitlyInteractedEventIds.contains(event.id) && event.isMediaToolEvent);
 
   bool _isToolGroupExpanded(ConversationTimelineItem item) {
     final id = _toolGroupExpansionId(item);
     if (_explicitlyInteractedToolGroupIds.contains(id)) {
       return _expandedEventIds.contains(id);
     }
-    if (item.events.any((event) => event.toolName == 'view_image')) return true;
+    if (item.events.any((event) => event.isMediaToolEvent)) return true;
     final firstEventId = item.events.firstOrNull?.id;
     if (firstEventId != null) {
       return _expandedEventIds.contains(firstEventId);

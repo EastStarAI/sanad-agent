@@ -64,6 +64,12 @@ class ToolExecutionCoordinator {
   }) : deferredToolResultResolver =
            deferredToolResultResolver ?? const DeferredToolResultResolver();
 
+  /// Media-bearing tools whose image event must be published only after the
+  /// durable tool-result write, so a client fetch triggered by the event cannot
+  /// race persistence. Other tools keep their immediate completion event.
+  static bool _defersMediaEvent(String toolName) =>
+      ViewImageMediaMetadata.isMediaTool(toolName);
+
   static String _eventInputFor(ToolCall toolCall) {
     if (toolCall.name != 'view_image') return jsonEncode(toolCall.arguments);
     return jsonEncode({
@@ -324,7 +330,7 @@ class ToolExecutionCoordinator {
     );
     if (onToolEvent != null) {
       for (final toolCall in toolCallsToRun.where(
-        (call) => call.name == 'view_image',
+        (call) => _defersMediaEvent(call.name),
       )) {
         final result = typedResults[toolCall.id]!;
         final timing = toolTiming[toolCall.id];
@@ -511,7 +517,7 @@ class ToolExecutionCoordinator {
           terminalAt: terminalAt,
           runtimeMs: runtimeMs,
         );
-        if (onToolEvent != null && toolCall.name != 'view_image') {
+        if (onToolEvent != null && !_defersMediaEvent(toolCall.name)) {
           await _maybeEmitToolEvent(
             cancellationScope,
             emit: () => onToolEvent(
@@ -742,7 +748,7 @@ class ToolExecutionCoordinator {
           (outputRecord is Map && outputRecord['is_error'] == true) ||
           _resultIndicatesError(result);
       final timing = toolTiming?[toolCall.id];
-      if (onToolEvent != null && toolCall.name != 'view_image') {
+      if (onToolEvent != null && !_defersMediaEvent(toolCall.name)) {
         await _maybeEmitToolEvent(
           cancellationScope,
           emit: () => onToolEvent(
@@ -889,7 +895,7 @@ class ToolExecutionCoordinator {
           toolCallId: toolCall.id,
         ) !=
         null;
-    if (appendToHistory && toolCall.name == 'view_image') {
+    if (appendToHistory && _defersMediaEvent(toolCall.name)) {
       await _appendToolMessage(
         callbacks,
         checkpointCoordinator,
@@ -903,7 +909,7 @@ class ToolExecutionCoordinator {
     }
     if (onToolEvent != null &&
         !isDeferredResult &&
-        (toolCall.name != 'view_image' || appendToHistory)) {
+        (!_defersMediaEvent(toolCall.name) || appendToHistory)) {
       await _maybeEmitToolEvent(
         cancellationScope,
         emit: () => onToolEvent(
@@ -925,7 +931,7 @@ class ToolExecutionCoordinator {
       );
     }
 
-    if (appendToHistory && toolCall.name != 'view_image') {
+    if (appendToHistory && !_defersMediaEvent(toolCall.name)) {
       await _appendToolMessage(
         callbacks,
         checkpointCoordinator,

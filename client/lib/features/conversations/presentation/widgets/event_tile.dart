@@ -129,7 +129,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       _isExpanded =
           widget.event.kind == EventKind.userMessage ||
           widget.event.kind == EventKind.finalAnswer ||
-          widget.event.toolName == 'view_image';
+          widget.event.isMediaToolEvent;
     }
 
     if (_isExpanded) {
@@ -761,7 +761,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     final toolName = widget.event.toolName ?? '';
     final category = ToolPresentationHelper.cleanToolTitle(toolName);
     final media = widget.event.viewImageMedia;
-    if (toolName == 'view_image') {
+    final hasMediaMetadata = widget.event.tool?['media'] != null;
+    if (widget.event.isMediaToolEvent) {
       if (widget.event.status == EventStatus.running) {
         return _buildViewImageRunning(context);
       }
@@ -775,7 +776,13 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           loader: widget.viewImageMediaLoader,
         );
       }
-      return const _UnavailableViewImage();
+      if (hasMediaMetadata || toolName == 'view_image') {
+        return const _UnavailableViewImage();
+      }
+      // A completed `system_screenshot` without media metadata is a text-only
+      // outcome (route without image input, or a capture rejected by the image
+      // policy); its summary and saved path stay visible in the regular tool
+      // presentation instead of a misleading "Image unavailable" surface.
     }
 
     // A terminal result can arrive before its matching tool-use input during

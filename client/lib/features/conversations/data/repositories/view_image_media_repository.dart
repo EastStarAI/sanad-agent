@@ -53,8 +53,18 @@ class ViewImageMedia {
   }
 }
 
+/// Tools whose rows render through the shared image media card.
+const Set<String> mediaToolNames = {'view_image', 'system_screenshot'};
+
 extension ViewImageMediaEvent on CanonicalEvent {
   ViewImageMedia? get viewImageMedia => ViewImageMedia.fromJson(tool?['media']);
+
+  /// Whether this row belongs to a media-bearing tool by name.
+  bool get isMediaToolName => mediaToolNames.contains(toolName);
+
+  /// Whether this row is presented as media: a media-bearing tool, or any
+  /// tool row that carries validated media metadata.
+  bool get isMediaToolEvent => isMediaToolName || viewImageMedia != null;
 }
 
 int? _positiveInt(Object? value) {
