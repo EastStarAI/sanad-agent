@@ -13,7 +13,9 @@ class ScheduleTaskTool extends BaseTool {
   ToolSchema get schema => ToolSchema(
     name: 'schedule_task',
     description:
-        'Create, list, cancel, or update scheduled tasks for this agent. Supports one-shot and recurring schedules.',
+        'Create, list, cancel, or update scheduled tasks for this agent. Supports one-shot and recurring schedules. '
+        'For update, send only the fields to change; the existing schedule shape is kept unless "kind" is supplied, '
+        'in which case the schedule fields replace the whole definition.',
     parameters: {
       'type': 'object',
       'required': ['action'],
@@ -92,6 +94,8 @@ class ScheduleTaskTool extends BaseTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    // Unused optional parameters sent as null or blank are absent (D2).
+    args = ScheduleDefinition.withoutAbsentValues(args);
     final action = _resolveAction(args);
 
     switch (action) {
@@ -320,16 +324,9 @@ class ScheduleTaskTool extends BaseTool {
     final taskVal = args['task']?.toString().trim();
     final hasTask = taskVal != null && taskVal.isNotEmpty;
 
-    final hasRecurrence = args.containsKey('kind') ||
-        args.containsKey('time') ||
-        args.containsKey('at') ||
-        args.containsKey('in') ||
-        args.containsKey('every') ||
-        args.containsKey('interval_minutes') ||
-        args.containsKey('weekdays') ||
-        args.containsKey('day_of_month') ||
-        args.containsKey('month_day') ||
-        args.containsKey('zone');
+    final hasRecurrence = args.keys.any(
+      ScheduleDefinition.definitionKeys.contains,
+    );
 
     if (!hasTask && !hasRecurrence) {
       return ToolExecutionResult.text(
@@ -341,8 +338,19 @@ class ScheduleTaskTool extends BaseTool {
 
     ScheduleDefinition? definition;
     if (hasRecurrence) {
+      final existing = getIt<CronScheduler>().getSchedule(id);
+      if (existing == null) {
+        return ToolExecutionResult.text(
+          'Error: Schedule "$id" not found.',
+          isError: true,
+          errorCode: ToolResultErrorCode.notFound,
+        );
+      }
       try {
-        definition = ScheduleDefinition.parse(args, defaultZone: _resolveDefaultZone());
+        definition = ScheduleDefinition.parse(
+          ScheduleDefinition.mergeUpdateArgs(existing.toDefinition(), args),
+          defaultZone: existing.zone,
+        );
       } on ScheduleValidationException catch (e) {
         return ToolExecutionResult.text(
           'Error: ${e.message}',

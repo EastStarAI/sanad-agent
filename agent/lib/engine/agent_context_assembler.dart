@@ -1,8 +1,12 @@
 import 'dart:io';
 
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
+import '../core/config.dart';
 import '../core/constants.dart';
+import '../core/di.dart';
 import '../core/environment_hints.dart';
+import '../evolution/scheduling/schedule_model.dart';
 
 /// Three-tier system prompt assembler for the sanad-agent agent engine.
 ///
@@ -189,19 +193,43 @@ class AgentContextAssembler {
     return parts.join('\n\n');
   }
 
+  /// The single per-turn date line (Task 112b, Decision B-D7).
+  ///
+  /// Date-only — NOT minute/second precision. A clock time would make the
+  /// system message unique per call and break prefix caching, while a date
+  /// still lets a long conversation see the current day. The date is taken in
+  /// the schedule timezone (`SCHEDULE_TIMEZONE`, the same resolution scheduling
+  /// uses) and labelled with that zone; an unsupported configured value falls
+  /// back to `local` rather than failing context assembly.
+  @visibleForTesting
+  static String formatDateLine({DateTime? now, String? zoneName}) {
+    final zone = _resolveDateZone(zoneName);
+    final zoned = zone.toZoned((now ?? DateTime.now()).toUtc());
+    final y = zoned.year.toString().padLeft(4, '0');
+    final m = zoned.month.toString().padLeft(2, '0');
+    final d = zoned.day.toString().padLeft(2, '0');
+    return 'Date: $y-$m-$d (zone: ${zone.raw})';
+  }
+
+  static ScheduleZone _resolveDateZone(String? zoneName) {
+    final configured =
+        zoneName ??
+        (getIt.isRegistered<Config>()
+            ? getIt<Config>().scheduleTimezone
+            : 'local');
+    try {
+      return ScheduleZone.parse(configured);
+    } on ScheduleValidationException {
+      return ScheduleZone.local();
+    }
+  }
+
   // ── Private helpers ──────────────────────────────────────────────────────
 
   String? _buildVolatilePart() {
     final volatileParts = <String>[];
 
-    // Date-only — NOT minute/second precision. Using full toIso8601String()
-    // would produce a different string on every turn, breaking prefix caching
-    // because the system message would be unique per call.
-    final dateOnly =
-        '${DateTime.now().year}-'
-        '${DateTime.now().month.toString().padLeft(2, '0')}-'
-        '${DateTime.now().day.toString().padLeft(2, '0')}';
-    volatileParts.add('Date: $dateOnly');
+    volatileParts.add(formatDateLine());
 
     final runtimeLines = <String>[];
     if (_sessionId != null) runtimeLines.add('Session ID: $_sessionId');

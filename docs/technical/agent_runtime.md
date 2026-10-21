@@ -43,7 +43,7 @@ By placing static instruction blocks at the top and highly volatile contents at 
 - **No Volatile Variables:** The context builder must not include time stamps or turn indices, ensuring the assembled block remains byte-identical between messages.
 
 ### 1.3. Volatile Tier (Turn Metadata & Memory)
-- **Date-Only Precision:** To prevent cache misses on every minute, the system time is formatted as a date-only stamp (`YYYY-MM-DD`). 
+- **Date-Only Precision:** To prevent cache misses on every minute, the system time is formatted as a date-only stamp (`YYYY-MM-DD`). The single date line reads `Date: YYYY-MM-DD (zone: <zone>)`: the date is taken in the schedule timezone (`SCHEDULE_TIMEZONE`, default `local`, resolved by the same zone rules as scheduling) and labelled with that zone, and an unsupported configured value falls back to `local` instead of failing assembly (Task 112b).
 - **Active Metadata:** Includes the current `session_id`, `model_name`, and `provider`.
 - **Short-Term Memory:** Stashes localized context and history keys extracted from the database or state repositories.
 

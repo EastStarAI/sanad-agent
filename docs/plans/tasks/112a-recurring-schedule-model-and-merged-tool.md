@@ -1,6 +1,6 @@
 ---
 title: "Task 112a — Recurring Schedule Model and Merged Schedule Tool"
-status: delivered (draft pull request open)
+status: ported onto current main (branch feat/112-port, awaiting review)
 current_gate: A4
 remaining_estimate: 0%
 depends_on: "None"
@@ -186,6 +186,64 @@ storage that survives a daemon restart.
 - [x] **Do not commit.** The orchestrator reviews the diff, re-runs the gates, and commits.
 - [x] Report: status (`Succeeded` / `Failed` / `Unsure`), touched files, exact commands with
       outcomes, skipped coverage, and unresolved uncertainty.
+
+## Port onto current main (2026-10-21)
+
+The original delivery (branch `feat/112-recurring-schedules-merged-tool`, draft PR #224) sits on
+`b02b9e62`. Main then merged the Task 110/113a SRP refactor (`adc128ec`), which turned `SessionDB`
+into a facade over repositories. The net 112 change (commits `094add95`, `ae75b5af`, `5b58ee12`,
+`8403c13d`) was **transplanted** onto `origin/main` at `adc128ec` on branch `feat/112-port`, not
+merged; the plan-77 commits on the old branch contributed no net diff and were not carried. The
+original branch and PR #224 were not modified.
+
+### Ownership map — old code to new owner
+
+| Old location (112 branch) | Owner on the port |
+|---|---|
+| `SessionDB.saveScheduledTask` / `getScheduledTask` / `getAllScheduledTasks` SQL (D8 column set) | `ScheduledTaskRepository` (`agent/lib/evolution/db/scheduled_task_repository.dart`); `SessionDB` only forwards with the same signatures |
+| `AgentStateDatabase` `scheduled_tasks` DDL, `_migrateScheduledTasks`, `idx_scheduled_tasks_next_run` | `AgentStateDatabase` (unchanged owner; hunk applied cleanly) |
+| `Config.scheduleTimezone` | `Config` (additive getter; unrelated main changes kept) |
+| `RuntimeContextBuilder` `Today:` line (B3) | `AgentContextAssembler.formatDateLine` — see 112b B-D7 amendment |
+| scheduling module, `CronScheduler`, `ScheduleTaskTool`, `ToolsRegistry` alias, `Toolsets`, tests | same files; main had not touched them since `b02b9e62` |
+| `interfaces_test.mocks.dart` | regenerated from current lib with a build filter (main's committed copy was already stale against main's own lib) |
+
+**Schema version:** the agent-state database has no integer schema version; migrations are
+guarded and idempotent. The port adds no new migration — `_migrateScheduledTasks` stays additive
+and runs after main's existing migrations in `_createSchemaAndMigrate`.
+
+### Defects found by the port review and fixed
+
+The old implementation was re-reviewed against this record and 112b before the full suites; it was
+not accepted as finished. Each fix has a regression test (the two scheduler fixes were
+mutation-checked: reverting either makes its test fail).
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P1 | major | `GatewayManager` awaits `initialize()` before it subscribes, so a startup fire-inside-grace was persisted as `fired` and then emitted into a listener-less broadcast stream and lost (contradicts B-D2 "never a silent drop"); tests hid it by subscribing first | `CronScheduler` holds events emitted with no listener and delivers them on first subscription |
+| P2 | major | the time-awareness line threw for an unsupported `SCHEDULE_TIMEZONE` (e.g. an IANA id), failing every workspace context build | single date line in `AgentContextAssembler`, invalid zone falls back to `local` |
+| P3 | major | a second, workspace-only date line (`Today:`) duplicated the assembler's `Date:` line, could disagree with it near midnight under a fixed offset, was absent without a workspace, and contradicted the runtime-context rule against time stamps | one zone-aware `Date: YYYY-MM-DD (zone: X)` line; `RuntimeContextBuilder` and `docs/agent_engine/capability_runtime.md` returned to main |
+| P4 | medium | no upper bound on `interval` / `in`: huge values overflowed `DateTime` arithmetic (far-past next run, `RangeError`, backward stepping in restart re-arm) | both capped at 366 days, compared in minutes before any `Duration` is built |
+| P5 | medium | optional parameters sent as `null` counted as present, changing inferred action/kind or rejecting valid calls | absent values (`null`, blank, empty list) are dropped at the tool boundary and in `ScheduleDefinition.parse` |
+| P6 | medium | an offset-less `at` was read in host-local time, ignoring the schedule zone (D3) | reinterpreted as wall-clock time in the schedule zone |
+| P7 | medium | a partial `update` (e.g. only `time` on a weekly schedule) was re-inferred as a new shape, silently turning weekly into daily | without `kind`, update merges over the existing definition; with `kind` it replaces it (D10 clarified in the schema description) |
+| P8 | minor | interval dispatch anchored on the previous run's actual (late) time, and restart re-arm on `last_run_at`, so cadence drifted by timer lateness (B-D3) | both anchor on the stored slot grid |
+| P9 | minor | mixed shapes `interval`+`at`/`in` and `once`+calendar fields were accepted with fields dropped (D2) | rejected with a message naming the conflict |
+| P10 | minor | `once in 30 seconds` summarized as "once in 0 minutes" | summary renders seconds; the legacy `seconds` unit stays accepted for one-shot delays only (main accepted it, B-D4) |
+| P11 | minor | next-run rendering differed per zone (`local` had no designator, `Z` had milliseconds) | one format `YYYY-MM-DDTHH:MM:SS` + `Z`/`±HH:MM` |
+
+### Port verification (2026-10-21, final tree)
+
+| Gate | Command (from the package directory) | Result |
+|---|---|---|
+| Agent analyzer | `fvm dart analyze` | no issues |
+| Focused 112 suites | scheduling, recovery, migration, evolution tracks, tool, registry, tools, assembler and date-zone tests | 110 passed |
+| Agent full suite | `fvm dart test` | 3,071 passed, 14 skipped, 0 failed |
+| Restart E2E | `fvm dart test --concurrency=1 e2e_test/durable_recovery_restart_e2e_test.dart` | 7 passed, 5 failed; F.2.2 (`schedule_task` side effect exactly once across restart) passed. The same 5 (F.2.1, F.2.6, F.2.8, F.2.11, F.2.12) fail identically on clean `origin/main` `adc128ec`, so they are pre-existing and unrelated to scheduling |
+| Client analyzer | `fvm flutter analyze` | no issues |
+| Client full suite | `fvm flutter test` | 1,734 passed, 1 skipped (no Client file changed) |
+
+Not changed: the reversed fold condition in the `@visibleForTesting` `ScheduleZone.simulatedDst`
+seam is dead code with a correct result (test-only); recorded here rather than altered.
 
 ## Review gate and delivery
 

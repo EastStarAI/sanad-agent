@@ -1,6 +1,6 @@
 ---
 title: "Task 112b — Recurring Wake Integration, Recovery, and Time Awareness"
-status: delivered (draft pull request open)
+status: ported onto current main (branch feat/112-port, awaiting review)
 current_gate: B4
 remaining_estimate: 0%
 depends_on: "112a"
@@ -43,10 +43,15 @@ the agent today's date in the schedule's zone.
 - **B-D6 — Outcome bookkeeping.** Each dispatch records `last_run_at` and `last_status`
   (`fired`, `skipped_missed`, `error`) so the listing can show the last outcome. A skipped
   occurrence carries the reason in the log and in `last_status`.
-- **B-D7 — Time awareness (separable concern).** The runtime context gains one line stating today's
-  date and the schedule zone label, derived per turn and containing **no clock time**, so the context
-  stays byte-stable within a day and a long conversation sees the current day. This gate is a
-  separate concern from scheduling and must remain independently revertible.
+- **B-D7 — Time awareness (separable concern).** The system prompt states today's date and the
+  schedule zone label, derived per turn and containing **no clock time**, so the prompt stays
+  byte-stable within a day and a long conversation sees the current day. This gate is a separate
+  concern from scheduling and must remain independently revertible.
+  *Amended on the port (2026-10-21):* the original delivery added a second `Today:` line to the
+  workspace runtime context next to the engine's existing `Date:` line. The port makes that single
+  volatile `Date:` line in `AgentContextAssembler` zone-aware (`Date: YYYY-MM-DD (zone: X)`, invalid
+  zone falls back to `local`) and leaves `RuntimeContextBuilder` unchanged; see 112a port defects
+  P2/P3. Coverage moved to `agent/test/engine/agent_context_date_zone_test.dart`.
 - **B-D8 — Out of scope.** Isolated/separate run sessions for scheduled work, delivery or reporting
   targets, pause/resume, run-now, retry/backoff after a failed run, and any Client surface.
 
@@ -133,6 +138,13 @@ the agent today's date in the schedule's zone.
 - [x] The runtime context contains today's date and zone, contains no clock time, and is identical
       within the same day.
 - [x] `fvm dart analyze` is clean and the focused test files pass with preserved exit status.
+
+## Port onto current main (2026-10-21)
+
+Ported with 112a onto `adc128ec` on branch `feat/112-port`; the ownership map, schema-version note,
+and the port-review defects (P1 startup event drop, P8 interval anchor drift, and the B3 amendment
+P2/P3 belong to this record's scope) are recorded in
+`docs/plans/tasks/112a-recurring-schedule-model-and-merged-tool.md` under "Port onto current main".
 
 ## Review gate and delivery
 

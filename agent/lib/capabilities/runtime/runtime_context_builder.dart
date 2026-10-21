@@ -4,9 +4,6 @@ import 'package:path/path.dart' as p;
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/skills/skill_inventory.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
-import 'package:sanad_agent/core/config.dart';
-import 'package:sanad_agent/core/di.dart';
-import 'package:sanad_agent/evolution/scheduling/schedule_model.dart';
 
 import 'workspace_path_resolver.dart';
 
@@ -17,47 +14,17 @@ class RuntimeContextBuilder {
 
   final WorkspacePathResolver _pathResolver;
   final SkillRegistry _skillRegistry;
-  final DateTime Function()? _nowProvider;
-  final String? _zoneName;
 
   WorkspacePathResolver get pathResolver => _pathResolver;
 
   const RuntimeContextBuilder({
     WorkspacePathResolver pathResolver = const WorkspacePathResolver(),
     SkillRegistry skillRegistry = const SkillRegistry(),
-    DateTime Function()? nowProvider,
-    String? zoneName,
   }) : _pathResolver = pathResolver,
-       _skillRegistry = skillRegistry,
-       _nowProvider = nowProvider,
-       _zoneName = zoneName;
+       _skillRegistry = skillRegistry;
 
   String buildWithoutWorkspace() =>
       'No workspace is attached, so file and terminal tools are unavailable. If the user requests them, ask them to select an existing workspace or create one from the workspace control in the upper-left corner.';
-
-  static String _resolveScheduleTimezone() {
-    try {
-      if (getIt.isRegistered<Config>()) {
-        return getIt<Config>().scheduleTimezone;
-      }
-    } catch (_) {}
-    return 'local';
-  }
-
-  /// Formats the date-and-zone time-awareness line for the runtime context (Decision B-D7).
-  ///
-  /// Contains today's date in the resolved schedule timezone and the zone label,
-  /// with no clock time, keeping it byte-stable within a single day.
-  static String formatTimeAwarenessLine({DateTime? now, String? zoneName}) {
-    final effectiveZoneName = zoneName ?? _resolveScheduleTimezone();
-    final zone = ScheduleZone.parse(effectiveZoneName);
-    final effectiveNow = (now ?? DateTime.now()).toUtc();
-    final zoned = zone.toZoned(effectiveNow);
-    final y = zoned.year.toString().padLeft(4, '0');
-    final m = zoned.month.toString().padLeft(2, '0');
-    final d = zoned.day.toString().padLeft(2, '0');
-    return 'Today: $y-$m-$d (zone: ${zone.raw})';
-  }
 
   Future<String?> build({
     required String workspacePath,
@@ -65,12 +32,10 @@ class RuntimeContextBuilder {
     ToolsRegistry? registry,
   }) async {
     final root = _pathResolver.normalizeWorkspaceRoot(workspacePath);
-    final effectiveNow = _nowProvider != null ? _nowProvider() : null;
     final lines = <String>[
       '# Runtime context',
       'Workspace: ${workspaceName?.trim().isNotEmpty == true ? workspaceName!.trim() : p.basename(root)}',
       'Working directory: $root (commands run here by default; do not "cd" to it)',
-      formatTimeAwarenessLine(now: effectiveNow, zoneName: _zoneName),
       '',
       'This context is regenerated per session. Treat it as the current local operating context, not as historical conversation content.',
     ];

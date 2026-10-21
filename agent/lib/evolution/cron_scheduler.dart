@@ -35,8 +35,14 @@ class CronScheduler extends BasePlatform {
     platformInstanceId: 'cron',
   );
 
-  final StreamController<GatewayEvent> _controller =
-      StreamController<GatewayEvent>.broadcast();
+  late final StreamController<GatewayEvent> _controller =
+      StreamController<GatewayEvent>.broadcast(onListen: _flushPendingEvents);
+
+  /// Events emitted before the first subscriber attached. `GatewayManager`
+  /// awaits [initialize] before it listens, and startup recovery dispatches a
+  /// due occurrence inside [initialize] after persisting it as fired (B-D1),
+  /// so a broadcast stream would otherwise drop that event silently (B-D2).
+  final List<GatewayEvent> _pendingEvents = [];
 
   @override
   Stream<GatewayEvent> get eventStream => _controller.stream;
@@ -124,6 +130,12 @@ class CronScheduler extends BasePlatform {
       definition: definition,
       id: id,
     );
+  }
+
+  /// Reads one schedule without mutating it, or `null` when it is unknown.
+  ScheduledTaskRecord? getSchedule(String id) {
+    final row = _sessionManager.db.getScheduledTask(id);
+    return row == null ? null : ScheduledTaskRecord.fromRow(row);
   }
 
   /// Lists all scheduled tasks device-wide (Decision D6).
@@ -278,7 +290,9 @@ class CronScheduler extends BasePlatform {
       final nextRunAt = OccurrenceCalculator.computeNextOccurrence(
         record.toDefinition(),
         from: executionTime,
-        previousRunAt: record.lastRunAt ?? record.nextRunAt,
+        // Anchor on the slot that just fired, not on timer lateness or an
+        // older run, so the interval cadence never drifts (B-D3).
+        previousRunAt: record.nextRunAt,
       );
 
       final nextRecord = ScheduledTaskRecord(
@@ -356,15 +370,31 @@ class CronScheduler extends BasePlatform {
   }
 
   void _emitEvent(String task, String sessionId) {
-    _controller.add(
-      GatewayEvent(
-        sessionId: sessionId,
-        platformId: platformId,
-        type: 'cron',
-        runId: 'cron_${DateTime.now().millisecondsSinceEpoch}',
-        message: Message(role: MessageRole.user, content: task),
-      ),
+    final event = GatewayEvent(
+      sessionId: sessionId,
+      platformId: platformId,
+      type: 'cron',
+      runId: 'cron_${DateTime.now().millisecondsSinceEpoch}',
+      message: Message(role: MessageRole.user, content: task),
     );
+    if (!_controller.hasListener) {
+      _pendingEvents.add(event);
+      return;
+    }
+    _controller.add(event);
+  }
+
+  void _flushPendingEvents() {
+    if (_pendingEvents.isEmpty) return;
+    final pending = List<GatewayEvent>.of(_pendingEvents);
+    _pendingEvents.clear();
+    // Deliver after the subscribing call returns so the listener is attached.
+    scheduleMicrotask(() {
+      for (final event in pending) {
+        if (_controller.isClosed) return;
+        _controller.add(event);
+      }
+    });
   }
 
   @override
@@ -433,7 +463,9 @@ class CronScheduler extends BasePlatform {
     final nextFutureRunAt = OccurrenceCalculator.computeNextOccurrence(
       definition,
       from: effectiveNow,
-      previousRunAt: record.lastRunAt ?? mostRecentMissed,
+      // The most recent due instant lies on the stored slot grid, which is
+      // the same anchor dispatch uses, so restart never re-anchors (B-D3).
+      previousRunAt: mostRecentMissed,
     );
 
     if (isInsideGrace) {
@@ -551,6 +583,7 @@ class CronScheduler extends BasePlatform {
       t.timer.cancel();
     }
     _tasks.clear();
+    _pendingEvents.clear();
     await _controller.close();
     _logger.info('CronScheduler disposed.');
   }

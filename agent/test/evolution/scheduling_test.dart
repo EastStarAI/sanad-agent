@@ -54,22 +54,16 @@ void main() {
         expect(intv.intervalMinutes, 30);
         expect(intv.humanRecurrenceSummary, 'every 30 minutes');
 
-        final intvHours = ScheduleDefinition.parse({
-          'every': '2 hours',
-        });
+        final intvHours = ScheduleDefinition.parse({'every': '2 hours'});
         expect(intvHours.kind, ScheduleKind.interval);
         expect(intvHours.intervalMinutes, 120);
         expect(intvHours.humanRecurrenceSummary, 'every 2 hours');
 
-        final intvDays = ScheduleDefinition.parse({
-          'every': 'every 1 days',
-        });
+        final intvDays = ScheduleDefinition.parse({'every': 'every 1 days'});
         expect(intvDays.intervalMinutes, 1440);
         expect(intvDays.humanRecurrenceSummary, 'every 1 day');
 
-        final intvExplicit = ScheduleDefinition.parse({
-          'interval_minutes': 45,
-        });
+        final intvExplicit = ScheduleDefinition.parse({'interval_minutes': 45});
         expect(intvExplicit.intervalMinutes, 45);
         expect(intvExplicit.humanRecurrenceSummary, 'every 45 minutes');
       });
@@ -211,7 +205,9 @@ void main() {
             isA<ScheduleValidationException>().having(
               (e) => e.message,
               'message',
-              contains('Interval schedule cannot be combined with calendar fields'),
+              contains(
+                'Interval schedule cannot be combined with calendar fields',
+              ),
             ),
           ),
         );
@@ -228,7 +224,9 @@ void main() {
             isA<ScheduleValidationException>().having(
               (e) => e.message,
               'message',
-              contains('Calendar schedule cannot be combined with interval or once fields'),
+              contains(
+                'Calendar schedule cannot be combined with interval or once fields',
+              ),
             ),
           ),
         );
@@ -268,7 +266,9 @@ void main() {
                 'message',
                 allOf(
                   contains('Invalid timezone "$iana"'),
-                  contains('IANA timezone identifiers are not supported in this release'),
+                  contains(
+                    'IANA timezone identifiers are not supported in this release',
+                  ),
                 ),
               ),
             ),
@@ -324,7 +324,10 @@ void main() {
         );
 
         // No previous run: now + 15 min
-        final next1 = OccurrenceCalculator.computeNextOccurrence(intv, from: now);
+        final next1 = OccurrenceCalculator.computeNextOccurrence(
+          intv,
+          from: now,
+        );
         expect(next1, DateTime.utc(2026, 10, 18, 12, 15));
 
         // Previous run at 11:50: anchor + 15 min = 12:05
@@ -424,54 +427,59 @@ void main() {
         expect(foldInstant, DateTime.utc(2026, 10, 24, 23, 30));
       });
 
-      test('exercises local zone across host daylight transitions if host observes DST', () {
-        // Check if the host operating system zone observes daylight transitions in 2026
-        final janOffset = DateTime(2026, 1, 1).timeZoneOffset;
-        final julOffset = DateTime(2026, 7, 1).timeZoneOffset;
-        if (janOffset == julOffset) {
-          markTestSkipped(
-            'Host timezone (${DateTime.now().timeZoneName}) does not observe DST transitions; skipping host-local transition test.',
-          );
-          return;
-        }
-
-        // Host observes DST. Find a day with transition.
-        DateTime? transitionDay;
-        for (int m = 1; m <= 12; m++) {
-          for (int d = 1; d <= 27; d++) {
-            final dt1 = DateTime(2026, m, d, 12);
-            final dt2 = DateTime(2026, m, d + 1, 12);
-            if (dt1.timeZoneOffset != dt2.timeZoneOffset) {
-              transitionDay = dt1;
-              break;
-            }
+      test(
+        'exercises local zone across host daylight transitions if host observes DST',
+        () {
+          // Check if the host operating system zone observes daylight transitions in 2026
+          final janOffset = DateTime(2026, 1, 1).timeZoneOffset;
+          final julOffset = DateTime(2026, 7, 1).timeZoneOffset;
+          if (janOffset == julOffset) {
+            markTestSkipped(
+              'Host timezone (${DateTime.now().timeZoneName}) does not observe DST transitions; skipping host-local transition test.',
+            );
+            return;
           }
-          if (transitionDay != null) break;
-        }
 
-        if (transitionDay == null) {
-          markTestSkipped('Host observes DST but transition day could not be bounded.');
-          return;
-        }
+          // Host observes DST. Find a day with transition.
+          DateTime? transitionDay;
+          for (int m = 1; m <= 12; m++) {
+            for (int d = 1; d <= 27; d++) {
+              final dt1 = DateTime(2026, m, d, 12);
+              final dt2 = DateTime(2026, m, d + 1, 12);
+              if (dt1.timeZoneOffset != dt2.timeZoneOffset) {
+                transitionDay = dt1;
+                break;
+              }
+            }
+            if (transitionDay != null) break;
+          }
 
-        final dailySchedule = ScheduleDefinition(
-          kind: ScheduleKind.daily,
-          atTime: '15:00',
-          zone: 'local',
-        );
+          if (transitionDay == null) {
+            markTestSkipped(
+              'Host observes DST but transition day could not be bounded.',
+            );
+            return;
+          }
 
-        // Occurrence computed strictly across the transition boundary
-        final fromUtc = transitionDay.toUtc();
-        final nextOccurrence = OccurrenceCalculator.computeNextOccurrence(
-          dailySchedule,
-          from: fromUtc,
-        );
+          final dailySchedule = ScheduleDefinition(
+            kind: ScheduleKind.daily,
+            atTime: '15:00',
+            zone: 'local',
+          );
 
-        final localDt = nextOccurrence.toLocal();
-        expect(localDt.hour, 15);
-        expect(localDt.minute, 0);
-        expect(nextOccurrence.isAfter(fromUtc), isTrue);
-      });
+          // Occurrence computed strictly across the transition boundary
+          final fromUtc = transitionDay.toUtc();
+          final nextOccurrence = OccurrenceCalculator.computeNextOccurrence(
+            dailySchedule,
+            from: fromUtc,
+          );
+
+          final localDt = nextOccurrence.toLocal();
+          expect(localDt.hour, 15);
+          expect(localDt.minute, 0);
+          expect(nextOccurrence.isAfter(fromUtc), isTrue);
+        },
+      );
 
       test('computes weekly with multiple weekdays', () {
         // Monday 2026-10-19 10:00 UTC
@@ -534,73 +542,100 @@ void main() {
     });
 
     group('Recurrence Grace Policy (Decision B-D2)', () {
-      test('computes grace window for once and recurring kinds with clamping', () {
-        // Once schedule: legacy grace window of 5 minutes
-        final onceDef = ScheduleDefinition(
-          kind: ScheduleKind.once,
-          zone: 'local',
-          onceAt: DateTime.utc(2026, 10, 20, 12, 0),
-        );
-        expect(RecurrenceGracePolicy.computeGraceWindow(onceDef), const Duration(minutes: 5));
+      test(
+        'computes grace window for once and recurring kinds with clamping',
+        () {
+          // Once schedule: legacy grace window of 5 minutes
+          final onceDef = ScheduleDefinition(
+            kind: ScheduleKind.once,
+            zone: 'local',
+            onceAt: DateTime.utc(2026, 10, 20, 12, 0),
+          );
+          expect(
+            RecurrenceGracePolicy.computeGraceWindow(onceDef),
+            const Duration(minutes: 5),
+          );
 
-        // Interval 2 min: half period is 60s -> clamped to minGrace (120s)
-        final intv2 = ScheduleDefinition(
-          kind: ScheduleKind.interval,
-          intervalMinutes: 2,
-          zone: 'local',
-        );
-        expect(RecurrenceGracePolicy.computeGraceWindow(intv2), const Duration(seconds: 120));
+          // Interval 2 min: half period is 60s -> clamped to minGrace (120s)
+          final intv2 = ScheduleDefinition(
+            kind: ScheduleKind.interval,
+            intervalMinutes: 2,
+            zone: 'local',
+          );
+          expect(
+            RecurrenceGracePolicy.computeGraceWindow(intv2),
+            const Duration(seconds: 120),
+          );
 
-        // Interval 10 min: half period is 5m (300s) -> within [120s, 7200s]
-        final intv10 = ScheduleDefinition(
-          kind: ScheduleKind.interval,
-          intervalMinutes: 10,
-          zone: 'local',
-        );
-        expect(RecurrenceGracePolicy.computeGraceWindow(intv10), const Duration(minutes: 5));
+          // Interval 10 min: half period is 5m (300s) -> within [120s, 7200s]
+          final intv10 = ScheduleDefinition(
+            kind: ScheduleKind.interval,
+            intervalMinutes: 10,
+            zone: 'local',
+          );
+          expect(
+            RecurrenceGracePolicy.computeGraceWindow(intv10),
+            const Duration(minutes: 5),
+          );
 
-        // Interval 1 hour: half period is 30m (1800s)
-        final intv60 = ScheduleDefinition(
-          kind: ScheduleKind.interval,
-          intervalMinutes: 60,
-          zone: 'local',
-        );
-        expect(RecurrenceGracePolicy.computeGraceWindow(intv60), const Duration(minutes: 30));
+          // Interval 1 hour: half period is 30m (1800s)
+          final intv60 = ScheduleDefinition(
+            kind: ScheduleKind.interval,
+            intervalMinutes: 60,
+            zone: 'local',
+          );
+          expect(
+            RecurrenceGracePolicy.computeGraceWindow(intv60),
+            const Duration(minutes: 30),
+          );
 
-        // Interval 6 hours: half period is 3h -> clamped to maxGrace (2 hours)
-        final intv360 = ScheduleDefinition(
-          kind: ScheduleKind.interval,
-          intervalMinutes: 360,
-          zone: 'local',
-        );
-        expect(RecurrenceGracePolicy.computeGraceWindow(intv360), const Duration(hours: 2));
+          // Interval 6 hours: half period is 3h -> clamped to maxGrace (2 hours)
+          final intv360 = ScheduleDefinition(
+            kind: ScheduleKind.interval,
+            intervalMinutes: 360,
+            zone: 'local',
+          );
+          expect(
+            RecurrenceGracePolicy.computeGraceWindow(intv360),
+            const Duration(hours: 2),
+          );
 
-        // Daily: half period is 12h -> clamped to maxGrace (2 hours)
-        final daily = ScheduleDefinition(
-          kind: ScheduleKind.daily,
-          atTime: '08:00',
-          zone: 'local',
-        );
-        expect(RecurrenceGracePolicy.computeGraceWindow(daily), const Duration(hours: 2));
+          // Daily: half period is 12h -> clamped to maxGrace (2 hours)
+          final daily = ScheduleDefinition(
+            kind: ScheduleKind.daily,
+            atTime: '08:00',
+            zone: 'local',
+          );
+          expect(
+            RecurrenceGracePolicy.computeGraceWindow(daily),
+            const Duration(hours: 2),
+          );
 
-        // Weekly: half period is 3.5 days -> clamped to maxGrace (2 hours)
-        final weekly = ScheduleDefinition(
-          kind: ScheduleKind.weekly,
-          weekdays: ['mon'],
-          atTime: '08:00',
-          zone: 'local',
-        );
-        expect(RecurrenceGracePolicy.computeGraceWindow(weekly), const Duration(hours: 2));
+          // Weekly: half period is 3.5 days -> clamped to maxGrace (2 hours)
+          final weekly = ScheduleDefinition(
+            kind: ScheduleKind.weekly,
+            weekdays: ['mon'],
+            atTime: '08:00',
+            zone: 'local',
+          );
+          expect(
+            RecurrenceGracePolicy.computeGraceWindow(weekly),
+            const Duration(hours: 2),
+          );
 
-        // Monthly: half period is ~15 days -> clamped to maxGrace (2 hours)
-        final monthly = ScheduleDefinition(
-          kind: ScheduleKind.monthly,
-          monthDay: 15,
-          atTime: '08:00',
-          zone: 'local',
-        );
-        expect(RecurrenceGracePolicy.computeGraceWindow(monthly), const Duration(hours: 2));
-      });
+          // Monthly: half period is ~15 days -> clamped to maxGrace (2 hours)
+          final monthly = ScheduleDefinition(
+            kind: ScheduleKind.monthly,
+            monthDay: 15,
+            atTime: '08:00',
+            zone: 'local',
+          );
+          expect(
+            RecurrenceGracePolicy.computeGraceWindow(monthly),
+            const Duration(hours: 2),
+          );
+        },
+      );
     });
 
     group('OccurrenceCalculator computeMostRecentDueInstant (Decision B-D2)', () {
@@ -644,33 +679,181 @@ void main() {
         expect(pastYesterday, DateTime.utc(2026, 10, 19, 10, 0));
       });
 
-      test('interval calculation terminates efficiently when last run is far in the past (S3)', () {
-        final def = ScheduleDefinition(
-          kind: ScheduleKind.interval,
-          intervalMinutes: 15,
-          zone: 'Z',
-        );
+      test(
+        'interval calculation terminates efficiently when last run is far in the past (S3)',
+        () {
+          final def = ScheduleDefinition(
+            kind: ScheduleKind.interval,
+            intervalMinutes: 15,
+            zone: 'Z',
+          );
 
-        // Last run 5 years ago (2021-10-20 10:00)
-        final farPast = DateTime.utc(2021, 10, 20, 10, 0);
-        final now = DateTime.utc(2026, 10, 20, 10, 35);
+          // Last run 5 years ago (2021-10-20 10:00)
+          final farPast = DateTime.utc(2021, 10, 20, 10, 0);
+          final now = DateTime.utc(2026, 10, 20, 10, 35);
 
-        // computeNextOccurrence must terminate instantly with next future slot (10:45)
-        final next = OccurrenceCalculator.computeNextOccurrence(
-          def,
-          from: now,
-          previousRunAt: farPast,
-        );
-        expect(next, DateTime.utc(2026, 10, 20, 10, 45));
+          // computeNextOccurrence must terminate instantly with next future slot (10:45)
+          final next = OccurrenceCalculator.computeNextOccurrence(
+            def,
+            from: now,
+            previousRunAt: farPast,
+          );
+          expect(next, DateTime.utc(2026, 10, 20, 10, 45));
 
-        // computeMostRecentDueInstant must terminate instantly with latest due slot on or before now (10:30)
-        final mostRecent = OccurrenceCalculator.computeMostRecentDueInstant(
-          def,
-          now: now,
-          previousRunAt: farPast,
-        );
-        expect(mostRecent, DateTime.utc(2026, 10, 20, 10, 30));
+          // computeMostRecentDueInstant must terminate instantly with latest due slot on or before now (10:30)
+          final mostRecent = OccurrenceCalculator.computeMostRecentDueInstant(
+            def,
+            now: now,
+            previousRunAt: farPast,
+          );
+          expect(mostRecent, DateTime.utc(2026, 10, 20, 10, 30));
+        },
+      );
+    });
+  });
+
+  group('Port review fixes (Task 112 port)', () {
+    test('null, blank, and empty optional values count as absent', () {
+      final daily = ScheduleDefinition.parse({
+        'kind': 'daily',
+        'time': '09:00',
+        'interval_minutes': null,
+        'every': '',
+        'weekdays': <String>[],
       });
+      expect(daily.kind, ScheduleKind.daily);
+
+      final inferred = ScheduleDefinition.parse({
+        'time': '09:00',
+        'weekdays': null,
+        'day_of_month': null,
+      });
+      expect(inferred.kind, ScheduleKind.daily);
+    });
+
+    test('interval and relative delays are bounded without overflow', () {
+      for (final args in <Map<String, dynamic>>[
+        {'kind': 'interval', 'interval_minutes': 200000000000},
+        {'kind': 'interval', 'every': '99999999999 days'},
+        {'kind': 'interval', 'every': '367 days'},
+        {'kind': 'once', 'in': '99999999999 days'},
+        {'kind': 'once', 'in': '400 days'},
+      ]) {
+        expect(
+          () => ScheduleDefinition.parse(args),
+          throwsA(isA<ScheduleValidationException>()),
+          reason: '$args',
+        );
+      }
+      final yearly = ScheduleDefinition.parse({
+        'kind': 'interval',
+        'every': '366 days',
+      });
+      expect(yearly.intervalMinutes, 366 * 24 * 60);
+    });
+
+    test('offset-less absolute time is wall clock in the schedule zone', () {
+      final def = ScheduleDefinition.parse({
+        'kind': 'once',
+        'at': '2026-10-22T09:00:00',
+        'zone': '+03:00',
+      });
+      expect(def.onceAt, DateTime.utc(2026, 10, 22, 6, 0));
+      expect(def.humanRecurrenceSummary, 'once at 2026-10-22T09:00:00+03:00');
+
+      final explicit = ScheduleDefinition.parse({
+        'kind': 'once',
+        'at': '2026-10-22T09:00:00Z',
+        'zone': '+03:00',
+      });
+      expect(explicit.onceAt, DateTime.utc(2026, 10, 22, 9, 0));
+    });
+
+    test('legacy one-shot seconds keep working and summarize truthfully', () {
+      final def = ScheduleDefinition.parse({
+        'in': '30 seconds',
+      }, now: DateTime.utc(2026, 10, 21, 12));
+      expect(def.onceAt, DateTime.utc(2026, 10, 21, 12, 0, 30));
+      expect(def.humanRecurrenceSummary, 'once in 30 seconds');
+      expect(
+        () => ScheduleDefinition.parse({
+          'kind': 'interval',
+          'every': '30 seconds',
+        }),
+        throwsA(isA<ScheduleValidationException>()),
+      );
+    });
+
+    test('mixed shapes are rejected instead of silently dropping fields', () {
+      expect(
+        () => ScheduleDefinition.parse({
+          'kind': 'interval',
+          'every': '5 minutes',
+          'at': '2026-10-22T09:00:00Z',
+        }),
+        throwsA(isA<ScheduleValidationException>()),
+      );
+      expect(
+        () => ScheduleDefinition.parse({
+          'kind': 'once',
+          'in': '5 minutes',
+          'weekdays': ['mon'],
+        }),
+        throwsA(isA<ScheduleValidationException>()),
+      );
+    });
+
+    test('instants render with one format and an explicit designator', () {
+      final instant = DateTime.utc(2026, 10, 21, 8, 0);
+      expect(
+        ScheduleZone.parse('Z').formatInstant(instant),
+        '2026-10-21T08:00:00Z',
+      );
+      expect(
+        ScheduleZone.parse('+03:00').formatInstant(instant),
+        '2026-10-21T11:00:00+03:00',
+      );
+      expect(
+        ScheduleZone.parse('local').formatInstant(instant),
+        matches(
+          RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$'),
+        ),
+      );
+    });
+
+    test('partial update keeps the existing shape; kind replaces it', () {
+      final weekly = ScheduleDefinition.parse({
+        'kind': 'weekly',
+        'weekdays': ['mon', 'wed'],
+        'time': '09:00',
+        'zone': '+02:00',
+      });
+
+      final moved = ScheduleDefinition.parse(
+        ScheduleDefinition.mergeUpdateArgs(weekly, {'time': '07:30'}),
+      );
+      expect(moved.kind, ScheduleKind.weekly);
+      expect(moved.weekdays, ['mon', 'wed']);
+      expect(moved.atTime, '07:30');
+      expect(moved.zone, '+02:00');
+
+      final replaced = ScheduleDefinition.parse(
+        ScheduleDefinition.mergeUpdateArgs(weekly, {
+          'kind': 'interval',
+          'every': '2 hours',
+        }),
+      );
+      expect(replaced.kind, ScheduleKind.interval);
+      expect(replaced.intervalMinutes, 120);
+
+      final interval = ScheduleDefinition.parse({
+        'kind': 'interval',
+        'interval_minutes': 15,
+      });
+      final retimed = ScheduleDefinition.parse(
+        ScheduleDefinition.mergeUpdateArgs(interval, {'every': '1 hours'}),
+      );
+      expect(retimed.intervalMinutes, 60);
     });
   });
 }

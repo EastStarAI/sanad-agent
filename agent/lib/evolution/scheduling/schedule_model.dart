@@ -199,22 +199,34 @@ class ScheduleZone {
   }
 
   /// Renders a UTC instant into an ISO-8601 string in this zone.
+  ///
+  /// Every zone renders `YYYY-MM-DDTHH:MM:SS` plus an explicit designator
+  /// (`Z` or `±HH:MM`); `local` uses the host offset at that instant.
   String formatInstant(DateTime utcInstant) {
     final utc = utcInstant.toUtc();
-    if (isLocal) {
-      return utc.toLocal().toIso8601String();
-    }
-    if (raw == 'Z') {
-      return utc.toIso8601String();
-    }
     final zoned = toZoned(utc);
+    final String designator;
+    if (isLocal) {
+      designator = _formatOffset(zoned.timeZoneOffset);
+    } else {
+      designator = raw;
+    }
     final y = zoned.year.toString().padLeft(4, '0');
     final m = zoned.month.toString().padLeft(2, '0');
     final d = zoned.day.toString().padLeft(2, '0');
     final h = zoned.hour.toString().padLeft(2, '0');
     final min = zoned.minute.toString().padLeft(2, '0');
     final s = zoned.second.toString().padLeft(2, '0');
-    return '$y-$m-${d}T$h:$min:$s$raw';
+    return '$y-$m-${d}T$h:$min:$s$designator';
+  }
+
+  static String _formatOffset(Duration offset) {
+    if (offset == Duration.zero) return 'Z';
+    final sign = offset.isNegative ? '-' : '+';
+    final abs = offset.abs();
+    final hh = abs.inHours.toString().padLeft(2, '0');
+    final mm = (abs.inMinutes % 60).toString().padLeft(2, '0');
+    return '$sign$hh:$mm';
   }
 
   @override
@@ -264,12 +276,31 @@ class ScheduleDefinition {
     this.onceIn,
   });
 
+  /// Longest accepted `interval` period and `in` delay. Bounding them keeps
+  /// occurrence arithmetic inside the `DateTime` range (no overflow, no
+  /// negative step) for every value the parser accepts.
+  static const Duration maxPeriod = Duration(days: 366);
+
+  /// Returns [args] without keys whose value is absent: `null`, a blank
+  /// string, or an empty list. Models often send unused optional parameters
+  /// that way, and such a key must not change the inferred schedule shape.
+  static Map<String, dynamic> withoutAbsentValues(Map<String, dynamic> args) => {
+    for (final entry in args.entries)
+      if (!_isAbsentValue(entry.value)) entry.key: entry.value,
+  };
+
+  static bool _isAbsentValue(Object? value) =>
+      value == null ||
+      (value is String && value.trim().isEmpty) ||
+      (value is List && value.isEmpty);
+
   /// Parses and validates schedule parameters from a tool or API map.
   static ScheduleDefinition parse(
-    Map<String, dynamic> args, {
+    Map<String, dynamic> rawArgs, {
     String defaultZone = 'local',
     DateTime? now,
   }) {
+    final args = withoutAbsentValues(rawArgs);
     final effectiveNow = now ?? DateTime.now().toUtc();
     final rawZone = (args['zone'] as String?)?.trim();
     final zoneStr = (rawZone != null && rawZone.isNotEmpty) ? rawZone : defaultZone;
@@ -308,11 +339,17 @@ class ScheduleDefinition {
       }
     }
 
-    // Cross-kind validation.
+    // Cross-kind validation: any shape outside D2 is rejected, never dropped.
     if (kind == ScheduleKind.interval) {
-      if (hasTime || hasWeekdays || hasMonthDay) {
+      if (hasTime || hasWeekdays || hasMonthDay || hasAt || hasIn) {
         throw const ScheduleValidationException(
-          'Interval schedule cannot be combined with calendar fields (time, weekdays, day_of_month).',
+          'Interval schedule cannot be combined with calendar fields (time, weekdays, day_of_month) or once fields (at, in).',
+        );
+      }
+    } else if (kind == ScheduleKind.once) {
+      if (hasInterval || hasWeekdays || hasMonthDay) {
+        throw const ScheduleValidationException(
+          'Once schedule cannot be combined with interval or calendar fields (every, interval_minutes, weekdays, day_of_month).',
         );
       }
     } else if (kind == ScheduleKind.daily ||
@@ -358,7 +395,7 @@ class ScheduleDefinition {
       return ScheduleDefinition(
         kind: ScheduleKind.once,
         zone: zone.raw,
-        onceAt: parsed.toUtc(),
+        onceAt: _absoluteInstantInZone(parsed, zone),
       );
     }
 
@@ -388,7 +425,7 @@ class ScheduleDefinition {
         return ScheduleDefinition(
           kind: ScheduleKind.once,
           zone: zone.raw,
-          onceAt: parsed.toUtc(),
+          onceAt: _absoluteInstantInZone(parsed, zone),
         );
       }
       throw ScheduleValidationException(
@@ -400,6 +437,31 @@ class ScheduleDefinition {
       'Once schedule requires "at" (ISO-8601) or "in" (<n> <minutes|hours|days>).',
     );
   }
+
+  /// An ISO-8601 value with an explicit offset (or `Z`) is an exact instant.
+  /// Without one, `DateTime.tryParse` yields host-local components; they are
+  /// reinterpreted as wall-clock time in the schedule's [zone] (Decision D3).
+  static DateTime _absoluteInstantInZone(DateTime parsed, ScheduleZone zone) {
+    if (parsed.isUtc) return parsed;
+    return zone.wallClockToUtc(
+      parsed.year,
+      parsed.month,
+      parsed.day,
+      parsed.hour,
+      parsed.minute,
+      parsed.second,
+      parsed.millisecond,
+    );
+  }
+
+  static void _ensureWithinMaxPeriod(Duration period, String value) {
+    if (period > maxPeriod) _rejectBeyondMaxPeriod(value);
+  }
+
+  static Never _rejectBeyondMaxPeriod(String value) =>
+      throw ScheduleValidationException(
+        'Duration "$value" exceeds the maximum of ${maxPeriod.inDays} days.',
+      );
 
   static ScheduleDefinition _parseInterval(
     Map<String, dynamic> args,
@@ -419,6 +481,10 @@ class ScheduleDefinition {
       throw const ScheduleValidationException(
         'Interval schedule requires positive "interval_minutes" or "every <n> <minutes|hours|days>".',
       );
+    }
+    // Compare in minutes: a Duration this large would overflow first.
+    if (intervalMinutes > maxPeriod.inMinutes) {
+      _rejectBeyondMaxPeriod('$intervalMinutes minutes');
     }
 
     return ScheduleDefinition(
@@ -561,14 +627,22 @@ class ScheduleDefinition {
       );
     }
 
-    if (unit == 'minute' || unit == 'minutes') {
-      return Duration(minutes: amount);
-    } else if (unit == 'hour' || unit == 'hours') {
-      return Duration(hours: amount);
-    } else if (unit == 'day' || unit == 'days') {
-      return Duration(days: amount);
-    } else if (unit == 'second' || unit == 'seconds') {
-      return Duration(seconds: amount);
+    // Guard before multiplying so a huge amount cannot overflow.
+    if (amount > maxPeriod.inMinutes) {
+      _rejectBeyondMaxPeriod(value);
+    }
+    final Duration? duration = switch (unit) {
+      'minute' || 'minutes' => Duration(minutes: amount),
+      'hour' || 'hours' => Duration(hours: amount),
+      'day' || 'days' => Duration(days: amount),
+      // Legacy one-shot unit kept for unchanged once behavior (B-D4) and
+      // replayed pre-merge calls; intervals stay minutes/hours/days.
+      'second' || 'seconds' => Duration(seconds: amount),
+      _ => null,
+    };
+    if (duration != null) {
+      _ensureWithinMaxPeriod(duration, value);
+      return duration;
     }
 
     throw ScheduleValidationException(
@@ -595,17 +669,75 @@ class ScheduleDefinition {
       );
     }
 
-    if (unit == 'minute' || unit == 'minutes') {
-      return amount;
-    } else if (unit == 'hour' || unit == 'hours') {
-      return amount * 60;
-    } else if (unit == 'day' || unit == 'days') {
-      return amount * 24 * 60;
+    if (amount > maxPeriod.inMinutes) {
+      _rejectBeyondMaxPeriod(value);
+    }
+    final int? minutes = switch (unit) {
+      'minute' || 'minutes' => amount,
+      'hour' || 'hours' => amount * 60,
+      'day' || 'days' => amount * 24 * 60,
+      _ => null,
+    };
+    if (minutes != null) {
+      _ensureWithinMaxPeriod(Duration(minutes: minutes), value);
+      return minutes;
     }
 
     throw ScheduleValidationException(
       'Unknown interval unit "$unit" in "$value". Accepted units are: minutes, hours, days.',
     );
+  }
+
+  /// Argument keys that each select one schedule field; a key of a group
+  /// replaces every alias of that group when merging (see [mergeUpdateArgs]).
+  static const List<Set<String>> _fieldGroups = [
+    {'at', 'in', 'time'},
+    {'every', 'interval_minutes', 'interval'},
+    {'weekdays'},
+    {'day_of_month', 'month_day'},
+    {'zone'},
+  ];
+
+  /// Every argument key that describes a schedule definition.
+  static final Set<String> definitionKeys = {
+    'kind',
+    for (final group in _fieldGroups) ...group,
+  };
+
+  /// This definition as [parse]-compatible arguments.
+  Map<String, dynamic> toArgs() => {
+    'kind': kind.name,
+    'zone': zone,
+    if (kind == ScheduleKind.once && onceAt != null)
+      'at': onceAt!.toUtc().toIso8601String(),
+    if (intervalMinutes != null) 'interval_minutes': intervalMinutes,
+    if (atTime != null) 'time': atTime,
+    if (weekdays != null && weekdays!.isNotEmpty) 'weekdays': weekdays,
+    if (monthDay != null) 'day_of_month': monthDay,
+  };
+
+  /// Merges a partial `update` (Decision D10) over [existing].
+  ///
+  /// When [update] names a `kind`, it is a complete replacement definition.
+  /// Otherwise the existing kind and fields are kept and only the supplied
+  /// fields change, so moving a weekly schedule to a new `time` stays weekly
+  /// instead of being re-inferred as a different shape.
+  static Map<String, dynamic> mergeUpdateArgs(
+    ScheduleDefinition existing,
+    Map<String, dynamic> update,
+  ) {
+    final supplied = {
+      for (final entry in withoutAbsentValues(update).entries)
+        if (definitionKeys.contains(entry.key)) entry.key: entry.value,
+    };
+    if (supplied.containsKey('kind')) return supplied;
+    final merged = existing.toArgs();
+    for (final group in _fieldGroups) {
+      if (group.any(supplied.containsKey)) {
+        merged.removeWhere((key, _) => group.contains(key));
+      }
+    }
+    return merged..addAll(supplied);
   }
 
   /// Generates a human recurrence summary (Decision D9).
@@ -638,7 +770,10 @@ class ScheduleDefinition {
     if (d.inHours > 0 && d.inMinutes % 60 == 0) {
       return '${d.inHours} ${d.inHours == 1 ? 'hour' : 'hours'}';
     }
-    return '${d.inMinutes} ${d.inMinutes == 1 ? 'minute' : 'minutes'}';
+    if (d.inMinutes > 0 && d.inSeconds % 60 == 0) {
+      return '${d.inMinutes} ${d.inMinutes == 1 ? 'minute' : 'minutes'}';
+    }
+    return '${d.inSeconds} ${d.inSeconds == 1 ? 'second' : 'seconds'}';
   }
 
   static String _formatIntervalMinutes(int minutes) {
