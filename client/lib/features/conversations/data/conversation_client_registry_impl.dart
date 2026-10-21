@@ -13,6 +13,7 @@ class ConversationClientRegistryImpl implements ManagedConversationClientRegistr
   final Map<String, SocketConversationClient> _clientsByAgentId = {};
   final Map<String, ConnectionScope> _scopeByAgentId = {};
   final Map<String, bool> _lastConnectedState = {};
+  final Map<String, bool> _lastOnlineState = {};
   final Map<String, DateTime> _localFallbackDeadlines = {};
   final Map<String, Timer> _localFallbackTimers = {};
   final Duration localReconnectGracePeriod;
@@ -48,18 +49,33 @@ class ConversationClientRegistryImpl implements ManagedConversationClientRegistr
         _scopeByAgentId[config.id] = endpoint.scope;
         _lastConnectedState[config.id] = isNowConnected;
 
-        if (isNowConnected) {
-          unawaited(
-            client.synchronizeAfterReconnect().catchError((Object error) {
-              // Reconnect reconciliation is best-effort; retained snapshots
-              // remain visible until the next successful synchronization.
-            }),
-          );
-        }
+        if (isNowConnected) _synchronize(client);
       } else {
         _lastConnectedState[config.id] = isNowConnected;
       }
     }
+  }
+
+  void _synchronize(SocketConversationClient client) {
+    unawaited(
+      client.synchronizeAfterReconnect().catchError((Object error) {
+        // Reconnect reconciliation is best-effort; retained snapshots
+        // remain visible until the next successful synchronization.
+      }),
+    );
+  }
+
+  /// A device turning Online in inventory is its re-announce on the Gateway.
+  /// A re-sync started when the Client socket became ready may have raced it
+  /// and gone unanswered, so the session list and the open conversation are
+  /// synchronized again once the device can answer.
+  void _synchronizeOnReannounce(DeviceConfig agent) {
+    final wasOnline = _lastOnlineState[agent.id];
+    _lastOnlineState[agent.id] = agent.isOnline;
+    if (wasOnline != false || !agent.isOnline) return;
+    final client = _clientsByAgentId[agent.id];
+    if (client == null || !_connectionCoordinator.isTransportReadyForAgent(agent)) return;
+    _synchronize(client);
   }
 
   @override
@@ -89,6 +105,7 @@ class ConversationClientRegistryImpl implements ManagedConversationClientRegistr
     _clientsByAgentId[config.id] = client;
     _scopeByAgentId[config.id] = configScope;
     _lastConnectedState[config.id] = endpoint.socketService.isConnected;
+    _lastOnlineState[config.id] = config.isOnline;
     return client;
   }
 
@@ -97,12 +114,14 @@ class ConversationClientRegistryImpl implements ManagedConversationClientRegistr
     final liveAgentIds = agents.map((agent) => agent.id).toSet();
     for (final agent in agents) {
       _clientsByAgentId[agent.id]?.updateConfig(agent);
+      _synchronizeOnReannounce(agent);
     }
     final staleAgentIds = _clientsByAgentId.keys.where((id) => !liveAgentIds.contains(id)).toList();
     for (final id in staleAgentIds) {
       _clientsByAgentId.remove(id)?.dispose();
       _scopeByAgentId.remove(id);
       _lastConnectedState.remove(id);
+      _lastOnlineState.remove(id);
       _localFallbackDeadlines.remove(id);
       _localFallbackTimers.remove(id)?.cancel();
     }
@@ -116,6 +135,7 @@ class ConversationClientRegistryImpl implements ManagedConversationClientRegistr
     _clientsByAgentId.clear();
     _scopeByAgentId.clear();
     _lastConnectedState.clear();
+    _lastOnlineState.clear();
     _localFallbackDeadlines.clear();
     for (final timer in _localFallbackTimers.values) {
       timer.cancel();

@@ -18,11 +18,13 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - A newly accepted Local Gateway socket starts with the initialized Agent `hardware_id`, so platform-family events emitted before its first command still carry the canonical local inventory identity. Do not emit or accept a synthetic local runtime identity.
 - `thinking_mode` is the only session/persistence/protocol field name; do not accept or emit aliases.
 - Every request-correlated response carries the original request id.
+- `model.snapshot_result` is a bounded client projection: it never carries the cached raw provider `model_metadata`, which stays Agent-internal for capability derivation.
 
 ## Cross-Transport Delivery Presence
 - Platform-family fan-out is Local-first and awaited before Cloud serialization. Local write failures are isolated and remain Cloud-eligible.
 - `DeliveryPresenceController` owns bounded in-memory event-local delivery results. The Cloud adapter consumes each result once, intersects it with the fresh Gateway-authored Cloud instance lease, and emits sorted `local_delivery_client_instance_ids` only for instances that received the same canonical `event_id` locally.
 - Local delivery results and Local membership never leave Agent memory except for that one event-local exclusion list; missing/expired/ambiguous state preserves Cloud egress.
+- Delivery-interest suppression applies only to uncorrelated egress. A reply that carries the `request_id` of a command received on the Cloud socket has a known Cloud requester and is always emitted to Cloud: right after a Client Cloud reconnect the Gateway interest set can still omit that requester, and a suppressed reply is never retried.
 
 ## Local Runtime Context
 - Rebuild per-turn workspace tools before assembling fresh runtime-owned system context for the runner.

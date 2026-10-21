@@ -54,6 +54,11 @@ class _ControllableTransport implements ConversationRepository {
     return completer.future;
   }
 
+  final StreamController<List<Session>> sessionPublications = StreamController<List<Session>>.broadcast();
+
+  @override
+  Stream<List<Session>> watchSessions(DeviceConfig agent) => sessionPublications.stream;
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -70,6 +75,50 @@ void main() {
 
   tearDown(() {
     store.dispose();
+  });
+
+  group('stale sections recover on a later successful session fetch (Task 124 D5)', () {
+    test('a failed section refresh is retried when the device publishes its session list', () async {
+      final repository = ConversationCacheRepository(cache: store, transport: transport);
+      final session = Session(
+        id: 'session-1',
+        title: 'Cached',
+        deviceId: device.id,
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+      );
+
+      // First refresh succeeds and leaves a cached snapshot.
+      final first = repository.refreshDeviceSidebar(device);
+      await pumpEventQueue();
+      transport.pendingWorkspaces.removeAt(0).complete(const []);
+      await pumpEventQueue();
+      transport.pendingRefreshSessions.removeAt(0).complete(SessionQueryResult(sessions: [session], hasMore: false));
+      await first;
+
+      // A later refresh times out: the cached rows stay, marked stale.
+      final second = repository.refreshDeviceSidebar(device, force: true);
+      await pumpEventQueue();
+      transport.pendingWorkspaces.removeAt(0).complete(const []);
+      await pumpEventQueue();
+      transport.pendingRefreshSessions.removeAt(0).completeError(StateError('timed out'));
+      await second;
+      expect(store.snapshot.contexts[device.id]!.unscopedConversations.state, ConversationResourceState.staleError);
+      final callsBefore = transport.refreshSessionsCalls;
+
+      // The reconnect re-sync later succeeds and publishes the session list.
+      transport.sessionPublications.add([session]);
+      await pumpEventQueue();
+      expect(transport.refreshSessionsCalls, callsBefore + 1);
+      transport.pendingRefreshSessions.removeAt(0).complete(SessionQueryResult(sessions: [session], hasMore: false));
+      await pumpEventQueue();
+      expect(store.snapshot.contexts[device.id]!.unscopedConversations.state, ConversationResourceState.ready);
+
+      // A publication with nothing stale issues no request.
+      transport.sessionPublications.add([session]);
+      await pumpEventQueue();
+      expect(transport.refreshSessionsCalls, callsBefore + 1);
+    });
   });
 
   group('Deterministic Reproduction & Pagination Efficiency (Task 97i)', () {

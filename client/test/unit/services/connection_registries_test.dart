@@ -188,6 +188,49 @@ void main() {
     localSocket.dispose();
   });
 
+  test('cloud reconnect re-syncs again once the device re-announces online (Task 124)', () async {
+    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final localSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final resolver = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'device-1',
+    );
+    final capabilitiesStore = DeviceCapabilitiesStore(resolver);
+    final conversationRegistry = ConversationClientRegistryImpl(resolver, capabilitiesStore);
+    final offline = DeviceConfig(
+      id: 'agent-remote-1',
+      name: 'SanadAgent Remote',
+      hardwareId: 'remote-device',
+      isOnline: false,
+    );
+    conversationRegistry.getOrCreateConversationClientForAgent(offline);
+    List<Map<String, dynamic>> sessionRequests() =>
+        cloudSocket.capturedCommands.where((entry) => entry['command'] == 'get_sessions').toList();
+
+    // The Client socket is ready before the Agent re-announced on the Gateway:
+    // this first request races the re-announce and can never be answered.
+    cloudSocket.setConnected(true);
+    await Future<void>.delayed(Duration.zero);
+    expect(sessionRequests(), hasLength(1));
+
+    // The re-announce arrives as the device turning online in inventory.
+    conversationRegistry.retainClientsFor([offline.copyWith(isOnline: true)]);
+    await Future<void>.delayed(Duration.zero);
+    expect(sessionRequests(), hasLength(2));
+
+    // A later inventory update that keeps the device online does not re-sync.
+    conversationRegistry.retainClientsFor([offline.copyWith(isOnline: true, name: 'Renamed')]);
+    await Future<void>.delayed(Duration.zero);
+    expect(sessionRequests(), hasLength(2));
+
+    conversationRegistry.dispose();
+    capabilitiesStore.dispose();
+    resolver.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+  });
+
   test('conversation registry rehydrates on cloud reconnect for non-local agents', () async {
     final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1');
     final localSocket = FakeSanadSocketService(hardwareId: 'device-1');

@@ -744,7 +744,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       );
 
       _messageSubscription = conversationRepository.watchMessages(agent).listen((messages) {
-        if (state.requestedSessionId != null) return;
+        if (state.requestedSessionId != null) {
+          // A store publication after a failed atomic history load means the
+          // device transport delivers again (for example the reconnect
+          // re-sync). Re-issue the failed load instead of leaving the
+          // conversation on its retry surface.
+          if (state.historyLoadError != null && !state.isHistoryLoading) retryHistoryLoad();
+          return;
+        }
         final activeSessionId = _resolvedActiveSessionId();
         final attention = _attentionFor(agent, activeSessionId);
         emit(

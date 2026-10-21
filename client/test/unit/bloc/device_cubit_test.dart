@@ -135,6 +135,107 @@ void main() {
     await cubit.close();
   });
 
+  group('remembered device that cannot appear', () {
+    test('falls back to the local device without forgetting the remembered cloud device', () async {
+      repository.seedAgents([localDevice], activeAgentId: cloudDevice.id);
+      repository.cloudInventoryPending = false;
+
+      final cubit = buildCubit();
+      await cubit.init();
+      await Future<void>.delayed(Duration.zero);
+
+      final state = cubit.state;
+      expect(state, isA<DeviceActive>());
+      expect((state as DeviceActive).activeAgent.id, localDevice.id);
+      expect(repository.getActiveAgentId(), cloudDevice.id);
+      await cubit.close();
+    });
+
+    test('falls back when a pending cloud inventory stops being pending', () async {
+      repository.seedAgents([localDevice], activeAgentId: cloudDevice.id);
+
+      final cubit = buildCubit();
+      await cubit.init();
+      expect(cubit.state, isA<DeviceNoActive>());
+
+      // The cloud socket failed or the account signed out: the inventory
+      // publishes again and the remembered device can no longer arrive.
+      repository.cloudInventoryPending = false;
+      repository.emitAgentsUpdate();
+      await Future<void>.delayed(Duration.zero);
+
+      final state = cubit.state;
+      expect(state, isA<DeviceActive>());
+      expect((state as DeviceActive).activeAgent.id, localDevice.id);
+      expect(repository.getActiveAgentId(), cloudDevice.id);
+      await cubit.close();
+    });
+
+    test('an active cloud device that leaves the inventory falls back to the local device', () async {
+      repository.seedAgents([localDevice, cloudDevice], activeAgentId: cloudDevice.id);
+      final cubit = buildCubit();
+      await cubit.init();
+      expect((cubit.state as DeviceActive).activeAgent.id, cloudDevice.id);
+
+      repository.cloudInventoryPending = false;
+      repository.seedAgents([localDevice], activeAgentId: cloudDevice.id);
+      repository.emitAgentsUpdate();
+      await Future<void>.delayed(Duration.zero);
+
+      final state = cubit.state;
+      expect(state, isA<DeviceActive>());
+      expect((state as DeviceActive).activeAgent.id, localDevice.id);
+      expect(repository.getActiveAgentId(), cloudDevice.id);
+      await cubit.close();
+    });
+
+    test('restores the remembered device when it becomes available again', () async {
+      repository.seedAgents([localDevice], activeAgentId: cloudDevice.id);
+      repository.cloudInventoryPending = false;
+      final cubit = buildCubit();
+      await cubit.init();
+      expect((cubit.state as DeviceActive).activeAgent.id, localDevice.id);
+
+      repository.cloudInventoryPending = true;
+      repository.seedAgents([localDevice, cloudDevice], activeAgentId: cloudDevice.id);
+      repository.emitAgentsUpdate();
+      await Future<void>.delayed(Duration.zero);
+
+      expect((cubit.state as DeviceActive).activeAgent.id, cloudDevice.id);
+      await cubit.close();
+    });
+
+    test('a user pick during the fallback replaces the remembered device', () async {
+      repository.seedAgents([localDevice], activeAgentId: cloudDevice.id);
+      repository.cloudInventoryPending = false;
+      final cubit = buildCubit();
+      await cubit.init();
+
+      await cubit.setActiveAgent(localDevice.id);
+      expect(repository.getActiveAgentId(), localDevice.id);
+
+      repository.seedAgents([localDevice, cloudDevice], activeAgentId: localDevice.id);
+      repository.emitAgentsUpdate();
+      await Future<void>.delayed(Duration.zero);
+
+      expect((cubit.state as DeviceActive).activeAgent.id, localDevice.id);
+      await cubit.close();
+    });
+
+    test('never invents a selection when no device is available', () async {
+      repository.seedAgents([localDevice.copyWith(isOnline: false)], activeAgentId: cloudDevice.id);
+      repository.cloudInventoryPending = false;
+
+      final cubit = buildCubit();
+      await cubit.init();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cubit.state, isA<DeviceNoActive>());
+      expect(repository.getActiveAgentId(), cloudDevice.id);
+      await cubit.close();
+    });
+  });
+
   test('temporary local inventory gap keeps the active local device offline', () async {
     repository.seedAgents([localDevice], activeAgentId: localDevice.id);
     final cubit = buildCubit();

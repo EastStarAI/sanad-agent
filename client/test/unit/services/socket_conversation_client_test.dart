@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/conversations/data/clients/socket_conversation_client.dart';
@@ -301,6 +302,56 @@ void main() {
       expect(client.currentMessages.single.text, 'Completed while disconnected');
     },
   );
+
+  test('a re-sync supersedes an unanswered reconnect request and hydrates the open conversation (Task 124)', () async {
+    // The first reconnect request raced the device re-announce: it stays
+    // unanswered for the life of the old attempt.
+    final stale = client.synchronizeAfterReconnect();
+    await Future<void>.delayed(Duration.zero);
+    expect(socket.capturedCommands.where((entry) => entry['command'] == 'get_sessions'), hasLength(1));
+    socket.clearCaptured();
+
+    final resync = client.synchronizeAfterReconnect();
+    await Future<void>.delayed(Duration.zero);
+    final sessionsCommands = socket.capturedCommands.where((entry) => entry['command'] == 'get_sessions').toList();
+    expect(sessionsCommands, hasLength(1), reason: 'the re-sync must not join the stale in-flight request');
+    final requestId = (sessionsCommands.single['payload'] as Map)['request_id'] as String;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'sessions_list',
+      'request_id': requestId,
+      'payload': {
+        'request_id': requestId,
+        'sessions': [
+          {'id': 'session-1', 'device_id': 'agent-1', 'title': 'Open conversation'},
+        ],
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    final historyCommand = socket.capturedCommands.where((entry) => entry['command'] == 'get_session_history').single;
+    final historyRequestId = (historyCommand['payload'] as Map)['request_id'] as String;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'request_id': historyRequestId,
+      'payload': {
+        'request_id': historyRequestId,
+        'messages': [
+          {
+            'id': 1,
+            'sender': 'ai',
+            'type': 'final_answer',
+            'content': 'Finished during the reconnect',
+            'created_at': '2026-10-21T10:00:00Z',
+          },
+        ],
+      },
+    });
+    await resync;
+    expect(client.currentMessages.single.text, 'Finished during the reconnect');
+    unawaited(stale.catchError((Object _) {}));
+  });
 
   test(
     'default getSessions keeps legacy access to sessions beyond the first page limit',
