@@ -149,7 +149,8 @@ Logs are in `temp/78/` (workspace root).
 | Agent analyzer | `fvm dart analyze` (agent) | No issues | `temp/78/agent-analyze.log` |
 | Client analyzer | `fvm flutter analyze` (client) | No issues | `temp/78/client-analyze.log` |
 | Agent focused | ordering, runner anchor, gateway, route-state, recovery suites | 264 passed | `temp/78/agent-focused.log` |
-| Client focused | parity, scroll, reconciler, event-handler suites | see report | `temp/78/client-focused-2.log` |
-| Agent full | `fvm dart test` | see report | `temp/78/agent-full.log` |
-| Client full | `fvm flutter test` | see report | `temp/78/client-full.log` |
-| Local E2E | `fvm flutter test e2e_test/ --concurrency=1` | see report | `temp/78/client-e2e.log` |
+| Agent task tests (final) | ordering + runner anchor | 12 passed | `temp/78/agent-focused-final.log` |
+| Client focused | parity, scroll, reconciler, event-handler suites | 76 passed | `temp/78/client-focused-2.log` |
+| Agent full | `fvm dart test` | 3063 passed, 14 skipped, exit 0 | `temp/78/agent-full.log` |
+| Client full | `fvm flutter test` | 1733 passed, 1 skipped; 1 load error (`flutter_tester` WebSocket connect, harness) in `socket_conversation_client_test.dart`, which passes 14/14 on rerun | `temp/78/client-full.log`, `temp/78/client-full-rerun-socket.log` |
+| Local E2E | `fvm flutter test e2e_test/ --concurrency=1` | 14 passed | `temp/78/client-e2e.log` |
