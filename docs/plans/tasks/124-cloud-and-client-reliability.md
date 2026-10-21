@@ -177,3 +177,28 @@ Topology: Home A runs the cloud Agent. Home B runs the Client and its own local 
    - repeat in compact (drawer) layout.
 
    After each "+" the URL and the main pane must show a New Conversation, and later sidebar clicks must still navigate. If it hangs, capture `sanad-dev logs client` from the search selection through the failed "+" (see Item 4, "Needed to close").
+
+## Live Round 1 Follow-ups
+
+Live r1 on `a725bfbb` (TH2 = A cloud, TH3 = B Client). Results:
+
+- passed: S1a, S3, and the S4 mechanism;
+- failed: S1b (D1);
+- not reproduced again: item 4.
+
+The live report is outside this repository.
+
+### D1 — An automatic Home restore overwrote the remembered device (High)
+
+**Root cause.** On a cold start with no route, `_HomeScreenContentState._applyInitialSessionSelection` restores the fallback device's last destination with `context.go`. The route change then reaches `_HomeScreenState._applyInitialDestination`, which called `DeviceCubit.setActiveAgent(dest.deviceId)` for every route. That call persisted the local id and ended the fallback through `switchAgent`. Within seconds of start-up, and with no user action, `active_device_id` changed from A to the local device. The `DeviceCubit` unit tests could not see this because the sequence crosses Home.
+
+**Fix.**
+- Home marks the routes it produces on its own: the no-route restore, the New Conversation alignment, the conversations-list resolution, the missing-device fallback, and the first-send promotion.
+- `_applyInitialDestination` skips `setActiveAgent` for a marked route. User-opened routes still persist their device and end the fallback.
+- `DeviceCubit` logs `device.fallback entered`, `device.fallback restored`, and `device.fallback ended by explicit selection` once each at info level, with 8-character id prefixes only. They are info rather than fine because the Client pins the root logger to info in debug builds and turns it off in release builds, so a fine line would never reach a live run.
+
+**Tests.** `client/test/widget/conversation_navigation_back_forward_test.dart`, group "remembered device fallback through Home (Task 124 D1)":
+- remembered A, cloud unavailable, fallback to local, Home's automatic restore, cloud back: A is restored and the persisted id stays A;
+- a user-opened local route during the fallback persists local, and it wins when cloud returns.
+
+Red → green: `temp/g3/r2-d1-red.log` (1 failed), `temp/g3/r2-d1-green.log` (2 passed).

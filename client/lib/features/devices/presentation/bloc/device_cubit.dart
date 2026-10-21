@@ -5,11 +5,15 @@ import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:logging/logging.dart';
+import 'package:sanad_client/core/navigation/nav_trace.dart' show shortId;
 
 import '../../domain/models/device_config.dart';
 import 'device_state.dart';
 
 class DeviceCubit extends Cubit<DeviceState> {
+  static final _logger = Logger('DeviceCubit');
+
   final ISocketService socketService;
   final IDeviceRepository agentRepository;
   final IDeviceClientRegistry agentClientRegistry;
@@ -164,6 +168,7 @@ class DeviceCubit extends Cubit<DeviceState> {
       final remembered = _isFallbackSelection ? agentRepository.getActiveAgent() : null;
       if (remembered != null && !remembered.representsDeviceId(s.activeAgent.id)) {
         _isFallbackSelection = false;
+        _logger.info('device.fallback restored remembered=${shortId(remembered.id)}');
         unawaited(_activate(remembered));
         return;
       }
@@ -231,13 +236,23 @@ class DeviceCubit extends Cubit<DeviceState> {
     // device list instead of switching to an arbitrary default.
     if (hasPersistedId && agentRepository.isCloudInventoryPending) return null;
     final fallback = _defaultActiveAgent(agents);
-    _isFallbackSelection = hasPersistedId && fallback != null;
+    final enteringFallback = hasPersistedId && fallback != null;
+    if (enteringFallback && !_isFallbackSelection) {
+      _logger.info(
+        'device.fallback entered remembered=${shortId(agentRepository.getActiveAgentId())} '
+        'active=${shortId(fallback.id)}',
+      );
+    }
+    _isFallbackSelection = enteringFallback;
     return fallback;
   }
 
   /// Explicit device selection (user or navigation). It ends any fallback,
   /// so a remembered device is no longer restored over the user's choice.
   Future<void> switchAgent(DeviceConfig config) async {
+    if (_isFallbackSelection) {
+      _logger.info('device.fallback ended by explicit selection active=${shortId(config.id)}');
+    }
     _isFallbackSelection = false;
     await _activate(config);
   }

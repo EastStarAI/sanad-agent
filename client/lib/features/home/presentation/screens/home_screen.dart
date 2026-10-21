@@ -80,6 +80,16 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  /// The destination Home itself navigated to (a restore, alignment, or
+  /// fallback), as opposed to one the user opened. Applying it must not count
+  /// as a device pick: it neither persists the device nor ends a
+  /// remembered-device fallback.
+  ConversationDestination? _automaticRoute;
+
+  void _markAutomaticRoute(ConversationDestination destination) {
+    _automaticRoute = destination;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -102,6 +112,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _applyInitialDestination() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final routeDestination = widget.destination;
+      final isAutomatic = routeDestination != null && routeDestination == _automaticRoute;
+      _automaticRoute = null;
       if (routeDestination == null || !mounted) {
         navTrace('home.applyRoute', 'route=null mounted=$mounted branch=skip');
         return;
@@ -125,6 +137,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Set active agent. Session selection is applied by _HomeScreenContent,
       // whose BuildContext is below the SessionCubit provider created here.
+      // A route Home produced itself already belongs to the active device and
+      // is not a user pick, so it must not persist or end a fallback.
+      if (isAutomatic) {
+        navTrace('home.applyRoute', 'route=${destTrace(dest)} device=automatic');
+        return;
+      }
       unawaited(context.read<DeviceCubit>().setActiveAgent(dest.deviceId));
     });
   }
@@ -198,6 +216,13 @@ class _HomeScreenContent extends StatefulWidget {
 }
 
 class _HomeScreenContentState extends State<_HomeScreenContent> {
+  /// Routes to a destination Home chose on its own (see
+  /// [_HomeScreenState._automaticRoute]).
+  void _goAutomatically(ConversationDestination destination) {
+    context.findAncestorStateOfType<_HomeScreenState>()?._markAutomaticRoute(destination);
+    context.go(destination.routePath);
+  }
+
   static const double _tabletBreakpoint = SidebarBreakpoints.tablet;
   bool _isCheckingProviderSetup = false;
   DeviceConfig? _providerSetupDevice;
@@ -265,7 +290,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
               'selected=${shortId(context.read<SessionCubit>().state.selectedSession?.id)} '
               'branch=restore:${branch.name}',
         );
-        if (mounted) context.go(restored.routePath);
+        if (mounted) _goAutomatically(restored);
         return;
       }
 
@@ -288,7 +313,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
         // unknowable here, so the active conversation falls back to New
         // Conversation through the single owner of that intent.
         final resolved = await context.read<SessionCubit>().startNewChat(fallbackAgent);
-        if (mounted) context.go(resolved.routePath);
+        if (mounted) _goAutomatically(resolved);
         return;
       }
 
@@ -321,7 +346,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
         // leaving the history current destination and the URL disagreeing.
         if (mounted && resolved != dest) {
           navTrace('home.applySession', 'route=${destTrace(dest)} -> ${destTrace(resolved)} branch=new-align');
-          context.go(resolved.routePath);
+          _goAutomatically(resolved);
         }
       } else if (dest.isConversationsList) {
         // The device conversation list is not a typed destination of its own:
@@ -329,7 +354,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
         final resolved = await context.read<SessionCubit>().startNewChat(destinationAgent);
         if (mounted) {
           navTrace('home.applySession', 'route=${destTrace(dest)} -> ${destTrace(resolved)} branch=conversationsList');
-          context.go(resolved.routePath);
+          _goAutomatically(resolved);
         }
       }
     });
@@ -497,7 +522,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
             'promote ${destTrace(current)} -> ${destTrace(destination)}',
           );
           historyCtrl.replaceCurrent(destination);
-          context.go(destination.routePath);
+          _goAutomatically(destination);
         });
       },
       child: BlocListener<DeviceCubit, DeviceState>(

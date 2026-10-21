@@ -618,6 +618,86 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('remembered device fallback through Home (Task 124 D1)', () {
+    testWidgets('an automatic Home restore during the fallback keeps and later restores the remembered device', (
+      tester,
+    ) async {
+      final local = DeviceConfig(id: 'hw-local', name: 'This device', hardwareId: 'hw-local', isOnline: true);
+      final localSession = Session(
+        id: 'session-local',
+        title: 'Local conversation',
+        deviceId: local.id,
+        createdAt: DateTime(2026, 1, 4),
+        updatedAt: DateTime(2026, 1, 4),
+        lastMessageAt: DateTime(2026, 1, 4),
+      );
+      conversationRepository.seedSessions(local, [localSession]);
+      cacheStore.applySessionCreated(local.id, localSession);
+      cacheStore.recordLastDestination(
+        ConversationDestination.session(deviceId: local.id, sessionId: localSession.id),
+      );
+      agentClientRegistry.registerClient(local.id, _InertDeviceClient(local, socket));
+
+      // Remembered cloud device A, but no cloud inventory can arrive.
+      agentRepository.seedAgents([local], activeAgentId: deviceA.id);
+      agentRepository.cloudInventoryPending = false;
+      await deviceCubit.init();
+      expect((deviceCubit.state as DeviceActive).activeAgent.id, local.id);
+
+      // Cold start with no route: Home restores the fallback device's last
+      // destination on its own.
+      final router = await pumpHome(tester, AppRoutes.home);
+      expect(currentPath(router), AppRoutes.sessionLocation(local.id, localSession.id));
+      expect(agentRepository.getActiveAgentId(), deviceA.id, reason: 'an automatic restore is not a user pick');
+
+      // The cloud inventory returns with A: the remembered device is restored.
+      agentRepository.cloudInventoryPending = true;
+      agentRepository.seedAgents([local, deviceA, deviceB], activeAgentId: deviceA.id);
+      agentRepository.emitAgentsUpdate();
+      await tester.pumpAndSettle();
+      expect((deviceCubit.state as DeviceActive).activeAgent.id, deviceA.id);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a user-opened route during the fallback replaces the remembered device', (tester) async {
+      final local = DeviceConfig(id: 'hw-local', name: 'This device', hardwareId: 'hw-local', isOnline: true);
+      final localSession = Session(
+        id: 'session-local',
+        title: 'Local conversation',
+        deviceId: local.id,
+        createdAt: DateTime(2026, 1, 4),
+        updatedAt: DateTime(2026, 1, 4),
+        lastMessageAt: DateTime(2026, 1, 4),
+      );
+      final otherLocal = localSession.copyWith(id: 'session-local-2', title: 'Other local');
+      conversationRepository.seedSessions(local, [localSession, otherLocal]);
+      cacheStore.applySessionCreated(local.id, localSession);
+      cacheStore.applySessionCreated(local.id, otherLocal);
+      cacheStore.recordLastDestination(
+        ConversationDestination.session(deviceId: local.id, sessionId: localSession.id),
+      );
+      agentClientRegistry.registerClient(local.id, _InertDeviceClient(local, socket));
+      agentRepository.seedAgents([local], activeAgentId: deviceA.id);
+      agentRepository.cloudInventoryPending = false;
+      await deviceCubit.init();
+
+      final router = await pumpHome(tester, AppRoutes.home);
+      expect(agentRepository.getActiveAgentId(), deviceA.id);
+      await tester.tap(find.byKey(ValueKey('sidebar_session_title:${otherLocal.id}')));
+      await tester.pumpAndSettle();
+      expect(currentPath(router), AppRoutes.sessionLocation(local.id, otherLocal.id));
+      expect(agentRepository.getActiveAgentId(), local.id);
+
+      // The user's pick wins over the remembered device when cloud returns.
+      agentRepository.cloudInventoryPending = true;
+      agentRepository.seedAgents([local, deviceA, deviceB], activeAgentId: local.id);
+      agentRepository.emitAgentsUpdate();
+      await tester.pumpAndSettle();
+      expect((deviceCubit.state as DeviceActive).activeAgent.id, local.id);
+      expect(tester.takeException(), isNull);
+    });
+  });
 }
 
 DeviceConfig _device(String id, String name) => DeviceConfig(id: id, name: name, isOnline: true);

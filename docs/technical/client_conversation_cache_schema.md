@@ -70,7 +70,10 @@ start and across device switches:
   the persisted id. While that fallback is active, the remembered device is
   restored as soon as it reappears in inventory; an explicit selection
   (`switchAgent`, or `setActiveAgent` from a device-scoped route) ends the
-  fallback and the route applies its own device. With no available device the
+  fallback and the route applies its own device. A route Home navigates to on
+  its own (for example the cold-start restore of the fallback device's last
+  conversation) does not call `setActiveAgent`, so it cannot overwrite the
+  remembered id. With no available device the
   cubit stays `DeviceNoActive` and invents no selection.
 - **Cross-device selection invalidation.** `SessionCubit` treats a
   `selectedSession` whose `deviceId` differs from the snapshot's
