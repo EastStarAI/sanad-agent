@@ -110,7 +110,11 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Resolve stable workspace UUIDs to their current daemon-owned path before filesystem, MCP, skill, or permission access; a missing path remains visible but fails execution until repaired.
 - Display-name rename never mutates the filesystem, and Change Path never rewrites session/work-item workspace ids.
 - Remote workspace-picker mutations remain daemon-owned and operate on directories only.
-- Create accepts an existing parent plus one validated child name; never accept a client-assembled create target path.
+- Folder create accepts an existing parent plus one validated child name; never accept a client-assembled create target path. Workspace registration from a remote pick accepts only a selected existing directory, which the daemon revalidates.
+- Managed-remote (cloud) paths resolve only inside the runtime Home's `workspaces` root, derived from the injected Home and never from a fixed Home directory name. A managed path must be absolute, NUL-free, free of raw `..` segments, and an existing directory with no symbolic link at any component below the root. Registered workspaces outside the root are not browsable or mutable from the cloud.
+- Managed `create_workspace` takes exactly one of `name` or `path`, and never registers the root itself.
+- Rename and delete refuse a folder that is, or contains, a registered workspace with `workspace_in_use`; they never rewrite workspace paths.
+- Managed listings omit symbolic links and build entry paths lexically. Every mutation, including managed create, revalidates on the serialized mutation queue immediately before the filesystem call.
 - Rename and delete reject filesystem roots, symbolic links, non-directories, missing paths, traversal names, and occupied rename destinations.
 - Recursive delete requires an explicit client confirmation, but daemon validation remains authoritative regardless of client behavior.
 - Workspace-record removal is metadata-only: it deletes the registered

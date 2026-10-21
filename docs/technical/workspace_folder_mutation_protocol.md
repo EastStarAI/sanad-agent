@@ -1,11 +1,13 @@
 ---
 title: "Remote Workspace Folder Mutation Protocol"
-description: "Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations."
+description: "Remote workspace picking, browse, and confirmation-gated folder mutations confined to the Home workspaces root."
 ---
 
 # Remote Workspace Folder Mutation Protocol
 
-Owning task: `docs/plans/tasks/82-secure-remote-device-control-workspaces-and-mcp.md`.
+Owning tasks: `docs/plans/tasks/82-secure-remote-device-control-workspaces-and-mcp.md`
+(managed-remote admission) and `docs/plans/tasks/123-remote-workspace-picker.md`
+(strict root confinement and the in-app remote picker).
 Threat model: [Remote Device Control Threat Model](remote_device_control_threat_model.md).
 
 G3 replaces the cloud freeze. Local same-device native picker and path-based
@@ -15,35 +17,70 @@ register a conversation session.
 
 ## Managed root
 
-The identity Sanad Home prepare step creates `SANAD_HOME/workspaces` through
-`SanadHomeBootstrap`. That directory must not be a symlink. Remote
-`create_workspace` accepts a **name** and optional **description** only. A
-client-supplied absolute path is rejected; the Agent creates
-`SANAD_HOME/workspaces/<name>`.
+The identity Sanad Home prepare step creates `<SANAD_HOME>/workspaces` through
+`SanadHomeBootstrap`. That directory must not be a symlink. The Agent derives
+the root from the runtime Home on every call; it never assumes a fixed Home
+directory name, so a Test Home moves the root with it.
+
+Every managed-remote path is resolved by one coordinator check
+(`WorkspaceFileSystemCoordinator.resolveManagedDirectory`). A path is accepted
+only when it:
+
+- is absolute, has no NUL byte, and has no raw `..` segment (even one that
+  would normalize back inside);
+- is the root, or lies inside it, after lexical normalization;
+- names an existing directory, with no symbolic link at any component below
+  the root.
+
+Anything else is `path_not_allowed`; a missing folder is a not-found error.
+Registered workspaces outside the root keep working for chat and tools by
+workspace id, but they cannot be browsed, mutated, or relocated to from the
+cloud.
+
+## Create
+
+Managed `create_workspace` takes exactly one of:
+
+- **`name`**: creates (or reuses) the direct child `<root>/<name>`;
+- **`path`**: registers an existing folder strictly inside the root (never the
+  root itself), as returned by a managed `workspace_tree` reply. The daemon
+  revalidates it and stores the resolved path with the folder basename as the
+  display name. Repeating the pick returns the existing record.
+
+Sending both, or neither, is `invalid_request`. Nested and overlapping
+workspaces are allowed, the same as the local picker.
 
 ## Browse
 
-Empty-path `browse_workspace_tree` on a managed-remote call lists:
+Empty-path `browse_workspace_tree` on a managed-remote call returns the root's
+own snapshot (`root_path == path == <root>`, `parent_path: null`), so the
+client opens directly inside the root. A non-empty path must pass the resolver
+above. `parent_path` steps back one folder and is null at the root, so the
+client cannot climb above it.
 
-- the managed workspaces root
-- registered workspace roots that are not already inside that managed root
+A non-empty `workspace_id` is resolved strictly as a stored UUID and is
+allowed only when that workspace resolves inside the root. Host paths are
+never accepted as workspace identifiers.
 
-A non-empty `workspace_id` is resolved strictly as a stored UUID. Host paths
-are never accepted as workspace identifiers and cannot implicitly register a
-new allowed root.
-
-It does not list `/`, the user Home, or `SANAD_HOME` internals (credentials,
-provider/MCP secrets, databases). Breadcrumb `parent_path` is null at an
-allowed root so the client cannot climb above it. Paths with NUL bytes,
-traversal, or symlink targets fail closed as `path_not_allowed`.
+Listings omit symbolic links entirely and build each entry path lexically
+from the validated listed folder, so no link target or outside path is
+disclosed. Files are still reported; the Client dialog shows folders only.
 
 ## Folder mutations
 
 `workspace.create_folder`, `workspace.rename_folder`, and
-`workspace.delete_folder` operate only inside an allowed root after
-canonicalization. They reject filesystem roots, the managed root itself,
-registered workspace roots, symbolic links, traversal names, and occupied
-rename targets.
+`workspace.delete_folder` operate only inside the root, through the same
+resolver. Rename and delete reject the root itself (`path_not_allowed`) and
+any folder that is, or contains, a registered workspace (`workspace_in_use`);
+paths of workspaces are never rewritten behind their records. Folder names
+must be one segment (`.`, `..`, `/`, `\`, empty, and NUL are rejected), and an
+occupied rename target is refused. The `workspace_in_use` rule applies to
+local folder mutations as well.
+
+Every mutation, including managed create, runs on the single serialized
+mutation queue and revalidates its paths immediately before the filesystem
+call. The remaining check-then-act window applies only to a local process on
+the Agent machine, which is outside the remote threat model.
 
 Recursive delete and `workspace.relocate` require a daemon preview:
 
@@ -69,11 +106,15 @@ the record-only behavior before sending it.
 
 ## Client
 
-Remote create uses a name dialog, not the operating-system picker. The
-constrained `WorkspaceBrowserDialog` and daemon tree/mutation APIs remain
-implemented for a future conversation-side file tree, but Workspace Overview
-does not expose a Browse folders action. Change Path remains same-desktop local
-only; arbitrary host-directory selection stays out of scope.
+A remote add-workspace (Conversation composer and Sidebar) opens the in-app
+`WorkspaceBrowserDialog`, not the operating-system picker and not a name
+prompt. Every browse and folder call goes to the device being configured
+(`WorkspaceBrowserCallbacks.forDevice`), never to the active session's device.
+"Use This Folder" is disabled at the root; the picked folder is sent as
+`create_workspace` `path`. Rejections render localized text keyed by the error
+code (`path_not_allowed`, `workspace_in_use`, `stale_confirmation`, generic).
+Change Path remains same-desktop local only; a remote Change Path through the
+same browser is a separate follow-up.
 
 ## Local continuity
 

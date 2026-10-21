@@ -38,4 +38,4 @@ The Sanad Client renders its interface in the user's chosen language. Launch loc
 4. If the locale is RTL, no layout changes should be required — flag any surface that hardcodes `left:` in a mirrored context.
 
 ## Remaining Coverage
-~81 presentation files still contain unlocalized English literals (secondary screens: provider_setup, devices, parts of settings). The living inventory is `docs/qa_maintenance/task95-remaining-ui-strings.md`; it is the canonical follow-up checklist for incremental localization passes.
+~80 presentation files still contain unlocalized English literals (secondary screens: provider_setup, devices, parts of settings). The living inventory is `docs/qa_maintenance/task95-remaining-ui-strings.md`; it is the canonical follow-up checklist for incremental localization passes.

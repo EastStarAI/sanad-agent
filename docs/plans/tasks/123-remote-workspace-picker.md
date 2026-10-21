@@ -2,7 +2,7 @@
 id: 123
 title: Remote workspace picker confined to the managed workspaces root
 status: in_progress
-gate: G1 (implementation)
+gate: G4 (independent review)
 created: 2026-10-21
 parent_task: none
 depends_on: []
@@ -172,9 +172,9 @@ Record operation ids, screenshots and the on-disk listings in the Round Log.
 ## Gates
 
 - [x] G0 — User answers to Q1–Q5, recorded under Decisions (2026-10-21).
-- [ ] G1 — Agent: A1–A8 with S1–S20 red on `adc128ec`, then green; analyzer clean.
-- [ ] G2 — Client: C1–C5; widget and unit tests; en/ar strings; analyzer clean.
-- [ ] G3 — Contracts and docs listed above updated, with no stale "remote sends no filesystem command" or "reserved for a future file tree" text left.
+- [x] G1 — Agent: A1–A8 with S1–S20 red on `adc128ec`, then green; analyzer clean.
+- [x] G2 — Client: C1–C5; widget and unit tests; en/ar strings; analyzer clean.
+- [x] G3 — Contracts and docs listed above updated, with no stale "remote sends no filesystem command" or "reserved for a future file tree" text left.
 - [ ] G4 — Independent review.
 - [ ] G5 — Live acceptance (TH1 cloud → "Sanad Agent Test2 (macOS)") with evidence.
 
@@ -222,4 +222,58 @@ That is about 1.1k–1.5k changed lines, roughly 2–3 writer rounds plus one re
 
 ## Round Log
 
-(empty)
+### Round 1 — implementation writer (2026-10-21)
+
+Branch `feat/123-remote-workspace-picker` on `adc128ec`. Not pushed; no PR.
+
+**Agent (A1–A8).**
+
+- `WorkspaceFileSystemCoordinator.resolveManagedDirectory` is the single
+  managed-path check. It replaces the registered-workspace root union
+  (`_allowedRemoteRoots` and its helpers are removed) and derives the root from
+  the injected Home on every call.
+- Empty managed browse returns the root snapshot. Managed listings skip links
+  and build entry paths lexically.
+- Managed `create_workspace` takes exactly one of `name` or `path`, runs on the
+  serialized queue, and registers a picked folder with its basename.
+- Rename and delete raise `workspace_in_use` for a folder that is or contains
+  a registered workspace. This applies in local mode too, as the Q3 decision
+  is not limited to the cloud.
+- Relocate uses the same resolver and never targets the root itself.
+- The Gateway `managed_remote` override was already correct; S19 now pins it.
+
+**Client (C1–C5).**
+
+- `WorkspacePickerHelper.promptCreateWorkspace` opens `WorkspaceBrowserDialog`
+  for a remote device and returns `WorkspaceCreateRequest(path: picked)`.
+  `_promptRemoteWorkspaceName` and `debugRemoteWorkspaceName` are removed, and
+  `debugRemoteBrowserPick` replaces the hook.
+- `WorkspaceBrowserCallbacks.forDevice` binds browse and folder calls to the
+  device being configured, in both the composer and the sidebar.
+- "Use This Folder" is disabled at the root, and a root hint is shown there.
+  The path line stays LTR inside RTL.
+- Every dialog string is in `app_en.arb` and `app_ar.arb`.
+- The transport throws a coded `WorkspaceCommandFailure` (a `StateError`
+  subtype). A browse `error` reply used to be parsed as an empty snapshot; it
+  now throws. The dialog maps `path_not_allowed`, `workspace_in_use` and
+  `stale_confirmation` to localized text. Any other failure shows the
+  localized generic line plus the Agent's reason.
+- The local native-picker branch is unchanged.
+
+**Tests.** Logs are in the private workspace `temp/123/`.
+
+| Run | Result | Log |
+|---|---|---|
+| Agent red, new tests on unchanged logic | 29 new cases fail; S19 passes (pins existing behaviour) | `agent-red.log` |
+| Agent focused (confinement, handler, Gateway security, service) | 106 passed | `agent-focused.log` |
+| Agent full fast suite | 3035 passed, 14 skipped | `agent-full.log` |
+| Agent E2E `remote_device_control_e2e_test.dart`, `--concurrency=1` | passed | `agent-e2e-remote-device-control.log` |
+| Client dialog and transport unit tests | 67 passed | `client-dialog-commands.log` |
+| Client composer local-picker and remote-browser tests | 1 + 1 passed | `client-input-panel.log` |
+| Client sidebar structure, with the device-targeting test | 24 passed | `client-sidebar.log` |
+| Client full fast suite (final tree) | 1742 passed, 1 skipped | `client-full.log` |
+| `fvm dart analyze` (agent), `fvm flutter analyze` (client) | no issues | — |
+| `scripts/lint_wiki.dart` | 1 error, already present on `adc128ec`: `third_party_skills_install_qa.md` is not indexed; not part of 123 | — |
+
+Open after this round: G4 independent review and G5 live acceptance.
+

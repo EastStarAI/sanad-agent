@@ -19,7 +19,9 @@ When remote access is enabled, the same interface can manage paired computers
 and headless servers through the optional Sanad hosted identity and relay
 service. You can select a device, browse its independent workspaces and
 conversations, and continue work from the desktop, mobile, or web client.
-Workspace files and execution remain on the device running the agent.
+Workspace files and execution remain on the device running the agent. To add a
+workspace on a remote device, you pick or create a folder inside that device's
+own workspaces folder; the remote device never exposes folders outside it.
 
 ## Parallel, durable sessions
 
