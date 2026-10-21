@@ -480,8 +480,10 @@ class CompactionRecoveryPolicy {
   );
 
   /// Fraction of the effective input budget one recovery pass may use. Kept
-  /// below 1 because the chars-per-token estimate underestimates Arabic and
-  /// CJK text.
+  /// below 1 because the estimate is not an exact tokenizer: since Task 118b
+  /// non-ASCII text is priced by its encoding, so the margin now covers
+  /// tokenizer variance on code, JSON and tool output rather than Arabic and
+  /// CJK undercounting.
   final double passBudgetSafetyRatio;
 
   /// Maximum number of source chunks one recovery may summarize. A source

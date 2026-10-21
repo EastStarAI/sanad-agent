@@ -721,6 +721,20 @@ correctness condition nor an efficiency claim. If the full request overflows,
 bounded contiguous chunk/reduce recovery (§8.12) preserves tool groups and never
 activates partial summaries.
 
+#### 8.11.3 Text estimation of non-ASCII content (Task 118b round 5)
+
+`CompactionTokenEstimator.estimateText` prices ASCII text at `ceil(chars / 4)`. CJK, Hangul and Kana code points cost one token each. Every other code point costs its UTF-8 bytes, `ceil(bytes / 4)` in total. Plain chars/4 counted Arabic, Cyrillic, Greek and Indic text at about half its real BPE cost: Arabic letters are two UTF-8 bytes, and BPE tokenizers spend roughly one token per two to three such characters. That let an Arabic session ride toward the provider limit below the compaction threshold. Accented Latin barely moves.
+
+The rule is provider-neutral and applies everywhere the compaction estimator prices text:
+
+- pressure fallback;
+- adapter wire estimates;
+- tail costs;
+- the pre-send fit check;
+- recovery packing.
+
+Provider-confirmed usage still wins wherever a proven receipt exists. The Client does not use this estimator; its usage indicator shows provider-reported usage, so the change has no Client blast radius. No fixture in the suites depended on the old Arabic pricing. The thresholds and the target are ratios of `W` and are unchanged.
+
 #### 8.11.2 Pre-send fit check of the full pass (Task 118b)
 
 Before the full summary pass is sent, the engine measures the whole summary request (the provider projection, the appended instruction and the tools) with the route's wire meter, or by estimate. It adds the output the provider will reserve. If that sum exceeds the window `W`, the full pass would be rejected, so it is not sent. The engine goes straight to the bounded chunk/reduce recovery (§8.12) and records `full_pass_skipped: presend_over_window`, `presend_request_tokens`, `output_reservation_tokens` and `output_reservation_source`.
@@ -746,8 +760,10 @@ and are injectable through the engine constructor.
 1. **Per-pass budget.** `floor(effectiveInputBudget × safetyRatio)` minus the
    stable system messages, the tool schemas, and the longer of the chunk and
    final instructions, all measured with `CompactionTokenEstimator` (text plus
-   model-facing media). The ratio stays below 1 because chars/4 underestimates
-   Arabic and CJK text.
+   model-facing media). The ratio stays below 1 because the estimate is not an
+   exact tokenizer. Since Task 118b round 5, non-ASCII text is priced by its
+   encoding (below), so the `0.80` margin is kept for tokenizer variance on
+   code, JSON and tool output; it was rechecked and not changed.
 2. **Packing.** The pruned source is split into atomic groups (an assistant
    tool-call batch plus its results, otherwise one message) and greedily
    packed, in order, into chunks that fit the budget.

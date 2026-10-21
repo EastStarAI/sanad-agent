@@ -89,6 +89,9 @@ canonical history. Stale non-null owners cannot clear newer compacting state or 
   on the tile grid. The fitted grid is clamped to the same per-image ceiling so
   thin or panorama images cannot demand an unbounded tile grid, and a fitted
   thin side that rounds to zero keeps one pixel instead of a non-finite scale.
+  Text is chars/4 for ASCII; CJK, Hangul and Kana cost one token per code
+  point and other non-ASCII text costs UTF-8 bytes / 4, because chars/4
+  priced Arabic at about half its real cost (Task 118b).
   Encoded media strings (data URIs, long base64
   blobs) are never priced as text; declared `media_bytes` keep byte-based
   accounting and homogeneous filler text stays on the chars/4 estimator. A user
