@@ -310,6 +310,19 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('compact New Conversation context chips never overflow (Task 124 D3)', (tester) async {
+    final longDevice = deviceA.copyWith(name: 'A device with a very long name that does not fit a phone');
+    agentRepository.seedAgents([longDevice, deviceB], activeAgentId: longDevice.id);
+    agentClientRegistry.registerClient(longDevice.id, _InertDeviceClient(longDevice, socket));
+    deviceCubit.emitState(DeviceActive(activeAgent: longDevice, agents: [longDevice, deviceB]));
+    const start = ConversationDestination.newConversation(deviceId: 'device-a', workspaceId: 'workspace-1');
+    history.setInitial(start);
+
+    await pumpHome(tester, start.routePath, size: const Size(420, 900));
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Device switch makes URL, history, selection, and presentation agree', (tester) async {
     history.setInitial(ConversationDestination.session(deviceId: deviceA.id, sessionId: sessionA.id));
 

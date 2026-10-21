@@ -223,3 +223,22 @@ The `get_appearance` request that was answered 64 ms later arrived after the ref
 - Client, `client/test/widget/conversation_navigation_back_forward_test.dart`: "a failed history load is re-issued once the transport delivers again". Red → green: `temp/g3/r2-d2-client-red.log` (1 failed), `temp/g3/r2-d2-client-green.log` (19 passed).
 
 **Overlap with Plan 83.** `feat/83-port` adds an `ingressAuthority` override and an import to `server_sanad_gateway_platform.dart`, near the top of the class. This change touches only the emit helpers and their call sites, so the textual merge should be trivial.
+
+### D3 — Compact layout overflow (Low)
+
+**Root cause.** The live log points to `client/lib/features/conversations/presentation/widgets/conversation_input_panel.dart` (the New Conversation context-chip `Row`). `ConversationContextChips` already scrolls horizontally. But it sat unflexed inside that outer `Row`, so its scroll view got unbounded width and laid its chips out at their natural size. A long device or workspace name overflows.
+
+A narrow-width test exposed a second overflow at the same width: the desktop status bar's gateway summary (`client/lib/features/home/presentation/widgets/status_bar.dart`).
+
+**Fix.**
+- The chips are `Expanded` in their row, so they scroll inside the available width.
+- The status-bar gateway button is `Flexible`, and its summary is one line with an ellipsis.
+
+**Test.** `client/test/widget/conversation_navigation_back_forward_test.dart`: "compact New Conversation context chips never overflow". It uses a 420-pixel window and a long device name. Red → green: `temp/g3/r2-d3-red.log` (both overflows), `temp/g3/r2-d3-green.log` (20 passed).
+
+### Testability
+
+- **Fallback lifecycle logs:** added with D1 (`device.fallback entered`, `restored`, and `ended by explicit selection`).
+- **Driver Enter action: skipped.**
+  - The driver contract (`docs/technical/flutter_vm_driver_cli.md`) has no key-event primitive. Adding one would need a new Client VM extension, a controller action, a CLI command, and a `sanad-dev ui` passthrough, each with its own tests. That is not a small, clean addition.
+  - A synthetic framework key event would also bypass the platform text-input path, which is exactly what the Enter-double-delivery hypothesis concerns.
