@@ -895,7 +895,13 @@ void main() {
     );
 
     expect(httpDispatchedCount, 0, reason: 'Zero HTTP requests dispatched on invalid attachment admission');
-    expect(runtime.findWorkItem('work-fail-5')?.state, SessionWorkState.blocked);
+    // A failed admission is a typed terminal outcome, not a blocked owner
+    // that would hold the session queue with no resumable checkpoint
+    // (Task 125).
+    expect(
+      runtime.findWorkItem('work-fail-5')?.state,
+      SessionWorkState.cancelled,
+    );
   });
 }
 
