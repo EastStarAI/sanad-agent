@@ -270,6 +270,92 @@ void main() {
     });
   });
 
+  // Task 113a port guard for 327805d2: a response timeout that fires after a
+  // reconnect cleans up on the connection's live socket, as on 6a832396.
+  group('SocketCommandTransport timeout after a reconnect', () {
+    late List<_TestCloudSocket> sockets;
+    late SocketConnectionController connection;
+    late SocketCommandTransport transport;
+
+    setUp(() async {
+      sockets = [];
+      connection = SocketConnectionController(
+        url: 'https://gateway.invalid',
+        hardwareId: 'test-hw',
+        startToken: 'token',
+        cloudSocketFactory: (_, _) {
+          final socket = _TestCloudSocket();
+          sockets.add(socket);
+          return socket;
+        },
+      );
+      await connection.connect();
+      transport = SocketCommandTransport(
+        hardwareId: 'test-hw',
+        connection: connection,
+        responseTimeout: const Duration(milliseconds: 100),
+      );
+    });
+
+    tearDown(() {
+      connection.dispose();
+    });
+
+    test('late timeout cleans up on the live socket, not the replaced one', () async {
+      final staleCall = transport.emitWithResponse('slow_request', {}, (_) {});
+      final firstSocket = sockets.single;
+      expect(firstSocket.listeners.containsKey('slow_request_response'), isTrue);
+
+      await connection.reconnect();
+      expect(sockets, hasLength(2));
+      final liveSocket = sockets.last;
+      expect(connection.socket, same(liveSocket));
+      final firstSocketOffs = firstSocket.offs.length;
+
+      await staleCall;
+
+      expect(liveSocket.offs, contains('slow_request_response'));
+      expect(firstSocket.offs, hasLength(firstSocketOffs));
+    });
+
+    test("late timeout keeps another call's response listener on the live socket", () async {
+      final staleCall = transport.emitWithResponse('slow_request', {}, (_) {});
+      await connection.reconnect();
+      final liveSocket = sockets.last;
+
+      Map<String, dynamic>? received;
+      final liveCall = transport.emitWithResponse(
+        'get_info',
+        {},
+        (response) => received = response,
+      );
+      await staleCall;
+
+      expect(liveSocket.listeners.containsKey('get_info_response'), isTrue);
+      liveSocket.receive('get_info_response', {'version': '2.4.0'});
+      await liveCall;
+      expect(received, {'version': '2.4.0'});
+    });
+
+    test(
+      "late timeout keeps a same-event call's response listener on the live socket",
+      () async {
+        final staleCall = transport.emitWithResponse('slow_request', {}, (_) {});
+        await connection.reconnect();
+        final liveSocket = sockets.last;
+
+        final liveCall = transport.emitWithResponse('slow_request', {}, (_) {});
+        await staleCall;
+
+        expect(liveSocket.listeners.containsKey('slow_request_response'), isTrue);
+        await liveCall;
+      },
+      skip: 'Pre-existing on 6a832396: cleanup calls off(event) on the live socket, '
+          'which removes every listener for that event, including a newer call made '
+          'after the reconnect. Kept unchanged by the SRP port.',
+    );
+  });
+
   group('HostedMediaRelayClient and hosted-media delegation', () {
     test('SanadSocketService delegates admitHostedAttachments to HostedMediaRelayClient', () async {
       final socket = _TestCloudSocket();
