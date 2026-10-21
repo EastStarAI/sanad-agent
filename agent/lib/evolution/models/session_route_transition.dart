@@ -30,6 +30,11 @@ class SessionRouteTransition {
   final String model;
   final String? reason;
   final String? requestId;
+
+  /// `message_id` of the newest active row when the transition committed;
+  /// history places the notice right after it. Null for legacy rows and for
+  /// route changes made outside a running turn.
+  final String? anchorMessageId;
   final DateTime createdAt;
 
   const SessionRouteTransition({
@@ -44,6 +49,7 @@ class SessionRouteTransition {
     required this.model,
     required this.reason,
     required this.requestId,
+    this.anchorMessageId,
     required this.createdAt,
   });
 
@@ -62,6 +68,7 @@ class SessionRouteTransition {
       model: row['model']! as String,
       reason: row['reason'] as String?,
       requestId: row['request_id'] as String?,
+      anchorMessageId: row['anchor_message_id'] as String?,
       createdAt: DateTime.parse(row['created_at']! as String).toUtc(),
     );
   }

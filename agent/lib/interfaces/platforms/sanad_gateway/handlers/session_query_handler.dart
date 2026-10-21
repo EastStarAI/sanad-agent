@@ -624,35 +624,56 @@ class SessionQueryHandler {
       historyMessages.insert(insertionIndex, lifecycleRow);
     }
 
+    final pageRowIds = {for (final entry in persistedMessages) entry.rowId};
+
     if (session != null &&
         session.forkSequence > 0 &&
         session.forkedFromMessageId != null &&
         session.forkedFromTurnId != null) {
-      final eventId = 'fork_${session.sessionId}';
-      historyMessages.add({
-        'id': eventId,
-        'event_id': eventId,
-        'sender': 'system',
-        'type': CanonicalEventTypes.sessionForked,
-        'content': 'Conversation forked',
-        'session_id': session.sessionId,
-        'created_at': session.createdAt.toUtc().toIso8601String(),
-        'metadata': {
-          'informational': true,
-          'informational_kind': 'session_fork',
-          'lineage_id': session.lineageId,
-          'parent_session_id': session.parentSessionId,
-          'forked_from_message_id': session.forkedFromMessageId,
-          'forked_from_turn_id': session.forkedFromTurnId,
-          'fork_sequence': session.forkSequence,
-        },
-      });
+      final insertionIndex = _forkMarkerInsertionIndex(
+        sessionId: sessionId,
+        pageRowIds: pageRowIds,
+        historyMessages: historyMessages,
+        isTailPage: isTailPage,
+      );
+      if (insertionIndex != null) {
+        final eventId = 'fork_${session.sessionId}';
+        historyMessages.insert(insertionIndex, {
+          'id': eventId,
+          'event_id': eventId,
+          'sender': 'system',
+          'type': CanonicalEventTypes.sessionForked,
+          'content': 'Conversation forked',
+          'session_id': session.sessionId,
+          'created_at': session.createdAt.toUtc().toIso8601String(),
+          'metadata': {
+            'informational': true,
+            'informational_kind': 'session_fork',
+            'lineage_id': session.lineageId,
+            'parent_session_id': session.parentSessionId,
+            'forked_from_message_id': session.forkedFromMessageId,
+            'forked_from_turn_id': session.forkedFromTurnId,
+            'fork_sequence': session.forkSequence,
+          },
+        });
+      }
     }
 
+    // Only automatic failover is rendered live (the Client turns
+    // `session_preferences_updated` into a timeline tile for that source
+    // alone), so history projects the same set for parity.
     for (final transition
         in _routeTransitions?.findForSession(sessionId) ??
             const <SessionRouteTransition>[]) {
       if (transition.source != SessionRouteSource.autoFailover) continue;
+      final insertionIndex = _routeTransitionInsertionIndex(
+        transition,
+        sessionId: sessionId,
+        pageRowIds: pageRowIds,
+        historyMessages: historyMessages,
+        isTailPage: isTailPage,
+      );
+      if (insertionIndex == null) continue;
       final previousProviderLabel =
           transition.previousProviderDisplayName ??
           transition.previousProviderInstanceId ??
@@ -660,7 +681,7 @@ class SessionQueryHandler {
       final nextProviderLabel =
           transition.providerDisplayName ?? transition.providerInstanceId;
       final reasonText = transition.reason?.replaceAll('_', ' ');
-      final transitionRow = <String, dynamic>{
+      historyMessages.insert(insertionIndex, {
         'id': transition.eventId,
         'event_id': transition.eventId,
         'sender': 'system',
@@ -673,46 +694,7 @@ class SessionQueryHandler {
             'Continuing with ${transition.model}.',
         ...transition.toPayload(),
         'created_at': transition.createdAt.toIso8601String(),
-      };
-      // History rows use synthetic timestamps (session creation + index), so
-      // comparing them against the real transition time misplaces the notice.
-      // Anchor on the durable request_id instead: the transition belongs to
-      // the turn that carried that request, right before its next event.
-      var insertionIndex = -1;
-      final requestId = transition.requestId;
-      if (requestId != null && requestId.isNotEmpty) {
-        var lastMatch = -1;
-        for (var i = 0; i < historyMessages.length; i++) {
-          if (historyMessages[i]['request_id']?.toString() == requestId) {
-            lastMatch = i;
-          }
-        }
-        if (lastMatch != -1) {
-          insertionIndex = lastMatch + 1;
-        }
-      }
-      if (insertionIndex == -1 &&
-          requestId != null &&
-          requestId.isNotEmpty &&
-          !isTailPage) {
-        continue;
-      }
-      if (insertionIndex == -1 && !isTailPage) {
-        continue;
-      }
-      if (insertionIndex == -1) {
-        // Legacy transitions without request identity remain tail-only.
-        insertionIndex = historyMessages.indexWhere((row) {
-          final createdAt = DateTime.tryParse(
-            row['created_at']?.toString() ?? '',
-          );
-          return createdAt != null && createdAt.isAfter(transition.createdAt);
-        });
-        if (insertionIndex == -1) {
-          insertionIndex = historyMessages.length;
-        }
-      }
-      historyMessages.insert(insertionIndex, transitionRow);
+      });
     }
 
     final inFlight = _sessionManager.getInFlightSnapshot(sessionId);
@@ -815,6 +797,116 @@ class SessionQueryHandler {
         row['source_message_row_id'] = persisted.rowId;
       }
     }
+  }
+
+  /// The fork marker follows the last row the fork copied, so it sits on the
+  /// one page holding that row whatever came after it. A legacy child whose
+  /// copied rows carry no `origin_message_id` keeps the old tail placement.
+  int? _forkMarkerInsertionIndex({
+    required String sessionId,
+    required Set<int> pageRowIds,
+    required List<Map<String, dynamic>> historyMessages,
+    required bool isTailPage,
+  }) {
+    final prefixEndRowId = _sessionManager.lastActiveForkCopiedRowId(
+      sessionId,
+    );
+    if (prefixEndRowId == null) {
+      return isTailPage ? historyMessages.length : null;
+    }
+    if (!pageRowIds.contains(prefixEndRowId)) return null;
+    return _historyIndexAfterRow(historyMessages, prefixEndRowId);
+  }
+
+  /// Places an automatic-failover notice where it appeared live: after the
+  /// last durable row at failover time (`anchor_message_id`). Legacy rows
+  /// without that anchor fall back to their request's turn, after the tool
+  /// results that had finished by then. Either way the notice belongs to the
+  /// one page that holds its anchor; an unresolvable notice stays tail-only.
+  int? _routeTransitionInsertionIndex(
+    SessionRouteTransition transition, {
+    required String sessionId,
+    required Set<int> pageRowIds,
+    required List<Map<String, dynamic>> historyMessages,
+    required bool isTailPage,
+  }) {
+    final anchorMessageId = transition.anchorMessageId;
+    final anchorRowId = anchorMessageId == null
+        ? null
+        : _sessionManager.activeRowIdForMessageId(sessionId, anchorMessageId);
+    if (anchorRowId != null) {
+      if (!pageRowIds.contains(anchorRowId)) return null;
+      return _indexAfterEarlierSyntheticRows(
+        historyMessages,
+        _historyIndexAfterRow(historyMessages, anchorRowId),
+        transition.createdAt,
+      );
+    }
+
+    final requestId = transition.requestId;
+    final requestRowId = requestId == null || requestId.isEmpty
+        ? null
+        : _sessionManager.activeRootRowIdForRequest(sessionId, requestId);
+    if (requestRowId == null) {
+      return isTailPage ? historyMessages.length : null;
+    }
+    if (!pageRowIds.contains(requestRowId)) return null;
+
+    var turnAnchorRowId = requestRowId;
+    final turnStart = _historyIndexAfterRow(historyMessages, requestRowId);
+    for (var i = turnStart; i < historyMessages.length; i++) {
+      final row = historyMessages[i];
+      if (row['sender'] == 'user' &&
+          row['input_kind'] != MessageHistoryIdentity.steer) {
+        break;
+      }
+      final terminalAt = row['type'] == 'tool_result'
+          ? DateTime.tryParse(row['terminal_at']?.toString() ?? '')
+          : null;
+      final sourceRowId = row['source_message_row_id'];
+      if (terminalAt != null &&
+          sourceRowId is int &&
+          !terminalAt.isAfter(transition.createdAt)) {
+        turnAnchorRowId = sourceRowId;
+      }
+    }
+    return _indexAfterEarlierSyntheticRows(
+      historyMessages,
+      _historyIndexAfterRow(historyMessages, turnAnchorRowId),
+      transition.createdAt,
+    );
+  }
+
+  /// Index just after every history row rendered from persisted rows up to
+  /// [rowId], so a row that renders nothing still resolves to its position.
+  int _historyIndexAfterRow(
+    List<Map<String, dynamic>> historyMessages,
+    int rowId,
+  ) {
+    var index = 0;
+    for (var i = 0; i < historyMessages.length; i++) {
+      final sourceRowId = historyMessages[i]['source_message_row_id'];
+      if (sourceRowId is int && sourceRowId <= rowId) index = i + 1;
+    }
+    return index;
+  }
+
+  /// Steps past derived rows (compaction lifecycle, earlier transitions, the
+  /// fork marker) at the same anchor that happened no later than [at].
+  int _indexAfterEarlierSyntheticRows(
+    List<Map<String, dynamic>> historyMessages,
+    int index,
+    DateTime at,
+  ) {
+    var cursor = index;
+    while (cursor < historyMessages.length) {
+      final row = historyMessages[cursor];
+      if (row['source_message_row_id'] != null) break;
+      final createdAt = DateTime.tryParse(row['created_at']?.toString() ?? '');
+      if (createdAt == null || createdAt.isAfter(at)) break;
+      cursor++;
+    }
+    return cursor;
   }
 
   int _resolveCompactionHistoryAnchor(
