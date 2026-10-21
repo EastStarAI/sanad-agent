@@ -2,7 +2,7 @@
 id: 118
 title: Compaction accuracy and complete-request target
 status: planned
-gate: blocked-on-117
+gate: ready (117 landed)
 created: 2026-10-21
 parent_task: none (split from 106)
 depends_on: [117]
@@ -31,11 +31,18 @@ Split from [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-
 
 Owners: `agent/lib/engine/context/context_compaction_engine.dart` (`prepareSelection`), `agent/lib/engine/context/compaction_tail_selector.dart`, `agent/lib/engine/runtime/` pressure evaluation, `agent/lib/evolution/compaction/model_projection_builder.dart`, and Client metrics presentation.
 
+## Items Moved In from Task 117
+
+Both predate Task 117 and were observed during its live acceptance on a Test Home with the representative corpus (two rounds). Evidence is in [Task 117](docs/plans/tasks/done/117-session-history-integrity.md).
+
+1. **Compaction-pass provider timeout.** The bounded recovery engaged as designed (3 chunks, per-pass budget 44,694, estimated source 96,218), but a recovery pass failed on a provider timeout in both rounds. The 90 s `connectTimeout` in `agent/lib/engine/adapters/provider_watchdog_config.dart` caps non-streamed compaction passes. The failure was contained: the session stayed usable and showed a notice.
+2. **Overflow-path breaker.** After a failed automatic compaction, overflow compaction still runs in the same run: `_autoCompactionBlockedForRun` in `agent/lib/engine/agent_runner.dart` is not checked on the overflow path.
+
 ## Boundaries
 
 - No blanket multiplier, fabricated floor, ciphertext-length cost or zero opaque cost.
 - Never trim required summary sections, drop tools, lower thinking, globally delete replay or shrink summary limits to force a fit.
-- Destination/issuer compatibility is [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md); history rewrite and the recovery summarizer are [Task 117](docs/plans/tasks/117-session-history-integrity.md).
+- Destination/issuer compatibility is [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md); history rewrite and the recovery summarizer are [Task 117](docs/plans/tasks/done/117-session-history-integrity.md).
 
 ## Gates
 
@@ -51,4 +58,4 @@ Real sessions exported read-only from the main Home are staged privately for thi
 
 ## Dependencies
 
-- Depends on [Task 117](docs/plans/tasks/117-session-history-integrity.md): its boundary-range and recovery changes touch the same selection inputs.
+- Depends on [Task 117](docs/plans/tasks/done/117-session-history-integrity.md): its boundary-range and recovery changes touch the same selection inputs.

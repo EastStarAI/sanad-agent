@@ -402,6 +402,8 @@
   "compactionActionPruning": "أرسل رسالة جديدة أو أعد محاولة الضغط.",
   "compactionFailureBudget": "سياق المحادثة لا يزال يتجاوز الحد المسموح للرموز بعد التقليص.",
   "compactionActionBudget": "اختصر الرسائل السابقة أو ابدأ جلسة جديدة.",
+  "compactionFailureRecoveryCapacity": "هذه المحادثة أكبر من أن تُلخَّص ضمن نافذة سياق النموذج.",
+  "compactionActionRecoveryCapacity": "ابدأ جلسة جديدة، أو بدّل إلى نموذج بنافذة سياق أكبر.",
   "compactionFailureTimeout": "انتهت مهلة استجابة المزوّد أثناء تلخيص المحادثة.",
   "compactionActionTimeout": "تحقق من الاتصال بالشبكة أو أعد المحاولة.",
   "compactionFailureRateLimited": "تم تجاوز حد معدل الطلبات لدى المزوّد أثناء التلخيص.",

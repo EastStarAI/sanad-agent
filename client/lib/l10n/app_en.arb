@@ -442,6 +442,8 @@
   "compactionActionPruning": "Send a new message or retry compaction.",
   "compactionFailureBudget": "Context history remains over budget after pruning.",
   "compactionActionBudget": "Shorten earlier messages or start a new session.",
+  "compactionFailureRecoveryCapacity": "This conversation is too large to summarize within the model's context window.",
+  "compactionActionRecoveryCapacity": "Start a new session, or switch to a model with a larger context window.",
   "compactionFailureTimeout": "Provider timed out during context summarization.",
   "compactionActionTimeout": "Check network connection or try again.",
   "compactionFailureRateLimited": "Provider rate limit reached during summarization.",

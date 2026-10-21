@@ -244,7 +244,7 @@ Plan 106 Gate G8 introduces allowlisted, typed failure diagnostics carrying stag
 #### Allowlisted Causes (`CompactionFailureCause`)
 Allowlisted non-sensitive identifier strings representing exact failure modes without leaking raw exception bodies, secrets, paths, user content, or HTTP payloads:
 - Preparation: `session_busy`, `compaction_in_progress`, `invalid_request`, `unavailable`, `session_not_found`, `thinking_capability_unsupported`, `thinking_capability_unknown`, `thinking_option_unavailable_for_route`, `thinking_route_instance_not_found`, `route_resolution_failed`, `preparation_failed`.
-- Pruning: `tool_result_malformed`, `pruning_failed`, `projection_still_over_budget`.
+- Pruning: `tool_result_malformed`, `pruning_failed`, `projection_still_over_budget`, `recovery_capacity_exceeded` (Task 117: the bounded recovery summarizer needs more chunks than configured; decided before any recovery provider call).
 - Provider: `timeout`, `rate_limited`, `overflow`, `invalid_response`, `network_error`, `provider_error`, `summarization_failed`.
 - Validation: `continuity_validation_failed`.
 - Persistence: `source_revision_stale`, `claim_lost`, `stale_operation`, `superseded`, `missing_message_rows`, `database_error`, `persistence_failed`, `interrupted`.
@@ -261,7 +261,7 @@ Plan 106 Gate G9 maps allowlisted stage and cause diagnostics into user-actionab
    - Fallback authority: without an ambient localization the resolver reads the generated English localization (`AppLocalizationsEn`), so `app_en.arb` remains the single copy authority and no English failure copy is duplicated as Dart literals.
 2. **Failure Categorization:**
    - **Preparation & Thinking Validation:** Distinguishes unsupported thinking modes (`thinking_capability_unsupported`, `thinking_capability_unknown`, etc.), busy sessions, duplicate in-progress operations, and invalid requests.
-   - **Pruning:** Distinguishes malformed tool results from unresolvable over-budget projections (`projection_still_over_budget`).
+   - **Pruning:** Distinguishes malformed tool results from unresolvable over-budget projections (`projection_still_over_budget`) and from a session too large for bounded recovery (`recovery_capacity_exceeded`, whose next action is to start a new session or switch to a larger-context model).
    - **Provider:** Distinguishes timeouts, rate limits (HTTP 429), context overflow, invalid responses, network errors, and generic provider errors.
    - **Validation:** Distinguishes continuity anchor failures (`continuity_validation_failed`).
    - **Persistence:** Distinguishes stale revisions, superseded claims, daemon restarts (`interrupted`), and storage write errors.
@@ -399,16 +399,38 @@ ship in Gate B1.
 |---|---|---|
 | Canonical messages | `messages(id, session_id, data)` via `SessionDB.getMessages` | **`messages.id`** is the durable identity for `CompactionMessageIdentity`; rows are append-only for compaction (no delete/replace during compression). |
 | Session metadata | `sessions` | Holds model/route/title; **`history_revision` is absent today** and must be added in B1. |
-| Message writers | `session_execution_state_coordinator` (`INSERT`), `SessionDB.replaceMessages` (semantic-prefix + changed-suffix rewrite) | Normal turns append rows; metadata-only patches preserve row ids; replay/supersession (Task 51) uses `replaceMessages` and must bump `history_revision`. |
+| Message writers | `session_execution_state_coordinator` (`INSERT`), `SessionDB.replaceMessages` (identity-aligned in-place rewrite, Task 117) | Normal turns append rows; identity-aligned content and metadata changes preserve row ids; replay/supersession (Task 51) uses `replaceMessages` and must bump `history_revision`. |
 | Execution queue | `session_work_items`, `session_pending_runs` | Orthogonal to compaction snapshot; queued user input during compaction stays here until terminal drain (53d). |
 
-`SessionDB.replaceMessages` preserves the longest semantically identical
-canonical prefix and its existing row IDs. Exact matches are untouched;
-top-level metadata-only changes update the existing row in place; the first
-role/content/tool/reasoning/provider-state change deletes and reinserts the
-changed suffix. Ordinary appends and response-metadata attachment therefore
-keep an activated boundary eligible, while edit/retry still supersedes the
-changed suffix and bumps `history_revision`.
+`SessionDB.replaceMessages` aligns the replacement list with the active rows
+by `message_id`, never by content (Task 117):
+
+1. **Identity assignment.** A message without `message_id` reuses the id of
+   the active row at the same position, so in-memory history appended after
+   the last reload stays bound to its rows. Positional reuse never takes an id
+   that another incoming message carries explicitly: a row inserted
+   mid-history (a `HistoryHealer` result) mints a fresh identity instead of
+   stealing the displaced row's and being overwritten by it.
+2. **Duplicate guard.** Two incoming messages with the same `message_id` throw
+   `StateError` before any write; the transaction rolls back.
+3. **In-place alignment.** While the existing and replacement ids match, a
+   row whose stored JSON differs is updated in place through
+   `MessageHistoryIdentity.persist(sqliteId:)`, keeping `messages.id`.
+   Unchanged rows are not written. Content transforms (processed-image
+   pruning, rejected provider-state clearing, steer stamping, metadata
+   attachment) therefore keep every row id and every compaction boundary
+   endpoint. Legacy rows without a stored `message_id` align by position only
+   with a message that carries no explicit id.
+4. **Structural suffix.** The first structural divergence (insertion,
+   removal, reorder, identity change) deletes only the *active* rows from that
+   point and re-inserts the remaining replacement messages, because
+   `messages.id` is the only ordering key. Superseded audit rows are never
+   deleted by a replace; re-inserted active rows receive ids above them.
+5. `history_revision` is bumped once per replace.
+
+Stored payloads stay opaque: an aligned unchanged row is not rewritten, and a
+re-inserted row is re-encoded from its decoded `Message`, so `providerState`
+and `metadata` round-trip byte-identically (Task 116 relies on this).
 | Runtime notices | `session_runtime_notices`, suspended/pending maps | Unrelated to projection boundaries. |
 
 **Findings:**
@@ -515,7 +537,7 @@ Task 47 consumers paginate **full** canonical history and optional compaction **
 
 **Task 51 — soft rewind / supersession**
 
-When `replaceMessages` removes or rewrites rows at or before a boundary's tail:
+When `replaceMessages` structurally inserts, removes, or reorders rows at or before a boundary's tail (identity-aligned content changes keep row ids and never invalidate a boundary, Task 117):
 
 1. Completed rows remain for audit but become **projection-ineligible** via `CompactionBoundaryValidity`.
 2. Orchestrator recomputes projection from the newest eligible completed boundary, or full history when none remain.
@@ -563,12 +585,12 @@ Projection rules:
 2. Active boundary ⇒ `[summary user message] + retained tail verbatim + current rows after the retained suffix`. Projection uses the surviving tail-start endpoint when recovery rewrites the obsolete tail-end row; the semantic tail-end fingerprint is reserved for causal placement of lifecycle events during history hydration.
 3. System prompt and runtime overlays remain outside projection; `AgentContextAssembler` owns them per request (53d wiring).
 4. Repeated compactions use only the newest eligible boundary; prior summaries are not stacked.
-5. Missing source endpoints or a missing retained-tail start in a completed boundary mark that boundary projection-ineligible and emit an invalidation diagnostic (skipping to older boundaries or rule 1 without lockout). A surviving tail start with a replaced tail end remains eligible and projects the replacement suffix. Numeric gaps between present endpoints are valid. `history_revision` is a monotonic write counter; `history_revision_future` means the boundary claims a revision ahead of live history (restore/rollback). Limitation: When fallback to full canonical history occurs for very large sessions, subsequent preflight summarization attempts may fail if the uncompacted history exceeds the provider context window and recovery chunking limits.
+5. Missing source endpoints or a missing retained-tail start in a completed boundary mark that boundary projection-ineligible and emit an invalidation diagnostic (skipping to older boundaries or rule 1 without lockout). A surviving tail start with a replaced tail end remains eligible and projects the replacement suffix. Numeric gaps between present endpoints are valid. `history_revision` is a monotonic write counter; `history_revision_future` means the boundary claims a revision ahead of live history (restore/rollback). After Task 117 only a structural mid-history insert inside a summarized range (or a legacy boundary invalidated before the fix) reaches this rule; content rewrites keep the endpoints. The invalidated record is never repaired or reused as `previousSummary`; a new boundary comes from normal preflight, and a session too large for one request is summarized by the bounded recovery summarizer (§8.12) or fails with `recovery_capacity_exceeded`. Re-anchoring endpoints by `message_id` across structural inserts is Task 118 scope.
 6. Compaction row fields and projection metadata never enter provider wire payloads.
 
 DI: `ModelProjectionBuilder` registered after `SessionManager` in `agent/lib/core/di.dart`.
 
-Verification: `fvm dart test test/evolution/model_projection_builder_test.dart` — 19 passed.
+Verification: `fvm dart test test/evolution/model_projection_builder_test.dart` — 23 passed (Task 117, 2026-10-21).
 
 ### 8.11 Provider-backed summary request (Task 53i)
 
@@ -630,8 +652,52 @@ revision, projection revision, and complete route signature.
 Compaction performs no cache-specific measurement or prefix enforcement. Cache
 behavior is incidental to the ordinary codec/provider request and is neither a
 correctness condition nor an efficiency claim. If the full request overflows,
-bounded contiguous chunk/reduce recovery preserves tool groups and never
+bounded contiguous chunk/reduce recovery (§8.12) preserves tool groups and never
 activates partial summaries.
+
+### 8.12 Bounded recovery summarizer (Task 117, 0P-F2)
+
+`ContextCompactionEngine._generateRecoverySummary` runs only after the
+ordinary provider request reports `CompactionProviderOverflow`. Its limits
+live in `CompactionRecoveryPolicy` (`agent/lib/core/config.dart`; defaults:
+safety ratio `0.80`, at most `16` chunks, minimum pass budget `512` tokens)
+and are injectable through the engine constructor.
+
+1. **Per-pass budget.** `floor(effectiveInputBudget × safetyRatio)` minus the
+   stable system messages, the tool schemas, and the longer of the chunk and
+   final instructions, all measured with `CompactionTokenEstimator` (text plus
+   model-facing media). The ratio stays below 1 because chars/4 underestimates
+   Arabic and CJK text.
+2. **Packing.** The pruned source is split into atomic groups (an assistant
+   tool-call batch plus its results, otherwise one message) and greedily
+   packed, in order, into chunks that fit the budget.
+3. **Oversized group.** A group over budget is copied with a deterministic
+   head-and-tail text cap per message (budget shared evenly) and an explicit
+   `[truncated N chars for summary]` marker. It is never dropped; if it is
+   still over budget it forms its own chunk. Canonical rows are untouched.
+4. **Capacity.** A pass budget below the minimum, or more chunks than
+   `maxChunks`, fails with stage `pruning`, cause `recovery_capacity_exceeded`
+   **before any recovery provider call** (only the original overflowing
+   request was sent). The Client shows an actionable localized notice.
+5. **Split once.** A chunk whose request overflows is halved by group once;
+   a half that overflows again, or a single-group chunk, fails with cause
+   `overflow`. There is no further bisection.
+6. **Bounded reduce.** The eligible `request.previousSummary` (when present)
+   precedes the chunk partials. Items are packed into reduce batches within
+   the pass budget; each multi-item batch is merged by one partial `reduce`
+   pass (`reduce:<n>_<attempt>`), single items carry over, and a level that
+   cannot merge any two items fails with `recovery_capacity_exceeded`. The
+   last single batch receives the final `reduce:<attempt>` pass with the
+   continuity anchors. Every level strictly shrinks the item count, so reduce
+   calls are bounded by the number of partials.
+7. **Diagnostics.** The decision snapshot records
+   `recovery_pass_budget_tokens`, `recovery_source_tokens`,
+   `recovery_chunk_count`, `recovery_max_chunks`, `recovery_safety_ratio`,
+   `recovery_split_count`, `recovery_reduce_batches`, and
+   `recovery_provider_calls`; each pass keeps its ledger entry.
+
+Skipping the ordinary request when it is already estimated to overflow is not
+implemented; the reactive overflow remains the only recovery trigger.
 
 ## 9. Orchestration and Protocol Contract (Task 53d)
 
@@ -756,7 +822,7 @@ The durable record contains:
 ### 11.2 Per-Attempt Summarization Ledger
 
 When summarization executes (including single-shot, recovery chunk/reduce, or corrective retry passes), each attempt is recorded in the ledger as a `CompactionSummarizationAttemptRecord`:
-- **Attempt Identification:** `pass_kind` (`full`, `repair`, `chunk`, `reduce`) and distinct `request_id` formatted as `compaction:[<trigger>:]<compactionId>:<passKind>:<attempt>` (e.g. `compaction:overflow:<compactionId>:full:0`).
+- **Attempt Identification:** `pass_kind` (`full`, `repair`, `chunk`, `reduce`) and distinct `request_id` formatted as `compaction:[<trigger>:]<compactionId>:<passKind>:<attempt>` (e.g. `compaction:overflow:<compactionId>:full:0`). Recovery chunk passes and intermediate reduce batches add a sequence index: `<passKind>:<index>_<attempt>` (§8.12).
 - **Timing:** `duration_ms` for that specific attempt.
 - **Provider Usage:** `input_tokens`, `cached_input_tokens`, `cache_write_tokens`, `output_tokens`, and `reasoning_tokens` reported for that call. Missing or unsupported usage stays `null`.
 - **Outcome and Failure Cause:** `outcome` (`success`, `validation_failed`, `invalid_response`, `overflow`, `error`) and typed `failure_reason`.

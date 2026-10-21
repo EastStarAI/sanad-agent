@@ -835,67 +835,78 @@ class SessionDB {
     AgentStateTransaction transaction,
   ) => _replaceMessagesInDatabase(transaction.db, sessionId, messages);
 
+  /// Rewrites the active history of [sessionId] to [messages].
+  ///
+  /// Rows are aligned by `message_id`, never by content: every aligned row is
+  /// updated in place (keeping `messages.id`) when its data differs, so
+  /// content transforms such as image pruning, provider-state clearing, steer
+  /// stamping, and metadata edits keep every row id and therefore every
+  /// compaction boundary endpoint. Only the first structural divergence (an
+  /// insertion, removal, reorder, or identity change) re-inserts the remaining
+  /// suffix, because `messages.id` is the only ordering key. The suffix delete
+  /// is scoped to the replaced active rows, so superseded audit rows survive.
+  /// Duplicate `message_id`s fail with [StateError] before any write.
   List<Message> _replaceMessagesInDatabase(
     Database db,
     String sessionId,
     List<Message> messages,
   ) {
     final existing = getPersistedMessages(sessionId);
+    final existingIdentities = existing
+        .map((entry) => MessageHistoryIdentity.read(entry.message))
+        .toList(growable: false);
     final assigned = MessageHistoryIdentity.assignIdentities(
       messages,
-      existingActive: existing
-          .map((entry) => MessageHistoryIdentity.read(entry.message))
-          .toList(growable: false),
+      existingActive: existingIdentities,
     );
-    var unchangedPrefixLength = 0;
+    MessageHistoryIdentity.requireUniqueMessageIds(assigned);
+    var alignedLength = 0;
     final comparableLength = existing.length < assigned.length
         ? existing.length
         : assigned.length;
-    final metadataUpdates = <({int rowId, Message message})>[];
-    while (unchangedPrefixLength < comparableLength) {
-      final existingMessage = existing[unchangedPrefixLength].message;
-      final replacementMessage = assigned[unchangedPrefixLength];
-      if (jsonEncode(existingMessage.toJson()) ==
-          jsonEncode(replacementMessage.toJson())) {
-        unchangedPrefixLength++;
-        continue;
+    while (alignedLength < comparableLength) {
+      final existingId = existingIdentities[alignedLength].messageId;
+      final replacement = assigned[alignedLength];
+      final aligned = existingId.isEmpty
+          // A legacy row without durable identity aligns only by position
+          // with a message that carried no explicit identity of its own.
+          ? MessageHistoryIdentity.read(
+              messages[alignedLength],
+            ).messageId.isEmpty
+          : existingId == MessageHistoryIdentity.read(replacement).messageId;
+      if (!aligned) break;
+      final current = existing[alignedLength];
+      if (jsonEncode(current.message.toJson()) !=
+          jsonEncode(replacement.toJson())) {
+        MessageHistoryIdentity.persist(
+          db,
+          sessionId,
+          replacement,
+          sqliteId: current.rowId,
+        );
       }
-      if (!_sameSemanticMessage(existingMessage, replacementMessage)) {
-        break;
-      }
-      metadataUpdates.add((
-        rowId: existing[unchangedPrefixLength].rowId,
-        message: replacementMessage,
-      ));
-      unchangedPrefixLength++;
+      alignedLength++;
     }
-    for (final entry in metadataUpdates) {
-      MessageHistoryIdentity.persist(
-        db,
-        sessionId,
-        entry.message,
-        sqliteId: entry.rowId,
+    if (alignedLength < existing.length) {
+      // Exactly the active rows being replaced: `existing` is the ordered
+      // active set, so every active row from the divergence onward.
+      db.execute(
+        '''
+        DELETE FROM messages
+        WHERE session_id = ?
+          AND id >= ?
+          AND (history_status = 'active' OR history_status IS NULL)
+        ''',
+        [sessionId, existing[alignedLength].rowId],
       );
     }
-    if (unchangedPrefixLength < existing.length) {
-      db.execute('DELETE FROM messages WHERE session_id = ? AND id >= ?', [
-        sessionId,
-        existing[unchangedPrefixLength].rowId,
-      ]);
-    }
-    for (final message in assigned.skip(unchangedPrefixLength)) {
+    for (final message in assigned.skip(alignedLength)) {
       MessageHistoryIdentity.persist(db, sessionId, message);
     }
     SessionHistoryRevisionRepository.bumpDatabase(db, sessionId);
     return getPersistedMessages(
       sessionId,
     ).map((entry) => entry.message).toList(growable: false);
-  }
-
-  static bool _sameSemanticMessage(Message left, Message right) {
-    final leftJson = left.toJson()..remove('metadata');
-    final rightJson = right.toJson()..remove('metadata');
-    return jsonEncode(leftJson) == jsonEncode(rightJson);
   }
 
   /// Compare-and-swaps [expectedHistoryRevision], revalidates the target as

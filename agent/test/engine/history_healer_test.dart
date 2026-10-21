@@ -170,4 +170,61 @@ void main() {
 
     expect(protected, {'switch-tool'});
   });
+
+  test('mid-history heal is persisted once and keeps every other row '
+      '(Task 117 D2)', () {
+    final session = sessionManager.createSession('test-model');
+    final sessionId = session.sessionId;
+    sessionManager.saveSessionHistory(sessionId, [
+      Message(
+        role: MessageRole.user,
+        content: 'u1',
+        metadata: const {'request_id': 'r1'},
+      ),
+      Message(
+        role: MessageRole.assistant,
+        toolCalls: [
+          ToolCall(id: 'orphan', name: 'shell_execute', arguments: const {}),
+        ],
+      ),
+      Message(
+        role: MessageRole.user,
+        content: 'u2',
+        metadata: const {'request_id': 'r2'},
+      ),
+      Message(role: MessageRole.assistant, content: 'a2'),
+    ]);
+    final before = sessionManager.db.getPersistedMessages(sessionId);
+
+    final loaded = sessionManager.db.getMessages(sessionId).toList();
+    HistoryHealer.healHistory(
+      history: loaded,
+      sessionManager: sessionManager,
+      sessionId: sessionId,
+    );
+
+    final healed = sessionManager.db.getPersistedMessages(sessionId);
+    expect(healed, hasLength(5));
+    expect(healed[2].message.toolCallId, 'orphan');
+    expect(healed[2].message.metadata?['reason'], 'daemon_interrupted');
+    expect(healed[0].rowId, before[0].rowId);
+    expect(healed[1].rowId, before[1].rowId);
+    expect(
+      healed.skip(3).map((entry) => entry.message.metadata?['message_id']),
+      before.skip(2).map((entry) => entry.message.metadata?['message_id']),
+    );
+
+    // A reload finds no orphan, so nothing is healed or rewritten again.
+    final reloaded = sessionManager.db.getMessages(sessionId).toList();
+    HistoryHealer.healHistory(
+      history: reloaded,
+      sessionManager: sessionManager,
+      sessionId: sessionId,
+    );
+    expect(reloaded, hasLength(5));
+    expect(
+      sessionManager.db.getPersistedMessages(sessionId).map((e) => e.rowId),
+      healed.map((e) => e.rowId),
+    );
+  });
 }
