@@ -73,9 +73,19 @@ erDiagram
     scheduled_tasks {
         text id PK
         text task
-        text run_at
         text session_id
+        text kind
+        integer interval_minutes
+        text at_time
+        text weekdays
+        integer month_day
+        text zone
+        text next_run_at
         text created_at
+        text updated_at
+        text last_run_at
+        text last_status
+        integer enabled
     }
     
     suspended_checkpoints {
@@ -223,15 +233,34 @@ Indexes (B1):
 See `docs/technical/context_compaction.md` §8 for activation CAS and Task 51/52 invalidation rules.
 
 ### 3.3. `scheduled_tasks` Table
-Tracks automation tasks and scheduled loops that the daemon runs asynchronously.
+Tracks automation tasks and scheduled recurring loops that the daemon runs asynchronously (Task 112a, Decision D8).
+
+Ownership: the table schema and its migration live in `AgentStateDatabase`; every read and write goes through `ScheduledTaskRepository` (`agent/lib/evolution/db/scheduled_task_repository.dart`) behind the `SessionDB` facade, and `CronScheduler` is the only caller that mutates rows.
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
 | `id` | `TEXT` | Primary Key | Unique task identifier |
-| `task` | `TEXT` | Non-null | Task details or command payload |
-| `run_at` | `TEXT` | Non-null | ISO8601 scheduled execution time |
+| `task` | `TEXT` | Non-null | Task details or command prompt to execute |
 | `session_id` | `TEXT` | Non-null | Originating conversation thread |
-| `created_at` | `TEXT` | Non-null | ISO8601 creation timestamp |
+| `kind` | `TEXT` | Non-null DEFAULT `'once'` | Recurrence kind (`once`, `interval`, `daily`, `weekly`, `monthly`) |
+| `interval_minutes` | `INTEGER` | Nullable | Interval duration in minutes (for `interval`) |
+| `at_time` | `TEXT` | Nullable | Wall-clock `HH:MM` time (for `daily`, `weekly`, `monthly`) |
+| `weekdays` | `TEXT` | Nullable | Comma-separated weekdays e.g. `mon,wed,fri` (for `weekly`) |
+| `month_day` | `INTEGER` | Nullable | Day of month 1..31 (for `monthly`) |
+| `zone` | `TEXT` | Non-null DEFAULT `'local'` | Timezone (`local` or fixed UTC offset `Z`, `+HH:MM`, `-HH:MM`) |
+| `next_run_at` | `TEXT` | Non-null | ISO8601 UTC timestamp of next scheduled execution (migrated from legacy `run_at`) |
+| `created_at` | `TEXT` | Non-null | ISO8601 UTC creation timestamp |
+| `updated_at` | `TEXT` | Non-null | ISO8601 UTC last update timestamp |
+| `last_run_at` | `TEXT` | Nullable | ISO8601 UTC timestamp of previous execution (preserved without change on skipped occurrences) |
+| `last_status` | `TEXT` | Nullable | Status of previous execution (`fired`, `skipped_missed`, `error`) |
+| `enabled` | `INTEGER` | Non-null DEFAULT `1` | 1 if schedule is active (pause/resume is out of scope in this release; reserved for future lifecycle control) |
+
+#### Migration Note (Task 112a)
+Pre-existing rows from earlier versions migrate automatically via an idempotent guarded migration:
+- Legacy `run_at` is renamed to `next_run_at`.
+- Rows default to `kind = 'once'`, `zone = 'local'`, `enabled = 1`, and `updated_at = created_at`.
+- An index `idx_scheduled_tasks_next_run` is created on `next_run_at ASC`.
+- Repeated migration execution is an idempotent no-op.
 
 ### 3.4. `suspended_checkpoints` Table
 Persists agent execution states when suspended for manual user approvals or clarifying questions.

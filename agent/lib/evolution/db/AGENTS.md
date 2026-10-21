@@ -21,7 +21,7 @@ This contract applies to `agent/lib/evolution/db/`.
 - Session database responsibilities are decomposed into cohesive owners behind the `SessionDB` facade:
   - `SessionRepository`: session lifecycle, metadata, titles, and workspace records.
   - `SessionMessageRepository`: message replace, append and read, history pages and projection, and originating tool-call lookup. It is the only owner of the history-rewrite algorithm.
-  - `ScheduledTaskRepository`: scheduled task persistence.
+  - `ScheduledTaskRepository`: every `scheduled_tasks` read and write (create/upsert, single read, ordered list, delete); the table schema and its additive migration stay in `AgentStateDatabase`.
   - `SuspendedCheckpointRepository`: suspended checkpoints and work-item state.
   - `SessionForkCommitRepository`: fork, soft-rewind, and root-user commit records.
   - `SessionDB`: delegating facade preserving the public API surface; it holds no SQL of its own and must never carry a second copy of a repository algorithm.

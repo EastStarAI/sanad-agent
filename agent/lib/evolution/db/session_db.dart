@@ -291,9 +291,37 @@ class SessionDB {
   void saveScheduledTask(
     String id,
     String task,
-    DateTime runAt,
-    String sessionId,
-  ) => _scheduledTaskRepository.saveScheduledTask(id, task, runAt, sessionId);
+    DateTime nextRunAt,
+    String sessionId, {
+    String kind = 'once',
+    int? intervalMinutes,
+    String? atTime,
+    String? weekdays,
+    int? monthDay,
+    String zone = 'local',
+    DateTime? updatedAt,
+    DateTime? lastRunAt,
+    String? lastStatus,
+    bool enabled = true,
+  }) => _scheduledTaskRepository.saveScheduledTask(
+    id,
+    task,
+    nextRunAt,
+    sessionId,
+    kind: kind,
+    intervalMinutes: intervalMinutes,
+    atTime: atTime,
+    weekdays: weekdays,
+    monthDay: monthDay,
+    zone: zone,
+    updatedAt: updatedAt,
+    lastRunAt: lastRunAt,
+    lastStatus: lastStatus,
+    enabled: enabled,
+  );
+
+  Map<String, dynamic>? getScheduledTask(String id) =>
+      _scheduledTaskRepository.getScheduledTask(id);
 
   List<Map<String, dynamic>> getAllScheduledTasks() =>
       _scheduledTaskRepository.getAllScheduledTasks();

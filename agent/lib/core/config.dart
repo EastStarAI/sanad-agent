@@ -155,6 +155,12 @@ class Config {
     return _readString('ACTIVE_PROVIDER').trim().toLowerCase();
   }
 
+  String get scheduleTimezone {
+    _ensureFreshEnv();
+    final tz = _readString('SCHEDULE_TIMEZONE').trim();
+    return tz.isEmpty ? 'local' : tz;
+  }
+
   String get version => loadAgentVersion();
 
   String get llmApiKey {
