@@ -91,7 +91,10 @@ which remained unavailable for more than ten minutes despite an accepted ticket
 for the exact raw CLI. Runtime installers instead require the canonical size and
 SHA-256 plus a valid Apple-anchored Developer ID signature with exact Team ID
 `UC2824B99G` and publisher name. They do not repeat the nondeterministic ticket
-lookup. `spctl --type execute` is not used because it rejects valid notarized
+lookup. A runtime rejection reports a typed, sanitized stage such as
+`publisher_requirement`; Agents before v1.0.6 still performed the `=notarized`
+lookup during `sanad update` and recover through the official installer, as
+described in [Release and Update Architecture](../technical/update_architecture.md#legacy-agent-recovery). `spctl --type execute` is not used because it rejects valid notarized
 non-bundle executables.
 
 The hosted macOS Client job restores the exported Sparkle Ed25519 key to a

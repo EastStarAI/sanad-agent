@@ -31,6 +31,30 @@ GitHub attestation locally.
 | Client Windows | `unsigned+winsparkle-dsa` | WinSparkle DSA plus manifest/checksum/provenance release gates |
 | Client Linux | `github-attestation` | manual discovery of the canonical x64 `.deb`; portable `tar.gz` remains an alternative |
 
+### Platform trust diagnostics
+
+`verifyReleaseArtifactTrustDetailed` returns a `PlatformTrustResult` instead of
+a bare boolean; `verifyReleaseArtifactTrust` remains as a boolean wrapper for
+existing callers. Every untrusted result is fail-closed and names one stage:
+
+| Stage | Meaning |
+|---|---|
+| `metadata_validation` | The manifest artifact violates `ReleaseArtifactTrustPolicy`. |
+| `codesign_verification` | `codesign` rejected the signature itself (any non-zero exit other than 3). |
+| `publisher_requirement` | The signature is valid but does not satisfy the exact Apple-anchored NanoSoft requirement (`codesign` exit 3). |
+| `authenticode_signature` | The Windows Authenticode status was not `Valid`. |
+| `verifier_unavailable` | The verifier could not run or threw; the artifact is still rejected. |
+| `platform_verifier` | A caller-supplied boolean verifier rejected the artifact without detail. |
+
+The detail is the verifier output passed through
+`sanitizePlatformVerifierOutput`: the staged artifact path (including its
+resolved `/private` form) becomes `<artifact>`, the current `HOME`/`USERPROFILE`
+and temporary roots become `<home>`/`<temp>`, `/var/folders` paths become
+`<temp>`, any other per-user directory segment becomes `<user>`, and ANSI and
+control characters collapse to one line of at most 500 characters. The summary
+`stage=<stage>: exit=<code>: <detail>` is carried in the Agent update message
+and the Client bootstrap result. The publisher requirement itself is unchanged.
+
 Windows remains intentionally unsigned for every release until an explicit
 signed-only migration changes this centralized policy. Signed and unsigned
 Windows types are not accepted together. Acquiring Authenticode requires a
@@ -45,6 +69,15 @@ Both bootstrap and Agent update reject a latest manifest whose version differs
 from that target before downloading an artifact. An older Agent may move only
 to the exact target. A newer Agent is never downgraded automatically.
 
+On Desktop startup the Client pairs before it connects: the gateway bootstrap
+asks the connection coordinator to check the local Agent first instead of
+treating a running daemon as already usable. A running Agent older than the
+Client receives `updateDaemon(targetVersion: <client version>)` through its own
+`/update` endpoint. If the Agent is newer, offline, or the update fails, the
+Client still connects to the running Agent. Concurrent bootstrap and connection
+paths share one lifecycle attempt, so two installs never race on one
+executable.
+
 A successful lifecycle result means authenticated health reports the target
 version and the local WebSocket reaches ready. Download, staging, replacement,
 or restart request alone are not success. Typed failures distinguish network,
@@ -53,17 +86,52 @@ start, health, version, authentication, and socket stages.
 
 ## First install and retry
 
-`VerifiedAgentBootstrapInstaller` is used only when the packaged Desktop Client
-cannot reach an installed Agent. It validates the exact manifest and artifact,
-stages beside the target, preserves the previous executable, performs an atomic
-move, and restores the previous executable when replacement fails.
+`VerifiedAgentBootstrapInstaller` is used only while the packaged Desktop
+Client cannot reach a running Agent and the executable under the managed Sanad
+Home is absent, older than the Client, has no parseable `Version:` line, or does
+not support a required service option. A compatible executable at the exact
+target is reused without a download. A newer executable is never replaced; it
+is started when compatible and reported as `downgrade_rejected`. The installer
+validates the exact manifest and artifact, stages beside the target, preserves
+the previous executable as a rollback copy, performs an atomic move, and
+restores the previous executable when replacement fails.
 `StandaloneDaemonController` then registers the platform service idempotently,
-starts it, and polls authenticated health with bounded backoff.
+starts it, and polls authenticated health with bounded backoff. If registration,
+start, or health fails after an existing executable was replaced, the failed
+candidate is stopped, the previous executable is restored and left stopped, and
+the result is `rollback_completed` with the original failure appended.
 
 The connection coordinator proves the authenticated local socket after health.
 A failed socket attempt is not cached permanently; a later retry creates a new
 attempt without deleting Sanad Home, identity, provider configuration, or a
 previous valid executable.
+
+## Legacy Agent recovery
+
+Agents v1.0.0 through v1.0.5 verified macOS update candidates against the
+`=notarized` code requirement. A standalone executable can fail that check, so
+`sanad update` on those versions may report a platform trust failure even for a
+genuine release. v1.0.6 (#105) replaced it with the exact Apple-anchored
+Developer ID requirement used today. Those Agents cannot gain new update logic
+in place; the supported recovery is the official installer, which verifies the
+artifact itself with the current requirement:
+
+```bash
+curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh
+bash install.sh --no-login
+```
+
+On Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://sanad.eaststarai.com/install.ps1))) -NoLogin
+```
+
+The installer replaces the executable and refreshes the background service,
+briefly interrupting connected Clients; existing sign-in is kept. A current
+Agent prints the same platform-appropriate command after any `trust_failed`
+update result. The command text comes from `OfficialAgentInstaller` in the
+shared release contract, which is the only host recovery guidance may name.
 
 ## Installed Agent update
 

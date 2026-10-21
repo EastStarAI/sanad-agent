@@ -24,6 +24,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.
 - [View Image Tool QA](view_image_tool_qa.md): Regression coverage for secure image loading, user attachment admission, composer/timeline/edit UX, local/remote media hydration, multimodal codecs, recovery, pruning, and binary-safe projections.
 - [Runtime Source Switch QA](runtime_source_switch_qa.md): Regression coverage for requester-scoped pair selection, multi-runtime isolation, retained runtime identity, target conflicts, and full-pair rollback.
+- [Agent Update Trust and Auto-Pairing QA](agent_update_trust_and_auto_pairing_qa.md): Typed trust stages, sanitized diagnostics, recovery guidance, stopped-agent compatibility, Client–Agent auto-pairing, and isolated Test Home live scenarios.
 - [Release Verification Matrix](release_verification.md): Local and hosted evidence required for release identity, signing, installation, update, rollback, and supply-chain safety.
 - [Community Governance QA](community_governance_qa.md): Static and live verification for labels, templates, skills, protected CI, Discord routing, and repository governance.
 - [Conversation Cache Recovery QA](conversation_cache_recovery_qa.md): Local cache, draft, reconnect, and restart recovery coverage.
