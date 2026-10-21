@@ -1,8 +1,8 @@
 ---
 id: 123
 title: Remote workspace picker confined to the managed workspaces root
-status: in_progress
-gate: G4 (independent review)
+status: done
+gate: G5 (live acceptance) closed
 created: 2026-10-21
 parent_task: none
 depends_on: []
@@ -175,8 +175,8 @@ Record operation ids, screenshots and the on-disk listings in the Round Log.
 - [x] G1 — Agent: A1–A8 with S1–S20 red on `adc128ec`, then green; analyzer clean.
 - [x] G2 — Client: C1–C5; widget and unit tests; en/ar strings; analyzer clean.
 - [x] G3 — Contracts and docs listed above updated, with no stale "remote sends no filesystem command" or "reserved for a future file tree" text left.
-- [ ] G4 — Independent review.
-- [ ] G5 — Live acceptance (TH1 cloud → "Sanad Agent Test2 (macOS)") with evidence.
+- [x] G4 — Independent review.
+- [x] G5 — Live acceptance (TH1 cloud → "Sanad Agent Test2 (macOS)") with evidence.
 
 ## Definition of Done
 
@@ -205,6 +205,7 @@ The user answered the open questions on 2026-10-21. These answers are binding fo
 - **Q3 — Folder containing a workspace: refused.** Renaming or deleting a folder that is or contains a registered workspace is refused with `workspace_in_use`. Paths are never rewritten.
 - **Q4 — Remote "Change Path": out of scope.** Using the dialog for remote Settings "Change Path" is a separate follow-up, not part of Task 123.
 - **Q5 — Folders only.** The dialog lists folders only.
+- **Local `workspace_in_use` (implementation decision).** The `workspace_in_use` refusal for renaming or deleting a folder that is or contains a registered workspace also applies in local mode, as a defensive check in the shared coordinator. There is no visible local UI change: the local flow uses the native picker and does not expose the in-app rename/delete.
 
 ## Estimate
 
@@ -276,4 +277,33 @@ Branch `feat/123-remote-workspace-picker` on `adc128ec`. Not pushed; no PR.
 | `scripts/lint_wiki.dart` | 1 error, already present on `adc128ec`: `third_party_skills_install_qa.md` is not indexed; not part of 123 | — |
 
 Open after this round: G4 independent review and G5 live acceptance.
+
+### Round 2 — independent review (2026-10-21)
+
+The coordinator read the full diff and re-ran the analyzers (clean) and the focused suites (agent 106 passed, client 117 passed). A mutation check on the confinement resolver was caught by the tests. After merging `origin/main` (`869419c4`, Task 111) both analyzers stayed clean and the same focused suites passed again.
+
+## Live Acceptance (2026-10-21)
+
+**Result: 7/7 PASS.** Candidate `a36c895c`. The client was the **TH3** slot (cloud on) instead of TH1, connected over the cloud to the TH2 device "Sanad Agent Test2 (macOS)" (`local=false`). Each request reached TH2 through `ServerSanadGatewayPlatform` from the cloud socket. The evidence lives outside the repository in the run notes and screenshots.
+
+| # | Scenario | Result |
+|---|---|---|
+| 1 | Remote add-workspace opens `WorkspaceBrowserDialog` at TH2's `<SANAD_HOME>/workspaces`, with no name popup and no native picker. At the root, `..` is absent, the root hint is shown, and "Use This Folder" is disabled; tapping it sends no `create_workspace`. | PASS |
+| 2 | Created `acc-123/parent/child`, renamed `child` to `picked`, and created and deleted `tmp-123` with the confirmation. The TH2 disk diff showed only the three expected folders. | PASS |
+| 3 | Picked `acc-123/parent/picked`. It registered as `picked`, and a session `pwd` tool call returned the picked folder on TH2. | PASS |
+| 4 | Over the cloud: browsing `/`, `$HOME`, the TH2 Home, `<root>/../`, a NUL path, and a planted symlink to `/tmp` each returned `path_not_allowed`. Renaming `acc-123/parent` returned `workspace_in_use`, also localized in the UI. Nothing changed on disk, and the listing omitted the link. | PASS |
+| 5 | Local regression: the local device's add-workspace opened no in-app dialog and no name popup. A new app-owned native panel window appeared. **Window evidence only**: the shell had no screen-recording permission, so the panel was not captured or driven. | PASS |
+| 6 | Arabic: the dialog strings are localized and the layout is mirrored. The current-path line stays LTR, and the `workspace_in_use` message is in Arabic. | PASS |
+| 7 | Cleanup: removed the workspace record, then deleted `acc-123` through the dialog. The TH2 root entry list matched the before-snapshot exactly. | PASS |
+
+Residual from the run: the test conversation stays in TH2 history, unscoped from the removed workspace.
+
+## Residual Testability Gaps
+
+- The dialog folder rows, the per-row rename/delete buttons, and the tool permission card options have no widget keys. Live driving used coordinates or VM-service calls for these.
+- The Client driver does not expose a widget's enabled state, so the disabled "Use This Folder" at the root was confirmed by a screenshot and by the absence of a `create_workspace`, not by a driver read.
+
+## Follow-up
+
+- Remote Settings "Change Path" (relocate) using this confined browser, limited to targets inside the managed root (Q4). Separate task.
 

@@ -6,7 +6,7 @@ description: "Remote workspace picking, browse, and confirmation-gated folder mu
 # Remote Workspace Folder Mutation Protocol
 
 Owning tasks: `docs/plans/tasks/82-secure-remote-device-control-workspaces-and-mcp.md`
-(managed-remote admission) and `docs/plans/tasks/123-remote-workspace-picker.md`
+(managed-remote admission) and `docs/plans/tasks/done/123-remote-workspace-picker.md`
 (strict root confinement and the in-app remote picker).
 Threat model: [Remote Device Control Threat Model](remote_device_control_threat_model.md).
 
