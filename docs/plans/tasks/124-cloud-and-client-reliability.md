@@ -150,3 +150,30 @@ The full Client NavTrace and AppRouterRedirect log of a live repro (`sanad-dev l
 ### Observed in passing (not changed)
 
 The unscoped "+" (`sidebar_new_unscoped_conversation_btn`, tooltip "New conversation without a workspace") calls `startNewChat(workspaceId: null)`. When it leaves an open session, that restores the open session's workspace, so the new draft is workspace-bound. Pressing a "+" whose resolved destination equals the current New Conversation is a deliberate no-op (redirect with no build). Either effect can look like a dead "+" and deserves a product decision.
+
+## Verification
+
+| Gate | Result | Log |
+|---|---|---|
+| `fvm flutter analyze` (client) | no issues | — |
+| `fvm dart analyze` (agent) | no issues | — |
+| Client full suite | 1,952 passed | `temp/g3/final-client-suite.log` |
+| Agent full suite | 3,231 passed, 14 skipped | `temp/g3/final-agent-suite.log` |
+| Client E2E (`local_dual_connection`, `hosted_attachment_relay`), `--concurrency=1` | 14 passed | `temp/g3/final-e2e.log` |
+| `fvm dart run scripts/lint_wiki.dart` | success | — |
+
+## Live Scenarios (two Test Homes on the candidate)
+
+Topology: Home A runs the cloud Agent. Home B runs the Client and its own local Agent. Both are signed in to the same account. The Agent suppresses cloud replies to a locally connected Client, so every cloud check runs from Home B against Home A's device.
+
+1. **Device fallback, cloud disabled.** On Home B, select Home A's device, then restart Home B with `--no-cloud`. The Client must show Home B's local device as selected, not "No device selected". Restart Home B with cloud enabled. While no device was picked in between, the Client must return to Home A's device after inventory loads. Repeat, but open a local conversation during the fallback: the Client must then stay on the local device.
+2. **Device fallback, signed out.** With Home A's device selected, sign out on Home B. The local device must become selected. The cloud device must not reappear until sign-in.
+3. **Pending inventory still waits.** Cold-start Home B with cloud enabled and Home A's device remembered. There must be no transient switch to the local device before the cloud inventory arrives.
+4. **Reconnect re-sync.** From Home B, start a long turn on Home A's device. Cut the Gateway connection for both sides, for example by dropping the network briefly. Let the turn finish while disconnected, then reconnect. Once Home A shows Online, the session list must refresh and the open conversation must leave "Processing…" without being reopened. The Client log must show a second `get_sessions` after the device turns Online.
+5. **`emitWithResponse` cleanup.** Covered by unit tests. No dedicated live step is needed beyond scenarios 1–4 passing without request timeouts.
+6. **Navigation repro (item 4).** On Home B, from a New Conversation and again from an open session:
+   - open a search result by click, then press "+" (top New Session, then the workspace "+");
+   - repeat the same steps opening the result with Enter;
+   - repeat in compact (drawer) layout.
+
+   After each "+" the URL and the main pane must show a New Conversation, and later sidebar clicks must still navigate. If it hangs, capture `sanad-dev logs client` from the search selection through the failed "+" (see Item 4, "Needed to close").
