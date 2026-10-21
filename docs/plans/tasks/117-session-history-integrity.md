@@ -1,7 +1,7 @@
 ---
 id: 117
 title: Session history integrity — in-place history rewrite and bounded recovery summarizer
-status: planned
+status: in-review
 gate: design-complete
 created: 2026-10-21
 parent_task: none (split from 106)
@@ -26,7 +26,7 @@ Split from [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-
    - Re-insert only from the first structural divergence (insert, removal, reorder).
    - A mid-history insert without `message_id` must not take a displaced row's identity (today the inserted `HistoryHealer` row is silently lost and re-healed on every load). Duplicate `message_id`s fail loudly and roll back.
    - The tail delete is scoped to the replaced active rows, so superseded audit rows survive.
-2. **Optional second slice — re-anchor boundary endpoints by `message_id`** so structural inserts inside a summarized range keep compaction. The DB record stays immutable; resolution happens in memory and fails closed on order conflicts.
+2. **Optional second slice — re-anchor boundary endpoints by `message_id`** so structural inserts inside a summarized range keep compaction. The DB record stays immutable; resolution happens in memory and fails closed on order conflicts. *Moved out of this task to [Task 118](docs/plans/tasks/118-compaction-accuracy-and-target.md); structural inserts keep the 0P ineligible-without-lockout behavior.*
 3. **0P-F2 — bounded recovery summarizer** (`agent/lib/engine/context/context_compaction_engine.dart` `_generateRecoverySummary` and chunking).
    - A per-pass token budget with a safety ratio, greedy packing of atomic tool-pair groups, a deterministic text cap for oversize groups, and bounded hierarchical reduce.
    - Carry the eligible previous summary into the reduce.
@@ -43,11 +43,11 @@ Split from [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-token-
 
 ## Gates
 
-- [ ] Red → green: a middle-row content change keeps all row ids; a mid-history insert keeps the inserted row; duplicate `message_id` rolls back; superseded rows survive replace.
-- [ ] A completed boundary stays eligible after `HistoryImagePruner` pruning and provider-state clearing inside its source range (`agent/test/evolution/model_projection_builder_test.dart`).
-- [ ] The legacy affected shape stays ineligible with its record unchanged (0P regression lock).
-- [ ] Recovery for a source larger than four windows: every request is within budget and the call count is bounded; over capacity fails with zero provider calls and an actionable localized notice.
-- [ ] Owning docs: `docs/technical/context_compaction.md`, `agent/lib/evolution/AGENTS.md`, engine `AGENTS.md`.
+- [x] Red → green: a middle-row content change keeps all row ids; a mid-history insert keeps the inserted row; duplicate `message_id` rolls back; superseded rows survive replace (`agent/test/evolution/session_history_in_place_rewrite_test.dart`, `agent/test/engine/history_healer_test.dart`).
+- [x] A completed boundary stays eligible after `HistoryImagePruner` pruning and provider-state clearing inside its source range (`agent/test/evolution/model_projection_builder_test.dart`).
+- [x] The legacy affected shape stays ineligible with its record unchanged (0P regression lock).
+- [x] Recovery for a source larger than four windows: every request is within budget and the call count is bounded; over capacity fails with zero recovery provider calls (only the original overflowing request was sent) and an actionable localized notice (`agent/test/engine/compaction_bounded_recovery_test.dart`). Skipping the ordinary request on an estimated overflow is not implemented.
+- [x] Owning docs: `docs/technical/context_compaction.md`, `agent/lib/evolution/AGENTS.md`, `agent/lib/evolution/db/AGENTS.md`, engine `AGENTS.md`, `docs/agent_engine/context_compaction_design.md`, `docs/qa_maintenance/context_compaction_qa.md`.
 - [ ] Independent review, then delegated Sanad live acceptance on the Test Home: a compaction plus image or tool-repair history so a rewrite lands inside the source range, then continuation; and a session larger than four windows. The 0P live gate deferred from Task 106 (r2/r3 `not_run`) closes here.
 
 ## Representative Data

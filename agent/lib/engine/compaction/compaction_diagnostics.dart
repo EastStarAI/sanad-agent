@@ -42,6 +42,9 @@ abstract final class CompactionFailureCause {
   static const toolResultMalformed = 'tool_result_malformed';
   static const pruningFailed = 'pruning_failed';
   static const projectionStillOverBudget = 'projection_still_over_budget';
+  /// The bounded recovery summarizer cannot cover the source within its
+  /// configured chunk capacity; decided before any recovery provider call.
+  static const recoveryCapacityExceeded = 'recovery_capacity_exceeded';
 
   // Provider stage
   static const timeout = 'timeout';

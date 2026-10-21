@@ -102,15 +102,27 @@ class MessageHistoryIdentity {
     };
   }
 
+  /// Assigns durable identity to every message.
+  ///
+  /// A message without `message_id` reuses the identity of the existing active
+  /// row at the same position, which keeps in-memory history that was never
+  /// re-read after persistence bound to its rows. That positional reuse never
+  /// takes an id that another incoming message carries explicitly: a message
+  /// inserted mid-history (for example a healed tool result) mints its own
+  /// identity instead of stealing the displaced row's.
   static List<Message> assignIdentities(
     List<Message> messages, {
     List<MessageHistoryIdentity> existingActive = const [],
   }) {
+    final explicitIds = <String>{
+      for (final message in messages)
+        ?_nonEmpty(message.metadata?['message_id']),
+    };
     String? currentTurnId;
     return [
       for (var index = 0; index < messages.length; index++)
         _assignOne(
-          _reuseExisting(messages[index], index, existingActive),
+          _reuseExisting(messages[index], index, existingActive, explicitIds),
           currentTurnId,
           (turnId) {
             currentTurnId = turnId;
@@ -119,10 +131,28 @@ class MessageHistoryIdentity {
     ];
   }
 
+  /// Throws [StateError] when two messages carry the same `message_id`.
+  ///
+  /// A duplicate would make the later write silently overwrite the earlier
+  /// row, so history writers must fail loudly and roll back instead.
+  static void requireUniqueMessageIds(List<Message> messages) {
+    final seen = <String>{};
+    for (final message in messages) {
+      final id = read(message).messageId;
+      if (id.isEmpty) continue;
+      if (!seen.add(id)) {
+        throw StateError(
+          'History write rejected: duplicate message_id in replacement list',
+        );
+      }
+    }
+  }
+
   static Message _reuseExisting(
     Message message,
     int index,
     List<MessageHistoryIdentity> existingActive,
+    Set<String> explicitIds,
   ) {
     final metadata = Map<String, dynamic>.from(message.metadata ?? const {});
     if (_nonEmpty(metadata['message_id']) != null ||
@@ -130,6 +160,9 @@ class MessageHistoryIdentity {
       return message;
     }
     final existing = existingActive[index];
+    if (explicitIds.contains(existing.messageId)) {
+      return message;
+    }
     metadata['message_id'] = existing.messageId;
     metadata['turn_id'] = _nonEmpty(metadata['turn_id']) ?? existing.turnId;
     metadata['history_status'] =

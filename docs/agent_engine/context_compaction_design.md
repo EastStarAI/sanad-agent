@@ -193,9 +193,14 @@ eligible.
   current goal, latest user request, active state, critical context, and
   remaining work. Provider-only reasoning wrappers are removed and the parsed
   structure is redacted before persistence.
-- If the append-only request overflows before output, recovery uses at most four
-  contiguous chunks that keep assistant tool calls with their results, followed
-  by one typed reduce pass. Partial summaries never activate a boundary.
+- If the append-only request overflows before output, the bounded recovery
+  summarizer packs contiguous groups that keep assistant tool calls with their
+  results into chunks within a per-pass token budget, splits an overflowing
+  chunk at most once, and reduces the partials (preceded by the eligible
+  previous summary) in budget-packed batches into one typed summary. A source
+  needing more chunks than configured fails with `recovery_capacity_exceeded`
+  before any recovery call. Partial summaries never activate a boundary.
+  Details: `docs/technical/context_compaction.md` §8.12.
 - Compaction adds no cache-specific measurement, enforcement, or metric. Cache
   behavior is incidental to the ordinary codec/provider request and is not a
   correctness condition or performance claim.

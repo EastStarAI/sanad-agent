@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/llm_usage_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
@@ -77,6 +79,7 @@ class ContextCompactionEngine {
   final CompactionToolPruner _toolPruner;
   final CompactionContinuityValidator _continuityValidator;
   final CompactionSummarizer _summarizer;
+  final CompactionRecoveryPolicy _recoveryPolicy;
 
   ContextCompactionEngine({
     RequestPressureEvaluator? pressureEvaluator,
@@ -84,7 +87,9 @@ class ContextCompactionEngine {
     CompactionToolPruner? toolPruner,
     CompactionContinuityValidator? continuityValidator,
     CompactionSummarizer? summarizer,
-  }) : _pressureEvaluator = pressureEvaluator ?? RequestPressureEvaluator(),
+    CompactionRecoveryPolicy recoveryPolicy = CompactionRecoveryPolicy.defaults,
+  }) : _recoveryPolicy = recoveryPolicy,
+       _pressureEvaluator = pressureEvaluator ?? RequestPressureEvaluator(),
        _tailSelector = tailSelector ?? const CompactionTailSelector(),
        _toolPruner = toolPruner ?? const CompactionToolPruner(),
        _continuityValidator =
@@ -189,6 +194,7 @@ class ContextCompactionEngine {
         'target_scope': 'usable_budget',
         if (request.thresholdRatio > 0)
           'threshold_ratio': request.thresholdRatio,
+        ...generated.decisionSnapshot,
       },
       postBoundary: const CompactionPostBoundaryStatus(
         status: 'pending',
@@ -724,6 +730,16 @@ class ContextCompactionEngine {
     );
   }
 
+  /// Bounded recovery after the ordinary provider request overflowed
+  /// (Task 117, 0P-F2).
+  ///
+  /// Atomic tool-call/result groups are packed into chunks against one
+  /// per-pass token budget. An oversized single group is text-capped with an
+  /// explicit truncation marker and never dropped. When the source needs more
+  /// than [CompactionRecoveryPolicy.maxChunks] chunks, recovery fails before
+  /// any recovery provider call. Partials (preceded by the eligible previous
+  /// summary) are reduced in budget-packed batches until one summary remains.
+  /// An overflowing chunk is split at most once.
   Future<_GeneratedSummary> _generateRecoverySummary({
     required CompactionEngineRequest request,
     required ProviderProjectionCompactionSummarizer provider,
@@ -732,7 +748,13 @@ class ContextCompactionEngine {
     List<CompactionSummarizationAttemptRecord> initialLedger = const [],
     required RequestPressureSnapshot pressure,
   }) async {
+    final policy = _recoveryPolicy;
     final ledger = List<CompactionSummarizationAttemptRecord>.from(initialLedger);
+    final decision = <String, dynamic>{
+      'recovery_max_chunks': policy.maxChunks,
+      'recovery_safety_ratio': policy.passBudgetSafetyRatio,
+    };
+    var providerCalls = 0;
     CompactionDurableDiagnostics failureDiagnostics({
       _CompactionUsage? usage,
     }) {
@@ -762,12 +784,29 @@ class ContextCompactionEngine {
           'target_scope': 'usable_budget',
           if (request.thresholdRatio > 0)
             'threshold_ratio': request.thresholdRatio,
+          ...decision,
+          'recovery_provider_calls': providerCalls,
         },
       );
     }
 
-    final chunks = _boundedSafeChunks(source, maximumChunks: 4);
-    if (chunks.isEmpty) {
+    CompactionEngineFailure capacityExceeded() => CompactionEngineFailure(
+      CompactionFailureReason.summarizationFailed,
+      stage: CompactionFailureStage.pruning,
+      cause: CompactionFailureCause.recoveryCapacityExceeded,
+      diagnostics: failureDiagnostics(),
+    );
+
+    CompactionEngineFailure overflowed(_CompactionUsage usage) =>
+        CompactionEngineFailure(
+          CompactionFailureReason.summarizationFailed,
+          stage: CompactionFailureStage.provider,
+          cause: CompactionFailureCause.overflow,
+          diagnostics: failureDiagnostics(usage: usage),
+        );
+
+    final groups = _atomicGroups(source);
+    if (groups.isEmpty) {
       throw CompactionEngineFailure(
         CompactionFailureReason.summarizationFailed,
         diagnostics: failureDiagnostics(),
@@ -776,53 +815,151 @@ class ContextCompactionEngine {
     final stableSystem = request.providerProjection!
         .where((message) => message.role == MessageRole.system)
         .toList(growable: false);
+    final chunkInstruction = CompactionSummaryPrompt.buildJsonInstruction(
+      partial: true,
+    );
+    final finalInstruction = CompactionSummaryPrompt.buildJsonInstruction();
+    final instructionTokens = CompactionTokenEstimator.estimateText(
+      chunkInstruction.length > finalInstruction.length
+          ? chunkInstruction
+          : finalInstruction,
+    );
+    final passBudget =
+        (pressure.effectiveInputBudget * policy.passBudgetSafetyRatio)
+            .floor() -
+        _estimateRecoveryMessages(stableSystem) -
+        CompactionTokenEstimator.estimateToolSchemas(request.toolSchemas) -
+        instructionTokens;
+    final sourceTokens = groups.fold<int>(
+      0,
+      (sum, group) => sum + _estimateRecoveryGroup(group),
+    );
+    decision['recovery_pass_budget_tokens'] = passBudget;
+    decision['recovery_source_tokens'] = sourceTokens;
+    if (passBudget < policy.minPassBudgetTokens) {
+      throw capacityExceeded();
+    }
+    final chunks = _packRecoveryChunks(groups, passBudget);
+    decision['recovery_chunk_count'] = chunks.length;
+    if (chunks.length > policy.maxChunks) {
+      throw capacityExceeded();
+    }
+
     final partials = <CompactionInternalSummary>[];
     var aggregateUsage = const _CompactionUsage();
     var duration = Duration.zero;
     var attempts = 0;
-    for (var i = 0; i < chunks.length; i++) {
-      final chunk = chunks[i];
-      final generated = await _recoveryPass(
+    var passIndex = 0;
+    var splits = 0;
+
+    Future<void> summarizeChunk(
+      List<List<IndexedConversationMessage>> chunk, {
+      required bool mayHalve,
+    }) async {
+      final index = passIndex++;
+      try {
+        final generated = await _recoveryPass(
+          request: request,
+          provider: provider,
+          baseProjection: [
+            ...stableSystem,
+            for (final group in chunk)
+              for (final entry in group) entry.message,
+          ],
+          instruction: chunkInstruction,
+          passKind: 'chunk',
+          chunkIndex: index,
+          ledger: ledger,
+          failureDiagnostics: failureDiagnostics,
+          onProviderCall: () => providerCalls++,
+        );
+        partials.add(generated.summary);
+        aggregateUsage = aggregateUsage + generated.aggregateUsage;
+        duration += generated.duration ?? Duration.zero;
+        attempts += generated.attempts;
+      } on _RecoveryPassOverflow catch (overflow) {
+        aggregateUsage = aggregateUsage + overflow.usage;
+        if (!mayHalve || chunk.length < 2) throw overflowed(aggregateUsage);
+        splits++;
+        decision['recovery_split_count'] = splits;
+        final middle = chunk.length ~/ 2;
+        await summarizeChunk(chunk.sublist(0, middle), mayHalve: false);
+        await summarizeChunk(chunk.sublist(middle), mayHalve: false);
+      }
+    }
+
+    for (final chunk in chunks) {
+      await summarizeChunk(chunk, mayHalve: true);
+    }
+
+    // Bounded hierarchical reduce. The eligible previous summary precedes the
+    // partials so earlier compacted history stays in the rolling checkpoint.
+    var items = <Map<String, dynamic>>[
+      if (request.previousSummary != null)
+        CompactionSummaryPrompt.toJsonMap(request.previousSummary!),
+      for (final summary in partials) CompactionSummaryPrompt.toJsonMap(summary),
+    ];
+    var reduceIndex = 0;
+    while (true) {
+      final batches = _packRecoveryItems(items, passBudget);
+      if (batches.length == 1) break;
+      if (batches.length >= items.length) {
+        // No batch can merge two items within the pass budget.
+        throw capacityExceeded();
+      }
+      final next = <Map<String, dynamic>>[];
+      for (final batch in batches) {
+        if (batch.length == 1) {
+          next.add(batch.single);
+          continue;
+        }
+        try {
+          final generated = await _recoveryPass(
+            request: request,
+            provider: provider,
+            baseProjection: [
+              ...stableSystem,
+              Message(role: MessageRole.user, content: jsonEncode(batch)),
+            ],
+            instruction: chunkInstruction,
+            passKind: 'reduce',
+            chunkIndex: reduceIndex++,
+            ledger: ledger,
+            failureDiagnostics: failureDiagnostics,
+            onProviderCall: () => providerCalls++,
+          );
+          next.add(CompactionSummaryPrompt.toJsonMap(generated.summary));
+          aggregateUsage = aggregateUsage + generated.aggregateUsage;
+          duration += generated.duration ?? Duration.zero;
+          attempts += generated.attempts;
+        } on _RecoveryPassOverflow catch (overflow) {
+          throw overflowed(aggregateUsage + overflow.usage);
+        }
+      }
+      items = next;
+    }
+    decision['recovery_reduce_batches'] = reduceIndex;
+
+    final _GeneratedSummary reduced;
+    try {
+      reduced = await _recoveryPass(
         request: request,
         provider: provider,
         baseProjection: [
           ...stableSystem,
-          ...chunk.map((entry) => entry.message),
+          Message(role: MessageRole.user, content: jsonEncode(items)),
         ],
-        instruction: CompactionSummaryPrompt.buildJsonInstruction(
-          partial: true,
-        ),
-        passKind: 'chunk',
-        chunkIndex: i,
+        instruction: finalInstruction,
+        anchors: anchors,
+        passKind: 'reduce',
         ledger: ledger,
         failureDiagnostics: failureDiagnostics,
+        onProviderCall: () => providerCalls++,
       );
-      partials.add(generated.summary);
-      aggregateUsage = aggregateUsage + generated.aggregateUsage;
-      duration += generated.duration ?? Duration.zero;
-      attempts += generated.attempts;
+    } on _RecoveryPassOverflow catch (overflow) {
+      throw overflowed(aggregateUsage + overflow.usage);
     }
-
-    final reduceBase = <Message>[
-      ...stableSystem,
-      Message(
-        role: MessageRole.user,
-        content: jsonEncode([
-          for (final summary in partials)
-            CompactionSummaryPrompt.toJsonMap(summary),
-        ]),
-      ),
-    ];
-    final reduced = await _recoveryPass(
-      request: request,
-      provider: provider,
-      baseProjection: reduceBase,
-      instruction: CompactionSummaryPrompt.buildJsonInstruction(),
-      anchors: anchors,
-      passKind: 'reduce',
-      ledger: ledger,
-      failureDiagnostics: failureDiagnostics,
-    );
+    decision['recovery_provider_calls'] = providerCalls;
     return _GeneratedSummary(
       summary: reduced.summary,
       continuity: reduced.continuity,
@@ -831,6 +968,7 @@ class ContextCompactionEngine {
       attempts: attempts + reduced.attempts,
       duration: duration + (reduced.duration ?? Duration.zero),
       ledger: ledger,
+      decisionSnapshot: Map.unmodifiable(decision),
     );
   }
 
@@ -845,6 +983,7 @@ class ContextCompactionEngine {
     required List<CompactionSummarizationAttemptRecord> ledger,
     required CompactionDurableDiagnostics Function({_CompactionUsage? usage})
         failureDiagnostics,
+    void Function()? onProviderCall,
   }) async {
     final immutableBase = List<Message>.unmodifiable(baseProjection);
     CompactionContinuityResult? lastContinuity;
@@ -862,6 +1001,7 @@ class ContextCompactionEngine {
         requestId: attemptRequestId,
       );
       try {
+        onProviderCall?.call();
         final result = await provider.summarizeProvider(
           CompactionProviderRequest(
             baseProjection: immutableBase,
@@ -957,10 +1097,8 @@ class ContextCompactionEngine {
             requestId: attemptRequestId,
           ),
         ));
-        throw CompactionEngineFailure(
-          CompactionFailureReason.summarizationFailed,
-          diagnostics: failureDiagnostics(usage: aggregateUsage),
-        );
+        // The caller owns the bounded split-or-fail decision.
+        throw _RecoveryPassOverflow(aggregateUsage);
       } on CompactionInvalidProviderResponse catch (error) {
         final errorUsage = _CompactionUsage.fromProvider(error.usage);
         aggregateUsage = aggregateUsage + errorUsage;
@@ -1073,11 +1211,11 @@ class ContextCompactionEngine {
     );
   }
 
-  static List<List<IndexedConversationMessage>> _boundedSafeChunks(
-    List<IndexedConversationMessage> source, {
-    required int maximumChunks,
-  }) {
-    if (source.isEmpty) return const [];
+  /// Groups each assistant tool-call batch with its results so recovery never
+  /// splits a tool pair across chunks.
+  static List<List<IndexedConversationMessage>> _atomicGroups(
+    List<IndexedConversationMessage> source,
+  ) {
     final groups = <List<IndexedConversationMessage>>[];
     for (var index = 0; index < source.length; index++) {
       final current = source[index];
@@ -1093,15 +1231,117 @@ class ContextCompactionEngine {
       }
       groups.add(group);
     }
-    final chunkCount = groups.length.clamp(1, maximumChunks);
-    final groupsPerChunk = (groups.length / chunkCount).ceil();
-    final chunks = <List<IndexedConversationMessage>>[];
-    for (var index = 0; index < groups.length; index += groupsPerChunk) {
-      chunks.add([
-        for (final group in groups.skip(index).take(groupsPerChunk)) ...group,
-      ]);
+    return groups;
+  }
+
+  static int _estimateRecoveryMessages(Iterable<Message> messages) =>
+      CompactionTokenEstimator.estimateMessages(messages) +
+      CompactionTokenEstimator.estimateMediaTokens(messages);
+
+  static int _estimateRecoveryGroup(List<IndexedConversationMessage> group) =>
+      _estimateRecoveryMessages(group.map((entry) => entry.message));
+
+  /// Greedy, order-preserving packing of atomic groups into chunks whose
+  /// estimate fits [passBudget]. An oversized group is text-capped first and
+  /// still forms its own chunk if it remains over budget.
+  static List<List<List<IndexedConversationMessage>>> _packRecoveryChunks(
+    List<List<IndexedConversationMessage>> groups,
+    int passBudget,
+  ) {
+    final chunks = <List<List<IndexedConversationMessage>>>[];
+    var current = <List<IndexedConversationMessage>>[];
+    var currentTokens = 0;
+    for (final original in groups) {
+      var group = original;
+      var tokens = _estimateRecoveryGroup(group);
+      if (tokens > passBudget) {
+        group = _capRecoveryGroup(group, passBudget);
+        tokens = _estimateRecoveryGroup(group);
+      }
+      if (current.isNotEmpty && currentTokens + tokens > passBudget) {
+        chunks.add(current);
+        current = [];
+        currentTokens = 0;
+      }
+      current.add(group);
+      currentTokens += tokens;
     }
+    if (current.isNotEmpty) chunks.add(current);
     return chunks;
+  }
+
+  /// Order-preserving packing of partial summaries into reduce batches.
+  static List<List<Map<String, dynamic>>> _packRecoveryItems(
+    List<Map<String, dynamic>> items,
+    int passBudget,
+  ) {
+    final batches = <List<Map<String, dynamic>>>[];
+    var current = <Map<String, dynamic>>[];
+    var currentTokens = 0;
+    for (final item in items) {
+      final tokens = CompactionTokenEstimator.estimateText(jsonEncode(item));
+      if (current.isNotEmpty && currentTokens + tokens > passBudget) {
+        batches.add(current);
+        current = [];
+        currentTokens = 0;
+      }
+      current.add(item);
+      currentTokens += tokens;
+    }
+    if (current.isNotEmpty) batches.add(current);
+    return batches;
+  }
+
+  /// Deterministic head-and-tail text cap for one oversized atomic group,
+  /// sharing [passBudget] evenly across its messages. Summary-input copies
+  /// only; canonical history is never touched.
+  static List<IndexedConversationMessage> _capRecoveryGroup(
+    List<IndexedConversationMessage> group,
+    int passBudget,
+  ) {
+    final perMessageChars =
+        (passBudget ~/ group.length) * CompactionTokenEstimator.charsPerToken;
+    return [
+      for (final entry in group)
+        IndexedConversationMessage(
+          rowId: entry.rowId,
+          message: _capRecoveryMessage(entry.message, perMessageChars),
+        ),
+    ];
+  }
+
+  static Message _capRecoveryMessage(Message message, int maxChars) {
+    final result = message.toolResult;
+    if (result != null) {
+      final text = result.displayText;
+      final capped = _capRecoveryText(text, maxChars);
+      if (identical(capped, text)) return message;
+      final derived = ToolExecutionResult(
+        schemaVersion: result.schemaVersion,
+        blocks: [ToolTextBlock(text: capped)],
+        isError: result.isError,
+        errorCode: result.errorCode,
+      );
+      return message.copyWith(content: capped, toolResult: derived);
+    }
+    final content = message.content;
+    if (content == null) return message;
+    final capped = _capRecoveryText(content, maxChars);
+    return identical(capped, content)
+        ? message
+        : message.copyWith(content: capped);
+  }
+
+  static String _capRecoveryText(String text, int maxChars) {
+    if (text.length <= maxChars) return text;
+    final omitted = text.length - maxChars;
+    final marker = '\n[truncated $omitted chars for summary]\n';
+    final keep = maxChars - marker.length;
+    if (keep <= 0) return marker.trim();
+    final head = (keep + 1) ~/ 2;
+    final tail = keep - head;
+    return '${text.substring(0, head)}$marker'
+        '${text.substring(text.length - tail)}';
   }
 
   static String _buildAttemptRequestId({
@@ -1143,6 +1383,9 @@ class _GeneratedSummary {
   final Duration? duration;
   final List<CompactionSummarizationAttemptRecord> ledger;
 
+  /// Additive recovery decision fields for the durable decision snapshot.
+  final Map<String, dynamic> decisionSnapshot;
+
   const _GeneratedSummary({
     required this.summary,
     required this.continuity,
@@ -1151,7 +1394,15 @@ class _GeneratedSummary {
     required this.attempts,
     required this.duration,
     this.ledger = const [],
+    this.decisionSnapshot = const {},
   });
+}
+
+/// Internal signal: one recovery pass overflowed the provider context.
+class _RecoveryPassOverflow implements Exception {
+  final _CompactionUsage usage;
+
+  const _RecoveryPassOverflow(this.usage);
 }
 
 class _CompactionUsage {

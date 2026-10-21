@@ -210,17 +210,26 @@ void main() {
   );
 
   test('completion accepts durable ranges with AUTOINCREMENT gaps', () {
+    // A structural insert re-inserts the suffix (Task 117) and leaves gaps;
+    // the inserted row is then removed so four rows remain.
+    final loaded = sessions.getMessages('session-1');
     sessions.replaceMessages('session-1', [
-      Message(role: MessageRole.user, content: 'one'),
-      Message(role: MessageRole.user, content: 'two edited'),
-      Message(role: MessageRole.assistant, content: 'three edited'),
-      Message(role: MessageRole.user, content: 'four edited'),
+      loaded[0],
+      Message(role: MessageRole.user, content: 'inserted'),
+      loaded[1].copyWith(content: 'two edited'),
+      loaded[2].copyWith(content: 'three edited'),
+      loaded[3].copyWith(content: 'four edited'),
+    ]);
+    final withInsert = sessions.getMessages('session-1');
+    sessions.replaceMessages('session-1', [
+      withInsert[0],
+      ...withInsert.skip(2),
     ]);
     final ids = sessions
         .getPersistedMessages('session-1')
         .map((entry) => entry.rowId)
         .toList();
-    expect(ids, [1, 5, 6, 7]);
+    expect(ids, [1, 9, 10, 11]);
     final source = CompactionMessageRange(
       start: CompactionMessageIdentity(ids[0]),
       end: CompactionMessageIdentity(ids[1]),
