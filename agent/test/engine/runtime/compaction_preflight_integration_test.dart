@@ -1551,6 +1551,83 @@ void main() {
       },
     );
 
+    test(
+      'Task 118 Stage3B: after a completed compaction and a restart the pre-boundary receipt is not restored and does not repeat compaction',
+      () async {
+        const sessionId = 'session-generic-post-boundary-restart';
+        final summarizer = _CapturingProviderSummarizer();
+        getIt.registerSingleton<CompactionCoordinator>(
+          CompactionCoordinator(
+            engine: ContextCompactionEngine(summarizer: summarizer),
+            boundaries: boundaries,
+            activation: CompactionActivationService(
+              boundaries: boundaries,
+              projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+            ),
+            projectionBuilder: getIt<ModelProjectionBuilder>(),
+          ),
+        );
+        final client = MockClient((request) async {
+          final sseData = [
+            'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"acknowledged"},"finish_reason":null}]}',
+            '',
+            'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":371839,"completion_tokens":20,"total_tokens":371859,"prompt_tokens_details":{"cached_tokens":370816}}}',
+            '',
+            'data: [DONE]',
+            '',
+          ].join('\n\n');
+          return http.Response(
+            sseData,
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          );
+        });
+        // A multi-turn conversation, so the compaction has a head to replace.
+        openAiRunner(sessionId: sessionId, client: client);
+        sessions.replaceMessages(sessionId, [
+          for (var turn = 0; turn < 6; turn++) ...[
+            Message(role: MessageRole.user, content: 'earlier ask $turn ${'q' * 400}'),
+            Message(role: MessageRole.assistant, content: 'earlier answer $turn ${'a' * 400}'),
+          ],
+        ]);
+        final producer = openAiRunner(sessionId: sessionId, client: client);
+        await producer
+            .streamMessage(
+              'continue the review',
+              providerId: routeProvider,
+              model: routeModel,
+            )
+            .toList();
+        producer.attachMetadataToLastAssistantMessage({
+          'provider': routeProvider,
+          'model': routeModel,
+          'context_usage': (await producer.getContextUsageSnapshot())!,
+        });
+
+        // Restart 1: the proven 371839 receipt is genuine pressure and
+        // compacts once.
+        final first = openAiRunner(sessionId: sessionId, client: client);
+        await first.debugPrepareProviderHistory();
+        final afterFirst = boundaries.listLifecycleForSession(sessionId);
+        expect(afterFirst, hasLength(1));
+        expect(afterFirst.single.status, CompactionStatus.completed);
+
+        // Restart 2, before any post-boundary turn: the newest retained row
+        // still carries the receipt measured on the pre-compaction request.
+        // Its wire proof cannot match the summary projection, so it is not
+        // restored and the small projection does not compact again.
+        final second = openAiRunner(sessionId: sessionId, client: client);
+        await second.debugPrepareProviderHistory();
+        expect(second.debugConfirmedInputUsageBaseline, isNull);
+        expect(
+          second.debugLastPreflightPressure?.measurementKind,
+          CompactionMeasurementKind.estimated,
+        );
+        expect(second.debugLastPreflightPressure?.exceedsThreshold, isFalse);
+        expect(boundaries.listLifecycleForSession(sessionId), hasLength(1));
+      },
+    );
+
     test('warm live confirmed input is used for generic-route admission', () async {
       const sessionId = 'session-generic-warm';
       final client = MockClient((request) async {
