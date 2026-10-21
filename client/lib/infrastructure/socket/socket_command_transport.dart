@@ -133,17 +133,23 @@ class SocketCommandTransport implements ISocketGateway {
     final completer = Completer<void>();
     final responseEvent = '${event}_response';
 
+    late final void Function(dynamic) listener;
+
     // Cleanup reads the connection's current socket, as before extraction, so
-    // a late timeout after a reconnect still targets the live socket.
+    // a late timeout after a reconnect still targets the live socket. It
+    // removes only this call's own listener: a newer call for the same event
+    // keeps its listener even when this call times out late.
     void cleanup() {
-      _connection.socket?.off(responseEvent);
+      _connection.socket?.off(responseEvent, listener);
     }
 
-    socket.on(responseEvent, (response) {
+    listener = (response) {
+      if (completer.isCompleted) return;
       handler(Map<String, dynamic>.from(response));
       cleanup();
       completer.complete();
-    });
+    };
+    socket.on(responseEvent, listener);
 
     _connection.logOutgoingSocketEvent(event, data);
     socket.emit(event, data);

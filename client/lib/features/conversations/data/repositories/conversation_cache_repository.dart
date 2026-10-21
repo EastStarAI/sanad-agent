@@ -37,6 +37,8 @@ class ConversationCacheRepository {
   final Map<String, Future<void>> _loadMoreInFlight = {};
   final Map<String, DateTime> _lastSectionRefreshStartedAt = {};
   final Map<String, DateTime> _lastDeviceSidebarRefreshStartedAt = {};
+  final Map<String, StreamSubscription<List<Session>>> _sessionPublications = {};
+  final Map<String, DeviceConfig> _latestDevices = {};
 
   ConversationCacheRepository({
     required ConversationCacheStore cache,
@@ -100,6 +102,7 @@ class ConversationCacheRepository {
     try {
       final workspaces = await _transport.getWorkspaces(device);
       _cache.applyWorkspacesRefreshed(device.id, workspaces, generation: generation);
+      _recoverStaleAfterSuccess(device);
     } catch (e) {
       _cache.applyWorkspacesError(device.id, e.toString(), generation: generation);
     }
@@ -108,6 +111,7 @@ class ConversationCacheRepository {
   /// Refresh all sidebar resources for one device while preserving its cached
   /// snapshot until each authoritative response arrives.
   Future<void> refreshDeviceSidebar(DeviceConfig device, {bool force = false}) {
+    _watchSessionPublications(device);
     final existing = _deviceSidebarRefreshInFlight[device.id];
     if (existing != null) return existing;
 
@@ -144,6 +148,62 @@ class ConversationCacheRepository {
       refreshUnscopedConversations(device, force: force),
       for (final workspaceId in workspaceIds) refreshWorkspaceConversations(device, workspaceId, force: force),
     ]);
+  }
+
+  /// A device session-list publication (for example the reconnect re-sync)
+  /// proves the device answers again, so resources whose last refresh failed
+  /// are refreshed once instead of keeping their stale error until the user
+  /// retries. A closed publication stream (its client was replaced) is
+  /// re-watched on the next sidebar refresh.
+  void _watchSessionPublications(DeviceConfig device) {
+    _latestDevices[device.id] = device;
+    if (_sessionPublications.containsKey(device.id)) return;
+    _sessionPublications[device.id] = _transport
+        .watchSessions(device)
+        .listen(
+          (_) => unawaited(refreshStaleResources(_latestDevices[device.id] ?? device)),
+          onDone: () => _sessionPublications.remove(device.id),
+        );
+  }
+
+  /// Any successful sidebar fetch for [device] proves it answers again, so the
+  /// other resources still in `staleError` are refreshed once.
+  void _recoverStaleAfterSuccess(DeviceConfig device) {
+    unawaited(refreshStaleResources(_latestDevices[device.id] ?? device));
+  }
+
+  /// Refreshes, once each, the workspace list and the conversation sections of
+  /// [device] whose last refresh failed (`staleError`). Resources that are not
+  /// stale, or already refreshing, issue no request. Callers use it when the
+  /// device is known to answer again: a successful fetch, a session-list
+  /// publication, or the device coming back Online.
+  Future<void> refreshStaleResources(DeviceConfig device) async {
+    _latestDevices[device.id] = device;
+    bool isStale(ConversationResourceState state) => state == ConversationResourceState.staleError;
+    final before = _cache.snapshot.contexts[device.id];
+    if (before == null) return;
+    if (isStale(before.workspaces.state)) {
+      await refreshWorkspaces(device, force: true);
+    }
+    final context = _cache.snapshot.contexts[device.id];
+    if (context == null) return;
+    final staleSections = <String?>[
+      if (isStale(context.unscopedConversations.state)) null,
+      for (final entry in context.workspaceConversationPages.entries)
+        if (isStale(entry.value.state)) entry.key,
+    ];
+    await Future.wait([
+      for (final workspaceId in staleSections) _refreshSection(device, workspaceId: workspaceId, force: true),
+    ]);
+  }
+
+  /// Cancels the session-list publication subscriptions.
+  void dispose() {
+    for (final subscription in _sessionPublications.values) {
+      unawaited(subscription.cancel());
+    }
+    _sessionPublications.clear();
+    _latestDevices.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -212,6 +272,7 @@ class ConversationCacheRepository {
         hasMore: result.hasMore,
         generation: generation,
       );
+      _recoverStaleAfterSuccess(device);
     } catch (e) {
       _cache.applySectionError(device.id, workspaceId, e.toString(), generation: generation);
     }
@@ -277,6 +338,7 @@ class ConversationCacheRepository {
         hasMore: result.hasMore,
         generation: generation,
       );
+      _recoverStaleAfterSuccess(device);
     } catch (e) {
       _cache.applySectionError(device.id, workspaceId, e.toString(), generation: generation);
     }

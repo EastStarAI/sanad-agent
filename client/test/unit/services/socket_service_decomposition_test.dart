@@ -27,7 +27,14 @@ final class _TestCloudSocket implements socket_io.Socket {
   @override
   socket_io.Socket off(String event, [Function? fn]) {
     offs.add(event);
-    listeners.remove(event);
+    // Mirrors socket_io_common's EventEmitter: a handler argument removes only
+    // that handler, no handler removes every listener for the event.
+    if (fn == null) {
+      listeners.remove(event);
+    } else {
+      listeners[event]?.remove(fn);
+      if (listeners[event]?.isEmpty ?? false) listeners.remove(event);
+    }
     return this;
   }
 
@@ -350,10 +357,27 @@ void main() {
         expect(liveSocket.listeners.containsKey('slow_request_response'), isTrue);
         await liveCall;
       },
-      skip: 'Pre-existing on 6a832396: cleanup calls off(event) on the live socket, '
-          'which removes every listener for that event, including a newer call made '
-          'after the reconnect. Kept unchanged by the SRP port.',
     );
+
+    test('a timed-out call removes only its own handler on the same socket', () async {
+      final socket = sockets.single;
+      final firstCall = transport.emitWithResponse('slow_request', {}, (_) {});
+      Map<String, dynamic>? received;
+      final secondCall = transport.emitWithResponse(
+        'slow_request',
+        {},
+        (response) => received = response,
+      );
+      expect(socket.listeners['slow_request_response'], hasLength(2));
+
+      await firstCall;
+
+      expect(socket.listeners['slow_request_response'], hasLength(1));
+      socket.receive('slow_request_response', {'ok': true});
+      await secondCall;
+      expect(received, {'ok': true});
+      expect(socket.listeners.containsKey('slow_request_response'), isFalse);
+    });
   });
 
   group('HostedMediaRelayClient and hosted-media delegation', () {

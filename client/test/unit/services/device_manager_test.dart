@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/data/device_manager.dart';
+import 'package:sanad_client/infrastructure/socket/socket_connection_controller.dart';
 import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/utils/app_platform.dart';
@@ -297,6 +298,67 @@ void main() {
     seedCoordinator.dispose();
     seedSocket.dispose();
     seedLocal.dispose();
+  });
+
+  group('isCloudInventoryPending', () {
+    Future<DeviceManager> managerFor(FakeSanadSocketService socket) async {
+      manager.dispose();
+      coordinator.dispose();
+      cloudSocket.dispose();
+      cloudSocket = socket;
+      coordinator = DeviceConnectionCoordinator(
+        cloudSocketService: cloudSocket,
+        localSocketService: localSocket,
+        currentDeviceId: 'current-device',
+      );
+      manager = await DeviceManager.create(cloudSocket, coordinator);
+      return manager;
+    }
+
+    test('is false when the cloud gateway is disabled for this Client', () async {
+      final subject = await managerFor(
+        FakeSanadSocketService(hardwareId: 'current-device', isLocalTransport: true),
+      );
+      expect(subject.isCloudInventoryPending, isFalse);
+    });
+
+    test('is false when no Sanad account session exists', () async {
+      final subject = await managerFor(
+        FakeSanadSocketService(hardwareId: 'current-device')..fakeHasAccessToken = false,
+      );
+      expect(subject.isCloudInventoryPending, isFalse);
+    });
+
+    test('is true while the signed-in cloud socket connects or reconnects', () async {
+      final socket = FakeSanadSocketService(hardwareId: 'current-device');
+      final subject = await managerFor(socket);
+      expect(subject.isCloudInventoryPending, isTrue);
+      for (final state in [SocketLifecycleState.connecting, SocketLifecycleState.authenticating]) {
+        socket.setLifecycleState(state);
+        expect(subject.isCloudInventoryPending, isTrue, reason: state.name);
+      }
+    });
+
+    test('is false when the cloud socket failed', () async {
+      final socket = FakeSanadSocketService(hardwareId: 'current-device');
+      final subject = await managerFor(socket);
+      for (final state in [SocketLifecycleState.error, SocketLifecycleState.authFailed]) {
+        socket.setLifecycleState(state);
+        expect(subject.isCloudInventoryPending, isFalse, reason: state.name);
+      }
+    });
+
+    test('stays pending on a ready socket until an authoritative inventory arrives', () async {
+      final socket = FakeSanadSocketService(hardwareId: 'current-device')..setConnected(true);
+      final subject = await managerFor(socket);
+      expect(subject.isCloudInventoryPending, isTrue);
+
+      await subject.handleDevicesResponseForTesting({
+        'status': 'ok',
+        'devices': <Map<String, dynamic>>[],
+      });
+      expect(subject.isCloudInventoryPending, isFalse);
+    });
   });
 }
 

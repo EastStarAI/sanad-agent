@@ -150,6 +150,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   SocketLifecycleState get lifecycleState => _connectionController.lifecycleState;
   bool get isLocalTransport => _connectionController.isLocalTransport;
 
+  /// Whether a cloud access token is configured. Never exposes the token.
+  bool get hasAccessToken => _connectionController.authToken != null;
+
   @override
   Stream<Map<String, dynamic>> get onAuthSuccess => _connectionController.onAuthSuccess;
   Stream<Map<String, dynamic>> get onAuthFailure => _connectionController.onAuthFailure;

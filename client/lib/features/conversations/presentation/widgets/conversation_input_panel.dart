@@ -826,19 +826,23 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
                         return BlocSelector<DeviceCapabilitiesCubit, DeviceCapabilitiesState, Capability>(
                           selector: (state) => state.getForAgent(agentSlice.capabilityAgentId ?? ''),
                           builder: (context, capabilities) {
+                            // The chips scroll horizontally on their own; they
+                            // need a bounded width to do so in a compact window.
                             return Row(
                               children: [
-                                ConversationContextChips(
-                                  agentSelectorKey: _agentSelectorKey,
-                                  agentSlice: agentSlice,
-                                  inputSlice: inputSlice,
-                                  capabilities: capabilities,
-                                  sessionId: widget.sessionId,
-                                  inputBgColor: Colors.transparent,
-                                  chipBgColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.8),
-                                  borderColor: borderColor,
-                                  dimTextColor: dimTextColor,
-                                  onPickAndCreateWorkspace: _pickAndCreateWorkspace,
+                                Expanded(
+                                  child: ConversationContextChips(
+                                    agentSelectorKey: _agentSelectorKey,
+                                    agentSlice: agentSlice,
+                                    inputSlice: inputSlice,
+                                    capabilities: capabilities,
+                                    sessionId: widget.sessionId,
+                                    inputBgColor: Colors.transparent,
+                                    chipBgColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.8),
+                                    borderColor: borderColor,
+                                    dimTextColor: dimTextColor,
+                                    onPickAndCreateWorkspace: _pickAndCreateWorkspace,
+                                  ),
                                 ),
                               ],
                             );

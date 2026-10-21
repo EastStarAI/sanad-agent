@@ -26,6 +26,14 @@ Changing the selected device changes the workspaces, conversations, provider
 configuration, and runtime state displayed by the client. It does not create a
 new conversation.
 
+The client remembers the last selected device. If that device cannot appear
+(the cloud gateway is disabled for this client, the user is signed out, or the
+cloud connection failed), the client selects the local device, or the first
+available device, instead of showing no device. It keeps remembering the
+previous device and switches back to it when it becomes available again, unless
+the user has picked or opened another device in the meantime. While a cloud
+device list is still loading, the client waits for it instead of switching.
+
 The compact Home gateway/status bar is a native-desktop surface. Web and mobile
 never render it, regardless of browser or viewport width. Its gateway and
 optional worktree badge consume only the expandable leading region; desktop

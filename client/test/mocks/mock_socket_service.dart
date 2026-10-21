@@ -44,6 +44,12 @@ class FakeSanadSocketService extends SanadSocketService {
   @override
   bool get isLocalTransport => _fakeLocalTransport;
 
+  /// A signed-in account by default; set false to model a signed-out Client.
+  bool fakeHasAccessToken = true;
+
+  @override
+  bool get hasAccessToken => fakeHasAccessToken;
+
   @override
   Future<List<String>> admitHostedAttachments({
     required String deviceId,

@@ -61,7 +61,20 @@ start and across device switches:
   persisted cloud id is absent, `DeviceManager` clears it before publishing
   the merged inventory so the cubit can select a valid fallback. This
   reconciliation excludes the local-device id because temporary local-daemon
-  unreachability is not authoritative deletion.
+  unreachability is not authoritative deletion. Waiting applies only while a
+  cloud inventory can still arrive (`IDeviceRepository.isCloudInventoryPending`:
+  cloud gateway enabled, access token present, cloud socket connecting,
+  authenticating, reconnecting, or ready before its first authoritative
+  response). When none can arrive (cloud disabled, signed out, `error` or
+  `authFailed`), the cubit selects the default device as a fallback but keeps
+  the persisted id. While that fallback is active, the remembered device is
+  restored as soon as it reappears in inventory; an explicit selection
+  (`switchAgent`, or `setActiveAgent` from a device-scoped route) ends the
+  fallback and the route applies its own device. A route Home navigates to on
+  its own (for example the cold-start restore of the fallback device's last
+  conversation) does not call `setActiveAgent`, so it cannot overwrite the
+  remembered id. With no available device the
+  cubit stays `DeviceNoActive` and invents no selection.
 - **Cross-device selection invalidation.** `SessionCubit` treats a
   `selectedSession` whose `deviceId` differs from the snapshot's
   `activeDeviceId` as no selection for the new device. It then restores the
@@ -89,6 +102,8 @@ Each resource (workspace section, conversation page) carries a `ConversationReso
 | `refreshing` | Snapshot exists; background refresh running. |
 | `ready` | Snapshot available; no refresh running. |
 | `staleError` | Last refresh failed; a stale snapshot remains. |
+
+A `staleError` resource recovers without a user tap. `ConversationCacheRepository.refreshStaleResources` refreshes, once each, only the resources still in `staleError` (workspace list first, then sections) when the device is known to answer again: after any successful sidebar fetch for that device (workspace list, section first page, or next page), after a default session-list publication (for example the reconnect re-sync), and when `SessionCubit` sees the active device come back Online. A resource that is not stale or is already refreshing issues no request, and only successes trigger recovery, so a failing device never loops.
 
 This implements stale-while-revalidate: the UI renders the memory/persistent snapshot immediately, then the store refreshes in the background. A resource containing cached rows is always treated as `refreshing`, even if an older lifecycle marker says `notLoaded`; loading indicators must never replace non-empty cached rows.
 
