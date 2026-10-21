@@ -155,6 +155,7 @@ A name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and must not be a protected opera
 - The Client answers with `tool_permission_response` carrying `secret_values` (`{NAME: value}`) to save, or `allowed: false` to skip. `PlatformRuntimeBridge` accepts it only when the ingress stamped `owner` authority (`PERMISSION_DENIED` otherwise), refuses `answer`, unrequested names, non-text or oversized values and missing required values (`INVALID_SECRET_VALUES`), and in every refusal keeps the request pending and logs the code only.
 - `SecretAcquisition` writes accepted values to the vault and replaces the decision with `{allowed, secret_outcome: stored|skipped|failed, secret_names}`. Only that value-free decision is retained in memory, handed to the waiting tool, claimed into `suspended_checkpoints.resolved_decision`, or resumed after a restart, where `SuspendedResumeService` returns the same result instead of re-running the tool.
 - The tool result is `{"status":"stored","secrets":[names]}`, `{"status":"skipped"}` or `{"status":"failed"}` (vault refused the write). It never contains a value. Re-entering a stored name replaces its value.
+- Terminal clients do not collect secrets: `sanad run` never auto-approves a secret request and records `needs_input`, the REPL leaves it pending for the Sanad Client, and the in-process terminal platform skips it.
 
 ### Listing, deletion and revocation
 

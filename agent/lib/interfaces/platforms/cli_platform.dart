@@ -140,6 +140,20 @@ class CliPlatform extends BasePlatform {
     try {
       final toolName = payload['tool_name']?.toString() ?? 'unknown-tool';
 
+      // This terminal has no Sanad Client attached and never collects
+      // secrets: the request is skipped so the turn can continue.
+      if (toolName == 'system_request_secret') {
+        print(
+          '\nThe agent requested a secret. Secrets are entered only in the '
+          'Sanad Client; skipping.',
+        );
+        return {
+          'request_id': payload['request_id'],
+          'allowed': false,
+          'decision': 'deny',
+        };
+      }
+
       if (toolName == 'system_ask_user') {
         print('\n=== 💬 Clarifying Questions ===');
         final questionsRaw = payload['questions'];

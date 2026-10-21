@@ -252,6 +252,7 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
    - Headless execution (`sanad run "<prompt>"`) leaves gated tool permissions pending and emits a diagnostic notice to `stderr` specifying the exact intervention command syntax (`sanad session permission <session-id> -r <req-id> --allow / --deny`).
    - Permissions are never auto-denied, enabling external supervisors and developers to inspect via `session show` and resolve via `session permission`.
    - The `--allow-all-tools` option automatically approves ordinary tool execution only. Clarification questions (`system_ask_user`) always remain pending and require explicit user input.
+   - Secret requests (`system_request_secret`) are never approved or answered by a terminal: `sanad run` records `needs_input` and prints a notice, the REPL prints the same notice and leaves the request pending for the Sanad Client, and the in-process terminal platform skips it. A manual `sanad session permission --allow` carries no values and is refused by the Agent.
 
 ### 9.3. Bounded Session Show Projection (Machine-Review Contract)
 
