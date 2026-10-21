@@ -42,7 +42,6 @@ import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
-import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:test/test.dart';
 
 class _PreflightAdapter implements LLMAdapter, WireInputUsageMeasurer {

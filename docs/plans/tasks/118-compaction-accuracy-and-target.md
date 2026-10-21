@@ -177,6 +177,33 @@ Gates:
 - Client `fvm flutter analyze` clean; full Client suite +1927 ~1 (`r4-final-client-suite.log`).
 - Wiki lint passes.
 
+### Round 5 — 118b writer, reference-grounded, 2026-10-21 (merged with `origin/main` `fe6204b1`)
+
+Grounding: evidence ID `118`, fingerprint `sha256:0f7c36e8b2e4f8988d689127d9ca6a995df54f280cc5c1fe5a5412886e8ea4d2`. The record lives in the ignored evidence store.
+
+| Item | Result | Red → green evidence |
+|---|---|---|
+| 1. Pre-send fit check | The engine checks the whole summary request, plus the output the provider reserves, against `W` before the full pass. A pass that cannot fit is not sent; recovery runs directly and the snapshot records `full_pass_skipped: presend_over_window`. The reservation order is: settings (`maxOutputTokens`), cached provider metadata, models.dev `limit.output`, then the fallback of 16,384, bounded to a quarter of `W`. It is a planning value only; no compaction output cap is sent. Tests that relied on the old doomed full pass now expect it skipped. | `r5-presend-red.log` (a `full` pass was sent), `r5-presend-green.log` |
+| 2. Manual and auto overhead parity | One helper measures the fixed overhead for every trigger: `ContextCompactionEngine.measureRequest`. A runner regression runs auto and manual compaction on identical session state and requires equal `fixed_overhead_tokens`. It passes on this branch; a seeded mutation that drops the manual idle-request preparation turns it red (952 versus 912). | `r5-parity-red-mutation.log`, `r5-parity-green.log` |
+| 3. Field-type hint | The instruction states that every value except `schemaVersion` is a single JSON string, with lists as lines, and gives a route-neutral example. | `r5-hint-red.log`, `r5-hint-green.log` |
+| 4. Non-ASCII estimation | ASCII stays chars/4; CJK, Hangul and Kana cost one token per code point; every other code point costs UTF-8 bytes / 4. No fixture held provider-confirmed Arabic usage, so the change rests on the reference evidence that chars/4 priced Arabic at about half its cost. The recovery safety ratio stays 0.80 with an updated rationale. Thresholds and the target are unchanged, and no existing fixture moved. The blast radius is the compaction estimator only; the Client does not use it. | `r5-arabic-red.log` (3 failures), `r5-arabic-green.log` |
+| 5. Calibration hygiene | Defects found: a zero input count became the confirmed baseline; usage from a failed or cancelled response replaced it; and such a row's receipt could restore. All three are now rejected. | `r5-calibration-red.log` (4 failures), `r5-calibration-green.log` |
+
+Decisions:
+
+- **Rejected: a tool-free summary pass.** The summary pass deliberately reuses the ordinary provider projection, so its system, tools and history prefix hits the prompt cache. Removing the tools changes that prefix and re-bills the whole history uncached, which costs far more than the tool-schema overhead it saves. Overhead parity is handled by the single overhead helper (item 2).
+- **Follow-ups (not in 118b):**
+  - extract files and paths locally instead of asking the model;
+  - provider structured output, gated on declared capability;
+  - an automatic-compaction failure pause across runs. The 118a breaker covers only the run that failed; a new run retries.
+
+Gates:
+
+- Agent `fvm dart analyze` clean; full agent suite +3360 ~15 (`r5-final-agent-suite.log`).
+- Daemon E2E 11/11 with `--concurrency=1` (`r5-final-daemon-e2e.log`).
+- Client `fvm flutter analyze` clean; full Client suite +1954 ~1 (`r5-final-client-suite.log`).
+- Wiki lint passes.
+
 ## Delivery Split
 
 Task 118 is delivered in two PRs. This file stays in `docs/plans/tasks/` until 118b lands.
