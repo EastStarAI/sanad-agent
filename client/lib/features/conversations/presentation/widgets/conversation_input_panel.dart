@@ -28,6 +28,7 @@ import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
 import 'package:sanad_client/features/voice/presentation/widgets/voice_stream_panel.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_context_chips.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
@@ -324,13 +325,40 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
     final result = await _inputCubit.compactSession();
     if (!mounted) return;
-    if (result.accepted) {
+    if (result.pending) {
+      // The acknowledgement was slower than the request window; the daemon
+      // may still be compacting. Say so neutrally and report the correlated
+      // late outcome without holding the runtime action in flight.
+      ToastUtils.showInfo(
+        context,
+        AppLocalizations.of(context)!.compactionPendingStillRunning,
+      );
+      if (result.settlement case final settlement?) {
+        unawaited(_presentLateCompactOutcome(sessionId, settlement));
+      }
       return;
     }
-    final l10n = AppLocalizations.of(context);
+    _presentCompactOutcome(result);
+  }
+
+  Future<void> _presentLateCompactOutcome(
+    String sessionId,
+    Future<SessionCompactResult> settlement,
+  ) async {
+    final result = await settlement;
+    // A late outcome belongs to the session that requested it. The lifecycle
+    // timeline tile stays the durable surface when this panel moved on, and an
+    // unconfirmed outcome is unknown rather than failed.
+    if (!mounted || widget.sessionId?.trim() != sessionId) return;
+    if (result.unconfirmed) return;
+    _presentCompactOutcome(result);
+  }
+
+  void _presentCompactOutcome(SessionCompactResult result) {
+    if (result.accepted) return;
     final failure = CompactionFailureFormatter.resolveForResult(
       result,
-      l10n: l10n,
+      l10n: AppLocalizations.of(context),
     );
     _showValidationError(failure.toToastMessage());
   }

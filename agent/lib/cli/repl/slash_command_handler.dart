@@ -50,6 +50,11 @@ class SlashCommandContext {
   final ReplHistory? history;
   final void Function()? onStopRequested;
 
+  /// Acknowledgement window for the `/compact` query. The daemon replies only
+  /// after compaction finishes, so a slow summary can outlive it.
+  static const defaultCompactAcknowledgementTimeout = Duration(seconds: 10);
+  final Duration compactAcknowledgementTimeout;
+
   SlashCommandContext({
     required this.sessionId,
     required this.currentModel,
@@ -66,6 +71,8 @@ class SlashCommandContext {
     this.locator,
     this.history,
     this.onStopRequested,
+    this.compactAcknowledgementTimeout =
+        defaultCompactAcknowledgementTimeout,
   });
 }
 
@@ -98,6 +105,8 @@ class CliSlashCommandHandler {
     bool isTurnRunning = false,
     bool thinking = false,
     void Function()? onStopRequested,
+    Duration compactAcknowledgementTimeout =
+        SlashCommandContext.defaultCompactAcknowledgementTimeout,
   }) {
     final effectiveRenderer =
         renderer ??
@@ -124,6 +133,7 @@ class CliSlashCommandHandler {
       isTurnRunning: isTurnRunning,
       thinking: thinking,
       onStopRequested: onStopRequested,
+      compactAcknowledgementTimeout: compactAcknowledgementTimeout,
     );
 
     return CliSlashCommandHandler(context: ctx);
@@ -764,9 +774,12 @@ Shortcuts:
     }
 
     try {
+      // Exactly one dispatch: the daemon replies only after compaction
+      // finishes, so a timeout is ambiguous and must never resend.
       final result = await context.client!.compactSession(
         sessionId: context.sessionId,
-        timeout: const Duration(seconds: 10),
+        timeout: context.compactAcknowledgementTimeout,
+        resendOnTimeout: false,
       );
       final outcome =
           result['outcome'] ??
@@ -778,10 +791,12 @@ Shortcuts:
           result['payload']?['failure_reason'] ??
           result['event']?['payload']?['failure_reason'];
 
-      if (outcome == 'success' ||
+      // `accepted` is the daemon's completed outcome; `no_op` needed no work.
+      if (outcome == 'accepted' ||
+          outcome == 'success' ||
+          outcome == 'no_op' ||
           outcome == 'noop' ||
-          outcome == 'completed' ||
-          outcome == 'dispatched') {
+          outcome == 'completed') {
         context.renderer.renderSuccess(
           'Context compacted successfully (outcome: $outcome).',
         );
@@ -791,7 +806,16 @@ Shortcuts:
         );
       }
     } catch (e) {
-      context.renderer.renderError('Failed to compact session: $e');
+      if (e is CliClientException && e.code == 'query_timeout') {
+        // Unacknowledged in time is not a failure: the daemon may still be
+        // compacting.
+        context.renderer.renderNotice(
+          'Compaction may still be running. Its result will appear in this '
+          'session when it finishes.',
+        );
+      } else {
+        context.renderer.renderError('Failed to compact session: $e');
+      }
     }
     return SlashCommandResult.success;
   }
