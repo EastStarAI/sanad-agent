@@ -1754,6 +1754,57 @@ void main() {
     await cubit.close();
   });
 
+  test('startNewChat never copies half a route from a provider-less cached session', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    // A cache-decoded session that lost its provider keeps model and thinking.
+    final halfRouteSession = session.copyWith(
+      model: 'deepseek-v4.1-flash',
+      thinkingMode: 'low',
+    );
+    expect(halfRouteSession.modelProvider, isNull);
+    final cacheStore = ConversationCacheStore();
+    cacheStore.setNewConversationDraft(
+      agent.id,
+      text: 'keep my draft',
+      providerId: 'stale-provider',
+      model: 'stale-model',
+      thinkingMode: 'stale-thinking',
+    );
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    // Startup: nothing is selected yet and the last-selected session comes
+    // from the persisted cache, decoded before the live session list lands.
+    cacheStore.applySessionCreated(agent.id, halfRouteSession);
+    cacheStore.recordLastDestination(
+      ConversationDestination.session(
+        deviceId: agent.id,
+        sessionId: halfRouteSession.id,
+      ),
+    );
+    expect(cacheRepository.lastSelectedSession(agent.id)?.model, 'deepseek-v4.1-flash');
+    expect(cubit.state.selectedSession, isNull);
+
+    await cubit.startNewChat(agent);
+    await Future<void>.delayed(Duration.zero);
+
+    final draft = cacheRepository.newConversationDraft(agent.id);
+    expect(draft.text, 'keep my draft');
+    expect(draft.providerId, isNull);
+    expect(draft.model, isNull);
+    expect(draft.thinkingMode, isNull);
+    await cubit.close();
+  });
+
   test('startNewChat restores the last selected session context per device', () async {
     socket.setConnected(true);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));

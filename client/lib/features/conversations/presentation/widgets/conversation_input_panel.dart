@@ -534,6 +534,11 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
   bool _draftContextMatchesInput(ConversationDraft draft) {
     final state = _inputCubit.state;
+    // A draft without a complete route does not own the route, so the device
+    // route it leaves in place is not a mismatch to restore again.
+    if (!draft.hasCompleteRoute) {
+      return state.selectedWorkspace?.id == draft.workspaceId;
+    }
     return state.selectedWorkspace?.id == draft.workspaceId &&
         state.nextMessageProviderId == draft.providerId &&
         state.nextMessageModel == draft.model &&

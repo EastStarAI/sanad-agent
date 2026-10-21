@@ -700,6 +700,37 @@ void main() {
     },
   );
 
+  test('restoring a provider-less draft route keeps the device route', () async {
+    messagesCubit.setNextMessagePreferences(
+      providerId: 'provider-go',
+      model: 'glm-5.2',
+      thinkingMode: 'max',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    inputCubit.restoreNewConversationPreferences(
+      providerId: null,
+      model: 'deepseek-v4.1-flash',
+      thinkingMode: 'low',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(inputCubit.state.nextMessageProviderId, 'provider-go');
+    expect(inputCubit.state.nextMessageModel, 'glm-5.2');
+    expect(inputCubit.state.nextMessageThinkingMode, 'max');
+
+    inputCubit.restoreNewConversationPreferences(
+      providerId: 'provider-other',
+      model: 'model-other',
+      thinkingMode: 'low',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(inputCubit.state.nextMessageProviderId, 'provider-other');
+    expect(inputCubit.state.nextMessageModel, 'model-other');
+    expect(inputCubit.state.nextMessageThinkingMode, 'low');
+  });
+
   test('daemon rejection keeps the confirmed route instead of locking in the pending selection', () async {
     final selectedSession = Session(
       id: 'session-1',

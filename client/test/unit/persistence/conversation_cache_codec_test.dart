@@ -274,6 +274,80 @@ void main() {
       expect(decoded.sessionDrafts[draftKey]!.providerId, 'provider-1');
     });
 
+    test('cached session provider survives the persistence round-trip', () {
+      final session = Session(
+        id: 's-provider',
+        title: 'Routed',
+        deviceId: 'device-1',
+        createdAt: DateTime.utc(2026, 10, 21),
+        updatedAt: DateTime.utc(2026, 10, 21),
+        modelProvider: 'provider-go',
+        model: 'deepseek-v4.1-flash',
+        thinkingMode: 'low',
+      );
+      final context = DeviceConversationContext.empty().copyWith(
+        unscopedConversations: ConversationSectionPage(
+          sessions: [session],
+          nextCursor: null,
+          hasMore: false,
+          state: ConversationResourceState.ready,
+          lastRefreshedAt: DateTime.utc(2026, 10, 21),
+          lastErrorAt: null,
+          lastError: null,
+        ),
+      );
+
+      final decoded = codec.decode(
+        codec.encode(
+          DeviceConversationCacheSnapshot(
+            activeDeviceId: 'device-1',
+            contexts: {'device-1': context},
+            sessionDrafts: const {},
+          ),
+        ),
+      );
+      final restored = decoded.contexts['device-1']!.unscopedConversations.sessions.single;
+      expect(restored.modelProvider, 'provider-go');
+      expect(restored.model, 'deepseek-v4.1-flash');
+      expect(restored.thinkingMode, 'low');
+    });
+
+    test('already-persisted legacy model_provider cache still restores the provider', () {
+      final decoded = codec.decode(
+        '{"v":4,"activeDeviceId":"device-1","contexts":{"device-1":{'
+        '"unscoped":{"sessions":[{"id":"s-legacy","title":"Legacy",'
+        '"device_id":"device-1","model":"glm-5.2","model_provider":"provider-go",'
+        '"thinking_mode":"max"}],"state":"ready"}}},"sessionDrafts":{}}',
+      );
+      final restored = decoded.contexts['device-1']!.unscopedConversations.sessions.single;
+      expect(restored.modelProvider, 'provider-go');
+      expect(restored.model, 'glm-5.2');
+    });
+
+    test('an already-persisted half-route draft heals on load', () {
+      final decoded = codec.decode(
+        '{"v":4,"activeDeviceId":"device-1","contexts":{"device-1":{'
+        '"newDraft":{"text":"keep me","workspaceId":"ws-1","providerId":null,'
+        '"model":"deepseek-v4.1-flash","thinkingMode":"low",'
+        '"updatedAt":"2026-10-21T06:55:06.793Z"}}},'
+        '"sessionDrafts":{"device-1|s-1":{"text":"session text","providerId":"",'
+        '"model":"deepseek-v4.1-flash","thinkingMode":"low",'
+        '"updatedAt":"2026-10-21T06:55:06.793Z"}}}',
+      );
+      final context = decoded.contexts['device-1']!;
+      expect(context.newConversationDraftText, 'keep me');
+      expect(context.newConversationDraftWorkspaceId, 'ws-1');
+      expect(context.newConversationDraftProviderId, isNull);
+      expect(context.newConversationDraftModel, isNull);
+      expect(context.newConversationDraftThinkingMode, isNull);
+
+      final sessionDraft = decoded.sessionDrafts['device-1|s-1']!;
+      expect(sessionDraft.text, 'session text');
+      expect(sessionDraft.providerId, isNull);
+      expect(sessionDraft.model, isNull);
+      expect(sessionDraft.thinkingMode, isNull);
+    });
+
     test('persisted sections are capped without retaining a skipping cursor', () {
       final sessions = List.generate(
         ConversationCacheCodec.maxPersistedSessionsPerSection + 5,

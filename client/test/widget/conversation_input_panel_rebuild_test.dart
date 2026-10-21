@@ -226,6 +226,37 @@ void main() {
     expect(cacheRepository.newConversationDraft(agent.id).text, 'keep this draft');
   });
 
+  testWidgets('a provider-less New Conversation draft keeps the device route', (tester) async {
+    sessionMessagesCubit.setNextMessagePreferences(
+      providerId: 'provider-go',
+      model: 'glm-5.2',
+      thinkingMode: 'max',
+    );
+    // Half route as written by older clients: model and thinking, no provider.
+    cacheRepository.setNewConversationDraft(
+      agent.id,
+      text: 'keep my text',
+      model: 'deepseek-v4.1-flash',
+      thinkingMode: 'low',
+    );
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      conversationCacheRepository: cacheRepository,
+      child: ConversationInputPanel(onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {}),
+    );
+    await tester.pump();
+
+    expect(find.text('keep my text'), findsOneWidget);
+    expect(sessionMessagesCubit.state.nextMessageProviderId, 'provider-go');
+    expect(sessionMessagesCubit.state.nextMessageModel, 'glm-5.2');
+    expect(sessionMessagesCubit.state.nextMessageThinkingMode, 'max');
+  });
+
   testWidgets('loading an existing session never shows the New Conversation draft', (tester) async {
     cacheRepository.setNewConversationDraft(
       agent.id,

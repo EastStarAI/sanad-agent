@@ -15,6 +15,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Flush debounced edits before send, session/device transition, and disposal; unrelated cache snapshots must not clear editor text.
 - Attachment send cleanup is owned by the draft scope and attachment IDs captured before asynchronous session creation/admission. Successful dispatch removes only those submitted IDs from that originating scope; scope changes and newer/unrelated drafts must not be cleared. Failure preserves the originating draft.
 - Draft workspace, provider, model, thinking, and text restore together per device. Permission remains workspace-policy-owned and must not be mutated by restore.
+- A draft route (provider, model, thinking) is copied or restored only as a complete provider+model pair (`ConversationDraft.isCompleteRoute`). `startNewChat` clears all three when the inherited session lacks either side, and a partial or empty draft route never replaces the current device route.
 - Existing-session selection must replace or explicitly clear all context fields before presentation swaps. An identity-only restored-session placeholder is not authoritative context and must preserve the persisted provider/model route until a complete route or authoritative route revision arrives.
 - `thinkingMode` is the Dart/domain name and `thinking_mode` is the wire/cache key; do not add aliases.
 - For a new device with no saved thinking preference: when
