@@ -51,7 +51,7 @@ Both predate Task 117 and were observed during its live acceptance on a Test Hom
 - [x] 3A deterministic paired regressions with fixture-scoped provider receipts; feasible and infeasible target cases; Client metrics consistent with `W` (118b writer; review pending).
 - [x] 3B runner/daemon regressions for below-threshold, true pressure, drift and restart non-repeat (118b writer; review pending).
 - [ ] Owning docs: `docs/technical/context_compaction.md`, `docs/agent_engine/context_compaction_design.md`, `docs/qa_maintenance/context_compaction_qa.md`.
-- [ ] Independent review and delegated Sanad live acceptance on the Test Home (large-context route `OpenCode Go / deepseek-v4.1-flash`) with a bounded call and token budget; validate the first actual post-input. Meet 10% (13% allowed upper result for the observed case) or report measured infeasibility.
+- [x] Independent review and delegated Sanad live acceptance on the Test Home (large-context route `OpenCode Go / deepseek-v4.1-flash`) with a bounded call and token budget; validate the first actual post-input. Meet 10% (13% allowed upper result for the observed case) or report measured infeasibility.
 
 ## Representative Data
 
@@ -206,6 +206,19 @@ Gates:
 - Client `fvm flutter analyze` clean; full Client suite +1954 ~1 (`r5-final-client-suite.log`).
 - Wiki lint passes.
 
+### Live r3 — Test Home 1, 2026-10-21 (candidate `1c62bf9d`; coordinator accepted)
+
+- `OpenCode Go / deepseek-v4.1-flash`: all 5 scenarios PASS.
+  - Auto at 90%: one operation with chunk + reduce; the first confirmed post-input was 9.82% of `W`, so the target was met.
+  - Manual `/compact`: fixed overhead equals auto exactly.
+  - Arabic estimate: −3.1% against the first confirmed input.
+  - Cancel: the next turn keeps the previous confirmed value.
+  - Restart: `below_threshold`, no repeated compaction.
+- ChatGPT `gpt-6-luna`: auto and manual PASS.
+- Follow-ups (not in 118b):
+  - **D5 (Medium):** the non-ASCII UTF-8 bytes / 4 estimate overprices Arabic on `gpt-6-luna` by about 43–55% before a confirmed receipt exists. It errs early and never overflows; with a receipt the error is about 0.1%.
+  - **O2 (Low):** `deepseek-v4.1-flash` estimates without a receipt run about −14% on tool-, JSON- and image-heavy history.
+
 ## Delivery Split
 
 Task 118 is delivered in two PRs. This file stays in `docs/plans/tasks/` until 118b lands.
@@ -231,7 +244,7 @@ Live acceptance on a Test Home:
 - The round 2 accounting fix is proven by tests only; it is simple and test-provable, so no live rerun was needed.
 - The second `context_compaction.completed` event is the planned republish by `reconcilePostBoundaryUsage`, which predates 118.
 
-### 118b — writer complete, review and live acceptance pending
+### 118b — reviewed and live accepted (live r3)
 
 - Stage3A: the complete-request target against `W`, replay-aware tail selection, and Client metrics on `W` (round 2 — 118b writer).
 - The rest of Stage3B (the audit items listed in round 1).
