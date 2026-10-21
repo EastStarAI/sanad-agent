@@ -130,9 +130,8 @@ BaseOpenAIAdapter goAdapter(
   );
 }
 
-ToolCall call(String id) => ToolCall(id: id, name: 'read_file', arguments: {
-  'path': '$id.txt',
-});
+ToolCall call(String id) =>
+    ToolCall(id: id, name: 'read_file', arguments: {'path': '$id.txt'});
 
 Message toolResult(String id) =>
     Message(role: MessageRole.tool, toolCallId: id, content: 'ok $id');
@@ -184,3 +183,95 @@ List<Map<String, dynamic>> assistantToolWire(List<Map<String, dynamic>> wire) =>
     wire
         .where((m) => m['role'] == 'assistant' && m['tool_calls'] != null)
         .toList();
+
+/// Task 120: Go-shaped models.dev entries (synthetic copies of the published
+/// `opencode-go` catalog shape) with per-model `provider.npm` / `provider.api`.
+const goResponsesModel = 'gpt-6-luna';
+const goMessagesModel = 'minimax-m3';
+const goMessagesEffortModel = 'claude-haiku-5-5';
+const goOpenAiApi = 'https://opencode.ai/inference/go/openai/v1';
+const goAnthropicApi = 'https://opencode.ai/inference/go/anthropic/v1';
+const goResponsesIssuer = '$goInstance|codex_responses|$goOpenAiApi';
+const goMessagesIssuer = '$goInstance|anthropic_compatible|$goAnthropicApi';
+
+Map<String, dynamic> goWireCatalogJson() => {
+  'opencode-go': {
+    'npm': '@ai-sdk/openai-compatible',
+    'api': goOpenAiApi,
+    'models': {
+      goResponsesModel: {
+        'id': goResponsesModel,
+        'reasoning': true,
+        'reasoning_options': [
+          {
+            'type': 'effort',
+            'values': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+          },
+        ],
+        'modalities': {
+          'input': ['text', 'image', 'pdf'],
+          'output': ['text'],
+        },
+        'provider': {'npm': '@ai-sdk/openai', 'api': goOpenAiApi},
+      },
+      goMessagesModel: {
+        'id': goMessagesModel,
+        'reasoning': true,
+        'reasoning_options': [
+          {'type': 'toggle'},
+        ],
+        'provider': {'npm': '@ai-sdk/anthropic', 'api': goAnthropicApi},
+      },
+      goMessagesEffortModel: {
+        'id': goMessagesEffortModel,
+        'reasoning': true,
+        'reasoning_options': [
+          {'type': 'toggle'},
+          {
+            'type': 'effort',
+            'values': ['low', 'medium', 'high', 'xhigh', 'max'],
+          },
+        ],
+        'provider': {'npm': '@ai-sdk/anthropic', 'api': goAnthropicApi},
+      },
+      deepseek: {
+        'id': deepseek,
+        'reasoning': true,
+        'reasoning_options': [
+          {
+            'type': 'effort',
+            'values': ['low', 'high', 'max'],
+          },
+        ],
+        'interleaved': {'field': 'reasoning_content'},
+        'provider': {'api': goOpenAiApi},
+      },
+      'responses-without-api': {
+        'id': 'responses-without-api',
+        'provider': {'npm': '@ai-sdk/openai'},
+      },
+      'google-served': {
+        'id': 'google-served',
+        'provider': {
+          'npm': '@ai-sdk/google',
+          'api': 'https://opencode.ai/inference/go/google/v1beta',
+        },
+      },
+    },
+  },
+  'deepseek': {
+    'models': {
+      'deepseek-chat': {
+        'id': 'deepseek-chat',
+        'provider': {'npm': '@ai-sdk/anthropic', 'api': goAnthropicApi},
+      },
+    },
+  },
+};
+
+ModelsDevService goWireModelsDev() {
+  final dir = Directory.systemTemp.createTempSync('sanad_120_models_dev_');
+  final path = p.join(dir.path, 'models_dev_cache.json');
+  File(path).writeAsStringSync(jsonEncode(goWireCatalogJson()));
+  return ModelsDevService(cacheFilePathOverride: path);
+}

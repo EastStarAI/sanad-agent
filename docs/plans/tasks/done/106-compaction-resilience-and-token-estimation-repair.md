@@ -55,7 +55,7 @@ Test Home live acceptance (scalar receipts only; raw artifacts stay private):
 Known gaps carried forward, not claimed as delivered:
 
 - `qwen3.7-max` on OpenCode Go resolves to unknown (admitted with the provider default, no thinking field).
-- `gpt-6-luna` and other Responses/Messages models on OpenCode Go still dispatch on Chat → [Task 120](docs/plans/tasks/120-opencode-go-per-model-protocol.md).
+- `gpt-6-luna` and other Responses/Messages models on OpenCode Go still dispatch on Chat → [Task 120](docs/plans/tasks/done/120-opencode-go-per-model-protocol.md).
 - The reactive 400 recovery with per-selection suppression is unit-proven; live evidence exists only for the earlier keying (r2).
 - r4 observations: a new draft keeps a carried value the route also offers (High) rather than resetting to the route default (Max), which is an open product decision; the filled default shows no default-hint row for glm-5.2 on Go; the Client placeholder-restore path is proven by its outcome and unit tests, not observed directly.
 - 0P live reproduction was `not_run` in r2/r3 for budget reasons → live gate moved to [Task 117](docs/plans/tasks/done/117-session-history-integrity.md).
@@ -71,7 +71,7 @@ The former ordered queue (0P follow-ups, Stage2, 3A, 3B, timeout toast, 116) is 
 | 0P-F1 history rewrite re-ids rows; 0P-F2 unbounded recovery summarizer | [Task 117 — Session history integrity](docs/plans/tasks/done/117-session-history-integrity.md) | Before 118. |
 | Stage2 near-window summarization resilience; Stage3A complete-request target, public metrics and replay-aware tail; Stage3B premature/repeated automatic pressure | [Task 118 — Compaction accuracy and target](docs/plans/tasks/118-compaction-accuracy-and-target.md) | Uses the locked decisions and observations below. |
 | Misleading manual-compaction timeout toast | [Task 119 — Manual compaction timeout feedback](docs/plans/tasks/done/119-manual-compaction-timeout-feedback.md) | Delivered in [PR228](https://github.com/EastStarAI/sanad-agent/pull/228). |
-| OpenCode Go per-model wire protocol (live round 1 D3) | [Task 120 — OpenCode Go per-model protocol](docs/plans/tasks/120-opencode-go-per-model-protocol.md) | After 116; keeps issuers stable. |
+| OpenCode Go per-model wire protocol (live round 1 D3) | [Task 120 — OpenCode Go per-model protocol](docs/plans/tasks/done/120-opencode-go-per-model-protocol.md) | After 116; keeps issuers stable. |
 | Per-request destination-compatible projection | [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md) | Detached; own PR. |
 
 ## Delivered Baseline and Evidence

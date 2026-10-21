@@ -101,8 +101,8 @@ class CompactionBoundaryRepository {
             tail_end_anchor_fingerprint, tail_end_anchor_ordinal,
             provider_instance_id, model_id, template_id, protocol,
             normalized_base_url, config_revision, credential_revision,
-            started_at, diagnostics_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            api_mode, started_at, diagnostics_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ''', CompactionOperationCodec.insertStartedParams(record: record));
       } on SqliteException catch (error) {
         if (_isStartedConflict(error)) {
@@ -806,7 +806,7 @@ class CompactionBoundaryRepository {
           tail_end_anchor_fingerprint, tail_end_anchor_ordinal,
           provider_instance_id, model_id, template_id, protocol,
           normalized_base_url, config_revision, credential_revision,
-          context_window_tokens, effective_input_budget_tokens,
+          api_mode, context_window_tokens, effective_input_budget_tokens,
           auto_threshold_tokens, estimated_request_tokens_before,
           estimated_request_tokens_after, before_measurement_kind,
           provider_confirmed_request_tokens_after, retained_tail_tokens,
@@ -816,7 +816,7 @@ class CompactionBoundaryRepository {
           summarization_attempts,
           internal_summary_json, failure_reason,
           failure_detail_json, started_at, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''',
         [
           const Uuid().v4(),
@@ -837,6 +837,7 @@ class CompactionBoundaryRepository {
           row['normalized_base_url'],
           row['config_revision'],
           row['credential_revision'],
+          row['api_mode'],
           row['context_window_tokens'],
           row['effective_input_budget_tokens'],
           row['auto_threshold_tokens'],

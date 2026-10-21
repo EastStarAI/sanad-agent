@@ -23,7 +23,7 @@ Delivered in [PR229](https://github.com/EastStarAI/sanad-agent/pull/229) with Ta
 - **Client.** The thinking menu stays visible; opening a session no longer writes its selection; a carried selection is admitted per route.
 - **Automated evidence.** Agent +2844 ~14, Client +1649, analyzers clean. Key suites: `agent/test/interfaces/runtime/carried_thinking_selection_admission_test.dart`, `agent/test/core/provider_thinking/thinking_route_session_sync_test.dart`, `agent/test/core/provider_thinking/layered_thinking_authority_test.dart`, `client/test/widget/route_thinking_mode_carried_selection_test.dart`.
 - **Live evidence (Test Home, r2/r3).** Moonshot `kimi-for-coding` `high` completed with `reasoning_effort="high"`, HTTP 200. ChatGPT/Codex `gpt-6-luna` control completed with Responses `reasoning.effort="high"`. OpenCode Go `deepseek-v4.1-flash` `low`/`off`, `deepseek-v4-pro` `off`/`high` and `glm-5.2` `high` completed with the expected wire directives. `glm-5.2` `none` was rejected before dispatch with CLI exit 1 and zero provider calls.
-- **Not closed here.** OpenCode Go `gpt-6-luna` now has a truthful descriptor but still fails on the Chat wire; per-model protocol routing is [Task 120](docs/plans/tasks/120-opencode-go-per-model-protocol.md). `qwen3.7-max` on Go remains unknown.
+- **Not closed here.** OpenCode Go `gpt-6-luna` now has a truthful descriptor but still fails on the Chat wire; per-model protocol routing is [Task 120](docs/plans/tasks/done/120-opencode-go-per-model-protocol.md). `qwen3.7-max` on Go remains unknown.
 
 ## Dependency and Activation
 
@@ -98,7 +98,7 @@ The bounded error code is `thinking_capability_unsupported`. The reported path i
 
 ## Acceptance Criteria and Definition of Done
 
-- [x] Both affected routes admit legitimate messages and complete responses using their truthful native capability contracts. Moonshot is live-proven; OpenCode Go `gpt-6-luna` admission is fixed, but its transport needs [Task 120](docs/plans/tasks/120-opencode-go-per-model-protocol.md).
+- [x] Both affected routes admit legitimate messages and complete responses using their truthful native capability contracts. Moonshot is live-proven; OpenCode Go `gpt-6-luna` admission is fixed, but its transport needs [Task 120](docs/plans/tasks/done/120-opencode-go-per-model-protocol.md).
 - [x] Existing valid user thinking selections are preserved; genuinely invalid explicit requests still receive safe specific feedback rather than silent recovery.
 - [x] `gpt-6-luna` through ChatGPT/Codex remains working; provider-specific behavior is not inferred from the shared model identifier.
 - [x] Unknown/not-reported and no-control UI states no longer conceal an unexplained total execution failure.
