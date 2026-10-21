@@ -20,6 +20,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
 - [Jev Sanad UI Automation](jev_sanad_ui_automation.md): Safety boundary and verification matrix for the Client Tester-owned conversation runner with narrow Jev verification.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
+- [Third-Party Skills Install QA](third_party_skills_install_qa.md): `sanad skills add/remove/update` source parsing, archive safety, provenance, bundled/hand-copied collisions, and scope precedence for user-installed skills.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.
 - [View Image Tool QA](view_image_tool_qa.md): Regression coverage for secure image loading, user attachment admission, composer/timeline/edit UX, local/remote media hydration, multimodal codecs, recovery, pruning, and binary-safe projections.

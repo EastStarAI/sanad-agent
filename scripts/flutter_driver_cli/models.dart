@@ -42,6 +42,10 @@ class UiElement {
   final String? semanticsLabel;
   final bool? selected;
   final bool button;
+
+  /// Whether the control accepts input; null when the widget has no
+  /// enabled state.
+  final bool? enabled;
   final UiBounds? bounds;
 
   const UiElement({
@@ -53,6 +57,7 @@ class UiElement {
     this.semanticsLabel,
     this.selected,
     this.button = false,
+    this.enabled,
     this.bounds,
   });
 
@@ -66,6 +71,7 @@ class UiElement {
       semanticsLabel: json['semantics_label'] as String?,
       selected: json['selected'] as bool?,
       button: json['button'] as bool? ?? false,
+      enabled: json['enabled'] as bool?,
       bounds: json['bounds'] != null
           ? UiBounds.fromJson(Map<String, dynamic>.from(json['bounds'] as Map))
           : null,
@@ -81,6 +87,7 @@ class UiElement {
     if (semanticsLabel != null) 'semantics_label': semanticsLabel,
     if (selected != null) 'selected': selected,
     if (button) 'button': true,
+    if (enabled != null) 'enabled': enabled,
     if (bounds != null) 'bounds': bounds!.toJson(),
   };
 

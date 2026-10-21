@@ -187,6 +187,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
         const SizedBox(height: 12),
         _buildPermissionAction(
           context,
+          key: const ValueKey('permission_option_once'),
           label: showNumbers ? '1  Yes, allow this time' : 'Yes, allow this time',
           onTap: () => _approveSuspendedRequest(context, widget.request, 'once'),
           primary: true,
@@ -194,18 +195,21 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
         const SizedBox(height: 8),
         _buildPermissionAction(
           context,
+          key: const ValueKey('permission_option_session'),
           label: showNumbers ? '2  Yes, allow for this session' : 'Yes, allow for this session',
           onTap: () => _approveSuspendedRequest(context, widget.request, 'session'),
         ),
         const SizedBox(height: 8),
         _buildPermissionAction(
           context,
+          key: const ValueKey('permission_option_workspace'),
           label: showNumbers ? '3  Yes, always allow in this workspace' : 'Yes, always allow in this workspace',
           onTap: () => _approveSuspendedRequest(context, widget.request, 'workspace'),
         ),
         const SizedBox(height: 8),
         _buildPermissionAction(
           context,
+          key: const ValueKey('permission_option_deny'),
           label: showNumbers ? '4  No' : 'No',
           onTap: () {
             setState(() {
@@ -219,6 +223,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
         if (_showDenyComment) ...[
           const SizedBox(height: 10),
           TextField(
+            key: const ValueKey('permission_deny_comment_input'),
             controller: _denyCommentController,
             minLines: 1,
             maxLines: 3,
@@ -243,6 +248,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
           Align(
             alignment: Alignment.centerRight,
             child: FilledButton(
+              key: const ValueKey('permission_deny_submit_button'),
               onPressed: () => _denySuspendedRequest(context, widget.request),
               child: const Text('Submit'),
             ),

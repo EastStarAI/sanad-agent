@@ -102,10 +102,11 @@ Future<ClientInstance?> selectClientInstance(
     callerDirectory: _callerDirectory,
     sanadHomeOverride: sanadHomePath,
   );
+  final activeAgents = await discoverAgentInstances(
+    sanadHomeOverride: sanadHomePath,
+  );
   final state = selectRuntimeProcessState(
-    activeAgents: await discoverAgentInstances(
-      sanadHomeOverride: sanadHomePath,
-    ),
+    activeAgents: activeAgents,
     activeClients: instances,
     runtime: runtime,
   );
@@ -134,6 +135,15 @@ Future<ClientInstance?> selectClientInstance(
     print(
       'Error: No running client instances found for the current worktree (${runtime.worktreeId}).',
     );
+    final ownerHint = explicitHomeOwnerHint(
+      explicitHome: sanadHomePath,
+      runtime: runtime,
+      homeRecords: await _explicitHomeLauncherRecords(
+        sanadHomePath,
+        activeAgents,
+      ),
+    );
+    if (ownerHint != null) print(ownerHint);
     print('Active instances in other worktrees:');
     for (final inst in instances) {
       print('  Port: ${inst.port} | Path: ${inst.path}');
@@ -148,6 +158,62 @@ Future<ClientInstance?> selectClientInstance(
     print('  Port: ${inst.port} | Path: ${inst.path}');
   }
   exit(1);
+}
+
+/// Explains why an explicit `--home` selected no Client from this worktree.
+///
+/// Developer actions select by the invoking worktree identity, so a Home whose
+/// live launcher lease was started from another source root is reported with
+/// that owner instead of being followed. Returns null when no explicit
+/// absolute Home was supplied or no lease for it belongs elsewhere.
+String? explicitHomeOwnerHint({
+  required String? explicitHome,
+  required SanadDevRuntime runtime,
+  required Iterable<RuntimeLauncherRecord> homeRecords,
+}) {
+  final home = explicitHome?.trim();
+  if (home == null || home.isEmpty || !isAbsoluteFileSystemPath(home)) {
+    return null;
+  }
+  final foreign = homeRecords
+      .where(
+        (record) =>
+            _samePath(record.sanadHome, home) &&
+            !_samePath(record.sourceRoot, runtime.repositoryRoot),
+      )
+      .toList(growable: false);
+  if (foreign.isEmpty) return null;
+  final owners = foreign
+      .map(
+        (record) =>
+            '  Agent port ${record.agentPort} | Source: '
+            '${record.sourceRoot}',
+      )
+      .join('\n');
+  return 'The selected Home $home is served by a sanad-dev runtime launched '
+      'from another worktree:\n$owners\n'
+      'Developer actions select by the invoking worktree; run this command '
+      'from that worktree.';
+}
+
+Future<List<RuntimeLauncherRecord>> _explicitHomeLauncherRecords(
+  String? explicitHome,
+  Iterable<AgentInstance> agents,
+) async {
+  final home = explicitHome?.trim();
+  if (home == null || home.isEmpty || !isAbsoluteFileSystemPath(home)) {
+    return const [];
+  }
+  final records = <RuntimeLauncherRecord>[];
+  for (final agent in agents) {
+    try {
+      final record = await readRuntimeLauncherRecord(home, agent.port);
+      if (record != null) records.add(record);
+    } on Object {
+      // A malformed or unreadable lease is diagnostic noise, not an owner.
+    }
+  }
+  return records;
 }
 
 Future<ClientInstance?> _recordedClientInstance(int port) async {
@@ -206,10 +272,14 @@ Future<AgentInstance?> selectAgentInstance(
         return inst;
       }
     }
-    stderr.writeln('Error: No running agent instance found on port $portOverride.');
+    stderr.writeln(
+      'Error: No running agent instance found on port $portOverride.',
+    );
     stderr.writeln('Active instances:');
     for (final inst in instances) {
-      stderr.writeln('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
+      stderr.writeln(
+        '  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})',
+      );
     }
     if (exitOnError) exit(1);
     return null;
@@ -248,7 +318,9 @@ Future<AgentInstance?> selectAgentInstance(
     );
     stderr.writeln('Active instances in other worktrees:');
     for (final inst in instances) {
-      stderr.writeln('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
+      stderr.writeln(
+        '  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})',
+      );
     }
     if (exitOnError) exit(1);
     return null;
@@ -258,7 +330,9 @@ Future<AgentInstance?> selectAgentInstance(
     'Error: Multiple running agent instances found for the current worktree. Please specify which instance to target using the -p/--port option:',
   );
   for (final inst in matchingInstances) {
-    stderr.writeln('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
+    stderr.writeln(
+      '  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})',
+    );
   }
   if (exitOnError) exit(1);
   return null;
