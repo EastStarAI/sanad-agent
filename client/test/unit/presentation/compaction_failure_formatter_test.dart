@@ -89,6 +89,73 @@ void main() {
       expect(overCapacity.stage, 'pruning');
     });
 
+    // Task 118 Stage2: each failed summary shape has its own explanation.
+    test('explains empty, reasoning-only and truncated summaries', () {
+      final cases = <String, (String, String)>{
+        'summary_empty': (
+          'The model returned an empty summary.',
+          'Try running compaction again; if it repeats, switch to a '
+              'different model.',
+        ),
+        'summary_reasoning_only': (
+          'The model returned only its reasoning and no summary.',
+          'Try running compaction again, or switch to a different model.',
+        ),
+        'summary_truncated': (
+          "The summary reached the model's output limit before it was "
+              'complete.',
+          'Try again, or switch to a model with a larger output limit.',
+        ),
+      };
+      for (final entry in cases.entries) {
+        final resolved = CompactionFailureFormatter.resolve(
+          cause: entry.key,
+          failureReason: 'summarization_failed',
+        );
+        expect(resolved.explanation, entry.value.$1, reason: entry.key);
+        expect(resolved.nextAction, entry.value.$2, reason: entry.key);
+        expect(resolved.stage, 'provider', reason: entry.key);
+      }
+    });
+
+    testWidgets('localizes the failed summary shapes in Arabic', (
+      tester,
+    ) async {
+      late AppLocalizations arabicL10n;
+      await tester.pumpWidget(
+        MaterialApp(
+          locale: const Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Builder(
+            builder: (context) {
+              arabicL10n = AppLocalizations.of(context)!;
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+      final generic = CompactionFailureFormatter.resolve(
+        cause: 'invalid_response',
+        l10n: arabicL10n,
+      );
+      final seen = <String>{generic.explanation};
+      for (final cause in [
+        'summary_empty',
+        'summary_reasoning_only',
+        'summary_truncated',
+      ]) {
+        final arabic = CompactionFailureFormatter.resolve(
+          cause: cause,
+          l10n: arabicL10n,
+        );
+        final english = CompactionFailureFormatter.resolve(cause: cause);
+        expect(seen.add(arabic.explanation), isTrue, reason: cause);
+        expect(arabic.explanation, isNot(english.explanation), reason: cause);
+        expect(arabic.nextAction, isNot(english.nextAction), reason: cause);
+      }
+    });
+
     test('distinguishes validation and persistence failures', () {
       final continuity = CompactionFailureFormatter.resolve(
         stage: 'validation',

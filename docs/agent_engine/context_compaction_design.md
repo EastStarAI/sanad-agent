@@ -37,6 +37,10 @@ canonical history. Stale non-null owners cannot clear newer compacting state or 
 - Effective input window uses `inputLimitTokens` when present, otherwise the
   route `contextWindowTokens`, then subtracts output reservation (`4096` default)
   and safety headroom (`1024` default).
+- The automatic threshold is the policy ratio of the full resolved window `W`
+  (`inputLimitTokens` when present), capped by that effective input window
+  (Task 118). It is reported over `W`; a trigger decided by the cap is flagged
+  `threshold_capped_by_usable_budget` rather than shown as the nominal threshold.
 - Provider-confirmed input usage is authoritative only for the same route and
   byte-equivalent measured wire prefix. The adapter fingerprints instructions,
   tools, and ordered wire input items; a strict extension starts from the
@@ -158,9 +162,9 @@ labels and therefore cannot create semantic anchors; tool effects retain their
 typed `tool_call_id` supporting anchor instead. One bounded repair attempt is
 allowed; weak fallback summaries never activate a boundary. Failures may carry
 `CompactionAntiThrashingHints` for 53d cooldown.
-One failed Auto attempt also opens a per-run breaker so later tool-loop model
-steps cannot repeat compaction work; manual compaction and a new run remain
-eligible.
+One failed automatic attempt (Auto preflight or Overflow) also opens a per-run
+breaker so neither later tool-loop model steps nor a provider overflow in that
+run can repeat compaction work; manual compaction and a new run remain eligible.
 
 ## Provider-backed summarizer contract (53i)
 
@@ -184,7 +188,14 @@ eligible.
   request settings remain unchanged, but the final instruction line forbids
   tool calls and requires the final JSON object only. A returned tool call is
   never executed: one corrective attempt starts again from the same immutable
-  base, then compaction fails safely.
+  base, then compaction fails safely. Empty, reasoning-only, truncated and
+  invalid-JSON summaries follow the same single correction and fail with a safe
+  shape-specific cause, and every billed attempt keeps its usage in the
+  ledger and the aggregate (recovery included); a timed-out pass fails at once
+  (`docs/technical/context_compaction.md` §8.11.1).
+- A compaction pass waits for its complete response under the central
+  compaction pass timeout (`compaction.passTimeoutSeconds`, default 600 s), not
+  the normal-turn 90 s response watchdog; normal turns keep their watchdogs.
 - Output length is a soft request for about two pages. Compaction adds no token,
   byte, or field-length cap and does not reject an otherwise valid JSON result;
   the ordinary provider/request limits remain authoritative.
@@ -244,13 +255,15 @@ context:
 compaction:
   threshold: 0.90
   targetRatio: 0.10
+  passTimeoutSeconds: 600
   models:
     gpt-5.6-sol:
       threshold: 0.85
       targetRatio: 0.08
 ```
 
-Absent sections use `{}`, `0.90`, and `0.10`. Per-model keys inherit global
+Absent sections use `{}`, `0.90`, `0.10` and `600`. `passTimeoutSeconds` is
+global (not per model) and must be a positive integer. Per-model keys inherit global
 values independently. Unknown keys, non-positive model limits, and ratios outside
 `(0, 1)` fail startup safely. `thresholdTokens`, `modelThresholds`, wildcards,
 and legacy `.env` `CONTEXT_LIMIT` are not supported.

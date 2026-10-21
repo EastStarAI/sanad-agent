@@ -1588,9 +1588,13 @@ class AgentRunner {
       body: providerBody,
       hasTrustedTemporaryReset: httpRetryAfter != null,
     );
+    // Overflow compaction is automatic too: the per-run breaker opened by a
+    // failed automatic or overflow compaction blocks it for the rest of the
+    // run (Task 118), and the overflow falls through to the recovery notice.
     if (reason == RuntimeFailureReason.contextOverflow &&
         !streamStarted &&
         !_overflowCompactionRetried &&
+        !_autoCompactionBlockedForRun &&
         getIt.isRegistered<CompactionCoordinator>() &&
         getIt.isRegistered<SessionHistoryRevisionRepository>() &&
         getIt.isRegistered<AgentRuntimeService>()) {
@@ -1651,7 +1655,12 @@ class AgentRunner {
               _refreshCanonicalHistoryAfterCompaction();
               return true;
             }
-          } catch (_) {}
+            if (outcome?.status == CompactionStatus.failed) {
+              _autoCompactionBlockedForRun = true;
+            }
+          } catch (_) {
+            _autoCompactionBlockedForRun = true;
+          }
         }
       }
     }

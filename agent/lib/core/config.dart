@@ -274,6 +274,10 @@ class Config {
   int? contextModelLimit(String modelId) =>
       _modelAwarePolicy.contextModelLimits[_normalizeModelId(modelId)];
 
+  /// Bound for one compaction provider pass to return its whole response.
+  Duration get compactionPassTimeout =>
+      _modelAwarePolicy.compaction.passTimeout;
+
   CompactionPolicy compactionPolicyForModel(String modelId) =>
       _modelAwarePolicy.compaction.forModel(_normalizeModelId(modelId));
 
@@ -411,12 +415,25 @@ class CompactionPolicy {
 }
 
 class ModelAwareCompactionPolicy extends CompactionPolicy {
+  /// Default bound for one compaction provider pass (summary, repair, chunk
+  /// or reduce) to return its complete response (Task 118). Non-streamed
+  /// passes cannot report progress, so the normal-turn `connectTimeout`
+  /// (90 s) cut slow models whose ~50k-input recovery passes took 60-71 s.
+  /// A near-window main pass is several times larger, so the default leaves
+  /// room for a full-window pass at that observed throughput while staying
+  /// bounded. `config.yaml` `compaction.passTimeoutSeconds` overrides it.
+  static const defaultPassTimeout = Duration(seconds: 600);
+
   final Map<String, CompactionPolicy> models;
+
+  /// Bound for one compaction provider pass to return its whole response.
+  final Duration passTimeout;
 
   const ModelAwareCompactionPolicy({
     required super.threshold,
     required super.targetRatio,
     required this.models,
+    this.passTimeout = defaultPassTimeout,
   });
 
   CompactionPolicy forModel(String normalizedModelId) {
@@ -1013,6 +1030,7 @@ class ModelAwareRuntimePolicy {
       'threshold',
       'targetRatio',
       'models',
+      'passTimeoutSeconds',
     }, 'compaction');
     final threshold = _ratio(
       rawCompaction['threshold'],
@@ -1124,6 +1142,11 @@ class ModelAwareRuntimePolicy {
         threshold: threshold,
         targetRatio: targetRatio,
         models: Map.unmodifiable(models),
+        passTimeout: _positiveSeconds(
+          rawCompaction['passTimeoutSeconds'],
+          ModelAwareCompactionPolicy.defaultPassTimeout,
+          'compaction.passTimeoutSeconds',
+        ),
       ),
       modelCapabilities: Map.unmodifiable(capabilities),
     );
@@ -1155,6 +1178,18 @@ class ModelAwareRuntimePolicy {
     if (unknown.isNotEmpty) {
       throw FormatException('Unknown $path key: ${unknown.first}');
     }
+  }
+
+  static Duration _positiveSeconds(
+    dynamic value,
+    Duration fallback,
+    String path,
+  ) {
+    if (value == null) return fallback;
+    if (value is! num || value <= 0 || value != value.toInt()) {
+      throw FormatException('$path must be a positive integer');
+    }
+    return Duration(seconds: value.toInt());
   }
 
   static double _ratio(dynamic value, double fallback, String path) {

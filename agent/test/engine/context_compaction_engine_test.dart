@@ -124,7 +124,7 @@ void main() {
       },
     );
 
-    test('applies ratio threshold to the effective input window', () {
+    test('applies ratio threshold to the full window, capped by usable input', () {
       final evaluator = RequestPressureEvaluator(
         outputReservationTokens: 100,
         safetyBufferTokens: 100,
@@ -141,10 +141,48 @@ void main() {
             thresholdRatio: threshold,
           );
 
-      expect(snapshot(799, 0.80).exceedsThreshold, isFalse);
-      expect(snapshot(800, 0.80).exceedsThreshold, isFalse);
-      expect(snapshot(801, 0.80).exceedsThreshold, isTrue);
-      expect(snapshot(851, 0.85).exceedsThreshold, isTrue);
+      // W=1200, usable input 1000: 80% of W is 960 (Task 118).
+      expect(snapshot(959, 0.80).exceedsThreshold, isFalse);
+      expect(snapshot(960, 0.80).exceedsThreshold, isFalse);
+      expect(snapshot(961, 0.80).exceedsThreshold, isTrue);
+      // 85% of W is 1020 > usable 1000, so usable input protects instead.
+      expect(snapshot(1_000, 0.85).exceedsThreshold, isFalse);
+      expect(snapshot(1_001, 0.85).exceedsThreshold, isTrue);
+      expect(snapshot(0, 0.85).thresholdCappedByUsableBudget, isTrue);
+    });
+
+    // Task 118 Stage3B: the nominal threshold is the policy ratio of the
+    // full resolved window W; the usable input budget only caps it.
+    test('threshold uses the full window W, not usable input', () {
+      final evaluator = RequestPressureEvaluator();
+      RequestPressureSnapshot snapshot(int tokens, {double ratio = 0.90}) =>
+          evaluator.evaluate(
+            routeSignature: _route(),
+            contextWindowTokens: 258_000,
+            conversationMessages: const [],
+            systemPrompt: '',
+            runtimeContext: '',
+            toolSchemas: const [],
+            wireEstimatedInputTokens: tokens,
+            thresholdRatio: ratio,
+          );
+
+      expect(snapshot(0).effectiveInputBudget, 252_880);
+      expect(snapshot(0).thresholdTokens, 232_200);
+      expect(snapshot(0).thresholdCappedByUsableBudget, isFalse);
+      // Production observation 0572d8c2: 231735 lies between the internal
+      // 227592 and the nominal 232200 and is below the nominal threshold.
+      expect(snapshot(231_735).exceedsThreshold, isFalse);
+      expect(snapshot(232_200).exceedsThreshold, isFalse);
+      expect(snapshot(232_201).exceedsThreshold, isTrue);
+      // Earlier auto b9992c3d: 235008 exceeds both thresholds.
+      expect(snapshot(235_008).exceedsThreshold, isTrue);
+
+      // A ratio whose nominal threshold exceeds usable input is capped and
+      // reported as the internal protection, not as the nominal threshold.
+      final capped = snapshot(0, ratio: 0.99);
+      expect(capped.thresholdTokens, 252_880);
+      expect(capped.thresholdCappedByUsableBudget, isTrue);
     });
 
     test('flags request above effective input budget', () {

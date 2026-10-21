@@ -245,7 +245,7 @@ Plan 106 Gate G8 introduces allowlisted, typed failure diagnostics carrying stag
 Allowlisted non-sensitive identifier strings representing exact failure modes without leaking raw exception bodies, secrets, paths, user content, or HTTP payloads:
 - Preparation: `session_busy`, `compaction_in_progress`, `invalid_request`, `unavailable`, `session_not_found`, `thinking_capability_unsupported`, `thinking_capability_unknown`, `thinking_option_unavailable_for_route`, `thinking_route_instance_not_found`, `route_resolution_failed`, `preparation_failed`.
 - Pruning: `tool_result_malformed`, `pruning_failed`, `projection_still_over_budget`, `recovery_capacity_exceeded` (Task 117: the bounded recovery summarizer needs more chunks than configured; decided before any recovery provider call).
-- Provider: `timeout`, `rate_limited`, `overflow`, `invalid_response`, `network_error`, `provider_error`, `summarization_failed`.
+- Provider: `timeout`, `rate_limited`, `overflow`, `invalid_response`, `network_error`, `provider_error`, `summarization_failed`, and the Task 118 failed-summary shapes `summary_empty`, `summary_reasoning_only` and `summary_truncated` (§8.11.1).
 - Validation: `continuity_validation_failed`.
 - Persistence: `source_revision_stale`, `claim_lost`, `stale_operation`, `superseded`, `missing_message_rows`, `database_error`, `persistence_failed`, `interrupted`.
 - Fallback: `unexpected_error`.
@@ -262,7 +262,7 @@ Plan 106 Gate G9 maps allowlisted stage and cause diagnostics into user-actionab
 2. **Failure Categorization:**
    - **Preparation & Thinking Validation:** Distinguishes unsupported thinking modes (`thinking_capability_unsupported`, `thinking_capability_unknown`, etc.), busy sessions, duplicate in-progress operations, and invalid requests.
    - **Pruning:** Distinguishes malformed tool results from unresolvable over-budget projections (`projection_still_over_budget`) and from a session too large for bounded recovery (`recovery_capacity_exceeded`, whose next action is to start a new session or switch to a larger-context model).
-   - **Provider:** Distinguishes timeouts, rate limits (HTTP 429), context overflow, invalid responses, network errors, and generic provider errors.
+   - **Provider:** Distinguishes timeouts, rate limits (HTTP 429), context overflow, invalid responses, network errors, and generic provider errors. Task 118 adds an empty summary (`summary_empty`), a reasoning-only response with no summary (`summary_reasoning_only`) and a summary cut at the model output limit (`summary_truncated`), each with its own English and Arabic explanation and next action.
    - **Validation:** Distinguishes continuity anchor failures (`continuity_validation_failed`).
    - **Persistence:** Distinguishes stale revisions, superseded claims, daemon restarts (`interrupted`), and storage write errors.
    - **Unclassified:** `unexpected_error` (and any unknown cause) renders the honest fallback explanation and retry action; it never inherits the provider default explanation, because the Agent defaults the stage to `provider` when no stage hint existed. A stage the Agent explicitly asserted keeps its stage-specific explanation.
@@ -333,7 +333,7 @@ Terminal result visible to orchestrator and protocol mappers.
 ### 4.8 Target Ratio and Tail Budgeting Semantics
 
 Compaction policy declares two primary thresholds:
-- `threshold`: Context utilization ratio (default `0.90`) at which prospective request token estimation triggers automatic compaction.
+- `threshold`: Context utilization ratio (default `0.90`) of the **full resolved window `W`** at which prospective request token estimation triggers automatic compaction (Task 118: at `W=258000` the trigger is `232200`, not `0.90 × usable 252880 = 227592`). The usable input budget only caps it: when `ratio × W` exceeds usable input, usable input decides the trigger and the decision snapshot records `threshold_capped_by_usable_budget: true` instead of presenting it as the nominal threshold. The snapshot also carries `nominal_threshold_tokens` and `threshold_scope: context_window`.
 - `targetRatio`: Utilization ratio (default `0.10`) used to derive `targetRequestTokens = (effectiveInputWindow * targetRatio).round()`.
 
 #### Exact Semantics in Engine Selection
@@ -627,6 +627,48 @@ or field-length limit. Its last line forbids tool calls and requires only the fi
 A tool-call response is never dispatched and receives one corrective attempt from the same
 immutable base; a second invalid response closes the operation as failed.
 
+#### 8.11.1 Failed summary shapes and pass timeout (Task 118 Stage2)
+
+Every provider pass (full, repair, recovery chunk and reduce) classifies an
+unusable response into one safe shape code; provider text never enters the
+ledger, diagnostics or logs:
+
+| Shape (ledger `failure_reason`) | Detected when | Terminal cause after the bounded attempts |
+|---|---|---|
+| `summary_tool_call` | the response carries a tool call | `invalid_response` |
+| `summary_truncated` | finish reason `length` or `incomplete` | `summary_truncated` |
+| `summary_incomplete` | finish reason `failed` or `cancelled` | `invalid_response` |
+| `summary_reasoning_only` | visible content is empty after reasoning markup is removed, and reasoning or markup was returned | `summary_reasoning_only` |
+| `summary_empty` | no visible content and no reasoning | `summary_empty` |
+| `summary_invalid_json` | the strict JSON parser rejects the text | `invalid_response` |
+
+Each shape gets exactly one corrective attempt from the immutable base; the
+failure is stage `provider` with the latest attempt's cause, never a continuity
+failure (a parsed summary that misses anchors stays `continuity_validation_failed`).
+Every attempt whose response the provider answered keeps that response's
+usage and the measured duration in its own ledger entry and in the aggregate
+usage, for every shape above, in the main and the recovery paths alike
+(invalid JSON included: the provider billed it even though the parser rejected
+it). When a recovery pass fails, the failure's `aggregate_usage` includes every
+earlier billed chunk and reduce pass of that recovery, not only the failing
+pass. A timed-out pass is not repeated: it fails at once with cause
+`timeout` and records its elapsed duration.
+
+A non-streamed pass delivers nothing until its whole response arrives, so the
+transport's response watchdog (`ProviderWatchdogConfig.connectTimeout`, 90 s
+for normal turns) used to cut slow models (Task 117 live acceptance: ~50k-input
+recovery passes took 60–71 s on a slow model and a pass timed out).
+`CompactionRequestFactory.buildCompactionRequestOptions` now replaces only
+that field with the compaction pass timeout from the central config
+(`Config.compactionPassTimeout`; default 600 s in
+`ModelAwareCompactionPolicy.defaultPassTimeout`, overridable by
+`compaction.passTimeoutSeconds` in `config.yaml`, a positive integer). The
+first-byte, stream-idle and optional total watchdogs keep their normal-turn
+values, and normal turns are unchanged. Streaming the passes was not chosen:
+it would change the wire path of every adapter family for one caller, while
+the timeout fix is one central option. Run cancellation still interrupts a
+pass immediately.
+
 The 16 registered provider templates resolve to four production wire families:
 Codex Responses, OpenAI-compatible Chat Completions, Anthropic-compatible
 Messages, and Ollama. One adapter-contract suite drives the production
@@ -715,7 +757,7 @@ idle|running -> compacting (in-memory barrier + durable started row)
 - Busy run returns typed `session_busy`.
 - In-flight compaction returns typed `compaction_in_progress`.
 - Auto preflight and overflow recovery keep the active work item / run authority.
-- A failed Auto attempt opens a breaker for the active run, preventing repeated summarizer/provider work on later tool-loop steps. A new run resets the breaker and manual `/compact` remains available.
+- A failed automatic attempt, Auto preflight or Overflow, opens a breaker for the active run. While it is open neither Auto preflight nor Overflow compaction runs again in that run (Task 118: Overflow used to ignore it), so a later tool-loop step or a provider overflow does not repeat summarizer/provider work; an overflow then takes the ordinary overflow recovery notice. A new run resets the breaker and manual `/compact` remains available.
 - Incoming user messages during compaction remain durable queued work and are never folded into the in-flight summary snapshot.
 
 ### 9.2 Triggers
@@ -825,7 +867,7 @@ When summarization executes (including single-shot, recovery chunk/reduce, or co
 - **Attempt Identification:** `pass_kind` (`full`, `repair`, `chunk`, `reduce`) and distinct `request_id` formatted as `compaction:[<trigger>:]<compactionId>:<passKind>:<attempt>` (e.g. `compaction:overflow:<compactionId>:full:0`). Recovery chunk passes and intermediate reduce batches add a sequence index: `<passKind>:<index>_<attempt>` (§8.12).
 - **Timing:** `duration_ms` for that specific attempt.
 - **Provider Usage:** `input_tokens`, `cached_input_tokens`, `cache_write_tokens`, `output_tokens`, and `reasoning_tokens` reported for that call. Missing or unsupported usage stays `null`.
-- **Outcome and Failure Cause:** `outcome` (`success`, `validation_failed`, `invalid_response`, `overflow`, `error`) and typed `failure_reason`.
+- **Outcome and Failure Cause:** `outcome` (`success`, `validation_failed`, `invalid_response`, `overflow`, `error`) and typed `failure_reason` (an allowlisted code such as the §8.11.1 summary shapes or a cause; never provider text or exception messages).
 
 **Preservation of Legacy Aggregate Semantics & Granular Per-Attempt Attribution:**
 - `CompactionMetrics.summarizationInputTokens` (and `session_compaction_operations.summarization_input_tokens`) preserves legacy aggregate semantics, recording the total input tokens consumed across all summarization attempts (aggregate processing cost).

@@ -21,6 +21,7 @@ import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
@@ -545,6 +546,117 @@ void main() {
       'high',
       reason: 'provider failure must not lower or clear the user choice',
     );
+  });
+
+  group('Task 118 item 2: overflow path respects the per-run breaker', () {
+    const overflowError = LlmHttpException(
+      statusCode: 400,
+      body: 'maximum context length exceeded',
+      headers: {},
+      operation: 'chat.completions',
+    );
+
+    late int startedEvents;
+    late List<CompactionTrigger> startedTriggers;
+
+    void installFailingCoordinator() {
+      startedEvents = 0;
+      startedTriggers = [];
+      getIt.registerSingleton<CompactionCoordinator>(
+        CompactionCoordinator(
+          engine: ContextCompactionEngine(summarizer: _FailingSummarizer()),
+          boundaries: boundaries,
+          activation: CompactionActivationService(
+            boundaries: boundaries,
+            projectionRevisions: SessionProjectionRevisionRepository(state),
+          ),
+          projectionBuilder: getIt<ModelProjectionBuilder>(),
+          onLifecycleEvent: (event) {
+            if (event.status == CompactionStatus.started) {
+              startedEvents++;
+              startedTriggers.add(event.trigger);
+            }
+          },
+        ),
+      );
+    }
+
+    setUp(() {
+      sessions.replaceMessages('session-preflight', [
+        Message(role: MessageRole.user, content: 'goal: exercise breaker'),
+        for (var index = 0; index < 500; index++)
+          Message(
+            role: MessageRole.user,
+            content: 'large request $index ${'x' * 1_000}',
+          ),
+      ]);
+      runner = AgentRunner(
+        _PreflightAdapter(),
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: 'session-preflight',
+      );
+      runner.beginAuthoritativeRun('run-breaker');
+      installFailingCoordinator();
+    });
+
+    test(
+      'a failed automatic compaction blocks overflow compaction in the same run',
+      () async {
+        await runner.debugPrepareProviderHistory();
+        expect(startedTriggers, [CompactionTrigger.auto]);
+
+        final recovered = await runner.debugTryOverflowCompactionRecovery(
+          error: overflowError,
+          providerInstanceId: 'provider-1',
+          modelId: 'gpt-4o',
+        );
+
+        expect(recovered, isFalse);
+        expect(
+          startedTriggers,
+          [CompactionTrigger.auto],
+          reason: 'the open breaker must stop the overflow compaction attempt',
+        );
+        expect(
+          boundaries
+              .listLifecycleForSession('session-preflight')
+              .where((record) => record.status == CompactionStatus.failed),
+          hasLength(1),
+        );
+      },
+    );
+
+    test(
+      'a failed overflow compaction opens the breaker for later auto steps',
+      () async {
+        final recovered = await runner.debugTryOverflowCompactionRecovery(
+          error: overflowError,
+          providerInstanceId: 'provider-1',
+          modelId: 'gpt-4o',
+        );
+        expect(recovered, isFalse);
+        expect(startedTriggers, [CompactionTrigger.overflow]);
+
+        await runner.debugPrepareProviderHistory();
+
+        expect(
+          startedTriggers,
+          [CompactionTrigger.overflow],
+          reason: 'a later model step in the same run must not retry',
+        );
+      },
+    );
+
+    test('a new run closes the breaker again', () async {
+      await runner.debugPrepareProviderHistory();
+      expect(startedEvents, 1);
+
+      runner.beginAuthoritativeRun('run-breaker-next');
+      await runner.debugPrepareProviderHistory();
+
+      expect(startedEvents, 2);
+    });
   });
 
   test(
