@@ -55,6 +55,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   String? _selectedSessionId;
   final Map<String, String> _nextMessageModelByAgentId = {};
   final Map<String, String> _nextMessageThinkingByAgentId = {};
+
+  /// The thinking value the user (or the selected conversation's own stored
+  /// selection) chose, per device. It differs from
+  /// [_nextMessageThinkingByAgentId] only while a route default is admitted
+  /// for display and the next send: an admitted default is never a choice, so
+  /// it never reaches this map, a draft or the device preference (Task 122).
+  final Map<String, String> _explicitThinkingByAgentId = {};
   final Map<String, String> _nextMessageProviderByAgentId = {};
   final Map<String, String> _pendingRouteProviderBySessionId = {};
   final Map<String, String> _pendingRouteModelBySessionId = {};
@@ -690,11 +697,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         final caps = capabilitiesStore?.getForAgent(agent.id);
         if (caps?.usesModelThinkingControls == true) {
           if (savedThinking != null && savedThinking.isNotEmpty) {
-            _nextMessageThinkingByAgentId[agent.id] = savedThinking;
+            _setThinking(agent.id, savedThinking);
           }
         } else {
           final thinkingMode = savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
-          _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
+          _setThinking(agent.id, thinkingMode);
           if (savedThinking == null || savedThinking.isEmpty) {
             unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
           }
@@ -1373,10 +1380,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
       if (thinkingMode != null) {
         if (trimmedThinkingMode == null || trimmedThinkingMode.isEmpty) {
-          _nextMessageThinkingByAgentId.remove(agent.id);
+          _setThinking(agent.id, null);
           unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
         } else {
-          _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
+          _setThinking(agent.id, trimmedThinkingMode);
           unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
         }
       }
@@ -1405,21 +1412,46 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   /// makes it the value the next send carries, in memory only. It writes no
   /// session preference and no device preference: opening or hydrating a
   /// conversation is never a user choice (live acceptance 106b r2 G2).
+  ///
+  /// The admitted value is not an explicit choice either, so it leaves
+  /// [explicitNextMessageThinkingMode] untouched: a New Conversation draft
+  /// persists only that explicit value (Task 122 D2).
   void admitNextMessageThinkingMode(String? thinkingMode) {
     final agent = _currentAgent;
     if (agent == null) return;
-    final normalized = thinkingMode?.trim();
-    if (normalized == null || normalized.isEmpty) {
-      _nextMessageThinkingByAgentId.remove(agent.id);
-    } else {
-      _nextMessageThinkingByAgentId[agent.id] = normalized;
-    }
+    _setThinking(agent.id, thinkingMode, explicit: false);
     emit(
       state.copyWith(
         nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
         clearNextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id] == null,
       ),
     );
+  }
+
+  /// The thinking value the user explicitly chose for the next send on the
+  /// current device (or the selected conversation's own stored selection),
+  /// excluding any route default admitted only for display and the next send.
+  String? get explicitNextMessageThinkingMode {
+    final agent = _currentAgent;
+    return agent == null ? null : _explicitThinkingByAgentId[agent.id];
+  }
+
+  /// Sets the next-send thinking value for [deviceId]. An [explicit] value is a
+  /// user choice (or the selected conversation's own stored selection) and is
+  /// recorded as such; an admitted route default changes only the next-send
+  /// value.
+  void _setThinking(String deviceId, String? value, {bool explicit = true}) {
+    final normalized = value?.trim();
+    void apply(Map<String, String> values) {
+      if (normalized == null || normalized.isEmpty) {
+        values.remove(deviceId);
+      } else {
+        values[deviceId] = normalized;
+      }
+    }
+
+    apply(_nextMessageThinkingByAgentId);
+    if (explicit) apply(_explicitThinkingByAgentId);
   }
 
   void replaceNextMessagePreferences({
@@ -1441,7 +1473,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
     replace(_nextMessageProviderByAgentId, providerId);
     replace(_nextMessageModelByAgentId, model);
-    replace(_nextMessageThinkingByAgentId, thinkingMode);
+    _setThinking(agent.id, thinkingMode);
     _emitCurrentState(error: null);
   }
 
@@ -1460,10 +1492,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       if (thinkingMode != null) {
         final trimmedThinkingMode = thinkingMode.trim();
         if (trimmedThinkingMode.isEmpty) {
-          _nextMessageThinkingByAgentId.remove(agent.id);
+          _setThinking(agent.id, null);
           unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
         } else {
-          _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
+          _setThinking(agent.id, trimmedThinkingMode);
           unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
         }
         sessionCubit.applyThinkingMode(
@@ -1508,10 +1540,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
     if (trimmedThinkingMode != null) {
       if (trimmedThinkingMode.isEmpty) {
-        _nextMessageThinkingByAgentId.remove(agent.id);
+        _setThinking(agent.id, null);
         unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
       } else {
-        _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
+        _setThinking(agent.id, trimmedThinkingMode);
         unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
       }
       final activeSessionId = state.activeSessionId;
@@ -1643,7 +1675,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
     replace(_nextMessageProviderByAgentId, providerId);
     replace(_nextMessageModelByAgentId, modelId);
-    replace(_nextMessageThinkingByAgentId, session?.thinkingMode);
+    _setThinking(deviceId, session?.thinkingMode);
   }
 
   /// Completes a deferred placeholder replacement once the same session's
@@ -1666,9 +1698,9 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     final stored = session.thinkingMode?.trim();
     final previous = _nextMessageThinkingByAgentId[agent.id];
     if (stored == null || stored.isEmpty) {
-      _nextMessageThinkingByAgentId.remove(agent.id);
+      _setThinking(agent.id, null);
     } else {
-      _nextMessageThinkingByAgentId[agent.id] = stored;
+      _setThinking(agent.id, stored);
     }
     return previous != _nextMessageThinkingByAgentId[agent.id];
   }

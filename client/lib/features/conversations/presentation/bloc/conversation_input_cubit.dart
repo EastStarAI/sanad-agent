@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:sanad_client/features/conversations/domain/models/conversation_draft.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
@@ -433,11 +434,20 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     messagesCubit.admitNextMessageThinkingMode(thinkingMode);
   }
 
+  /// The explicit (user-chosen or conversation-stored) thinking value, without
+  /// a route default admitted only for display and the next send. This is the
+  /// only thinking value a New Conversation draft may persist.
+  String? get explicitNextMessageThinkingMode => messagesCubit.explicitNextMessageThinkingMode;
+
+  /// Restores a New Conversation draft route. Only a complete provider+model
+  /// route replaces the current one; a partial or empty draft route is ignored
+  /// so the device route or readiness default stays in effect.
   void restoreNewConversationPreferences({
     String? providerId,
     String? model,
     String? thinkingMode,
   }) {
+    if (!ConversationDraft.isCompleteRoute(providerId, model)) return;
     messagesCubit.replaceNextMessagePreferences(
       providerId: providerId,
       model: model,

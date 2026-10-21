@@ -314,29 +314,36 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
       // choice instead of rewriting it on a guess.
       return;
     }
-    final currentSelection = _currentSelectionId(session, composerState: composerState)?.trim();
+    final isDraft = sessionId == null || sessionId.isEmpty;
+    // A draft resolves from the explicit choice it carries, so an earlier
+    // admitted default never stands in for the user's pick when the route
+    // changes again; an existing conversation resolves from its own stored
+    // selection (see [_currentSelectionId]).
+    final currentSelection = isDraft
+        ? cubit.explicitNextMessageThinkingMode?.trim()
+        : _currentSelectionId(session, composerState: composerState)?.trim();
     final targetSelectionId = RouteThinkingControl.resolveSelectionId(
       descriptor: descriptor,
       selectionId: currentSelection,
     );
-    if (targetSelectionId == currentSelection) {
-      // Already admitted: never rewrite an unchanged value, so resolution can
-      // never loop through the composer state.
+    final carriedRaw =
+        (composerState != null ? composerState.nextMessageThinkingMode : widget.inputSlice.nextMessageThinkingMode)
+            ?.trim();
+    final carried = carriedRaw?.isEmpty == true ? null : carriedRaw;
+    // Already admitted: never rewrite an unchanged value, so resolution can
+    // never loop through the composer state. An existing conversation's own
+    // valid stored selection is already its next-send value (selection
+    // replaces it); a draft compares only the value it actually carries, so
+    // an earlier admitted default is replaced by the explicit pick again.
+    if (targetSelectionId == carried || (!isDraft && targetSelectionId == currentSelection)) {
       return;
     }
-    if (sessionId != null && sessionId.isNotEmpty) {
-      // Opening or hydrating an existing conversation is not a user choice:
-      // show the effective value and carry it on the next send, but never
-      // write it to the session or the device (live acceptance 106b r2 G2).
-      cubit.admitRouteThinkingMode(targetSelectionId);
-      return;
-    }
-    // A new-conversation draft has no session to write: the composer's own
-    // selection path keeps the admitted value and the next send in step.
-    await cubit.selectThinkingMode(
-      scope: widget.capabilities.thinkingModeScope,
-      thinkingMode: targetSelectionId,
-    );
+    // Resolving a route's effective selection is never a user choice, for an
+    // existing conversation or a New Conversation draft alike: show the
+    // effective value and carry it on the next send, but never write it to the
+    // session, the draft or the device (live acceptance 106b r2 G2, Task 122
+    // D2). Only an explicit menu choice writes.
+    cubit.admitRouteThinkingMode(targetSelectionId);
   }
 
   /// Tells the composer whether this route's resolved control can carry a
@@ -409,6 +416,14 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     final sessionMode = session?.thinkingMode?.trim();
     if (sessionMode != null && sessionMode.isNotEmpty) {
       return sessionMode;
+    }
+    if (session != null && session.id.isNotEmpty) {
+      // An existing conversation with no stored selection shows its route's
+      // own default, exactly like a New Conversation drafted from it. A value
+      // carried in memory from another conversation or a device-level pick
+      // never stands in for it (Task 122 D3); an explicit pick in this
+      // conversation is applied to the session itself before it is shown.
+      return null;
     }
     return pending;
   }
@@ -720,10 +735,16 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     Widget wrapped = content;
     // A deferred admission waits until the composer owns the conversation it was
     // resolved for, so the composer's own ownership change is what retries it.
+    // A New Conversation draft also re-resolves when its carried value changes
+    // without a route change (a draft restore), so the shown default and the
+    // value the next send carries never diverge. Admission is idempotent.
     try {
       context.read<ConversationInputCubit>();
       wrapped = BlocListener<ConversationInputCubit, ConversationInputState>(
-        listenWhen: (previous, current) => previous.activeSessionId != current.activeSessionId,
+        listenWhen: (previous, current) =>
+            previous.activeSessionId != current.activeSessionId ||
+            ((current.activeSessionId?.isEmpty ?? true) &&
+                previous.nextMessageThinkingMode != current.nextMessageThinkingMode),
         listener: (context, state) {
           unawaited(_admitForComposerOwnershipChange(state));
         },

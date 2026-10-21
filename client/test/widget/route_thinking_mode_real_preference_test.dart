@@ -390,4 +390,161 @@ void main() {
       expect(thinkingWrites().single['thinking_mode'], 'high');
     },
   );
+
+  /// Drives a cubit call to completion under the widget test's fake clock.
+  Future<void> drive(WidgetTester tester, Future<void> call) async {
+    var done = false;
+    unawaited(call.whenComplete(() => done = true));
+    for (var i = 0; i < 50 && !done; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(done, isTrue, reason: 'composer call must complete');
+    await settle(tester);
+  }
+
+  group('Task 122: New chat takes the open session thinking without writing a default', () {
+    // Session A holds an explicit High, session B NULL thinking; both on the
+    // glm-like route (High/Max, default Max).
+    List<Session> task122Sessions() => [
+      for (final (id, thinking) in [('glm-high', 'high'), ('glm-null', null)])
+        Session(
+          id: id,
+          title: id,
+          deviceId: agent.id,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-glm',
+          thinkingMode: thinking,
+        ),
+    ];
+
+    Session sessionById(String id) => task122Sessions().firstWhere((s) => s.id == id);
+
+    setUp(() => conversationRepository.seedSessions(agent, task122Sessions()));
+
+    /// What the composer does once a New Conversation draft is bound: it
+    /// restores the draft route the new chat wrote (provider, model, thinking).
+    void restoreDraftLikeComposer() {
+      final draft = conversationCacheRepository.newConversationDraft(agent.id);
+      final matches =
+          inputCubit.state.nextMessageProviderId == draft.providerId &&
+          inputCubit.state.nextMessageModel == draft.model &&
+          inputCubit.explicitNextMessageThinkingMode == draft.thinkingMode;
+      if (matches) return;
+      inputCubit.restoreNewConversationPreferences(
+        providerId: draft.providerId,
+        model: draft.model,
+        thinkingMode: draft.thinkingMode,
+      );
+    }
+
+    testWidgets('open session A (glm, explicit High) then New chat shows glm High (rule kept)', (tester) async {
+      await preferencesRepository.setLastThinkingMode(agent.id, 'low');
+      buildStack();
+      await sessionCubit.selectSession(sessionById('glm-high'));
+      await pumpControl(tester);
+      expect(find.byKey(const Key('chip_High')), findsOneWidget);
+
+      await sessionCubit.startNewChat(agent);
+      restoreDraftLikeComposer();
+      await settle(tester);
+
+      expect(sessionCubit.state.selectedSession, isNull);
+      expect(find.byKey(const Key('chip_High')), findsOneWidget);
+      expect(inputCubit.state.nextMessageModel, 'model-glm');
+      expect(inputCubit.state.nextMessageThinkingMode, 'high');
+      expect(conversationCacheRepository.newConversationDraft(agent.id).thinkingMode, 'high');
+      expect(inputCubit.explicitNextMessageThinkingMode, 'high');
+      expect(preferencesRepository.getLastThinkingMode(agent.id), 'low', reason: 'nothing was picked');
+      expect(thinkingWrites(), isEmpty);
+    });
+
+    testWidgets(
+      'D2 (live case 4c): open session B (glm, NULL) then New chat shows glm Max '
+      'with no draft or device-preference write',
+      (tester) async {
+        // The user's last explicit device-level pick was Low on another model.
+        await preferencesRepository.setLastThinkingMode(agent.id, 'low');
+        buildStack();
+        await sessionCubit.selectSession(sessionById('glm-null'));
+        await pumpControl(tester);
+        expect(find.byKey(const Key('chip_Max')), findsOneWidget);
+
+        await sessionCubit.startNewChat(agent);
+        restoreDraftLikeComposer();
+        await settle(tester);
+
+        expect(sessionCubit.state.selectedSession, isNull);
+        expect(find.byKey(const Key('chip_Max')), findsOneWidget, reason: 'same display as the open session');
+        expect(inputCubit.state.nextMessageThinkingMode, 'max', reason: 'the next send carries the shown default');
+        expect(
+          conversationCacheRepository.newConversationDraft(agent.id).thinkingMode,
+          isNull,
+          reason: 'the default is never persisted into the draft',
+        );
+        expect(inputCubit.explicitNextMessageThinkingMode, isNull, reason: 'what the composer would persist');
+        expect(
+          preferencesRepository.getLastThinkingMode(agent.id),
+          'low',
+          reason: 'a default fill never overwrites the device thinking preference',
+        );
+        expect(thinkingWrites(), isEmpty);
+      },
+    );
+
+    testWidgets(
+      'D3 (live case 4c): a NULL session shows the route default even when a valid value is carried in memory',
+      (tester) async {
+        buildStack();
+        await sessionCubit.selectSession(sessionById('glm-high'));
+        await pumpControl(tester);
+        expect(inputCubit.state.nextMessageThinkingMode, 'high');
+
+        // The NULL session is presented while the composer still carries High
+        // (a device-level or sibling value): it must show its route default.
+        await sessionCubit.selectSession(sessionById('glm-null'));
+        await settle(tester);
+
+        expect(find.byKey(const Key('chip_Max')), findsOneWidget);
+        expect(inputCubit.state.nextMessageThinkingMode, 'max');
+        expect(sessionCubit.state.selectedSession?.thinkingMode, isNull);
+        expect(thinkingWrites(), isEmpty);
+      },
+    );
+
+    testWidgets('a draft explicit pick carries across a model that does not offer it', (tester) async {
+      buildStack();
+      await pumpControl(tester);
+      await drive(tester, inputCubit.selectModel(
+        // A draft has no session: its route is a next-message preference.
+        scope: CapabilityValueScope.message,
+        providerId: 'provider-1',
+        model: 'model-a',
+      ));
+      await drive(tester, inputCubit.selectThinkingMode(scope: CapabilityValueScope.session, thinkingMode: 'low'));
+      expect(preferencesRepository.getLastThinkingMode(agent.id), 'low');
+
+      // glm offers High/Max only: the default shows, the explicit Low stays.
+      await drive(tester, inputCubit.selectModel(
+        // A draft has no session: its route is a next-message preference.
+        scope: CapabilityValueScope.message,
+        providerId: 'provider-1',
+        model: 'model-glm',
+      ));
+      expect(find.byKey(const Key('chip_Max')), findsOneWidget);
+      expect(inputCubit.explicitNextMessageThinkingMode, 'low');
+      expect(preferencesRepository.getLastThinkingMode(agent.id), 'low');
+
+      // Back on a model that offers Low: the user's pick returns.
+      await drive(tester, inputCubit.selectModel(
+        // A draft has no session: its route is a next-message preference.
+        scope: CapabilityValueScope.message,
+        providerId: 'provider-1',
+        model: 'model-a',
+      ));
+      expect(find.byKey(const Key('chip_Low')), findsOneWidget);
+      expect(inputCubit.state.nextMessageThinkingMode, 'low');
+    });
+  });
 }
