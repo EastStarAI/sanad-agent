@@ -43,6 +43,10 @@ class SessionStopCoordinator {
   final Set<String> _busySessions;
   final Map<String, Object?> _suspendedEvents;
   final PersistedRuntimeStateRepository? Function() _getPersistedState;
+
+  /// Read on every use, as the orchestrator getter was before extraction, so
+  /// a stop never keeps a repository captured before its awaits.
+  PersistedRuntimeStateRepository? get persistedState => _getPersistedState();
   final Future<List<SuspendedCheckpoint>> Function() _listRecoverableSuspensions;
   final void Function(GatewayResponse) _emitResponse;
   final void Function(String sessionId) _drainNextQueuedEvent;
@@ -101,7 +105,6 @@ class SessionStopCoordinator {
         await _tryPreserveInteractiveWait(sessionId)) {
       return;
     }
-    final persistedState = _getPersistedState();
     final activeRun = _turnExecutor.getActiveRun(sessionId);
     final stoppedRunId = activeRun?.runId;
     final stoppedTurnId = activeRun?.turnId;
@@ -317,25 +320,6 @@ class SessionStopCoordinator {
       _busySessions.remove(sessionId);
       _drainNextQueuedEvent(sessionId);
     }
-  }
-
-  /// Stops all daemon-owned work before a controlled restart.
-  Future<void> requestStopAll({bool preserveInteractiveWaits = false}) async {
-    final sessionIds = <String>{
-      ..._busySessions,
-      ..._suspendedEvents.keys,
-      ..._queueCoordinator.sessionIds,
-      ..._turnExecutor.activeSessionIds,
-    };
-    await Future.wait(
-      sessionIds.map(
-        (sessionId) => requestStop(
-          sessionId,
-          forceEmitStopped: true,
-          preserveInteractiveWait: preserveInteractiveWaits,
-        ),
-      ),
-    );
   }
 
   /// Preserves a session whose only unfinished work is awaiting user input

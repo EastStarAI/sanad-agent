@@ -64,7 +64,7 @@ class SessionRestartCheckpointManager {
     milliseconds: 25,
   );
 
-  final Logger _logger = Logger('SessionRestartCheckpointManager');
+  final Logger _logger;
 
   final PersistedRuntimeStateRepository? Function() getPersistedState;
   final SessionTurnExecutor turnExecutor;
@@ -77,13 +77,14 @@ class SessionRestartCheckpointManager {
   bool get controlledRestartDraining => _controlledRestartDraining;
 
   SessionRestartCheckpointManager({
+    Logger? logger,
     required this.getPersistedState,
     required this.turnExecutor,
     required this.queueCoordinator,
     required this.listAwaitingSuspensions,
     required this.isSessionBusy,
     required this.drainNextQueuedEvent,
-  });
+  }) : _logger = logger ?? Logger('SessionRestartCheckpointManager');
 
   void beginControlledRestartDrain() {
     _controlledRestartDraining = true;

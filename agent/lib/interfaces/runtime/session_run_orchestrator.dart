@@ -115,6 +115,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       getPersistedState: () => persistedState,
     );
     _restartManager = SessionRestartCheckpointManager(
+      logger: _logger,
       getPersistedState: () => persistedState,
       turnExecutor: _turnExecutor,
       queueCoordinator: _queueCoordinator,
@@ -524,11 +525,25 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     Iterable<ControlledRestartBlocker> blockers,
   ) => _restartManager.interruptProviderRequestsForRestart(blockers);
 
-  /// Stops all daemon-owned work before a controlled restart.
-  Future<void> requestStopAll({bool preserveInteractiveWaits = false}) =>
-      _stopCoordinator.requestStopAll(
-        preserveInteractiveWaits: preserveInteractiveWaits,
-      );
+  /// Stops all daemon-owned work before a controlled restart. Each session is
+  /// stopped through [requestStop], so a subclass override still applies.
+  Future<void> requestStopAll({bool preserveInteractiveWaits = false}) async {
+    final sessionIds = <String>{
+      ..._busySessions,
+      ..._suspendedEvents.keys,
+      ..._queueCoordinator.sessionIds,
+      ..._turnExecutor.activeSessionIds,
+    };
+    await Future.wait(
+      sessionIds.map(
+        (sessionId) => requestStop(
+          sessionId,
+          forceEmitStopped: true,
+          preserveInteractiveWait: preserveInteractiveWaits,
+        ),
+      ),
+    );
+  }
 
   /// Waits for running tool work to reach a durable restart-safe checkpoint.
   ///

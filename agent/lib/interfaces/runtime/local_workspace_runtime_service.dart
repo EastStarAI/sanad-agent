@@ -9,8 +9,6 @@ import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
-import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
-import 'package:sanad_agent/core/sanad_home/sanad_home_boundary.dart';
 import 'package:sanad_agent/interfaces/models/workspace_control.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
@@ -746,21 +744,8 @@ class LocalWorkspaceRuntimeService {
     return _workspacePayload(workspace);
   }
 
-  String _ensureManagedWorkspacesRoot() {
-    try {
-      return SanadHomeBootstrap.atRoot(
-        _sanadHome,
-        scope: SanadHomeScope.identity,
-      ).ensureDirectoryPathSync(
-        SanadHomeBootstrap.managedWorkspacesDirectoryName,
-      );
-    } on SanadHomeBoundaryViolation {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'The managed workspaces root is not available.',
-      );
-    }
-  }
+  String _ensureManagedWorkspacesRoot() =>
+      _fsCoordinator.ensureManagedWorkspacesRoot();
 
   Future<T> _serialized<T>(Future<T> Function() operation) =>
       _fsCoordinator.serialized(operation);

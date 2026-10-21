@@ -4,11 +4,17 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_boundary.dart';
 import 'package:sanad_agent/interfaces/models/workspace_control.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 
-/// Coordinates directory tree browsing, folder creation, renaming, previewing,
-/// deletion, safe path validation, and managed remote boundaries for workspaces.
+/// Owns workspace file-system work for [LocalWorkspaceRuntimeService]:
+/// directory tree browsing, folder creation, rename, delete preview and
+/// delete, path confinement for managed remote access, the managed workspaces
+/// root, confirmation fingerprints, and the single serialized mutation queue.
+///
+/// Workspace records stay with the host; this coordinator reads them through
+/// the injected lookups only.
 class WorkspaceFileSystemCoordinator {
   WorkspaceFileSystemCoordinator({
     required String Function() getSanadHome,
@@ -17,10 +23,10 @@ class WorkspaceFileSystemCoordinator {
     required Future<String?> Function(String workspaceId)
     resolveWorkspacePathById,
     required Future<List<Map<String, dynamic>>> Function() readStoredWorkspaces,
-  })  : _getSanadHome = getSanadHome,
-        _getWorkspaceRecordById = getWorkspaceRecordById,
-        _resolveWorkspacePathById = resolveWorkspacePathById,
-        _readStoredWorkspaces = readStoredWorkspaces;
+  }) : _getSanadHome = getSanadHome,
+       _getWorkspaceRecordById = getWorkspaceRecordById,
+       _resolveWorkspacePathById = resolveWorkspacePathById,
+       _readStoredWorkspaces = readStoredWorkspaces;
 
   final String Function() _getSanadHome;
   final Map<String, dynamic>? Function(String workspaceId)
@@ -37,6 +43,10 @@ class WorkspaceFileSystemCoordinator {
   Future<void> drainMutations() => _mutationTail;
 
   String get _sanadHome => _getSanadHome();
+
+  /// Runs [operation] on the serialized workspace mutation queue.
+  Future<T> serialized<T>(Future<T> Function() operation) =>
+      _serialized(operation);
 
   Future<Map<String, dynamic>> browseWorkspaceTree({
     String? workspaceId,
@@ -55,7 +65,7 @@ class WorkspaceFileSystemCoordinator {
           throw StateError('Workspace not found or its folder is unavailable.');
         }
         if (managedRemote) {
-          await assertAllowedRemotePath(resolvedWorkspacePath);
+          await _assertAllowedRemotePath(resolvedWorkspacePath);
         }
         return _buildDirectorySnapshot(
           directory: Directory(resolvedWorkspacePath),
@@ -73,15 +83,15 @@ class WorkspaceFileSystemCoordinator {
       return _browseSystemRoots(maxEntries: maxEntries);
     }
 
-    rejectUnsafePathString(trimmedPath);
+    _rejectUnsafePathString(trimmedPath);
     final requestedPath = normalizePath(trimmedPath);
     var workspacePath = '';
     var rootPath = _rootPathFor(requestedPath);
     var parentPath = _parentPathFor(requestedPath, rootPath: rootPath);
 
     if (managedRemote) {
-      await assertAllowedRemotePath(requestedPath);
-      final allowedRoot = await containingAllowedRoot(requestedPath);
+      await _assertAllowedRemotePath(requestedPath);
+      final allowedRoot = await _containingAllowedRoot(requestedPath);
       rootPath = allowedRoot ?? requestedPath;
       parentPath = requestedPath == rootPath
           ? null
@@ -96,7 +106,7 @@ class WorkspaceFileSystemCoordinator {
       if (workspace == null || resolvedWorkspacePath == null) {
         throw StateError('Workspace not found or its folder is unavailable.');
       }
-      if (!isWithinRoot(root: resolvedWorkspacePath, target: requestedPath)) {
+      if (!_isWithinRoot(root: resolvedWorkspacePath, target: requestedPath)) {
         throw StateError('Requested path is outside the selected workspace.');
       }
       workspacePath = workspace['id'] as String;
@@ -121,6 +131,167 @@ class WorkspaceFileSystemCoordinator {
       maxEntries: maxEntries,
       hideInternal: managedRemote,
     );
+  }
+
+  Future<Map<String, dynamic>> _browseSystemRoots({
+    required int maxEntries,
+  }) async {
+    if (Platform.isWindows) {
+      final roots = await _listWindowsRoots();
+      return {
+        'workspace_id': '',
+        'root_path': '',
+        'path': '',
+        'parent_path': null,
+        'entries': roots.take(maxEntries).toList(growable: false),
+        'truncated': roots.length > maxEntries,
+      };
+    }
+
+    return _buildDirectorySnapshot(
+      directory: Directory(Platform.pathSeparator),
+      workspaceId: '',
+      rootPath: Platform.pathSeparator,
+      path: Platform.pathSeparator,
+      parentPath: null,
+      maxEntries: maxEntries,
+    );
+  }
+
+  Future<Map<String, dynamic>> _buildDirectorySnapshot({
+    required Directory directory,
+    required String workspaceId,
+    required String rootPath,
+    required String path,
+    required String? parentPath,
+    required int maxEntries,
+    bool hideInternal = false,
+  }) async {
+    final entities = <FileSystemEntity>[];
+    await for (final entity in directory.list(followLinks: false)) {
+      entities.add(entity);
+    }
+    entities.sort((left, right) {
+      final leftDir = left is Directory ? 0 : 1;
+      final rightDir = right is Directory ? 0 : 1;
+      if (leftDir != rightDir) {
+        return leftDir.compareTo(rightDir);
+      }
+      return p
+          .basename(left.path)
+          .toLowerCase()
+          .compareTo(p.basename(right.path).toLowerCase());
+    });
+
+    final items = <Map<String, dynamic>>[];
+    for (final entity in entities.take(maxEntries)) {
+      final entry = await _buildTreeEntry(entity, rootPath: rootPath);
+      if (entry == null) {
+        continue;
+      }
+      if (hideInternal && _isSanadInternalHidden(entry['path'] as String)) {
+        continue;
+      }
+      items.add(entry);
+    }
+
+    return {
+      'workspace_id': workspaceId,
+      'root_path': rootPath,
+      'path': path,
+      'parent_path': parentPath,
+      'entries': items,
+      'truncated': entities.length > maxEntries,
+    };
+  }
+
+  Future<Map<String, dynamic>?> _buildTreeEntry(
+    FileSystemEntity entity, {
+    required String rootPath,
+  }) async {
+    try {
+      final stat = await entity.stat();
+      final entityPath = normalizePath(entity.path);
+      return {
+        'name': _entryDisplayName(entityPath),
+        'path': entityPath,
+        'relative_path': _relativePathFor(entityPath, rootPath: rootPath),
+        'type': entity is Directory ? 'directory' : 'file',
+        'size': stat.size,
+        'modified_at': stat.modified.toIso8601String(),
+      };
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _listWindowsRoots() async {
+    final roots = <Map<String, dynamic>>[];
+    for (var codeUnit = 65; codeUnit <= 90; codeUnit++) {
+      final drivePath = '${String.fromCharCode(codeUnit)}:\\';
+      final directory = Directory(drivePath);
+      if (!await directory.exists()) {
+        continue;
+      }
+      final entry = await _buildTreeEntry(directory, rootPath: '');
+      if (entry != null) {
+        roots.add(entry);
+      }
+    }
+    return roots;
+  }
+
+  String _rootPathFor(String targetPath) {
+    if (Platform.isWindows) {
+      return p.rootPrefix(targetPath);
+    }
+    return Platform.pathSeparator;
+  }
+
+  String? _parentPathFor(String targetPath, {required String rootPath}) {
+    final normalizedTarget = normalizePath(targetPath);
+    if (rootPath.isNotEmpty) {
+      final normalizedRoot = normalizePath(rootPath);
+      if (normalizedTarget == normalizedRoot) {
+        return null;
+      }
+
+      final parentPath = normalizePath(Directory(normalizedTarget).parent.path);
+      if (parentPath == normalizedTarget) {
+        return null;
+      }
+      if (parentPath == normalizedRoot) {
+        return normalizedRoot;
+      }
+      return _isWithinRoot(root: normalizedRoot, target: parentPath)
+          ? parentPath
+          : normalizedRoot;
+    }
+
+    final parentPath = normalizePath(Directory(normalizedTarget).parent.path);
+    return parentPath == normalizedTarget ? null : '';
+  }
+
+  String _relativePathFor(String entityPath, {required String rootPath}) {
+    if (rootPath.isEmpty) {
+      return entityPath;
+    }
+    return p.relative(entityPath, from: rootPath);
+  }
+
+  String _entryDisplayName(String entityPath) {
+    final basename = p.basename(entityPath);
+    if (basename.isNotEmpty) {
+      return basename;
+    }
+    return entityPath;
+  }
+
+  bool _isWithinRoot({required String root, required String target}) {
+    final normalizedRoot = normalizePath(root);
+    final normalizedTarget = normalizePath(target);
+    return normalizedTarget == normalizedRoot ||
+        p.isWithin(normalizedRoot, normalizedTarget);
   }
 
   Future<String> createFolder({
@@ -158,7 +329,7 @@ class WorkspaceFileSystemCoordinator {
     bool managedRemote = false,
   }) async {
     return _serialized(() async {
-      final sourcePath = await validateMutableDirectory(
+      final sourcePath = await _validateMutableDirectory(
         path,
         managedRemote: managedRemote,
       );
@@ -172,7 +343,7 @@ class WorkspaceFileSystemCoordinator {
         throw StateError('A file or folder with that name already exists.');
       }
       if (managedRemote) {
-        await assertAllowedRemotePath(p.dirname(sourcePath));
+        await _assertAllowedRemotePath(p.dirname(sourcePath));
       }
 
       final renamed = await Directory(sourcePath).rename(targetPath);
@@ -184,7 +355,7 @@ class WorkspaceFileSystemCoordinator {
     String path, {
     bool managedRemote = false,
   }) async {
-    final targetPath = await validateMutableDirectory(
+    final targetPath = await _validateMutableDirectory(
       path,
       managedRemote: managedRemote,
     );
@@ -221,7 +392,7 @@ class WorkspaceFileSystemCoordinator {
           );
         }
       }
-      final targetPath = await validateMutableDirectory(
+      final targetPath = await _validateMutableDirectory(
         path,
         managedRemote: managedRemote,
       );
@@ -255,11 +426,11 @@ class WorkspaceFileSystemCoordinator {
     return normalizePath(trimmed);
   }
 
-  Future<String> validateMutableDirectory(
+  Future<String> _validateMutableDirectory(
     String value, {
     bool managedRemote = false,
   }) async {
-    rejectUnsafePathString(value);
+    _rejectUnsafePathString(value);
     final trimmed = value.trim();
     if (trimmed.isEmpty) {
       throw const FormatException('Folder path is required.');
@@ -279,12 +450,12 @@ class WorkspaceFileSystemCoordinator {
     }
 
     final normalized = normalizePath(trimmed);
-    if (isFileSystemRoot(normalized)) {
+    if (_isFileSystemRoot(normalized)) {
       throw StateError('Filesystem roots cannot be renamed or deleted.');
     }
     if (managedRemote) {
-      await assertAllowedRemotePath(normalized);
-      if (await isProtectedRemoteRoot(normalized)) {
+      await _assertAllowedRemotePath(normalized);
+      if (await _isProtectedRemoteRoot(normalized)) {
         throw const WorkspaceCommandException(
           WorkspaceCommandErrorCodes.pathNotAllowed,
           'Protected workspace roots cannot be renamed or deleted.',
@@ -294,7 +465,7 @@ class WorkspaceFileSystemCoordinator {
     return normalized;
   }
 
-  bool isFileSystemRoot(String path) {
+  bool _isFileSystemRoot(String path) {
     final parent = normalizePath(Directory(path).parent.path);
     return parent == path;
   }
@@ -309,36 +480,31 @@ class WorkspaceFileSystemCoordinator {
   }
 
   String ensureManagedWorkspacesRoot() {
-    final home = normalizePath(_sanadHome);
-    final root = p.join(
-      home,
-      SanadHomeBootstrap.managedWorkspacesDirectoryName,
-    );
-    final directory = Directory(root);
-    if (!directory.existsSync()) {
-      directory.createSync(recursive: true);
+    try {
+      return SanadHomeBootstrap.atRoot(
+        _sanadHome,
+        scope: SanadHomeScope.identity,
+      ).ensureDirectoryPathSync(
+        SanadHomeBootstrap.managedWorkspacesDirectoryName,
+      );
+    } on SanadHomeBoundaryViolation {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'The managed workspaces root is not available.',
+      );
     }
-    return normalizePath(root);
   }
 
   Future<Map<String, dynamic>> _browseAllowedRemoteRoots({
     required int maxEntries,
   }) async {
-    final roots = await allowedRemoteRoots();
+    final roots = await _allowedRemoteRoots();
     final entries = <Map<String, dynamic>>[];
-    for (final root in roots) {
-      final directory = Directory(root);
-      if (!await directory.exists()) continue;
-      entries.add({
-        'name': _entryDisplayName(root),
-        'path': root,
-        'type': 'directory',
-        'is_directory': true,
-        'is_symlink': false,
-        'is_hidden': false,
-        'is_readable': true,
-      });
-      if (entries.length >= maxEntries) break;
+    for (final root in roots.take(maxEntries)) {
+      final entry = await _buildTreeEntry(Directory(root), rootPath: '');
+      if (entry != null && !_isSanadInternalHidden(root)) {
+        entries.add(entry);
+      }
     }
     return {
       'workspace_id': '',
@@ -346,65 +512,71 @@ class WorkspaceFileSystemCoordinator {
       'path': '',
       'parent_path': null,
       'entries': entries,
-      'truncated': entries.length >= maxEntries,
+      'truncated': roots.length > maxEntries,
     };
   }
 
-  Future<List<String>> allowedRemoteRoots() async {
+  Future<List<String>> _allowedRemoteRoots() async {
     final roots = <String>{};
     final managed = normalizePath(ensureManagedWorkspacesRoot());
     roots.add(managed);
     for (final workspace in await _readStoredWorkspaces()) {
       final path = workspace['path'] as String?;
       if (path == null || path.trim().isEmpty) continue;
+      if (!Directory(path).existsSync()) continue;
       final normalized = normalizePath(path);
-      if (isSanadInternalHidden(normalized)) continue;
-      if (await Directory(normalized).exists()) {
-        roots.add(normalized);
-      }
+      if (_isSanadInternalHidden(normalized)) continue;
+      if (_isWithinRoot(root: managed, target: normalized)) continue;
+      roots.add(normalized);
     }
     return roots.toList(growable: false);
   }
 
-  Future<void> assertAllowedRemotePath(String targetPath) async {
-    final normalized = normalizePath(targetPath);
-    if (isSanadInternalHidden(normalized)) {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'Sanad configuration and internal storage cannot be browsed.',
-      );
-    }
-    final allowed = await containingAllowedRoot(normalized);
-    if (allowed == null) {
-      throw const WorkspaceCommandException(
-        WorkspaceCommandErrorCodes.pathNotAllowed,
-        'Remote navigation is restricted to registered workspaces and managed storage.',
-      );
-    }
-  }
-
-  Future<String?> containingAllowedRoot(String targetPath) async {
-    final normalizedTarget = normalizePath(targetPath);
-    for (final root in await allowedRemoteRoots()) {
-      final normalizedRoot = normalizePath(root);
-      if (normalizedTarget == normalizedRoot ||
-          p.isWithin(normalizedRoot, normalizedTarget)) {
-        return normalizedRoot;
+  Future<String?> _containingAllowedRoot(String path) async {
+    final normalized = normalizePath(path);
+    for (final root in await _allowedRemoteRoots()) {
+      if (_isWithinRoot(root: root, target: normalized)) {
+        return root;
       }
     }
     return null;
+  }
+
+  Future<void> _assertAllowedRemotePath(String path) async {
+    _rejectUnsafePathString(path);
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'Symbolic-link folders cannot be browsed or changed here.',
+      );
+    }
+    final normalized = normalizePath(path);
+    if (_isSanadInternalHidden(normalized) || _isFileSystemRoot(normalized)) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'That path is outside the allowed workspace roots.',
+      );
+    }
+    if (await _containingAllowedRoot(normalized) == null) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'That path is outside the allowed workspace roots.',
+      );
+    }
   }
 
   Future<String> requireAllowedExistingDirectory(
     String value, {
     required String label,
   }) async {
+    _rejectUnsafePathString(value);
     final normalized = normalizeExistingDirectory(value, label: label);
-    await assertAllowedRemotePath(normalized);
+    await _assertAllowedRemotePath(normalized);
     return normalized;
   }
 
-  Future<bool> isProtectedRemoteRoot(String path) async {
+  Future<bool> _isProtectedRemoteRoot(String path) async {
     final normalized = normalizePath(path);
     if (normalized == normalizePath(ensureManagedWorkspacesRoot())) {
       return true;
@@ -426,26 +598,29 @@ class WorkspaceFileSystemCoordinator {
     return false;
   }
 
-  bool isSanadInternalHidden(String path) {
+  bool _isSanadInternalHidden(String path) {
     final normalized = normalizePath(path);
     final home = normalizePath(_sanadHome);
     final managed = normalizePath(
       p.join(home, SanadHomeBootstrap.managedWorkspacesDirectoryName),
     );
-    if (normalized == managed || p.isWithin(managed, normalized)) {
+    if (normalized == managed ||
+        _isWithinRoot(root: managed, target: normalized)) {
       return false;
     }
-    if (normalized == home || p.isWithin(home, normalized)) {
+    if (normalized == home || _isWithinRoot(root: home, target: normalized)) {
       return true;
     }
     final stateHome = normalizePath(getSanadStateHome());
-    if (normalized == stateHome || p.isWithin(stateHome, normalized)) {
+    if (stateHome != home &&
+        (normalized == stateHome ||
+            _isWithinRoot(root: stateHome, target: normalized))) {
       return true;
     }
     return false;
   }
 
-  void rejectUnsafePathString(String value) {
+  void _rejectUnsafePathString(String value) {
     if (value.contains('\u0000')) {
       throw const FormatException('Invalid path.');
     }
@@ -461,173 +636,6 @@ class WorkspaceFileSystemCoordinator {
       modified = FileStat.statSync(path).modified.toUtc().toIso8601String();
     } catch (_) {}
     return '$operation|$path|$modified|$extra';
-  }
-
-  bool isWithinRoot({required String root, required String target}) {
-    final normalizedRoot = normalizePath(root);
-    final normalizedTarget = normalizePath(target);
-    return normalizedRoot == normalizedTarget ||
-        p.isWithin(normalizedRoot, normalizedTarget);
-  }
-
-  Future<Map<String, dynamic>> _browseSystemRoots({
-    required int maxEntries,
-  }) async {
-    if (Platform.isWindows) {
-      final roots = await _listWindowsRoots();
-      return {
-        'workspace_id': '',
-        'root_path': '',
-        'path': '',
-        'parent_path': null,
-        'entries': roots,
-        'truncated': false,
-      };
-    }
-
-    final rootDir = Directory('/');
-    return _buildDirectorySnapshot(
-      directory: rootDir,
-      workspaceId: '',
-      rootPath: '/',
-      path: '/',
-      parentPath: null,
-      maxEntries: maxEntries,
-    );
-  }
-
-  Future<Map<String, dynamic>> _buildDirectorySnapshot({
-    required Directory directory,
-    required String workspaceId,
-    required String rootPath,
-    required String path,
-    required String? parentPath,
-    required int maxEntries,
-    bool hideInternal = false,
-  }) async {
-    final entries = <Map<String, dynamic>>[];
-    var truncated = false;
-    try {
-      final children = await directory.list(followLinks: false).toList();
-      children.sort((left, right) {
-        final leftIsDir = left is Directory ? 0 : 1;
-        final rightIsDir = right is Directory ? 0 : 1;
-        if (leftIsDir != rightIsDir) {
-          return leftIsDir.compareTo(rightIsDir);
-        }
-        return p
-            .basename(left.path)
-            .toLowerCase()
-            .compareTo(p.basename(right.path).toLowerCase());
-      });
-
-      for (final child in children) {
-        if (hideInternal && isSanadInternalHidden(child.path)) {
-          continue;
-        }
-        if (entries.length >= maxEntries) {
-          truncated = true;
-          break;
-        }
-        final entry = await _buildTreeEntry(
-          child,
-          rootPath: rootPath,
-          hideInternal: hideInternal,
-        );
-        if (entry != null) {
-          entries.add(entry);
-        }
-      }
-    } catch (_) {
-      // Permission or unreadable directories return an empty entries list.
-    }
-
-    return {
-      'workspace_id': workspaceId,
-      'root_path': rootPath,
-      'path': path,
-      'parent_path': parentPath,
-      'entries': entries,
-      'truncated': truncated,
-    };
-  }
-
-  Future<Map<String, dynamic>?> _buildTreeEntry(
-    FileSystemEntity entity, {
-    required String rootPath,
-    bool hideInternal = false,
-  }) async {
-    final type = await FileSystemEntity.type(entity.path, followLinks: false);
-    if (type == FileSystemEntityType.notFound) return null;
-    final isDirectory = type == FileSystemEntityType.directory;
-    final isSymlink = type == FileSystemEntityType.link;
-    final name = _entryDisplayName(entity.path);
-    final isHidden = name.startsWith('.');
-    if (hideInternal && (isSanadInternalHidden(entity.path) || isHidden)) {
-      return null;
-    }
-
-    return {
-      'name': name,
-      'path': normalizePath(entity.path),
-      'relative_path': _relativePathFor(entity.path, rootPath: rootPath),
-      'type': isDirectory ? 'directory' : (isSymlink ? 'symlink' : 'file'),
-      'is_directory': isDirectory,
-      'is_symlink': isSymlink,
-      'is_hidden': isHidden,
-      'is_readable': true,
-    };
-  }
-
-  Future<List<Map<String, dynamic>>> _listWindowsRoots() async {
-    final roots = <Map<String, dynamic>>[];
-    for (var code = 65; code <= 90; code++) {
-      final drive = '${String.fromCharCode(code)}:\\';
-      if (await Directory(drive).exists()) {
-        roots.add({
-          'name': drive,
-          'path': drive,
-          'relative_path': drive,
-          'type': 'directory',
-          'is_directory': true,
-          'is_symlink': false,
-          'is_hidden': false,
-          'is_readable': true,
-        });
-      }
-    }
-    return roots;
-  }
-
-  String _rootPathFor(String targetPath) {
-    if (Platform.isWindows) {
-      final root = p.rootPrefix(targetPath);
-      return root.isNotEmpty ? normalizePath(root) : normalizePath(targetPath);
-    }
-    return '/';
-  }
-
-  String? _parentPathFor(String targetPath, {required String rootPath}) {
-    final normalizedTarget = normalizePath(targetPath);
-    final normalizedRoot = normalizePath(rootPath);
-    if (normalizedTarget == normalizedRoot) {
-      return null;
-    }
-    final parent = normalizePath(Directory(normalizedTarget).parent.path);
-    return parent == normalizedTarget ? null : parent;
-  }
-
-  String _relativePathFor(String entityPath, {required String rootPath}) {
-    final normalizedRoot = normalizePath(rootPath);
-    final normalizedEntity = normalizePath(entityPath);
-    if (normalizedRoot == normalizedEntity) return '.';
-    return p.relative(normalizedEntity, from: normalizedRoot);
-  }
-
-  String _entryDisplayName(String entityPath) {
-    final base = p.basename(entityPath);
-    if (base.isNotEmpty) return base;
-    return entityPath;
   }
 
   Future<({int count, bool truncated})> _countDirectoryEntries(
@@ -650,9 +658,6 @@ class WorkspaceFileSystemCoordinator {
     }
     return (count: count, truncated: false);
   }
-
-  Future<T> serialized<T>(Future<T> Function() operation) =>
-      _serialized(operation);
 
   Future<T> _serialized<T>(Future<T> Function() operation) async {
     final previous = _mutationTail;
