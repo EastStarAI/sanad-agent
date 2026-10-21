@@ -146,9 +146,10 @@ class SessionRecoveryRestorer {
             checkpointKind == AgentRunner.checkpointKindAfterToolResult;
         final suspendedToolCallIds =
             suspendedToolCallIdsBySession[sessionId] ?? const <String>{};
-        final isInteractiveWait =
-            executingTools.isNotEmpty &&
-            executingTools.every(suspendedToolCallIds.contains);
+        final isInteractiveWait = _isUnresolvedInteractiveWait(
+          executingTools,
+          suspendedToolCallIds,
+        );
 
         if (await _terminalizeInterruptedShellTools(store, running)) {
           resumableWorkItemIds.add(running.workItemId);
@@ -310,9 +311,10 @@ class SessionRecoveryRestorer {
         );
         final suspendedToolCallIds =
             suspendedToolCallIdsBySession[sessionId] ?? const <String>{};
-        final isInteractiveWait =
-            executingTools.isNotEmpty &&
-            executingTools.every(suspendedToolCallIds.contains);
+        final isInteractiveWait = _isUnresolvedInteractiveWait(
+          executingTools,
+          suspendedToolCallIds,
+        );
         if (!isInteractiveWait) continue;
         _logger.info(
           'Repairing falsely blocked interactive work item '
@@ -347,6 +349,28 @@ class SessionRecoveryRestorer {
         if (hasRecoverableDecision) {
           _logger.info(
             'Reclassifying interrupted resolved input for work item '
+            '${item.workItemId} to waiting before reclaim.',
+          );
+          store.transitionWorkItemState(
+            workItemId: item.workItemId,
+            fromState: SessionWorkState.resuming,
+            toState: SessionWorkState.waiting,
+          );
+          continue;
+        }
+        final suspendedToolCallIds =
+            suspendedToolCallIdsBySession[sessionId] ?? const <String>{};
+        // Checked after the decision-ready branch: the suspended set also
+        // holds `decision_ready` ids. A pending user-input wait that was
+        // claimed but never answered must return to `waiting` rather than
+        // inherit unknown-outcome tool recovery, which would terminalize the
+        // unresolved question.
+        if (_isUnresolvedInteractiveWait(
+          executingTools,
+          suspendedToolCallIds,
+        )) {
+          _logger.info(
+            'Reclassifying interrupted interactive wait for work item '
             '${item.workItemId} to waiting before reclaim.',
           );
           store.transitionWorkItemState(
@@ -585,6 +609,19 @@ class SessionRecoveryRestorer {
     }
   }
 
+  /// True when every interrupted tool call of a work item is still owned by an
+  /// unresolved user-input checkpoint (`system_ask_user` question or a pending
+  /// tool-permission prompt). Such a tool never ran far enough to produce side
+  /// effects, so it must be restored as a durable wait instead of being
+  /// terminalized as an unknown-outcome interruption.
+  static bool _isUnresolvedInteractiveWait(
+    List<String> executingToolCallIds,
+    Set<String> suspendedToolCallIds,
+  ) {
+    return executingToolCallIds.isNotEmpty &&
+        executingToolCallIds.every(suspendedToolCallIds.contains);
+  }
+
   bool _hasProvableWaitingOwner(
     SessionWorkItem workItem,
     PersistedRuntimeNotice? notice,
@@ -594,8 +631,7 @@ class SessionRecoveryRestorer {
       workItem.continuationMetadata['currently_executing_tools'] as List? ??
           const [],
     );
-    if (executingTools.isNotEmpty &&
-        executingTools.every(suspendedToolCallIds.contains)) {
+    if (_isUnresolvedInteractiveWait(executingTools, suspendedToolCallIds)) {
       return true;
     }
     if (notice == null || notice.status != 'waiting') return false;
