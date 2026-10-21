@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'package:path/path.dart' as p;
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
-import 'package:sanad_client/features/conversations/domain/models/conversation_resource_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -28,9 +26,10 @@ import 'package:sanad_client/features/devices/presentation/bloc/device_state.dar
 import 'package:sanad_client/features/devices/domain/device_preferences_repository.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logging/logging.dart';
-import 'package:uuid/uuid.dart';
 
+import 'session_intervention_coordinator.dart';
 import 'session_messages_state.dart';
+import 'session_workspace_coordinator.dart';
 
 class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   static const defaultThinkingMode = 'balanced';
@@ -43,7 +42,8 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   final DeviceCapabilitiesStore? capabilitiesStore;
   final LocalToolRuntimeService? localToolRuntime;
   final WorkspaceToolRuntimeContext? workspaceRuntimeContext;
-  StreamSubscription<WorkspacePolicy>? _workspacePolicySubscription;
+  late final SessionWorkspaceCoordinator _workspaceCoordinator;
+  late final SessionInterventionCoordinator _interventionCoordinator;
   StreamSubscription? _agentStateSubscription;
   StreamSubscription<DeviceConversationCacheSnapshot>? _cacheSubscription;
   StreamSubscription? _sessionStateSubscription;
@@ -70,17 +70,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   /// Sessions selected as an identity-only startup placeholder whose route
   /// context replacement was deferred until their authoritative summary.
   final Set<String> _deferredRouteContextSessionIds = {};
-  final Map<String, List<DeviceWorkspace>> _workspacesByAgentId = {};
-  final Map<String, DeviceWorkspace> _selectedWorkspaceByAgentId = {};
-  final Set<String> _loadingWorkspaceAgentIds = {};
-  final Map<String, WorkspacePermissionMode> _permissionModesByWorkspaceId = {};
-  final Set<String> _downgradedSessionIds = {};
-  final Set<String> _loadingPermissionModeWorkspaceIds = {};
-  final Map<String, int> _workspacePolicyLoadIds = {};
   final Set<String> _freshSessionIdsAwaitingFirstTurn = {};
-  final Set<String> _initiatedStopRequestIds = {};
-  final Map<String, String> _stopRecoveryClaimIds = {};
-  final Set<String> _inFlightStopRecoveryAckIds = {};
   final Map<String, String> _requestedHistoryAnchors = {};
   int _requestGeneration = 0;
   Timer? _delayedLoadingTimer;
@@ -95,6 +85,33 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     this.localToolRuntime,
     this.workspaceRuntimeContext,
   }) : super(const SessionMessagesState()) {
+    _workspaceCoordinator = SessionWorkspaceCoordinator(
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: conversationCacheRepository,
+      capabilitiesStore: capabilitiesStore,
+      localToolRuntime: localToolRuntime,
+      workspaceRuntimeContext: workspaceRuntimeContext,
+      sessionCubit: sessionCubit,
+      getCurrentAgent: () => _currentAgent,
+      getSelectedSessionId: () => _selectedSessionId,
+      getState: () => state,
+      emit: emit,
+      getIsClosed: () => isClosed,
+    );
+    _interventionCoordinator = SessionInterventionCoordinator(
+      conversationRepository: conversationRepository,
+      sessionCubit: sessionCubit,
+      preferencesRepository: preferencesRepository,
+      getCurrentAgent: () => _currentAgent,
+      getState: () => state,
+      emit: emit,
+      getIsClosed: () => isClosed,
+      setPendingRouteSelection: _setPendingRouteSelection,
+      nextMessageProviderByAgentId: _nextMessageProviderByAgentId,
+      nextMessageModelByAgentId: _nextMessageModelByAgentId,
+      nextMessageThinkingByAgentId: _nextMessageThinkingByAgentId,
+      selectedWorkspaceForAgent: _selectedWorkspaceForAgent,
+    );
     _agentStateSubscription = agentCubit.stream.listen(_handleDeviceStateChange);
     _cacheSubscription = conversationCacheRepository?.snapshotStream.listen(_handleCacheSnapshot);
     _sessionStateSubscription = sessionCubit.stream.listen(_handleSessionStateChange);
@@ -107,37 +124,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     _handleSessionStateChange(sessionCubit.state);
   }
 
+  List<DeviceWorkspace> _workspacesForAgent(String? agentId) =>
+      agentId == null ? const [] : _workspaceCoordinator.workspacesForAgent(agentId);
+
+  bool _isLoadingWorkspaces(String? agentId) =>
+      agentId != null && _workspaceCoordinator.isLoadingWorkspaces(agentId);
+
   void _handleCacheSnapshot(DeviceConversationCacheSnapshot snapshot) {
-    final agent = _currentAgent;
-    if (agent == null) return;
-    final cachedWorkspaces = snapshot.contexts[agent.id]?.workspaces;
-    if (cachedWorkspaces == null || !cachedWorkspaces.state.hasUsableSnapshot) return;
-
-    final workspaces = List<DeviceWorkspace>.unmodifiable(cachedWorkspaces.workspaces);
-    _workspacesByAgentId[agent.id] = workspaces;
-
-    final currentSelection = _selectedWorkspaceByAgentId[agent.id];
-    var selectedWorkspace = currentSelection;
-    if (currentSelection != null) {
-      for (final workspace in workspaces) {
-        if (workspace.id == currentSelection.id) {
-          selectedWorkspace = workspace;
-          break;
-        }
-      }
-      _selectedWorkspaceByAgentId[agent.id] = selectedWorkspace!;
-      workspaceRuntimeContext?.setActiveWorkspace(selectedWorkspace);
-    }
-
-    if (!isClosed) {
-      emit(
-        state.copyWith(
-          availableWorkspaces: workspaces,
-          selectedWorkspace: selectedWorkspace,
-          clearSelectedWorkspace: selectedWorkspace == null,
-        ),
-      );
-    }
+    _workspaceCoordinator.handleCacheSnapshot(snapshot);
   }
 
   void _handleDeviceStateChange(DeviceState agentState) {
@@ -160,12 +154,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       _delayedLoadingTimer?.cancel();
       _currentAgent = null;
       workspaceRuntimeContext?.clear();
-      _loadingPermissionModeWorkspaceIds.clear();
+      _workspaceCoordinator.clearState();
       unawaited(_messageSubscription?.cancel());
       unawaited(_queuedMessagesSubscription?.cancel());
       unawaited(_attentionSubscription?.cancel());
       unawaited(_stopRecoverySubscription?.cancel());
-      _inFlightStopRecoveryAckIds.clear();
+      _interventionCoordinator.clearInFlightStopRecoveryAcks();
       _selectedSessionId = null;
       emit(const SessionMessagesState());
     }
@@ -215,10 +209,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearNextMessageModel: currentAgent == null && state.nextMessageModel != null,
           nextMessageThinkingMode: currentAgent == null ? null : _nextMessageThinkingByAgentId[currentAgent.id],
           clearNextMessageThinkingMode: currentAgent == null && state.nextMessageThinkingMode != null,
-          availableWorkspaces: currentAgent == null ? const [] : _workspacesByAgentId[currentAgent.id] ?? const [],
+          availableWorkspaces: _workspacesForAgent(currentAgent?.id),
           selectedWorkspace: currentAgent == null ? null : _selectedWorkspaceForAgent(currentAgent),
           clearSelectedWorkspace: currentAgent == null,
-          isLoadingWorkspaces: currentAgent != null && _loadingWorkspaceAgentIds.contains(currentAgent.id),
+          isLoadingWorkspaces: _isLoadingWorkspaces(currentAgent?.id),
           requiresWorkspace: currentAgent != null && _requiresWorkspace(currentAgent),
           clearPendingSuspendedRequest: true,
           clearRuntimeNotice: true,
@@ -254,17 +248,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     final agent = _currentAgent;
     if (agent != null) {
       final sessionWorkspace = _workspaceFromSession(selectedSession);
-      if (sessionWorkspace != null) {
-        _selectedWorkspaceByAgentId[agent.id] = sessionWorkspace;
-        workspaceRuntimeContext?.setActiveWorkspace(sessionWorkspace);
-        if (nextSessionId.isNotEmpty) {
-          workspaceRuntimeContext?.bindSessionWorkspace(nextSessionId, sessionWorkspace);
-        }
-        unawaited(_loadPermissionModeForWorkspace(sessionWorkspace));
-      } else {
-        _selectedWorkspaceByAgentId.remove(agent.id);
-        workspaceRuntimeContext?.setActiveWorkspace(null);
-      }
+      _workspaceCoordinator.setSessionWorkspace(
+        agent,
+        sessionWorkspace,
+        nextSessionId: nextSessionId,
+      );
       _replaceSessionRouteContext(agent.id, selectedSession);
     }
 
@@ -288,10 +276,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           pendingNextMessageModel: _pendingModelForSession(nextSessionId),
           nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
           clearNextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id] == null,
-          availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
+          availableWorkspaces: _workspacesForAgent(agent.id),
           selectedWorkspace: _selectedWorkspaceForAgent(agent),
           clearSelectedWorkspace: _selectedWorkspaceForAgent(agent) == null,
-          isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
+          isLoadingWorkspaces: _isLoadingWorkspaces(agent.id),
           requiresWorkspace: _requiresWorkspace(agent),
           permissionMode: _permissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
           isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(
@@ -591,10 +579,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           pendingNextMessageModel: _pendingModelForSession(sessionId),
           nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
           clearNextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id] == null,
-          availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
+          availableWorkspaces: _workspacesForAgent(agent.id),
           selectedWorkspace: _selectedWorkspaceForAgent(agent),
           clearSelectedWorkspace: _selectedWorkspaceForAgent(agent) == null,
-          isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
+          isLoadingWorkspaces: _isLoadingWorkspaces(agent.id),
           requiresWorkspace: _requiresWorkspace(agent),
           permissionMode: _permissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
           isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(
@@ -643,7 +631,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     unawaited(_messageSubscription?.cancel());
     unawaited(_queuedMessagesSubscription?.cancel());
     unawaited(_attentionSubscription?.cancel());
-    unawaited(_workspacePolicySubscription?.cancel());
+    _workspaceCoordinator.cancelPolicySubscription();
     unawaited(_stopRecoverySubscription?.cancel());
 
     _currentAgent = agent;
@@ -654,13 +642,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       final shouldLoadSelectedSession =
           selectedSession?.id == _selectedSessionId && _sessionMatchesAgent(selectedSession, agent);
       final sessionWorkspace = shouldLoadSelectedSession ? _workspaceFromSession(selectedSession) : null;
+      // Only a resolved session workspace replaces the agent's selection here;
+      // without one the current (possibly manual) selection is kept.
       if (sessionWorkspace != null) {
-        _selectedWorkspaceByAgentId[agent.id] = sessionWorkspace;
-        workspaceRuntimeContext?.setActiveWorkspace(sessionWorkspace);
-        if (_selectedSessionId != null && _selectedSessionId!.isNotEmpty) {
-          workspaceRuntimeContext?.bindSessionWorkspace(_selectedSessionId!, sessionWorkspace);
-        }
-        unawaited(_loadPermissionModeForWorkspace(sessionWorkspace));
+        _workspaceCoordinator.setSessionWorkspace(
+          agent,
+          sessionWorkspace,
+          nextSessionId: _selectedSessionId,
+        );
       }
 
       final bool isFreshSession;
@@ -733,10 +722,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
                 pendingNextMessageProviderId: _pendingProviderForSession(_selectedSessionId),
                 pendingNextMessageModel: _pendingModelForSession(_selectedSessionId),
                 nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
-                availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
+                availableWorkspaces: _workspacesForAgent(agent.id),
                 selectedWorkspace: _selectedWorkspaceForAgent(agent),
                 clearSelectedWorkspace: _selectedWorkspaceForAgent(agent) == null,
-                isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
+                isLoadingWorkspaces: _isLoadingWorkspaces(agent.id),
                 requiresWorkspace: _requiresWorkspace(agent),
                 permissionMode: _permissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
                 isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
@@ -778,9 +767,9 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
             pendingNextMessageProviderId: _pendingProviderForSession(activeSessionId),
             pendingNextMessageModel: _pendingModelForSession(activeSessionId),
             nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
-            availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
+            availableWorkspaces: _workspacesForAgent(agent.id),
             selectedWorkspace: _selectedWorkspaceForAgent(agent),
-            isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
+            isLoadingWorkspaces: _isLoadingWorkspaces(agent.id),
             requiresWorkspace: _requiresWorkspace(agent),
             permissionMode: _permissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
             isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
@@ -968,187 +957,19 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
   }
 
-  Future<void> steerMessage(String text, {required String requestId}) async {
-    final agent = _currentAgent;
-    final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || sessionId.isEmpty) return;
-    emit(state.copyWith(queuedMutationRequestIds: {...state.queuedMutationRequestIds, requestId}));
-    try {
-      await conversationRepository.steerMessage(
-        agent,
-        text,
-        requestId: requestId,
-        sessionId: sessionId,
-      );
-    } catch (e) {
-      emit(
-        state.copyWith(
-          error: e.toString(),
-          queuedMutationRequestIds: {...state.queuedMutationRequestIds}..remove(requestId),
-        ),
-      );
-    }
-  }
+  Future<void> steerMessage(String text, {required String requestId}) =>
+      _interventionCoordinator.steerMessage(text, requestId: requestId);
 
-  Future<void> deleteQueuedMessage({required String requestId}) async {
-    final agent = _currentAgent;
-    final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || requestId.isEmpty) return;
-    emit(state.copyWith(queuedMutationRequestIds: {...state.queuedMutationRequestIds, requestId}));
-    final operationId = await conversationRepository.deleteQueuedMessage(
-      agent,
-      requestId: requestId,
-      sessionId: sessionId,
-    );
-    if (operationId == null) {
-      emit(state.copyWith(queuedMutationRequestIds: {...state.queuedMutationRequestIds}..remove(requestId)));
-    }
-  }
+  Future<void> deleteQueuedMessage({required String requestId}) =>
+      _interventionCoordinator.deleteQueuedMessage(requestId: requestId);
 
-  Future<void> cancelPendingSteer({required String requestId}) async {
-    final agent = _currentAgent;
-    final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || requestId.isEmpty) return;
-    emit(
-      state.copyWith(
-        pendingSteerCancellationRequestIds: {...state.pendingSteerCancellationRequestIds, requestId},
-      ),
-    );
-    final operationId = await conversationRepository.cancelPendingSteer(
-      agent,
-      requestId: requestId,
-      sessionId: sessionId,
-    );
-    if (operationId == null) {
-      emit(
-        state.copyWith(
-          pendingSteerCancellationRequestIds: {...state.pendingSteerCancellationRequestIds}..remove(requestId),
-        ),
-      );
-    }
-  }
+  Future<void> cancelPendingSteer({required String requestId}) =>
+      _interventionCoordinator.cancelPendingSteer(requestId: requestId);
 
-  Future<void> stop() async {
-    final agent = _currentAgent;
-    final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null) return;
-    final requestId = const Uuid().v4();
-    final recoveryOwnerToken = const Uuid().v4();
-    final cache = sessionCubit.conversationCacheRepository;
-    try {
-      await cache?.markStopRecoveryPendingAndFlush(
-        agent.id,
-        sessionId,
-        requestId,
-        ownerToken: recoveryOwnerToken,
-      );
-    } catch (_) {
-      return;
-    }
-    _initiatedStopRequestIds.add(requestId);
-    final acceptedRequestId = await conversationRepository.stop(
-      agent,
-      sessionId: sessionId,
-      requestId: requestId,
-      recoveryOwnerToken: recoveryOwnerToken,
-    );
-    if (acceptedRequestId == null) {
-      _initiatedStopRequestIds.remove(requestId);
-      await cache?.unmarkStopRecoveryPendingAndFlush(agent.id, sessionId, requestId);
-    }
-  }
+  Future<void> stop() => _interventionCoordinator.stop();
 
-  Future<void> _applyStopRecovery(DeviceConfig agent, StopDraftRecovery recovery) async {
-    final cache = sessionCubit.conversationCacheRepository;
-    if (cache == null) return;
-    if (recovery.claimRequired) {
-      if (_stopRecoveryClaimIds.containsKey(recovery.stopRequestId)) return;
-      final claimId = const Uuid().v4();
-      _stopRecoveryClaimIds[recovery.stopRequestId] = claimId;
-      try {
-        await cache.setStopRecoveryClaimAndFlush(
-          agent.id,
-          recovery.sessionId,
-          recovery.stopRequestId,
-          claimId,
-        );
-      } catch (_) {
-        _stopRecoveryClaimIds.remove(recovery.stopRequestId);
-        return;
-      }
-      final acceptedClaimId = await conversationRepository.claimStopRecovery(
-        agent,
-        sessionId: recovery.sessionId,
-        stopRequestId: recovery.stopRequestId,
-        commandRequestId: claimId,
-      );
-      if (acceptedClaimId == null) {
-        _stopRecoveryClaimIds.remove(recovery.stopRequestId);
-        try {
-          await cache.clearStopRecoveryClaimAndFlush(
-            agent.id,
-            recovery.sessionId,
-            recovery.stopRequestId,
-          );
-        } catch (_) {}
-      }
-      return;
-    }
-    final draft = cache.sessionDraft(agent.id, recovery.sessionId);
-    final persistedClaimId = draft?.stopRecoveryClaimIds[recovery.stopRequestId];
-    final recoveryOwnerToken = draft?.stopRecoveryOwnerTokens[recovery.stopRequestId];
-    final claimedByThisClient =
-        recovery.recoveryReason == 'daemon_restart' &&
-        recovery.claimedBy != null &&
-        (_stopRecoveryClaimIds[recovery.stopRequestId] == recovery.claimedBy || persistedClaimId == recovery.claimedBy);
-    final alreadyApplied = draft?.appliedStopRecoveryIds.contains(recovery.stopRequestId) == true;
-    final isOwned = recovery.recoveryReason == 'daemon_restart'
-        ? claimedByThisClient || alreadyApplied
-        : (recoveryOwnerToken != null && recoveryOwnerToken.isNotEmpty && !alreadyApplied);
-    if (!isOwned) return;
-    if (_inFlightStopRecoveryAckIds.contains(recovery.stopRequestId)) return;
-    _inFlightStopRecoveryAckIds.add(recovery.stopRequestId);
-    try {
-      final changed = await cache.prependStopRecoveryAndFlush(
-        agent.id,
-        recovery.sessionId,
-        stopRequestId: recovery.stopRequestId,
-        texts: recovery.inputs.map((input) => input.text),
-      );
-      if (!changed && !alreadyApplied) {
-        _inFlightStopRecoveryAckIds.remove(recovery.stopRequestId);
-        return;
-      }
-    } catch (_) {
-      _inFlightStopRecoveryAckIds.remove(recovery.stopRequestId);
-      return;
-    }
-    await conversationRepository.acknowledgeStopRecovery(
-      agent,
-      sessionId: recovery.sessionId,
-      stopRequestId: recovery.stopRequestId,
-      claimantId: recovery.recoveryReason == 'daemon_restart' ? recovery.claimedBy : null,
-      recoveryOwnerToken: recovery.recoveryReason == 'user_stop' ? recoveryOwnerToken : null,
-    );
-    _initiatedStopRequestIds.remove(recovery.stopRequestId);
-    _stopRecoveryClaimIds.remove(recovery.stopRequestId);
-    try {
-      await cache.clearStopRecoveryClaimAndFlush(
-        agent.id,
-        recovery.sessionId,
-        recovery.stopRequestId,
-      );
-    } catch (_) {}
-    if (recovery.recoveryReason == 'user_stop') {
-      try {
-        await cache.clearStopRecoveryOwnerTokenAndFlush(
-          agent.id,
-          recovery.sessionId,
-          recovery.stopRequestId,
-        );
-      } catch (_) {}
-    }
-  }
+  Future<void> _applyStopRecovery(DeviceConfig agent, StopDraftRecovery recovery) =>
+      _interventionCoordinator.applyStopRecovery(agent, recovery);
 
   Future<TurnReplayResult> replayTurn({
     required String targetRequestId,
@@ -1160,151 +981,38 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     List<Map<String, dynamic>>? attachmentEdits,
     bool confirmedReplayUnsafe = false,
     bool confirmedDropSteers = false,
-  }) async {
-    final agent = _currentAgent;
-    final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || sessionId.isEmpty) {
-      return const TurnReplayResult(
-        outcome: 'missing_session',
-        safety: TurnReplaySafety.unknown,
-        requiresConfirmation: false,
-      );
-    }
-    final revision = expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0;
-    final repository = conversationRepository;
-    final TurnReplayResult result;
-    if (attachmentEdits != null) {
-      if (repository is! AttachmentReplayRepository) {
-        return const TurnReplayResult(
-          outcome: 'attachments_unsupported',
-          safety: TurnReplaySafety.unknown,
-          requiresConfirmation: false,
-        );
-      }
-      result = await (repository as AttachmentReplayRepository).replayTurnWithAttachments(
-        agent,
-        sessionId: sessionId,
+  }) =>
+      _interventionCoordinator.replayTurn(
         targetRequestId: targetRequestId,
         targetMessageId: targetMessageId,
         targetTurnId: targetTurnId,
-        expectedHistoryRevision: revision,
-        action: action,
-        message: message ?? '',
-        attachmentEdits: attachmentEdits,
-        providerInstanceId: state.nextMessageProviderId,
-        modelId: state.nextMessageModel,
-        thinkingMode: state.nextMessageThinkingMode,
-        confirmedReplayUnsafe: confirmedReplayUnsafe,
-        confirmedDropSteers: confirmedDropSteers,
-      );
-    } else {
-      result = await repository.replayTurn(
-        agent,
-        sessionId: sessionId,
-        targetRequestId: targetRequestId,
-        targetMessageId: targetMessageId,
-        targetTurnId: targetTurnId,
-        expectedHistoryRevision: revision,
+        expectedHistoryRevision: expectedHistoryRevision,
         action: action,
         message: message,
-        providerInstanceId: state.nextMessageProviderId,
-        modelId: state.nextMessageModel,
-        thinkingMode: state.nextMessageThinkingMode,
+        attachmentEdits: attachmentEdits,
         confirmedReplayUnsafe: confirmedReplayUnsafe,
         confirmedDropSteers: confirmedDropSteers,
       );
-    }
-    final nextRevision = result.historyRevision;
-    final selected = sessionCubit.state.selectedSession;
-    if (nextRevision != null && selected != null && selected.id == sessionId) {
-      sessionCubit.applyHistoryRevision(sessionId, nextRevision);
-    }
-    return result;
-  }
 
   Future<SessionForkResult> forkSession({
     required String targetMessageId,
     required String targetTurnId,
-  }) async {
-    final agent = _currentAgent;
-    final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || sessionId.isEmpty) {
-      return const SessionForkResult(outcome: 'missing_session');
-    }
-    final result = await conversationRepository.forkSession(
-      agent,
-      sessionId: sessionId,
-      targetMessageId: targetMessageId,
-      targetTurnId: targetTurnId,
-    );
-    final child = result.child;
-    if (result.isAccepted && child != null) {
-      try {
-        await sessionCubit.adoptForkedSession(
-          child.copyWith(deviceId: child.deviceId ?? agent.id),
-        );
-      } catch (error, stackTrace) {
-        _logger.warning(
-          'Fork committed but child navigation failed.',
-          error,
-          stackTrace,
-        );
-        return SessionForkResult(
-          outcome: result.outcome,
-          child: child,
-          navigationFailed: true,
-        );
-      }
-    }
-    return result;
-  }
+  }) =>
+      _interventionCoordinator.forkSession(
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+      );
 
-  Future<void> retryRuntimeNotice() async {
-    final agent = _currentAgent;
-    final notice = state.runtimeNotice;
-    if (agent == null || notice == null) {
-      return;
-    }
-    final providerId = state.nextMessageProviderId?.trim();
-    final modelId = state.nextMessageModel?.trim();
-    await conversationRepository.retryRuntimeNotice(
-      agent,
-      sessionId: notice.sessionId,
-      requestId: notice.requestId,
-      providerInstanceId: providerId == null || providerId.isEmpty ? null : providerId,
-      modelId: modelId == null || modelId.isEmpty ? null : modelId,
-    );
-  }
+  Future<void> retryRuntimeNotice() => _interventionCoordinator.retryRuntimeNotice();
 
   Future<void> continueWithProvider({
     required String providerInstanceId,
     String? modelId,
-  }) async {
-    final agent = _currentAgent;
-    final notice = state.runtimeNotice;
-    if (agent == null || notice == null) {
-      return;
-    }
-    _setPendingRouteSelection(
-      sessionId: notice.sessionId,
-      providerId: providerInstanceId,
-      modelId: modelId,
-    );
-    emit(
-      state.copyWith(
-        activeSessionId: notice.sessionId,
-        pendingNextMessageProviderId: providerInstanceId,
-        pendingNextMessageModel: modelId?.trim().isEmpty ?? true ? state.pendingNextMessageModel : modelId!.trim(),
-      ),
-    );
-    await conversationRepository.continueWithProvider(
-      agent,
-      sessionId: notice.sessionId,
-      providerInstanceId: providerInstanceId,
-      requestId: notice.requestId,
-      modelId: modelId?.trim().isEmpty ?? true ? null : modelId!.trim(),
-    );
-  }
+  }) =>
+      _interventionCoordinator.continueWithProvider(
+        providerInstanceId: providerInstanceId,
+        modelId: modelId,
+      );
 
   Future<void> respondToSuspendedRequest(
     DeviceSuspendedRequest request, {
@@ -1312,27 +1020,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     String? scope,
     String? comment,
     String? answer,
-  }) async {
-    final agent = _currentAgent;
-    if (agent == null) return;
-    try {
-      await conversationRepository.respondToSuspendedRequest(
-        agent,
+  }) =>
+      _interventionCoordinator.respondToSuspendedRequest(
         request,
         allow: allow,
         scope: scope,
         comment: comment,
         answer: answer,
       );
-      emit(
-        state.copyWith(
-          clearPendingSuspendedRequest: true,
-        ),
-      );
-    } catch (e) {
-      emit(state.copyWith(error: e.toString()));
-    }
-  }
 
   Future<void> updateSessionPreferences({
     String? providerId,
@@ -1610,9 +1305,9 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         clearPendingNextMessageModel: pendingModelId == null,
         nextMessageThinkingMode: agent == null ? null : _nextMessageThinkingByAgentId[agent.id],
         clearNextMessageThinkingMode: agent == null || _nextMessageThinkingByAgentId[agent.id] == null,
-        availableWorkspaces: agent == null ? const [] : _workspacesByAgentId[agent.id] ?? const [],
+        availableWorkspaces: _workspacesForAgent(agent?.id),
         selectedWorkspace: agent == null ? null : _selectedWorkspaceForAgent(agent),
-        isLoadingWorkspaces: agent != null && _loadingWorkspaceAgentIds.contains(agent.id),
+        isLoadingWorkspaces: _isLoadingWorkspaces(agent?.id),
         requiresWorkspace: agent != null && _requiresWorkspace(agent),
         permissionMode: _permissionModeForWorkspace(agent == null ? null : _selectedWorkspaceForAgent(agent)),
         isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(
@@ -1796,398 +1491,61 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     return changed;
   }
 
-  Future<void> refreshWorkspaces() async {
-    final agent = _currentAgent;
-    if (agent == null) return;
-    await _ensureWorkspacesForAgent(agent, force: true);
-  }
+  Future<void> refreshWorkspaces() => _workspaceCoordinator.refreshWorkspaces();
 
-  Future<SessionCompactResult> compactSession() async {
-    final agent = _currentAgent;
-    final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || sessionId.isEmpty) {
-      return const SessionCompactResult(outcome: 'missing_session');
-    }
-    return conversationRepository.compactSession(
-      agent,
-      sessionId: sessionId,
-    );
-  }
+  Future<SessionCompactResult> compactSession() =>
+      _interventionCoordinator.compactSession();
 
-  Future<List<SlashCommandEntry>> searchSlashCommands({String? query}) async {
-    final agent = _currentAgent;
-    if (agent == null) {
-      return const [];
-    }
+  Future<List<SlashCommandEntry>> searchSlashCommands({String? query}) =>
+      _interventionCoordinator.searchSlashCommands(query: query);
 
-    return conversationRepository.searchSlashCommands(
-      agent,
-      query: query,
-      workspaceId: _selectedWorkspaceForAgent(agent)?.id,
-    );
-  }
+  Future<WorkspaceTreeSnapshot> browseWorkspaceTree({String? path}) =>
+      _workspaceCoordinator.browseWorkspaceTree(path: path);
 
-  Future<WorkspaceTreeSnapshot> browseWorkspaceTree({String? path}) async {
-    final agent = _currentAgent;
-    if (agent == null) {
-      throw StateError('No active agent selected.');
-    }
+  void selectWorkspace(DeviceWorkspace workspace) =>
+      _workspaceCoordinator.selectWorkspace(workspace);
 
-    return conversationRepository.browseWorkspaceTree(
-      agent,
-      path: path,
-    );
-  }
-
-  void selectWorkspace(DeviceWorkspace workspace) {
-    final agent = _currentAgent;
-    if (agent == null) return;
-    _selectedWorkspaceByAgentId[agent.id] = workspace;
-    workspaceRuntimeContext?.setActiveWorkspace(workspace);
-    unawaited(_loadPermissionModeForWorkspace(workspace));
-    unawaited(_registerToolsForWorkspace(agent, workspace.id));
-    emit(
-      state.copyWith(
-        selectedWorkspace: workspace,
-        availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
-        isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
-        requiresWorkspace: _requiresWorkspace(agent),
-        permissionMode: _permissionModeForWorkspace(workspace),
-        isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(workspace),
-        error: null,
-      ),
-    );
-  }
-
-  void clearWorkspace() {
-    final agent = _currentAgent;
-    if (agent == null) return;
-    _selectedWorkspaceByAgentId.remove(agent.id);
-    workspaceRuntimeContext?.setActiveWorkspace(null);
-    emit(
-      state.copyWith(
-        clearSelectedWorkspace: true,
-        availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
-        isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
-        requiresWorkspace: _requiresWorkspace(agent),
-        permissionMode: WorkspacePermissionMode.defaultMode,
-        isLoadingPermissionMode: false,
-        error: null,
-      ),
-    );
-  }
+  void clearWorkspace() => _workspaceCoordinator.clearWorkspace();
 
   Future<DeviceWorkspace?> createWorkspace({
     String? path,
     String? name,
     String? description,
-  }) async {
-    final agent = _currentAgent;
-    if (agent == null) return null;
-
-    try {
-      final workspace = conversationCacheRepository == null
-          ? await conversationRepository.createWorkspace(
-              agent,
-              path: path,
-              name: name,
-              description: description,
-            )
-          : await conversationCacheRepository!.createWorkspace(
-              agent,
-              path: path,
-              name: name,
-              description: description,
-            );
-      if (workspace == null) return null;
-      final currentList = List<DeviceWorkspace>.from(_workspacesByAgentId[agent.id] ?? const []);
-      currentList.removeWhere((item) => item.id == workspace.id);
-      currentList.insert(0, workspace);
-      _workspacesByAgentId[agent.id] = currentList;
-      _selectedWorkspaceByAgentId[agent.id] = workspace;
-      workspaceRuntimeContext?.setActiveWorkspace(workspace);
-      unawaited(_loadPermissionModeForWorkspace(workspace));
-      unawaited(_registerToolsForWorkspace(agent, workspace.id));
-      emit(
-        state.copyWith(
-          availableWorkspaces: currentList,
-          selectedWorkspace: workspace,
-          isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
-          requiresWorkspace: _requiresWorkspace(agent),
-          permissionMode: _permissionModeForWorkspace(workspace),
-          isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(workspace),
-          error: null,
-        ),
+  }) =>
+      _workspaceCoordinator.createWorkspace(
+        path: path,
+        name: name,
+        description: description,
       );
-      return workspace;
-    } catch (e) {
-      emit(state.copyWith(error: e.toString()));
-      return null;
-    }
-  }
 
-  Future<void> _ensureWorkspacesForAgent(DeviceConfig agent, {bool force = false}) async {
-    final caps = capabilitiesStore != null ? await capabilitiesStore!.ensureFreshForAgent(agent, force: force) : null;
-    final supportsWorkspaceFlow = (caps?.supportsWorkspaces ?? false) || (caps?.workspaceRequired ?? false);
-    if (!supportsWorkspaceFlow) {
-      _workspacesByAgentId.remove(agent.id);
-      _selectedWorkspaceByAgentId.remove(agent.id);
-      if (_currentAgent?.id == agent.id) {
-        emit(
-          state.copyWith(
-            availableWorkspaces: const [],
-            clearSelectedWorkspace: true,
-            isLoadingWorkspaces: false,
-            requiresWorkspace: false,
-            permissionMode: WorkspacePermissionMode.defaultMode,
-            isLoadingPermissionMode: false,
-          ),
-        );
-      }
-      return;
-    }
+  Future<void> _ensureWorkspacesForAgent(DeviceConfig agent, {bool force = false}) =>
+      _workspaceCoordinator.ensureWorkspacesForAgent(agent, force: force);
 
-    if (_workspacesByAgentId.containsKey(agent.id) && !force) {
-      if (_currentAgent?.id == agent.id) {
-        emit(
-          state.copyWith(
-            availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
-            selectedWorkspace: _selectedWorkspaceForAgent(agent),
-            isLoadingWorkspaces: false,
-            requiresWorkspace: _requiresWorkspace(agent),
-            permissionMode: _permissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
-            isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
-          ),
-        );
-      }
-      return;
-    }
+  Future<void> setWorkspacePermissionMode(WorkspacePermissionMode permissionMode) =>
+      _workspaceCoordinator.setWorkspacePermissionMode(permissionMode);
 
-    _loadingWorkspaceAgentIds.add(agent.id);
-    if (_currentAgent?.id == agent.id) {
-      emit(state.copyWith(isLoadingWorkspaces: true, requiresWorkspace: _requiresWorkspace(agent)));
-    }
+  bool _sessionMatchesAgent(Session? session, DeviceConfig? agent) =>
+      SessionWorkspaceCoordinator.sessionMatchesAgent(session, agent);
 
-    try {
-      final workspaces = await conversationRepository.getWorkspaces(agent);
-      _workspacesByAgentId[agent.id] = workspaces;
-      final selectedWorkspace = _selectedWorkspaceByAgentId[agent.id];
-      if (selectedWorkspace != null) {
-        for (final workspace in workspaces) {
-          if (workspace.id == selectedWorkspace.id) {
-            _selectedWorkspaceByAgentId[agent.id] = workspace;
-            break;
-          }
-        }
-      }
-    } catch (e) {
-      if (_currentAgent?.id == agent.id) {
-        emit(state.copyWith(error: e.toString()));
-      }
-    } finally {
-      _loadingWorkspaceAgentIds.remove(agent.id);
-      if (_currentAgent?.id == agent.id) {
-        emit(
-          state.copyWith(
-            availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
-            selectedWorkspace: _selectedWorkspaceForAgent(agent),
-            isLoadingWorkspaces: false,
-            requiresWorkspace: _requiresWorkspace(agent),
-            permissionMode: _permissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
-            isLoadingPermissionMode: _isLoadingPermissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
-          ),
-        );
-      }
-    }
-  }
+  DeviceWorkspace? _selectedWorkspaceForAgent(DeviceConfig agent) =>
+      _workspaceCoordinator.selectedWorkspaceForAgent(agent);
 
-  Future<void> setWorkspacePermissionMode(WorkspacePermissionMode permissionMode) async {
-    final agent = _currentAgent;
-    final workspace = agent == null ? null : _selectedWorkspaceForAgent(agent);
-    if (workspace == null || workspace.path.trim().isEmpty) {
-      emit(state.copyWith(error: 'Select a workspace before changing its permission mode.'));
-      return;
-    }
+  DeviceWorkspace? _workspaceFromSession(Session? session) =>
+      _workspaceCoordinator.workspaceFromSession(session);
 
-    _workspacePolicyLoadIds[workspace.id] = (_workspacePolicyLoadIds[workspace.id] ?? 0) + 1;
-    if (_selectedSessionId != null) {
-      if (permissionMode == WorkspacePermissionMode.defaultMode) {
-        _downgradedSessionIds.add(_selectedSessionId!);
-      } else if (permissionMode == WorkspacePermissionMode.fullAccess) {
-        _downgradedSessionIds.remove(_selectedSessionId!);
-      }
-    }
-    emit(state.copyWith(isLoadingPermissionMode: true));
-    try {
-      final updatedPolicy = await conversationRepository.setWorkspacePermissionMode(
-        agent!,
-        workspaceId: workspace.id,
-        workspacePath: workspace.path,
-        mode: permissionMode,
-      );
-      _permissionModesByWorkspaceId[workspace.id] = updatedPolicy.permissionMode;
-      emit(
-        state.copyWith(
-          selectedWorkspace: workspace,
-          permissionMode: updatedPolicy.permissionMode,
-          isLoadingPermissionMode: false,
-          error: null,
-        ),
-      );
-    } catch (e) {
-      emit(
-        state.copyWith(
-          isLoadingPermissionMode: false,
-          error: e.toString(),
-        ),
-      );
-    }
-  }
+  bool _requiresWorkspace(DeviceConfig agent) =>
+      _workspaceCoordinator.requiresWorkspace(agent);
 
-  bool _sessionMatchesAgent(Session? session, DeviceConfig? agent) {
-    if (session == null || agent == null) return false;
-    if (session.deviceId == agent.id) return true;
-    if (session.deviceId != null && agent.representsDeviceId(session.deviceId!)) return true;
-    if (session.deviceId == null && agent.isLocalInventoryDevice) return true;
-    return false;
-  }
+  WorkspacePermissionMode _permissionModeForWorkspace(DeviceWorkspace? workspace) =>
+      _workspaceCoordinator.permissionModeForWorkspace(workspace);
 
-  DeviceWorkspace? _selectedWorkspaceForAgent(DeviceConfig agent) {
-    final selectedSession = sessionCubit.state.selectedSession;
-    if (_sessionMatchesAgent(selectedSession, agent)) {
-      final sessionWorkspace = _workspaceFromSession(selectedSession);
-      if (sessionWorkspace != null) {
-        return sessionWorkspace;
-      }
-    }
-    return _selectedWorkspaceByAgentId[agent.id];
-  }
-
-  DeviceWorkspace? _workspaceFromSession(Session? session) {
-    final workspaceId = session?.workspaceId?.trim();
-    final execRoot =
-        session?.metadata?['execution_root']?.toString().trim() ??
-        (session?.workspacePath?.trim().isNotEmpty == true ? session?.workspacePath!.trim() : null);
-
-    if (workspaceId == null || workspaceId.isEmpty) {
-      if (execRoot != null && execRoot.isNotEmpty) {
-        final folderName = p.basename(execRoot);
-        return DeviceWorkspace(
-          id: 'exec_root:$execRoot',
-          name: folderName.isNotEmpty ? folderName : 'Workspace',
-          path: execRoot,
-          trustState: 'untrusted',
-        );
-      }
-      return null;
-    }
-
-    for (final workspaces in _workspacesByAgentId.values) {
-      for (final workspace in workspaces) {
-        if (workspace.id == workspaceId) return workspace;
-      }
-    }
-
-    final folderName = session?.workspaceName?.trim().isNotEmpty == true
-        ? session!.workspaceName!.trim()
-        : (execRoot != null && execRoot.isNotEmpty ? p.basename(execRoot) : workspaceId);
-
-    return DeviceWorkspace(
-      id: workspaceId,
-      name: folderName,
-      path: session?.workspacePath?.trim() ?? (execRoot ?? ''),
-      trustState: session?.workspaceTrustState?.trim().isNotEmpty == true
-          ? session!.workspaceTrustState!.trim()
-          : 'untrusted',
-    );
-  }
-
-  bool _requiresWorkspace(DeviceConfig agent) {
-    final caps = capabilitiesStore?.getForAgent(agent.id);
-    return caps?.workspaceRequired ?? false;
-  }
-
-  WorkspacePermissionMode _permissionModeForWorkspace(DeviceWorkspace? workspace) {
-    if (workspace == null) {
-      return WorkspacePermissionMode.defaultMode;
-    }
-    final selectedSession = sessionCubit.state.selectedSession;
-    final isExplicitlyDowngraded = selectedSession != null && _downgradedSessionIds.contains(selectedSession.id);
-    if (!isExplicitlyDowngraded &&
-        selectedSession != null &&
-        (selectedSession.metadata?['allow_all_tools'] == true ||
-            selectedSession.metadata?['permission_mode'] == 'full_access')) {
-      return WorkspacePermissionMode.fullAccess;
-    }
-    return _permissionModesByWorkspaceId[workspace.id] ?? WorkspacePermissionMode.defaultMode;
-  }
-
-  bool _isLoadingPermissionModeForWorkspace(DeviceWorkspace? workspace) {
-    if (workspace == null) {
-      return false;
-    }
-    return _loadingPermissionModeWorkspaceIds.contains(workspace.id);
-  }
-
-  Future<void> _loadPermissionModeForWorkspace(DeviceWorkspace workspace) async {
-    final workspaceId = workspace.id.trim();
-    final workspacePath = workspace.path.trim();
-    if (workspaceId.isEmpty || workspacePath.isEmpty) {
-      return;
-    }
-
-    final loadId = (_workspacePolicyLoadIds[workspaceId] ?? 0) + 1;
-    _workspacePolicyLoadIds[workspaceId] = loadId;
-
-    _loadingPermissionModeWorkspaceIds.add(workspaceId);
-    if (!isClosed && _currentAgent != null && _selectedWorkspaceForAgent(_currentAgent!)?.id == workspaceId) {
-      emit(state.copyWith(isLoadingPermissionMode: true));
-    }
-
-    unawaited(_workspacePolicySubscription?.cancel());
-    final agent = _currentAgent;
-    if (agent != null) {
-      _workspacePolicySubscription = conversationRepository.watchWorkspacePolicy(agent, workspaceId).listen((policy) {
-        _permissionModesByWorkspaceId[workspaceId] = policy.permissionMode;
-        if (!isClosed && _currentAgent?.id == agent.id && _selectedWorkspaceForAgent(agent)?.id == workspaceId) {
-          emit(state.copyWith(permissionMode: policy.permissionMode));
-        }
-      });
-    }
-
-    try {
-      final policy = await conversationRepository.getWorkspacePolicy(agent!, workspacePath);
-      if (_workspacePolicyLoadIds[workspaceId] == loadId) {
-        _permissionModesByWorkspaceId[workspaceId] = policy.permissionMode;
-      }
-    } catch (e) {
-      if (!isClosed && _currentAgent != null && _selectedWorkspaceForAgent(_currentAgent!)?.id == workspaceId) {
-        emit(state.copyWith(error: e.toString()));
-      }
-    } finally {
-      _loadingPermissionModeWorkspaceIds.remove(workspaceId);
-      if (!isClosed && _currentAgent != null && _selectedWorkspaceForAgent(_currentAgent!)?.id == workspaceId) {
-        emit(
-          state.copyWith(
-            permissionMode: _permissionModeForWorkspace(workspace),
-            isLoadingPermissionMode: false,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _registerToolsForWorkspace(DeviceConfig agent, String workspaceId) async {
-    if (workspaceId.trim().isEmpty) return;
-    await localToolRuntime?.broadcastAvailableTools(
-      workspaceId: workspaceId,
-    );
-  }
+  bool _isLoadingPermissionModeForWorkspace(DeviceWorkspace? workspace) =>
+      _workspaceCoordinator.isLoadingPermissionModeForWorkspace(workspace);
 
   @override
   Future<void> close() async {
     _delayedLoadingTimer?.cancel();
-    _inFlightStopRecoveryAckIds.clear();
+    _interventionCoordinator.clearInFlightStopRecoveryAcks();
     await _agentStateSubscription?.cancel();
     await _cacheSubscription?.cancel();
     await _sessionStateSubscription?.cancel();
@@ -2195,7 +1553,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     await _queuedMessagesSubscription?.cancel();
     await _stopRecoverySubscription?.cancel();
     await _attentionSubscription?.cancel();
-    await _workspacePolicySubscription?.cancel();
+    _workspaceCoordinator.dispose();
     return super.close();
   }
 }

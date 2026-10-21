@@ -221,5 +221,33 @@ void main() {
       await pumpEventQueue();
       expect(messagesCubit.state.selectedWorkspace, isNull);
     });
+    // Task 110 port guard: re-subscribing to an agent without a selected
+    // session keeps that agent's manually selected workspace. Only a resolved
+    // session workspace replaces it.
+    test('agent re-subscribe without a selected session keeps the manual workspace', () async {
+      final workspace = DeviceWorkspace(
+        id: 'ws-manual-1',
+        name: 'Manual Workspace',
+        path: '/manual/workspace',
+        trustState: 'untrusted',
+      );
+      socket.autoCapabilitiesPayload = const {
+        'supports_workspaces': true,
+        'supports_workspace_selection': true,
+      };
+      conversationRepository.workspaces.add(workspace);
+      await messagesCubit.refreshWorkspaces();
+      await pumpEventQueue();
+      messagesCubit.selectWorkspace(workspace);
+      await pumpEventQueue();
+      expect(messagesCubit.state.selectedWorkspace?.id, workspace.id);
+
+      agentCubit.emitState(DeviceActive(activeAgent: remoteAgent, agents: [localAgent, remoteAgent]));
+      await pumpEventQueue();
+      agentCubit.emitState(DeviceActive(activeAgent: localAgent, agents: [localAgent, remoteAgent]));
+      await pumpEventQueue();
+
+      expect(messagesCubit.state.selectedWorkspace?.id, workspace.id);
+    });
   });
 }
