@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
@@ -437,6 +438,71 @@ OPENROUTER_API_KEY=sk-or-test
         (i) => i['id'] == 'openai-inst',
       );
       expect(openai['status'], equals(InstanceStatus.draft));
+    },
+  );
+
+  test(
+    'model.snapshot stays a bounded client projection of a large aggregator catalog (Task 124 D4)',
+    () async {
+      final repo = getIt<ProviderInstanceRepository>();
+      repo.createInstance(
+        ProviderInstance(
+          id: 'router-inst',
+          templateId: 'openrouter',
+          displayName: 'Router',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          defaultModel: 'vendor/model-0',
+          status: InstanceStatus.ready,
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+      // A live aggregator cache: ~400 models, each with the provider's raw
+      // `/models` record kept for capability derivation (~2.4 KB each).
+      final rawDescription = 'A long provider-authored model description. ' * 40;
+      repo.upsertModelCache(
+        instanceId: 'router-inst',
+        cacheKey: 'models',
+        models: [
+          for (var i = 0; i < 400; i++)
+            {
+              'value': 'vendor/model-$i',
+              'label': 'Model $i',
+              'provider': 'openrouter',
+              'context_window': 1048576,
+              'supports_reasoning': true,
+              'model_metadata': {
+                'id': 'vendor/model-$i',
+                'description': rawDescription,
+                'pricing': {'prompt': '0.0000001', 'completion': '0.000007'},
+                'supported_parameters': ['reasoning', 'tools', 'temperature'],
+              },
+            },
+        ],
+        fetchedAt: DateTime.now(),
+        source: 'live',
+        configRevision: 1,
+        credentialRevision: 1,
+      );
+
+      final envelope = await sendCommand(
+        'model.snapshot',
+        payload: {'request_id': 'req-size'},
+      );
+      final payload = envelope['payload'] as Map<String, dynamic>;
+      final router = (payload['instances'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((i) => i['id'] == 'router-inst');
+      final models = (router['models'] as List).cast<Map<String, dynamic>>();
+      expect(models, hasLength(400));
+      expect(models.every((model) => !model.containsKey('model_metadata')), isTrue);
+      expect(models.first['id'], 'vendor/model-0');
+      expect(models.first['supports_reasoning_output'], isTrue);
+      // The relayed reply stays far below the raw catalog (~1 MB here).
+      expect(utf8.encode(jsonEncode(envelope)).length, lessThan(150 * 1024));
     },
   );
 

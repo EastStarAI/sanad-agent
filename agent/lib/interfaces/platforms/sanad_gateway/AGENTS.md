@@ -18,6 +18,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - A newly accepted Local Gateway socket starts with the initialized Agent `hardware_id`, so platform-family events emitted before its first command still carry the canonical local inventory identity. Do not emit or accept a synthetic local runtime identity.
 - `thinking_mode` is the only session/persistence/protocol field name; do not accept or emit aliases.
 - Every request-correlated response carries the original request id.
+- `model.snapshot_result` is a bounded client projection: it never carries the cached raw provider `model_metadata`, which stays Agent-internal for capability derivation.
 
 ## Cross-Transport Delivery Presence
 - Platform-family fan-out is Local-first and awaited before Cloud serialization. Local write failures are isolated and remain Cloud-eligible.

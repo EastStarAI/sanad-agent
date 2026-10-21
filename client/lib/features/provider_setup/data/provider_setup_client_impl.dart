@@ -357,15 +357,27 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
 
   // ── Plan 29 Model Cache & Recent Commands ──────────────────────────────
 
+  /// In-flight `model.snapshot` per target device. The snapshot is a
+  /// read-only projection, so concurrent callers (provider setup and the usage
+  /// catalog both load it when a screen opens) share one request instead of
+  /// relaying the same catalog several times over the cloud path.
+  final Map<String, Future<ModelCacheSnapshotDto>> _snapshotsInFlight = {};
+
   @override
-  Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async {
-    final payload = await _request(
+  Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) {
+    final key = agent?.id ?? _connectionCoordinator.currentDeviceId;
+    final inFlight = _snapshotsInFlight[key];
+    if (inFlight != null) return inFlight;
+    final future = _request(
       command: 'model.snapshot',
       payload: const {},
       expectedEvent: 'model.snapshot_result',
       agent: agent,
-    );
-    return ModelCacheSnapshotDto.fromJson(payload);
+    ).then(ModelCacheSnapshotDto.fromJson);
+    _snapshotsInFlight[key] = future;
+    return future.whenComplete(() {
+      if (identical(_snapshotsInFlight[key], future)) unawaited(_snapshotsInFlight.remove(key));
+    });
   }
 
   @override

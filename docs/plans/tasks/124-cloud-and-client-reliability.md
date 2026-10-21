@@ -263,3 +263,45 @@ A narrow-width test exposed a second overflow at the same width: the desktop sta
   - the first `get_sessions` and `list_workspaces` after `auth_success` must be answered, with no 10 s timeout and no "Could not refresh" banner;
   - a history load lost in the disconnect must reload without pressing Retry.
 - **D3:** the compact layout (phone-size window) must log no RenderFlex overflow.
+
+## Round Log
+
+| Round | Candidate | Result |
+|---|---|---|
+| r1 | `a725bfbb` | S1a, S3, and the S4 mechanism passed. S1b failed (D1). D2 and D3 found. Item 4 not reproduced. |
+| r2 | `39061cd3` | D1 and D3 passed. The D2 Agent fix worked, but acceptance failed because of a new defect, D4. D5 and D6 found. Item 4 not reproduced. |
+| r3 | this round | D4, D5, and D6 addressed (below). |
+
+### D4 — Cloud replies stalled behind `model.snapshot_result` (High)
+
+**Measurement.** A read-only query of TH2's Agent state database (`provider_model_cache`, 7 instances, 491 cached models) gave these sizes:
+
+| Content | Size |
+|---|---|
+| Raw cached models | 1,531,209 bytes. One aggregator instance alone held 417 models in 1,018,911 bytes. |
+| Same models without `model_metadata` | 285,348 bytes |
+| `thinking_control` within that | 192,574 bytes |
+
+The snapshot relayed every cached entry unchanged, including `model_metadata`: the provider's raw `/models` record, with descriptions, pricing, parameters, and links. So each `model.snapshot_result` carried about 1.5 MB.
+
+B also sent two concurrent `model.snapshot` requests per screen (provider setup and the usage catalog), so about 3 MB crossed the relay before the replies queued behind them. Live r2 timings:
+
+- A emitted the result in under 60 ms;
+- B received it after 18–60 s, which is roughly 25–80 KB/s through the relay;
+- the five `sessions_list` replies queued behind it arrived 40–60 s late, past the 10 s timeout.
+
+**Root cause.** The Agent relayed Agent-internal cache data that is not part of the snapshot contract. The Client only reads `id`/`value`, `name`/`label`, `owned_by`, `supports_reasoning(_output)`, and `thinking_control`.
+
+**Fix (smallest change that removes the head-of-line block).**
+- Agent: `_normalizeModelEntry` drops `model_metadata` from the snapshot projection. That is a 5.4× reduction on the measured catalog, with no protocol field the Client reads removed.
+- Client: `ProviderSetupClientImpl.modelSnapshot` coalesces concurrent requests for the same device into one in-flight request. That halves the relayed volume on screen open.
+
+**Alternatives not chosen.**
+- Delaying the snapshot until after the session list would leave the oversized payload in place for every later reply.
+- A split or paged snapshot would change the protocol for no extra gain once the internal record is gone.
+
+**The "5× `get_sessions`".** These are not duplicates. TH2 has 4 workspaces, so one sidebar refresh issues 1 unscoped and 4 workspace-scoped section queries. Each section is already one in-flight request (covered by `conversation_cache_repository_pagination_efficiency_test.dart`). Collapsing them into one request would need a new multi-section query in the protocol. That is not done here, because the section replies are small and only stalled behind the snapshot.
+
+**Tests.**
+- Agent, `agent/test/interfaces/sanad_bridge_provider_test.dart`, "model.snapshot stays a bounded client projection of a large aggregator catalog": 400 models with raw metadata. It asserts no `model_metadata` in the reply, the fields the Client reads preserved, and the serialized envelope under 150 KB. Red → green: `temp/g3/r3-d4-agent-red.log` (1 failed), `temp/g3/r3-d4-agent-green.log` (34 passed).
+- Client, `client/test/unit/provider_setup/provider_setup_client_impl_test.dart`, "concurrent snapshots for one device share a single request": one `model.snapshot` command for two callers, and a fresh request after completion. Red → green: `temp/g3/r3-d4-client-red.log` (1 failed), `temp/g3/r3-d4-client-green.log` (17 passed).
