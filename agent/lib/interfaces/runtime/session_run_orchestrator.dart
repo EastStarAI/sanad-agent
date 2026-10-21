@@ -35,6 +35,7 @@ import 'session_turn_request_helpers.dart';
 import 'suspended_checkpoint_store.dart';
 
 import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/engine/context/context_compaction_engine.dart';
 import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/compaction_request_factory.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
@@ -72,7 +73,8 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   final Map<String, SuspendedRun> _suspendedEvents = {};
   final Map<String, Future<void>> _stopRequests = {};
   final Set<String> _busySessions = {};
-  final Set<String> _compactingSessions = {};
+  final Map<String, String> _compactingSessionOwners = {};
+  Set<String> get _compactingSessions => _compactingSessionOwners.keys.toSet();
   final Set<String> _resumingSessions = {};
   bool _controlledRestartDraining = false;
   final PersistedSuspendedDecisionResumer? _resumePersistedSuspendedDecision;
@@ -86,13 +88,11 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   /// Optional durable store for suspended runs and queued messages. Wired by
   /// DI when `PersistedRuntimeStateRepository` is registered; null in tests
   /// that do not exercise persistence.
-  PersistedRuntimeStateRepository? _persistedState;
   PersistedRuntimeStateRepository? get persistedState {
-    if (_persistedState != null) return _persistedState;
     if (getIt.isRegistered<PersistedRuntimeStateRepository>()) {
-      _persistedState = getIt<PersistedRuntimeStateRepository>();
+      return getIt<PersistedRuntimeStateRepository>();
     }
-    return _persistedState;
+    return null;
   }
 
   SessionRunOrchestrator({
@@ -241,17 +241,27 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       _turnExecutor.activeSessionIds.isNotEmpty;
 
   bool isSessionCompacting(String sessionId) =>
-      _compactingSessions.contains(sessionId);
+      _compactingSessionOwners.containsKey(sessionId);
 
   @visibleForTesting
   void debugEnterCompactionBarrier(String sessionId) {
-    _compactingSessions.add(sessionId);
+    _compactingSessionOwners[sessionId] = 'barrier';
   }
 
   @visibleForTesting
   void debugExitCompactionBarrier(String sessionId) {
-    _compactingSessions.remove(sessionId);
+    _compactingSessionOwners.remove(sessionId);
     _drainNextQueuedEvent(sessionId);
+  }
+
+  @visibleForTesting
+  void debugMarkSessionBusy(String sessionId) {
+    _busySessions.add(sessionId);
+  }
+
+  @visibleForTesting
+  void debugClearSessionBusy(String sessionId) {
+    _busySessions.remove(sessionId);
   }
 
   bool hasSuspendedEvent(String sessionId) =>
@@ -1120,6 +1130,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         'session_id': sessionId,
         'request_id': requestId,
         'outcome': CompactionFailureReason.sessionBusy.wireValue,
+        'failure_reason': CompactionFailureReason.sessionBusy.wireValue,
+        'failure_stage': CompactionFailureStage.preparation,
+        'failure_cause': CompactionFailureCause.sessionBusy,
       };
     }
     if (isSessionCompacting(sessionId)) {
@@ -1127,6 +1140,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         'session_id': sessionId,
         'request_id': requestId,
         'outcome': CompactionFailureReason.compactionInProgress.wireValue,
+        'failure_reason': CompactionFailureReason.compactionInProgress.wireValue,
+        'failure_stage': CompactionFailureStage.preparation,
+        'failure_cause': CompactionFailureCause.compactionInProgress,
       };
     }
     if (getIt.isRegistered<CompactionBoundaryRepository>()) {
@@ -1137,6 +1153,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           'session_id': sessionId,
           'request_id': requestId,
           'outcome': CompactionFailureReason.compactionInProgress.wireValue,
+          'failure_reason': CompactionFailureReason.compactionInProgress.wireValue,
+          'failure_stage': CompactionFailureStage.preparation,
+          'failure_cause': CompactionFailureCause.compactionInProgress,
         };
       }
     }
@@ -1146,29 +1165,52 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         'session_id': sessionId,
         'request_id': requestId,
         'outcome': 'unavailable',
+        'failure_reason': 'unavailable',
+        'failure_stage': CompactionFailureStage.preparation,
+        'failure_cause': CompactionFailureCause.unavailable,
       };
     }
 
     final compactionId = const Uuid().v4();
-    final compactionRunner = getIt<AgentRunner>(param1: sessionId);
-    final providerSeed = await compactionRunner.prepareCompactionProviderSeed();
-    final engineRequest = await CompactionRequestFactory.forSession(
-      sessionId: sessionId,
-      trigger: CompactionTrigger.manual,
-      compactionId: compactionId,
-      providerProjection: providerSeed.projection,
-      providerTools: providerSeed.tools,
-      providerRequestOptions: providerSeed.options,
-    );
+    final CompactionEngineRequest? engineRequest;
+    try {
+      final compactionRunner = getIt<AgentRunner>(param1: sessionId);
+      final providerSeed =
+          await compactionRunner.prepareCompactionProviderSeed();
+      engineRequest = await CompactionRequestFactory.forSession(
+        sessionId: sessionId,
+        trigger: CompactionTrigger.manual,
+        compactionId: compactionId,
+        providerProjection: providerSeed.projection,
+        providerTools: providerSeed.tools,
+        providerRequestOptions: providerSeed.options,
+      );
+    } catch (error) {
+      final diagnostics = CompactionDiagnostics.classify(
+        error,
+        stageHint: CompactionFailureStage.preparation,
+      );
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': 'failed',
+        'failure_reason': diagnostics.failureReason.wireValue,
+        'failure_stage': diagnostics.stage,
+        'failure_cause': diagnostics.cause,
+      };
+    }
     if (engineRequest == null) {
       return {
         'session_id': sessionId,
         'request_id': requestId,
         'outcome': 'invalid_request',
+        'failure_reason': 'invalid_request',
+        'failure_stage': CompactionFailureStage.preparation,
+        'failure_cause': CompactionFailureCause.invalidRequest,
       };
     }
 
-    _compactingSessions.add(sessionId);
+    _compactingSessionOwners[sessionId] = compactionId;
     try {
       final outcome = await getIt<CompactionCoordinator>().runCompaction(
         request: engineRequest,
@@ -1195,10 +1237,25 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         'outcome': 'failed',
         'failure_reason': outcome.failureReason?.wireValue,
         'compaction_id': outcome.compactionId,
+        if (outcome.failureStage != null) 'failure_stage': outcome.failureStage,
+        if (outcome.failureCause != null) 'failure_cause': outcome.failureCause,
+      };
+    } catch (error) {
+      final diagnostics = CompactionDiagnostics.classify(error);
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': 'failed',
+        'failure_reason': diagnostics.failureReason.wireValue,
+        'compaction_id': compactionId,
+        'failure_stage': diagnostics.stage,
+        'failure_cause': diagnostics.cause,
       };
     } finally {
-      _compactingSessions.remove(sessionId);
-      _drainNextQueuedEvent(sessionId);
+      if (_compactingSessionOwners[sessionId] == compactionId) {
+        _compactingSessionOwners.remove(sessionId);
+        _drainNextQueuedEvent(sessionId);
+      }
     }
   }
 
@@ -1589,6 +1646,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       requestedWorkspaceId: requestedWorkspaceId,
     );
     final payloadModel = turnRequest.model;
+    var thinkingRouteRevalidated = false;
 
     if (isNewSession) {
       final initialTitle = _resolveInitialSessionTitle(event);
@@ -1670,6 +1728,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           getIt.isRegistered<ThinkingRouteSessionSync>() &&
           (priorModel != payloadModel ||
               provider != existingSession.providerId)) {
+        thinkingRouteRevalidated = true;
         final corrected = getIt<ThinkingRouteSessionSync>()
             .revalidateAndApplySession(
               sessionId: event.sessionId,
@@ -1682,6 +1741,20 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           thinkingMode: corrected.selectionId,
         );
       }
+    }
+
+    // A turn that echoes the already-persisted session preference carries an
+    // inherited selection; the target route must not reject it (Task 115).
+    if (existingSession != null &&
+        !thinkingRouteRevalidated &&
+        getIt.isRegistered<ThinkingRouteSessionSync>()) {
+      turnRequest = getIt<ThinkingRouteSessionSync>()
+          .revalidateCarriedTurnSelection(
+            turnRequest,
+            persistedSelection: existingSession.thinkingMode,
+            sessionProviderInstanceId: existingSession.providerId,
+            sessionModelId: existingSession.model,
+          );
     }
 
     if (existingSession != null &&

@@ -15,6 +15,7 @@ This contract applies to `client/lib/features/conversations/data/`.
 - Keep the schema versioned. Unknown future versions or corrupt payloads must invalidate safely to an empty snapshot.
 - Hydrate the persistor before `runApp` and serialize writes so an older delayed save cannot overwrite a newer flush.
 - Lifecycle pause, hidden, and detached transitions must flush pending writes.
+- Cached session rows round-trip through the canonical `Session.fromJson` wire keys (provider as `provider_instance_id`); decoding migrates the legacy `model_provider` key. Decoding drops a persisted half draft route (provider or model missing) as a whole so it can never be restored.
 
 ## Fetch, Pagination, and Generations
 - Keep workspace and conversation request generations independent.

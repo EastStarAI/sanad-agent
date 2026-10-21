@@ -1,10 +1,12 @@
 import 'package:logging/logging.dart';
 import 'dart:async';
 
+import 'package:sanad_client/features/conversations/domain/models/conversation_draft.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
+import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/thinking_control.dart';
@@ -313,6 +315,10 @@ class SessionCubit extends Cubit<SessionState> {
     }
     emit(state.copyWith(selectedSession: resolvedSession));
 
+    navTrace(
+      'session.selectSession',
+      'session=${shortId(resolvedSession.id)} device=${shortId(resolvedSession.deviceId ?? agent?.id)} agentFound=${agent != null}',
+    );
     historyController.navigateTo(
       ConversationDestination.session(
         deviceId: resolvedSession.deviceId ?? agent?.id ?? '',
@@ -511,7 +517,55 @@ class SessionCubit extends Cubit<SessionState> {
     return current;
   }
 
-  Future<void> startNewChat(DeviceConfig agent, {String? workspaceId}) async {
+  /// Resolve the typed destination a device should present right now.
+  ///
+  /// This is the single destination resolver shared by startup restore and the
+  /// device switch: the device's persisted typed last destination when one
+  /// exists (carrying its nullable New Conversation workspace preselection),
+  /// otherwise New Conversation for that device.
+  ConversationDestination resolveDeviceDestination(String deviceId) {
+    final destination = conversationCacheRepository?.restartDestination(deviceId);
+    return destination ?? ConversationDestination.newConversation(deviceId: deviceId);
+  }
+
+  /// Switch the active device as exactly one typed navigation.
+  ///
+  /// Ordering is the contract: the cache context switches first, its projection
+  /// for the target device is awaited, and only then is the resolved destination
+  /// committed to [historyController]. That keeps the URL, the history current
+  /// destination, the sidebar selection, and the presented conversation
+  /// describing the same device. Returns the destination the caller must
+  /// navigate GoRouter to.
+  Future<ConversationDestination> switchActiveDevice(DeviceConfig agent) async {
+    final cacheRepository = conversationCacheRepository;
+    Future<void> projectionSettled = Future<void>.value();
+    if (cacheRepository != null && cacheRepository.activeDeviceId != agent.id) {
+      // Subscribe before switching so the snapshot that carries the new active
+      // device is observed even though it is delivered asynchronously.
+      projectionSettled = cacheRepository.snapshotStream.firstWhere(
+        (snapshot) => snapshot.activeDeviceId == agent.id,
+      );
+      cacheRepository.selectDevice(agent.id);
+    }
+    await agentCubit.switchAgent(agent);
+    await projectionSettled;
+
+    final destination = resolveDeviceDestination(agent.id);
+    navTrace(
+      'session.switchDevice',
+      'device=${shortId(agent.id)} -> ${destTrace(destination)} selected=${shortId(state.selectedSession?.id)}',
+    );
+    historyController.navigateTo(destination);
+    return destination;
+  }
+
+  /// Start a New Conversation and return the typed destination presenting it.
+  ///
+  /// The resolved `workspaceId` is part of the returned destination, so callers
+  /// must route with it rather than building a New Conversation location from
+  /// their own workspace guess; otherwise the same surface exists as two typed
+  /// destinations and reconciling them adds a spurious history step.
+  Future<ConversationDestination> startNewChat(DeviceConfig agent, {String? workspaceId}) async {
     final activeAgent = agentCubit.state is DeviceActive ? (agentCubit.state as DeviceActive).activeAgent : null;
     if (activeAgent?.id != agent.id) {
       await agentCubit.switchAgent(agent);
@@ -519,11 +573,26 @@ class SessionCubit extends Cubit<SessionState> {
 
     final cacheRepository = conversationCacheRepository;
     final selectedSession = state.selectedSession;
-    final previousSession = selectedSession?.deviceId == agent.id
+    // Leaving a conversation open on this device: the new draft takes that
+    // conversation's full route (provider, model and its own thinking) — the
+    // standing product rule for a user-initiated New chat.
+    final leavesOpenSession = selectedSession?.deviceId == agent.id;
+    // Otherwise (Client startup, a route entry or a device switch) nothing
+    // is being left: a persisted draft that already holds a complete route is
+    // the user's own and wins, including its explicit thinking. The
+    // last-selected session seeds the route only when there is no complete
+    // draft route (Task 122 D1).
+    final persistedDraft = leavesOpenSession ? null : cacheRepository?.newConversationDraft(agent.id);
+    final keepPersistedDraft = persistedDraft?.hasCompleteRoute == true;
+    final previousSession = leavesOpenSession
         ? selectedSession
+        : keepPersistedDraft
+        ? null
         : cacheRepository?.lastSelectedSession(agent.id);
     final requestedWorkspaceId = workspaceId?.trim();
-    final restoredWorkspaceId = previousSession?.workspaceId?.trim();
+    final restoredWorkspaceId = keepPersistedDraft
+        ? persistedDraft?.workspaceId?.trim()
+        : previousSession?.workspaceId?.trim();
     final canRestoreWorkspace =
         restoredWorkspaceId?.isNotEmpty == true &&
         cacheRepository?.containsWorkspace(agent.id, restoredWorkspaceId!) == true;
@@ -537,11 +606,15 @@ class SessionCubit extends Cubit<SessionState> {
       deviceId: agent.id,
       workspaceId: targetWorkspaceId,
     );
+    navTrace(
+      'session.startNewChat',
+      'device=${shortId(agent.id)} requestedWs=${shortId(workspaceId)} targetWs=${shortId(targetWorkspaceId)} selected=${shortId(state.selectedSession?.id)}',
+    );
     if (_newConversationDeviceId == agent.id &&
         _newConversationWorkspaceId == targetWorkspaceId &&
         state.selectedSession == null) {
       historyController.navigateTo(destination);
-      return;
+      return destination;
     }
 
     // Persist the typed destination immediately. This prevents restart
@@ -555,21 +628,43 @@ class SessionCubit extends Cubit<SessionState> {
     _newConversationDeviceId = agent.id;
     _newConversationWorkspaceId = targetWorkspaceId;
     conversationRepository.beginNewSession(agent);
+    // Provider and model form one route: inherit provider, model and thinking
+    // only as a complete pair. A half route (e.g. a cache-decoded session that
+    // has not yet refreshed its provider) clears all three so the device route
+    // or readiness default applies instead.
+    if (keepPersistedDraft) {
+      // Only the workspace follows the resolved destination; the persisted
+      // route and thinking stay exactly as the user left them.
+      cacheRepository?.setNewConversationDraft(
+        agent.id,
+        workspaceId: targetWorkspaceId,
+        clearWorkspace: targetWorkspaceId == null,
+        clearPermissionMode: true,
+      );
+      emit(state.copyWith(clearSelectedSession: true));
+      historyController.navigateTo(destination);
+      return destination;
+    }
+    final inheritRoute = ConversationDraft.isCompleteRoute(
+      previousSession?.modelProvider,
+      previousSession?.model,
+    );
     cacheRepository?.setNewConversationDraft(
       agent.id,
       workspaceId: targetWorkspaceId,
-      providerId: previousSession?.modelProvider,
-      model: previousSession?.model,
-      thinkingMode: previousSession?.thinkingMode,
+      providerId: inheritRoute ? previousSession?.modelProvider : null,
+      model: inheritRoute ? previousSession?.model : null,
+      thinkingMode: inheritRoute ? previousSession?.thinkingMode : null,
       clearWorkspace: targetWorkspaceId == null,
-      clearProvider: previousSession?.modelProvider?.trim().isNotEmpty != true,
-      clearModel: previousSession?.model?.trim().isNotEmpty != true,
-      clearThinkingMode: previousSession?.thinkingMode?.trim().isNotEmpty != true,
+      clearProvider: !inheritRoute,
+      clearModel: !inheritRoute,
+      clearThinkingMode: !inheritRoute || previousSession?.thinkingMode?.trim().isNotEmpty != true,
       clearPermissionMode: true,
     );
     emit(state.copyWith(clearSelectedSession: true));
 
     historyController.navigateTo(destination);
+    return destination;
   }
 
   void _clearNewConversationPresentation() {

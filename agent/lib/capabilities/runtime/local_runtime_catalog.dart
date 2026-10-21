@@ -15,7 +15,10 @@ import 'package:sanad_agent/capabilities/tools/system/mouse_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/keyboard_tool.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 
 import 'web_search/web_fetch_service.dart';
@@ -26,6 +29,10 @@ import 'workspace_tools/file_read_handler.dart';
 import 'workspace_tools/file_write_handler.dart';
 import 'workspace_tools/search_glob_handler.dart';
 import 'workspace_tools/search_grep_handler.dart';
+import 'workspace_tools/view_image_handler.dart';
+
+typedef AdmittedAttachmentPathsResolver =
+    Future<List<String>> Function(String sessionId);
 
 class LocalRuntimeCatalog {
   LocalRuntimeCatalog({
@@ -36,6 +43,7 @@ class LocalRuntimeCatalog {
     PermissionManager? permissionManager,
     PlatformRuntimeBridge? platformRuntimeBridge,
     WorkspacePathResolver? pathResolver,
+    AdmittedAttachmentPathsResolver? admittedAttachmentPathsResolver,
   }) : _workspaceRuntimeService = workspaceRuntimeService,
        _webSearchService = webSearchService ?? WebSearchService(),
        _webFetchService = webFetchService ?? WebFetchService(),
@@ -43,7 +51,9 @@ class LocalRuntimeCatalog {
        _permissionManager = permissionManager ?? PermissionManager(),
        _platformRuntimeBridge =
            platformRuntimeBridge ?? PlatformRuntimeBridge(),
-       _pathResolver = pathResolver ?? const WorkspacePathResolver();
+       _pathResolver = pathResolver ?? const WorkspacePathResolver(),
+       _admittedAttachmentPathsResolver =
+           admittedAttachmentPathsResolver ?? _noAdmittedAttachmentPaths;
 
   final LocalWorkspaceRuntimeService _workspaceRuntimeService;
   final WorkspacePathResolver _pathResolver;
@@ -52,12 +62,40 @@ class LocalRuntimeCatalog {
   final McpRuntimeManager _mcpRuntimeManager;
   final PermissionManager _permissionManager;
   final PlatformRuntimeBridge _platformRuntimeBridge;
+  final AdmittedAttachmentPathsResolver _admittedAttachmentPathsResolver;
+
+  static Future<List<String>> _noAdmittedAttachmentPaths(
+    String sessionId,
+  ) async => const [];
 
   Future<List<BaseTool>> buildTools({
     required ToolsRegistry registry,
     required AgentTurnRequest request,
+    List<String> pendingAttachmentIds = const [],
   }) async {
     final workspacePath = await _resolveTargetWorkspacePath(request);
+    final pendingAttachmentPaths =
+        getIt.isRegistered<AttachmentStore>() &&
+            pendingAttachmentIds.isNotEmpty &&
+            request.requestId != null
+        ? await getIt<AttachmentStore>().resolveAdmissionPaths(
+            sessionId: request.sessionId,
+            admissionId: request.requestId!,
+            attachmentIds: pendingAttachmentIds,
+          )
+        : const <String>[];
+    final injectedAttachmentPaths = await _admittedAttachmentPathsResolver(
+      request.sessionId,
+    );
+    final persistedAttachmentPaths = injectedAttachmentPaths.isNotEmpty
+        ? injectedAttachmentPaths
+        : getIt.isRegistered<AttachmentStore>()
+        ? await getIt<AttachmentStore>().resolveAttachedPaths(request.sessionId)
+        : const <String>[];
+    final admittedAttachmentPaths = {
+      ...persistedAttachmentPaths,
+      ...pendingAttachmentPaths,
+    }.toList(growable: false);
     final tools = <BaseTool>[
       // TEMPORARILY DISABLED: tool_search — paused for review.
       // _buildSearchTool(registry),
@@ -69,6 +107,12 @@ class LocalRuntimeCatalog {
 
     if (workspacePath != null && workspacePath.isNotEmpty) {
       tools.addAll(_buildWorkspaceTools(workspacePath, request));
+    }
+    if ((workspacePath != null && workspacePath.isNotEmpty) ||
+        admittedAttachmentPaths.isNotEmpty) {
+      tools.add(
+        _buildViewImageTool(workspacePath, admittedAttachmentPaths, request),
+      );
     }
 
     final hasConfig = getIt.isRegistered<Config>();
@@ -177,7 +221,34 @@ class LocalRuntimeCatalog {
     if (execRoot != null && execRoot.isNotEmpty) {
       return _pathResolver.validateAndNormalizeExecutionRoot(execRoot);
     }
-    return _resolveWorkspacePath(request.effectiveWorkspaceId);
+
+    final effectiveId = request.effectiveWorkspaceId;
+    if (effectiveId != null && effectiveId.startsWith('exec_root:')) {
+      final path = effectiveId.substring('exec_root:'.length);
+      return _pathResolver.validateAndNormalizeExecutionRoot(path);
+    }
+
+    if (effectiveId != null && effectiveId.isNotEmpty) {
+      final workspacePath = await _resolveWorkspacePath(effectiveId);
+      if (workspacePath != null && workspacePath.isNotEmpty) {
+        return workspacePath;
+      }
+    }
+
+    if (getIt.isRegistered<SessionManager>()) {
+      final sessionMeta = getIt<SessionManager>().getSessionMetadata(
+        request.sessionId,
+      );
+      final sessionExecRoot = sessionMeta?['execution_root']?.toString();
+      if (sessionExecRoot != null && sessionExecRoot.isNotEmpty) {
+        return _pathResolver.validateAndNormalizeExecutionRoot(sessionExecRoot);
+      }
+      final sessionWorkspacePath = sessionMeta?['workspace_path']?.toString();
+      if (sessionWorkspacePath != null && sessionWorkspacePath.isNotEmpty) {
+        return sessionWorkspacePath;
+      }
+    }
+    return null;
   }
 
   Future<String?> _resolveWorkspacePath(String? workspaceId) async {
@@ -360,6 +431,68 @@ class LocalRuntimeCatalog {
     );
   }
 
+  BaseTool _buildViewImageTool(
+    String? workspacePath,
+    List<String> admittedAttachmentPaths,
+    AgentTurnRequest request,
+  ) {
+    final hasWorkspace = workspacePath != null && workspacePath.isNotEmpty;
+    final spec = LocalToolSpec(
+      name: 'view_image',
+      displayName: 'View Image',
+      description:
+          'Inspect one local PNG, JPEG, or WebP image from the current workspace or admitted session attachments.',
+      inputSchema: const {
+        'type': 'object',
+        'properties': {
+          'path': {'type': 'string'},
+          'detail': {
+            'type': 'string',
+            'enum': ['low', 'auto', 'high', 'original'],
+            'default': 'auto',
+          },
+        },
+        'required': ['path'],
+        'additionalProperties': false,
+      },
+      source: hasWorkspace
+          ? const {'type': 'builtin_workspace', 'id': 'sanad-agent.workspace'}
+          : const {
+              'type': 'builtin_attachment',
+              'id': 'sanad-agent.attachments',
+            },
+      category: 'workspace_io',
+      workspaceRequired: hasWorkspace,
+      approval: const {'mode': 'workspace', 'sensitive': false},
+      execution: const {
+        'target': 'local_runtime',
+        'timeout_ms': 30000,
+        'restart_replay_safe': true,
+      },
+      serverName: hasWorkspace ? 'workspace' : 'attachments',
+    );
+    final handler = ViewImageHandler(_pathResolver);
+    return _ResultCallbackTool(
+      toolSpec: spec,
+      onExecuteResult: (args, {context}) => handler.executeResult(
+        args,
+        workspacePath: workspacePath,
+        admittedAttachmentPaths: admittedAttachmentPaths,
+        context: context,
+        authorizeExternal:
+            (canonicalPath, originalArguments, toolContext) async {
+              await _authorizeExternalWorkspacePath(
+                toolName: 'view_image',
+                arguments: {...originalArguments, 'path': canonicalPath},
+                context: toolContext,
+                request: request,
+                workspacePath: workspacePath!,
+              );
+            },
+      ),
+    );
+  }
+
   List<BaseTool> _buildWorkspaceTools(
     String workspacePath,
     AgentTurnRequest request,
@@ -441,7 +574,7 @@ class LocalRuntimeCatalog {
           name: 'file_edit',
           displayName: 'Edit File',
           description:
-              'Perform an exact string replacement inside the workspace or in an authorized external file. old_string must preserve indentation and must not include file_read line-number prefixes. Fails when no unique match exists unless replace_all is true.',
+              'Perform exact string replacements inside the workspace or in an authorized external file. Provide either old_string and new_string for a single replacement, or edits for multiple non-contiguous replacements in the same file. Each old_string must preserve indentation and must not include file_read line-number prefixes. Fails atomically if any match is missing or ambiguous unless replace_all is true, or if edits overlap.',
           inputSchema: const {
             'type': 'object',
             'properties': {
@@ -449,8 +582,23 @@ class LocalRuntimeCatalog {
               'old_string': {'type': 'string'},
               'new_string': {'type': 'string'},
               'replace_all': {'type': 'boolean'},
+              'edits': {
+                'type': 'array',
+                'description':
+                    'Optional list of edits to apply in one call. Each edit requires old_string and new_string.',
+                'items': {
+                  'type': 'object',
+                  'properties': {
+                    'old_string': {'type': 'string'},
+                    'new_string': {'type': 'string'},
+                    'replace_all': {'type': 'boolean'},
+                  },
+                  'required': ['old_string', 'new_string'],
+                  'additionalProperties': false,
+                },
+              },
             },
-            'required': ['path', 'old_string', 'new_string'],
+            'required': ['path'],
             'additionalProperties': false,
           },
           category: 'workspace_io',
@@ -851,4 +999,33 @@ class LocalRuntimeCatalog {
       },
     );
   }
+}
+
+typedef _ResultExecutionCallback =
+    Future<ToolExecutionResult> Function(
+      Map<String, dynamic> args, {
+      ToolContext? context,
+    });
+
+final class _ResultCallbackTool extends SpecBackedTool {
+  _ResultCallbackTool({
+    required this.toolSpec,
+    required _ResultExecutionCallback onExecuteResult,
+  }) : _onExecuteResult = onExecuteResult;
+
+  @override
+  final LocalToolSpec toolSpec;
+  final _ResultExecutionCallback _onExecuteResult;
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) => _onExecuteResult(args, context: context);
+
+  @override
+  Future<String> execute(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => (await executeResult(args, context: context)).displayText;
 }

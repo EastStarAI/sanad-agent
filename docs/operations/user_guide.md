@@ -27,7 +27,7 @@ from the mixed Client, Agent, checksum, and update files on GitHub Releases.
 | macOS | [Download Sanad Client for macOS](https://downloads.sanad.eaststarai.com/client/macos) |
 | Windows | [Download Sanad Client for Windows](https://downloads.sanad.eaststarai.com/client/windows) |
 | Linux | [Download Sanad Client for Linux](https://downloads.sanad.eaststarai.com/client/linux) |
-| Android | No stable public app yet; use the Web Client |
+| Android | [Get Sanad Client on Google Play](https://play.google.com/store/apps/details?id=com.eaststarai.sanad) (listed as `Sanad Remote`) |
 | iOS | No stable public app yet; use the Web Client |
 | Web | [app.sanad.eaststarai.com](https://app.sanad.eaststarai.com) |
 
@@ -64,6 +64,17 @@ menu with its desktop icon. For terminal installation, run
 directory. The portable `tar.gz` remains available for advanced users who do
 not want a system installation.
 
+### Android
+
+Install Sanad Client from
+[Google Play](https://play.google.com/store/apps/details?id=com.eaststarai.sanad).
+The listing uses the display name `Sanad Remote` with the package identity
+`com.eaststarai.sanad`. Google Play is the only supported Android distribution
+channel: do not install an Android package from a release page or a mirrored
+APK, because store-signed updates and the App Links association belong to the
+Play listing. The Android app is a client only; the Agent keeps running on the
+paired computer or server.
+
 ## Use Sanad locally
 
 On desktop, choose **Run Locally** during setup. The Client downloads the
@@ -84,7 +95,8 @@ You can install the native agent on a headless server without installing the
 Flutter client there.
 
 1. Sign in to Sanad Client on desktop, mobile, or web.
-2. Open **Device Management** and choose **Add device**.
+2. Open **Settings**, then click **+** beside the **Devices** heading in the
+   Settings sidebar to open **Add device**.
 3. Give the device a name.
 4. Copy the complete generated command and run it once on the target computer
    or server. Do not extract, reconstruct, or share its embedded credential.
@@ -423,7 +435,7 @@ Packaged macOS and Windows Clients check the Stable signed Appcast after startup
 and ask before installing a Client update. Windows releases remain temporarily
 unsigned under the documented release policy, while WinSparkle DSA, canonical
 release metadata, size, SHA-256, SBOM, and protected provenance remain required.
-iOS uses Internal TestFlight, Android uses its user-approved system flow, and Web
+iOS uses Internal TestFlight, Android updates through Google Play, and Web
 loads the newer deployment on a later browser refresh.
 
 On packaged Windows and macOS clients, consent-based automatic checks run in the

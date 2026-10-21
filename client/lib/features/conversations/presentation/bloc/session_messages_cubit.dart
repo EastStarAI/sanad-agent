@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:path/path.dart' as p;
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
@@ -54,14 +55,26 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   String? _selectedSessionId;
   final Map<String, String> _nextMessageModelByAgentId = {};
   final Map<String, String> _nextMessageThinkingByAgentId = {};
+
+  /// The thinking value the user (or the selected conversation's own stored
+  /// selection) chose, per device. It differs from
+  /// [_nextMessageThinkingByAgentId] only while a route default is admitted
+  /// for display and the next send: an admitted default is never a choice, so
+  /// it never reaches this map, a draft or the device preference (Task 122).
+  final Map<String, String> _explicitThinkingByAgentId = {};
   final Map<String, String> _nextMessageProviderByAgentId = {};
   final Map<String, String> _pendingRouteProviderBySessionId = {};
   final Map<String, String> _pendingRouteModelBySessionId = {};
   final Map<String, int> _confirmedRouteRevisionBySessionId = {};
+
+  /// Sessions selected as an identity-only startup placeholder whose route
+  /// context replacement was deferred until their authoritative summary.
+  final Set<String> _deferredRouteContextSessionIds = {};
   final Map<String, List<DeviceWorkspace>> _workspacesByAgentId = {};
   final Map<String, DeviceWorkspace> _selectedWorkspaceByAgentId = {};
   final Set<String> _loadingWorkspaceAgentIds = {};
   final Map<String, WorkspacePermissionMode> _permissionModesByWorkspaceId = {};
+  final Set<String> _downgradedSessionIds = {};
   final Set<String> _loadingPermissionModeWorkspaceIds = {};
   final Map<String, int> _workspacePolicyLoadIds = {};
   final Set<String> _freshSessionIdsAwaitingFirstTurn = {};
@@ -161,10 +174,15 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   void _handleSessionStateChange(SessionState sessionState) {
     final selectedSession = sessionState.selectedSession;
     final nextSessionId = selectedSession?.id;
-    final routeChangedForActiveSession =
-        nextSessionId != null && nextSessionId == _selectedSessionId && _syncConfirmedRouteFromSession(selectedSession);
     if (nextSessionId == _selectedSessionId) {
-      if (routeChangedForActiveSession) {
+      final adoptedDeferredThinking = _adoptDeferredSessionThinking(selectedSession);
+      final routeChangedForActiveSession =
+          (nextSessionId != null && _syncConfirmedRouteFromSession(selectedSession)) || adoptedDeferredThinking;
+      final currentWorkspace = _currentAgent == null ? null : _selectedWorkspaceForAgent(_currentAgent!);
+      final newPermissionMode = _permissionModeForWorkspace(currentWorkspace);
+      final permissionChanged = state.permissionMode != newPermissionMode;
+      final workspaceChanged = state.selectedWorkspace?.id != currentWorkspace?.id;
+      if (routeChangedForActiveSession || permissionChanged || workspaceChanged) {
         _emitCurrentState();
       }
       return;
@@ -220,7 +238,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       return;
     }
 
-    if (selectedSession?.deviceId != _currentAgent?.id) {
+    if (!_sessionMatchesAgent(selectedSession, _currentAgent)) {
       _scheduleDelayedLoading(nextSessionId);
       emit(
         state.copyWith(
@@ -307,6 +325,8 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           isHistoryLoading: true,
           showDelayedLoading: false,
           clearHistoryLoadError: true,
+          selectedWorkspace: _selectedWorkspaceForAgent(agent),
+          clearSelectedWorkspace: _selectedWorkspaceForAgent(agent) == null,
         ),
       );
 
@@ -632,7 +652,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       unawaited(_ensureWorkspacesForAgent(agent));
       final selectedSession = sessionCubit.state.selectedSession;
       final shouldLoadSelectedSession =
-          selectedSession?.id == _selectedSessionId && selectedSession?.deviceId == agent.id;
+          selectedSession?.id == _selectedSessionId && _sessionMatchesAgent(selectedSession, agent);
       final sessionWorkspace = shouldLoadSelectedSession ? _workspaceFromSession(selectedSession) : null;
       if (sessionWorkspace != null) {
         _selectedWorkspaceByAgentId[agent.id] = sessionWorkspace;
@@ -677,11 +697,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         final caps = capabilitiesStore?.getForAgent(agent.id);
         if (caps?.usesModelThinkingControls == true) {
           if (savedThinking != null && savedThinking.isNotEmpty) {
-            _nextMessageThinkingByAgentId[agent.id] = savedThinking;
+            _setThinking(agent.id, savedThinking);
           }
         } else {
           final thinkingMode = savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
-          _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
+          _setThinking(agent.id, thinkingMode);
           if (savedThinking == null || savedThinking.isEmpty) {
             unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
           }
@@ -715,6 +735,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
                 nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
                 availableWorkspaces: _workspacesByAgentId[agent.id] ?? const [],
                 selectedWorkspace: _selectedWorkspaceForAgent(agent),
+                clearSelectedWorkspace: _selectedWorkspaceForAgent(agent) == null,
                 isLoadingWorkspaces: _loadingWorkspaceAgentIds.contains(agent.id),
                 requiresWorkspace: _requiresWorkspace(agent),
                 permissionMode: _permissionModeForWorkspace(_selectedWorkspaceForAgent(agent)),
@@ -803,7 +824,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   bool _selectedSessionBelongsToCurrentClient() {
     final selectedSession = sessionCubit.state.selectedSession;
-    return selectedSession?.id == _selectedSessionId && selectedSession?.deviceId == _currentAgent?.id;
+    return selectedSession?.id == _selectedSessionId && _sessionMatchesAgent(selectedSession, _currentAgent);
   }
 
   String? _resolvedActiveSessionId() {
@@ -846,13 +867,26 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     );
   }
 
-  Future<void> sendMessage(String text, {MessageDeliveryIntent intent = MessageDeliveryIntent.auto}) async {
+  /// Sends [text], creating the session first when none is active.
+  ///
+  /// [omitThinkingMode] is set by the composer when the target route's
+  /// resolved thinking control is `noControl`/`unknown`: the user cannot see or
+  /// choose a value there, so no `thinking_mode` is sent with `create_session`
+  /// or the turn and none is written onto the new session. The stored
+  /// per-device preference is left untouched for routes that do offer it.
+  Future<bool> sendMessage(
+    String text, {
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+    List<Map<String, dynamic>> attachments = const [],
+    bool omitThinkingMode = false,
+  }) async {
     final agent = _currentAgent;
-    if (agent == null) return;
+    if (agent == null) return false;
+    final thinkingForTurn = omitThinkingMode ? null : _nextMessageThinkingByAgentId[agent.id];
     final workspaceId = _selectedWorkspaceForAgent(agent)?.id;
     if (_requiresWorkspace(agent) && (workspaceId == null || workspaceId.isEmpty)) {
       emit(state.copyWith(error: 'Select a workspace before sending your first Sanad Agent message.'));
-      return;
+      return false;
     }
 
     try {
@@ -868,7 +902,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           isTitlePlaceholder: true,
           providerId: _effectiveProviderFor(agent, targetSessionId),
           model: _effectiveModelFor(agent, targetSessionId),
-          thinkingMode: _nextMessageThinkingByAgentId[agent.id],
+          thinkingMode: thinkingForTurn,
         );
         targetSessionId = createdSession.id;
         _freshSessionIdsAwaitingFirstTurn.add(createdSession.id);
@@ -887,19 +921,37 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         emit(state.copyWith(activeSessionId: targetSessionId));
       }
 
-      final requestId = await conversationRepository.sendMessage(
-        agent,
-        text,
-        sessionId: targetSessionId,
-        workspaceId: workspaceId,
-        providerId: _effectiveProviderFor(agent, targetSessionId),
-        model: _effectiveModelFor(agent, targetSessionId),
-        thinkingMode: _nextMessageThinkingByAgentId[agent.id],
-        intent: intent,
-      );
-      if (targetSessionId.isNotEmpty) {
-        final currentThinking = _nextMessageThinkingByAgentId[agent.id];
-        sessionCubit.applyThinkingMode(targetSessionId, currentThinking);
+      final repository = conversationRepository;
+      final String? requestId;
+      if (attachments.isNotEmpty) {
+        if (repository is! AttachmentSendRepository) {
+          throw StateError('Attachment admission is unavailable.');
+        }
+        requestId = await (repository as AttachmentSendRepository).sendMessageWithAttachments(
+          agent,
+          text,
+          sessionId: targetSessionId,
+          workspaceId: workspaceId,
+          providerId: _effectiveProviderFor(agent, targetSessionId),
+          model: _effectiveModelFor(agent, targetSessionId),
+          thinkingMode: thinkingForTurn,
+          attachments: attachments,
+          intent: intent,
+        );
+      } else {
+        requestId = await repository.sendMessage(
+          agent,
+          text,
+          sessionId: targetSessionId,
+          workspaceId: workspaceId,
+          providerId: _effectiveProviderFor(agent, targetSessionId),
+          model: _effectiveModelFor(agent, targetSessionId),
+          thinkingMode: thinkingForTurn,
+          intent: intent,
+        );
+      }
+      if (targetSessionId.isNotEmpty && !omitThinkingMode) {
+        sessionCubit.applyThinkingMode(targetSessionId, thinkingForTurn);
       }
       if (requestId != null && targetSessionId.isNotEmpty) {
         sessionCubit.markSessionDraftAwaitingAcceptance(
@@ -907,9 +959,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           targetSessionId,
           requestId,
         );
+        return true;
       }
+      return false;
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
+      return false;
     }
   }
 
@@ -1102,6 +1157,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
+    List<Map<String, dynamic>>? attachmentEdits,
     bool confirmedReplayUnsafe = false,
     bool confirmedDropSteers = false,
   }) async {
@@ -1114,21 +1170,50 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         requiresConfirmation: false,
       );
     }
-    final result = await conversationRepository.replayTurn(
-      agent,
-      sessionId: sessionId,
-      targetRequestId: targetRequestId,
-      targetMessageId: targetMessageId,
-      targetTurnId: targetTurnId,
-      expectedHistoryRevision: expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0,
-      action: action,
-      message: message,
-      providerInstanceId: state.nextMessageProviderId,
-      modelId: state.nextMessageModel,
-      thinkingMode: state.nextMessageThinkingMode,
-      confirmedReplayUnsafe: confirmedReplayUnsafe,
-      confirmedDropSteers: confirmedDropSteers,
-    );
+    final revision = expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0;
+    final repository = conversationRepository;
+    final TurnReplayResult result;
+    if (attachmentEdits != null) {
+      if (repository is! AttachmentReplayRepository) {
+        return const TurnReplayResult(
+          outcome: 'attachments_unsupported',
+          safety: TurnReplaySafety.unknown,
+          requiresConfirmation: false,
+        );
+      }
+      result = await (repository as AttachmentReplayRepository).replayTurnWithAttachments(
+        agent,
+        sessionId: sessionId,
+        targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: revision,
+        action: action,
+        message: message ?? '',
+        attachmentEdits: attachmentEdits,
+        providerInstanceId: state.nextMessageProviderId,
+        modelId: state.nextMessageModel,
+        thinkingMode: state.nextMessageThinkingMode,
+        confirmedReplayUnsafe: confirmedReplayUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
+      );
+    } else {
+      result = await repository.replayTurn(
+        agent,
+        sessionId: sessionId,
+        targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: revision,
+        action: action,
+        message: message,
+        providerInstanceId: state.nextMessageProviderId,
+        modelId: state.nextMessageModel,
+        thinkingMode: state.nextMessageThinkingMode,
+        confirmedReplayUnsafe: confirmedReplayUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
+      );
+    }
     final nextRevision = result.historyRevision;
     final selected = sessionCubit.state.selectedSession;
     if (nextRevision != null && selected != null && selected.id == sessionId) {
@@ -1295,10 +1380,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
       if (thinkingMode != null) {
         if (trimmedThinkingMode == null || trimmedThinkingMode.isEmpty) {
-          _nextMessageThinkingByAgentId.remove(agent.id);
+          _setThinking(agent.id, null);
           unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
         } else {
-          _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
+          _setThinking(agent.id, trimmedThinkingMode);
           unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
         }
       }
@@ -1323,6 +1408,52 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
   }
 
+  /// Shows [thinkingMode] as the open conversation's effective selection and
+  /// makes it the value the next send carries, in memory only. It writes no
+  /// session preference and no device preference: opening or hydrating a
+  /// conversation is never a user choice (live acceptance 106b r2 G2).
+  ///
+  /// The admitted value is not an explicit choice either, so it leaves
+  /// [explicitNextMessageThinkingMode] untouched: a New Conversation draft
+  /// persists only that explicit value (Task 122 D2).
+  void admitNextMessageThinkingMode(String? thinkingMode) {
+    final agent = _currentAgent;
+    if (agent == null) return;
+    _setThinking(agent.id, thinkingMode, explicit: false);
+    emit(
+      state.copyWith(
+        nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
+        clearNextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id] == null,
+      ),
+    );
+  }
+
+  /// The thinking value the user explicitly chose for the next send on the
+  /// current device (or the selected conversation's own stored selection),
+  /// excluding any route default admitted only for display and the next send.
+  String? get explicitNextMessageThinkingMode {
+    final agent = _currentAgent;
+    return agent == null ? null : _explicitThinkingByAgentId[agent.id];
+  }
+
+  /// Sets the next-send thinking value for [deviceId]. An [explicit] value is a
+  /// user choice (or the selected conversation's own stored selection) and is
+  /// recorded as such; an admitted route default changes only the next-send
+  /// value.
+  void _setThinking(String deviceId, String? value, {bool explicit = true}) {
+    final normalized = value?.trim();
+    void apply(Map<String, String> values) {
+      if (normalized == null || normalized.isEmpty) {
+        values.remove(deviceId);
+      } else {
+        values[deviceId] = normalized;
+      }
+    }
+
+    apply(_nextMessageThinkingByAgentId);
+    if (explicit) apply(_explicitThinkingByAgentId);
+  }
+
   void replaceNextMessagePreferences({
     String? providerId,
     String? model,
@@ -1342,7 +1473,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
     replace(_nextMessageProviderByAgentId, providerId);
     replace(_nextMessageModelByAgentId, model);
-    replace(_nextMessageThinkingByAgentId, thinkingMode);
+    _setThinking(agent.id, thinkingMode);
     _emitCurrentState(error: null);
   }
 
@@ -1361,10 +1492,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       if (thinkingMode != null) {
         final trimmedThinkingMode = thinkingMode.trim();
         if (trimmedThinkingMode.isEmpty) {
-          _nextMessageThinkingByAgentId.remove(agent.id);
+          _setThinking(agent.id, null);
           unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
         } else {
-          _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
+          _setThinking(agent.id, trimmedThinkingMode);
           unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
         }
         sessionCubit.applyThinkingMode(
@@ -1409,10 +1540,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
     if (trimmedThinkingMode != null) {
       if (trimmedThinkingMode.isEmpty) {
-        _nextMessageThinkingByAgentId.remove(agent.id);
+        _setThinking(agent.id, null);
         unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
       } else {
-        _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
+        _setThinking(agent.id, trimmedThinkingMode);
         unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
       }
       final activeSessionId = state.activeSessionId;
@@ -1523,7 +1654,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       // Startup may restore the selected session as an identity-only
       // placeholder before its authoritative summary/history arrives. It must
       // not erase the persisted device route during that transient window.
+      final sessionId = session?.id;
+      if (sessionId != null && sessionId.isNotEmpty) {
+        _deferredRouteContextSessionIds.add(sessionId);
+      }
       return;
+    }
+    if (session != null) {
+      _deferredRouteContextSessionIds.remove(session.id);
     }
 
     void replace(Map<String, String> values, String? value) {
@@ -1537,7 +1675,34 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
     replace(_nextMessageProviderByAgentId, providerId);
     replace(_nextMessageModelByAgentId, modelId);
-    replace(_nextMessageThinkingByAgentId, session?.thinkingMode);
+    _setThinking(deviceId, session?.thinkingMode);
+  }
+
+  /// Completes a deferred placeholder replacement once the same session's
+  /// authoritative summary arrives: the conversation's own stored thinking
+  /// selection (or its absence) becomes the next-send value, in memory only.
+  /// The device preference written by another conversation must never stand in
+  /// for this conversation's stored pick after a Client restart. The route
+  /// itself is confirmed by [_syncConfirmedRouteFromSession].
+  bool _adoptDeferredSessionThinking(Session? session) {
+    final agent = _currentAgent;
+    if (agent == null || session == null || !_deferredRouteContextSessionIds.contains(session.id)) {
+      return false;
+    }
+    final hasCompleteRoute =
+        session.modelProvider?.trim().isNotEmpty == true && session.model?.trim().isNotEmpty == true;
+    if (!hasCompleteRoute && session.routeRevision == null && _isIdentityOnlySessionPlaceholder(session)) {
+      return false;
+    }
+    _deferredRouteContextSessionIds.remove(session.id);
+    final stored = session.thinkingMode?.trim();
+    final previous = _nextMessageThinkingByAgentId[agent.id];
+    if (stored == null || stored.isEmpty) {
+      _setThinking(agent.id, null);
+    } else {
+      _setThinking(agent.id, stored);
+    }
+    return previous != _nextMessageThinkingByAgentId[agent.id];
   }
 
   bool _isIdentityOnlySessionPlaceholder(Session? session) {
@@ -1578,7 +1743,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   bool _syncConfirmedRouteFromSession(Session? session) {
     final agent = _currentAgent;
-    if (agent == null || session == null || session.deviceId != agent.id) {
+    if (agent == null || session == null || !_sessionMatchesAgent(session, agent)) {
       return false;
     }
     var changed = false;
@@ -1845,6 +2010,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
 
     _workspacePolicyLoadIds[workspace.id] = (_workspacePolicyLoadIds[workspace.id] ?? 0) + 1;
+    if (_selectedSessionId != null) {
+      if (permissionMode == WorkspacePermissionMode.defaultMode) {
+        _downgradedSessionIds.add(_selectedSessionId!);
+      } else if (permissionMode == WorkspacePermissionMode.fullAccess) {
+        _downgradedSessionIds.remove(_selectedSessionId!);
+      }
+    }
     emit(state.copyWith(isLoadingPermissionMode: true));
     try {
       final updatedPolicy = await conversationRepository.setWorkspacePermissionMode(
@@ -1872,9 +2044,17 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
   }
 
+  bool _sessionMatchesAgent(Session? session, DeviceConfig? agent) {
+    if (session == null || agent == null) return false;
+    if (session.deviceId == agent.id) return true;
+    if (session.deviceId != null && agent.representsDeviceId(session.deviceId!)) return true;
+    if (session.deviceId == null && agent.isLocalInventoryDevice) return true;
+    return false;
+  }
+
   DeviceWorkspace? _selectedWorkspaceForAgent(DeviceConfig agent) {
     final selectedSession = sessionCubit.state.selectedSession;
-    if (selectedSession?.deviceId == agent.id) {
+    if (_sessionMatchesAgent(selectedSession, agent)) {
       final sessionWorkspace = _workspaceFromSession(selectedSession);
       if (sessionWorkspace != null) {
         return sessionWorkspace;
@@ -1885,18 +2065,37 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   DeviceWorkspace? _workspaceFromSession(Session? session) {
     final workspaceId = session?.workspaceId?.trim();
+    final execRoot =
+        session?.metadata?['execution_root']?.toString().trim() ??
+        (session?.workspacePath?.trim().isNotEmpty == true ? session?.workspacePath!.trim() : null);
+
     if (workspaceId == null || workspaceId.isEmpty) {
+      if (execRoot != null && execRoot.isNotEmpty) {
+        final folderName = p.basename(execRoot);
+        return DeviceWorkspace(
+          id: 'exec_root:$execRoot',
+          name: folderName.isNotEmpty ? folderName : 'Workspace',
+          path: execRoot,
+          trustState: 'untrusted',
+        );
+      }
       return null;
     }
+
     for (final workspaces in _workspacesByAgentId.values) {
       for (final workspace in workspaces) {
         if (workspace.id == workspaceId) return workspace;
       }
     }
+
+    final folderName = session?.workspaceName?.trim().isNotEmpty == true
+        ? session!.workspaceName!.trim()
+        : (execRoot != null && execRoot.isNotEmpty ? p.basename(execRoot) : workspaceId);
+
     return DeviceWorkspace(
       id: workspaceId,
-      name: session?.workspaceName?.trim().isNotEmpty == true ? session!.workspaceName!.trim() : workspaceId,
-      path: session?.workspacePath?.trim() ?? '',
+      name: folderName,
+      path: session?.workspacePath?.trim() ?? (execRoot ?? ''),
       trustState: session?.workspaceTrustState?.trim().isNotEmpty == true
           ? session!.workspaceTrustState!.trim()
           : 'untrusted',
@@ -1911,6 +2110,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   WorkspacePermissionMode _permissionModeForWorkspace(DeviceWorkspace? workspace) {
     if (workspace == null) {
       return WorkspacePermissionMode.defaultMode;
+    }
+    final selectedSession = sessionCubit.state.selectedSession;
+    final isExplicitlyDowngraded = selectedSession != null && _downgradedSessionIds.contains(selectedSession.id);
+    if (!isExplicitlyDowngraded &&
+        selectedSession != null &&
+        (selectedSession.metadata?['allow_all_tools'] == true ||
+            selectedSession.metadata?['permission_mode'] == 'full_access')) {
+      return WorkspacePermissionMode.fullAccess;
     }
     return _permissionModesByWorkspaceId[workspace.id] ?? WorkspacePermissionMode.defaultMode;
   }

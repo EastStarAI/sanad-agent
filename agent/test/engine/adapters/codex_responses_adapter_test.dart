@@ -6,12 +6,24 @@ import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
+import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
+import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_codec.dart';
 import 'package:sanad_agent/engine/adapters/codex_models_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
+import 'package:sanad_agent/engine/adapters/e2e_fixture_adapter.dart';
+import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/engine/adapters/missing_provider_adapter.dart';
+import 'package:sanad_agent/engine/adapters/mock_adapter.dart';
+import 'package:sanad_agent/engine/adapters/ollama_adapter.dart';
+import 'package:sanad_agent/engine/adapters/rate_limited_llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_profile.dart';
@@ -41,6 +53,184 @@ void main() {
         apiMode: 'codex_responses',
       );
     });
+
+    test('declares closed capabilities and delegates wrappers', () {
+      const openAi = ProviderProfile(name: 'openai', apiMode: 'chat');
+      const anthropic = ProviderProfile(
+        name: 'anthropic',
+        apiMode: 'anthropic_messages',
+      );
+      const ollama = ProviderProfile(name: 'ollama', apiMode: 'chat');
+      final richAdapters = <LLMAdapter>[
+        BaseAnthropicAdapter(config, anthropic),
+        CodexResponsesAdapter(config, profile),
+        const E2eFixtureAdapter(),
+      ];
+      final textAdapters = <LLMAdapter>[
+        BaseOpenAIAdapter(config, openAi),
+        OllamaAdapter(config, ollama),
+        const MissingProviderAdapter(message: 'missing'),
+        MockLLMAdapter(),
+        const E2eFixtureAdapter(
+          toolResultMediaCapability: ToolResultMediaCapability.textOnly,
+        ),
+      ];
+
+      expect(
+        richAdapters.map((adapter) => adapter.toolResultMediaCapability),
+        everyElement(ToolResultMediaCapability.imageToolResults),
+      );
+      expect(
+        textAdapters.map((adapter) => adapter.toolResultMediaCapability),
+        everyElement(ToolResultMediaCapability.textOnly),
+      );
+      for (final inner in [...richAdapters, ...textAdapters]) {
+        final wrapper = RateLimitedLLMAdapter(
+          inner,
+          providerInstanceId: 'test',
+          requestsPerMinute: 0,
+          limiter: ProviderRateLimiter(),
+        );
+        expect(
+          wrapper.toolResultMediaCapability,
+          inner.toolResultMediaCapability,
+        );
+      }
+    });
+
+    test(
+      'route change projects one immutable text fallback in sync and stream',
+      () async {
+        final richResult = ToolExecutionResult(
+          blocks: [
+            ToolTextBlock(text: 'visible summary'),
+            ToolImageBlock(
+              dataBase64: 'cGl4ZWxz',
+              mimeType: 'image/png',
+              width: 1,
+              height: 1,
+              detail: ToolImageDetail.auto,
+            ),
+          ],
+        );
+        final history = [
+          Message(role: MessageRole.user, content: 'inspect'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(id: 'call_route', name: 'view_image', arguments: {}),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            content: richResult.displayText,
+            toolCallId: 'call_route',
+            toolResult: richResult,
+          ),
+        ];
+        final canonicalBefore = jsonEncode(
+          history.map((message) => message.toJson()).toList(),
+        );
+        late Map<String, dynamic> richBody;
+        final richAdapter = CodexResponsesAdapter(
+          config,
+          profile,
+          client: MockClient.streaming((request, _) async {
+            richBody = _map(jsonDecode((request as http.Request).body));
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  _sseResponse({
+                    'status': 'completed',
+                    'output': [
+                      {
+                        'type': 'message',
+                        'role': 'assistant',
+                        'status': 'completed',
+                        'content': [
+                          {'type': 'output_text', 'text': 'ok'},
+                        ],
+                      },
+                    ],
+                  }),
+                ),
+              ),
+              200,
+            );
+          }),
+        );
+        final syncAdapter = BaseOpenAIAdapter(
+          config,
+          const ProviderProfile(name: 'openai', apiMode: 'chat'),
+          baseUrlOverride: 'https://example.test/v1',
+          apiKeyOverride: 'test',
+          defaultModelOverride: 'test-model',
+          client: MockClient((request) async {
+            return http.Response(
+              jsonEncode({
+                'choices': [
+                  {
+                    'message': {'content': 'ok'},
+                    'finish_reason': 'stop',
+                  },
+                ],
+              }),
+              200,
+            );
+          }),
+        );
+        final streamAdapter = BaseOpenAIAdapter(
+          config,
+          const ProviderProfile(name: 'custom', apiMode: 'chat'),
+          baseUrlOverride: 'https://example.test/v1',
+          apiKeyOverride: 'test',
+          defaultModelOverride: 'test-model',
+          client: MockClient.streaming((request, _) async {
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  'data: ${jsonEncode({
+                    'choices': [
+                      {
+                        'delta': {'content': 'ok'},
+                        'finish_reason': 'stop',
+                      },
+                    ],
+                  })}\n\ndata: [DONE]\n\n',
+                ),
+              ),
+              200,
+              headers: {'content-type': 'text/event-stream'},
+            );
+          }),
+        );
+
+        const supportedOptions = LLMRequestOptions(
+          routeCapabilityProfile: RouteCapabilityProfile(
+            providerInstanceId: 'openai-codex',
+            modelId: 'gpt-5.4',
+            imageSupport: RouteImageSupport.supported,
+            evidenceSource: 'test_fixture',
+          ),
+        );
+        await richAdapter.generateResponse(history, options: supportedOptions);
+        expect((richBody['input'] as List).last['output'], isA<List>());
+
+        // Non-image routes halt actionably without sending HTTP request (77i5 contract)
+        expect(
+          () => syncAdapter.generateResponse(history),
+          throwsA(isA<UnsupportedError>()),
+        );
+        expect(
+          () => streamAdapter.generateStream(history).toList(),
+          throwsA(isA<UnsupportedError>()),
+        );
+        expect(
+          jsonEncode(history.map((message) => message.toJson()).toList()),
+          canonicalBefore,
+        );
+      },
+    );
 
     test('fetches the Codex-specific model catalog', () async {
       late http.Request captured;
@@ -948,6 +1138,95 @@ void main() {
         'max_output_tokens',
       );
     });
+
+    test(
+      'sync and stream send ordered rich function output with exact call id',
+      () async {
+        final bodies = <Map<String, dynamic>>[];
+        final adapter = CodexResponsesAdapter(
+          config,
+          profile,
+          client: MockClient.streaming((request, _) async {
+            bodies.add(_map(jsonDecode((request as http.Request).body)));
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  _sseResponse({
+                    'status': 'completed',
+                    'output': [
+                      {
+                        'type': 'message',
+                        'role': 'assistant',
+                        'status': 'completed',
+                        'content': [
+                          {'type': 'output_text', 'text': 'ok'},
+                        ],
+                      },
+                    ],
+                  }),
+                ),
+              ),
+              200,
+            );
+          }),
+        );
+        final richResult = ToolExecutionResult(
+          blocks: [
+            ToolTextBlock(text: 'before'),
+            ToolImageBlock(
+              dataBase64: 'AQID',
+              mimeType: 'image/png',
+              width: 1,
+              height: 1,
+              detail: ToolImageDetail.original,
+            ),
+            ToolTextBlock(text: 'after'),
+          ],
+        );
+        final history = [
+          Message(role: MessageRole.user, content: 'inspect'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(id: 'call_image_1', name: 'view_image', arguments: {}),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            content: richResult.displayText,
+            toolCallId: 'call_image_1',
+            toolResult: richResult,
+          ),
+        ];
+
+        const supportedOptions = LLMRequestOptions(
+          routeCapabilityProfile: RouteCapabilityProfile(
+            providerInstanceId: 'openai-codex',
+            modelId: 'gpt-5.4',
+            imageSupport: RouteImageSupport.supported,
+            evidenceSource: 'test_fixture',
+          ),
+        );
+        await adapter.generateResponse(history, options: supportedOptions);
+        await adapter.generateStream(history, options: supportedOptions).toList();
+
+        expect(bodies, hasLength(2));
+        for (final body in bodies) {
+          final output = (body['input'] as List).last as Map;
+          expect(output['call_id'], 'call_image_1');
+          expect(output['output'], [
+            {'type': 'input_text', 'text': 'before'},
+            {
+              'type': 'input_image',
+              'image_url': 'data:image/png;base64,AQID',
+              'detail': 'high',
+            },
+            {'type': 'input_text', 'text': 'after'},
+          ]);
+        }
+        expect(richResult.blocks[1], isA<ToolImageBlock>());
+      },
+    );
 
     test('preflight rejects malformed tool history before network', () async {
       var sent = false;

@@ -34,6 +34,8 @@ class CompactionEventSnapshot extends Equatable {
   final CompactionLifecycleStatus status;
   final CompactionTriggerKind trigger;
   final String? failureReason;
+  final String? failureStage;
+  final String? failureCause;
   final int? contextWindowTokens;
   final int? effectiveInputBudgetTokens;
   final int? autoThresholdTokens;
@@ -52,6 +54,8 @@ class CompactionEventSnapshot extends Equatable {
     required this.status,
     required this.trigger,
     this.failureReason,
+    this.failureStage,
+    this.failureCause,
     this.contextWindowTokens,
     this.effectiveInputBudgetTokens,
     this.autoThresholdTokens,
@@ -88,7 +92,9 @@ class CompactionEventSnapshot extends Equatable {
       compactionId: compactionId,
       status: status,
       trigger: CompactionTriggerKind.fromWire(json['trigger'] ?? 'manual'),
-      failureReason: _nullableString(json['failure_reason']),
+      failureReason: _nullableString(json['failure_reason'] ?? json['failureReason']),
+      failureStage: _nullableString(json['failure_stage'] ?? json['failureStage']),
+      failureCause: _nullableString(json['failure_cause'] ?? json['failureCause']),
       contextWindowTokens: _nullableInt(json['context_window_tokens']),
       effectiveInputBudgetTokens: _nullableInt(
         json['effective_input_budget_tokens'],
@@ -168,6 +174,8 @@ class CompactionEventSnapshot extends Equatable {
     status,
     trigger,
     failureReason,
+    failureStage,
+    failureCause,
     contextWindowTokens,
     effectiveInputBudgetTokens,
     autoThresholdTokens,
@@ -183,30 +191,85 @@ class CompactionEventSnapshot extends Equatable {
 }
 
 class SessionCompactResult extends Equatable {
+  /// Client-only outcome: the command was dispatched once but its
+  /// acknowledgement did not arrive within the request window. The daemon may
+  /// still be compacting; this is never a failure.
+  static const pendingOutcome = 'pending';
+
+  /// Client-only outcome: a pending command produced no correlated result
+  /// within the settlement window. The real outcome is unknown, not failed.
+  static const unconfirmedOutcome = 'unconfirmed';
+
   final String outcome;
   final String? failureReason;
   final String? compactionId;
+  final String? failureStage;
+  final String? failureCause;
+  final String? requestId;
+
+  /// Completes once with the daemon's late correlated result for a [pending]
+  /// command, or with [unconfirmedOutcome]. Not part of value equality.
+  final Future<SessionCompactResult>? settlement;
 
   const SessionCompactResult({
     required this.outcome,
     this.failureReason,
     this.compactionId,
+    this.failureStage,
+    this.failureCause,
+    this.requestId,
+    this.settlement,
   });
 
   factory SessionCompactResult.fromJson(Map<String, dynamic> json) {
+    final outcome = json['outcome']?.toString() ?? 'failed';
+    final failureReason = json['failure_reason']?.toString() ??
+        json['failureReason']?.toString() ??
+        (outcome != 'accepted' ? outcome : null);
+    final failureStage = json['failure_stage']?.toString() ??
+        json['failureStage']?.toString();
+    final failureCause = json['failure_cause']?.toString() ??
+        json['failureCause']?.toString();
     return SessionCompactResult(
-      outcome: json['outcome']?.toString() ?? 'failed',
-      failureReason: json['failure_reason']?.toString(),
-      compactionId: json['compaction_id']?.toString(),
+      outcome: outcome,
+      failureReason: failureReason,
+      compactionId: json['compaction_id']?.toString() ??
+          json['compactionId']?.toString(),
+      failureStage: failureStage,
+      failureCause: failureCause,
+      requestId: json['request_id']?.toString(),
     );
   }
 
   bool get accepted => outcome == 'accepted';
 
-  bool get sessionBusy => outcome == 'session_busy';
+  bool get pending => outcome == pendingOutcome;
 
-  bool get compactionInProgress => outcome == 'compaction_in_progress';
+  bool get unconfirmed => outcome == unconfirmedOutcome;
+
+  bool get sessionBusy =>
+      outcome == 'session_busy' ||
+      outcome == 'sessionBusy' ||
+      failureReason == 'session_busy' ||
+      failureReason == 'sessionBusy' ||
+      failureCause == 'session_busy' ||
+      failureCause == 'sessionBusy';
+
+  bool get compactionInProgress =>
+      outcome == 'compaction_in_progress' ||
+      outcome == 'compactionInProgress' ||
+      failureReason == 'compaction_in_progress' ||
+      failureReason == 'compactionInProgress' ||
+      failureCause == 'compaction_in_progress' ||
+      failureCause == 'compactionInProgress';
 
   @override
-  List<Object?> get props => [outcome, failureReason, compactionId];
+  List<Object?> get props => [
+    outcome,
+    failureReason,
+    compactionId,
+    failureStage,
+    failureCause,
+    requestId,
+  ];
 }

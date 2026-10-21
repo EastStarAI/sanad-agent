@@ -10,12 +10,26 @@ import '../models/session_history_page.dart';
 import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
 import '../../core/models/message.dart';
+import '../../core/models/tool_call.dart';
 import 'agent_state_database.dart';
 import 'compaction_boundary_repository.dart';
 import 'session_history_revision_repository.dart';
 import '../compaction/model_context_projection.dart';
 import 'message_history_identity.dart';
 import 'session_fork_copy.dart';
+
+/// Originating tool-call context resolved from persisted session history.
+class OriginatingToolCallContext {
+  final ToolCall toolCall;
+  final String? runId;
+  final String? modelStepId;
+
+  const OriginatingToolCallContext({
+    required this.toolCall,
+    this.runId,
+    this.modelStepId,
+  });
+}
 
 /// Result of an atomic soft-rewind plus replacement-user commit.
 class SoftRewindAdmissionCommit {
@@ -821,67 +835,78 @@ class SessionDB {
     AgentStateTransaction transaction,
   ) => _replaceMessagesInDatabase(transaction.db, sessionId, messages);
 
+  /// Rewrites the active history of [sessionId] to [messages].
+  ///
+  /// Rows are aligned by `message_id`, never by content: every aligned row is
+  /// updated in place (keeping `messages.id`) when its data differs, so
+  /// content transforms such as image pruning, provider-state clearing, steer
+  /// stamping, and metadata edits keep every row id and therefore every
+  /// compaction boundary endpoint. Only the first structural divergence (an
+  /// insertion, removal, reorder, or identity change) re-inserts the remaining
+  /// suffix, because `messages.id` is the only ordering key. The suffix delete
+  /// is scoped to the replaced active rows, so superseded audit rows survive.
+  /// Duplicate `message_id`s fail with [StateError] before any write.
   List<Message> _replaceMessagesInDatabase(
     Database db,
     String sessionId,
     List<Message> messages,
   ) {
     final existing = getPersistedMessages(sessionId);
+    final existingIdentities = existing
+        .map((entry) => MessageHistoryIdentity.read(entry.message))
+        .toList(growable: false);
     final assigned = MessageHistoryIdentity.assignIdentities(
       messages,
-      existingActive: existing
-          .map((entry) => MessageHistoryIdentity.read(entry.message))
-          .toList(growable: false),
+      existingActive: existingIdentities,
     );
-    var unchangedPrefixLength = 0;
+    MessageHistoryIdentity.requireUniqueMessageIds(assigned);
+    var alignedLength = 0;
     final comparableLength = existing.length < assigned.length
         ? existing.length
         : assigned.length;
-    final metadataUpdates = <({int rowId, Message message})>[];
-    while (unchangedPrefixLength < comparableLength) {
-      final existingMessage = existing[unchangedPrefixLength].message;
-      final replacementMessage = assigned[unchangedPrefixLength];
-      if (jsonEncode(existingMessage.toJson()) ==
-          jsonEncode(replacementMessage.toJson())) {
-        unchangedPrefixLength++;
-        continue;
+    while (alignedLength < comparableLength) {
+      final existingId = existingIdentities[alignedLength].messageId;
+      final replacement = assigned[alignedLength];
+      final aligned = existingId.isEmpty
+          // A legacy row without durable identity aligns only by position
+          // with a message that carried no explicit identity of its own.
+          ? MessageHistoryIdentity.read(
+              messages[alignedLength],
+            ).messageId.isEmpty
+          : existingId == MessageHistoryIdentity.read(replacement).messageId;
+      if (!aligned) break;
+      final current = existing[alignedLength];
+      if (jsonEncode(current.message.toJson()) !=
+          jsonEncode(replacement.toJson())) {
+        MessageHistoryIdentity.persist(
+          db,
+          sessionId,
+          replacement,
+          sqliteId: current.rowId,
+        );
       }
-      if (!_sameSemanticMessage(existingMessage, replacementMessage)) {
-        break;
-      }
-      metadataUpdates.add((
-        rowId: existing[unchangedPrefixLength].rowId,
-        message: replacementMessage,
-      ));
-      unchangedPrefixLength++;
+      alignedLength++;
     }
-    for (final entry in metadataUpdates) {
-      MessageHistoryIdentity.persist(
-        db,
-        sessionId,
-        entry.message,
-        sqliteId: entry.rowId,
+    if (alignedLength < existing.length) {
+      // Exactly the active rows being replaced: `existing` is the ordered
+      // active set, so every active row from the divergence onward.
+      db.execute(
+        '''
+        DELETE FROM messages
+        WHERE session_id = ?
+          AND id >= ?
+          AND (history_status = 'active' OR history_status IS NULL)
+        ''',
+        [sessionId, existing[alignedLength].rowId],
       );
     }
-    if (unchangedPrefixLength < existing.length) {
-      db.execute('DELETE FROM messages WHERE session_id = ? AND id >= ?', [
-        sessionId,
-        existing[unchangedPrefixLength].rowId,
-      ]);
-    }
-    for (final message in assigned.skip(unchangedPrefixLength)) {
+    for (final message in assigned.skip(alignedLength)) {
       MessageHistoryIdentity.persist(db, sessionId, message);
     }
     SessionHistoryRevisionRepository.bumpDatabase(db, sessionId);
     return getPersistedMessages(
       sessionId,
     ).map((entry) => entry.message).toList(growable: false);
-  }
-
-  static bool _sameSemanticMessage(Message left, Message right) {
-    final leftJson = left.toJson()..remove('metadata');
-    final rightJson = right.toJson()..remove('metadata');
-    return jsonEncode(leftJson) == jsonEncode(rightJson);
   }
 
   /// Compare-and-swaps [expectedHistoryRevision], revalidates the target as
@@ -941,6 +966,26 @@ class SessionDB {
         assignedReplacement,
         ...superseded,
       ]);
+      for (final attachment in assignedReplacement.attachments) {
+        _db.execute(
+          '''
+          UPDATE user_attachments
+          SET message_id = ?, status = 'attached'
+          WHERE attachment_id = ? AND session_id = ?
+            AND (status = 'staged' OR message_id = ?)
+          ''',
+          [
+            replacementIdentity.messageId,
+            attachment.id,
+            sessionId,
+            targetMessageId,
+          ],
+        );
+        if (_db.updatedRows != 1) {
+          _db.execute('ROLLBACK');
+          return null;
+        }
+      }
       final next = current + 1;
       _db.execute(
         'UPDATE sessions SET history_revision = ?, updated_at = ? WHERE session_id = ?',
@@ -1212,6 +1257,73 @@ class SessionDB {
       rowId: row['id'] as int,
       message: MessageHistoryIdentity.fromRow(row),
     );
+  }
+
+  /// Resolves the originating assistant [ToolCall] and execution context for a
+  /// specific tool call ID from persisted session history without loading the
+  /// full timeline or tool output bytes.
+  OriginatingToolCallContext? findOriginatingToolCall(
+    String sessionId, {
+    required String toolCallId,
+    String? turnId,
+  }) {
+    if (sessionId.isEmpty || toolCallId.isEmpty) return null;
+
+    final hasTurn = turnId != null && turnId.isNotEmpty;
+    final sql = '''
+      SELECT
+        m.id AS message_row_id,
+        m.session_id,
+        m.turn_id,
+        m.run_id,
+        json_extract(m.data, '\$.metadata.run_id') AS metadata_run_id,
+        json_extract(m.data, '\$.metadata.model_step_id') AS metadata_model_step_id,
+        tc.value AS tool_call_json
+      FROM messages m,
+           json_each(json_extract(m.data, '\$.toolCalls')) tc
+      WHERE m.session_id = ?
+        ${hasTurn ? 'AND m.turn_id = ?' : ''}
+        AND (m.history_status = 'active' OR m.history_status IS NULL)
+        AND json_extract(m.data, '\$.role') = 'assistant'
+        AND json_extract(tc.value, '\$.id') = ?
+      ORDER BY m.id DESC
+      LIMIT 2
+    ''';
+
+    final params = <Object?>[
+      sessionId,
+      if (hasTurn) turnId,
+      toolCallId,
+    ];
+
+    final rows = _db.select(sql, params);
+    if (rows.isEmpty) return null;
+
+    // Enforce honest ambiguity handling: if multiple active origins exist,
+    // do not guess which one owns the call.
+    if (rows.length > 1) {
+      return null;
+    }
+
+    final row = rows.first;
+    final toolCallJsonRaw = row['tool_call_json'];
+    if (toolCallJsonRaw == null || toolCallJsonRaw is! String) return null;
+
+    try {
+      final parsed = jsonDecode(toolCallJsonRaw);
+      if (parsed is! Map) return null;
+      final toolCall = ToolCall.fromJson(
+        Map<String, dynamic>.from(parsed),
+      );
+      return OriginatingToolCallContext(
+        toolCall: toolCall,
+        runId: row['run_id']?.toString() ??
+            row['metadata_run_id']?.toString(),
+        modelStepId: row['metadata_model_step_id']?.toString(),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   // Scheduled Tasks persistence

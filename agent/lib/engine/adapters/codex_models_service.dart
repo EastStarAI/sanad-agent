@@ -66,6 +66,9 @@ class CodexModelsService {
           contextWindow: contextWindow is num && contextWindow > 0
               ? contextWindow.toInt()
               : null,
+          rawMetadata: Map<String, Object?>.from(
+            entry.map((k, v) => MapEntry(k.toString(), v)),
+          ),
         ),
       );
     }
@@ -86,6 +89,7 @@ class CodexModelsService {
           provider: provider,
           contextWindow: record.contextWindow,
           supportsReasoning: true,
+          modelMetadata: record.rawMetadata,
         ),
       );
     }
@@ -195,12 +199,14 @@ class _CodexModelRecord {
   final String label;
   final int priority;
   final int? contextWindow;
+  final Map<String, Object?> rawMetadata;
 
   const _CodexModelRecord({
     required this.slug,
     required this.label,
     required this.priority,
     required this.contextWindow,
+    this.rawMetadata = const {},
   });
 }
 

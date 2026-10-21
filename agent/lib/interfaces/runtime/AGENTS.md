@@ -16,11 +16,12 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Preserve strict FIFO for queued input and immediately drain queue-only sessions restored without a recovery notice.
 - Queue promotion, deletion, route rewrite, and execution-snapshot recomputation commit through the execution aggregate owner.
 - Steering targets the active run's runner and bypasses ordinary admission only through the dedicated steer lifecycle.
+- Turn thinking provenance: a turn `thinking_mode` equal to the session preference persisted before that turn (by `create_session`, a previous turn or a preference update) is a carried-over preference, not a fresh explicit choice. Before execution the orchestrator passes it through `ThinkingRouteSessionSync.revalidateCarriedTurnSelection`: an offered value is unchanged, while a value the target route does not offer falls back to provider default with the existing route-scoped correction. A value that differs from the persisted preference stays a fresh explicit request and admission still validates and rejects it.
 - Idle manual compaction obtains its provider projection, ordinary tool list, and request settings from a session-scoped `AgentRunner` seed without admitting or inventing a user turn.
 
 ## Runtime Collaborators
 - `SessionQueueCoordinator` owns queue projection, FIFO drain, and non-terminal route rewrites.
-- `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, tool event emission, exception routing, and post-terminal title scheduling.
+- `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, tool event emission, exception routing, and post-terminal title scheduling. Normal and resumed tool-completion publication preserves the engine-authored byte-free media descriptor without reconstructing it from text or re-reading paths.
 - `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work. Recovery queries join live sessions so legacy orphan work is ignored without a startup delete pass; the restorer must not run general `state.db` maintenance or retention deletes.
 - Shared request-id and route helpers remain stateless and must not import the orchestrator.
 - `DeviceCommandAdmission` owns device-control admission: correlation against
@@ -90,9 +91,12 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 
 ## Latest-Root-Turn Replay
 - Replay targets the latest active `root_turn` by `message_id`, `turn_id`, `request_id`, and `expected_history_revision`.
+- Messages with empty text content remain replay-eligible if attachments are present.
 - Soft rewind and replacement-user acceptance commit atomically; the CAS
   transaction revalidates the target as the latest active root. History is
   never truncated, and rewind without a durable replacement is not admitted.
+  Admitted replacement attachments atomically update `user_attachments` to
+  the new message ownership, retaining superseded attachments on superseded rows.
 - Steer is not a replay boundary, including pending, delivered, and
   embedded steers. Dispatch waits for an authoritative `idle` snapshot
   after scoped stop. Missing snapshot state is not dispatch authority.

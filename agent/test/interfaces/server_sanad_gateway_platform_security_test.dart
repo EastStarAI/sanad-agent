@@ -1035,6 +1035,79 @@ void main() {
         expect(runtimeBridge.registeredSessionCount, 0);
       },
     );
+
+    test('dispatches device.cli.execute and emits cli output and terminal result', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.deviceCliExecute,
+        'device_id': 'test-device-id',
+        'request_id': 'req-cli-cloud-1',
+        'payload': {
+          'request_id': 'req-cli-cloud-1',
+          'argv': ['version'],
+        },
+      });
+
+      final cliStdouts = socket.emittedEvents.where(
+        (entry) =>
+            entry['event'] == 'device_event' &&
+            (entry['data'] as Map)['event'] ==
+                CanonicalEventTypes.deviceCliStdout,
+      );
+      expect(cliStdouts, isNotEmpty);
+
+      final cliResults = socket.emittedEvents.where(
+        (entry) =>
+            entry['event'] == 'device_event' &&
+            (entry['data'] as Map)['event'] ==
+                CanonicalEventTypes.deviceCliResult,
+      );
+      expect(cliResults, isNotEmpty);
+      final resultData = cliResults.first['data'] as Map<String, dynamic>;
+      expect(resultData['payload']['exit_code'], 0);
+      expect(resultData['payload']['request_id'], 'req-cli-cloud-1');
+    });
+
+    test(
+      'rejects a mismatched device_id for device.cli.execute as wrong_device',
+      () async {
+        await socket.trigger('execute_command', {
+          'command': CanonicalEventTypes.deviceCliExecute,
+          'device_id': 'other-device-id',
+          'request_id': 'req-cli-wrong-device',
+          'payload': {
+            'request_id': 'req-cli-wrong-device',
+            'session_id': 'sess-123',
+            'argv': ['version'],
+          },
+        });
+
+        _expectDisabledError(
+          socket.emittedEvents,
+          requestId: 'req-cli-wrong-device',
+          code: DeviceControlErrorCodes.wrongDevice,
+        );
+      },
+    );
+
+    test('dispatches device.cli.cancel over cloud socket', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.deviceCliCancel,
+        'device_id': 'test-device-id',
+        'request_id': 'req-cli-cancel-cloud',
+        'payload': {
+          'request_id': 'req-cli-cancel-cloud',
+          'target_request_id': 'non-existent-in-flight-req',
+        },
+      });
+
+      final cancelErrors = socket.emittedEvents.where(
+        (entry) =>
+            entry['event'] == 'device_event' &&
+            (entry['data'] as Map)['type'] == 'error' &&
+            (entry['data'] as Map)['payload']['code'] == 'not_found',
+      );
+      expect(cancelErrors, isNotEmpty);
+    });
   });
 }
 

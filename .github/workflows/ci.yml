@@ -2,7 +2,9 @@ name: Public CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+    # Label events are handled by protected-labels.yml, which re-runs only the
+    # protected-label job of this run; ordinary labels never restart full CI.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -129,6 +131,9 @@ jobs:
       - name: Validate embedded product skills
         working-directory: agent
         run: fvm dart run tool/generate_bundled_skills.dart --check
+      - name: Validate shipped model capability defaults
+        working-directory: agent
+        run: fvm dart run tool/generate_model_capability_defaults.dart --check
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze
@@ -365,6 +370,9 @@ jobs:
     name: Verify protected review labels
     needs: classify
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -374,9 +382,13 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Read labels at run time: a re-run keeps the original event payload,
+          # so payload labels would be stale after a protected-label change.
+          LABELS_JSON="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '[.labels[].name]')"
           git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed"
           has_label() { jq -e --arg label "$1" 'index($label) != null' <<< "$LABELS_JSON" >/dev/null; }
           require_for_paths() {

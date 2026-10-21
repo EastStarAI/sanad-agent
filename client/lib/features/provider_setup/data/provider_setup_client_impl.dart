@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:sanad_client/features/devices/data/device_command_client.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -395,6 +397,101 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
       throw StateError(
         'Model refresh failed: ${result['error'] ?? 'unknown error'}',
       );
+    }
+  }
+
+  StreamController<ModelCacheUpdateEvent>? _modelUpdatesController;
+  StreamSubscription<Map<String, dynamic>>? _localUpdatesSub;
+  StreamSubscription<Map<String, dynamic>>? _cloudUpdatesSub;
+
+  @override
+  Stream<ModelCacheUpdateEvent> get modelUpdates {
+    _modelUpdatesController ??= StreamController<ModelCacheUpdateEvent>.broadcast(
+      onListen: _startModelUpdates,
+      onCancel: _stopModelUpdates,
+      sync: true,
+    );
+    return _modelUpdatesController!.stream;
+  }
+
+  void _startModelUpdates() {
+    _localUpdatesSub = _connectionCoordinator.localSocketService.events.listen(
+      (e) => _handleModelUpdateEvent(e, isLocalTransport: true),
+      onError: (Object _, StackTrace __) {
+        // Absorb source transport errors safely without forwarding raw payload,
+        // credentials, or diagnostic leaks to listeners, retaining prior authority.
+      },
+    );
+    _cloudUpdatesSub = _connectionCoordinator.cloudSocketService.events.listen(
+      (e) => _handleModelUpdateEvent(e, isLocalTransport: false),
+      onError: (Object _, StackTrace __) {
+        // Absorb source transport errors safely without forwarding raw payload,
+        // credentials, or diagnostic leaks to listeners, retaining prior authority.
+      },
+    );
+  }
+
+  void _stopModelUpdates() {
+    final localSub = _localUpdatesSub;
+    _localUpdatesSub = null;
+    if (localSub != null) {
+      unawaited(localSub.cancel());
+    }
+    final cloudSub = _cloudUpdatesSub;
+    _cloudUpdatesSub = null;
+    if (cloudSub != null) {
+      unawaited(cloudSub.cancel());
+    }
+  }
+
+  void _handleModelUpdateEvent(
+    Map<String, dynamic> rawEvent, {
+    required bool isLocalTransport,
+  }) {
+    final eventType =
+        rawEvent['event']?.toString() ?? rawEvent['message_type']?.toString() ?? rawEvent['type']?.toString();
+    if (eventType != 'model.cache_updated') return;
+
+    final rawDev = rawEvent['device_id'];
+    final rawHw = rawEvent['hardware_id'];
+
+    if (rawDev != null && (rawDev is! String || rawDev.trim().isEmpty)) {
+      return;
+    }
+    if (rawHw != null && (rawHw is! String || rawHw.trim().isEmpty)) {
+      return;
+    }
+
+    final dev = rawDev is String ? rawDev.trim() : null;
+    final hw = rawHw is String ? rawHw.trim() : null;
+
+    final String? deviceId;
+    if (isLocalTransport) {
+      if (hw != null && hw.isNotEmpty) {
+        deviceId = hw;
+      } else if (dev != null && dev.isNotEmpty) {
+        deviceId = dev;
+      } else {
+        final current = _connectionCoordinator.currentDeviceId.trim();
+        deviceId = current.isNotEmpty ? current : null;
+      }
+    } else {
+      if (dev != null && dev.isNotEmpty) {
+        deviceId = dev;
+      } else if (hw != null && hw.isNotEmpty) {
+        deviceId = hw;
+      } else {
+        deviceId = null;
+      }
+    }
+
+    if (deviceId == null || deviceId.isEmpty) return;
+
+    final update = ModelCacheUpdateEvent.tryParse(rawEvent, deviceId: deviceId);
+    if (update != null && update.providerInstanceId.isNotEmpty && update.deviceId != null) {
+      if (_modelUpdatesController?.hasListener == true) {
+        _modelUpdatesController?.add(update);
+      }
     }
   }
 

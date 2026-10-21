@@ -7,25 +7,35 @@ import '../../core/config.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/tool_call.dart';
+import '../../core/models/llm_provider_state.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/models/model_metadata.dart';
+import '../../core/di.dart';
+import '../../core/provider_runtime/provider_instance_repository.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
+import '../../core/provider_runtime/route_capability_resolver.dart';
 import 'provider_profile.dart';
 import 'llm_http_exception.dart';
 import '../../core/provider_thinking/anthropic_thinking_wire_codec.dart';
 import 'llm_request_options.dart';
+import 'models_dev_service.dart';
 import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
+import 'tool_result_wire_codec.dart';
+import 'chat_reasoning_replay_policy.dart';
+import 'provider_history_projection_exception.dart';
 import '../llm_request_dumper.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 
-class BaseAnthropicAdapter implements LLMAdapter {
+class BaseAnthropicAdapter
+    implements LLMAdapter, ToolResultMediaCapabilityProvider {
   final _logger = Logger('BaseAnthropicAdapter');
   final Config config;
   final ProviderProfile profile;
+  final String? providerInstanceId;
   final http.Client? client;
   final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
@@ -37,6 +47,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
   BaseAnthropicAdapter(
     this.config,
     this.profile, {
+    this.providerInstanceId,
     this.client,
     this.modelContextLimitLookup,
     this.baseUrlOverride,
@@ -66,6 +77,10 @@ class BaseAnthropicAdapter implements LLMAdapter {
   String get _apiKey => apiKeyOverride ?? config.apiKeyFor(profile);
   String get availableModelsSource => _availableModelsSource;
   Object? get lastModelsException => _lastModelsException;
+
+  @override
+  ToolResultMediaCapability get toolResultMediaCapability =>
+      ToolResultMediaCapability.imageToolResults;
 
   @override
   Future<List<ModelOption>> getAvailableModels() async {
@@ -134,8 +149,9 @@ class BaseAnthropicAdapter implements LLMAdapter {
 
         _lastModelsException = null;
         return data
+            .whereType<Map>()
             .map((entry) {
-              final rawId = (entry as Map)['id']?.toString() ?? '';
+              final rawId = entry['id']?.toString() ?? '';
               final normalized = ProviderModelId.normalize(
                 templateId: profile.name,
                 protocol: profile.effectiveProtocol,
@@ -148,6 +164,9 @@ class BaseAnthropicAdapter implements LLMAdapter {
                 contextWindow:
                     ModelMetadata.getLimitForModel(normalized) ?? 200000,
                 supportsReasoning: false,
+                modelMetadata: Map<String, Object?>.from(
+                  entry.map((k, v) => MapEntry(k.toString(), v)),
+                ),
               );
             })
             .where((model) => model.value.isNotEmpty)
@@ -253,8 +272,9 @@ class BaseAnthropicAdapter implements LLMAdapter {
       profile.effectiveProtocol,
     );
     final resolvedModel = _resolveModel(modelOverride);
+    final stopwatch = Stopwatch()..start();
 
-    final body = _buildRequestBody(
+    final body = await _buildRequestBody(
       history,
       resolvedModel: resolvedModel,
       tools: tools,
@@ -266,6 +286,16 @@ class BaseAnthropicAdapter implements LLMAdapter {
         url: url,
         headers: _anthropicHeaders(options: options),
         body: body,
+        requestId: options.requestId,
+        provider: profile.name,
+        model: resolvedModel,
+        baseUrl: _baseUrl,
+        protocol: profile.effectiveProtocol,
+        stream: false,
+        safeOptions: options.toSafeDumpOptions(
+          stream: false,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -281,13 +311,35 @@ class BaseAnthropicAdapter implements LLMAdapter {
         body: jsonEncode(body),
         operation: 'generateResponse',
       );
+    } catch (error) {
+      if (LLMRequestDumper.isEnabled) {
+        await LLMRequestDumper.recordError(
+          error,
+          requestId: options.requestId,
+          duration: stopwatch.elapsed,
+        );
+      }
+      rethrow;
     } finally {
       await transport.dispose();
     }
 
     _logger.info('LLM Response status: ${response.statusCode}');
     if (LLMRequestDumper.isEnabled) {
-      await LLMRequestDumper.dumpResponse(response.body);
+      String? finishReason;
+      if (response.statusCode == 200) {
+        try {
+          final data = jsonDecode(response.body);
+          finishReason = data['stop_reason']?.toString();
+        } catch (_) {}
+      }
+      await LLMRequestDumper.dumpResponse(
+        response.body,
+        requestId: options.requestId,
+        statusCode: response.statusCode,
+        duration: stopwatch.elapsed,
+        finishReason: finishReason,
+      );
     }
 
     if (response.statusCode != 200) {
@@ -303,6 +355,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     String content = '';
     String reasoning = '';
     List<ToolCall>? toolCalls;
+    final signedThinking = <Map<String, dynamic>>[];
 
     for (var block in contentBlocks) {
       final type = block['type'];
@@ -310,6 +363,13 @@ class BaseAnthropicAdapter implements LLMAdapter {
         content += block['text'] as String? ?? '';
       } else if (type == 'thinking') {
         reasoning += block['thinking'] as String? ?? '';
+        _addSignedThinking(
+          signedThinking,
+          thinking: block['thinking']?.toString() ?? '',
+          signature: block['signature']?.toString(),
+        );
+      } else if (type == 'redacted_thinking') {
+        _addRedactedThinking(signedThinking, block['data']?.toString());
       } else if (type == 'tool_use') {
         toolCalls ??= [];
         toolCalls.add(
@@ -344,6 +404,11 @@ class BaseAnthropicAdapter implements LLMAdapter {
         content: content,
         reasoning: reasoning.trim().isEmpty ? null : reasoning,
         toolCalls: toolCalls,
+        providerState: _thinkingState(
+          signedThinking,
+          options: options,
+          resolvedModel: resolvedModel,
+        ),
       ),
       isToolCall: toolCalls != null && toolCalls.isNotEmpty,
       usage: usage,
@@ -365,8 +430,9 @@ class BaseAnthropicAdapter implements LLMAdapter {
       profile.effectiveProtocol,
     );
     final resolvedModel = _resolveModel(modelOverride);
+    final stopwatch = Stopwatch()..start();
 
-    final body = _buildRequestBody(
+    final body = await _buildRequestBody(
       history,
       resolvedModel: resolvedModel,
       tools: tools,
@@ -379,6 +445,16 @@ class BaseAnthropicAdapter implements LLMAdapter {
         url: url,
         headers: _anthropicHeaders(options: options),
         body: body,
+        requestId: options.requestId,
+        provider: profile.name,
+        model: resolvedModel,
+        baseUrl: _baseUrl,
+        protocol: profile.effectiveProtocol,
+        stream: true,
+        safeOptions: options.toSafeDumpOptions(
+          stream: true,
+          protocol: profile.effectiveProtocol,
+        ),
       );
     }
 
@@ -393,7 +469,14 @@ class BaseAnthropicAdapter implements LLMAdapter {
     late http.StreamedResponse response;
     try {
       response = await transport.send(request, operation: 'generateStream');
-    } catch (_) {
+    } catch (error) {
+      if (LLMRequestDumper.isEnabled) {
+        await LLMRequestDumper.recordError(
+          error,
+          requestId: options.requestId,
+          duration: stopwatch.elapsed,
+        );
+      }
       await transport.dispose();
       rethrow;
     }
@@ -409,7 +492,10 @@ class BaseAnthropicAdapter implements LLMAdapter {
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
             'error': err,
-          });
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          );
         }
         throw LlmHttpException.fromStreamedResponse(
           response,
@@ -425,6 +511,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
       LLMFinishReason? streamFinishReason;
       final contentBuffer = StringBuffer();
       final reasoningBuffer = StringBuffer();
+      final thinkingBlocks = <int, _PartialThinkingBlock>{};
 
       try {
         await for (final line in transport.decodeSseLines(
@@ -503,8 +590,19 @@ class BaseAnthropicAdapter implements LLMAdapter {
                   partialToolCalls[index] = _PartialClaudeToolCall()
                     ..id = block['id']
                     ..name = block['name'];
+                } else if (block != null &&
+                    block['type'] == 'redacted_thinking') {
+                  thinkingBlocks[index] = _PartialThinkingBlock()
+                    ..redactedData = block['data']?.toString();
                 } else if (block != null && block['type'] == 'thinking') {
+                  final partialThinking = thinkingBlocks[index] =
+                      _PartialThinkingBlock();
+                  final initialSignature = block['signature']?.toString();
+                  if (initialSignature != null) {
+                    partialThinking.signature.write(initialSignature);
+                  }
                   final initial = block['thinking']?.toString();
+                  if (initial != null) partialThinking.thinking.write(initial);
                   if (initial != null && initial.isNotEmpty) {
                     reasoningBuffer.write(initial);
                     yield AgentResponse(
@@ -541,8 +639,16 @@ class BaseAnthropicAdapter implements LLMAdapter {
                       model: resolvedModel,
                       provider: 'anthropic',
                     );
+                  } else if (deltaType == 'signature_delta') {
+                    final signature = delta['signature']?.toString();
+                    if (signature != null) {
+                      thinkingBlocks[index]?.signature.write(signature);
+                    }
                   } else if (deltaType == 'thinking_delta') {
                     final chunk = delta['thinking']?.toString();
+                    if (chunk != null) {
+                      thinkingBlocks[index]?.thinking.write(chunk);
+                    }
                     if (chunk != null && chunk.isNotEmpty) {
                       reasoningBuffer.write(chunk);
                       yield AgentResponse(
@@ -613,12 +719,32 @@ class BaseAnthropicAdapter implements LLMAdapter {
           );
         }
 
+        final signedThinking = <Map<String, dynamic>>[];
+        for (final index in thinkingBlocks.keys.toList()..sort()) {
+          final block = thinkingBlocks[index]!;
+          if (block.redactedData != null) {
+            _addRedactedThinking(signedThinking, block.redactedData);
+          } else {
+            _addSignedThinking(
+              signedThinking,
+              thinking: block.thinking.toString(),
+              signature: block.signature.toString(),
+            );
+          }
+        }
+        final thinkingState = _thinkingState(
+          signedThinking,
+          options: options,
+          resolvedModel: resolvedModel,
+        );
+
         if (completedToolCalls.isNotEmpty) {
           yield AgentResponse(
             message: Message(
               role: MessageRole.assistant,
               content: '',
               toolCalls: completedToolCalls,
+              providerState: thinkingState,
             ),
             isToolCall: true,
             usage: finalUsage,
@@ -626,9 +752,13 @@ class BaseAnthropicAdapter implements LLMAdapter {
             provider: 'anthropic',
             finishReason: streamFinishReason ?? LLMFinishReason.toolCalls,
           );
-        } else if (finalUsage != null) {
+        } else if (finalUsage != null || thinkingState != null) {
           yield AgentResponse(
-            message: Message(role: MessageRole.assistant, content: ''),
+            message: Message(
+              role: MessageRole.assistant,
+              content: '',
+              providerState: thinkingState,
+            ),
             isToolCall: false,
             usage: finalUsage,
             model: resolvedModel,
@@ -649,12 +779,17 @@ class BaseAnthropicAdapter implements LLMAdapter {
               if (reasoningBuffer.isNotEmpty)
                 'reasoning': reasoningBuffer.toString(),
               if (completedToolCalls.isNotEmpty)
-                'tool_calls':
-                    completedToolCalls.map((tc) => tc.toJson()).toList(),
+                'tool_calls': completedToolCalls
+                    .map((tc) => tc.toJson())
+                    .toList(),
             },
             'finish_reason': effectiveFinishReason.name,
             'usage': ?finalUsage,
-          });
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          finishReason: effectiveFinishReason.name,
+          );
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
@@ -671,23 +806,33 @@ class BaseAnthropicAdapter implements LLMAdapter {
                 if (reasoningBuffer.isNotEmpty)
                   'reasoning': reasoningBuffer.toString(),
                 if (completedToolCalls.isNotEmpty)
-                  'tool_calls':
-                      completedToolCalls.map((tc) => tc.toJson()).toList(),
+                  'tool_calls': completedToolCalls
+                      .map((tc) => tc.toJson())
+                      .toList(),
                 if (partialToolCalls.isNotEmpty)
                   'partial_tool_calls': partialToolCalls.values
-                      .map((p) => {
-                            if (p.id != null) 'id': p.id,
-                            if (p.name != null) 'name': p.name,
-                            'arguments': p.argumentsBuffer.toString(),
-                          })
+                      .map(
+                        (p) => {
+                          if (p.id != null) 'id': p.id,
+                          if (p.name != null) 'name': p.name,
+                          'arguments': p.argumentsBuffer.toString(),
+                        },
+                      )
                       .toList(),
               },
             'error': e.toString(),
-          });
+          }, requestId: options.requestId,
+          statusCode: response.statusCode,
+          duration: stopwatch.elapsed,
+          finishReason: 'incomplete',
+          );
         }
         rethrow;
       }
     } finally {
+      if (LLMRequestDumper.isEnabled) {
+        LLMRequestDumper.cleanupActiveDump(requestId: options.requestId);
+      }
       await transport.dispose();
     }
   }
@@ -706,7 +851,13 @@ class BaseAnthropicAdapter implements LLMAdapter {
   ///    tool-uses are stripped to avoid 400 errors from Bedrock/Claude.
   /// 3. Messages are forced to alternate user/assistant. Adjacent
   ///    same-role messages are merged.
-  List<Map<String, dynamic>> _buildAnthropicMessages(List<Message> history) {
+  List<Map<String, dynamic>> _buildAnthropicMessages(
+    List<Message> history, {
+    Map<String, String>? verifiedAttachments,
+    required LLMRequestOptions options,
+    required String resolvedModel,
+  }) {
+    final issuer = _stateIssuer(options);
     final nonSystem = history
         .where((m) => m.role != MessageRole.system)
         .toList();
@@ -715,18 +866,36 @@ class BaseAnthropicAdapter implements LLMAdapter {
     final wireMessages = <Map<String, dynamic>>[];
     for (final m in nonSystem) {
       if (m.role == MessageRole.tool) {
+        final toolUseId = m.toolCallId?.trim() ?? '';
+        if (toolUseId.isEmpty) {
+          throw const FormatException(
+            'Anthropic tool result is missing toolCallId.',
+          );
+        }
         wireMessages.add({
           'role': 'user',
           'content': [
             {
               'type': 'tool_result',
-              'tool_use_id': m.toolCallId ?? '',
-              'content': m.content ?? '',
+              'tool_use_id': toolUseId,
+              'content': ToolResultWireCodec.anthropicContent(m),
+              if (m.toolResult?.isError == true) 'is_error': true,
             },
           ],
         });
       } else if (m.role == MessageRole.assistant) {
-        final List<dynamic> contentList = [];
+        final List<dynamic> contentList = [
+          // Signed thinking replays first, and only to its exact issuer and
+          // model; foreign or unsigned thinking is never sent (Task 116 D5).
+          if (ProviderStateProvenance.isSameRoute(
+            m,
+            namespace: thinkingStateNamespace,
+            issuer: issuer,
+            resolvedModel: resolvedModel,
+            normalizeModel: _resolveModel,
+          ))
+            ..._replayableThinking(m.providerState!),
+        ];
         if (m.content != null && m.content!.isNotEmpty) {
           contentList.add({'type': 'text', 'text': m.content!});
         }
@@ -747,7 +916,34 @@ class BaseAnthropicAdapter implements LLMAdapter {
               : contentList,
         });
       } else {
-        wireMessages.add({'role': 'user', 'content': m.content ?? ''});
+        final List<dynamic> userParts = [];
+        if (m.attachments.isNotEmpty) {
+          if (m.content != null && m.content!.isNotEmpty) {
+            userParts.add({'type': 'text', 'text': m.content!});
+          }
+          for (final att in m.attachments) {
+            final b64 =
+                verifiedAttachments?[att.id] ??
+                ToolResultWireCodec.userAttachmentBase64(
+                  att,
+                  preloadedBase64: verifiedAttachments,
+                );
+            if (b64 != null) {
+              userParts.add({
+                'type': 'image',
+                'source': {
+                  'type': 'base64',
+                  'media_type': att.mimeType,
+                  'data': b64,
+                },
+              });
+            }
+          }
+        }
+        wireMessages.add({
+          'role': 'user',
+          'content': userParts.isNotEmpty ? userParts : (m.content ?? ''),
+        });
       }
     }
 
@@ -768,34 +964,31 @@ class BaseAnthropicAdapter implements LLMAdapter {
       }
     }
 
-    // Third pass: strip orphan tool_use blocks from assistant messages
-    // whose IDs have no matching tool_result anywhere in the history.
+    // Third pass: a tool_use without a matching tool_result cannot be sent
+    // and must not be silently dropped (canonical meaning would change), so
+    // the request fails closed before dispatch (Task 116 D5).
+    var unpairedToolCalls = 0;
     for (final wm in wireMessages) {
-      if (wm['role'] == 'assistant') {
-        final content = wm['content'];
-        if (content is List) {
-          final filtered = <dynamic>[];
-          for (final block in content) {
-            if (block is Map && block['type'] == 'tool_use') {
-              final id = block['id']?.toString();
-              if (id != null && !answeredToolUseIds.contains(id)) {
-                continue; // strip orphan tool_use
-              }
-            }
-            filtered.add(block);
-          }
-          if (filtered.isEmpty) {
-            // All content was orphan tool_use; keep minimal text.
-            wm['content'] = '';
-          } else if (filtered.length == 1 &&
-              filtered[0] is Map &&
-              filtered[0]['type'] == 'text') {
-            wm['content'] = filtered[0]['text'];
-          } else {
-            wm['content'] = filtered;
+      if (wm['role'] != 'assistant') continue;
+      final content = wm['content'];
+      if (content is! List) continue;
+      for (final block in content) {
+        if (block is Map && block['type'] == 'tool_use') {
+          final id = block['id']?.toString();
+          if (id == null || !answeredToolUseIds.contains(id)) {
+            unpairedToolCalls++;
           }
         }
       }
+    }
+    if (unpairedToolCalls > 0) {
+      throw ProviderHistoryProjectionException(
+        route:
+            '${options.providerInstanceId ?? providerInstanceId ?? profile.name}'
+            '/$resolvedModel',
+        reasonCode: ProviderHistoryProjectionException.unpairedToolCall,
+        affectedCount: unpairedToolCalls,
+      );
     }
 
     // Fourth pass: merge consecutive same-role messages.
@@ -844,13 +1037,66 @@ class BaseAnthropicAdapter implements LLMAdapter {
     return {'role': a['role'], 'content': mergedContent};
   }
 
-  Map<String, dynamic> _buildRequestBody(
+  Future<Map<String, dynamic>> _buildRequestBody(
     List<Message> history, {
     required String resolvedModel,
     required LLMRequestOptions options,
     List<ToolSchema>? tools,
     bool stream = false,
-  }) {
+  }) async {
+    final hasImages = ToolResultWireCodec.hasImages(history);
+    if (hasImages) {
+      final instanceId = options.providerInstanceId ?? providerInstanceId;
+      final overrideSnapshot =
+          options.routeCapabilityProfile?.rawOverride ??
+          options.routeCapabilitySnapshot;
+      final profileSnapshot =
+          options.routeCapabilityProfile ??
+          (overrideSnapshot != null
+              ? RouteCapabilityProfile(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  imageSupport: overrideSnapshot.supportsImageInput == true
+                      ? RouteImageSupport.supported
+                      : (overrideSnapshot.supportsImageInput == false
+                            ? RouteImageSupport.unsupported
+                            : RouteImageSupport.unknown),
+                  evidenceSource: 'snapshot',
+                  rawOverride: overrideSnapshot,
+                )
+              : RouteCapabilityResolver(
+                  instances: getIt.isRegistered<ProviderInstanceRepository>()
+                      ? getIt<ProviderInstanceRepository>()
+                      : null,
+                  config: config,
+                  modelsDevService: getIt.isRegistered<ModelsDevService>()
+                      ? getIt<ModelsDevService>()
+                      : null,
+                ).resolveSync(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  baseUrl: _baseUrl,
+                ));
+
+      if (profileSnapshot.imageSupport == RouteImageSupport.unsupported) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unsupported,
+        );
+      } else if (profileSnapshot.imageSupport == RouteImageSupport.unknown) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unknown,
+        );
+      }
+    }
+
+    final verifiedAttachments =
+        await ToolResultWireCodec.loadVerifiedUserAttachments(
+          history,
+          attachmentStore: options.attachmentStore,
+        );
+
     // Extract system messages.
     String? systemPrompt;
     final systemMessages = history.where((m) => m.role == MessageRole.system);
@@ -858,7 +1104,12 @@ class BaseAnthropicAdapter implements LLMAdapter {
       systemPrompt = systemMessages.map((m) => m.content ?? '').join('\n');
     }
 
-    final formattedMessages = _buildAnthropicMessages(history);
+    final formattedMessages = _buildAnthropicMessages(
+      history,
+      verifiedAttachments: verifiedAttachments,
+      options: options,
+      resolvedModel: resolvedModel,
+    );
 
     final body = <String, dynamic>{
       'model': resolvedModel,
@@ -884,6 +1135,72 @@ class BaseAnthropicAdapter implements LLMAdapter {
 
     AnthropicThinkingWireCodec.applyThinking(body, options.thinkingDirective);
     return body;
+  }
+
+  /// Namespace for issuer-bound Anthropic thinking blocks (Task 116 D5).
+  static const thinkingStateNamespace = 'anthropic_messages';
+  static const thinkingBlocksKey = 'thinking_blocks';
+
+  String _stateIssuer(LLMRequestOptions options) {
+    final instance =
+        options.providerInstanceId ?? providerInstanceId ?? profile.name;
+    final endpoint = _baseUrl.replaceFirst(RegExp(r'/+$'), '');
+    return '$instance|${profile.effectiveProtocol}|$endpoint';
+  }
+
+  /// Only signed thinking is replayable; unsigned text is visible reasoning.
+  static void _addSignedThinking(
+    List<Map<String, dynamic>> blocks, {
+    required String thinking,
+    required String? signature,
+  }) {
+    if (signature == null || signature.isEmpty) return;
+    blocks.add({
+      'type': 'thinking',
+      'thinking': thinking,
+      'signature': signature,
+    });
+  }
+
+  static void _addRedactedThinking(
+    List<Map<String, dynamic>> blocks,
+    String? data,
+  ) {
+    if (data == null || data.isEmpty) return;
+    blocks.add({'type': 'redacted_thinking', 'data': data});
+  }
+
+  LLMProviderState? _thinkingState(
+    List<Map<String, dynamic>> blocks, {
+    required LLMRequestOptions options,
+    required String resolvedModel,
+  }) {
+    if (blocks.isEmpty) return null;
+    return LLMProviderState(
+      namespace: thinkingStateNamespace,
+      issuer: _stateIssuer(options),
+      data: {
+        thinkingBlocksKey: blocks,
+        ProviderStateProvenance.issuerModelKey: resolvedModel,
+      },
+    );
+  }
+
+  static List<Map<String, dynamic>> _replayableThinking(
+    LLMProviderState state,
+  ) {
+    final raw = state.data[thinkingBlocksKey];
+    if (raw is! List) return const [];
+    return [
+      for (final block in raw)
+        if (block is Map &&
+            ((block['type'] == 'thinking' &&
+                    block['signature'] is String &&
+                    (block['signature'] as String).isNotEmpty) ||
+                (block['type'] == 'redacted_thinking' &&
+                    block['data'] is String)))
+          Map<String, dynamic>.from(block),
+    ];
   }
 
   LLMFinishReason _normalizeFinishReason(
@@ -915,6 +1232,12 @@ Map<String, dynamic> _normalizeAnthropicUsage(Map<String, dynamic> usage) => {
   'cache_read_input_tokens': ?usage['cache_read_input_tokens'],
   'cache_creation_input_tokens': ?usage['cache_creation_input_tokens'],
 };
+
+class _PartialThinkingBlock {
+  final StringBuffer thinking = StringBuffer();
+  final StringBuffer signature = StringBuffer();
+  String? redactedData;
+}
 
 class _PartialClaudeToolCall {
   String? id;

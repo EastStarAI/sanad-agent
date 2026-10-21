@@ -130,6 +130,16 @@ class CanonicalEvent {
   /// The output/result of the tool
   dynamic get toolOutput => tool?['output'];
 
+  /// Whether this event represents an explicit canonical or typed error
+  bool get isError {
+    if (status == EventStatus.running || status == EventStatus.cancelled) return false;
+    return status == EventStatus.error ||
+        kind == EventKind.error ||
+        tool?['isError'] == true ||
+        tool?['errorCode'] != null ||
+        (tool?['toolResult'] is Map && (tool!['toolResult'] as Map)['isError'] == true);
+  }
+
   /// Create a copy of this event with some fields updated
   CanonicalEvent copyWith({
     String? id,

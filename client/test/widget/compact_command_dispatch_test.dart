@@ -13,6 +13,8 @@ import 'package:sanad_client/features/devices/data/device_connection_coordinator
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
+import 'package:sanad_client/l10n/app_localizations_ar.dart';
+import 'package:sanad_client/l10n/app_localizations_en.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -416,7 +418,7 @@ void main() {
     expect(conversationRepository.compactSessionCalls, 1);
     expect(
       validationError,
-      'Context compaction is already in progress.',
+      'Context compaction is already in progress. Wait for the current operation to finish before retrying.',
     );
     expect(find.text('/compact'), findsNothing);
     expect(
@@ -428,7 +430,7 @@ void main() {
   });
 
   testWidgets(
-    'terminal compact failure consumes command and reports the typed reason',
+    'terminal compact failure consumes command and reports localized explanation with next action',
     (tester) async {
       conversationRepository.compactSessionResult = const SessionCompactResult(
         outcome: 'failed',
@@ -459,7 +461,7 @@ void main() {
       expect(conversationRepository.compactSessionCalls, 1);
       expect(
         validationError,
-        'Context compaction failed: continuityValidationFailed',
+        'Summary failed continuity verification. Retry compaction to generate a complete summary.',
       );
       expect(find.text('/compact'), findsNothing);
       expect(
@@ -470,6 +472,319 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
     },
   );
+
+  testWidgets(
+    'thinking capability rejection feedback explains thinking unsupported with actionable advice',
+    (tester) async {
+      conversationRepository.compactSessionResult = const SessionCompactResult(
+        outcome: 'failed',
+        failureReason: 'summarization_failed',
+        failureStage: 'preparation',
+        failureCause: 'thinking_capability_unsupported',
+      );
+      String? validationError;
+      ConversationInputPanel.debugOnValidationError = (message) {
+        validationError = message;
+      };
+
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        child: ConversationInputPanel(
+          sessionId: 'session-compact',
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+
+      await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_message_btn')));
+      await tester.pumpAndSettle();
+
+      expect(conversationRepository.compactSessionCalls, 1);
+      expect(
+        validationError,
+        'Selected thinking mode is not supported by the active model or route. '
+        'Select a supported thinking mode or route and try again.',
+      );
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
+
+  testWidgets(
+    'provider timeout rejection feedback explains timeout with safe next action',
+    (tester) async {
+      conversationRepository.compactSessionResult = const SessionCompactResult(
+        outcome: 'failed',
+        failureReason: 'summarization_failed',
+        failureStage: 'provider',
+        failureCause: 'timeout',
+      );
+      String? validationError;
+      ConversationInputPanel.debugOnValidationError = (message) {
+        validationError = message;
+      };
+
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        child: ConversationInputPanel(
+          sessionId: 'session-compact',
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+
+      await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_message_btn')));
+      await tester.pumpAndSettle();
+
+      expect(conversationRepository.compactSessionCalls, 1);
+      expect(
+        validationError,
+        'Provider timed out during context summarization. Check network connection or try again.',
+      );
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
+
+  testWidgets(
+    'Arabic locale delivers the localized toast explanation with next action',
+    (tester) async {
+      conversationRepository.compactSessionResult = const SessionCompactResult(
+        outcome: 'failed',
+        failureReason: 'summarization_failed',
+        failureStage: 'preparation',
+        failureCause: 'thinking_capability_unsupported',
+      );
+      String? validationError;
+      ConversationInputPanel.debugOnValidationError = (message) {
+        validationError = message;
+      };
+
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        locale: const Locale('ar'),
+        child: ConversationInputPanel(
+          sessionId: 'session-compact',
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+
+      await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_message_btn')));
+      await tester.pumpAndSettle();
+
+      // Expectations derive from the localization system: the root contract
+      // forbids Arabic literals in handwritten Dart, including tests.
+      final arabic = AppLocalizationsAr();
+      expect(conversationRepository.compactSessionCalls, 1);
+      expect(
+        validationError,
+        '${arabic.compactionFailureThinkingUnsupported} '
+        '${arabic.compactionActionThinkingUnsupported}',
+      );
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
+
+  group('slow acknowledgement (Task 119)', () {
+    late Completer<SessionCompactResult> settlement;
+    late List<String> validationErrors;
+    late List<String> infoNotices;
+
+    setUp(() {
+      validationErrors = [];
+      infoNotices = [];
+      ConversationInputPanel.debugOnValidationError = validationErrors.add;
+      ToastUtils.debugOnShowInfo = infoNotices.add;
+    });
+
+    tearDown(() => ToastUtils.debugOnShowInfo = null);
+
+    // Toast animations never settle while a toast is visible, so advance a
+    // bounded frame instead of pumpAndSettle.
+    Future<void> settle(WidgetTester tester) async {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    }
+
+    Future<void> runCompact(
+      WidgetTester tester, {
+      Locale? locale,
+      String sessionId = 'session-compact',
+    }) async {
+      // Created inside the test body so its completion runs in the widget
+      // tester's fake-async zone.
+      settlement = Completer<SessionCompactResult>();
+      conversationRepository.compactSessionResult = SessionCompactResult(
+        outcome: SessionCompactResult.pendingOutcome,
+        requestId: 'req-slow',
+        settlement: settlement.future,
+      );
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        locale: locale,
+        wrapWithToastification: true,
+        child: ConversationInputPanel(
+          sessionId: sessionId,
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+      await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_message_btn')));
+      await settle(tester);
+      expect(conversationRepository.compactSessionCalls, 1);
+    }
+
+    Future<void> drainToasts(WidgetTester tester) async {
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+
+    testWidgets('pending shows a neutral still-running notice, never a failure', (
+      tester,
+    ) async {
+      await runCompact(tester);
+
+      expect(conversationRepository.compactSessionCalls, 1);
+      expect(validationErrors, isEmpty);
+      expect(infoNotices, [AppLocalizationsEn().compactionPendingStillRunning]);
+      await drainToasts(tester);
+    });
+
+    testWidgets('late success after pending shows no failure', (tester) async {
+      await runCompact(tester);
+      settlement.complete(
+        const SessionCompactResult(outcome: 'accepted', compactionId: 'cmp-1'),
+      );
+      await settle(tester);
+
+      expect(validationErrors, isEmpty);
+      expect(conversationRepository.compactSessionCalls, 1);
+      await drainToasts(tester);
+    });
+
+    testWidgets('late failure after pending is reported exactly once', (
+      tester,
+    ) async {
+      await runCompact(tester);
+      settlement.complete(
+        const SessionCompactResult(
+          outcome: 'failed',
+          failureReason: 'summarization_failed',
+          failureStage: 'provider',
+          failureCause: 'timeout',
+        ),
+      );
+      await settle(tester);
+
+      expect(validationErrors, [
+        'Provider timed out during context summarization. Check network connection or try again.',
+      ]);
+      expect(conversationRepository.compactSessionCalls, 1, reason: 'never resent');
+      await drainToasts(tester);
+    });
+
+    testWidgets('late busy rejection after pending is reported', (tester) async {
+      await runCompact(tester);
+      settlement.complete(
+        const SessionCompactResult(outcome: 'compaction_in_progress'),
+      );
+      await settle(tester);
+
+      expect(validationErrors, [
+        'Context compaction is already in progress. Wait for the current operation to finish before retrying.',
+      ]);
+      await drainToasts(tester);
+    });
+
+    testWidgets('pending releases the runtime action without resending', (
+      tester,
+    ) async {
+      await runCompact(tester);
+      expect(conversationRepository.compactSessionCalls, 1);
+
+      // Only an explicit new user intent dispatches again; the daemon owns
+      // whether it is admitted (for example compaction_in_progress).
+      conversationRepository.compactSessionResult = const SessionCompactResult(
+        outcome: 'compaction_in_progress',
+      );
+      await tester.enterText(find.byKey(const Key('chat_input')), '/compact');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_message_btn')));
+      await settle(tester);
+
+      expect(conversationRepository.compactSessionCalls, 2);
+      expect(validationErrors, [
+        'Context compaction is already in progress. Wait for the current operation to finish before retrying.',
+      ]);
+      await drainToasts(tester);
+    });
+
+    testWidgets('unconfirmed settlement adds no failure', (tester) async {
+      await runCompact(tester);
+      settlement.complete(
+        const SessionCompactResult(outcome: SessionCompactResult.unconfirmedOutcome),
+      );
+      await settle(tester);
+
+      expect(validationErrors, isEmpty);
+      await drainToasts(tester);
+    });
+
+    testWidgets('late failure for a session the panel left is not shown here', (
+      tester,
+    ) async {
+      await runCompact(tester);
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        wrapWithToastification: true,
+        child: ConversationInputPanel(
+          sessionId: 'session-other',
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+      settlement.complete(const SessionCompactResult(outcome: 'failed'));
+      await settle(tester);
+
+      expect(validationErrors, isEmpty);
+      await drainToasts(tester);
+    });
+
+    testWidgets('Arabic locale localizes the still-running notice', (
+      tester,
+    ) async {
+      await runCompact(tester, locale: const Locale('ar'));
+
+      expect(validationErrors, isEmpty);
+      expect(infoNotices, [AppLocalizationsAr().compactionPendingStillRunning]);
+      await drainToasts(tester);
+    });
+  });
 }
 
 class _TestSessionMessagesCubit extends SessionMessagesCubit {

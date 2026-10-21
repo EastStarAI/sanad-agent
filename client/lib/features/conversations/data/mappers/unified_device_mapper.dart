@@ -87,6 +87,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       'previous_provider_display_name':
           row['previous_provider_display_name'] ?? metadata['previous_provider_display_name'],
       'provider_display_name': row['provider_display_name'] ?? metadata['provider_display_name'],
+      'attachments': row['attachments'] ?? metadata['attachments'],
     };
     final historyStructuredFields = switch (type) {
       'tool_use' => <String, dynamic>{
@@ -95,11 +96,20 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       },
       'tool_result' => <String, dynamic>{
         'tool': row['tool'] ?? _historyToolName(metadata['tool']) ?? toolMetadata,
-        'output': row['output'] ?? metadata['output'] ?? toolMetadata?['output'],
-        'isError': row['isError'] ?? metadata['isError'],
+        'input': row['input'] ?? metadata['input'] ?? toolMetadata?['input'],
+        'output': row['output'] ?? metadata['output'] ?? toolMetadata?['output'] ?? row['content'],
+        if (row['isError'] != null || metadata['isError'] != null)
+          'isError': row['isError'] ?? metadata['isError'],
         'status': row['status'] ?? metadata['status'],
         'provider_instance_id': row['provider_instance_id'] ?? metadata['provider_instance_id'],
         'model_id': row['model_id'] ?? metadata['model_id'],
+        'media': row['media'] ?? metadata['media'],
+        if (row['toolResult'] != null || metadata['toolResult'] != null)
+          'toolResult': row['toolResult'] ?? metadata['toolResult'],
+        if (row['tool_result'] != null || metadata['tool_result'] != null)
+          'tool_result': row['tool_result'] ?? metadata['tool_result'],
+        if (row['errorCode'] != null || metadata['errorCode'] != null)
+          'errorCode': row['errorCode'] ?? metadata['errorCode'],
       },
       'tool_call' => <String, dynamic>{
         'tool': row['tool'] ?? toolMetadata ?? _historyToolName(metadata['tool']),
@@ -116,7 +126,18 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'status': row['status'] ?? metadata['status'],
         'started_at': row['started_at'] ?? metadata['started_at'],
         'completed_at': row['completed_at'] ?? metadata['completed_at'],
-        'failure_reason': row['failure_reason'] ?? metadata['failure_reason'],
+        'failure_reason': row['failure_reason'] ??
+            row['failureReason'] ??
+            metadata['failure_reason'] ??
+            metadata['failureReason'],
+        'failure_stage': row['failure_stage'] ??
+            row['failureStage'] ??
+            metadata['failure_stage'] ??
+            metadata['failureStage'],
+        'failure_cause': row['failure_cause'] ??
+            row['failureCause'] ??
+            metadata['failure_cause'] ??
+            metadata['failureCause'],
         'context_window_tokens': row['context_window_tokens'] ?? metadata['context_window_tokens'],
         'estimated_request_tokens_before':
             row['estimated_request_tokens_before'] ?? metadata['estimated_request_tokens_before'],
@@ -317,6 +338,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
           status: status ?? EventStatus.running,
+          text: text,
           tool: {
             'name': event['tool'] ?? 'Unknown Tool',
             'input': event['input'],
@@ -340,16 +362,61 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         );
 
       case 'tool_result':
-        final output = event['output']?.toString() ?? '';
+        final rawToolResult =
+            event['toolResult'] ?? event['tool_result'] ?? metadata?['toolResult'] ?? metadata?['tool_result'];
+        final toolResult = rawToolResult is Map ? Map<String, dynamic>.from(rawToolResult) : null;
+        String? typedResultText;
+        if (toolResult != null && toolResult['blocks'] is List) {
+          final blocks = toolResult['blocks'] as List;
+          final textParts = <String>[];
+          for (final b in blocks) {
+            if (b is Map && b['type'] == 'text' && b['text'] != null) {
+              final t = b['text'].toString();
+              if (t.isNotEmpty) textParts.add(t);
+            }
+          }
+          if (textParts.isNotEmpty) {
+            typedResultText = textParts.join('\n');
+          }
+        }
+        final rawOutput = event['output'];
+        final rawInput = event['input'] ?? metadata?['input'];
         final explicitStatus = _extractStatus(event['status']);
         final isCancelled = explicitStatus == EventStatus.cancelled || event['status']?.toString() == 'cancelled';
-        final isError = !isCancelled && (event['isError'] == true || explicitStatus == EventStatus.error);
+        final toolResultIsError = toolResult?['isError'] == true || toolResult?['errorCode'] != null;
+        final isError =
+            !isCancelled &&
+            (event['isError'] == true ||
+                explicitStatus == EventStatus.error ||
+                event['status']?.toString() == 'error' ||
+                event['status']?.toString() == 'failed' ||
+                toolResultIsError ||
+                event['errorCode'] != null);
+
+        final resolvedOutput = (rawOutput != null && rawOutput is String && rawOutput.isNotEmpty)
+            ? rawOutput
+            : (typedResultText != null && typedResultText.isNotEmpty
+                ? typedResultText
+                : (text.isNotEmpty ? text : rawOutput));
+        final resolvedText = (typedResultText != null && typedResultText.isNotEmpty)
+            ? typedResultText
+            : (isError ? text : '');
 
         return CanonicalEvent(
           id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
           status: isCancelled ? EventStatus.cancelled : (isError ? EventStatus.error : EventStatus.done),
-          tool: {'name': event['tool'] ?? '', 'output': output},
+          text: resolvedText,
+          tool: {
+            'name': event['tool'] ?? '',
+            if (rawInput != null) 'input': rawInput,
+            if (resolvedOutput != null) 'output': resolvedOutput,
+            'isError': isError,
+            if (event['media'] is Map) 'media': Map<String, dynamic>.from(event['media'] as Map),
+            if (toolResult != null) 'toolResult': toolResult,
+            if (toolResult?['errorCode'] != null || event['errorCode'] != null)
+              'errorCode': toolResult?['errorCode'] ?? event['errorCode'],
+          },
           timestamp: timestamp,
           sessionId: sessionId,
           runId: runId,
@@ -374,6 +441,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
           status: status ?? EventStatus.running,
+          text: text,
           tool: {
             'name': tool?['name'] ?? event['tool'] ?? 'Unknown Tool',
             'input': tool?['input'] ?? event['input'],
@@ -550,6 +618,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         if (event['provider_instance_id'] != null) 'provider_instance_id': event['provider_instance_id'],
         if (event['model_id'] != null) 'model_id': event['model_id'],
         if (snapshot.failureReason != null) 'failure_reason': snapshot.failureReason,
+        if (snapshot.failureStage != null) 'failure_stage': snapshot.failureStage,
+        if (snapshot.failureCause != null) 'failure_cause': snapshot.failureCause,
         if (snapshot.contextWindowTokens != null) 'context_window_tokens': snapshot.contextWindowTokens,
         if (snapshot.effectiveInputBudgetTokens != null)
           'effective_input_budget_tokens': snapshot.effectiveInputBudgetTokens,
@@ -603,7 +673,28 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
 
   String _extractText(Map<String, dynamic> event) {
     final value = event['content'] ?? event['text'] ?? event['message'];
-    return (value ?? '').toString();
+    if (value != null && value is String && value.isNotEmpty) return value;
+    final rawToolResult =
+        event['toolResult'] ?? event['tool_result'] ?? (event['metadata'] is Map ? (event['metadata'] as Map)['toolResult'] ?? (event['metadata'] as Map)['tool_result'] : null);
+    if (rawToolResult is Map) {
+      if (rawToolResult['blocks'] is List) {
+        final blocks = rawToolResult['blocks'] as List;
+        final textParts = <String>[];
+        for (final b in blocks) {
+          if (b is Map && b['type'] == 'text' && b['text'] != null) {
+            final t = b['text'].toString();
+            if (t.isNotEmpty) textParts.add(t);
+          }
+        }
+        return textParts.join('\n');
+      }
+      return '';
+    }
+    final output = event['output'];
+    if (output is String) {
+      return output;
+    }
+    return '';
   }
 
   EventStatus? _extractStatus(dynamic value) {
@@ -643,6 +734,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       if (event['terminal_at'] != null) 'terminal_at': event['terminal_at'],
       if (event['runtime_ms'] != null) 'runtime_ms': event['runtime_ms'],
       if (event['cleanup_outcome'] != null) 'cleanup_outcome': event['cleanup_outcome'],
+      if (event['attachments'] is List) 'attachments': event['attachments'],
     };
     return normalized.isEmpty ? null : normalized;
   }

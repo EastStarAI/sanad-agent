@@ -70,14 +70,71 @@ Removing `ContextEngine` does **not** alter these independent paths:
 - Prototype compression did not feed usage metrics; it only replaced message lists before the provider call.
 - Latest provider-reported input usage for the same route and measured request
   material is the authoritative pressure baseline. Adapter-owned wire
-  fingerprints prove a strict extension and only the appended wire suffix is
+  fingerprints prove the extension, and only the appended wire suffix is
   estimated; a rough full-request estimate must not override that confirmed
   value. Route, prompt, schema, or measured-prefix changes invalidate the
   baseline. After daemon restart, the runner may recover the latest persisted
-  assistant `usage.input_tokens` only by rebuilding and adapter-measuring the
-  exact request prefix that produced that assistant response. The normal
-  strict-extension proof still decides whether the recovered baseline applies
-  to the next request, so stale route or wire material fails closed.
+  assistant usage only by rebuilding the exact request prefix that produced that
+  assistant response. The timestamped per-model-step `context_usage` snapshot is
+  the authority there, because the generic `usage` map on the same row is a
+  mutable run value that can disagree with the frozen per-call snapshot;
+  `usage.input_tokens` remains a legacy fallback. Route identity follows
+  authority: a provider/model identity present in the `context_usage` snapshot
+  wins, so a matching mutable legacy `provider`/`model` value never overrides a
+  mismatched snapshot; a recorded identity that is absent or empty never
+  matches, and candidate aliases themselves are never null. Production
+  `BaseOpenAIAdapter` implements `WireInputUsageMeasurer` and
+  `WireInputTokenEstimator` by reusing its canonical request builder,
+  ensuring generic OpenAI-compatible routes participate in wire measurement
+  without alternate codecs or transport-counting discrepancies.
+- A baseline recovered from persisted usage requires a compact versioned
+  non-content proof (`wire_proof`, format `v1:<sha256>`) that binds the
+  confirmed input to the complete ordered wire items (`inputItemFingerprints`),
+  stable material (`stableMaterialFingerprint`), and safe route signature. The
+  live producer writes `wire_proof` into the frozen per-step `context_usage`
+  snapshot. On restore after restart, the active adapter remeasures the exact
+  historical request prefix preceding the assistant row; the baseline is
+  restored only if the adapter exposes `WireInputUsageMeasurer`, the row
+  carries a valid `wire_proof`, the persisted proof matches the remeasured
+  prefix and route signature, and the current request extends that
+  prefix on the same route (`extendsMeasurement`). Unsupported/no-measurer
+  adapters, legacy unbound rows without `wire_proof`, and any drift in route,
+  prompt, tool schemas, or historical message content fail closed to explicit
+  estimates. There is no unproven floor: prospective pressure is calculated
+  from the remeasured extension delta (`wireMeasurement.estimatedTokens -
+  baselineWire.estimatedTokens`), and a wire-measured baseline is consumed only
+  while the live remeasurement keeps proving that extension. If the proof stops
+  holding — for example a wire-visible request option such as a thinking
+  directive changes — admission falls back to the explicit estimate until a new
+  provider response supplies a fresh binding; the in-memory message comparison
+  remains only for routes whose adapter exposes no wire measurement at all.
+  Stale receipts recorded before an activated compaction boundary are discarded
+  by the same material proof, so no wall-clock recency heuristic is needed.
+  Metadata-only bookkeeping changes on earlier
+  messages do not alter the wire payload or item fingerprints and thus do not
+  falsely invalidate valid pressure. Cached input tokens remain part of the
+  confirmed input and are never discounted, and confirmed pressure that already
+  exceeds the threshold still triggers automatic compaction.
+- Adapter wire measurement prices only model-visible material: text uses the
+  text rate, and provider-owned opaque state — Codex reasoning
+  `encrypted_content` replay — is excluded entirely, because the provider prices
+  it under its own token models rather than as request text. Encoded media
+  transport (data URIs and long base64 blobs) is never priced as text; image
+  material is priced separately from its canonical, dimension-bearing history
+  (a base charge plus a tile charge per image after the model's edge and
+  minimum-short-side fit). Only `low` detail is charged the base rate: canonical
+  `ToolImageDetail.original` reaches the wire as `high` and is priced on the
+  tile grid. The fitted grid is clamped to the per-image ceiling, so a thin or
+  panorama image that would otherwise scale to an unbounded tile grid stays
+  bounded, and a fitted thin side that rounds to zero keeps one pixel instead
+  of producing a non-finite scale. An image without recorded dimensions is
+  bounded by the same per-image ceiling instead of its transport size, and
+  declared `media_bytes` keep byte-based accounting. The estimate therefore never charges
+  the serialized transport for opaque replay or encoded media, and confirmed
+  baseline deltas reuse that same basis. Ordering fingerprints are unchanged,
+  so a baseline measured on a different (for example pre-repair) pricing basis
+  yields a non-extending or negative delta and is discarded instead of mixing
+  stale usage into the prospective estimate.
 - Provider/model text injected into the volatile system tier comes from the
   resolved route identity, not response-metrics display state. A provider
   response therefore cannot mutate the next request prefix and invalidate an
@@ -169,6 +226,59 @@ Typed, redactable failures for persistence and protocol. Initial set:
 | `persistenceFailed` | Boundary commit failed |
 | `interrupted` | Restart with non-terminal `started` row |
 
+### 4.3.1 Safe Diagnostics (`CompactionFailureStage` & `CompactionFailureCause`)
+
+Plan 106 Gate G8 introduces allowlisted, typed failure diagnostics carrying stage and cause across:
+1. Command Result (`SessionCompactResult` via `sessionCompactResult` envelope payload: `failure_stage`, `failure_cause`).
+2. Live Lifecycle Broadcast (`CompactionLifecycleEvent` via `contextCompactionFailed` canonical event: `failure_stage`, `failure_cause`).
+3. Historical Timeline Hydration (`SessionQueryHandler._compactionLifecycleHistoryRow`: `failure_stage`, `failure_cause` extracted from durable `failure_detail_json`).
+4. Durable Persistence (`session_compaction_operations.failure_detail_json`: `{"stage": stage, "cause": cause, ...}`).
+
+#### Allowlisted Stages (`CompactionFailureStage`)
+- `preparation`: Pre-claim validation, runner initialization, thinking selection validation, admission checks.
+- `pruning`: Message and tool-result pruning before summarization, including projection budget handling.
+- `provider`: Summarizer model invocation (timeouts, rate limits, network, provider HTTP codes).
+- `validation`: Continuity anchor validation.
+- `persistence`: Database commit, boundary CAS, or activation failure.
+
+#### Allowlisted Causes (`CompactionFailureCause`)
+Allowlisted non-sensitive identifier strings representing exact failure modes without leaking raw exception bodies, secrets, paths, user content, or HTTP payloads:
+- Preparation: `session_busy`, `compaction_in_progress`, `invalid_request`, `unavailable`, `session_not_found`, `thinking_capability_unsupported`, `thinking_capability_unknown`, `thinking_option_unavailable_for_route`, `thinking_route_instance_not_found`, `route_resolution_failed`, `preparation_failed`.
+- Pruning: `tool_result_malformed`, `pruning_failed`, `projection_still_over_budget`, `recovery_capacity_exceeded` (Task 117: the bounded recovery summarizer needs more chunks than configured; decided before any recovery provider call).
+- Provider: `timeout`, `rate_limited`, `overflow`, `invalid_response`, `network_error`, `provider_error`, `summarization_failed`.
+- Validation: `continuity_validation_failed`.
+- Persistence: `source_revision_stale`, `claim_lost`, `stale_operation`, `superseded`, `missing_message_rows`, `database_error`, `persistence_failed`, `interrupted`.
+- Fallback: `unexpected_error`.
+
+### 4.3.2 Client Explanatory Feedback & Safe Next Actions (Gate G9)
+
+Plan 106 Gate G9 maps allowlisted stage and cause diagnostics into user-actionable, localized feedback:
+1. **Reusable Resolution:** `CompactionFailureFormatter` in `client/lib/features/conversations/presentation/utils/compaction_failure_formatter.dart` normalizes wire fields (accepting both canonical `snake_case` and legacy `camelCase`) and resolves one `CompactionFailureExplanation` containing:
+   - `explanation`: Localized statement of what failed.
+   - `nextAction`: Localized guidance on safe next actions.
+   - `toToastMessage()`: Combined message used for manual `/compact` error toasts.
+   - `toDetailLines()`: Formatted `Failure:` and `Next action:` lines rendered in `CompactionEventTile` tooltips.
+   - Fallback authority: without an ambient localization the resolver reads the generated English localization (`AppLocalizationsEn`), so `app_en.arb` remains the single copy authority and no English failure copy is duplicated as Dart literals.
+2. **Failure Categorization:**
+   - **Preparation & Thinking Validation:** Distinguishes unsupported thinking modes (`thinking_capability_unsupported`, `thinking_capability_unknown`, etc.), busy sessions, duplicate in-progress operations, and invalid requests.
+   - **Pruning:** Distinguishes malformed tool results from unresolvable over-budget projections (`projection_still_over_budget`) and from a session too large for bounded recovery (`recovery_capacity_exceeded`, whose next action is to start a new session or switch to a larger-context model).
+   - **Provider:** Distinguishes timeouts, rate limits (HTTP 429), context overflow, invalid responses, network errors, and generic provider errors.
+   - **Validation:** Distinguishes continuity anchor failures (`continuity_validation_failed`).
+   - **Persistence:** Distinguishes stale revisions, superseded claims, daemon restarts (`interrupted`), and storage write errors.
+   - **Unclassified:** `unexpected_error` (and any unknown cause) renders the honest fallback explanation and retry action; it never inherits the provider default explanation, because the Agent defaults the stage to `provider` when no stage hint existed. A stage the Agent explicitly asserted keeps its stage-specific explanation.
+3. **Multilingual Parity:** English (`app_en.arb`) and Arabic RTL (`app_ar.arb`) keys provide natural translations without hardcoded widget literals. Widget and test expectations are resolved through the localization system — handwritten Dart carries no Arabic literals, including tests (root localization law), and the English timeline tile copy is locked through the localization delegates.
+4. **History & Live Parity:** `UnifiedDeviceMapper` parses `failure_stage` and `failure_cause` from both live `context_compaction.failed` envelopes and hydrated historical rows (`session.query`), ensuring reopening a conversation reproduces the exact same explanation as the original event.
+5. **Redaction & Safety:** Client feedback never renders raw exception messages, stack traces, file paths, or provider bodies.
+
+### 4.3.3 Manual `/compact` Acknowledgement Timing (Task 119)
+
+The daemon's `SessionRunOrchestrator.handleCompactCommand` awaits `CompactionCoordinator.runCompaction` before the handler emits `session.compact_result`, so the result carries the terminal outcome (`accepted` means completed) rather than admission. Busy, in-progress, unavailable and invalid-request rejections still return before any provider call. A provider summary can therefore outlive the Client's request window; the Client owns truthful presentation of that gap:
+
+1. **One dispatch, unchanged window:** `ConversationCommands.compactSession` sends `session.compact` once with the gateway's 10-second acknowledgement window (`defaultCompactAcknowledgementTimeout`); the global gateway timeout is not raised, and a timeout never resends.
+2. **Pending, not failed:** an unacknowledged dispatch returns `SessionCompactResult.pendingOutcome`. The composer shows the neutral localized `compactionPendingStillRunning` notice (info toast, not an error) and releases the runtime action; a later explicit `/compact` is a new user intent that the daemon admits or rejects (for example `compaction_in_progress`).
+3. **Late correlation:** a listener registered before dispatch matches the late `session.compact_result` by exact `session_id` and `request_id` and settles at most once (duplicates and other requests or sessions are ignored). Without a match inside `defaultCompactSettlementWindow` (10 minutes) or when the event stream closes, it settles as `unconfirmedOutcome`, which is unknown rather than failed and shows nothing further.
+4. **Real outcome:** a late failure or rejection shows the same `CompactionFailureFormatter` toast as an on-time one, exactly once, and only while the composer still shows the requesting session. A late success shows no toast. The `context_compaction.started|completed|failed` lifecycle tiles remain the durable timeline and history surface in every case.
+
 ### 4.4 `CompactionPressure`
 
 Input to the engine; produced by pressure evaluation only.
@@ -220,6 +330,27 @@ Terminal result visible to orchestrator and protocol mappers.
 - Model projection injects summary content through the projection builder into the ephemeral provider payload only.
 - Timeline shows compaction **events**, not summary text (Plan 53 §4.7).
 
+### 4.8 Target Ratio and Tail Budgeting Semantics
+
+Compaction policy declares two primary thresholds:
+- `threshold`: Context utilization ratio (default `0.90`) at which prospective request token estimation triggers automatic compaction.
+- `targetRatio`: Utilization ratio (default `0.10`) used to derive `targetRequestTokens = (effectiveInputWindow * targetRatio).round()`.
+
+#### Exact Semantics in Engine Selection
+1. **Retained-Tail Budget, Not Full-Request Cap:**
+   `ContextCompactionEngine.prepareSelection` uses `targetRequestTokens` specifically as the token budget for the **retained tail** (`tailTokenBudget`). It selects the most recent conversational turns that fit within this budget so the active conversation preserves recent context verbatim. The effective budget is capped at `targetRequestTokens` and can be smaller: a progress guard additionally caps it at 50% of the current history tokens (`progressCap`), whichever is lower.
+2. **Additive Non-Tail Overhead:**
+   The full prospective and confirmed request size after compaction comprises:
+   - System prompt and developer instructions
+   - Runtime context and memory injections
+   - Available tool schemas
+   - The generated compaction summary
+   - The retained tail messages
+3. **Full-Request Constraint Boundary:**
+   `buildCandidate` verifies the post-compaction request projection against the model's `effectiveInputBudget` (context window minus output token reservation), ensuring it safely fits within provider limits. It does *not* force the sum of tools, system prompt, summary, and tail into `targetRatio`. The retained tail itself is re-checked against `targetRequestTokens`: if either the full projection exceeds `effectiveInputBudget` or the tail exceeds the target, projection-only pruning runs once, and a candidate that still exceeds either bound fails with `projectionStillOverBudget` rather than activating an over-budget boundary.
+4. **Observed Confirmed Ratios:**
+   When `targetRatio = 0.10` and `threshold = 0.90`, an actual post-compaction request token utilization of ~18–20% (e.g. ~18.8% confirmed usage) is normal and mathematically expected behavior reflecting ~10% retained tail plus additive system prompt, tool schemas, and summary overhead.
+
 ## 5. Provider Wire Stripping (Gate A0)
 
 The following must never appear in provider request bodies or adapter-visible message lists:
@@ -268,16 +399,38 @@ ship in Gate B1.
 |---|---|---|
 | Canonical messages | `messages(id, session_id, data)` via `SessionDB.getMessages` | **`messages.id`** is the durable identity for `CompactionMessageIdentity`; rows are append-only for compaction (no delete/replace during compression). |
 | Session metadata | `sessions` | Holds model/route/title; **`history_revision` is absent today** and must be added in B1. |
-| Message writers | `session_execution_state_coordinator` (`INSERT`), `SessionDB.replaceMessages` (semantic-prefix + changed-suffix rewrite) | Normal turns append rows; metadata-only patches preserve row ids; replay/supersession (Task 51) uses `replaceMessages` and must bump `history_revision`. |
+| Message writers | `session_execution_state_coordinator` (`INSERT`), `SessionDB.replaceMessages` (identity-aligned in-place rewrite, Task 117) | Normal turns append rows; identity-aligned content and metadata changes preserve row ids; replay/supersession (Task 51) uses `replaceMessages` and must bump `history_revision`. |
 | Execution queue | `session_work_items`, `session_pending_runs` | Orthogonal to compaction snapshot; queued user input during compaction stays here until terminal drain (53d). |
 
-`SessionDB.replaceMessages` preserves the longest semantically identical
-canonical prefix and its existing row IDs. Exact matches are untouched;
-top-level metadata-only changes update the existing row in place; the first
-role/content/tool/reasoning/provider-state change deletes and reinserts the
-changed suffix. Ordinary appends and response-metadata attachment therefore
-keep an activated boundary eligible, while edit/retry still supersedes the
-changed suffix and bumps `history_revision`.
+`SessionDB.replaceMessages` aligns the replacement list with the active rows
+by `message_id`, never by content (Task 117):
+
+1. **Identity assignment.** A message without `message_id` reuses the id of
+   the active row at the same position, so in-memory history appended after
+   the last reload stays bound to its rows. Positional reuse never takes an id
+   that another incoming message carries explicitly: a row inserted
+   mid-history (a `HistoryHealer` result) mints a fresh identity instead of
+   stealing the displaced row's and being overwritten by it.
+2. **Duplicate guard.** Two incoming messages with the same `message_id` throw
+   `StateError` before any write; the transaction rolls back.
+3. **In-place alignment.** While the existing and replacement ids match, a
+   row whose stored JSON differs is updated in place through
+   `MessageHistoryIdentity.persist(sqliteId:)`, keeping `messages.id`.
+   Unchanged rows are not written. Content transforms (processed-image
+   pruning, rejected provider-state clearing, steer stamping, metadata
+   attachment) therefore keep every row id and every compaction boundary
+   endpoint. Legacy rows without a stored `message_id` align by position only
+   with a message that carries no explicit id.
+4. **Structural suffix.** The first structural divergence (insertion,
+   removal, reorder, identity change) deletes only the *active* rows from that
+   point and re-inserts the remaining replacement messages, because
+   `messages.id` is the only ordering key. Superseded audit rows are never
+   deleted by a replace; re-inserted active rows receive ids above them.
+5. `history_revision` is bumped once per replace.
+
+Stored payloads stay opaque: an aligned unchanged row is not rewritten, and a
+re-inserted row is re-encoded from its decoded `Message`, so `providerState`
+and `metadata` round-trip byte-identically (Task 116 relies on this).
 | Runtime notices | `session_runtime_notices`, suspended/pending maps | Unrelated to projection boundaries. |
 
 **Findings:**
@@ -384,7 +537,7 @@ Task 47 consumers paginate **full** canonical history and optional compaction **
 
 **Task 51 — soft rewind / supersession**
 
-When `replaceMessages` removes or rewrites rows at or before a boundary's tail:
+When `replaceMessages` structurally inserts, removes, or reorders rows at or before a boundary's tail (identity-aligned content changes keep row ids and never invalidate a boundary, Task 117):
 
 1. Completed rows remain for audit but become **projection-ineligible** via `CompactionBoundaryValidity`.
 2. Orchestrator recomputes projection from the newest eligible completed boundary, or full history when none remain.
@@ -424,7 +577,7 @@ Dart helper: `CompactionBoundaryValidity` in `agent/lib/evolution/models/compact
 | `ModelProjectionBuilder` | Reads canonical history + newest **eligible** completed boundary; emits ephemeral provider conversation list |
 | `CompactionSummaryProjection` | Formats internal summary as one projected **user** message (`sanad_compaction_summary: true` metadata) |
 | `CanonicalConversationTimeline` | Full `messages.id` ordering for UI/audit; independent of projection |
-| `CompactionBoundaryValidity` | Eligibility checks; endpoint loss rejects a partially superseded range while numeric gaps between present endpoints remain valid |
+| `CompactionBoundaryValidity` | Eligibility checks; missing source endpoints or missing retained-tail start mark the boundary ineligible (falling back to older boundaries or full history) while numeric gaps between present endpoints remain valid |
 
 Projection rules:
 
@@ -432,12 +585,12 @@ Projection rules:
 2. Active boundary ⇒ `[summary user message] + retained tail verbatim + current rows after the retained suffix`. Projection uses the surviving tail-start endpoint when recovery rewrites the obsolete tail-end row; the semantic tail-end fingerprint is reserved for causal placement of lifecycle events during history hydration.
 3. System prompt and runtime overlays remain outside projection; `AgentContextAssembler` owns them per request (53d wiring).
 4. Repeated compactions use only the newest eligible boundary; prior summaries are not stacked.
-5. Exactly one missing endpoint in the newest completed boundary ⇒ `ModelProjectionException` (no silent reorder fallback). Both endpoints missing skip to older boundaries or rule 1; numeric gaps between present endpoints are normal.
+5. Missing source endpoints or a missing retained-tail start in a completed boundary mark that boundary projection-ineligible and emit an invalidation diagnostic (skipping to older boundaries or rule 1 without lockout). A surviving tail start with a replaced tail end remains eligible and projects the replacement suffix. Numeric gaps between present endpoints are valid. `history_revision` is a monotonic write counter; `history_revision_future` means the boundary claims a revision ahead of live history (restore/rollback). After Task 117 only a structural mid-history insert inside a summarized range (or a legacy boundary invalidated before the fix) reaches this rule; content rewrites keep the endpoints. The invalidated record is never repaired or reused as `previousSummary`; a new boundary comes from normal preflight, and a session too large for one request is summarized by the bounded recovery summarizer (§8.12) or fails with `recovery_capacity_exceeded`. Re-anchoring endpoints by `message_id` across structural inserts is Task 118 scope.
 6. Compaction row fields and projection metadata never enter provider wire payloads.
 
 DI: `ModelProjectionBuilder` registered after `SessionManager` in `agent/lib/core/di.dart`.
 
-Verification: `fvm dart test test/evolution/model_projection_builder_test.dart` — 7 passed.
+Verification: `fvm dart test test/evolution/model_projection_builder_test.dart` — 23 passed (Task 117, 2026-10-21).
 
 ### 8.11 Provider-backed summary request (Task 53i)
 
@@ -448,11 +601,30 @@ that the provider rejected before output; Manual uses the current idle
 projection without adding a synthetic conversation turn. The message and the
 provider response are never persisted as canonical messages.
 
-The request keeps the ordinary tool schemas, thinking mode, output setting,
-cancellation scope, and other request options. The prompt asks for approximately
-two pages but creates no compaction-only token, byte, or field-length limit. Its
-last line forbids tool calls and requires only the final JSON object. A tool-call
-response is never dispatched and receives one corrective attempt from the same
+The compaction request options are built through a single canonical derivation
+(`CompactionRequestFactory.buildCompactionRequestOptions`) shared across manual,
+automatic, and overflow triggers. Every `LLMRequestOptions` field is explicitly
+accounted for: active route signature, user-selected thinking mode, native thinking
+directive, route capability profile/snapshot, attachment store, and transport test seams
+(`requestClientFactory`) are preserved verbatim. Compaction correlation overrides
+`requestId: 'compaction:...'` and cancellation scopes are verified (clearing expired
+or cancelled scopes rather than blindly copying them). Stored thinking choices and wire
+directives are never lowered or substituted as an error fallback. User image attachments
+are verified through the request's `AttachmentStore` before transmission; missing, corrupt,
+or unauthorized media fails specifically before HTTP, preserving the storage jail.
+
+Before summarization, compressible head tool messages are pruned by `CompactionToolPruner`.
+For structured tool results (`Message.toolResult`), the pruner derives immutable replacement
+`ToolExecutionResult` blocks so `content == toolResult.displayText` strictly holds. Call
+identities (`toolCallId`), error flags/codes (`isError`, `errorCode`), schema version, and
+metadata are preserved. For summarizer input, media blocks (`ToolImageBlock`) are converted
+to text descriptions (`[media omitted for compaction summary: <bytes> bytes]`); for oversized
+retained-tail projection, valid image blocks remain untouched without creating invalid empty
+image blocks or inventing an unsanctioned image retention policy. Canonical records are never mutated.
+
+The prompt asks for approximately two pages but creates no compaction-only token, byte,
+or field-length limit. Its last line forbids tool calls and requires only the final JSON object.
+A tool-call response is never dispatched and receives one corrective attempt from the same
 immutable base; a second invalid response closes the operation as failed.
 
 The 16 registered provider templates resolve to four production wire families:
@@ -480,8 +652,52 @@ revision, projection revision, and complete route signature.
 Compaction performs no cache-specific measurement or prefix enforcement. Cache
 behavior is incidental to the ordinary codec/provider request and is neither a
 correctness condition nor an efficiency claim. If the full request overflows,
-bounded contiguous chunk/reduce recovery preserves tool groups and never
+bounded contiguous chunk/reduce recovery (§8.12) preserves tool groups and never
 activates partial summaries.
+
+### 8.12 Bounded recovery summarizer (Task 117, 0P-F2)
+
+`ContextCompactionEngine._generateRecoverySummary` runs only after the
+ordinary provider request reports `CompactionProviderOverflow`. Its limits
+live in `CompactionRecoveryPolicy` (`agent/lib/core/config.dart`; defaults:
+safety ratio `0.80`, at most `16` chunks, minimum pass budget `512` tokens)
+and are injectable through the engine constructor.
+
+1. **Per-pass budget.** `floor(effectiveInputBudget × safetyRatio)` minus the
+   stable system messages, the tool schemas, and the longer of the chunk and
+   final instructions, all measured with `CompactionTokenEstimator` (text plus
+   model-facing media). The ratio stays below 1 because chars/4 underestimates
+   Arabic and CJK text.
+2. **Packing.** The pruned source is split into atomic groups (an assistant
+   tool-call batch plus its results, otherwise one message) and greedily
+   packed, in order, into chunks that fit the budget.
+3. **Oversized group.** A group over budget is copied with a deterministic
+   head-and-tail text cap per message (budget shared evenly) and an explicit
+   `[truncated N chars for summary]` marker. It is never dropped; if it is
+   still over budget it forms its own chunk. Canonical rows are untouched.
+4. **Capacity.** A pass budget below the minimum, or more chunks than
+   `maxChunks`, fails with stage `pruning`, cause `recovery_capacity_exceeded`
+   **before any recovery provider call** (only the original overflowing
+   request was sent). The Client shows an actionable localized notice.
+5. **Split once.** A chunk whose request overflows is halved by group once;
+   a half that overflows again, or a single-group chunk, fails with cause
+   `overflow`. There is no further bisection.
+6. **Bounded reduce.** The eligible `request.previousSummary` (when present)
+   precedes the chunk partials. Items are packed into reduce batches within
+   the pass budget; each multi-item batch is merged by one partial `reduce`
+   pass (`reduce:<n>_<attempt>`), single items carry over, and a level that
+   cannot merge any two items fails with `recovery_capacity_exceeded`. The
+   last single batch receives the final `reduce:<attempt>` pass with the
+   continuity anchors. Every level strictly shrinks the item count, so reduce
+   calls are bounded by the number of partials.
+7. **Diagnostics.** The decision snapshot records
+   `recovery_pass_budget_tokens`, `recovery_source_tokens`,
+   `recovery_chunk_count`, `recovery_max_chunks`, `recovery_safety_ratio`,
+   `recovery_split_count`, `recovery_reduce_batches`, and
+   `recovery_provider_calls`; each pass keeps its ledger entry.
+
+Skipping the ordinary request when it is already estimated to overflow is not
+implemented; the reactive overflow remains the only recovery trigger.
 
 ## 9. Orchestration and Protocol Contract (Task 53d)
 
@@ -509,6 +725,11 @@ idle|running -> compacting (in-memory barrier + durable started row)
 | `manual` | Idle `/compact` command |
 | `auto` | Prospective pressure preflight at model boundaries |
 | `overflow` | Confirmed provider context-overflow before any durable/visible provider output; one retry only |
+
+A successful `overflow` compaction re-projects the provider history from the
+newly activated boundary before that single retry, so the retried request is the
+reduced projection instead of the failed request; one turn performs at most one
+overflow compaction and later tool-loop steps cannot repeat it.
 
 ### 9.3 Canonical command and events (D6)
 
@@ -545,3 +766,93 @@ Live lifecycle delivery is session-scoped. The client accepts a
 `context_compaction.started|completed|failed` timeline update only when its
 explicit `session_id` matches the active conversation; compaction in a
 background conversation must not mutate the visible timeline.
+
+## 10. Compaction LLM Request Dumper Pairing and Isolation
+
+Diagnostic capture of auxiliary compaction exchanges is owned by `LLMRequestDumper` and production provider adapters (`BaseOpenAIAdapter`, `BaseAnthropicAdapter`, `CodexResponsesAdapter`).
+
+### 10.1 Opt-in Activation
+
+Compaction request dumping reuses the standard `DUMP_REQUESTS` environment variable (or `Config.dumpRequests`). When disabled, all dumper calls return immediately with zero I/O or state modification.
+
+### 10.2 Canonical Keying & Pairing
+
+Compaction calls carry an explicit `compaction:`-prefixed `requestId` or `compactionId`. The dumper canonicalizes these through `LLMRequestDumper.compactionKey(compactionId: ..., requestId: ...)`, producing keys formatted as `compaction:<compactionId>:<requestId>` (or `compaction:<compactionId>`).
+
+- **Preflight/Initial dump:** `dumpRequest` with compaction parameters initializes a dedicated dump file `request_dumps/compaction_dump_<safeKey>_<timestamp>.json` with `capture_state: 'initialized'`.
+- **Wire dispatch:** `recordActualRequest` updates the dump with resolved wire headers and serialized body, transitioning `capture_state: 'request_sent'`. If an adapter dispatches without a preceding initial dump, `recordActualRequest` auto-creates the compaction dump file.
+- **Completion:** `dumpResponse` attaches the sanitized response payload, sets `capture_state: 'completed'`, and clears the active in-flight map.
+- **Failure:** Transport errors (socket drop, HTTP error, timeout) caught in adapters invoke `recordError`, writing the sanitized error message and type, marking `capture_state: 'error'`, and removing the in-flight key.
+- **Cancellation:** Streaming subscription cancellations execute adapter `finally` blocks invoking `cleanupActiveDump`, immediately removing in-flight tracking from `_activeCompactionDumps` without leaking active map state.
+
+### 10.3 Strict Normal-Turn Isolation and Cross-Request Keyed Fail-Closed Boundary
+
+Compaction requests are strictly decoupled from normal turn exchanges:
+- Compaction operations **never** read, write, or overwrite the static `lastDumpFilePath`.
+- Normal-turn dumps use `_activeNormalDumps` (keyed by `requestId`) and `_activeUnkeyedNormalDumpPath` (for unkeyed auxiliary exchanges) rather than falling back to an ambiguous global pointer.
+- **Fail-Closed on Unknown/Terminal Request IDs:** If a nonempty `requestId` is supplied to `recordActualRequest`, `recordError`, or `dumpResponse` but is not actively registered in `_activeNormalDumps` (e.g., late arrival after turn completion), the call fails closed (`return null`). It never attaches to, overwrites, or mutates another active turn's dump file.
+- **Unkeyed Traffic Isolation:** Auxiliary or unkeyed normal traffic (`requestId == null || requestId.isEmpty`) pairs strictly with `_activeUnkeyedNormalDumpPath` or auto-creates an independent dump file; it never attaches to an in-flight keyed normal turn.
+- **Retry Attempt Isolation:** Real runner retry attempts generate distinct request IDs (`$turnRequestId`, `$turnRequestId:retry_1`), keeping each attempt's dump file hermetic (attempt 0 records the retriable error e.g. 429, while attempt 1 records completion).
+- Active in-flight mappings are tracked only during active execution and cleared upon completion, error, or stream cancellation, preserving hermetic state without speculative memory caches.
+
+### 10.4 Route Metadata, Safe Options, and Durable Dump References
+
+For compaction exchanges, the dump captures the exact route and safe options used for the wire call:
+- **Route Metadata:** `provider`, `model`, `base_url`, `protocol`, and `stream` are recorded at initial dump and confirmed upon wire dispatch.
+- **Safe Options:** Options are sanitized via `toSafeDumpOptions()`, preserving `thinking_mode`, `thinking_directive`, `timeout_ms`, and `max_output_tokens` without exposing credentials or internal state.
+- **Timing and Status:** Dispatches and responses record `status_code`, `duration_ms`, and provider `finish_reason`.
+- **Capture Completeness:** Dumper tracks `capture_state` through `initialized` → `request_sent` → `completed` (or `error`). Responses marked incomplete or truncated due to length limits (`length`, `incomplete`, Anthropic `max_tokens`, or `partial_message`) explicitly set `capture_state: 'truncated'` and `truncated: true`. Responses terminating with `failed` or `cancelled` finish reasons or non-200 status codes are explicitly marked `capture_state: 'error'`.
+- **Durable Link:** Completed compaction dumps cache their repository-relative path (e.g., `request_dumps/compaction_dump_<key>_<timestamp>.json`), which is persisted directly into the compaction operation record via `diagnostics_json` (`relative_dump_path`). Captures are discoverable by operation and request ID without reading payload bodies.
+
+## 11. Minimal Durable Compaction Diagnostics & Post-Boundary Binding
+
+Task 106 Stage 1 Slice 2 introduces minimal durable diagnostics on `session_compaction_operations`, isolating single-request context occupancy from aggregate execution cost and binding provider-confirmed post-compaction usage to the exact first request using the newly activated boundary.
+
+### 11.1 Additive Persistence (`diagnostics_json`)
+
+Compaction diagnostics are persisted in SQLite on `session_compaction_operations.diagnostics_json` as additive JSON (`CompactionDurableDiagnostics`). This preserves schema backward compatibility without requiring separate event stores or schema migrations. Diagnostics survive daemon restart and database re-open.
+
+The durable record contains:
+- `relative_dump_path`: safe relative path to the associated compaction LLM request dump.
+- `attempts`: ordered per-attempt summarization ledger entries.
+- `aggregate_usage`: total token consumption across all summarization attempts.
+- `last_pre_compaction_call`: attribution of the last ordinary provider-confirmed call that preceded the boundary.
+- `post_boundary`: exact post-boundary confirmation status and usage receipt.
+
+### 11.2 Per-Attempt Summarization Ledger
+
+When summarization executes (including single-shot, recovery chunk/reduce, or corrective retry passes), each attempt is recorded in the ledger as a `CompactionSummarizationAttemptRecord`:
+- **Attempt Identification:** `pass_kind` (`full`, `repair`, `chunk`, `reduce`) and distinct `request_id` formatted as `compaction:[<trigger>:]<compactionId>:<passKind>:<attempt>` (e.g. `compaction:overflow:<compactionId>:full:0`). Recovery chunk passes and intermediate reduce batches add a sequence index: `<passKind>:<index>_<attempt>` (§8.12).
+- **Timing:** `duration_ms` for that specific attempt.
+- **Provider Usage:** `input_tokens`, `cached_input_tokens`, `cache_write_tokens`, `output_tokens`, and `reasoning_tokens` reported for that call. Missing or unsupported usage stays `null`.
+- **Outcome and Failure Cause:** `outcome` (`success`, `validation_failed`, `invalid_response`, `overflow`, `error`) and typed `failure_reason`.
+
+**Preservation of Legacy Aggregate Semantics & Granular Per-Attempt Attribution:**
+- `CompactionMetrics.summarizationInputTokens` (and `session_compaction_operations.summarization_input_tokens`) preserves legacy aggregate semantics, recording the total input tokens consumed across all summarization attempts (aggregate processing cost).
+- `diagnostics.aggregateUsage` captures the aggregate breakdown (`input_tokens`, `output_tokens`, `cached_input_tokens`, etc.), while `diagnostics.attempts` provides granular per-attempt attribution and outcome history.
+
+### 11.3 Last Ordinary Call Before the Boundary (Pre-Call Attribution)
+
+The claim transaction binds the last ordinary provider-confirmed call that preceded the boundary into `diagnostics_json.last_pre_compaction_call` (`CompactionPreCallAttribution`). It reuses the usage snapshots already persisted on assistant message rows: `metadata.context_usage` when present, with the legacy `metadata.usage` map normalized through `LlmUsageSnapshot` only as a legacy fallback when `context_usage` is absent. No new table, estimator, event store, or reporting surface is introduced.
+
+- **Identity and time:** durable `message_id`, `request_id` (`<run or turn request id>:<model_step_id>`), `run_id`, `model_step_id`, and the snapshot's `observed_at`.
+- **Route and usage authority:** `provider_instance_id`, `model_id`, and only provider-reported `input_tokens`/`cached_input_tokens`. When `context_usage` is present, it is the sole authoritative record; missing input stays missing (`usage_missing`) and mutable turn-level aggregate totals from `metadata.usage` are never spliced into the snapshot. `provider_instance_id` preserves genuine instance UUID provenance rather than collapsing to adapter template/profile aliases, ensuring distinct same-template instances (e.g. `inst-1` vs `inst-2`) are strictly differentiated and truthfully evaluate to `not_applicable` with `route_changed`. An absent or unsupported value is omitted from the JSON instead of becoming zero, an estimate, or a mutable run total.
+- **Applicability & Material Equivalence:** `applicable`, `not_applicable`, or `unknown`. Every value other than `applicable` carries a typed reason: `no_ordinary_call` (no assistant row exists yet), `usage_missing`, `identity_incomplete`, `route_changed`, `material_changed` (a completed boundary was activated after the measurement, so the measured material predates the current projection), and `material_unverified` (material equivalence unverified against active prompts/schemas/messages). In the repository claim transaction, without an engine-level prefix remeasurement and material comparison, applicability fails closed to `unknown` with reason `material_unverified`, never claiming `applicable` on syntactic wire-proof hash validation alone.
+- **Immutability:** the value is written once in the `started` row and carried unchanged through `completeStarted` and `failStarted`. A later ordinary call, retry, restart, or subsequent compaction cannot replace it, so a pending pre-call is never relabelled from a grown request.
+- **Classification of Fork Diagnostics Omission:** When a session is forked, `cloneTerminalOperationsForFork` clones existing terminal compaction operations into the child session with remapped message IDs and new operation UUIDs, but omits `diagnostics_json` (evaluating to `NULL` diagnostics for cloned boundaries in the child session). This omission is intentional and non-blocking: granular diagnostics (`last_pre_compaction_call`, `post_boundary`, `attempts`, `relative_dump_path`) contain parent-session identities (`parent message_id`, `parent run_id`, parent dump files). Omitting unmapped diagnostics prevents parent provenance contamination in the child session while preserving canonical boundary projection (`internal_summary_json`, `retained_tail_tokens`, ranges, route signature).
+- **Classification of Failed Compaction Scalar Persistence (F2):** Failed compaction operations persist `NULL` in table columns (`context_window_tokens`, `effective_input_budget_tokens`, `auto_threshold_tokens`, `estimated_request_tokens_before/after`, `retained_tail_tokens`, `summarization_*`, `duration_ms`), preserving decision parameters in `diagnostics_json.decision_snapshot` and attempt token usage in `diagnostics_json.attempts`. Because `ModelProjectionBuilder` queries only completed boundaries (`findLatestCompleted`), failed boundaries are non-projectable; preserving scalars exclusively in diagnostics is safe and non-blocking for Stage 1.
+- **Classification of No-Progress Pruning Guard (F5):** When tail pruning produces a post-projection estimate not lower than the pre-projection estimate (e.g. when the newest growth turn holds almost all context), `ContextCompactionEngine` returns `projection_still_over_budget`. While semantically representing lack of compaction progress, this failure cause safely aborts ineffective compaction without inventing protocol causes that would require cross-layer enum, translation, and UI changes.
+- **Normal Dump Immutability & Retry Attempt Isolation (F3):** Completed normal-turn request dumps (`capture_state = completed` or `error`) are terminal and cannot be overwritten by subsequent unkeyed auxiliary model calls (such as `TitleService`). Requests in a retry loop maintain attempt-isolated request correlation (`$stepRequestId:retry_$attempt`), preserving both failed attempts (e.g. 429) and completed 200 attempts in distinct files without in-flight dump key collisions.
+
+Two limits stay explicit rather than being guessed. Prompt, runtime-context, or tool-schema drift that never produced an activated boundary is not detectable from durable rows alone, so it is not claimed by `applicable`; and the record diagnoses the measurement that preceded the boundary rather than authorizing its reuse as the next request's baseline. Reuse remains governed by the existing remeasured wire-extension proof in `RequestPressureEvaluator`.
+
+### 11.4 Exact Post-Boundary Binding
+
+Post-compaction usage reconciliation binds immutably to the exact first request and step dispatched against the newly activated compaction boundary:
+- **Dispatch Reservation:** `AgentRunner` records the active compaction boundary (`_activeProjectionBoundary`) during prompt projection assembly (`ModelProjectionBuilder.buildForSession`). At dispatch time, before calling the model adapter, `AgentRunner` invokes `CompactionCoordinator.reservePostBoundaryDispatch` using `$turnRequestId:$currentModelStepId` and the active staged request's `routeSignature`. Unrelated replies across restart, retries, subsequent model steps in a multi-step turn, route changes, or repeated boundaries cannot steal or replace this reservation. Route applicability is never invented from the boundary's own signature when the actual request route is unavailable.
+- **Completion-Boundary Missing Usage Finalization:** Intermediate streaming chunks and finish-reason chunks with null usage do not trigger missing status, preserving OpenAI-compatible streams that emit a finish chunk before a trailing usage chunk. Arriving usage (including trailing stream chunks) reconciles the boundary. If the provider call or stream terminates without reporting token usage, missing usage is finalized at the runner completion boundary (`no_provider_usage` or `missing_input_tokens`).
+- **Retry & Route-Failover Finalization:** When a post-boundary turn encounters a same-route transient failure (such as HTTP 429 rate limit with retry budget), the reservation remains `'reserved'` across attempt-isolated retries as long as the boundary identity is unchanged, reconciling confirmed token usage upon retry success. If a same-route retry activates a newer compaction boundary (or the live boundary identity changes), the abandoned boundary reservation is captured and finalized as missing with reason `'no_provider_usage'`. When a failure triggers a handled auto-failover to a different provider or model route (Route A → Route B), the abandoned route's reservation is explicitly finalized as missing with reason `'route_failover'` (`missingReason: 'route_failover'`) immediately upon recovery, before history preparation. This prevents reservations from remaining indefinitely in `'reserved'` status while strictly forbidding fabricated usage attribution from Route B to Route A's boundary. Subscription cancellations (including client disconnects and executor stop requests cancelling the stream), history preparation failures, restart-drain aborts, and unhandled runner errors that exhaust retry budgets are guarded via finally blocks, stream cancellation hooks, and error handlers to finalize unfinalized reservations with `'no_provider_usage'`. Stop acknowledgement no longer waits for generator unwind (cleanup is deadline-bounded by `RunCancellationScope`). Because the cancelled generator may still be suspended at an await (for example a 429 `waitForRetry`) and unwind after acknowledgement, the detached unwind is contained at the stream boundary (`AgentRunner._cancellableTurnStream`): cancellation signals (`RuntimeRecoveryCancelled`, `RateLimitCancelled`, `ProviderRequestCancelledException`) end quietly, any other unwind failure is logged `SEVERE` by error type only, and nothing escapes to the zone as an uncaught error. The streaming reservation holder is stream-scoped per `streamMessage`/`resumeStream` invocation, ensuring cancellation of one stream never cross-finalizes a concurrent or subsequent stream's reservation on the same runner (while production runners remain factory-scoped per event). Both streaming and non-streaming runner paths observe these exact semantics.
+- **Receipt Immutability:** Once post-boundary usage is confirmed or marked missing, subsequent calls with grown history or alternate steps are rejected (`null`) and cannot replace or overwrite the first call's status.
+- **Route Mismatch Rejection:** If the dispatched post-boundary request is on a different route than the compaction operation's `routeSignature`, reconciliation is rejected (`null`) and the status remains unchanged.
+- **Truthful Target Outcome (Stage 1):** In Stage 1, `targetOutcome` evaluates explicitly to `TargetOutcome.unknown` rather than applying unauthorized diagnostic arithmetic (such as blanket 13% ceilings or generalized `+0.03` tolerance formulas). The observed post-boundary occupancy ratio is truthfully recorded as `post_input_ratio = inputTokens / W`, and `decisionSnapshot` captures the configured `target_ratio`, `target_scope: 'usable_budget'`, and context capacity. Target outcome comparison policy and denominator alignment are deferred to Stage 3A.
+- **Legacy Provenance & Unreserved Fail-Closed Protection:** Operations created prior to diagnostic instrumentation (`diagnostics_json == NULL`) fail closed for dispatch reservation, missing usage recording, and post-upgrade reconciliation attempts; subsequent post-upgrade calls are never synthesized or misattributed as the first post-boundary call. Historical confirmed scalars (e.g. 19,182 tokens) remain immutable without synthesizing diagnostics. Unsolicited replies arriving without prior matching dispatch reservation fail closed (`null`) and leave the post-boundary status in its existing pending state.

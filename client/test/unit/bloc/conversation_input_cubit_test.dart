@@ -1,4 +1,7 @@
+import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'dart:io';
+
+import 'dart:typed_data';
 
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_cache_store.dart';
@@ -15,6 +18,7 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_entry.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
@@ -236,6 +240,175 @@ void main() {
     await inputCubit.sendMessage('   ');
 
     expect(conversationRepository.sentMessages, ['hello']);
+  });
+
+  test('accepted send clears its captured new-conversation scope, not another draft', () async {
+    messagesCubit.emitState(
+      const SessionMessagesState(nextMessageProviderId: 'provider-1', nextMessageModel: 'model-1'),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await inputCubit.selectModel(scope: CapabilityValueScope.message, providerId: 'provider-1', model: 'model-1');
+    inputCubit.selectWorkspace(workspace);
+    await Future<void>.delayed(Duration.zero);
+    const capability = Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: 5 * 1024 * 1024,
+      attachmentMaxFilesPerMessage: 4,
+      attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+    );
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+    await inputCubit.addDraftAttachment(
+      name: 'submitted.png',
+      bytes: Uint8List.fromList([1, 2, 3]),
+      source: DraftAttachmentSource.picker,
+      capability: capability,
+    );
+    expect(inputCubit.state.draftAttachments, hasLength(1));
+    messagesCubit.onSend = () async {
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'created-session');
+      await inputCubit.addDraftAttachment(
+        name: 'unrelated.png',
+        bytes: Uint8List.fromList([4, 5, 6]),
+        source: DraftAttachmentSource.picker,
+        capability: capability,
+      );
+      return true;
+    };
+    await inputCubit.sendMessage('inspect');
+    expect(inputCubit.state.draftAttachments.single.name, 'unrelated.png');
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+    expect(inputCubit.state.draftAttachments, isEmpty);
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'created-session');
+    expect(inputCubit.state.draftAttachments.single.name, 'unrelated.png');
+  });
+
+  test('failed send preserves its captured scope and an unrelated draft', () async {
+    messagesCubit.emitState(
+      const SessionMessagesState(nextMessageProviderId: 'provider-1', nextMessageModel: 'model-1'),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await inputCubit.selectModel(scope: CapabilityValueScope.message, providerId: 'provider-1', model: 'model-1');
+    inputCubit.selectWorkspace(workspace);
+    await Future<void>.delayed(Duration.zero);
+    const capability = Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: 5 * 1024 * 1024,
+      attachmentMaxFilesPerMessage: 4,
+      attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+    );
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+    await inputCubit.addDraftAttachment(
+      name: 'submitted.png',
+      bytes: Uint8List.fromList([1, 2, 3]),
+      source: DraftAttachmentSource.picker,
+      capability: capability,
+    );
+    expect(inputCubit.state.draftAttachments, hasLength(1));
+    messagesCubit.onSend = () async {
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'created-session');
+      await inputCubit.addDraftAttachment(
+        name: 'unrelated.png',
+        bytes: Uint8List.fromList([4, 5, 6]),
+        source: DraftAttachmentSource.picker,
+        capability: capability,
+      );
+      return false;
+    };
+    await inputCubit.sendMessage('inspect');
+    expect(inputCubit.state.draftAttachments.single.name, 'unrelated.png');
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+    expect(inputCubit.state.draftAttachments.single.name, 'submitted.png');
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'created-session');
+    expect(inputCubit.state.draftAttachments.single.name, 'unrelated.png');
+  });
+
+  test('paste, picker, and drop share admission before send', () async {
+    messagesCubit.emitState(
+      const SessionMessagesState(
+        requiresWorkspace: true,
+        nextMessageProviderId: 'provider-1',
+        nextMessageModel: 'model-1',
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await inputCubit.selectModel(
+      scope: CapabilityValueScope.message,
+      providerId: 'provider-1',
+      model: 'model-1',
+    );
+    inputCubit.selectWorkspace(workspace);
+    await Future<void>.delayed(Duration.zero);
+    const capability = Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: 5 * 1024 * 1024,
+      attachmentMaxFilesPerMessage: 4,
+      attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+    );
+    for (final entry in <(String, DraftAttachmentSource)>[
+      ('paste.png', DraftAttachmentSource.paste),
+      ('picker.txt', DraftAttachmentSource.picker),
+      ('drop.bin', DraftAttachmentSource.drop),
+    ]) {
+      await inputCubit.addDraftAttachment(
+        name: entry.$1,
+        bytes: Uint8List.fromList(const [1, 2, 3]),
+        source: entry.$2,
+        capability: capability,
+      );
+    }
+
+    await inputCubit.sendMessage('inspect');
+
+    expect(conversationRepository.sentMessages, ['inspect']);
+    final admitted = conversationRepository.sentAttachmentRequests.single;
+    expect(admitted.map((entry) => entry['name']), [
+      'paste.png',
+      'picker.txt',
+      'drop.bin',
+    ]);
+    expect(admitted.map((entry) => entry['size_bytes']), everyElement(3));
+    expect(admitted.map((entry) => entry['data_base64']), everyElement('AQID'));
+    expect(
+      admitted.map((entry) => entry['sha256']),
+      everyElement(hasLength(64)),
+    );
+    expect(inputCubit.state.draftAttachments, isEmpty);
+  });
+
+  test('failed attachment admission retains the draft and does not send', () async {
+    conversationRepository.failAttachmentAdmission = true;
+    messagesCubit.emitState(
+      const SessionMessagesState(
+        requiresWorkspace: true,
+        nextMessageProviderId: 'provider-1',
+        nextMessageModel: 'model-1',
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await inputCubit.selectModel(
+      scope: CapabilityValueScope.message,
+      providerId: 'provider-1',
+      model: 'model-1',
+    );
+    inputCubit.selectWorkspace(workspace);
+    await Future<void>.delayed(Duration.zero);
+    await inputCubit.addDraftAttachment(
+      name: 'pixel.png',
+      bytes: Uint8List.fromList(const [1, 2, 3]),
+      source: DraftAttachmentSource.drop,
+      capability: const Capability(
+        supportsAttachments: true,
+        attachmentMaxFileBytes: 5 * 1024 * 1024,
+        attachmentMaxFilesPerMessage: 4,
+        attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+      ),
+    );
+
+    await inputCubit.sendMessage('inspect');
+
+    expect(conversationRepository.sentMessages, isEmpty);
+    expect(inputCubit.state.draftAttachments, hasLength(1));
+    expect(messagesCubit.state.error, contains('Attachment admission failed'));
   });
 
   test('message-scoped model and thinking selections are sent with the next user message', () async {
@@ -526,6 +699,37 @@ void main() {
       expect(inputCubit.state.nextMessageModel, 'model-1');
     },
   );
+
+  test('restoring a provider-less draft route keeps the device route', () async {
+    messagesCubit.setNextMessagePreferences(
+      providerId: 'provider-go',
+      model: 'glm-5.2',
+      thinkingMode: 'max',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    inputCubit.restoreNewConversationPreferences(
+      providerId: null,
+      model: 'deepseek-v4.1-flash',
+      thinkingMode: 'low',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(inputCubit.state.nextMessageProviderId, 'provider-go');
+    expect(inputCubit.state.nextMessageModel, 'glm-5.2');
+    expect(inputCubit.state.nextMessageThinkingMode, 'max');
+
+    inputCubit.restoreNewConversationPreferences(
+      providerId: 'provider-other',
+      model: 'model-other',
+      thinkingMode: 'low',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(inputCubit.state.nextMessageProviderId, 'provider-other');
+    expect(inputCubit.state.nextMessageModel, 'model-other');
+    expect(inputCubit.state.nextMessageThinkingMode, 'low');
+  });
 
   test('daemon rejection keeps the confirmed route instead of locking in the pending selection', () async {
     final selectedSession = Session(
@@ -835,7 +1039,7 @@ void main() {
     // 1. Save some preferences first
     await preferencesRepository.setLastProvider(agent.id, 'provider-1');
     await preferencesRepository.setLastModel(agent.id, 'claude-3-opus');
-      await preferencesRepository.setLastThinkingMode(agent.id, 'deep');
+    await preferencesRepository.setLastThinkingMode(agent.id, 'deep');
 
     // 2. Re-subscribe to agent by re-initializing the cubit (simulating fresh start)
     final newMessagesCubit = _TestSessionMessagesCubit(
@@ -854,7 +1058,7 @@ void main() {
 
     expect(newInputCubit.state.nextMessageProviderId, 'provider-1');
     expect(newInputCubit.state.nextMessageModel, 'claude-3-opus');
-      expect(newInputCubit.state.nextMessageThinkingMode, 'deep');
+    expect(newInputCubit.state.nextMessageThinkingMode, 'deep');
 
     await newInputCubit.close();
     await newMessagesCubit.close();
@@ -890,6 +1094,55 @@ void main() {
 
       expect(restartedInputCubit.state.nextMessageProviderId, 'provider-1');
       expect(restartedInputCubit.state.nextMessageModel, 'claude-3-opus');
+
+      await restartedInputCubit.close();
+      await restartedMessagesCubit.close();
+    },
+  );
+
+  test(
+    'restored identity-only session adopts its stored thinking pick once the authoritative summary arrives',
+    () async {
+      // Client restart: the device preference holds a pick made on another
+      // conversation, while this conversation stored an explicit `max`.
+      await preferencesRepository.setLastProvider(agent.id, 'go-1');
+      await preferencesRepository.setLastModel(agent.id, 'glm-5.2');
+      await preferencesRepository.setLastThinkingMode(agent.id, 'high');
+      final now = DateTime.now();
+      await sessionCubit.selectSession(
+        Session(id: 'session-glm', title: 'Loading...', deviceId: agent.id, createdAt: now, updatedAt: now),
+      );
+
+      final restartedMessagesCubit = _TestSessionMessagesCubit(
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        conversationRepository: conversationRepository,
+        preferencesRepository: preferencesRepository,
+        capabilitiesStore: capabilitiesStore,
+        localToolRuntime: localToolRuntime,
+        workspaceRuntimeContext: workspaceRuntimeContext,
+      );
+      final restartedInputCubit = ConversationInputCubit(messagesCubit: restartedMessagesCubit);
+      await Future<void>.delayed(Duration.zero);
+
+      await sessionCubit.selectSession(
+        Session(
+          id: 'session-glm',
+          title: 'GLM conversation',
+          deviceId: agent.id,
+          createdAt: now,
+          updatedAt: now,
+          modelProvider: 'go-1',
+          model: 'glm-5.2',
+          routeRevision: 3,
+          thinkingMode: 'max',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(restartedInputCubit.state.nextMessageThinkingMode, 'max');
+      // Adopting the stored pick is not a user choice: no device write.
+      expect(preferencesRepository.getLastThinkingMode(agent.id), 'high');
 
       await restartedInputCubit.close();
       await restartedMessagesCubit.close();
@@ -981,6 +1234,24 @@ class _TestSessionMessagesCubit extends SessionMessagesCubit {
     super.localToolRuntime,
     super.workspaceRuntimeContext,
   });
+
+  Future<bool> Function()? onSend;
+
+  @override
+  Future<bool> sendMessage(
+    String text, {
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+    List<Map<String, dynamic>> attachments = const [],
+    bool omitThinkingMode = false,
+  }) async {
+    if (onSend != null) return onSend!();
+    return super.sendMessage(
+      text,
+      intent: intent,
+      attachments: attachments,
+      omitThinkingMode: omitThinkingMode,
+    );
+  }
 
   void emitState(SessionMessagesState state) {
     emit(state);

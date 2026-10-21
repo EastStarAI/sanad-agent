@@ -91,6 +91,23 @@ class AccountRevokeResult {
   final bool currentSessionRevoked;
 }
 
+class AccountDeleteResult {
+  const AccountDeleteResult({
+    required this.requestId,
+    this.result = 'core_deleted',
+    this.cleanupStatus = 'pending',
+    this.isIdempotent = false,
+  });
+
+  final String requestId;
+  final String result;
+  final String cleanupStatus;
+  final bool isIdempotent;
+
+  bool get isPending => cleanupStatus == 'pending' || result == 'core_deleted';
+  bool get isCompleted => cleanupStatus == 'completed' || result == 'completed';
+}
+
 class AccountLifecycleException implements Exception {
   const AccountLifecycleException(this.message, {this.outcomeUnknown = false});
 

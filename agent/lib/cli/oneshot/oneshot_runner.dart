@@ -152,6 +152,7 @@ class OneshotRunner {
     String? outDir,
     bool streamEvents = false,
     String? executionRoot,
+    void Function(RunLifecycleEvent event)? eventSink,
   }) async {
     final out = stdoutSink ?? stdout;
     final err = stderrSink ?? stderr;
@@ -190,6 +191,7 @@ class OneshotRunner {
       store: artifactStore,
       streamEvents: streamEvents,
       outSink: out,
+      eventSink: eventSink,
       sessionId: effectiveSessionId,
       workspaceId: effectiveWorkspace,
       executionRoot: effectiveExecutionRoot,
@@ -261,7 +263,10 @@ class OneshotRunner {
                   sanadHomeOverride: sanadHome,
                 ).discover(
                   urlOverride: gatewayUrl,
-                  probeTimeout: const Duration(milliseconds: 300),
+                  // Cheap pre-check only: the ownership lease below remains the
+                  // authoritative backstop, and a forced standalone start must
+                  // not be delayed by the wider targeted deadline.
+                  probeTimeout: LocalGatewayDiscovery.speculativeProbeTimeout,
                 );
             if (owner.isDaemonRunning) {
               err.writeln(
@@ -298,14 +303,18 @@ class OneshotRunner {
           );
           shouldDisposeClient = true;
         } on SanadRuntimeOwnershipConflict {
+          // Reaching the standalone factory without --standalone means
+          // discovery could not confirm a healthy daemon for this Home, so the
+          // forced-standalone wording would misreport the cause.
+          final message = standalone
+              ? '--standalone cannot use this Sanad Home while another runtime owns it.'
+              : 'Could not confirm a healthy Sanad daemon for this Sanad Home; an in-process runtime cannot take over a Home owned by another runtime.';
+          err.writeln('Error: $message');
           err.writeln(
-            'Error: --standalone cannot use this Sanad Home while another runtime owns it.',
+            standalone
+                ? 'Hint: omit --standalone to attach to the running daemon.'
+                : 'Hint: verify the daemon gateway endpoint for this Sanad Home and retry.',
           );
-          err.writeln(
-            'Hint: omit --standalone to attach to the running daemon.',
-          );
-          const message =
-              '--standalone cannot use this Sanad Home while another runtime owns it.';
           await coordinator.recordTerminal(
             exitCode: 78,
             status: 'failed',
@@ -622,6 +631,23 @@ class OneshotRunner {
             if (event.model != null) finalModel = event.model;
             if (event.provider != null) finalProvider = event.provider;
 
+            // A typed rejection before dispatch is a failed turn, never a
+            // completion: report the specific reason and exit non-zero.
+            final rejectionCode = event.errorCode;
+            if (rejectionCode != null && rejectionCode.isNotEmpty) {
+              hasError = true;
+              errorMessage = event.finalMessage.isNotEmpty
+                  ? '$rejectionCode: ${event.finalMessage}'
+                  : rejectionCode;
+              if (!json) {
+                err.writeln('Error: $errorMessage');
+              }
+              if (!completer.isCompleted) {
+                completer.complete(1);
+              }
+              return;
+            }
+
             if (event.finalMessage.isNotEmpty) {
               if (assistantBuffer.isEmpty) {
                 assistantBuffer.write(event.finalMessage);
@@ -811,7 +837,10 @@ class OneshotRunner {
         providerInstanceId: resolvedProviderId,
         providerId: resolvedProviderId,
         thinkingMode: effectiveThinkingMode,
-        metadata: {'execution_root': ?effectiveExecutionRoot},
+        metadata: {
+          'execution_root': ?effectiveExecutionRoot,
+          if (automaticallyApproveTools) 'allow_all_tools': true,
+        },
       );
 
       if (!json && !quiet) {

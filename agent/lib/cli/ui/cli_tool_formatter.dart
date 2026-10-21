@@ -119,7 +119,22 @@ class CliToolFormatter {
         final patch = toolInput['patch']?.toString();
         final oldStr = toolInput['old_string']?.toString();
         final newStr = toolInput['new_string']?.toString();
-        if (oldStr != null || newStr != null) {
+        final rawEdits = toolInput['edits'];
+        if (rawEdits is List && rawEdits.isNotEmpty) {
+          var del = 0;
+          var add = 0;
+          for (final item in rawEdits) {
+            if (item is Map) {
+              final o = item['old_string']?.toString();
+              final n = item['new_string']?.toString();
+              if (o != null) del += '\n'.allMatches(o).length + 1;
+              if (n != null) add += '\n'.allMatches(n).length + 1;
+            }
+          }
+          details.add(
+            MapEntry('Edits', '${rawEdits.length} (+$add -$del lines)'),
+          );
+        } else if (oldStr != null || newStr != null) {
           final del = oldStr != null ? '\n'.allMatches(oldStr).length + 1 : 0;
           final add = newStr != null ? '\n'.allMatches(newStr).length + 1 : 0;
           details.add(MapEntry('Changes', '+$add -$del lines'));
@@ -148,6 +163,7 @@ class CliToolFormatter {
           'new_string',
           'offset',
           'limit',
+          'edits',
         },
       );
     } else if (action == 'search_glob' || action == 'search_grep') {
@@ -212,7 +228,11 @@ class CliToolFormatter {
         arguments['path']?.toString() ?? '',
         workspacePath,
       );
-      return '$cyan🔧 Editing file:$reset $bold$path$reset';
+      final rawEdits = arguments['edits'];
+      final countSuffix = (rawEdits is List && rawEdits.isNotEmpty)
+          ? ' (${rawEdits.length} edits)'
+          : '';
+      return '$cyan🔧 Editing file:$reset $bold$path$reset$countSuffix';
     } else if (clean == 'search_glob') {
       final pat = arguments['pattern']?.toString() ?? '';
       return '$cyan🔧 Searching files (glob):$reset $bold$pat$reset';

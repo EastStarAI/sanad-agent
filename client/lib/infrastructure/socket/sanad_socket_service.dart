@@ -2,15 +2,19 @@ import 'package:logging/logging.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:sanad_client/core/interfaces/socket_gateway.dart';
 import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/infrastructure/socket/event_deduplicator.dart';
 import 'package:sanad_client/infrastructure/socket/event_router.dart';
+import 'package:sanad_client/infrastructure/socket/hosted_conversation_media.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
+import 'package:uuid/uuid.dart';
 import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
 import 'package:sanad_client/infrastructure/local_gateway/local_gateway_uri_policy.dart';
 
@@ -24,6 +28,12 @@ enum SocketLifecycleState {
 }
 
 enum SocketTransportMode { cloudSocketIo, localWebSocket }
+
+typedef CloudSocketFactory =
+    socket_io.Socket Function(
+      String url,
+      Map<String, dynamic> options,
+    );
 
 class SanadSocketService implements ISocketService, ISocketGateway {
   static final _logger = Logger('SanadSocket');
@@ -40,6 +50,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   final LocalGatewayCredentialProvider? _localCredentialProvider;
   final bool _localTransportEnabled;
   final Duration Function(int attempt) _localReconnectDelay;
+  final CloudSocketFactory _cloudSocketFactory;
 
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
@@ -62,7 +73,11 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   final _accountLifecycleRevokeController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get accountLifecycleRevokeResults => _accountLifecycleRevokeController.stream;
 
+  final _accountLifecycleDeleteController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get accountLifecycleDeleteResults => _accountLifecycleDeleteController.stream;
+
   final _accountLifecycleChangedController = StreamController<void>.broadcast();
+  final _attachmentRelayController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<void> get accountLifecycleChanges => _accountLifecycleChangedController.stream;
 
   final EventRouter _eventRouter = EventRouter();
@@ -108,6 +123,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     LocalGatewayCredentialProvider? localCredentialProvider,
     bool localTransportEnabled = true,
     Duration Function(int attempt)? localReconnectDelay,
+    CloudSocketFactory cloudSocketFactory = socket_io.io,
   }) : _url = url,
        _hardwareId = hardwareId,
        _clientInstanceId = clientInstanceId,
@@ -118,7 +134,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
            localCredentialProvider ??
            (transportMode == SocketTransportMode.localWebSocket ? const LocalGatewayCredentialProvider() : null),
        _localTransportEnabled = localTransportEnabled,
-       _localReconnectDelay = localReconnectDelay ?? _defaultLocalReconnectDelay;
+       _localReconnectDelay = localReconnectDelay ?? _defaultLocalReconnectDelay,
+       _cloudSocketFactory = cloudSocketFactory;
 
   factory SanadSocketService.local({
     required String url,
@@ -224,7 +241,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     }
 
     _logger.info('[${hashCode}]: Connecting to cloud gateway');
-    _socket = socket_io.io(
+    _socket = _cloudSocketFactory(
       _url,
       socket_io.OptionBuilder().setTransports(['websocket']).enableForceNew().disableAutoConnect().setExtraHeaders({
         'Authorization': 'Bearer $_authToken',
@@ -235,9 +252,37 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       if (_isDisposed) return;
       // device_event is logged by its handler only after cross-transport
       // deduplication accepts it.
-      if (event == 'device_event') return;
+      if (event == 'device_event' ||
+          event.startsWith('attachment_upload_') ||
+          event.startsWith('conversation_media_')) {
+        return;
+      }
       _logIncomingSocketEvent(event, data);
     });
+
+    void relayAttachmentEvent(String event, dynamic data) {
+      final payload = _asMap(data);
+      if (!_isDisposed && payload != null) {
+        _attachmentRelayController.add({...payload, '_event': event});
+      }
+    }
+
+    _socket!.on(
+      'attachment_upload_ack',
+      (data) => relayAttachmentEvent('attachment_upload_ack', data),
+    );
+    _socket!.on(
+      'attachment_upload_error',
+      (data) => relayAttachmentEvent('attachment_upload_error', data),
+    );
+    for (final event in const [
+      'conversation_media_start',
+      'conversation_media_chunk',
+      'conversation_media_complete',
+      'conversation_media_error',
+    ]) {
+      _socket!.on(event, (data) => relayAttachmentEvent(event, data));
+    }
 
     _socket!.onConnect((_) {
       _logger.info('[${hashCode}]: Connected');
@@ -298,6 +343,12 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       final payload = _asMap(data);
       if (!_isDisposed && payload != null) {
         _accountLifecycleRevokeController.add(payload);
+      }
+    });
+    _socket!.on('account_lifecycle_delete_result', (data) {
+      final payload = _asMap(data);
+      if (!_isDisposed && payload != null) {
+        _accountLifecycleDeleteController.add(payload);
       }
     });
     _socket!.on('account_lifecycle_changed', (_) {
@@ -561,6 +612,270 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     }
   }
 
+  Future<List<String>> admitHostedAttachments({
+    required String deviceId,
+    required String sessionId,
+    required String requestId,
+    required List<Map<String, dynamic>> attachments,
+  }) async {
+    if (!isConnected || isLocalTransport) {
+      throw StateError('Hosted attachment relay is unavailable.');
+    }
+    final decoded = attachments
+        .map((attachment) {
+          final encoded = attachment['data_base64'];
+          if (encoded is! String) {
+            throw StateError('Attachment bytes are unavailable.');
+          }
+          return base64Decode(encoded);
+        })
+        .toList(growable: false);
+    final turnTotalBytes = decoded.fold<int>(
+      0,
+      (total, bytes) => total + bytes.length,
+    );
+    if (attachments.isEmpty ||
+        attachments.length > 4 ||
+        decoded.any((bytes) => bytes.length > 5 * 1024 * 1024) ||
+        turnTotalBytes > 20 * 1024 * 1024) {
+      throw StateError('Attachment limits exceeded.');
+    }
+    try {
+      final results = await Future.wait([
+        for (var fileIndex = 0; fileIndex < attachments.length; fileIndex++)
+          _admitHostedAttachment(
+            deviceId: deviceId,
+            sessionId: sessionId,
+            requestId: requestId,
+            source: attachments[fileIndex],
+            bytes: decoded[fileIndex],
+            fileIndex: fileIndex,
+            turnFileCount: attachments.length,
+            turnTotalBytes: turnTotalBytes,
+          ),
+      ], eagerError: true);
+      return List.unmodifiable(results);
+    } on Object {
+      for (var fileIndex = 0; fileIndex < attachments.length; fileIndex++) {
+        _socket?.emit('attachment_upload_cancel', {
+          'version': 'v1',
+          'upload_id': '${requestId}_$fileIndex',
+        });
+      }
+      rethrow;
+    }
+  }
+
+  Future<String> _admitHostedAttachment({
+    required String deviceId,
+    required String sessionId,
+    required String requestId,
+    required Map<String, dynamic> source,
+    required Uint8List bytes,
+    required int fileIndex,
+    required int turnFileCount,
+    required int turnTotalBytes,
+  }) async {
+    final uploadId = '${requestId}_$fileIndex';
+    try {
+      final started = _waitForUpload(
+        uploadId,
+        (event) => event['state'] == 'started',
+      );
+      final chunkCount = (bytes.length + 256 * 1024 - 1) ~/ (256 * 1024);
+      _socket!.emit('attachment_upload_start', {
+        'version': 'v1',
+        'upload_id': uploadId,
+        'device_id': deviceId,
+        'session_id': sessionId,
+        'request_id': requestId,
+        'name': source['name'],
+        // Composer admission has no MIME hint; the Agent inspects magic bytes.
+        'mime_type': source['mime_type'] ?? 'application/octet-stream',
+        'size_bytes': bytes.length,
+        'sha256': sha256.convert(bytes).toString(),
+        'chunk_count': chunkCount == 0 ? 1 : chunkCount,
+        'file_index': fileIndex,
+        'turn_file_count': turnFileCount,
+        'turn_total_bytes': turnTotalBytes,
+      });
+      await started;
+      if (bytes.isEmpty) {
+        await _emitHostedChunk(uploadId, 0, Uint8List(0));
+      } else {
+        for (var offset = 0, index = 0; offset < bytes.length; offset += 256 * 1024, index++) {
+          final end = (offset + 256 * 1024).clamp(0, bytes.length);
+          await _emitHostedChunk(
+            uploadId,
+            index,
+            Uint8List.sublistView(bytes, offset, end),
+          );
+        }
+      }
+      final terminalResult = _waitForUpload(
+        uploadId,
+        (event) => event['state'] == 'terminal',
+      );
+      _socket!.emit('attachment_upload_commit', {
+        'version': 'v1',
+        'upload_id': uploadId,
+      });
+      final terminal = await terminalResult;
+      final attachmentId = terminal['attachment_id'];
+      if (terminal['outcome'] != 'accepted' || attachmentId is! String) {
+        throw StateError('Attachment admission failed.');
+      }
+      return attachmentId;
+    } on Object {
+      _socket?.emit('attachment_upload_cancel', {
+        'version': 'v1',
+        'upload_id': uploadId,
+      });
+      rethrow;
+    }
+  }
+
+  Future<void> _emitHostedChunk(
+    String uploadId,
+    int index,
+    Uint8List bytes,
+  ) async {
+    final acknowledged = _waitForUpload(
+      uploadId,
+      (event) => event['state'] == 'chunk' && event['index'] == index,
+    );
+    _socket!.emit('attachment_upload_chunk', {
+      'version': 'v1',
+      'upload_id': uploadId,
+      'index': index,
+      'sha256': sha256.convert(bytes).toString(),
+      'data': bytes,
+    });
+    await acknowledged;
+  }
+
+  Future<Map<String, dynamic>> _waitForUpload(
+    String uploadId,
+    bool Function(Map<String, dynamic>) accepted,
+  ) async {
+    final event = await _attachmentRelayController.stream
+        .firstWhere(
+          (event) =>
+              event['upload_id'] == uploadId && (event['_event'] == 'attachment_upload_error' || accepted(event)),
+        )
+        .timeout(const Duration(seconds: 30));
+    if (event['_event'] == 'attachment_upload_error') {
+      throw StateError('Attachment admission failed: ${event['error_code']}');
+    }
+    return event;
+  }
+
+  Future<HostedConversationMedia> fetchHostedConversationMedia({
+    required String deviceId,
+    required String sessionId,
+    required String mediaId,
+    required String purpose,
+    void Function(void Function())? registerCancel,
+  }) async {
+    if (!isConnected || isLocalTransport) {
+      throw StateError('Hosted media relay is unavailable.');
+    }
+    final routeId = const Uuid().v4();
+    final completer = Completer<HostedConversationMedia>();
+    var routeCancelled = false;
+    registerCancel?.call(() {
+      if (completer.isCompleted) return;
+      routeCancelled = true;
+      _socket?.emit('conversation_media_cancel', {
+        'version': 'v1',
+        'route_id': routeId,
+      });
+      completer.completeError(StateError('Media fetch cancelled.'));
+    });
+    final chunks = <int, Uint8List>{};
+    String? mimeType;
+    String? fullHash;
+    int? sizeBytes;
+    int? chunkCount;
+    late final StreamSubscription<Map<String, dynamic>> subscription;
+    subscription = _attachmentRelayController.stream.listen((event) {
+      if (event['route_id'] != routeId || completer.isCompleted) return;
+      try {
+        switch (event['_event']) {
+          case 'conversation_media_error':
+            throw StateError('Media fetch failed: ${event['error_code']}');
+          case 'conversation_media_start':
+            if (event['session_id'] != sessionId ||
+                event['size_bytes'] is! int ||
+                event['sha256'] is! String ||
+                event['mime_type'] is! String ||
+                event['chunk_count'] is! int) {
+              throw const FormatException('Invalid media metadata.');
+            }
+            sizeBytes = event['size_bytes'] as int;
+            fullHash = event['sha256'] as String;
+            mimeType = event['mime_type'] as String;
+            chunkCount = event['chunk_count'] as int;
+            if (sizeBytes! < 0 || sizeBytes! > 5 * 1024 * 1024) {
+              throw const FormatException('Invalid media size.');
+            }
+            break;
+          case 'conversation_media_chunk':
+            final index = event['index'];
+            final data = event['data'];
+            if (chunkCount == null || index is! int || index != chunks.length || data is! List<int>) {
+              throw const FormatException('Invalid media sequence.');
+            }
+            final bytes = Uint8List.fromList(data);
+            if (sha256.convert(bytes).toString() != event['sha256']) {
+              throw const FormatException('Invalid media chunk hash.');
+            }
+            chunks[index] = bytes;
+            break;
+          case 'conversation_media_complete':
+            if (chunkCount == null || chunks.length != chunkCount) {
+              throw const FormatException('Incomplete media payload.');
+            }
+            final builder = BytesBuilder(copy: false);
+            for (var index = 0; index < chunkCount!; index++) {
+              builder.add(chunks[index]!);
+            }
+            final bytes = builder.takeBytes();
+            if (bytes.length != sizeBytes || sha256.convert(bytes).toString() != fullHash) {
+              throw const FormatException('Invalid media payload.');
+            }
+            completer.complete(
+              HostedConversationMedia(bytes: bytes, mimeType: mimeType!),
+            );
+        }
+      } on Object catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    _socket!.emit('conversation_media_fetch', {
+      'version': 'v1',
+      'route_id': routeId,
+      'device_id': deviceId,
+      'session_id': sessionId,
+      'request_id': routeId,
+      'media_id': mediaId,
+      'purpose': purpose,
+    });
+    try {
+      return await completer.future.timeout(const Duration(seconds: 30));
+    } on Object {
+      if (!routeCancelled) {
+        _socket?.emit('conversation_media_cancel', {
+          'version': 'v1',
+          'route_id': routeId,
+        });
+      }
+      rethrow;
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
   @override
   void sendDeviceCommand({
     required String deviceId,
@@ -738,7 +1053,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     unawaited(_eventsController.close());
     unawaited(_accountLifecycleResponseController.close());
     unawaited(_accountLifecycleRevokeController.close());
+    unawaited(_accountLifecycleDeleteController.close());
     unawaited(_accountLifecycleChangedController.close());
+    unawaited(_attachmentRelayController.close());
     _eventRouter.dispose();
     unawaited(_authSuccessController.close());
     unawaited(_authFailureController.close());
@@ -916,6 +1233,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       'account_lifecycle_changed',
       'revoke_account_principal',
       'account_lifecycle_revoke_result',
+      'delete_account',
+      'account_lifecycle_delete_result',
     }.contains(event)) {
       return {
         if (payload['version'] is num) 'version': payload['version'],

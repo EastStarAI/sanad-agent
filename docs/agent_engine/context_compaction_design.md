@@ -21,9 +21,12 @@ CompactionEngineRequest
 
 The coordinator selects immutable source/tail ranges synchronously, persists the
 exclusive started claim, and publishes the compacting barrier before the first
-summarizer await. `CompactionActivationService` activates only a validated
-candidate; summarizer, validation, or cancellation failure closes the claimed
-row as typed failed and never mutates canonical history.
+summarizer await. Pre-claim preparation and thinking selection errors are contained
+without creating a database claim or barrier. `CompactionActivationService` activates
+only a validated candidate; summarizer, pruning, validation, or cancellation failure
+closes the claimed row as typed failed with allowlisted safe stage and cause diagnostics
+(`failure_stage`, `failure_cause` stored in `failure_detail_json`) and never mutates
+canonical history. Stale non-null owners cannot clear newer compacting state or drain queues.
 
 ## Pressure and budgeting
 
@@ -41,11 +44,53 @@ row as typed failed and never mutates canonical history.
   `mixed`). A larger rough estimate of the full request cannot override it.
 - A route/model/config revision, prompt, tool-schema, or measured-prefix change
   invalidates the snapshot and returns to an explicitly estimated projection.
+- Recovering that baseline after a restart reads the timestamped per-model-step
+  `context_usage` snapshot rather than the mutable generic `usage` map, which can
+  hold a later run value on the same assistant row. A provider/model identity
+  present in that snapshot is authoritative: a matching mutable legacy
+  `provider`/`model` value never overrides a mismatched snapshot, and an absent
+  or empty recorded identity never matches a null candidate alias. Production
+  `BaseOpenAIAdapter` implements `WireInputUsageMeasurer` and
+  `WireInputTokenEstimator` through its canonical request builder.
+- A baseline recovered from persistence requires a versioned compact non-content
+  `wire_proof` (`v1:<sha256>`) that binds confirmed input to complete ordered wire
+  items (`inputItemFingerprints`), stable material (`stableMaterialFingerprint`),
+  and route signature. The live producer records `wire_proof` in the frozen
+  `context_usage` snapshot. Upon restore after a restart, the active adapter
+  remeasures the historical prefix preceding the assistant row; the baseline is
+  restored only if the adapter exposes `WireInputUsageMeasurer`, `wire_proof`
+  is valid and matches remeasurement, and the current request extends that
+  prefix on the same route (`extendsMeasurement`). Unsupported/no-measurer adapters,
+  legacy unbound rows without `wire_proof`, and any drift in route, prompt, tool
+  schemas, or historical message content fail closed to explicit estimates. There
+  is no unproven floor: prospective pressure is calculated from the remeasured
+  wire extension delta (`wireMeasurement.estimatedTokens - baselineWire.estimatedTokens`),
+  and a wire-measured baseline is consumed only while the live remeasurement keeps
+  proving that extension. When the proof stops holding — for example a wire-visible
+  request option such as a thinking directive changes — admission falls back to the
+  explicit estimate until a new provider response supplies a fresh binding; the
+  in-memory message comparison remains only for routes whose adapter exposes no wire
+  measurement at all. Stale receipts from before an activated compaction boundary are
+  discarded by the same material proof, so no wall-clock recency heuristic is needed.
+  Metadata-only bookkeeping changes on earlier messages do not alter wire items or
+  proofs and do not falsely invalidate valid pressure. Cached input tokens count as
+  input, and confirmed pressure exceeding the threshold triggers automatic compaction.
 - Tool-schema token estimates are cached by route identity + schema fingerprint
   so stable schemas are cheap to re-evaluate and routes never share a cache entry.
-- Declared `media_bytes`, `data:*;base64,...` payloads, and long base64 blobs with
-  alphabet markers use byte-based media accounting; homogeneous filler text stays
-  on the chars/4 estimator.
+- Image material is priced from its model-facing form, not its transport: a base
+  charge plus a tile charge per image after the model's maximum-edge and
+  minimum-short-side fit, with the per-image ceiling for an image whose
+  dimensions are not recorded. Only `low` detail is charged the base rate;
+  canonical `ToolImageDetail.original` reaches the wire as `high` and is priced
+  on the tile grid. The fitted grid is clamped to the same per-image ceiling so
+  thin or panorama images cannot demand an unbounded tile grid, and a fitted
+  thin side that rounds to zero keeps one pixel instead of a non-finite scale.
+  Encoded media strings (data URIs, long base64
+  blobs) are never priced as text; declared `media_bytes` keep byte-based
+  accounting and homogeneous filler text stays on the chars/4 estimator. A user
+  attachment is priced by the per-image ceiling even when the route text-projects
+  it instead of sending the image, so the residual error stays bounded (at most
+  one ceiling per attachment) and never grows with the encoded payload.
 - Automatic compaction triggers above `90%` of the effective input window by
   default. The retained-history suffix has a separate `10%` target. Both ratios
   may be overridden per exact normalized model id in `SANAD_HOME/config.yaml`.
@@ -76,6 +121,15 @@ row as typed failed and never mutates canonical history.
   tail; no middle gap is permitted.
 - Summarizer input describes media and truncates oversized tool results; protected
   tail rows stay verbatim for summarizer partitioning.
+- Structured tool results (`Message.toolResult`) are pruned coherently with their
+  string projection: `CompactionToolPruner` derives immutable replacement
+  `ToolExecutionResult` blocks so the invariant `content == toolResult.displayText`
+  is strictly preserved. Call identity (`toolCallId`), error flags/codes (`isError`,
+  `errorCode`), schema version, and metadata remain intact.
+- For summarizer input, media blocks (`ToolImageBlock`) are converted to clean text
+  descriptions (`[media omitted for compaction summary: <bytes> bytes]`). For oversized
+  retained-tail projection (`pruneOversizedForProjection`), `ToolImageBlock`s remain
+  unmodified without creating invalid empty image blocks or inventing a new image-retention policy.
 - When a single recent tool/media payload would keep the post-compaction request
   over budget, `CompactionToolPruner.pruneOversizedForProjection` shrinks
   projection-only copies so the engine can still emit a candidate. Canonical rows
@@ -114,6 +168,18 @@ eligible.
   provider-visible projection for the trigger. Auto includes the admitted user
   turn; overflow reuses the failed projection; manual uses the current idle
   projection without inventing a turn.
+- Request options are derived through a single canonical builder
+  (`CompactionRequestFactory.buildCompactionRequestOptions`) shared across manual,
+  automatic, and overflow paths. Every `LLMRequestOptions` field is explicitly accounted for:
+  the active route signature, user-selected thinking mode, native thinking directive,
+  capability profile and snapshot, attachment store, and transport test seams (`requestClientFactory`)
+  are preserved verbatim. Compaction overrides only correlation (`requestId: 'compaction:...'`)
+  and safely verifies cancellation scope lifecycle (clearing expired or cancelled scopes
+  rather than copying them blindly).
+- Exact thinking preservation is strict: the user's selected thinking mode and wire directive
+  are never lowered, cleared, defaulted, or substituted as error recovery.
+- Image attachments are verified against the request's `AttachmentStore` before transmission;
+  missing, corrupt, or unauthorized media fails specifically before HTTP, preserving the storage jail.
 - One ordinary ephemeral user message is appended. The normal tool list and
   request settings remain unchanged, but the final instruction line forbids
   tool calls and requires the final JSON object only. A returned tool call is
@@ -127,9 +193,14 @@ eligible.
   current goal, latest user request, active state, critical context, and
   remaining work. Provider-only reasoning wrappers are removed and the parsed
   structure is redacted before persistence.
-- If the append-only request overflows before output, recovery uses at most four
-  contiguous chunks that keep assistant tool calls with their results, followed
-  by one typed reduce pass. Partial summaries never activate a boundary.
+- If the append-only request overflows before output, the bounded recovery
+  summarizer packs contiguous groups that keep assistant tool calls with their
+  results into chunks within a per-pass token budget, splits an overflowing
+  chunk at most once, and reduces the partials (preceded by the eligible
+  previous summary) in budget-packed batches into one typed summary. A source
+  needing more chunks than configured fails with `recovery_capacity_exceeded`
+  before any recovery call. Partial summaries never activate a boundary.
+  Details: `docs/technical/context_compaction.md` §8.12.
 - Compaction adds no cache-specific measurement, enforcement, or metric. Cache
   behavior is incidental to the ordinary codec/provider request and is not a
   correctness condition or performance claim.

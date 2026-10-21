@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:sanad_agent/cli/cli.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
+import 'package:sanad_agent/core/sanad_home/runtime_ownership.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:test/test.dart';
@@ -151,6 +152,94 @@ class FakeInProcessTurnClient extends CliTurnClientBase {
 
 Future<int> _runTargeted(SanadCommandRunner runner, List<String> arguments) {
   return runner.run([...arguments, '--execution-root', Directory.current.path]);
+}
+
+/// Minimal authenticated loopback gateway that deliberately answers `/health`
+/// slower than the legacy 300 ms discovery deadline and completes one `think`
+/// turn over WebSocket.
+class DelayedHealthyGateway {
+  DelayedHealthyGateway._(this.server, this.healthDelay, this.finalAnswer);
+
+  final HttpServer server;
+  final Duration healthDelay;
+  final String finalAnswer;
+
+  int healthRequests = 0;
+  int socketConnections = 0;
+  String? socketToken;
+  final List<Map<String, dynamic>> receivedEnvelopes = [];
+
+  String get gatewayUrl => 'ws://127.0.0.1:${server.port}/gateway';
+
+  static Future<DelayedHealthyGateway> start({
+    Duration healthDelay = const Duration(milliseconds: 450),
+    String finalAnswer = 'attached gateway answer',
+  }) async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final gateway = DelayedHealthyGateway._(server, healthDelay, finalAnswer);
+
+    server.listen((request) async {
+      if (request.uri.path == '/health') {
+        gateway.healthRequests++;
+        await Future<void>.delayed(gateway.healthDelay);
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.json
+          ..write('{"status":"ok"}');
+        await request.response.close();
+        return;
+      }
+
+      if (WebSocketTransformer.isUpgradeRequest(request)) {
+        gateway.socketConnections++;
+        gateway.socketToken =
+            request.headers.value('x-sanad-gateway-token') ??
+            request.headers.value('authorization');
+        final socket = await WebSocketTransformer.upgrade(request);
+        socket.listen((dynamic raw) {
+          final decoded = jsonDecode(raw.toString());
+          if (decoded is Map) {
+            final envelope = Map<String, dynamic>.from(decoded);
+            gateway.receivedEnvelopes.add(envelope);
+            socket.add(jsonEncode(_turnCompleteFrame(envelope, gateway)));
+          }
+        });
+        return;
+      }
+
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+    });
+
+    return gateway;
+  }
+
+  static Map<String, dynamic> _turnCompleteFrame(
+    Map<String, dynamic> envelope,
+    DelayedHealthyGateway gateway,
+  ) {
+    final payload = envelope['payload'];
+    final sessionId = payload is Map
+        ? payload['session_id']?.toString()
+        : null;
+    return {
+      'type': 'device_event',
+      'session_id': sessionId,
+      'event': {
+        'type': 'turn_complete',
+        'session_id': sessionId,
+        'payload': {
+          'text': gateway.finalAnswer,
+          'model': 'test-model',
+          'provider': 'test-provider',
+        },
+      },
+    };
+  }
+
+  Future<void> close() async {
+    await server.close(force: true);
+  }
 }
 
 void main() {
@@ -1219,6 +1308,97 @@ void main() {
         } finally {
           await server.close(force: true);
           await requests.cancel();
+          await home.delete(recursive: true);
+        }
+      },
+    );
+
+    test(
+      'attaches to an explicitly targeted daemon whose health answer is slower than the legacy probe deadline',
+      () async {
+        final home = await Directory.systemTemp.createTemp(
+          'sanad-cli-slow-gateway-',
+        );
+        final gateway = await DelayedHealthyGateway.start();
+        var standaloneFactoryCalled = false;
+        final out = StringBuffer();
+        final err = StringBuffer();
+
+        try {
+          await File(
+            '${home.path}/${LocalGatewayCredentials.relativePath}',
+          ).writeAsString('home-token');
+
+          final runner = OneshotRunner(
+            stdinReader: () async => null,
+            standaloneClientFactory: ({sanadHomeOverride}) async {
+              standaloneFactoryCalled = true;
+              throw const SanadRuntimeOwnershipConflict();
+            },
+          );
+
+          final exitCode = await runner.run(
+            prompt: 'attach to the running daemon',
+            sanadHome: home.path,
+            gatewayUrl: gateway.gatewayUrl,
+            stdoutSink: out,
+            stderrSink: err,
+            timeout: const Duration(seconds: 10),
+          );
+
+          expect(standaloneFactoryCalled, isFalse);
+          expect(exitCode, 0);
+          expect(err.toString(), isNot(contains('cannot use this Sanad Home')));
+          expect(out.toString(), contains('attached gateway answer'));
+          // Mode resolution probes the targeted endpoint once; the transport
+          // then re-validates the same endpoint while attaching.
+          expect(gateway.healthRequests, 2);
+          expect(gateway.socketConnections, 1);
+          expect(gateway.socketToken, 'home-token');
+          expect(gateway.receivedEnvelopes.single['command'], 'think');
+        } finally {
+          await gateway.close();
+          await home.delete(recursive: true);
+        }
+      },
+    );
+
+    test(
+      'reports an accurate cause when a fallback standalone runtime cannot take over an owned Home',
+      () async {
+        final home = await Directory.systemTemp.createTemp(
+          'sanad-cli-owned-fallback-',
+        );
+        final err = StringBuffer();
+
+        try {
+          await File(
+            '${home.path}/${LocalGatewayCredentials.relativePath}',
+          ).writeAsString('home-token');
+
+          final runner = OneshotRunner(
+            stdinReader: () async => null,
+            standaloneClientFactory: ({sanadHomeOverride}) async {
+              throw const SanadRuntimeOwnershipConflict();
+            },
+          );
+
+          final exitCode = await runner.run(
+            prompt: 'must not run standalone',
+            sanadHome: home.path,
+            gatewayUrl: 'ws://127.0.0.1:59996/gateway',
+            stdoutSink: StringBuffer(),
+            stderrSink: err,
+            timeout: const Duration(seconds: 10),
+          );
+
+          expect(exitCode, 78);
+          expect(err.toString(), isNot(contains('--standalone')));
+          expect(
+            err.toString(),
+            contains('Could not confirm a healthy Sanad daemon'),
+          );
+        } finally {
           await home.delete(recursive: true);
         }
       },

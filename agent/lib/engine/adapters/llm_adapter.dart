@@ -1,10 +1,40 @@
 import '../../core/models/message.dart';
+import '../../core/models/tool_execution_result.dart';
 import '../../core/models/agent_response.dart';
 import '../../capabilities/models/tool_schema.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'llm_request_options.dart';
 
 typedef ModelContextLimitLookup = int? Function(String modelId);
+
+enum ToolResultMediaCapability { textOnly, imageToolResults }
+
+/// Explicit capability seam for adapters and transparent wrappers.
+abstract interface class ToolResultMediaCapabilityProvider {
+  ToolResultMediaCapability get toolResultMediaCapability;
+}
+
+extension LLMAdapterToolResultMedia on LLMAdapter {
+  ToolResultMediaCapability get toolResultMediaCapability =>
+      this is ToolResultMediaCapabilityProvider
+      ? (this as ToolResultMediaCapabilityProvider).toolResultMediaCapability
+      : ToolResultMediaCapability.textOnly;
+}
+
+const imageToolResultOmissionMarker =
+    '[Image omitted: active provider does not accept image tool results.]';
+
+/// Builds a detached provider-facing fallback without mutating [message].
+String textOnlyToolResultContent(Message message) {
+  final result = message.toolResult;
+  if (result == null ||
+      !result.blocks.any((block) => block is ToolImageBlock)) {
+    return message.content ?? '';
+  }
+  final text = result.displayText;
+  if (text.contains(imageToolResultOmissionMarker)) return text;
+  return '$text\n$imageToolResultOmissionMarker';
+}
 
 /// Adapter-owned measurement of the material that contributes input tokens on
 /// the provider wire.

@@ -125,6 +125,12 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
 - Deleting a session clears its draft.
 - Composer edits flush before dispatch and before changing device/session ownership. A device switch saves against the previously bound device rather than reading the already-selected replacement device.
 - Workspace, provider, model, and thinking mode are persisted with the per-device New Conversation draft and restored with its text. Permission mode is not draft-owned; restoration reloads the selected Workspace policy and never writes a permission mutation.
+- Provider, model, and thinking mode form one draft route (`ConversationDraft.isCompleteRoute`): they are written, inherited, and restored only when both provider and model are present. Restore ignores a partial or empty draft route so the device route or readiness default stays in effect, and decoding heals an already-persisted half route (for example a model without a provider) by dropping all three route fields while keeping the draft text and workspace.
+- Route source for `startNewChat` (Task 122):
+  - **Leaving an open conversation on the same device** (a user-initiated New chat): the draft takes that conversation's full route — provider, model and its own stored thinking (null when the conversation stores none) — replacing any earlier draft route.
+  - **Nothing open** (Client startup restore, a New Conversation route entry, a device switch): a persisted draft with a complete route is the user's own and is kept with its thinking; only the workspace follows the resolved destination. The last-selected session seeds the route only when the draft has no complete route, and a half session route still clears all three.
+  - "Copied and never changed" and "changed by the user" are not distinguished: without a separate marker the persisted complete draft always wins, which yields the same route when it was copied unchanged.
+- The draft's thinking mode is only ever an explicit value: a user pick, a value carried with the user's pick from another model, or the source conversation's own stored selection. A route default the thinking control admits for display and the next send (`ConversationInputCubit.explicitNextMessageThinkingMode` excludes it) is never written to the draft or to the device thinking preference; a draft holding null shows the same route default again.
 - Editing after dispatch clears the pending request marker before writing newer text, so acceptance of the older request cannot clear a newer draft.
 - Snapshot consumers detect canonical cleanup from the immutable snapshot event itself; an unrelated cache emission while a debounce is pending never clears the editor.
 
@@ -184,8 +190,10 @@ that direction, and session activation resets both.
 - Debounced writes via `ConversationCachePersistor` (default 500ms); `flush()` on lifecycle pause/close.
 - Bootstrap awaits hydration before `runApp`, and serialized persistence writes prevent an older delayed save from overwriting a newer snapshot.
 - At most 50 session summaries per section are persisted. If an in-memory section exceeds that limit, its cursor is discarded so restart cannot skip omitted rows; the next refresh restores authoritative pagination.
-- Persisted session summaries include the confirmed provider, exact model id, thinking mode, and
-  `route_revision`. `thinking_mode` is the only persisted key and no alternate-key fallback is
+- Persisted session summaries include the confirmed provider (under the canonical wire key
+  `provider_instance_id`, decoded by `Session.fromJson`), exact model id, thinking mode, and
+  `route_revision`. Caches written before Task 122 stored the provider as `model_provider`; the
+  codec migrates that legacy key on decode so already-persisted rows keep their provider. `thinking_mode` is the only persisted key and no alternate-key fallback is
   supported. A cached route is only a reconnect projection: live/list/history confirmations still
   pass through the session route reducer before replacing it.
 - Execution snapshots, runtime notices, pending permission requests, and

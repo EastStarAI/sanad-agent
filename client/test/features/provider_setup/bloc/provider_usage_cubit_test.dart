@@ -33,6 +33,7 @@ class _FakeUsageClient implements ProviderSetupClient {
   Future<void> Function()? usageGetLatency;
   Future<void> Function()? usageSupportLatency;
   Future<void> Function()? usageResetLatency;
+  Future<void> Function()? modelSnapshotLatency;
   final List<(String, String, String?)> resetCalls = [];
   ProviderUsageResetResultDto? resetResult;
 
@@ -111,6 +112,7 @@ class _FakeUsageClient implements ProviderSetupClient {
   @override
   Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async {
     modelSnapshotCalls += 1;
+    await modelSnapshotLatency?.call();
     return ModelCacheSnapshotDto(
       instances: scriptedInstances,
       recent: const [],
@@ -470,6 +472,387 @@ void main() {
       final remoteAgent = DeviceConfig(id: 'remote-1', name: 'Remote', isOnline: true);
       await cubit.ensureProviderDisplayNames(agent: remoteAgent);
       expect(client.modelSnapshotCalls, 2, reason: 'per-device catalog request');
+    },
+  );
+
+  test(
+    'regression: creating custom provider updates display names after invalidation without restart',
+    () async {
+      final client = _FakeUsageClient();
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      // Initial load: contains 'a' -> 'Provider A'
+      await cubit.ensureProviderDisplayNames(agent: _local);
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {'a': 'Provider A'},
+      );
+      expect(client.modelSnapshotCalls, 1);
+
+      // User adds custom provider 'b' ('OpenAi Compatible')
+      client.scriptedInstances = [
+        const ModelCacheInstanceDto(
+          id: 'a',
+          displayName: 'Provider A',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: [],
+        ),
+        const ModelCacheInstanceDto(
+          id: 'b',
+          displayName: 'OpenAi Compatible',
+          status: 'ready',
+          isDefault: false,
+          cacheStatus: 'fetched',
+          models: [],
+        ),
+      ];
+
+      // Mutation invalidates the catalog
+      cubit.invalidateProviderDisplayNames(agent: _local);
+
+      // Composer consumer re-ensures display names
+      await cubit.ensureProviderDisplayNames(agent: _local);
+
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {
+          'a': 'Provider A',
+          'b': 'OpenAi Compatible',
+        },
+      );
+      expect(client.modelSnapshotCalls, 2);
+    },
+  );
+
+  test(
+    'regression: updateProviderDisplayNames authoritatively updates display names and prunes missing instances',
+    () async {
+      final client = _FakeUsageClient();
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      await cubit.ensureProviderDisplayNames(agent: _local);
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {'a': 'Provider A'},
+      );
+      expect(client.modelSnapshotCalls, 1);
+
+      // Setup mutates and renames/adds providers authoritatively
+      cubit.updateProviderDisplayNames(
+        agent: _local,
+        displayNames: {
+          'a': 'Provider A Renamed',
+          'b': 'Anthropic Compatible',
+        },
+      );
+
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {
+          'a': 'Provider A Renamed',
+          'b': 'Anthropic Compatible',
+        },
+      );
+
+      // Repeated ensure does not re-fetch since catalog is already updated
+      await cubit.ensureProviderDisplayNames(agent: _local);
+      expect(client.modelSnapshotCalls, 1);
+    },
+  );
+
+  test(
+    'regression: onInstanceRemoved removes instance from providerDisplayNames',
+    () async {
+      final client = _FakeUsageClient();
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      cubit.updateProviderDisplayNames(
+        agent: _local,
+        displayNames: {
+          'a': 'Provider A',
+          'b': 'OpenAi Compatible',
+        },
+      );
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {
+          'a': 'Provider A',
+          'b': 'OpenAi Compatible',
+        },
+      );
+
+      cubit.onInstanceRemoved(agent: _local, instanceId: 'b');
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {'a': 'Provider A'},
+      );
+    },
+  );
+
+  test(
+    'regression: pending pre-mutation catalog fetch cannot reinstall stale names',
+    () async {
+      final pending = Completer<void>();
+      final client = _FakeUsageClient()..modelSnapshotLatency = () => pending.future;
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      // Start pre-mutation load (scripted instances has 'a': 'Provider A')
+      final preMutationLoad = cubit.ensureProviderDisplayNames(agent: _local);
+      await Future<void>.delayed(Duration.zero);
+
+      // While pre-mutation load is in flight, user updates provider to 'a': 'Authoritative New'
+      cubit.updateProviderDisplayNames(
+        agent: _local,
+        displayNames: {'a': 'Authoritative New'},
+      );
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {'a': 'Authoritative New'},
+      );
+
+      // Now pre-mutation load finishes with older data ('Provider A')
+      pending.complete();
+      await preMutationLoad;
+
+      // Authoritative new name must NOT have been overwritten by stale pre-mutation result
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {'a': 'Authoritative New'},
+      );
+    },
+  );
+
+  test(
+    'regression: invalidating one device preserves other devices display names and query isolation',
+    () async {
+      final client = _FakeUsageClient();
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      final remoteAgent = DeviceConfig(id: 'remote-1', name: 'Remote', isOnline: true);
+
+      await cubit.ensureProviderDisplayNames(agent: _local);
+      await cubit.ensureProviderDisplayNames(agent: remoteAgent);
+      expect(client.modelSnapshotCalls, 2);
+
+      // Invalidate only local device
+      cubit.invalidateProviderDisplayNames(agent: _local);
+
+      // Remote agent catalog remains valid and is not re-fetched
+      await cubit.ensureProviderDisplayNames(agent: remoteAgent);
+      expect(client.modelSnapshotCalls, 2);
+
+      // Local agent catalog re-fetches
+      await cubit.ensureProviderDisplayNames(agent: _local);
+      expect(client.modelSnapshotCalls, 3);
+    },
+  );
+
+  test(
+    'regression: in-flight catalog request started before clearDevice cannot repopulate stale names (ABA race)',
+    () async {
+      final pending = Completer<void>();
+      final client = _FakeUsageClient()..modelSnapshotLatency = () => pending.future;
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      // Start in-flight catalog load at initial revision (scripted instances has 'a': 'Provider A')
+      final oldLoad = cubit.ensureProviderDisplayNames(agent: _local);
+      await Future<void>.delayed(Duration.zero);
+
+      // Device switch / clear occurs while request is in flight
+      cubit.clearDevice(_local);
+      expect(cubit.state.displayNamesFor(_localDeviceId), isEmpty);
+
+      // Optionally, device rejoins or setup publishes new names
+      cubit.updateProviderDisplayNames(
+        agent: _local,
+        displayNames: {'b': 'New Provider'},
+      );
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {'b': 'New Provider'},
+      );
+
+      // Late pre-clear snapshot resolves with stale data ('a': 'Provider A')
+      pending.complete();
+      await oldLoad;
+
+      // Monotonic generation must reject old snapshot; new names must be preserved
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {'b': 'New Provider'},
+      );
+    },
+  );
+
+  test(
+    'regression: in-flight catalog request started before clearDevice does not reappear on cleared device',
+    () async {
+      final pending = Completer<void>();
+      final client = _FakeUsageClient()..modelSnapshotLatency = () => pending.future;
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      // Start in-flight catalog load at initial revision
+      final oldLoad = cubit.ensureProviderDisplayNames(agent: _local);
+      await Future<void>.delayed(Duration.zero);
+
+      // Clear device drops state and must tombstone/advance generation
+      cubit.clearDevice(_local);
+      expect(cubit.state.displayNamesFor(_localDeviceId), isEmpty);
+
+      // Late pre-clear snapshot resolves
+      pending.complete();
+      await oldLoad;
+
+      // Stale catalog must not reappear on cleared device
+      expect(cubit.state.displayNamesFor(_localDeviceId), isEmpty);
+    },
+  );
+
+  test(
+    'regression: authoritative empty snapshot neutralizes pending catalog fetch and prevents stale reinstatement',
+    () async {
+      final pending = Completer<void>();
+      final client = _FakeUsageClient()..modelSnapshotLatency = () => pending.future;
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      // Start in-flight catalog load (which will return {'a': 'Provider A'})
+      final load = cubit.ensureProviderDisplayNames(agent: _local);
+      await Future<void>.delayed(Duration.zero);
+
+      // Authoritative removal of all instances occurs; setup flow publishes empty display names
+      cubit.updateProviderDisplayNames(
+        agent: _local,
+        displayNames: const {},
+      );
+      expect(cubit.state.displayNamesFor(_localDeviceId), isEmpty);
+
+      // Resolve the pending fetch
+      pending.complete();
+      await load;
+
+      // Stale catalog must NOT be reinstated
+      expect(cubit.state.displayNamesFor(_localDeviceId), isEmpty);
+    },
+  );
+
+  test(
+    'regression: quiescent identical names update with no pending fetch is a strict no-op',
+    () async {
+      final client = _FakeUsageClient();
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      cubit.updateProviderDisplayNames(
+        agent: _local,
+        displayNames: {'a': 'Provider A'},
+      );
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        {'a': 'Provider A'},
+      );
+
+      final emitted = <ProviderUsageState>[];
+      final subscription = cubit.stream.listen(emitted.add);
+      addTearDown(subscription.cancel);
+
+      // Identical update with no fetch in flight must emit zero events
+      cubit.updateProviderDisplayNames(
+        agent: _local,
+        displayNames: {'a': 'Provider A'},
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(emitted, isEmpty);
+    },
+  );
+
+  test(
+    'regression: catalog invalidation and name updates do not cancel unrelated in-flight usage/support fetches',
+    () async {
+      final pending = Completer<void>();
+      final client = _FakeUsageClient()..usageSupportLatency = () => pending.future;
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      // Start in-flight support/usage fetch for instance 'a'
+      final load = cubit.onInstancesLoaded(
+        agent: _local,
+        instanceIds: const ['a'],
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      // During the in-flight support fetch, catalog is authoritatively updated and invalidated
+      cubit.updateProviderDisplayNames(
+        agent: _local,
+        displayNames: {'a': 'Provider A Updated'},
+      );
+      cubit.invalidateProviderDisplayNames(agent: _local);
+
+      // Complete the pending support fetch
+      pending.complete();
+      await load;
+
+      // Unrelated support answer must NOT be dropped by catalog revision bump
+      expect(
+        cubit.state.support.supports(_localDeviceId, 'a'),
+        isTrue,
+        reason: 'support answer must remain valid despite catalog revision changes',
+      );
+      expect(
+        cubit.state.entry(_localDeviceId, 'a'),
+        isNotNull,
+        reason: 'usage entry must not be dropped by catalog revision changes',
+      );
     },
   );
 

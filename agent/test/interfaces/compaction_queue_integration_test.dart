@@ -80,6 +80,7 @@ void main() {
     ).thenReturn(null);
     when(mockAgentRunner.canPublishRunEvents).thenReturn(true);
     when(mockAgentRunner.setTurnRequestId(any)).thenReturn(null);
+    when(mockAgentRunner.configureUserAttachments(any)).thenReturn(null);
     when(
       mockAgentRunner.commitUserMessage(
         any,

@@ -233,6 +233,8 @@ Use the review skill.''',
       ),
     ).thenReturn(null);
     when(mockAgentRunner.canPublishRunEvents).thenReturn(true);
+    when(mockAgentRunner.setTurnRequestId(any)).thenReturn(null);
+    when(mockAgentRunner.configureUserAttachments(any)).thenReturn(null);
 
     // Stub SessionManager so GatewayManager can persist metrics during tests
     mockSessionDb = MockSessionDB();

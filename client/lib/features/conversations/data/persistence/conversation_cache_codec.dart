@@ -120,6 +120,7 @@ class ConversationCacheCodec {
   }) {
     final pagesRaw = (json['workspacePages'] as Map?)?.cast<String, dynamic>() ?? const {};
     final newDraft = (json['newDraft'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final newDraftRoute = _DraftRoute.fromJson(newDraft);
     return DeviceConversationContext(
       lastDestination: _destinationFromJson(json['lastDestination'], deviceId),
       lastSelectedSessionId: json['lastSelectedSessionId'] as String?,
@@ -137,9 +138,9 @@ class ConversationCacheCodec {
       ),
       newConversationDraftText: (newDraft['text'] as String?) ?? '',
       newConversationDraftWorkspaceId: newDraft['workspaceId'] as String?,
-      newConversationDraftProviderId: newDraft['providerId'] as String?,
-      newConversationDraftModel: newDraft['model'] as String?,
-      newConversationDraftThinkingMode: newDraft['thinkingMode'] as String?,
+      newConversationDraftProviderId: newDraftRoute.providerId,
+      newConversationDraftModel: newDraftRoute.model,
+      newConversationDraftThinkingMode: newDraftRoute.thinkingMode,
       newConversationDraftPermissionMode: newDraft['permissionMode'] as String?,
       newConversationDraftPendingRequestId: newDraft['pendingRequestId'] as String?,
       newConversationDraftUpdatedAt:
@@ -232,7 +233,7 @@ class ConversationCacheCodec {
     final rawList = (json['sessions'] as List?) ?? const [];
     return ConversationSectionPage(
       sessions: [
-        for (final raw in rawList) Session.fromJson(Map<String, dynamic>.from(raw as Map)),
+        for (final raw in rawList) _sessionFromJson(Map<String, dynamic>.from(raw as Map)),
       ],
       nextCursor: json['nextCursor'] as String?,
       hasMore: (json['hasMore'] as bool?) ?? false,
@@ -275,7 +276,7 @@ class ConversationCacheCodec {
     'last_user_message_at': s.lastMessageAt?.toIso8601String(),
     'model': s.model,
     'model_display': s.modelDisplay,
-    'model_provider': s.modelProvider,
+    'provider_instance_id': s.modelProvider,
     'route_revision': s.routeRevision,
     'history_revision': s.historyRevision,
     'thinking_mode': s.thinkingMode,
@@ -287,6 +288,17 @@ class ConversationCacheCodec {
     'workspace_trust_state': s.workspaceTrustState,
     'metadata': s.metadata,
   };
+
+  /// Decodes a cached session through the canonical wire contract. Caches
+  /// written before Task 122 stored the provider as `model_provider`, which
+  /// [Session.fromJson] does not read; migrate it so the route survives.
+  Session _sessionFromJson(Map<String, dynamic> json) {
+    final legacyProvider = json['model_provider'];
+    if (json['provider_instance_id'] == null && legacyProvider != null) {
+      json = {...json, 'provider_instance_id': legacyProvider};
+    }
+    return Session.fromJson(json);
+  }
 
   Map<String, dynamic> _draftToJson(ConversationDraft d) => {
     'text': d.text,
@@ -303,28 +315,31 @@ class ConversationCacheCodec {
     'updatedAt': d.updatedAt.toIso8601String(),
   };
 
-  ConversationDraft _draftFromJson(Map<String, dynamic> json) => ConversationDraft(
-    text: (json['text'] as String?) ?? '',
-    workspaceId: json['workspaceId'] as String?,
-    providerId: json['providerId'] as String?,
-    model: json['model'] as String?,
-    thinkingMode: json['thinkingMode'] as String?,
-    permissionMode: json['permissionMode'] as String?,
-    pendingRequestId: json['pendingRequestId'] as String?,
-    appliedStopRecoveryIds: (json['appliedStopRecoveryIds'] as List? ?? const [])
-        .map((value) => value.toString())
-        .toSet(),
-    pendingStopRecoveryIds: (json['pendingStopRecoveryIds'] as List? ?? const [])
-        .map((value) => value.toString())
-        .toSet(),
-    stopRecoveryClaimIds: (json['stopRecoveryClaimIds'] as Map? ?? const {}).map(
-      (key, value) => MapEntry(key.toString(), value.toString()),
-    ),
-    stopRecoveryOwnerTokens: (json['stopRecoveryOwnerTokens'] as Map? ?? const {}).map(
-      (key, value) => MapEntry(key.toString(), value.toString()),
-    ),
-    updatedAt: _parseDate(json['updatedAt']) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
-  );
+  ConversationDraft _draftFromJson(Map<String, dynamic> json) {
+    final route = _DraftRoute.fromJson(json);
+    return ConversationDraft(
+      text: (json['text'] as String?) ?? '',
+      workspaceId: json['workspaceId'] as String?,
+      providerId: route.providerId,
+      model: route.model,
+      thinkingMode: route.thinkingMode,
+      permissionMode: json['permissionMode'] as String?,
+      pendingRequestId: json['pendingRequestId'] as String?,
+      appliedStopRecoveryIds: (json['appliedStopRecoveryIds'] as List? ?? const [])
+          .map((value) => value.toString())
+          .toSet(),
+      pendingStopRecoveryIds: (json['pendingStopRecoveryIds'] as List? ?? const [])
+          .map((value) => value.toString())
+          .toSet(),
+      stopRecoveryClaimIds: (json['stopRecoveryClaimIds'] as Map? ?? const {}).map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      ),
+      stopRecoveryOwnerTokens: (json['stopRecoveryOwnerTokens'] as Map? ?? const {}).map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      ),
+      updatedAt: _parseDate(json['updatedAt']) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -351,5 +366,26 @@ class ConversationCacheCodec {
   DateTime? _parseDate(dynamic value) {
     if (value == null || value is! String || value.isEmpty) return null;
     return DateTime.tryParse(value)?.toUtc();
+  }
+}
+
+/// Persisted draft route healed on load: provider, model and thinking restore
+/// only as one complete provider+model route. A half route persisted by an
+/// older client (model without provider) is dropped so the device route or
+/// readiness default applies instead of an unsendable provider-less route.
+class _DraftRoute {
+  final String? providerId;
+  final String? model;
+  final String? thinkingMode;
+
+  const _DraftRoute._(this.providerId, this.model, this.thinkingMode);
+
+  factory _DraftRoute.fromJson(Map<String, dynamic> json) {
+    final providerId = json['providerId'] as String?;
+    final model = json['model'] as String?;
+    if (!ConversationDraft.isCompleteRoute(providerId, model)) {
+      return const _DraftRoute._(null, null, null);
+    }
+    return _DraftRoute._(providerId, model, json['thinkingMode'] as String?);
   }
 }

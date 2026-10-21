@@ -33,6 +33,7 @@ doc/api/
 /macos/Flutter/GeneratedPluginRegistrant.swift
 generated_*
 !lib/capabilities/skills/generated_bundled_skills.dart
+!lib/core/provider_thinking/generated_model_capability_defaults.dart
 
 .DS_Store
 .vscode

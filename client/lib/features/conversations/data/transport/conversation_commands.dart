@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:logging/logging.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
@@ -32,13 +34,28 @@ class ConversationCommands {
   Future<List<CanonicalEvent>>? _newerHistoryLoad;
   String? _newerHistoryCursor;
 
+  /// Acknowledgement window for `session.compact`; equal to the gateway's
+  /// default request window and intentionally not raised.
+  static const defaultCompactAcknowledgementTimeout = Duration(seconds: 10);
+
+  /// Upper bound for correlating a late `session.compact_result` after the
+  /// acknowledgement window elapsed. Past it the outcome is unconfirmed.
+  static const defaultCompactSettlementWindow = Duration(minutes: 10);
+
+  final Duration _compactAcknowledgementTimeout;
+  final Duration _compactSettlementWindow;
+
   ConversationCommands({
     required ConversationCommandGateway gateway,
     required DeviceConversationStore conversationStore,
     required DeviceEventMapper mapper,
+    Duration compactAcknowledgementTimeout = defaultCompactAcknowledgementTimeout,
+    Duration compactSettlementWindow = defaultCompactSettlementWindow,
   }) : _gateway = gateway,
        _conversationStore = conversationStore,
-       _mapper = mapper;
+       _mapper = mapper,
+       _compactAcknowledgementTimeout = compactAcknowledgementTimeout,
+       _compactSettlementWindow = compactSettlementWindow;
 
   Future<String?> sendMessage(
     String message, {
@@ -68,6 +85,87 @@ class ConversationCommands {
         'request_id': requestId,
         'session_id': targetSessionId,
         'message': message,
+        'delivery_intent': intent.wireValue,
+        if (workspaceId != null && workspaceId.trim().isNotEmpty) 'workspace_id': workspaceId.trim(),
+        if (context != null && context.trim().isNotEmpty) 'context': context.trim(),
+        if (providerId != null && providerId.trim().isNotEmpty) 'provider_id': providerId.trim(),
+        if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
+        if (thinkingMode != null && thinkingMode.trim().isNotEmpty) 'thinking_mode': thinkingMode.trim(),
+      },
+    );
+    return requestId;
+  }
+
+  Future<String?> sendMessageWithAttachments(
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  }) async {
+    if (!_gateway.isConnected) return null;
+    if (attachments.isEmpty) {
+      return sendMessage(
+        message,
+        sessionId: sessionId,
+        workspaceId: workspaceId,
+        context: context,
+        providerId: providerId,
+        model: model,
+        thinkingMode: thinkingMode,
+        intent: intent,
+      );
+    }
+    final requestId = generateConversationRequestId();
+    final List<String> attachmentIds;
+    if (_gateway.isLocalTransport) {
+      final response = await _gateway.request(
+        command: 'attachment.admit',
+        requestId: requestId,
+        timeout: const Duration(seconds: 30),
+        payload: {
+          'request_id': requestId,
+          'session_id': sessionId,
+          'attachments': attachments,
+        },
+      );
+      final responsePayload = response?['payload'] is Map
+          ? Map<String, dynamic>.from(response!['payload'] as Map)
+          : const <String, dynamic>{};
+      final rawIds = responsePayload['attachment_ids'];
+      attachmentIds = rawIds is List
+          ? rawIds.whereType<String>().where((id) => id.isNotEmpty).toList(growable: false)
+          : const <String>[];
+      if (responsePayload['outcome'] != 'accepted') {
+        throw StateError('Attachment admission failed.');
+      }
+    } else {
+      attachmentIds = await _gateway.admitHostedAttachments(
+        sessionId: sessionId,
+        requestId: requestId,
+        attachments: attachments,
+      );
+    }
+    if (attachmentIds.length != attachments.length) {
+      throw StateError('Attachment admission failed.');
+    }
+
+    _conversationStore.beginOutgoingRequest(
+      requestId: requestId,
+      sessionId: sessionId,
+      isDraftRequest: false,
+    );
+    _gateway.sendCommand(
+      command: 'think',
+      payload: {
+        'request_id': requestId,
+        'session_id': sessionId,
+        'message': message,
+        'attachment_ids': attachmentIds,
         'delivery_intent': intent.wireValue,
         if (workspaceId != null && workspaceId.trim().isNotEmpty) 'workspace_id': workspaceId.trim(),
         if (context != null && context.trim().isNotEmpty) 'context': context.trim(),
@@ -247,6 +345,7 @@ class ConversationCommands {
     int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
+    List<Map<String, dynamic>>? attachmentEdits,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
@@ -274,6 +373,7 @@ class ConversationCommands {
         'confirmed_replay_unsafe': confirmedReplayUnsafe,
         'confirmed_drop_steers': confirmedDropSteers,
         if (message != null) 'message': message,
+        if (attachmentEdits != null) 'attachment_edits': attachmentEdits,
         if (providerInstanceId != null && providerInstanceId.trim().isNotEmpty)
           'provider_instance_id': providerInstanceId.trim(),
         if (modelId != null && modelId.trim().isNotEmpty) 'model_id': modelId.trim(),
@@ -294,16 +394,41 @@ class ConversationCommands {
       return const SessionCompactResult(outcome: 'disconnected');
     }
     final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'session.compact',
-      payload: {'session_id': sessionId, 'request_id': requestId},
+    // Listen before dispatch so a result arriving right after the
+    // acknowledgement window cannot be missed.
+    final lateResult = _CompactSettlement(
+      events: _gateway.events,
+      sessionId: sessionId,
       requestId: requestId,
+      window: _compactSettlementWindow,
     );
-    final payload = Map<String, dynamic>.from(
-      result?['payload'] as Map? ?? result ?? const {},
-    );
-    return SessionCompactResult.fromJson(payload);
+    final Map<String, dynamic>? result;
+    try {
+      result = await _gateway.request(
+        command: 'session.compact',
+        payload: {'session_id': sessionId, 'request_id': requestId},
+        requestId: requestId,
+        timeout: _compactAcknowledgementTimeout,
+      );
+    } catch (_) {
+      lateResult.cancel();
+      rethrow;
+    }
+    if (result == null) {
+      // Dispatched once, but unacknowledged in time: the daemon may still be
+      // compacting. Never resend and never report this as a failure.
+      return SessionCompactResult(
+        outcome: SessionCompactResult.pendingOutcome,
+        requestId: requestId,
+        settlement: lateResult.future,
+      );
+    }
+    lateResult.cancel();
+    return SessionCompactResult.fromJson(_responsePayload(result));
   }
+
+  static Map<String, dynamic> _responsePayload(Map<String, dynamic> response) =>
+      Map<String, dynamic>.from(response['payload'] as Map? ?? response);
 
   Future<SessionForkResult> forkSession({
     required String sessionId,
@@ -1189,5 +1314,60 @@ class ConversationCommands {
         if (answer != null && answer.trim().isNotEmpty) 'answer': answer.trim(),
       },
     );
+  }
+}
+
+/// Correlates one late `session.compact_result` with the exact session and
+/// request of a pending manual compaction. Settles at most once: with the
+/// daemon's result, or as unconfirmed when the window elapses or the event
+/// stream closes. It only observes events and never dispatches.
+class _CompactSettlement {
+  static const _resultEvent = 'session.compact_result';
+
+  final String _sessionId;
+  final String _requestId;
+  final Completer<SessionCompactResult> _completer = Completer();
+  late final StreamSubscription<Map<String, dynamic>> _subscription;
+  late final Timer _timer;
+
+  _CompactSettlement({
+    required Stream<Map<String, dynamic>> events,
+    required String sessionId,
+    required String requestId,
+    required Duration window,
+  }) : _sessionId = sessionId,
+       _requestId = requestId {
+    _subscription = events.listen(_onEvent, onDone: _settleUnconfirmed);
+    _timer = Timer(window, _settleUnconfirmed);
+  }
+
+  Future<SessionCompactResult> get future => _completer.future;
+
+  void _onEvent(Map<String, dynamic> event) {
+    final payload = ConversationCommands._responsePayload(event);
+    final type = event['event'] as String? ?? payload['type'] as String?;
+    if (type != _resultEvent) return;
+    final requestId = event['request_id'] ?? payload['request_id'];
+    final sessionId = event['session_id'] ?? payload['session_id'];
+    if (requestId != _requestId || sessionId != _sessionId) return;
+    _settle(SessionCompactResult.fromJson(payload));
+  }
+
+  void _settleUnconfirmed() => _settle(
+    SessionCompactResult(
+      outcome: SessionCompactResult.unconfirmedOutcome,
+      requestId: _requestId,
+    ),
+  );
+
+  void _settle(SessionCompactResult result) {
+    if (_completer.isCompleted) return;
+    _completer.complete(result);
+    cancel();
+  }
+
+  void cancel() {
+    _timer.cancel();
+    unawaited(_subscription.cancel());
   }
 }

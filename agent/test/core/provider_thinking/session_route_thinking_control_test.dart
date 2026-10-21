@@ -43,6 +43,25 @@ void main() {
   tearDown(() => state.dispose());
 
   test('resolveSessionRouteThinkingControl returns supported descriptor map', () {
+    // Provider-reported native levels are the capability authority here.
+    repo.upsertModelCache(
+      instanceId: 'inst-1',
+      cacheKey: 'models',
+      models: [
+        {
+          'value': 'o3',
+          'supported_reasoning_levels': [
+            {'effort': 'low'},
+            {'effort': 'medium'},
+            {'effort': 'high'},
+          ],
+        },
+      ],
+      fetchedAt: DateTime.now(),
+      source: 'live',
+      configRevision: 1,
+      credentialRevision: 1,
+    );
     final control = resolveSessionRouteThinkingControl(
       resolver: resolver,
       session: SessionState(

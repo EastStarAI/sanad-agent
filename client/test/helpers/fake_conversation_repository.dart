@@ -22,7 +22,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_fork_r
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
-class FakeConversationRepository implements ConversationRepository {
+class FakeConversationRepository implements ConversationRepository, AttachmentSendRepository, AttachmentReplayRepository {
   bool transportReady = true;
   final Map<String, List<Session>> _sessionsByAgentId = {};
   final Map<String, List<CanonicalEvent>> _messagesByAgentId = {};
@@ -65,6 +65,8 @@ class FakeConversationRepository implements ConversationRepository {
   loadAnchoredHistoryHandler;
   final List<String> sentMessages = [];
   final List<Map<String, String?>> sentMessageRequests = [];
+  final List<List<Map<String, dynamic>>> sentAttachmentRequests = [];
+  bool failAttachmentAdmission = false;
   final List<Map<String, String?>> steerMessageRequests = [];
   final List<String?> stoppedSessionIds = [];
   final List<Map<String, String?>> retriedRuntimeNotices = [];
@@ -106,6 +108,7 @@ class FakeConversationRepository implements ConversationRepository {
   );
   final List<TurnReplayResult> replayResults = [];
   final List<Map<String, Object?>> replayRequests = [];
+  Object? replayWithAttachmentsException;
   SessionForkResult forkResult = const SessionForkResult(outcome: 'accepted');
   final List<Map<String, String>> forkRequests = [];
 
@@ -293,6 +296,36 @@ class FakeConversationRepository implements ConversationRepository {
   }
 
   @override
+  Future<String?> sendMessageWithAttachments(
+    DeviceConfig agent,
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  }) async {
+    sentAttachmentRequests.add(attachments);
+    if (failAttachmentAdmission) {
+      throw StateError('Attachment admission failed.');
+    }
+    return sendMessage(
+      agent,
+      message,
+      sessionId: sessionId,
+      workspaceId: workspaceId,
+      context: context,
+      providerId: providerId,
+      model: model,
+      thinkingMode: thinkingMode,
+      intent: intent,
+    );
+  }
+
+  @override
   Future<void> steerMessage(
     DeviceConfig agent,
     String message, {
@@ -397,6 +430,48 @@ class FakeConversationRepository implements ConversationRepository {
       'confirmed_replay_unsafe': confirmedReplayUnsafe,
       'confirmed_drop_steers': confirmedDropSteers,
     });
+    return replayResults.isEmpty ? replayResult : replayResults.removeAt(0);
+  }
+
+  final List<Map<String, dynamic>> replayWithAttachmentRequests = [];
+
+  @override
+  Future<TurnReplayResult> replayTurnWithAttachments(
+    DeviceConfig agent, {
+    required String sessionId,
+    required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    required int expectedHistoryRevision,
+    required TurnReplayAction action,
+    required String message,
+    required List<Map<String, dynamic>> attachmentEdits,
+    String? providerInstanceId,
+    String? modelId,
+    String? thinkingMode,
+    bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
+  }) async {
+    replayWithAttachmentRequests.add({
+      'session_id': sessionId,
+      'target_request_id': targetRequestId,
+      'target_message_id': targetMessageId,
+      'target_turn_id': targetTurnId,
+      'expected_history_revision': expectedHistoryRevision,
+      'action': action,
+      'message': message,
+      'attachment_edits': attachmentEdits,
+      'provider_instance_id': providerInstanceId,
+      'model_id': modelId,
+      'thinking_mode': thinkingMode,
+      'confirmed_replay_unsafe': confirmedReplayUnsafe,
+      'confirmed_drop_steers': confirmedDropSteers,
+    });
+    if (replayWithAttachmentsException != null) {
+      final error = replayWithAttachmentsException!;
+      replayWithAttachmentsException = null;
+      throw error;
+    }
     return replayResults.isEmpty ? replayResult : replayResults.removeAt(0);
   }
 

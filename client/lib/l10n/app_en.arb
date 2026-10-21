@@ -60,6 +60,14 @@
   "account": "Account",
   "signOut": "Sign out",
   "deleteAccount": "Delete account",
+  "deleteAccountConfirmationTitle": "Delete Account",
+  "deleteAccountConfirmationMessage": "Are you sure you want to permanently delete your Sanad Cloud account? This will immediately sign out all phone, web, and desktop sessions, disconnect all registered agents from your account, and remove all cloud data and credits. This action cannot be undone.",
+  "deleteAccountLocalDataNotice": "Agent-owned local conversations and workspace files on your machines will remain intact.",
+  "deleteAccountAppleNotice": "Sign in with Apple Notice (Apple TN3194): We do not store Apple tokens on our servers. To revoke Sanad access, open your device Settings > Apple ID > Sign in with Apple > Sanad > Stop using Apple ID, or visit https://appleid.apple.com.",
+  "deleteAccountConfirmAction": "Delete Account",
+  "deleteAccountInProgress": "Deleting account…",
+  "deleteAccountPendingNotice": "Your account has been deleted. Background cleanup of active sessions and devices is completing.",
+  "deleteAccountError": "Failed to delete account. Please try again.",
   "confirm": "Confirm",
   "cancel": "Cancel",
   "save": "Save",
@@ -350,5 +358,134 @@
   "toolWritingFile": "Writing file...",
   "toolEditingFile": "Editing file...",
   "toolSearchingFiles": "Searching files...",
-  "toolExecuting": "Executing tool..."
+  "toolExecuting": "Executing tool...",
+  "clientCli": "Client CLI",
+  "clientCliDescription": "Allow command-line tools to relay Sanad commands to remote devices through this Client.",
+  "enableClientCli": "Enable Client CLI",
+  "clientCliPermissionMode": "Permission mode",
+  "clientCliDefaultMode": "Default",
+  "clientCliDefaultModeDesc": "Ask for confirmation before executing commands on remote devices.",
+  "clientCliFullAccessMode": "Full access",
+  "clientCliFullAccessModeDesc": "Execute commands directly on remote devices without asking for confirmation.",
+  "clientCliApprovalTitle": "Allow Sanad CLI to run remote command?",
+  "clientCliAllowOnce": "Yes, allow this time",
+  "clientCliAllowSession": "Yes, allow for this session",
+  "clientCliDeny": "No, deny",
+  "workspacePermissionModeTooltip": "Select Permission Mode",
+  "@workspacePermissionModeTooltip": {
+    "description": "Tooltip for selecting workspace permission mode"
+  },
+  "workspacePermissionModeTooltipWithRoot": "Permission: {permissionMode}\nExecution Root: {executionRoot}",
+  "@workspacePermissionModeTooltipWithRoot": {
+    "description": "Tooltip showing permission mode and execution root path",
+    "placeholders": {
+      "permissionMode": {
+        "type": "String"
+      },
+      "executionRoot": {
+        "type": "String"
+      }
+    }
+  },
+  "workspacePermissionModeDefault": "Default",
+  "@workspacePermissionModeDefault": {
+    "description": "Label for default workspace permission mode"
+  },
+  "workspacePermissionModeFullAccess": "Full Access",
+  "@workspacePermissionModeFullAccess": {
+    "description": "Label for full access workspace permission mode"
+  },
+  "thinkingModeUnavailableLabel": "Unavailable",
+  "thinkingModeUnavailableTooltip": "Thinking mode selection is not available for this device.",
+  "thinkingModeLoadingLabel": "Loading...",
+  "thinkingModeRetryLabel": "Retry",
+  "thinkingModeFetchFailureTooltip": "Failed to load thinking options. Click to retry.",
+  "thinkingModeNoControlLabel": "No control",
+  "thinkingModeNoControlTooltip": "No selectable thinking level is reported for this model.",
+  "thinkingModeUnknownLabel": "Not reported",
+  "thinkingModeUnknownTooltip": "Thinking options are not reported for this model.",
+  "thinkingModeProviderDefaultSelectedLabel": "Provider default",
+  "@thinkingModeProviderDefaultSelectedLabel": {
+    "description": "Composer thinking chip for a selectable route when there is no valid explicit choice and no authority layer declares a valid default. It is the selected state: the next send carries no thinking field, so the provider applies its own default. The control never shows an empty or unselected state."
+  },
+  "thinkingModeTokenBudgetLabel": "Token budget",
+  "thinkingModeTokenBudgetAnnotation": "{tokens} tokens",
+  "@thinkingModeTokenBudgetAnnotation": {
+    "placeholders": {
+      "tokens": {
+        "type": "int"
+      }
+    }
+  },
+  "thinkingModeSelectTooltip": "Select Thinking Mode",
+  "thinkingModeSelectBudgetTooltip": "Select Thinking Mode · budget: {budget}",
+  "@thinkingModeSelectBudgetTooltip": {
+    "placeholders": {
+      "budget": {
+        "type": "String"
+      }
+    }
+  },
+  "thinkingModeProviderDefaultHint": "Provider default",
+  "@thinkingModeProviderDefaultHint": {
+    "description": "Hint shown inside the expanded thinking menu below the single option the Agent declared as this route's native default. A menu hint only: it never appears on the composer chip, in a synthetic Default row, or when the declared default is unknown."
+  },
+  "compactionFailureSessionBusy": "Session is busy.",
+  "compactionActionSessionBusy": "Try /compact again when idle.",
+  "compactionFailureCompactionInProgress": "Context compaction is already in progress.",
+  "compactionActionCompactionInProgress": "Wait for the current operation to finish before retrying.",
+  "compactionFailureThinkingUnsupported": "Selected thinking mode is not supported by the active model or route.",
+  "compactionActionThinkingUnsupported": "Select a supported thinking mode or route and try again.",
+  "compactionFailurePreparation": "Failed to prepare context compaction.",
+  "compactionActionPreparation": "Check session settings and try again.",
+  "compactionFailurePruning": "Structured tool results could not be pruned for summarization.",
+  "compactionActionPruning": "Send a new message or retry compaction.",
+  "compactionFailureBudget": "Context history remains over budget after pruning.",
+  "compactionActionBudget": "Shorten earlier messages or start a new session.",
+  "compactionFailureRecoveryCapacity": "This conversation is too large to summarize within the model's context window.",
+  "compactionActionRecoveryCapacity": "Start a new session, or switch to a model with a larger context window.",
+  "compactionFailureTimeout": "Provider timed out during context summarization.",
+  "compactionActionTimeout": "Check network connection or try again.",
+  "compactionFailureRateLimited": "Provider rate limit reached during summarization.",
+  "compactionActionRateLimited": "Wait a moment before retrying.",
+  "compactionFailureOverflow": "Conversation history exceeded the provider's context capacity.",
+  "compactionActionOverflow": "Shorten conversation history or switch to a higher capacity model.",
+  "compactionFailureInvalidResponse": "Provider returned an invalid or incomplete summary.",
+  "compactionActionInvalidResponse": "Try running compaction again.",
+  "compactionFailureNetwork": "Network connection error while contacting provider.",
+  "compactionActionNetwork": "Check network connection and try again.",
+  "compactionFailureSummarization": "Provider summarization failed.",
+  "compactionActionSummarization": "Try running compaction again.",
+  "compactionFailureContinuity": "Summary failed continuity verification.",
+  "compactionActionContinuity": "Retry compaction to generate a complete summary.",
+  "compactionFailureStaleRevision": "Conversation history changed during compaction.",
+  "compactionActionStaleRevision": "Try running compaction again with current history.",
+  "compactionFailureClaimLost": "Compaction claim was superseded by another operation.",
+  "compactionActionClaimLost": "Try running compaction again.",
+  "compactionFailureInterrupted": "Compaction was interrupted by daemon restart.",
+  "compactionActionInterrupted": "Try running compaction again.",
+  "compactionFailurePersistence": "Failed to persist compaction boundaries to storage.",
+  "compactionActionPersistence": "Ensure sufficient disk space and try again.",
+  "compactionFailureUnexpected": "Context compaction encountered an unexpected error.",
+  "compactionActionRetry": "Try running compaction again.",
+  "compactionPendingStillRunning": "Context compaction is still running. Its result will appear in this conversation when it finishes.",
+  "@compactionPendingStillRunning": {
+    "description": "Neutral notice when the /compact acknowledgement is slower than the request window; the daemon may still be compacting, so this must never read as a failure."
+  },
+  "compactionFailurePrefix": "Failure: {explanation}",
+  "@compactionFailurePrefix": {
+    "placeholders": {
+      "explanation": {
+        "type": "String"
+      }
+    }
+  },
+  "compactionNextActionPrefix": "Next action: {action}",
+  "@compactionNextActionPrefix": {
+    "placeholders": {
+      "action": {
+        "type": "String"
+      }
+    }
+  }
 }

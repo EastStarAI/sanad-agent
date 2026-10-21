@@ -1,3 +1,4 @@
+import '../../core/models/view_image_media_metadata.dart';
 import 'dart:async';
 
 import 'package:logging/logging.dart';
@@ -327,6 +328,7 @@ class SessionTurnExecutor {
                     required String toolName,
                     String? input,
                     String? output,
+                    ViewImageMediaMetadata? media,
                     required bool isError,
                     required bool isStart,
                     String? toolRunId,
@@ -341,6 +343,7 @@ class SessionTurnExecutor {
                       toolName: toolName,
                       input: input,
                       output: output,
+                      media: media,
                       isError: isError,
                       isStart: isStart,
                       toolRunId: toolRunId,
@@ -382,6 +385,7 @@ class SessionTurnExecutor {
                     required String toolName,
                     String? input,
                     String? output,
+                    ViewImageMediaMetadata? media,
                     required bool isError,
                     required bool isStart,
                     String? toolRunId,
@@ -396,6 +400,7 @@ class SessionTurnExecutor {
                       toolName: toolName,
                       input: input,
                       output: output,
+                      media: media,
                       isError: isError,
                       isStart: isStart,
                       toolRunId: toolRunId,
@@ -477,6 +482,13 @@ class SessionTurnExecutor {
         onError: (e, stack) {
           if (e is RuntimeRecoveryRequired || e is RuntimeRecoveryCancelled) {
             _logger.info('Runtime recovery transition in streamTurn: $e');
+          } else if (e is ThinkingSelectionException) {
+            // An expected user-selection rejection before dispatch: one line
+            // with its code, no stack trace (clean logging).
+            _logger.info(
+              'Thinking selection rejected before dispatch for session '
+              '${event.sessionId}: ${e.code}',
+            );
           } else {
             _logger.severe('Error in streamTurn: $e', e, stack);
           }
@@ -633,6 +645,36 @@ class SessionTurnExecutor {
       if (activeRun == null || !ownsRun(activeRun)) {
         return;
       }
+      // Terminal delivery requires the exact owner's durable terminal commit.
+      // The rejection terminalizes only the durable work item this run owns, and
+      // durable ownership (not the in-memory projection) decides whether this
+      // run may still deliver a terminal response: a stale loser whose work item
+      // was already released, replaced, or cancelled stays silent so it cannot
+      // clear or overwrite the newer owner's in-flight state or deliver a stale
+      // terminal answer. A turn with no durable work item (no persisted state)
+      // keeps its in-memory rejection.
+      final repo = getPersistedState();
+      final rejectedWorkItemId = activeRun.workItemId;
+      if (repo != null && rejectedWorkItemId != null) {
+        final terminalized = repo.transitionOwnedWorkItem(
+          sessionId: event.sessionId,
+          workItemId: rejectedWorkItemId,
+          toState: SessionWorkState.cancelled,
+        );
+        if (!terminalized) {
+          _logger.warning(
+            'Ignoring thinking-selection rejection for session '
+            '${event.sessionId}, work item $rejectedWorkItemId, run '
+            '${activeRun.runId}: durable ownership has moved on.',
+          );
+          // Align the in-memory projection with durable ownership so run
+          // finalization treats this run as no longer owning the session. The
+          // completion callback releases busy ownership and drains queued work,
+          // so it must not fire for a run whose durable ownership is gone.
+          activeRun.invalidated = true;
+          return;
+        }
+      }
       sessionManager.clearInFlightSnapshot(event.sessionId);
       emitResponse(
         GatewayResponse(
@@ -641,13 +683,11 @@ class SessionTurnExecutor {
           message: Message(
             role: MessageRole.assistant,
             content: e.message,
-            metadata: {
-              'error_code': e.code,
-              'thinking_selection_error': true,
-            },
+            metadata: {'error_code': e.code, 'thinking_selection_error': true},
           ),
           isComplete: true,
           runId: activeRun.runId,
+          turnId: activeRun.turnId,
           modelStepId: agentRunner.currentModelStepId,
         ),
       );
@@ -663,18 +703,32 @@ class SessionTurnExecutor {
           toState: SessionWorkState.blocked,
         );
       }
-      if (isResume && getIt.isRegistered<RuntimeRecoveryService>()) {
-        getIt<RuntimeRecoveryService>().reportFailure(
-          sessionId: event.sessionId,
-          reason: RuntimeFailureReason.unknown,
-          requestId: turnRequest.requestId,
-          providerInstanceId: turnRequest.effectiveProviderInstanceId,
-          title: 'Resume checkpoint is not safe to continue',
-          message:
-              'The daemon could not validate the saved resume checkpoint. Execution was blocked to avoid replaying an unsafe partial turn.',
-          forceBlocked: true,
-          runId: activeRun.runId,
-        );
+      if (getIt.isRegistered<RuntimeRecoveryService>()) {
+        if (isResume) {
+          getIt<RuntimeRecoveryService>().reportFailure(
+            sessionId: event.sessionId,
+            reason: RuntimeFailureReason.unknown,
+            requestId: turnRequest.requestId,
+            providerInstanceId: turnRequest.effectiveProviderInstanceId,
+            title: 'Resume checkpoint is not safe to continue',
+            message:
+                'The daemon could not validate the saved resume checkpoint. Execution was blocked to avoid replaying an unsafe partial turn.',
+            forceBlocked: true,
+            runId: activeRun.runId,
+          );
+        } else if (activeRun.workItemId != null) {
+          getIt<RuntimeRecoveryService>().reportFailure(
+            sessionId: event.sessionId,
+            reason: RuntimeFailureReason.unknown,
+            requestId: turnRequest.requestId,
+            providerInstanceId: turnRequest.effectiveProviderInstanceId,
+            title: 'Execution could not start',
+            message:
+                'The request could not be started safely. Execution was blocked so you can retry, edit, or stop.',
+            forceBlocked: true,
+            runId: activeRun.runId,
+          );
+        }
       }
       final redactedError = _secretsRedactor.redact(e.toString());
       _logger.severe('Error handling event: $redactedError', e, stack);
@@ -762,6 +816,8 @@ class SessionTurnExecutor {
         'model_display': agentRunner.activeModelDisplay,
       if (agentRunner.activeProvider != null)
         'provider': agentRunner.activeProvider,
+      if (agentRunner.activeProviderInstanceId != null)
+        'provider_instance_id': agentRunner.activeProviderInstanceId,
       if (snapshot['context_window_tokens'] != null)
         'context_tokens': snapshot['context_window_tokens'],
     });
@@ -775,6 +831,7 @@ class SessionTurnExecutor {
     required String toolName,
     String? input,
     String? output,
+    ViewImageMediaMetadata? media,
     required bool isError,
     required bool isStart,
     String? toolRunId,
@@ -826,6 +883,7 @@ class SessionTurnExecutor {
           role: MessageRole.tool,
           content: output,
           metadata: {
+            'media': ?media?.toPublicJson(),
             'started_at': ?startedAt?.toIso8601String(),
             'terminal_at': ?terminalAt?.toIso8601String(),
             'runtime_ms': ?runtimeMs,

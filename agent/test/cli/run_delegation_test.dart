@@ -21,9 +21,34 @@ class MockDelegationTurnClient extends CliTurnClientBase {
   final List<Map<String, dynamic>> permissionResponses = [];
   bool completeTurnImmediately;
 
+  /// Turn-dispatch readiness of the runner under test.
+  ///
+  /// This is the only safe gate before emitting turn events. `OneshotRunner`
+  /// records its initial `running` artifact through
+  /// `RunArtifactCoordinator.recordInitial()` first, and only then resolves the
+  /// client, subscribes to [eventStream]'s derived streams and calls
+  /// [dispatchTurnRequest]. [eventStream] is a broadcast stream, so an event
+  /// emitted between those two points has no subscriber, is dropped, and can
+  /// never be observed by the run. Waiting for the `running` artifact therefore
+  /// makes a test scheduler-dependent instead of deterministic.
   Completer<void> turnDispatched = Completer<void>();
 
   MockDelegationTurnClient({this.completeTurnImmediately = false});
+
+  /// Whether the runner currently subscribes to this client's event streams.
+  bool get hasEventSubscriber => _events.hasListener;
+
+  /// Fails deterministically instead of silently dropping an intervention
+  /// event that the run could never observe.
+  void _requireEventSubscriber(String emitter) {
+    if (_events.hasListener) return;
+    fail(
+      '$emitter() was called before the run subscribed to turn events. '
+      'Gate turn events on the dispatch-readiness signal '
+      '(await client.turnDispatched.future) instead of on the initial '
+      '`running` artifact, which is recorded before subscription.',
+    );
+  }
 
   @override
   Stream<CliEvent> get eventStream => _events.stream;
@@ -113,6 +138,7 @@ class MockDelegationTurnClient extends CliTurnClientBase {
     required String question,
     String? sessionId,
   }) {
+    _requireEventSubscriber('emitUserQuestion');
     _events.add(
       CliPermissionRequestEvent(
         requestId: requestId,
@@ -131,6 +157,7 @@ class MockDelegationTurnClient extends CliTurnClientBase {
     required String toolName,
     String? sessionId,
   }) {
+    _requireEventSubscriber('emitToolPermission');
     _events.add(
       CliPermissionRequestEvent(
         requestId: requestId,
@@ -141,9 +168,17 @@ class MockDelegationTurnClient extends CliTurnClientBase {
     );
   }
 
-  void emitTurnComplete({String? sessionId, String finalMessage = ''}) {
+  void emitTurnComplete({
+    String? sessionId,
+    String finalMessage = '',
+    String? errorCode,
+  }) {
     _events.add(
-      CliTurnCompleteEvent(finalMessage: finalMessage, sessionId: sessionId),
+      CliTurnCompleteEvent(
+        finalMessage: finalMessage,
+        sessionId: sessionId,
+        errorCode: errorCode,
+      ),
     );
   }
 
@@ -282,7 +317,98 @@ void main() {
         ]);
 
         expect(exitCode, equals(2));
-        expect(stderrBuf.toString(), contains('Mutually exclusive'));
+        final stderrText = stderrBuf.toString();
+        expect(stderrText, contains('--brief-file'));
+        expect(stderrText, contains('"positional prompt text"'));
+      },
+    );
+
+    test(
+      'G4: --thinking-mode off is a selectable product option id',
+      () async {
+        final briefFile = File(p.join(tempDir.path, 'task_brief.md'))
+          ..writeAsStringSync('Answer briefly.');
+        final runner = createRunner();
+        fakeClient.completeTurnImmediately = true;
+
+        final exitCode = await runner.run([
+          'run',
+          '--brief-file',
+          briefFile.path,
+          '--thinking-mode',
+          'off',
+          '--workspace',
+          'ws-locked-88',
+          '--out-dir',
+          outDir.path,
+        ]);
+
+        expect(exitCode, equals(0), reason: stderrBuf.toString());
+        expect(fakeClient.dispatchedRequest?.thinkingMode, 'off');
+      },
+    );
+
+    test(
+      'G4: a stray positional next to --brief-file names the stray argument '
+      'instead of a misleading mutual-exclusion message',
+      () async {
+        final briefFile = File(p.join(tempDir.path, 'task_brief.md'))
+          ..writeAsStringSync('Answer briefly.');
+        final runner = createRunner();
+        final exitCode = await runner.run([
+          'run',
+          '--brief-file',
+          briefFile.path,
+          '--thinking',
+          'off',
+          '--workspace',
+          'ws-locked-88',
+        ]);
+
+        expect(exitCode, equals(2));
+        final stderrText = stderrBuf.toString();
+        expect(stderrText, isNot(contains('Mutually exclusive')));
+        expect(stderrText, contains('"off"'));
+        expect(fakeClient.dispatchedRequest, isNull);
+      },
+    );
+
+    test(
+      'G3: a pre-dispatch thinking rejection exits non-zero with its reason',
+      () async {
+        final outDir = Directory(p.join(tempDir.path, 'out-rejected'))
+          ..createSync();
+        final client = MockDelegationTurnClient();
+        final oneshot = OneshotRunner(stdinReader: () async => null);
+        final runFuture = oneshot.run(
+          prompt: 'hi',
+          session: 'sess-rejected',
+          thinkingMode: 'none',
+          outDir: outDir.path,
+          client: client,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+        await client.turnDispatched.future;
+        client.emitTurnComplete(
+          sessionId: 'sess-rejected',
+          finalMessage:
+              'The selected thinking option is unavailable for this route.',
+          errorCode: 'thinking_option_unavailable_for_route',
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, isNot(0));
+        expect(
+          stderrBuf.toString(),
+          contains('thinking_option_unavailable_for_route'),
+        );
+        final result = await RunArtifactStore(outDir.path).readResult();
+        expect(result, isNotNull);
+        expect(result!.status, 'failed');
+        expect(result.exitCode, isNot(0));
+        expect(result.error, contains('thinking_option_unavailable_for_route'));
+        await client.dispose();
       },
     );
 
@@ -443,7 +569,12 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await waitFor(() => _statusIs(outDir, 'running'));
+        // Turn dispatch is the deterministic readiness gate: only after it can
+        // the runner's event subscriptions be observed. The `running` artifact
+        // is recorded earlier and cannot stand in for subscription readiness.
+        await fakeClient.turnDispatched.future.timeout(
+          const Duration(seconds: 5),
+        );
 
         final store = RunArtifactStore(outDir.path);
         var midResult = await store.readResult();
@@ -494,7 +625,13 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await waitFor(() => _statusIs(outDir, 'running'));
+        // Turn dispatch is the deterministic readiness gate for turn events.
+        // The initial `running` artifact is recorded before the runner resolves
+        // the client and subscribes to its event streams, so gating on it can
+        // drop an intervention event that the run would never observe.
+        await fakeClient.turnDispatched.future.timeout(
+          const Duration(seconds: 5),
+        );
 
         // 1. Emit user question
         fakeClient.emitUserQuestion(
@@ -559,6 +696,74 @@ void main() {
     );
 
     test(
+      'turn event readiness is the dispatch signal, not the initial running artifact',
+      () async {
+        // The runner records its `running` artifact before it resolves the
+        // client and subscribes to the client's event streams. Holding stdin
+        // open keeps that pre-dispatch window open for as long as this test
+        // needs it, so the readiness contract is proven deterministically
+        // instead of depending on scheduler luck (the reproduced full-suite
+        // flake: an intervention event emitted after observing the artifact but
+        // before subscription is dropped and can never be observed).
+        final stdinGate = Completer<void>();
+        final oneshot = OneshotRunner(
+          stdinReader: () async {
+            await stdinGate.future;
+            return null;
+          },
+        );
+
+        final runFuture = oneshot.run(
+          prompt: 'Readiness gate task',
+          session: 'sess-ready-1',
+          outDir: outDir.path,
+          streamEvents: true,
+          client: fakeClient,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+
+        // 1. The `running` artifact is observable while the run still has no
+        //    turn event subscriber, so it cannot gate event emission.
+        await waitFor(() => _statusIs(outDir, 'running'));
+        expect(fakeClient.hasEventSubscriber, isFalse);
+
+        // 2. Dispatch is the readiness contract: the runner subscribes before
+        //    it dispatches, so events emitted from here on are always observed.
+        stdinGate.complete();
+        await fakeClient.turnDispatched.future.timeout(
+          const Duration(seconds: 5),
+        );
+        expect(fakeClient.hasEventSubscriber, isTrue);
+
+        fakeClient.emitUserQuestion(
+          requestId: 'req-ready-1',
+          question: 'Which workspace should be used?',
+          sessionId: 'sess-ready-1',
+        );
+        await waitFor(
+          () => _statusIs(outDir, 'needs_input', requestId: 'req-ready-1'),
+        );
+
+        final store = RunArtifactStore(outDir.path);
+        final result = await store.readResult();
+        expect(result!.status, equals('needs_input'));
+        expect(
+          result.pendingIntervention?['request_id'],
+          equals('req-ready-1'),
+        );
+
+        // 3. Complete the run so the readiness above is not the only outcome.
+        fakeClient.emitChunk('Answer received.', sessionId: 'sess-ready-1');
+        fakeClient.emitTurnComplete(
+          sessionId: 'sess-ready-1',
+          finalMessage: 'Readiness gate proven.',
+        );
+        expect(await runFuture, equals(0));
+      },
+    );
+
+    test(
       '--allow-all-tools auto-approves ordinary tool permissions but leaves system_ask_user pending',
       () async {
         final oneshot = OneshotRunner(stdinReader: () async => null);
@@ -576,6 +781,7 @@ void main() {
         await fakeClient.turnDispatched.future.timeout(
           const Duration(seconds: 5),
         );
+        expect(fakeClient.dispatchedRequest?.metadata['allow_all_tools'], isTrue);
 
         // 1. Emit ordinary tool permission -> auto approved
         fakeClient.emitToolPermission(

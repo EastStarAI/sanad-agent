@@ -67,10 +67,37 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 ---
 
-## 6. Concurrency & Idempotency (First-Writer-Wins)
+## 6. Manual Session Compaction (`session compact`)
+
+| Scenario | CLI Command | Expected Runtime Behavior | Exit Code |
+|---|---|---|---|
+| Request compaction for session | `sanad session compact <session-id>` | Daemon receives the correlated `session.compact` query and replies after compaction finishes (`SessionRunOrchestrator.handleCompactCommand` awaits `runCompaction`); the CLI prints `Compaction request accepted for session <session-id>` for a completed compaction. Single dispatch, no retry on timeout. | 0 |
+| Request compaction in JSON mode | `sanad session compact <session-id> --json` | Outputs JSON object containing `session_id`, `outcome` (`accepted` / `dispatched` / `no_op` / `failed`), and correlated IDs (`compaction_id`, `request_id`). | 0 |
+| Compaction request rejected or busy | `sanad session compact <session-id> --json` | Returns JSON object with failure outcome (`failed`, `session_busy`, `compaction_in_progress`), `failure_reason`, and `exit_code: 1`. | 1 |
+| Query timeout or connection failure | `sanad session compact <session-id> --json` | Fails closed after single dispatch attempt without retrying; returns JSON error with `exit_code: 1`. A timeout is not a compaction failure: the daemon may still be compacting. | 1 |
+| Missing or malformed daemon response | `sanad session compact <session-id> --json` | Rejects malformed payload; returns `outcome: failed`, `failure_reason: missing_outcome`, and `exit_code: 1`. | 1 |
+| REPL `/compact` slow or timed out (Task 119) | `/compact` inside `sanad` REPL | Exactly one `session.compact` dispatch, never resent. A timeout renders the neutral notice `Compaction may still be running…`, never an error, `dispatched` or success; `accepted` renders as completed, and busy or failure outcomes render with their reason. Covered by `agent/test/cli/slash_command_handler_test.dart` group `/compact outcomes (Task 119)`. | 0 |
+| Compact session missing argument | `sanad session compact` | Error message `Error: Session ID is required.` and usage instructions. | 1 |
+
+---
+
+## 7. Concurrency & Idempotency (First-Writer-Wins)
 
 | Scenario | Initial State | Concurrency Trigger | Expected Result |
 |---|---|---|---|
 | Racing duplicate intervention responses | Checkpoint in status `awaiting_permission` | Two responses arrive concurrently for the same `request_id` | Exactly one writer wins the database claim (`claimSuspendedCheckpointDecision`); winning response resumes execution (`outcome: resolved`). Losing writer receives `ALREADY_RESOLVED` and does NOT resume a second turn. |
 | Stale intervention after resolution | Checkpoint already resolved | A late intervention arrives for `request_id` | Gateway returns `outcome: already_resolved`, errorCode `ALREADY_RESOLVED`. |
 | Duplicate intervention across mismatched session | Checkpoint already resolved for session A | A duplicate arrives targeting session B | Gateway returns `outcome: cross_session_mismatch`, errorCode `CROSS_SESSION_MISMATCH` (cross-session validation takes precedence). |
+
+---
+
+## 8. Automated One-Shot Intervention Readiness (In-Process Coverage)
+
+`agent/test/cli/run_delegation_test.dart` locks the Section 4 policy without a daemon. Turn events are emitted only after the run dispatched the turn (`await client.turnDispatched.future`), because the initial `running` artifact is recorded before the runner subscribes to the client's event streams. The readiness contract is owned by Section 8.1 of `docs/technical/sanad_cli_architecture.md`.
+
+| Scenario | Automated Coverage | Readiness Gate |
+|---|---|---|
+| Clarification question surfaces as `needs_input` without terminating the run, resumption returns to `running`, and a gated tool stays `needs_permission` (fail-closed, no auto-answer) before completing | `surfaces non-terminal needs_input and needs_permission events without terminating run` | Turn dispatch readiness |
+| `--allow-all-tools` auto-approves ordinary tool permissions only; `system_ask_user` remains pending | `--allow-all-tools auto-approves ordinary tool permissions but leaves system_ask_user pending` | Turn dispatch readiness |
+| The `running` artifact is observable while the run has no turn-event subscriber, and an intervention emitted after dispatch readiness is always observed | `turn event readiness is the dispatch signal, not the initial running artifact` | Unbounded (held) pre-dispatch window |
+| Terminal classification precedence: timeout (124), SIGINT (130), external cancellation (130) and incomplete `missing_final` (1) are not overwritten by late events | sibling `run_delegation_test.dart` cases | Post-dispatch and post-terminal emission |

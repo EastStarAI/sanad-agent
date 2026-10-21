@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/compaction_event_tile.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 void main() {
   testWidgets('shows centered manual compacting label while started', (tester) async {
@@ -116,12 +117,54 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Before compaction: 318,066 tokens (80.5%)'), findsOneWidget);
-    expect(find.textContaining('Retained tail: ~38,073 tokens'), findsOneWidget);
+    expect(find.textContaining('Retained tail: ~34,922 tokens'), findsOneWidget);
     expect(find.textContaining('Auto threshold: 315,904 tokens (80.0%)'), findsOneWidget);
     expect(find.textContaining('Usable input: 394,880 tokens'), findsOneWidget);
     expect(find.textContaining('Context window: 400,000 tokens'), findsOneWidget);
     expect(find.textContaining('Trigger:'), findsNothing);
     expect(find.textContaining('Status:'), findsNothing);
+  });
+
+  testWidgets('enforces mathematical invariant: retained tail never exceeds after compaction', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CompactionEventTile(
+            snapshot: CompactionEventSnapshot(
+              sessionId: 'session-1',
+              compactionId: 'cmp-clamp',
+              status: CompactionLifecycleStatus.completed,
+              trigger: CompactionTriggerKind.manual,
+              contextWindowTokens: 128000,
+              effectiveInputBudgetTokens: 120000,
+              estimatedRequestTokensBefore: 150000, // over budget -> history
+              estimatedRequestTokensAfter: 25000,
+              providerConfirmedRequestTokensAfter: 19363,
+              retainedTailTokens: 44156, // was estimated larger than after
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+
+    // After compaction confirmed
+    expect(
+      find.textContaining('After compaction: 19,363 tokens (16.1%) ✓ Confirmed'),
+      findsOneWidget,
+    );
+    // Retained tail must be clamped to after compaction tokens (19,363), not 44,156
+    expect(find.textContaining('Retained tail: ~19,363 tokens'), findsOneWidget);
+    expect(find.textContaining('44,156'), findsNothing);
+    // Over budget before compaction labeled with (history)
+    expect(
+      find.textContaining('Before compaction (history): 150,000 tokens (125.0%)'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('keeps the timeline interaction at least 44 logical pixels high', (
@@ -155,9 +198,12 @@ void main() {
         'Context reclaimed: 60,000 tokens (75.0%)\n'
         'Retained tail: ~5,000 tokens\n'
         'Context window: 100,000 tokens\n'
-        'Failure: projection_still_over_budget';
+        'Failure: Context history remains over budget after pruning.\n'
+        'Next action: Shorten earlier messages or start a new session.';
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: CompactionEventTile(
             snapshot: CompactionEventSnapshot(
@@ -332,5 +378,112 @@ void main() {
     expect(find.text('Auto context compaction failed'), findsOneWidget);
     expect(tester.takeException(), isNull);
     expect(tester.getSize(find.byType(InkWell)).height, greaterThanOrEqualTo(44));
+  });
+
+  testWidgets('displays thinking capability rejection with explanatory feedback', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: CompactionEventTile(
+            snapshot: const CompactionEventSnapshot(
+              sessionId: 'session-1',
+              compactionId: 'cmp-thinking-unsupported',
+              status: CompactionLifecycleStatus.failed,
+              trigger: CompactionTriggerKind.manual,
+              failureStage: 'preparation',
+              failureCause: 'thinking_capability_unsupported',
+              failureReason: 'summarization_failed',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+    expect(
+      find.text(
+        'Failure: Selected thinking mode is not supported by the active model or route.\n'
+        'Next action: Select a supported thinking mode or route and try again.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('displays provider timeout with actionable feedback', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: CompactionEventTile(
+            snapshot: const CompactionEventSnapshot(
+              sessionId: 'session-1',
+              compactionId: 'cmp-timeout',
+              status: CompactionLifecycleStatus.failed,
+              trigger: CompactionTriggerKind.auto,
+              failureStage: 'provider',
+              failureCause: 'timeout',
+              failureReason: 'summarization_failed',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+    expect(
+      find.text(
+        'Failure: Provider timed out during context summarization.\n'
+        'Next action: Check network connection or try again.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('displays Arabic localized failure and next action', (tester) async {
+    late AppLocalizations arabicL10n;
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('ar'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Builder(
+          builder: (context) {
+            arabicL10n = AppLocalizations.of(context)!;
+            return const Scaffold(
+              body: CompactionEventTile(
+                snapshot: CompactionEventSnapshot(
+                  sessionId: 'session-1',
+                  compactionId: 'cmp-ar',
+                  status: CompactionLifecycleStatus.failed,
+                  trigger: CompactionTriggerKind.manual,
+                  failureStage: 'preparation',
+                  failureCause: 'thinking_capability_unsupported',
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    expect(arabicL10n.localeName, 'ar');
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+    // Expectations derive from the localization system: the root contract
+    // forbids Arabic literals in handwritten Dart, including tests.
+    expect(
+      find.text(
+        '${arabicL10n.compactionFailurePrefix(arabicL10n.compactionFailureThinkingUnsupported)}\n'
+        '${arabicL10n.compactionNextActionPrefix(arabicL10n.compactionActionThinkingUnsupported)}',
+      ),
+      findsOneWidget,
+    );
   });
 }

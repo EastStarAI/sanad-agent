@@ -135,6 +135,24 @@ All responses carry `request_id`. Instance mutations broadcast
 | `model.recent.list` | `model.recent.recent_result` | Returns last 5 selections with current display names, using the same normalized instance-local model ids as `model.snapshot`. |
 | `model.recent.record` | `model.recent.recent_recorded` | Records a model selection (upsert, moves to top). |
 
+### Client Provider Catalog Freshness & Composer Synchronization
+
+Composer components (`_ModelChip`, `ConversationBottomActions`) display the active model along with its provider's friendly name (e.g., `Custom Provider | llama-3`). The client manages provider display names centrally in `ProviderUsageCubit`:
+- **Shared Per-Device Resource**: Display-name catalogs are keyed strictly per device (`_catalogRevisions[deviceId]`), preventing cross-device leakage and decoupling catalog invalidation from per-instance usage/support request generations (`_deviceRevisions`).
+- **Immediate Mutation Sync**: When provider instances are created, renamed, or deleted within `ProviderSetupFlow`, the flow publishes updated names directly to `ProviderUsageCubit.updateProviderDisplayNames` strictly from authoritative snapshot generation boundaries (`snapshotGeneration > 0`) emitted by successful cubit loads or mutations. The composer reflects the updated name immediately without requiring an application restart.
+- **Publication Boundary Safety**: UI navigation (e.g. `backToPicker`, `backToInstances`), error clearing, auth cancellations, and load errors never advance `snapshotGeneration` and never publish or wipe the existing catalog. Cached names are preserved across failures and transitions; only authoritative successful removal of an instance clears its display name.
+- **Race Condition Guard**: A monotonic per-device catalog revision counter bails out any delayed, in-flight pre-mutation responses from reinstalling stale display names. Generation authority persists across device clears to eliminate ABA races where pre-clear requests match generation 0, and authoritative mutation snapshots (including empty removals) neutralize in-flight loads.
+- **Unrelated Resource Isolation**: Updating or invalidating the display-name catalog never aborts or drops in-flight usage/support fetches, ensuring seamless UI operations. Quiescent identical name updates with no in-flight fetch are strict no-ops.
+
+### Client Route Thinking Control Refresh Lifecycle
+
+Mounted composer controls (`RouteThinkingModeSelector`) display model-scoped thinking mode options, labels, and defaults. The client synchronizes these controls with daemon model updates without requiring route transitions or application restart:
+- **Authoritative Stream Projection**: `ProviderSetupClient.modelUpdates` projects incoming `model.cache_updated` socket events into typed `ModelCacheUpdateEvent` models carrying `providerInstanceId`, `status`, `deviceId`, and optional error details.
+- **Terminal Event Admission**: `RouteThinkingModeSelector` subscribes to `modelUpdates` and triggers snapshot revalidation strictly on terminal `updated` events for the active route's provider instance and matching device.
+- **Freshness Arbitration**: `RouteThinkingControl.resolveDescriptor` arbitrates between session-stored descriptors and authoritative model snapshots. When an authoritative snapshot provides a differing `capabilityRevision`, reflects control removal (`null`), or reports `unsupported`, the snapshot descriptor takes precedence over same-route session cache.
+- **Selection Safety & Invalidation**: When refreshed options invalidate the current selection, selection is repaired visibly to the provider default (`null`); when the selection remains supported, it is retained.
+- **Failure & Cross-Scope Isolation**: Terminal `failed` refresh events retain prior validated authority rather than resetting or clearing mounted controls. Events targeting other provider instances or foreign devices are safely ignored.
+
 ### Task 55 — Provider account usage limits (Gates A–C)
 
 Provider account limits are instance-scoped account data, separate from both
@@ -201,19 +219,31 @@ controls, not the selectable values themselves:
 Each model entry in `model.snapshot_result.instances[].models[]` may include:
 
 - `supports_reasoning_output`: whether the model may emit reasoning output.
-- `thinking_control`: descriptor with `status` (`supported` | `unsupported` | `unknown`), optional `kind`, ordered `options[]` (`id`, English `label`, `is_off`, `is_provider_default`), `default_option_id`, `capability_revision`, and `source`.
+- `thinking_control`: descriptor with `status` (`supported` | `unsupported` | `unknown`), optional `kind`, ordered `options[]` (`id`, English `label`, `is_off`, `is_provider_default`, optional `budget_tokens`), `default_option_id`, `capability_revision`, and `source`.
+  - `budget_tokens` is an optional positive integer carried only by an option that is genuinely a token budget; it states the effective token count the exact route resolves for that option and is absent for Off, for effort/level/toggle options, and whenever the count is unknown. It is additive and independent of selection identity, so clients may disclose an effective budget without inventing one. Anthropic and Gemini budget options take it from the owning catalog's own budget resolution, and a declared `anthropic_budget` or `google_thinking` endpoint option takes it from its validated declared value. A disclosed count is a whole positive integer: a fractional, non-finite or otherwise malformed value is treated as unavailable rather than truncated, rounded or allowed to fail the metadata round-trip, so a malformed peer value never becomes a fabricated budget.
+  - `default_option_id` and `is_provider_default` are native-default metadata only. An omitted, cleared or whitespace-only selection stays provider default by omission and emits no request field; a documented default is dispatched only when it is actually selected, and an unknown native default stays unknown. A Client may admit such a known native default as an ordinary explicit selection through its own composer selection path, which is then an ordinary explicit selection on this wire; the daemon still forces no default on its own.
 
 Session payloads may also include `thinking_control` for the active route when the daemon can resolve it from the current model cache revision. Clients must ignore a route descriptor when its `capability_revision` or `route_revision` does not match the active route (Gate D).
 
-Aggregator templates such as OpenRouter use `aggregator_upstream` thinking policy: capability follows the upstream vendor prefix in the model id (`anthropic/...`, `google/...`, `deepseek/...`, `openai/...`, etc.), and the chat-completions adapter emits OpenRouter's nested `reasoning` object instead of top-level `reasoning_effort`.
+Aggregator templates such as OpenRouter carry the `aggregator_upstream` wire label: the chat-completions adapter emits OpenRouter's nested `reasoning` object instead of top-level `reasoning_effort`. Capability follows the layered authority (§2.3): a finite effort set declared by the gateway's own model metadata is authoritative for that exact route; an unusable declaration publishes explicit `unknown` route-control evidence; otherwise the `openrouter` models.dev entry or `unknown` applies. No budget choice or default is invented. See [OpenRouter Reasoning Discovery QA](../qa_maintenance/openrouter_reasoning_discovery_qa.md).
 
-Gemini templates use `google_thinking`: budget models map to `extra_body.google.thinking_config.thinking_budget`, level models map to `thinking_level`, and the adapter never mixes those shapes with top-level `reasoning_effort`.
+Gemini templates carry the `google_thinking` wire label: level selections map to `extra_body.google.thinking_config.thinking_level`, declared budgets to `thinking_budget`, and the adapter never mixes those shapes with top-level `reasoning_effort`. A declared `0` budget remains Off and carries no `budget_tokens`.
 
-DeepSeek templates use `deepseek_thinking`: only fixed chat fixtures advertise toggle/effort controls; unresolved models stay `unknown`, reasoner models stay `unsupported`, and the wire codec keeps toggle off and effort mutually exclusive.
+DeepSeek and ZAI templates carry the `deepseek_thinking` / `zai_thinking` wire labels. The declared `native_toggle_effort` wire carries the same envelope on every native/partner Chat route (OpenCode Go included): effort selections also enable thinking (`thinking: {type: enabled}` plus `reasoning_effort`), and Off sends `thinking: {type: disabled}` ([DeepSeek thinking](https://api-docs.deepseek.com/guides/thinking_mode)). Which options exist comes only from the five-layer authority (§2.3). For DeepSeek and GLM models that is normally the shipped defaults.
 
-OpenCode Go explicitly opts into the OpenAI Chat effort policy, but selectable controls remain limited to recognized reasoning model families; `supports_reasoning_output` alone never proves control support. OpenAI-family effort descriptors expose `medium` as the display default while a null/cleared persisted selection still means provider default by wire omission. General recognized models expose `low | medium | high | xhigh`; models with verified maximum effort support additionally expose `max`, while `o1` remains limited to `medium | high`.
+The Kimi Moonshot template carries the `kimi_thinking` wire label (generic Chat codec: `reasoning_effort` for efforts, `thinking: {type: enabled/disabled}` for a toggle). Its controls come from the five-layer authority: provider-reported `/models` metadata first (for example `kimi-for-coding` reporting `think_efforts` `low/high/max` default `max` with thinking type `only`), then shipped defaults (`kimi-k3` `low/high/max` default `max`, `kimi-k2.6` toggle default `on`), then models.dev.
+
+OpenCode Go routes take controls from the five-layer authority. Shipped defaults restore the pre-regression families: DeepSeek `off/low/high/max` default `high`, GLM, Kimi and Grok. The `opencode-go` models.dev vendor entry answers for models without a shipped record, for example `gpt-6-luna` effort `none…max` and `claude-haiku-5-5` toggle plus effort. `supports_reasoning_output` alone never proves request-time control support. An unselected or cleared choice resolves to `UseProviderDefault()`. Per-model wire protocol (`provider.npm` `@ai-sdk/openai` → Responses, `@ai-sdk/anthropic` → Messages) is not yet routed (see the Task 106 live-r1 D3 record); those models still dispatch on the template Chat wire.
+
+A turn `thinking_mode` that equals the session preference persisted before the turn (for example the value a Client sent with `create_session` and repeats on the first `think`) is a carried-over preference, not a fresh explicit choice. When the target route reports a set that does not offer it, the daemon admits the turn with provider default and records the route-scoped correction instead of rejecting it. A fresh explicit value is clamped to the nearest lower offered level, or rejected before any provider request when none exists. On an `unknown` route any value passes through and no thinking field is sent.
 
 `update_session_preferences` may update provider/model and `thinking_mode` together or update thinking alone. New clients send the canonical `provider_instance_id`; the daemon also accepts legacy `provider_id` input for compatibility but does not require both. Presence of `thinking_mode` is significant: a non-empty value persists the normalized selection, while an empty or null value clears it and the resulting session event includes `thinking_mode: null`. Omitting the key leaves the stored thinking selection unchanged.
+
+### Provider Thinking Controls Coverage Matrix
+
+The static 16-template coverage table from Task 43 and the Plan 77 exact-model catalogs are superseded by the layered capability authority (settings → provider-reported → models.dev → unknown). Wire serialization is governed by the route template and API mode.
+
+For the shipped-kind wire matrix and the layered capability authority, see [§2.3 Layered Thinking Capability Authority & Route Wire](#23-layered-thinking-capability-authority--route-wire).
 
 ### Provisional setup ownership (Task 57)
 
@@ -329,11 +359,73 @@ network notice; it does not reinterpret the failure as a rate limit.
 ### Chat Completions reasoning continuity
 
 OpenAI-compatible Chat Completions endpoints may return structured
-`reasoning_details` needed across a tool loop. Sanad persists those details as
-opaque provider state, separately from user-visible reasoning, and replays
-them only when the issuer composed from provider instance, protocol, and
-normalized endpoint matches the active connection. A provider or endpoint
-switch drops this wire state from the next payload while retaining the ordinary assistant text.
+`reasoning_details` or `reasoning_content` needed across a tool loop. Sanad
+persists those fields as opaque provider state, separately from user-visible
+reasoning, and replays them only when the issuer composed from provider
+instance, protocol, and normalized endpoint matches the active connection
+**and** the recorded producing model equals the destination model. A provider,
+endpoint or model switch drops this wire state from the next payload while
+retaining the ordinary assistant text and tool-call/result pairs.
+
+### Per-request provider-compatible projection (Task 116)
+
+Canonical history is never rewritten for a destination. Every request (sync,
+stream, wire measurement and the compaction summarizer share the request
+builder) projects the same history for its own route, so X→Y→X switches,
+restarts and compacted tails need no reset.
+
+- **Recorded provenance (D1).** Every Chat tool-call response carries typed
+  state in namespace `openai_chat_completions`, even without reasoning. The
+  additive `data` keys are `issuer_model` (resolved model) and
+  `reasoning_field` (`string`, `null` or `absent`, as received; stream deltas
+  fold so any string wins, then an explicit null). The issuer string and the
+  existing `reasoning_content`/`reasoning_details` keys are unchanged; no
+  database column changes.
+- **Same-model replay (D2).** Reasoning and opaque state replay only to the
+  same instance, protocol, endpoint and model. Legacy state without
+  `issuer_model` uses `metadata.context_usage.model_id`, then
+  `metadata.model`; with neither it is foreign. This closes cross-model leaks
+  on one aggregator instance (for example Kimi or GLM reasoning reaching
+  DeepSeek on OpenCode Go).
+- **Route echo policy (D3).** The destination's exact models.dev entry
+  `interleaved.field` selects the policy. Same route sends exactly what was
+  recorded, including `""`; a recorded explicit `null` is echoed only to a
+  route declaring `reasoning_content`, so strict routes never receive a key
+  they did not send. Foreign or unrecorded origin is never copied, padded or
+  relabelled. On an echo-required route the five probe cells (same-route
+  empty, absent and null; foreign earlier-turn and current-turn) default to
+  `asRecorded` until live probes decide them; a probe outcome is a one-line
+  data change to `ChatReasoningReplayPolicy.defaultDecisions` or an exact
+  `<models.dev vendor>/<model>` entry in `routeOverrides`. Thinking explicitly
+  off never rejects.
+- **Safe rejection (D4).** A history with no truthful representation raises
+  `ProviderHistoryProjectionException` before any HTTP call, carrying only the
+  route, a closed reason code (`foreign_tool_turn_requires_reasoning`,
+  `same_route_reasoning_unrecoverable`, `unpaired_tool_call`) and an affected
+  count. The runner reports one blocked `invalid_request` notice ("Conversation
+  history not supported by this model") with no failover, retry, thinking
+  change or history change. The message never suggests compaction because the
+  summarizer replays the same history. Wire measurement projects as recorded
+  and never raises, so preflight pressure stays a real estimate; dispatch and
+  the summarizer enforce. Notice text is Agent-authored English like the
+  sibling image and thinking-option notices; Client localization of these
+  titles is not yet keyed.
+- **Anthropic (D5).** Signed `thinking` blocks (with `signature`, including
+  streamed `signature_delta`) and `redacted_thinking` blocks are captured in
+  namespace `anthropic_messages` with the same issuer shape plus
+  `issuer_model`, and replay first in the assistant content only to that exact
+  issuer and model. Unsigned thinking is visible reasoning only. A `tool_use`
+  without a matching `tool_result` is no longer stripped: the request fails
+  closed with `unpaired_tool_call`.
+- **Other families (D6).** Native Ollama emits only portable fields; Codex
+  Responses replays only its own issuer's `reasoning_items`; strict Chat routes
+  receive no reasoning keys from foreign history. Codex reasoning items are not
+  yet model-stamped: cross-model rejection on one Codex instance is unevidenced
+  and remains a recorded gap.
+
+Task 120 must keep the Chat issuer string stable for unchanged routes or
+declare an issuer-equivalence set; otherwise every persisted row becomes
+foreign under this projection.
 Chat Completions sync and stream share the same request fields and terminal
 classification; stream-only flags are the only payload difference.
 
@@ -607,3 +699,169 @@ A bounded retry on the current provider follows the same durable ownership bound
 `provider.usage.reset` requires `request_id`, `provider_instance_id`, and a daemon-owned `idempotency_key`. The response event is `provider.usage.reset_result` with one of `reset`, `confirmation_required`, `nothing_to_reset`, `no_credit`, `already_redeemed`, `auth_required`, `unsupported`, or `failed`.
 
 The daemon always performs a fresh usage preflight. If no window is exhausted, it returns a short-lived `confirmation_token` bound to the exact account and preflight snapshot. A subsequent confirmation uses a new transport `request_id`, reuses the logical operation's `idempotency_key`, and includes that token. Changed or expired snapshots require confirmation again. Concurrent or replayed requests for the same instance-scoped key share the same daemon operation, and the client retains that key across ambiguous failures so a retry cannot create a second mutation. Successful, already-processed, and nothing-to-reset outcomes trigger a provider refresh; `refresh_failed: true` distinguishes a completed mutation from reconciliation failure. Credentials and raw provider responses never cross the protocol.
+
+## Exact-Route Model Capabilities & Thinking Controls (Plan 77 / Task 77i5)
+
+Intrinsic capability declarations and catalog lookup are keyed by exact model identity, not provider UUID, template, or endpoint. The daemon freezes their resolved result into an exact-route execution snapshot; route identity and revisions isolate endpoint metadata and Client selections, while the actual protocol/API mode owns serialization.
+
+### 1. Precedence Order
+Capability resolution for each field proceeds in strict priority. For thinking controls the first layer that has a record for the exact model id wins as a whole (§2.3):
+1. **Explicit Home Configuration Override** (`config.yaml` under `model_capabilities`, keyed directly by exact model identity).
+2. **Authoritative Endpoint Metadata** (e.g. from `/models` when supported by the provider, bound to config/credential revisions).
+3. **Shipped Defaults** (thinking only: `agent/model_capability_defaults.yaml`, generated into `generated_model_capability_defaults.dart`; same schema as item 1 plus a documentation `source`).
+4. **Curated Catalog Data** (`models.dev`: for thinking, the serving vendor's exact entry, then its `canonical_model_id` entry when the vendor entry reports no `reasoning_options`; for images, universal model knowledge across catalog namespaces).
+5. **Unknown** (fails closed for images. For thinking, the turn is admitted with the provider default and no thinking field. The Client renders its own honest `unknown` thinking state, key `route_thinking_mode_unknown`, and never a `Default` level).
+
+### 2. Configuration Schema (`SANAD_HOME/config.yaml`)
+Custom capability overrides are declared in `config.yaml` using exact model identity keys directly under `model_capabilities` (case-sensitive, preserving colons in URN-style IDs). Provider instance IDs are excluded from capability keys so a single declaration applies across multiple providers, custom/native routes, renames, and deletions/re-creations. Unlanded nested provider schemas (`model_capabilities.<provider-id>.<model-id>`) are rejected at parse time with an actionable `FormatException`.
+
+```yaml
+model_capabilities:
+  "<exact-model-id>":
+    supports_image_input: true
+    thinking_control:
+      status: supported # supported | unsupported | unknown
+      wire: openai_chat_effort # openai_chat_effort | codex_responses_effort | anthropic_adaptive | anthropic_budget
+      options:
+        low: low
+        medium: medium
+        high: high
+```
+
+Rules:
+- `supports_image_input`: Boolean. Absence/null means unconfigured.
+- `thinking_control.status`: `supported`, `unsupported`, or `unknown`.
+- `wire`: Typed wire protocol, checked for wire compatibility against provider protocol and `apiMode`:
+  - `openai_chat_effort`: Compatible with `openai_compatible` protocol and `chat_completions`/`chat` API mode.
+  - `codex_responses_effort`: Compatible with `openai_compatible` protocol and `codex_responses` API mode.
+  - `anthropic_adaptive` / `anthropic_budget`: Strictly requires `anthropic_compatible` protocol and `anthropic_messages` API mode.
+  - Wire incompatibility fails closed: the descriptor is downgraded to unsupported/unknown.
+- Option validation and wire mappings:
+  - The typed Chat/Responses effort vocabulary is `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, centralized in `ThinkingWireVocabulary`; model/endpoint declarations still authorize only their own finite subset, never every value for every model.
+  - Canonical effort/level IDs retain their exact semantic value; no remap/elevation or effort label hiding a Boolean enable/disable. Opaque option IDs may map to explicit valid finite values, and legitimate numeric budget tiers remain budgets. Fake-Off/fake-On is rejected at parse time.
+  - `anthropic_adaptive`: Allowed efforts are `none`, `off`, `low`, `medium`, `high`, `max`. Declared disable maps to typed false toggle, producing `thinking: {type: disabled}` rather than `adaptive + effort: off`; active tiers use `AnthropicAdaptiveDirective` and `output_config.effort` on Messages.
+  - `toggle_effort`: Validated Boolean or `true`/`false`/`on`/`off` strings resolve through the typed toggle; false uses the owning route's genuine disable, not an effort parameter guessed from the option label.
+  - `google_thinking`: Accepts validated non-negative integer budgets or canonical levels `minimal`, `low`, `medium`, `high`. A declared disable (`0` or its validated `none`/`off` alias) resolves to `GoogleBudgetDirective(0)`, producing `extra_body.google.thinking_config.thinking_budget: 0`, **never** an invented `thinking_level: off`. Positive budgets and active levels retain their exact typed values. Native model facts decide whether a real model permits disable.
+  - `nim_kimi_thinking` / `nim_qwen_thinking`: Finite typed `chat_template_kwargs.thinking` / `chat_template_kwargs.enable_thinking` Boolean declarations; self-hosted Qwen additionally admits exact `low`, `medium`, `xhigh` efforts. These declarations are selectable only on generic/custom compatible Chat or NIM Chat serializers; aggregator/Responses/Messages/native Ollama reject incompatible controls before dispatch. Hosted model facts and self-hosted declarations remain distinct; see [NVIDIA Thinking Wire QA](../qa_maintenance/nvidia_thinking_wire_qa.md).
+  - `anthropic_budget`: Disabling options are prohibited; budgets must be integers >= 1024. A non-positive Anthropic budget is not a disable. Each budget option publishes its `budget_tokens`. On the Messages wire an explicitly selected budget is emitted verbatim when it fits below the request's `max_tokens`; a request that cannot honour it fails actionably while the body is built, before dispatch, instead of silently sending a smaller budget than the one selected. Since no positive budget can fit below a ceiling that leaves it no room, a declared `max_tokens` of `1`, `0` or a negative value is likewise unhonourable and rejected; only an absent `max_tokens` — no declared ceiling to compare against — leaves the selected budget unchanged.
+  - Provider Default: null, empty or whitespace-only selection resolves to `UseProviderDefault()` for configuration and endpoint declarations even with `default_option`. A known default remains `defaultOptionId` descriptor metadata; it dispatches only when explicitly selected — a Client that auto-admits its own route's known native default sends it as that ordinary explicit selection.
+  - `isOff` identifies an actual admitted disable, never Default omission. Explicit declaration options remain separate from provider-managed omission.
+
+### 2.1 Declared Endpoint Thinking Controls & Cache Isolation
+Endpoints that discover model capabilities dynamically may provide raw `thinking_control` metadata within `model_metadata`:
+- **Canonical Parse Validation:** Declared endpoint controls must parse through canonical `ThinkingControlOverride.tryParse` / `parse`. Invented budgets (e.g., `int.tryParse ?? 1024`), guessed effort tiers, or guessed toggles are strictly rejected.
+- **Shared Finite Vocabulary & Discovery Outcomes:** A declared endpoint control validates its option values against the shared finite vocabulary of its wire — the typed Chat/Responses effort vocabulary `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` — so declaration validation and serialization cannot drift. A documented finite list is declared exactly as documented and in documented order, and an explicit all-values declaration is declared as those seven values. An unusable `reasoning`-style member (a present member whose effort selector is omitted, an empty list, malformed values, or a default outside the documented set) publishes explicit `unknown` route-control evidence for that exact route instead of silently adopting an unrelated intrinsic ladder of options, and no budget choice or default is invented. A names-only model list remains absence of new evidence: nothing is published, so existing authority and intrinsic model knowledge stay in force. See [OpenRouter Reasoning Discovery QA](../qa_maintenance/openrouter_reasoning_discovery_qa.md).
+- **Option Value Fidelity:** Declared option mappings are honored without modification: opaque option IDs map directly to declared wire values, and budget options map to exact declared integer values.
+- **Wire Codec Serialization:** HTTP request serializers map opaque option IDs to declared wire values, selected budgets to exact integer `budget_tokens`, and `off` or provider default selections to explicit wire disable directives or complete wire absence.
+- **DTO Cache & Metadata Isolation:** Top-level enriched DTO descriptors (`ModelOption.thinkingControl`) are strictly isolated from raw endpoint metadata (`ModelOption.modelMetadata`). Cache round-trips (`toJson`/`fromJson`) maintain structural stability without recursive nesting. When a configuration override is removed, the route immediately falls back to the raw declared original or `unknown` without requiring a cache refetch.
+
+### 2.2 Exact Route & Endpoint Capability Binding
+- **Universal Model Catalog Resolution (`ModelsDevService`):** Curated model knowledge in `ModelsDevService` acts as intrinsic model intelligence. Known canonical models and explicit grounded aliases (e.g. `claude-haiku-4.5`) resolve image support across custom endpoints, proxies, and official routes without requiring provider UUID matching, template membership, or official base URL equality. Genuinely unknown models on names-only custom endpoints or conflicting vendor entries fail closed to `unknown` unless explicitly declared via `model_capabilities` in `config.yaml`.
+- **Grounded Exact Aliases & Consensus:** `ModelsDevService.groundedModelAliases` maintains strictly same-generation aliases only (e.g., `claude-haiku-4.5`, `claude-haiku-4-5`, `claude-haiku-4-5-20251001`); cross-generation fallbacks and speculative names are prohibited. When exact selected model ID is present in a vendor entry, it is authoritative; when missing, contradictory candidate aliases within any reporting vendor fail closed (`null`) and propagate across all vendor aggregation so another publisher cannot erase ambiguity, while missing metadata in another vendor does not veto unambiguous known facts.
+- **Startup Catalog Hydration:** Catalog hydration (`ModelsDevService.ensureLoaded()`) is wired into the daemon and standalone CLI startup lifecycles prior to turn admission. Turn admission resolves capabilities synchronously with zero HTTP calls.
+- **Forced Catalog Reload on Manual Refresh:** Explicit provider model refresh (`ProviderModelCacheService.refresh(manual: true)`) threads `forceRefresh: true` into `ModelsDevService.ensureLoaded()`, forcing a fresh catalog reload, while normal background/startup refreshes respect the cache TTL.
+- **Mode-Owned Wire Serialization & Wire Model Preservation:** The active API mode and provider protocol govern wire translation; model identity never implies wire format. A Claude model routed via an OpenAI-compatible endpoint serializes as OpenAI Chat completions, never Anthropic Messages. Wire requests sent to endpoints preserve the exact relay selected model ID (e.g., `claude-haiku-4.5`), never rewriting the wire body model to catalog aliases.
+- **Zero Hot-Path Network:** Request payload serialization and measurement execute synchronously against the admitted `RouteCapabilityProfile` or in-memory cached capabilities. Asynchronous catalog lookups during body assembly are strictly prohibited.
+- **Exact Model Identity:** Daemon route lookup (`ProviderModelId.normalize`) and client descriptor resolution/session matching (`RouteThinkingControl.normalizeModelId`) preserve case, catalog namespaces, and variant symbols (e.g., `~`, `:`) without lowercasing custom model IDs or stripping catalog identifiers, stripping only transport-owned provider instance prefixes with exact boundaries. Every vendor catalog — including Gemini — matches exact grounded ids plus the single documented catalog namespace; no catalog may use substring, prefix, wildcard or case-folding promotion.
+- **Tri-State Honesty & No Silent Remap:** An id that is not grounded stays `unknown`, never a fabricated `unsupported`. Only a positive report — a declaration `status: unsupported`, models.dev `reasoning: false`, or an always-on models.dev `only` entry with no selectable value — is `unsupported`. Both values advertise no options and emit no wire parameter, but `unknown` keeps the route declinable through `model_capabilities` instead of claiming a proven absence of controls. A selection id the route actually advertises is a current option id and is never rewritten by legacy-alias migration: the documented Gemini `minimal` level must reach the wire as `minimal`, never silently as `low`.
+
+### 2.3 Layered Thinking Capability Authority & Route Wire
+- **Authority Order (five layers):** (1) settings (`model_capabilities` override); (2) provider-reported metadata for the exact route (endpoint `thinking_control` declarations from provider-owned discovery parsers — OpenRouter `reasoning`, LM Studio native reasoning, Kimi `supports_reasoning`/`supports_thinking_type`/`think_efforts`/`reasoning` — and native item schemas: Codex `supported_reasoning_levels`, the Ollama live probe); (3) shipped defaults; (4) the serving vendor's exact models.dev entry; (5) the models.dev entry its `canonical_model_id` (`<vendor>/<model-id>`) names, only when (4) reports no `reasoning_options`. Otherwise `unknown`. The first layer with a record wins as a whole; fields are never mixed across layers, with the one exception of the default fill below.
+- **Default Fill (2026-10-21):** when the winning layer declares options but no default, the default comes from the next layer, in precedence order and skipping the winner, that declares one for the same exact model id: the shipped record regardless of its route class, then the models.dev serving-vendor entry, then its canonical entry. It is taken only when it is one of the winning options. Options always come from the winning layer alone. The descriptor records the provenance in `default_source` (`config_override`, `endpoint_declared`, `provider_reported`, `shipped_default`, `models_dev`, `models_dev_canonical`), marks the filled option `is_provider_default`, and appends `+default_<source>_<id>` to the capability revision. A shipped record that itself wins (for example its `compatible_chat: positive_efforts` degrade) never donates to itself, so that degrade keeps no default. A filled default is descriptor metadata only: an unset selection still resolves to `UseProviderDefault()` and writes nothing. Example: `glm-5.2` on OpenCode Go takes options `high`/`max` from the Go models.dev entry and the default `max` from its shipped record (`default_source: shipped_default`).
+- **Shipped Defaults (layer 3):** `agent/model_capability_defaults.yaml` carries the facts formerly hard-coded in Dart model tables (OpenAI o-series/GPT-5.x/GPT-6, gpt-oss, xAI Grok, Kimi, DeepSeek, Z.AI GLM, Claude, Gemini, hosted NIM ids), each with a documentation `source`, optional `aliases`, a `routes` class and an optional `compatible_chat: positive_efforts`.
+  - `tool/generate_model_capability_defaults.dart` validates every record with `ThinkingControlOverride.parse` and writes `generated_model_capability_defaults.dart`. CI runs it with `--check`.
+  - Route classes: `any` applies wherever the wire is compatible, and effort records follow the route between Chat and Responses. `native` applies on first-party/partner native Chat dialects and the aggregator; on generic compatible Chat it applies only with `compatible_chat: positive_efforts`, which keeps positive efforts and drops Off and the default. `first_party` is `native` without the partner Chat route (OpenCode Go): it is used when the partner's serving evidence contradicts the first-party record, so the partner falls through to its own models.dev entry. `glm-5.2` carries it because OpenCode Go serves it thinking-only (HTTP 400 on `thinking: {type: disabled}`; Go models.dev reports efforts `high`/`max` with no toggle and no default, so the shipped `max` fills the default), while Z.AI keeps `off`/`high`/`max`, default `max`. `google` applies on the Gemini template and the aggregator. `nim` applies on the hosted NIM catalog only.
+  - A record that does not apply passes to the next layer.
+  - Shipped records mark their documented default as `is_provider_default`.
+- **Native Toggle/Effort Wire:** `native_toggle_effort` declares the native Chat envelope.
+  - Boolean options are the `thinking: {type: enabled|disabled}` toggle.
+  - An effort option sends `thinking: {type: enabled}` plus `reasoning_effort` (`NativeThinkingEffortDirective`).
+  - It is admitted on first-party/partner native Chat dialects (DeepSeek, Kimi, Z.AI, OpenCode Go) and the aggregator. This restores the official DeepSeek contract — `off`/`low`/`high`/`max`, default `high` — on OpenCode Go without a model-name table.
+  - `anthropic_budget` also admits an exact Boolean `false` Off, sent as `thinking: {type: disabled}`.
+- **Clamp:** an explicit selection the reported set does not offer clamps to the nearest lower level of `minimal < low < medium < high < xhigh < max`. It never escalates and never falls to Off/none. With no lower level it is rejected (`thinking_option_unavailable_for_route`). An `unknown` set passes the selection through unchanged and sends no thinking field.
+- **Reactive 400 Recovery:** when a provider answers HTTP 400 that clearly rejects the thinking/reasoning field the request carried, the runner:
+  - retries that request exactly once without the field;
+  - records only the rejected selection value for that route+model as rejected for the rest of the session, in memory only; a later, different selection on the same route is still sent;
+  - logs a warning that the requested selection was not applied and the provider default answered (the 400 attempt also stays in the request dump), so the retry never passes as the user's choice.
+  
+  Other 400s are unchanged, and there is no second retry.
+- **models.dev Mapping:** `ModelsDevService.modelEntrySync(template, model)` reads the serving vendor (`providerToModelsDev[template]`) exact key only — no case folding, alias or cross-vendor inference, because controls are a property of the serving provider (`kimi-k3` reports `[max]` on `opencode-go` and `[low, high, max]` on `moonshotai`). `reasoning_options` `{type: effort, values}` become exact option ids in declared order (`none` is an Off option), an optional per-option `default` member becomes `default_option_id`, `{type: toggle}` adds a leading `off` (or `on`/`off` alone, Chat only), and `{type: only}` declares always-on thinking with no Off. `reasoning: false` and an `only` entry with no values are positive `unsupported` reports; `reasoning: true` without `reasoning_options` is `unknown`; any value outside the shared effort vocabulary, a duplicate, an unknown option type or a contradictory combination fails closed to `unknown`. The descriptor revision carries the evidence fingerprint (`models_dev_<sha>_<wire>`). Custom routes never consume a vendor entry.
+- **Kimi Provider-Reported Discovery:** on the registered `kimi` template, an item reporting `supports_reasoning: true`, thinking type `only` (`supports_thinking_type` and/or `reasoning.type`) and a finite positive effort set with an optional default (`think_efforts` and/or `reasoning.effort`; both forms must agree) is written as an owned `openai_chat_effort` declaration with no Off. Other thinking types or inconsistent evidence leave discovery untouched.
+- **Family Ids Are Wire Encoders Only:** template policy ids (`deepseek_thinking`, `zai_thinking`, `google_thinking`, `aggregator_upstream`, `kimi_thinking`, `nim_thinking`, `anthropic_thinking`) select the request codec from the route template; `ThinkingRoutePolicy.policyIdFor` never reads the model id. The models.dev layer chooses typed directives from the route API mode: Chat `OpenAiEffortDirective`/`ThinkingToggleDirective`, Responses `ResponsesReasoningDirective`, Messages `AnthropicAdaptiveDirective`/disable, Gemini `GoogleLevelDirective`/zero budget.
+- **Budgets:** token-budget options come only from settings or provider-reported declarations (`anthropic_budget`, `google_thinking` integer values). models.dev reports no budgets, so no budget tier is invented.
+- **Tri-State Honesty:** absence of evidence is `unknown` (turn admitted with the provider default), never `unsupported`; `unsupported` comes only from a positive report.
+- **HTTP Body Wire Authority:** Admitted typed directives serialize through the actual route codec: Chat effort uses `reasoning_effort`; Responses uses `reasoning.effort`; OpenRouter retains its `reasoning` envelope; Anthropic uses manual budget or adaptive effort, never both; native Ollama uses its typed `think` field. `UseProviderDefault` omits the thinking field rather than substituting a selected tier. Invalid selections are rejected before HTTP dispatch with `ThinkingSelectionErrorCode.optionUnavailable`. The OpenRouter aggregator keeps its own `reasoning` envelope: positive effort tiers and positive budgets serialize as `reasoning.enabled = true` with `reasoning.effort` or `reasoning.max_tokens`, while admitted disable — zero Google budget, typed false toggle or canonical effort `none` — serializes as `reasoning.effort = "none"` without `enabled: true`. Google level `off` — an invalid `GoogleLevelDirective('off')`, since Google's documented level enum has no `off` — malformed effort/level, negative Google budget, non-positive Anthropic budget and unsupported typed directives reject before dispatch rather than silently becoming omission; an explicitly enabled zero budget is never emitted.
+- **Native Finite Evidence:** Codex discovery retains each exact model entry's `supported_reasoning_levels` (`effort` strings) and optional `default_reasoning_level`. One strict parser validates membership, types and model identity. Unknown raw metadata synonyms are not evidence, and a missing native default never licenses choosing the first tier or guessing `medium`. Shipped-default facts remain finite and source-backed: `gpt-5.6-sol` permits `none, low, medium, high, xhigh, max`; `gpt-6-astra` permits `low, medium, high, xhigh, max` but not `none`. A documented `none` is Off, not provider Default.
+- **Native Ollama Evidence:** A strict live capability list and native `thinking.values`/`thinking.default` declaration determine controls. Boolean choices are exactly the declared booleans, with a member Boolean default; no unavailable Off is invented. Level choices/defaults retain string type and membership, including a native string token named `off` rather than substituting Boolean `false`. Malformed/mixed declarations remain unknown; absent `thinking` in a valid probed capability list is unsupported. Model names alone never produce levels or defaults.
+- **Live Evidence Freshness & Authority:** `source: live` evidence is time-bounded; older than `ThinkingControlStaleEvidence.liveEvidenceTtl` (5 minutes) resolution normally fails closed to unknown. The one exception retains a descriptor only when it was produced from a validated native declaration for the exact model route and its fresh rebuild under the same config/credential/policy revision still resolves `supported`, so model-owned On/Off/default facts survive elapsed wall-clock time instead of silently resetting the composer to unknown. Failure and invalidation evidence always stays authoritative: `live_probe_failed`, `cache_stale`, and `stale_live_evidence` resolve unknown until a live probe succeeds again, and malformed, unknown, unsupported, or revision-changed evidence is never retained. A config or credential revision change alone neither clears failure provenance nor rebuilds success from persisted metadata; a successful live probe under the new revision is what drops that provenance and restores the model-owned facts.
+- **Rejected Selection Lifecycle:** A selection the active route cannot honor is rejected during turn admission before any provider request and emitted as a terminal error response carrying the typed `ThinkingSelectionErrorCode`. The rejected turn's own durable work item is terminalized as `cancelled` through the owner-scoped durable transition, and that response is delivered only after the transition applies — durable ownership, never the in-memory projection, decides delivery. A rejection whose work item was already released, replaced, or cancelled stays silent: it delivers no stale terminal answer, clears no in-flight state, signals no turn completion (so it releases neither busy ownership nor the queued-work drain), and leaves the newer durable owner and its queued work untouched. A turn admitted without a durable work item (no persisted state) keeps its in-memory rejection and still completes normally.
+- **Failed Refresh Reconstructs From Current Authority:** A failed model-list refresh never hands a cached descriptor straight back to the route. Each cached model is re-derived from the current authority — active Home configuration, the instance's config/credential revision, the route protocol, the actual API mode and the model's own persisted discovery metadata. A descriptor survives only when the persisted one was `supported` and not already invalidated, the reconstruction is `supported` from inherent model-owned evidence (`profile` catalog facts or a model-only `config_override`), and the reconstruction carries the same capability revision. Endpoint declarations are deliberately excluded: they are route-owned evidence that only a successful discovery can revalidate, so a model-list failure must not silently reclassify them as intrinsic support. A removed or changed override, an incompatible route/API mode, or a config/credential revision change therefore fails closed instead of resurrecting stale controls; live probe/discovery evidence keeps its `live_probe_failed` invalidation, and every other model stays unknown until a successful refresh rebuilds it.
+
+#### Shipped-kind wire matrix
+
+`agent/test/core/provider_thinking/layered_thinking_authority_test.dart` covers the five layers and the clamp, and checks the regression table (the OpenCode Go list) through the real resolver and production adapters, asserting request bodies. `opencode_go_deepseek_v41_thinking_regression_test.dart` pins the official DeepSeek wire contract on OpenCode Go, and `thinking_selection_agent_runner_test.dart` (group `reactive 400 recovery`) pins the one-retry recovery and its per-selection scope.
+
+A thinking selection rejected before dispatch (`ThinkingSelectionException`) answers with an assistant message carrying `error_code`; the canonical `final_answer` payload keeps that `error_code`, so the CLI reports the run as failed (exit `1`, status `failed`, `error` = `<code>: <message>`) rather than completed. The daemon logs that expected rejection at INFO with its code and no stack trace.
+
+| Route wire | Representative evidence | Body for a selected option |
+|---|---|---|
+| Generic Chat (`openai`, `opencode-go`, `kimi`, `xai`, `nvidia`, `lm-studio`, `llama-cpp`) | shipped defaults, models.dev effort/toggle, Codex levels, declarations | `reasoning_effort: <id>`; toggle Off `thinking: {type: disabled}` |
+| `native_toggle_effort` (DeepSeek, Z.AI, Kimi toggles; native/partner Chat incl. OpenCode Go) | shipped defaults, declarations | `thinking: {type: enabled}` + `reasoning_effort`; Off `thinking: {type: disabled}` |
+| `openai-codex` Responses | Codex `supported_reasoning_levels`, models.dev effort | `reasoning: {effort, summary: auto}` |
+| `anthropic` Messages | shipped Claude budget/adaptive records, models.dev effort + toggle, declarations | `thinking: {type: adaptive}` + `output_config.effort`; Off `thinking: {type: disabled}` |
+| `gemini` | shipped Gemini level/budget records, models.dev levels, declarations | `extra_body.google.thinking_config.thinking_level` / `thinking_budget` |
+| `openrouter` | gateway `reasoning` declaration, shipped records (any typed wire), models.dev | `reasoning: {enabled: true, effort}` |
+| `ollama` | live probe | native `think` |
+
+Grounding for the codecs: [OpenAI reasoning guide](https://developers.openai.com/api/docs/guides/reasoning), [Claude thinking](https://platform.claude.com/docs/en/build-with-claude/thinking), [Gemini thinking](https://ai.google.dev/gemini-api/docs/thinking), [DeepSeek thinking](https://api-docs.deepseek.com/guides/thinking_mode/), [Kimi thinking](https://platform.kimi.ai/docs/guide/use-thinking-models), [OpenCode Go](https://opencode.ai/docs/go/). Capability itself comes only from the five layers above; the shipped records cite their own sources in `agent/model_capability_defaults.yaml`.
+
+### 3. Image Capabilities: Actual Pixels or Honest Failure
+For supported routes, user attachments and tool image results reach the LLM wire request as actual base64 image data:
+- OpenAI Chat: Attached user images as `image_url` parts (`data:<mime>;base64,<data>`); tool image results projected as detached user context following contiguous result batches.
+- Codex Responses: User image attachments and tool results mapped to `input_image` items with data URLs.
+- Anthropic Messages: User image attachments and tool results mapped to `image` content blocks with base64 source.
+
+**Recoverable Tool Capability Check:**
+`ToolExecutionCallbacks.currentImageSupport()` reads the active turn's frozen admission, and the coordinator copies only its `supported | unsupported | unknown` value into each request-owned `ToolContext`. No provider identity or mutable configuration lookup is needed by the image handler. Missing context/capability remains `unknown`.
+
+`ViewImageHandler.executeResult` checks this capability before resolving/reading/processing the file. Supported execution retains verified image blocks. Unsupported and unknown return distinct actionable text-only error results with no image blocks. The normal paired tool result reaches the next model continuation, allowing an honest explanation without poisoning history or creating a provider/contact failure. Non-visual user-attachment projection retains source attachments but no longer instructs unsupported/unknown models to inspect pixels with `view_image`.
+
+**Fail-Closed Adapter Preflight:**
+If adapter-facing history still contains image payloads (including previously persisted tool images) on an unsupported or unresolved route, Chat, Responses, and Anthropic adapters throw the typed local `LocalImageCapabilityException` before HTTP:
+- **Unsupported:** `The selected model "<model>" does not support image input.`
+- **Unknown:** `Image input capability is unknown for model "<model>". Specify supports_image_input in config.yaml under model_capabilities.`
+
+The Runner handles this specific local exception as an actionable blocked invalid request without automatic failover, provider UUID exposure, a misleading contact-failure description, or a `Provider response` prefix. Unrelated `UnsupportedError` and actual HTTP/network/provider errors retain their existing classification. Canonical pixel history is not rewritten or silently stripped; genuinely pixel-bearing unsupported dispatch remains blocked. This adapter rule is distinct from intentional non-visual user-attachment projection and recoverable text-only tool errors.
+
+**Verified Attachment Storage & Integrity:**
+User attachments are strictly validated by `AttachmentStore.readVerifiedAttachment` prior to payload serialization:
+- Binds private store references within the jail root (`${SANAD_STATE_HOME}/attachments`).
+- Validates attachment lifecycle status (`available`).
+- Confirms actual file size and SHA-256 digest match stored database metadata.
+- Validates magic bytes for image payloads:
+  - PNG: `0x89 0x50 0x4E 0x47`
+  - JPEG: `0xFF 0xD8 0xFF`
+  - GIF: `0x47 0x49 0x46 0x38`
+  - WEBP: `RIFF....WEBP`
+- Missing, corrupted, unavailable, or tampered images halt actionably before HTTP with `StateError` or `FormatException`. Synchronous file reads, CWD fallbacks, and global `getSanadHome()` paths are strictly prohibited.
+
+**Turn Admission & Capability Snapshot Freezing:**
+- The capability profile (`RouteCapabilityProfile`) is authoritatively resolved and frozen at turn admission (`AgentRunner.sendMessage`, `streamMessage`, `resumeStream`).
+- The admitted profile remains immutable across all turn iterations, tool calls, measurements, and mid-turn `config.yaml` reloads.
+- Mid-flight route overrides (`AgentRunner.updateTurnRoute`) explicitly re-resolve and update the profile for the target route before the next retry iteration.
+
+### 4. Client Thinking Control Lifecycle
+- **Transient Loading State:** When route metadata is being fetched, the selector renders a distinct `Loading...` chip (`route_thinking_mode_loading`), never premature `Unavailable`.
+- **Authoritative Unknown:** An authoritative `unknown` status renders the Client's own honest unreported state: the visible disabled chip `Not reported` (`route_thinking_mode_unknown`, `thinkingModeUnknownLabel` / `thinkingModeUnknownTooltip`) with its explanation. It never renders a level, a synthetic `Default`/provider-managed chip or a reserved omission value, and it stays distinct from a resolved no-control route (`route_thinking_mode_no_control`) and from a route that carries no thinking transport (`Unavailable`). Unknown evidence never rewrites a stored explicit choice.
+- **Omission on the Wire vs. Client Admission:** A null, empty or whitespace-only `thinking_mode` is the Agent's wire-level omission boundary: it emits no request field and resolves to `UseProviderDefault()` for callers that hold no effective explicit selection. That boundary is not a claim that a cleared Client selection must stay omitted — the Client resolves an effective selection first: with no valid saved explicit value it admits the route's known valid native default as a real selection through its own composer selection path and sends that exact option (Plan 77 / Task 77K), so a native default is applied, never merely annotated. The declared default is disclosed by the menu-only `thinkingModeProviderDefaultHint` line below that option's own row inside the expanded menu, and a route whose declared default is unknown or absent marks no row. There is no synthetic `Default` row.
+- **Always a Selected Value (user rule 2026-10-21):** a selectable control never shows an empty or "Not selected" state. When there is no valid explicit choice and no layer declares a valid default, the chip shows the localized selected state `Provider default` (`thinkingModeProviderDefaultSelectedLabel`); the next send carries no thinking field. The menu still lists only the declared options, and showing either the filled default or `Provider default` never writes a session or device preference: only an explicit menu choice writes.
+- **Restart Persistence:** an explicit pick is stored on the session row and in the route-scoped preference store, and survives an agent restart (startup recovery and turn revalidation restore it even while models.dev is not yet hydrated, because an `unknown` route passes it through) and a capability-revision change. After a Client restart the selected conversation may first be restored as an identity-only placeholder; when its authoritative summary arrives, the conversation's own stored pick replaces the device-level last pick as the next-send value, in memory only, so the chip and the next turn agree.
+- **Cache Reuse Without Flicker:** When returning to a previously loaded route on the same provider instance and agent, the cached descriptor is displayed immediately without flicker.
+- **Route & Device Isolation:** Identical model IDs across different provider instances or different agents are strictly isolated; snapshots are invalidated on device/agent change.
+- **Superseded Requests & Race Protection:** In-flight snapshot responses for superseded route selections are dropped. Revalidation captures session ID and ensures no silent selection reset occurs on superseded sessions.
+
+### 5. Attachment Replay Admission & Early Turn Blocked Notification
+- **Replay Admission Query:** During replay edit or retry turns, `commitSoftRewindAdmission` commits the replacement root user message inside a transaction and associates retained attachments with `status = 'attached'`. `AttachmentStore.resolveAdmissionPaths` and `loadAdmission` permit attachments with `status = 'staged' OR (status = 'attached' AND EXISTS (SELECT 1 FROM messages WHERE session_id = user_attachments.session_id AND message_id = user_attachments.message_id AND request_id = user_attachments.admission_id AND history_status = 'active'))`. The queued turn executor (`LocalRuntimeCatalog.buildTools`) reliably resolves disk paths for retained attachments while cross-request, cross-session, superseded, or corrupted attachments remain fail-closed.
+- **Early Failure Notice Reporting:** When an early error occurs before or during turn preparation (e.g. tool resolution, catalog build, or model adapter initialization), `SessionTurnExecutor.runTurn` catches the exception, transitions the active work item to `SessionWorkState.blocked`, and invokes `RuntimeRecoveryService.reportFailure(..., forceBlocked: true)`. An actionable runtime notice is recorded in `session_runtime_notices` and broadcast to all connected clients via `session.runtime_notice`, preventing client 90-second timeouts or UI hangs and enabling immediate user retry or route correction.
+- **Replay Execution Pipeline & Transport Isolation:** Replay turn execution exercises the full queued `SessionTurnExecutor` -> `AgentRunner` -> provider serialization adapter pipeline (`BaseOpenAIAdapter` / `BaseAnthropicAdapter`). `ProviderRequestTransport` enforces clear ownership boundaries: scoped requests create per-request owned HTTP clients closed upon request completion or cancellation (`_ownsClient = true`). For isolated test environments, `requestClientFactory` injects fresh request-owned clients per call. Unscoped operations (such as model catalog discovery) reuse `adapterSharedClient` unowned (`_ownsClient = false`), preserving shared client instances without accidental closure.
+- **Client Replay Error Guidance & Lost-ACK Reconciliation:** On the client side, inline replay turn dispatches wrap execution in bounded exception handling (`try / catch / finally`). The client distinguishes confirmed rejections from unconfirmed transport drops (`disconnected`, `invalid_response`, `timeout`, `unconfirmed`). When delivery outcome cannot be confirmed, the UI surfaces honest unconfirmed-outcome guidance (`"Replay outcome could not be confirmed. Check conversation history before retrying."` or `"Disconnected from agent. Reconnect and check conversation history before retrying."`) rather than generic failure messages encouraging blind resend. Editor text and attachments are preserved with zero automatic resend, allowing manual user retry after checking history. In the event of a dropped transport acknowledgement where the backend accepted the turn, reconciliation occurs authoritatively through backend history updates and revision advancement, dismissing the superseded inline editor without duplicate client commits. Test coverage validates this presentation and state reconciliation seam at the cubit/repository boundary; daemon transaction rollback and socket reconnection remain governed at the gateway integration boundary.

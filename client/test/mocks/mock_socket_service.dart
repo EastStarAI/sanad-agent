@@ -29,11 +29,34 @@ class FakeSanadSocketService extends SanadSocketService {
   List<Map<String, dynamic>> get capturedCommands => List.unmodifiable(_capturedCommands);
 
   bool _fakeReady = false;
+  final bool _fakeLocalTransport;
+  Completer<List<String>>? hostedAdmissionCompleter;
+  List<Map<String, dynamic>>? capturedHostedAttachments;
   SocketLifecycleState _fakeLifecycleState = SocketLifecycleState.disconnected;
   Map<String, dynamic>? autoCapabilitiesPayload = const <String, dynamic>{};
 
-  FakeSanadSocketService({String hardwareId = 'test-device-id'})
-    : super(url: 'http://localhost:8000', hardwareId: hardwareId);
+  FakeSanadSocketService({
+    String hardwareId = 'test-device-id',
+    bool isLocalTransport = false,
+  }) : _fakeLocalTransport = isLocalTransport,
+       super(url: 'http://localhost:8000', hardwareId: hardwareId);
+
+  @override
+  bool get isLocalTransport => _fakeLocalTransport;
+
+  @override
+  Future<List<String>> admitHostedAttachments({
+    required String deviceId,
+    required String sessionId,
+    required String requestId,
+    required List<Map<String, dynamic>> attachments,
+  }) {
+    capturedHostedAttachments = attachments;
+    return hostedAdmissionCompleter?.future ??
+        Future.value([
+          for (var index = 0; index < attachments.length; index++) 'hosted-attachment-$index',
+        ]);
+  }
 
   /// Manually switch the connected state and notify listeners.
   void setConnected(bool value) {

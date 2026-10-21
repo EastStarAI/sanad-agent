@@ -142,6 +142,7 @@ jobs:
         run: |
           fvm dart pub get
           fvm dart run tool/generate_bundled_skills.dart --check
+          fvm dart run tool/generate_model_capability_defaults.dart --check
           fvm dart analyze
           fvm dart test
       - name: Compile agent
@@ -161,6 +162,7 @@ jobs:
         run: |
           fvm dart pub get
           fvm dart run tool/generate_bundled_skills.dart --check
+          fvm dart run tool/generate_model_capability_defaults.dart --check
           fvm dart analyze
           fvm dart test test/core/update/release_manifest_test.dart
       - name: Compile Windows agent and no-console launcher

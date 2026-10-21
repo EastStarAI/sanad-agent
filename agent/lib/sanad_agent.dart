@@ -1,7 +1,9 @@
 export 'core/config.dart';
 export 'core/di.dart';
 export 'core/models/message.dart';
+export 'core/models/user_attachment.dart';
 export 'core/models/tool_call.dart';
+export 'core/models/tool_execution_result.dart';
 export 'core/models/agent_response.dart';
 export 'engine/agent_runner.dart';
 export 'engine/adapters/llm_adapter.dart';

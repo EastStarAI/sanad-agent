@@ -1754,6 +1754,182 @@ void main() {
     await cubit.close();
   });
 
+  group('Task 122 New Conversation route ownership', () {
+    late ConversationCacheStore cacheStore;
+    late ConversationCacheRepository cacheRepository;
+
+    Session goSession(String id, {required String model, String? thinkingMode}) => session.copyWith(
+      id: id,
+      modelProvider: 'provider-go',
+      model: model,
+      thinkingMode: thinkingMode,
+    );
+
+    // Session A: Go glm-5.2 with an explicit High. Session B: the same route
+    // with NULL thinking (its chip shows the route default, Max).
+    late Session sessionA;
+    late Session sessionB;
+
+    Future<SessionCubit> buildCubit() async {
+      sessionA = goSession('session-a', model: 'glm-5.2', thinkingMode: 'high');
+      sessionB = goSession('session-b', model: 'glm-5.2');
+      client.initialSessions.addAll([sessionA, sessionB]);
+      socket.setConnected(true);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      cacheStore = ConversationCacheStore();
+      cacheRepository = ConversationCacheRepository(cache: cacheStore, transport: conversationRepository);
+      final cubit = SessionCubit(
+        agentCubit: agentCubit,
+        socketService: socket,
+        conversationRepository: conversationRepository,
+        conversationCacheRepository: cacheRepository,
+      );
+      await Future<void>.delayed(Duration.zero);
+      return cubit;
+    }
+
+    test('D1 (live cases 2 and 4a): startup keeps a persisted complete draft route and its explicit thinking', () async {
+      final cubit = await buildCubit();
+      // The user picked flash and an explicit Low on the draft before the restart.
+      cacheStore.setNewConversationDraft(
+        agent.id,
+        providerId: 'provider-go',
+        model: 'deepseek-v4.1-flash',
+        thinkingMode: 'low',
+      );
+      // The last-selected session holds another route.
+      final lastSession = goSession('session-pro', model: 'deepseek-v4-pro', thinkingMode: 'high');
+      cacheStore.applySessionCreated(agent.id, lastSession);
+      cacheStore.recordLastDestination(
+        ConversationDestination.session(deviceId: agent.id, sessionId: lastSession.id),
+      );
+      expect(cubit.state.selectedSession, isNull, reason: 'startup: nothing is open yet');
+
+      await cubit.startNewChat(agent);
+      await Future<void>.delayed(Duration.zero);
+
+      final draft = cacheRepository.newConversationDraft(agent.id);
+      expect(draft.providerId, 'provider-go');
+      expect(draft.model, 'deepseek-v4.1-flash', reason: 'the user-chosen draft route wins over the last session');
+      expect(draft.thinkingMode, 'low', reason: 'the explicit draft thinking is never replaced');
+      await cubit.close();
+    });
+
+    test('D1: startup seeds the draft from the last session only when the draft has no complete route', () async {
+      final cubit = await buildCubit();
+      final lastSession = goSession('session-pro', model: 'deepseek-v4-pro', thinkingMode: 'high');
+      cacheStore.applySessionCreated(agent.id, lastSession);
+      cacheStore.recordLastDestination(
+        ConversationDestination.session(deviceId: agent.id, sessionId: lastSession.id),
+      );
+
+      await cubit.startNewChat(agent);
+      await Future<void>.delayed(Duration.zero);
+
+      final draft = cacheRepository.newConversationDraft(agent.id);
+      expect(draft.providerId, 'provider-go');
+      expect(draft.model, 'deepseek-v4-pro');
+      expect(draft.thinkingMode, 'high');
+      await cubit.close();
+    });
+
+    test('New chat from an open session with an explicit High copies its full route over an existing draft', () async {
+      final cubit = await buildCubit();
+      cacheStore.setNewConversationDraft(
+        agent.id,
+        providerId: 'provider-go',
+        model: 'deepseek-v4.1-flash',
+        thinkingMode: 'low',
+      );
+      await cubit.selectSession(sessionA);
+      await Future<void>.delayed(Duration.zero);
+      expect(cubit.state.selectedSession?.id, sessionA.id);
+
+      await cubit.startNewChat(agent);
+      await Future<void>.delayed(Duration.zero);
+
+      final draft = cacheRepository.newConversationDraft(agent.id);
+      expect(draft.providerId, 'provider-go');
+      expect(draft.model, 'glm-5.2');
+      expect(draft.thinkingMode, 'high', reason: "the open session's explicit value is a user choice");
+      await cubit.close();
+    });
+
+    test('D2: New chat from an open session with NULL thinking carries null, never the route default', () async {
+      final cubit = await buildCubit();
+      cacheStore.setNewConversationDraft(
+        agent.id,
+        providerId: 'provider-go',
+        model: 'deepseek-v4.1-flash',
+        thinkingMode: 'low',
+      );
+      await cubit.selectSession(sessionB);
+      await Future<void>.delayed(Duration.zero);
+      expect(cubit.state.selectedSession?.id, sessionB.id);
+
+      await cubit.startNewChat(agent);
+      await Future<void>.delayed(Duration.zero);
+
+      final draft = cacheRepository.newConversationDraft(agent.id);
+      expect(draft.providerId, 'provider-go');
+      expect(draft.model, 'glm-5.2');
+      expect(draft.thinkingMode, isNull, reason: 'the same route default resolves from null');
+      await cubit.close();
+    });
+  });
+
+  test('startNewChat never copies half a route from a provider-less cached session', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    // A cache-decoded session that lost its provider keeps model and thinking.
+    final halfRouteSession = session.copyWith(
+      model: 'deepseek-v4.1-flash',
+      thinkingMode: 'low',
+    );
+    expect(halfRouteSession.modelProvider, isNull);
+    final cacheStore = ConversationCacheStore();
+    // The persisted draft holds no complete route of its own (a complete one
+    // would win at startup, Task 122 D1), so the cached session seeds it.
+    cacheStore.setNewConversationDraft(
+      agent.id,
+      text: 'keep my draft',
+      model: 'stale-model',
+      thinkingMode: 'stale-thinking',
+    );
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    // Startup: nothing is selected yet and the last-selected session comes
+    // from the persisted cache, decoded before the live session list lands.
+    cacheStore.applySessionCreated(agent.id, halfRouteSession);
+    cacheStore.recordLastDestination(
+      ConversationDestination.session(
+        deviceId: agent.id,
+        sessionId: halfRouteSession.id,
+      ),
+    );
+    expect(cacheRepository.lastSelectedSession(agent.id)?.model, 'deepseek-v4.1-flash');
+    expect(cubit.state.selectedSession, isNull);
+
+    await cubit.startNewChat(agent);
+    await Future<void>.delayed(Duration.zero);
+
+    final draft = cacheRepository.newConversationDraft(agent.id);
+    expect(draft.text, 'keep my draft');
+    expect(draft.providerId, isNull);
+    expect(draft.model, isNull);
+    expect(draft.thinkingMode, isNull);
+    await cubit.close();
+  });
+
   test('startNewChat restores the last selected session context per device', () async {
     socket.setConnected(true);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
@@ -1929,6 +2105,204 @@ void main() {
     expect(historyCtrl.snapshot.backStack.last.sessionId, session.id);
 
     await cubit.close();
+  });
+
+  test('resolveDeviceDestination is the single resolver for restore and device switch', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final cacheStore = ConversationCacheStore();
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    // No persisted destination for this device: New Conversation.
+    expect(
+      cubit.resolveDeviceDestination(agent.id),
+      ConversationDestination.newConversation(deviceId: agent.id),
+    );
+
+    // A persisted session destination is restored as typed, unchanged.
+    final sessionDestination = ConversationDestination.session(
+      deviceId: agent.id,
+      sessionId: session.id,
+    );
+    cacheStore.recordLastDestination(sessionDestination);
+    expect(cubit.resolveDeviceDestination(agent.id), sessionDestination);
+
+    // A workspace-less New Conversation destination is restored as typed too.
+    const newWithoutWorkspace = ConversationDestination.newConversation(deviceId: 'agent-1');
+    cacheStore.recordLastDestination(newWithoutWorkspace);
+    expect(cubit.resolveDeviceDestination(agent.id), newWithoutWorkspace);
+
+    // The resolver delegates workspace validity to the typed restart source: a
+    // preselection the section authoritatively reports as missing is dropped.
+    cacheStore.recordLastDestination(
+      const ConversationDestination.newConversation(
+        deviceId: 'agent-1',
+        workspaceId: 'workspace-a',
+      ),
+    );
+    cacheStore.applyWorkspacesRefreshed(
+      agent.id,
+      const [],
+      generation: cacheStore.advanceWorkspacesGeneration(agent.id),
+    );
+    expect(
+      cubit.resolveDeviceDestination(agent.id),
+      ConversationDestination.newConversation(deviceId: agent.id),
+    );
+
+    await cubit.close();
+    cacheStore.dispose();
+  });
+
+  test('startNewChat returns the resolved destination including the restored workspace', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final contextualSession = Session(
+      id: 'session-context',
+      title: 'Context session',
+      deviceId: agent.id,
+      workspaceId: 'workspace-a',
+      createdAt: DateTime(2026, 1, 1),
+      updatedAt: DateTime(2026, 1, 1),
+    );
+    final cacheStore = ConversationCacheStore();
+    cacheStore.applyWorkspacesRefreshed(
+      agent.id,
+      const [DeviceWorkspace(id: 'workspace-a', name: 'A', path: '/a')],
+      generation: cacheStore.advanceWorkspacesGeneration(agent.id),
+    );
+    cacheStore.applySessionCreated(agent.id, contextualSession);
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+    final historyCtrl = ConversationHistoryController();
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      historyController: historyCtrl,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    // The construction refresh replaces the section projection from the
+    // transport; re-publish the canonical workspace context before the intent.
+    cacheStore
+      ..applyWorkspacesRefreshed(
+        agent.id,
+        const [DeviceWorkspace(id: 'workspace-a', name: 'A', path: '/a')],
+        generation: cacheStore.advanceWorkspacesGeneration(agent.id),
+      )
+      ..applySessionCreated(agent.id, contextualSession);
+    await cubit.selectSession(contextualSession);
+
+    const expected = ConversationDestination.newConversation(
+      deviceId: 'agent-1',
+      workspaceId: 'workspace-a',
+    );
+    final resolved = await cubit.startNewChat(agent);
+
+    // The caller routes with this destination, so the resolved workspace is the
+    // presented route instead of a workspace-less location.
+    expect(resolved, expected);
+    expect(historyCtrl.snapshot.current, expected);
+    expect(cacheRepository.lastDestination(agent.id), expected);
+
+    // Re-applying the resolved destination (the canonical route echo) must not
+    // create a second destination or a second history entry.
+    final repeated = await cubit.startNewChat(agent, workspaceId: resolved.workspaceId);
+    expect(repeated, expected);
+    expect(historyCtrl.snapshot.current, expected);
+    expect(historyCtrl.snapshot.backStack.length, 1);
+
+    await cubit.close();
+    cacheStore.dispose();
+  });
+
+  test('switchActiveDevice switches the cache context then records one typed navigation', () async {
+    socket.setConnected(true);
+    final deviceB = DeviceConfig(id: 'device-b', name: 'Device B', isOnline: true);
+    final sessionB = Session(
+      id: 'session-b',
+      title: 'Session B',
+      deviceId: deviceB.id,
+      createdAt: DateTime(2026, 1, 2),
+      updatedAt: DateTime(2026, 1, 2),
+    );
+    final deviceBClient = _FakeDeviceClient(
+      config: deviceB,
+      controller: socket,
+      initialSessions: [sessionB],
+    );
+    agentCubit.registerClient(deviceB.id, deviceBClient);
+    repository.seedAgents([agent, deviceB], activeAgentId: agent.id);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent, deviceB]));
+
+    final cacheStore = ConversationCacheStore();
+    cacheStore.applySessionCreated(agent.id, session);
+    cacheStore.applySessionCreated(deviceB.id, sessionB);
+    cacheStore.recordLastDestination(
+      ConversationDestination.session(deviceId: agent.id, sessionId: session.id),
+    );
+    cacheStore.recordLastDestination(
+      ConversationDestination.session(deviceId: deviceB.id, sessionId: sessionB.id),
+    );
+    cacheStore.setActiveDevice(agent.id);
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+
+    final deviceASession = ConversationDestination.session(
+      deviceId: agent.id,
+      sessionId: session.id,
+    );
+    final historyCtrl = ConversationHistoryController()..setInitial(deviceASession);
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      historyController: historyCtrl,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(cubit.state.selectedSession?.id, session.id);
+
+    final deviceBSession = ConversationDestination.session(
+      deviceId: deviceB.id,
+      sessionId: sessionB.id,
+    );
+    final resolved = await cubit.switchActiveDevice(deviceB);
+
+    // One typed navigation: cache context, active agent, selection, and history
+    // current destination all describe the new device.
+    expect(resolved, deviceBSession);
+    expect(cacheRepository.activeDeviceId, deviceB.id);
+    expect((agentCubit.state as DeviceActive).activeAgent.id, deviceB.id);
+    expect(cubit.state.selectedSession?.deviceId, deviceB.id);
+    expect(cubit.state.selectedSession?.id, sessionB.id);
+    expect(historyCtrl.snapshot.current, deviceBSession);
+    expect(historyCtrl.snapshot.backStack, [deviceASession]);
+
+    // Back and Forward then move predictably across devices.
+    expect(historyCtrl.goBack(), deviceASession);
+    expect(historyCtrl.snapshot.forwardStack, [deviceBSession]);
+    expect(historyCtrl.goForward(), deviceBSession);
+
+    await cubit.close();
+    deviceBClient.dispose();
+    cacheStore.dispose();
   });
 
   test('E4: restart recovery: cache persists last selected session for HomeScreen restore', () async {

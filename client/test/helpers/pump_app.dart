@@ -1,6 +1,6 @@
+import 'package:toastification/toastification.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
-import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart'
-    show kSupportedLocales;
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart' show kSupportedLocales;
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_capabilities_cubit.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
@@ -22,6 +22,7 @@ Future<void> pumpTestApp(
   WidgetTester tester, {
   required Widget child,
   GoRouter? router,
+  Locale? locale,
   DeviceCubit? agentCubit,
   SessionCubit? sessionCubit,
   SessionSidebarCubit? sessionSidebarCubit,
@@ -32,18 +33,25 @@ Future<void> pumpTestApp(
   VoiceStreamCubit? voiceStreamCubit,
   ConversationCacheRepository? conversationCacheRepository,
   ConversationRepository? conversationRepository,
+  bool wrapWithToastification = false,
 }) {
   Widget wrapped = router != null
       ? MaterialApp.router(
           routerConfig: router,
+          locale: locale,
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: kSupportedLocales,
         )
       : MaterialApp(
           home: Scaffold(body: child),
+          locale: locale,
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: kSupportedLocales,
         );
+
+  if (wrapWithToastification) {
+    wrapped = ToastificationWrapper(child: wrapped);
+  }
 
   final blocProviders = [
     BlocProvider<VoiceStreamCubit>.value(value: voiceStreamCubit ?? FakeVoiceStreamCubit()),

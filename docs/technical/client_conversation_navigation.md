@@ -8,7 +8,8 @@ description: "Technical design for device-scoped sidebar projection, atomic hist
 ## State Owners
 
 - `NavigationHistoryController` owns typed back, current, and forward
-  destinations.
+  destinations, and is the single stack-reconciliation owner: every external
+  route change is applied through `reconcile()`.
 - `ConversationCacheStore` owns per-device sessions, last destinations, drafts,
   expansion state, and pagination resources.
 - `SessionCubit` projects selected-session identity and coordinates typed
@@ -38,6 +39,15 @@ destination is restored. New Conversation and session destinations remain
 distinct; `lastSelectedSessionId` is only context inheritance and never decides
 the restart route. Background refreshes with usable cached rows are visually
 silent; only initial loading and stale errors add sidebar chrome.
+
+A device switch is one typed navigation, never a bare selection change. The
+intent switches the cache context and the active agent, awaits the target
+device's cache projection, resolves that device's typed last destination through
+the same resolver the startup restore uses, and only then records the
+destination on `NavigationHistoryController`; the shell then moves GoRouter to
+the returned destination. The URL, the history current destination, the sidebar
+selection, and the presented conversation therefore always describe one device,
+and Back may cross devices deterministically and visibly.
 
 ## Authoritative Conversation Search
 
@@ -151,6 +161,41 @@ crosses behind the composer; fully visible growth does not move. Any manual
 movement away clears eligibility and active follow immediately, and later events
 cannot restore either state. A manual return to the bottom restores eligibility
 and boundary-gated minimal follow.
+
+## Destination Integrity
+
+Every destination a route resolves to is presented as requested. The sidebar
+projection is a per-section, first-page-only view that is replaced wholesale on
+each section refresh, so absence from it is never evidence that a destination
+is invalid: a session route is opened with the matching selected session when it
+is already known and with the typed placeholder otherwise, and a session the
+daemon genuinely does not have fails its history load and surfaces the existing
+retry presentation. Confirmed deletion remains the only automatic New
+Conversation fallback.
+
+Reconciling an externally applied route is implemented once, on
+`ConversationHistoryController.reconcile()`, which compares the parsed
+destination against the existing stacks, mutates the controller, and reports the
+branch it took (`NavigationReconciliation`). `GoRouterHistorySync.
+reconcileFromRoute` delegates to it; route owners must not re-derive the branch.
+
+A New Conversation surface has exactly one route identity. `startNewChat`
+returns the destination it resolved — including any restored workspace
+preselection — and every caller routes with that returned destination instead of
+rebuilding a location. A route that reaches New Conversation without the
+workspace the restored draft belongs to is aligned to the resolved destination,
+so the visible URL, the history current destination, and the presented surface
+never disagree.
+
+The selection listener may not move the route: every selection change that
+follows an explicit navigation (sidebar tap, Back/Forward, deep link) already
+has a route owner. The only transition it may act on is a New Conversation that
+has just materialized into the session created by its first send, whose consumed
+New Conversation entry is replaced in place rather than pushed.
+
+Navigation history describes one authenticated identity. Sign-out or a different
+account clears it, so the next identity never inherits destinations that are not
+its own.
 
 ## Deletion and Route Replacement
 

@@ -24,6 +24,8 @@ class CompactionOperationRecord {
   final CompactionInternalSummary? internalSummary;
   final CompactionFailureReason? failureReason;
   final String? failureDetailJson;
+  final CompactionDurableDiagnostics? diagnostics;
+  final String? diagnosticsJson;
   final DateTime startedAt;
   final DateTime? completedAt;
 
@@ -42,6 +44,8 @@ class CompactionOperationRecord {
     this.internalSummary,
     this.failureReason,
     this.failureDetailJson,
+    this.diagnostics,
+    this.diagnosticsJson,
     required this.startedAt,
     this.completedAt,
   }) : assert(compactionId.isNotEmpty),
@@ -73,6 +77,26 @@ class CompactionOperationRecord {
   bool get isAuthoritativeProjection =>
       status == CompactionStatus.completed && internalSummary != null;
 
+  String? get failureStage {
+    final raw = failureDetailJson;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return decoded['stage']?.toString();
+    } catch (_) {}
+    return null;
+  }
+
+  String? get failureCause {
+    final raw = failureDetailJson;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return decoded['cause']?.toString();
+    } catch (_) {}
+    return null;
+  }
+
   /// Converts a validated engine candidate into a completed durable row.
   factory CompactionOperationRecord.fromCandidate({
     required CompactionCandidate candidate,
@@ -90,6 +114,10 @@ class CompactionOperationRecord {
       routeSignature: candidate.routeSignature,
       metrics: candidate.metrics,
       internalSummary: candidate.internalSummary,
+      diagnostics: candidate.diagnostics,
+      diagnosticsJson: candidate.diagnostics != null
+          ? jsonEncode(candidate.diagnostics!.toJson())
+          : null,
       startedAt: startedAt,
       completedAt: completedAt,
     );
@@ -114,6 +142,8 @@ class CompactionOperationRecord {
       routeSignature: routeSignature,
       failureReason: failureReason,
       failureDetailJson: failureDetailJson,
+      diagnostics: diagnostics,
+      diagnosticsJson: diagnosticsJson,
       startedAt: startedAt,
       completedAt: completedAt,
     );
@@ -164,72 +194,60 @@ class SessionHistoryRevision {
 abstract final class CompactionBoundaryValidity {
   CompactionBoundaryValidity._();
 
-  /// Returns false when canonical history no longer contains the referenced rows
-  /// or when [currentRevision] proves the snapshot head was superseded.
-  static bool isProjectionEligible({
+  /// Identifies why a completed boundary cannot drive model projection.
+  /// Returns null if the boundary is projection-eligible.
+  static String? ineligibilityReason({
     required CompactionOperationRecord boundary,
     required Set<int> existingMessageRowIds,
     required SessionHistoryRevision currentRevision,
   }) {
     if (!boundary.isAuthoritativeProjection) {
-      return false;
+      return 'not_authoritative';
     }
-    if (hasConflictingMessageRowIds(
-      boundary: boundary,
-      existingMessageRowIds: existingMessageRowIds,
-    )) {
-      return false;
-    }
-    if (_hasMissingRows(
-      boundary: boundary,
-      existingMessageRowIds: existingMessageRowIds,
-    )) {
-      return false;
-    }
-    return boundary.sourceHistoryRevision.value <= currentRevision.value;
-  }
-
-  /// True when durable boundary anchors prove an unsafe partial rewrite.
-  ///
-  /// `messages.id` is globally AUTOINCREMENT and edit/retry may leave numeric
-  /// gaps, so integers between the endpoints are not expected identities.
-  /// Both source endpoints missing is treated as superseded history. A retained
-  /// tail may legitimately have its old end replaced by recovery/edit suffix
-  /// rows; its start is the durable split anchor and must remain present.
-  static bool hasConflictingMessageRowIds({
-    required CompactionOperationRecord boundary,
-    required Set<int> existingMessageRowIds,
-  }) {
     final sourceStartPresent = existingMessageRowIds.contains(
       boundary.sourceRange.start.rowId,
     );
     final sourceEndPresent = existingMessageRowIds.contains(
       boundary.sourceRange.end.rowId,
     );
-    if (sourceStartPresent != sourceEndPresent) return true;
-
     final tailStartPresent = existingMessageRowIds.contains(
       boundary.retainedTailRange.start.rowId,
     );
     final tailEndPresent = existingMessageRowIds.contains(
       boundary.retainedTailRange.end.rowId,
     );
-    return !tailStartPresent && tailEndPresent;
+
+    if (!sourceStartPresent && sourceEndPresent) {
+      return 'impossible_ordering_source_start_missing';
+    }
+    if (!tailStartPresent && tailEndPresent) {
+      return 'impossible_ordering_tail_start_missing';
+    }
+    if (!sourceStartPresent && !sourceEndPresent) {
+      return 'source_range_missing';
+    }
+    if (sourceStartPresent && !sourceEndPresent) {
+      return 'source_end_missing';
+    }
+    if (!tailStartPresent) {
+      return 'tail_start_missing';
+    }
+    if (boundary.sourceHistoryRevision.value > currentRevision.value) {
+      return 'history_revision_future';
+    }
+    return null;
   }
 
-  static bool _rangeRowsMissing(
-    CompactionMessageRange range,
-    Set<int> existingMessageRowIds,
-  ) {
-    return !existingMessageRowIds.contains(range.start.rowId) ||
-        !existingMessageRowIds.contains(range.end.rowId);
-  }
-
-  static bool _hasMissingRows({
+  /// Returns false when canonical history no longer contains the referenced rows.
+  static bool isProjectionEligible({
     required CompactionOperationRecord boundary,
     required Set<int> existingMessageRowIds,
+    required SessionHistoryRevision currentRevision,
   }) {
-    return _rangeRowsMissing(boundary.sourceRange, existingMessageRowIds) ||
-        !existingMessageRowIds.contains(boundary.retainedTailRange.start.rowId);
+    return ineligibilityReason(
+      boundary: boundary,
+      existingMessageRowIds: existingMessageRowIds,
+      currentRevision: currentRevision,
+    ) == null;
   }
 }

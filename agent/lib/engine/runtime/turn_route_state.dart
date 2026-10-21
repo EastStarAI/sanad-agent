@@ -1,7 +1,10 @@
 import '../../core/config.dart';
 import '../../core/di.dart';
 import '../../core/agent_runtime_service.dart';
+import '../../core/provider_thinking/thinking_route_preference_store.dart';
 import '../../core/provider_thinking/thinking_route_session_sync.dart';
+import '../../core/provider_thinking/thinking_selection_errors.dart';
+import '../../core/provider_thinking/thinking_selection_resolver.dart';
 import '../adapters/llm_adapter.dart';
 import '../adapters/missing_provider_adapter.dart';
 import '../agent_context_assembler.dart';
@@ -34,6 +37,7 @@ class TurnRouteState {
   String? _turnThinkingMode;
   String? _turnRequestId;
   String? _turnRunId;
+  String? _activeProviderInstanceId;
   ({LLMAdapter adapter, String? modelOverride})? _resolvedTurnRoute;
 
   TurnRouteState({
@@ -42,6 +46,8 @@ class TurnRouteState {
     required this.sessionManager,
     required this.contextAssembler,
   });
+
+  String? get activeProviderInstanceId => _activeProviderInstanceId;
 
   String? get effectiveModel {
     final session = sessionManager.getSessionRecord(sessionId);
@@ -64,11 +70,147 @@ class TurnRouteState {
   void setTurnRunId(String? runId) {
     _turnRunId = runId;
     _resolvedTurnRoute = null;
+    if (runId == null) {
+      _activeProviderInstanceId = null;
+    }
   }
 
   String? get effectiveThinkingMode {
+    if (_turnThinkingMode != null) {
+      return _turnThinkingMode;
+    }
     final session = sessionManager.getSessionRecord(sessionId);
-    return _turnThinkingMode ?? session?.thinkingMode;
+    final sessionRouteProvider = sessionProviderId()?.trim();
+    final sessionRouteModel = session?.model.trim();
+    final turnRouteProvider = _turnProviderId?.trim() ?? sessionRouteProvider;
+    final turnRouteModel = _turnModel?.trim() ?? sessionRouteModel;
+    final isSessionRoute =
+        turnRouteProvider == sessionRouteProvider &&
+        turnRouteModel == sessionRouteModel;
+    final sessionSelection = _normalizedSelection(session?.thinkingMode);
+
+    String? candidate;
+    bool hasCandidate = false;
+
+    if (turnRouteProvider != null &&
+        turnRouteModel != null &&
+        getIt.isRegistered<ThinkingRoutePreferenceStore>()) {
+      final store = getIt<ThinkingRoutePreferenceStore>();
+      final active = store.read(sessionId);
+      final activeIsTurnRoute =
+          active != null &&
+          active.providerInstanceId == turnRouteProvider &&
+          active.modelId == turnRouteModel;
+      final pref = store.readForRoute(
+        sessionId,
+        providerInstanceId: turnRouteProvider,
+        modelId: turnRouteModel,
+      );
+      if (pref != null) {
+        final storedSelection = _normalizedSelection(pref.selectionId);
+        // On the session's own route, when the latest stored preference was
+        // recorded for this same route, a differing session row is the newer
+        // write (an explicit client set or clear) and stays authoritative.
+        // The route-keyed store restores a choice only when the turn targets
+        // another route, or when the session route moved without a thinking
+        // sync (the row then carries another route's inherited mode).
+        final sessionRowSupersedesStore =
+            isSessionRoute &&
+            activeIsTurnRoute &&
+            storedSelection != sessionSelection;
+        if (!sessionRowSupersedesStore) {
+          candidate = pref.selectionId;
+          hasCandidate = true;
+        } else if (sessionSelection == null && storedSelection != null) {
+          // The superseded entry is never restored, but a stale one is still
+          // corrected so it cannot resurface on a later route round trip.
+          _validateForRoute(
+            storedSelection,
+            providerInstanceId: turnRouteProvider,
+            modelId: turnRouteModel,
+          );
+        }
+      } else if (active != null && !activeIsTurnRoute) {
+        // Active stored preference belongs to another route: do not leak into this route
+        return null;
+      }
+    }
+
+    if (!hasCandidate && isSessionRoute) {
+      candidate = sessionSelection;
+      hasCandidate = true;
+    }
+
+    final normalizedCandidate = _normalizedSelection(candidate);
+    if (!hasCandidate || normalizedCandidate == null) {
+      return null;
+    }
+    if (turnRouteProvider == null || turnRouteModel == null) {
+      return candidate;
+    }
+    // A candidate exists from stored preference or legacy session state.
+    // Validate it against the active route capability descriptor before admitting it.
+    return _validateForRoute(
+      candidate!,
+      providerInstanceId: turnRouteProvider,
+      modelId: turnRouteModel,
+      unresolvedFallback: candidate,
+    );
+  }
+
+  static String? _normalizedSelection(String? selection) {
+    final trimmed = selection?.trim();
+    return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+  }
+
+  /// Resolves [candidate] for the route, recording a route-scoped correction
+  /// and returning null when the route no longer offers it. Without a
+  /// registered resolver, returns [unresolvedFallback].
+  String? _validateForRoute(
+    String candidate, {
+    required String providerInstanceId,
+    required String modelId,
+    String? unresolvedFallback,
+  }) {
+    if (!getIt.isRegistered<ThinkingSelectionResolver>()) {
+      return unresolvedFallback;
+    }
+    try {
+      return getIt<ThinkingSelectionResolver>()
+          .resolve(
+            providerInstanceId: providerInstanceId,
+            modelId: modelId,
+            selectionId: candidate,
+          )
+          .selectionId;
+    } on ThinkingSelectionException catch (error) {
+      if (getIt.isRegistered<ThinkingRoutePreferenceStore>()) {
+        final store = getIt<ThinkingRoutePreferenceStore>();
+        // This getter is read several times per turn. An identical pending
+        // correction means the route entry was already dropped, so a repeat
+        // read must not rewrite metadata or re-stamp `corrected_at`.
+        final pending = store.readCorrection(sessionId);
+        if (pending != null &&
+            pending.reason == error.code &&
+            pending.previousSelectionId == candidate &&
+            store.readForRoute(
+                  sessionId,
+                  providerInstanceId: providerInstanceId,
+                  modelId: modelId,
+                ) ==
+                null) {
+          return null;
+        }
+        store.recordCorrection(
+          sessionId: sessionId,
+          reason: error.code,
+          previousSelectionId: candidate,
+          providerInstanceId: providerInstanceId,
+          modelId: modelId,
+        );
+      }
+      return null;
+    }
   }
 
   /// Sets the per-message routing intent from the incoming turn request.
@@ -79,6 +221,9 @@ class TurnRouteState {
     String? requestId,
   }) {
     _turnProviderId = providerId;
+    if (providerId != null) {
+      _activeProviderInstanceId = providerId;
+    }
     _turnModel = model;
     _turnThinkingMode = thinkingMode;
     if (requestId != null) {
@@ -90,7 +235,10 @@ class TurnRouteState {
   /// next retry loop iteration uses the new route rather than the stale one
   /// (Plan 30 Phase H P1: route override during waiting).
   void updateTurnRoute({String? providerId, String? modelId}) {
-    if (providerId != null) _turnProviderId = providerId;
+    if (providerId != null) {
+      _turnProviderId = providerId;
+      _activeProviderInstanceId = providerId;
+    }
     if (modelId != null) _turnModel = modelId;
     // Invalidate any cached resolved route so the next resolution re-resolves
     // from AgentRuntimeService with the updated ids.
@@ -111,6 +259,7 @@ class TurnRouteState {
   /// recovery wait abort (the user may have changed provider/model).
   void refreshFromSession() {
     _turnProviderId = sessionProviderId();
+    _activeProviderInstanceId = _turnProviderId;
     _turnModel = effectiveModel;
     _resolvedTurnRoute = null;
   }
@@ -178,11 +327,13 @@ class TurnRouteState {
   resolveTurnRouting() {
     if (!getIt.isRegistered<AgentRuntimeService>()) {
       final config = getIt.isRegistered<Config>() ? getIt<Config>() : null;
+      final resolvedProvider =
+          _turnProviderId ??
+          sessionProviderId() ??
+          config?.resolveProviderName();
+      _activeProviderInstanceId = resolvedProvider;
       return (
-        providerId:
-            _turnProviderId ??
-            sessionProviderId() ??
-            config?.resolveProviderName(),
+        providerId: resolvedProvider,
         model: _turnModel ?? effectiveModel ?? config?.llmModel,
         baseUrl: config?.llmBaseUrl,
         apiKey: config?.llmApiKey,
@@ -196,6 +347,7 @@ class TurnRouteState {
         providerId: providerId,
         modelId: model,
       );
+      _activeProviderInstanceId = signature.providerInstanceId;
       String? resolvedApiKey;
       if (runtime.credentialService != null &&
           !signature.providerInstanceId.startsWith('fallback-')) {
@@ -214,6 +366,7 @@ class TurnRouteState {
       );
     } catch (_) {
       final config = getIt.isRegistered<Config>() ? getIt<Config>() : null;
+      _activeProviderInstanceId = providerId;
       return (
         providerId: providerId,
         model: model,
@@ -236,7 +389,7 @@ class TurnRouteState {
 
     final newProvider = _turnProviderId ?? sessionProviderId();
     final newModel = _turnModel ?? session.model;
-    var newThinking = _turnThinkingMode ?? session.thinkingMode;
+    var newThinking = _turnThinkingMode ?? effectiveThinkingMode;
 
     final providerChanged =
         newProvider != null && newProvider != session.providerId;

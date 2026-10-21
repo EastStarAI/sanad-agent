@@ -7,6 +7,8 @@ library;
 
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
 
+import '../../../core/models/user_attachment.dart';
+
 class ModelOption {
   final String value;
   final String label;
@@ -61,16 +63,26 @@ class ModelOption {
   };
 
   factory ModelOption.fromJson(Map<String, dynamic> json) {
+    final value = json['value']?.toString() ?? json['id']?.toString() ?? '';
+    final label = json['label']?.toString() ?? (value.isNotEmpty ? value : 'Unknown Model');
+    final Map<String, Object?> metadata;
+    if (json.containsKey('model_metadata')) {
+      metadata = _modelMetadataFromJson(json['model_metadata']);
+    } else {
+      metadata = _modelMetadataFromJson(json);
+      metadata.remove('thinking_control');
+      metadata.remove('model_metadata');
+    }
     return ModelOption(
-      value: json['value'] as String,
-      label: json['label'] as String,
+      value: value,
+      label: label,
       provider: json['provider'] as String?,
       contextWindow: json['context_window'] as int?,
       supportsReasoning:
           json['supports_reasoning_output'] as bool? ??
           json['supports_reasoning'] as bool? ??
           false,
-      modelMetadata: _modelMetadataFromJson(json['model_metadata']),
+      modelMetadata: metadata,
       thinkingControl: _thinkingControlFromJson(json['thinking_control']),
     );
   }
@@ -190,6 +202,15 @@ class AgentCapabilities {
       'supports_local_tool_runtime': supportsLocalToolRuntime,
       'supports_slash_commands': supportsSlashCommands,
       'delivery_presence_v1': true,
+      'supports_attachments': true,
+      'attachment_media_v1': {
+        'version': 1,
+        'ordered_references': true,
+        'max_file_bytes': UserAttachmentPolicy.maxFileBytes,
+        'max_files_per_message': UserAttachmentPolicy.maxFilesPerMessage,
+        'max_total_bytes_per_message':
+            UserAttachmentPolicy.maxTotalBytesPerMessage,
+      },
       'model_selection_scope': modelSelectionScope,
       'thinking_mode_scope': thinkingModeScope,
       'thinking_stream_mode': thinkingStreamMode,
@@ -198,7 +219,9 @@ class AgentCapabilities {
       'tool_protocol_version': toolProtocolVersion,
       'permission_modes': permissionModes,
       'approval_scopes': approvalScopes,
-      'thinking_modes_list': thinkingModeSource == 'model' ? const [] : thinkingModes,
+      'thinking_modes_list': thinkingModeSource == 'model'
+          ? const []
+          : thinkingModes,
       'slash_commands_list': slashCommands
           .map((command) => command.toJson())
           .toList(),

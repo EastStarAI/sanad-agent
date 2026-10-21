@@ -39,7 +39,8 @@ This contract applies to `client/lib/features/settings/`.
 - Provider setup embedded in Settings must reuse `ProviderSetupFlow` and its controller rather than implementing a second setup workflow.
 
 ## Account Sessions and Devices
-- Sessions & Devices is account-scoped and consumes the Portal's authoritative account lifecycle projection through one repository/cubit owner.
+- Sessions & Devices is account-scoped and consumes the authenticated Cloud Socket's authoritative account lifecycle projection through one repository/cubit owner; Portal HTTP owns authentication, not lifecycle routes.
+- Profile account deletion requires explicit confirmation and one single-flight repository request. Confirmed database deletion delegates to normal logout; pending cleanup must not be presented as completed. Unknown outcomes must not report success or automatically retry. Agent-owned local data remains untouched.
 - Client-session current status comes from the verified credential family, never instance metadata. Presence renders `Online`, `Offline`, or `Status unavailable`; registry failure must not become false Offline. Each Client row shows the canonical privacy-safe short reference derived instance-first, with account-session fallback, so users can correlate it with Agent lifecycle logs without exposing raw ids.
 - Connected Agents reuse the existing `DeviceCubit` inventory and navigate to device Overview. Do not create another device store or `/agents` management surface.
 - Revoke is confirmed and per-row single-flight. Unknown outcomes retain the last snapshot and refetch; a confirmed current-session revoke delegates to the normal logout flow.

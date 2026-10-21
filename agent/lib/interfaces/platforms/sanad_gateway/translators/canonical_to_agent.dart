@@ -34,6 +34,12 @@ class CanonicalToAgent {
     final deliveryIntent = payload['delivery_intent'] == 'queue'
         ? MessageDeliveryIntent.queue
         : MessageDeliveryIntent.auto;
+    final attachmentIds = _attachmentIds(payload);
+    if (attachmentIds == null) return null;
+    if ((command == 'steer' || (command == 'think' && mode == 'steer')) &&
+        attachmentIds.isNotEmpty) {
+      return null;
+    }
     if (command == 'steer' || (command == 'think' && mode == 'steer')) {
       final text = payload['message'] as String? ?? '';
       final turnRequest = AgentTurnRequest(
@@ -71,7 +77,10 @@ class CanonicalToAgent {
         thinkingMode: payload['thinking_mode'] as String?,
         requestId: payload['request_id'] as String?,
         deliveryIntent: deliveryIntent,
-        metadata: _turnMetadata(payload),
+        metadata: {
+          ..._turnMetadata(payload),
+          if (attachmentIds.isNotEmpty) 'attachment_ids': attachmentIds,
+        },
       );
       return GatewayEvent(
         sessionId: sessionId,
@@ -118,6 +127,24 @@ class CanonicalToAgent {
 
     // Reject unknown commands instead of translating them to a fallback message
     return null;
+  }
+
+  static List<String>? _attachmentIds(Map<String, dynamic> payload) {
+    final raw = payload['attachment_ids'];
+    if (raw == null) return const [];
+    if (raw is! List || raw.length > 4) return null;
+    final ids = <String>[];
+    for (final value in raw) {
+      if (value is! String ||
+          value.trim().isEmpty ||
+          value.contains('/') ||
+          value.contains(r'\') ||
+          ids.contains(value)) {
+        return null;
+      }
+      ids.add(value);
+    }
+    return List<String>.unmodifiable(ids);
   }
 
   static Map<String, dynamic> _turnMetadata(Map<String, dynamic> payload) {

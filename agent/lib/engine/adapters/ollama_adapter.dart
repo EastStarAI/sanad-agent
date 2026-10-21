@@ -5,10 +5,13 @@ import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/models/model_metadata.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 
+import '../../core/di.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
+import '../../core/provider_runtime/provider_instance_repository.dart';
+import '../../core/provider_runtime/route_capability_resolver.dart';
 import '../../core/provider_thinking/ollama_thinking_probe.dart';
 import '../../core/provider_thinking/ollama_thinking_wire_codec.dart';
 import 'base_openai_adapter.dart';
@@ -16,6 +19,7 @@ import 'llm_request_options.dart';
 import 'llm_http_exception.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
+import 'tool_result_wire_codec.dart';
 
 class OllamaAdapter extends BaseOpenAIAdapter {
   final _logger = Logger('OllamaAdapter');
@@ -25,9 +29,13 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     super.config,
     super.profile, {
     super.client,
+    super.requestClientFactory,
+    super.modelsDevService,
     super.modelContextLimitLookup,
     super.baseUrlOverride,
     super.apiKeyOverride,
+    super.defaultModelOverride,
+    super.providerInstanceId,
   });
 
   @override
@@ -221,6 +229,31 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     return ModelMetadata.unknownContextLimit;
   }
 
+  @override
+  Future<Map<String, dynamic>> buildRequestBody(
+    List<Message> history, {
+    required String resolvedModel,
+    required LLMRequestOptions options,
+    List<ToolSchema>? tools,
+    bool stream = false,
+    // Native Ollama projects only portable fields and never replays reasoning,
+    // so it has no history shape to reject (Task 116 D6).
+    bool enforceProjection = true,
+  }) async {
+    final messages = await _prepareMessages(
+      history,
+      resolvedModel: resolvedModel,
+      options: options,
+    );
+    return _buildChatBody(
+      resolvedModel: resolvedModel,
+      messages: messages,
+      options: options,
+      tools: tools,
+      stream: stream,
+    );
+  }
+
   Map<String, dynamic> _buildChatBody({
     required String resolvedModel,
     required List<Map<String, dynamic>> messages,
@@ -253,30 +286,92 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     return body;
   }
 
-  List<Map<String, dynamic>> _historyToMessages(List<Message> history) {
-    return history
-        .map((m) {
-          final Map<String, dynamic> data = {
-            'role': super.roleToString(m.role),
-            'content': m.content ?? '',
-          };
+  Map<String, dynamic> _messageToWire(Message m) {
+    final Map<String, dynamic> data = {
+      'role': super.roleToString(m.role),
+      'content': m.content ?? '',
+    };
 
-          if (m.role == MessageRole.tool && m.toolCallId != null) {
-            data['tool_call_id'] = m.toolCallId;
-          }
-          if (m.toolCalls != null && m.toolCalls!.isNotEmpty) {
-            data['tool_calls'] = m.toolCalls!
-                .map(
-                  (tc) => {
-                    'type': 'function',
-                    'function': {'name': tc.name, 'arguments': tc.arguments},
-                  },
+    if (m.role == MessageRole.tool && m.toolCallId != null) {
+      data['tool_call_id'] = m.toolCallId;
+    }
+    if (m.toolCalls != null && m.toolCalls!.isNotEmpty) {
+      data['tool_calls'] = m.toolCalls!
+          .map(
+            (tc) => {
+              'type': 'function',
+              'function': {'name': tc.name, 'arguments': tc.arguments},
+            },
+          )
+          .toList(growable: false);
+    }
+    return data;
+  }
+
+  Future<List<Map<String, dynamic>>> _prepareMessages(
+    List<Message> history, {
+    required String resolvedModel,
+    required LLMRequestOptions options,
+  }) async {
+    final hasImages = ToolResultWireCodec.hasImages(history);
+    bool supportsImages = false;
+    if (hasImages) {
+      final instanceId = options.providerInstanceId ?? providerInstanceId;
+      final overrideSnapshot =
+          options.routeCapabilityProfile?.rawOverride ??
+          options.routeCapabilitySnapshot;
+      final profileSnapshot =
+          options.routeCapabilityProfile ??
+          (overrideSnapshot != null
+              ? RouteCapabilityProfile(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  imageSupport: overrideSnapshot.supportsImageInput == true
+                      ? RouteImageSupport.supported
+                      : (overrideSnapshot.supportsImageInput == false
+                            ? RouteImageSupport.unsupported
+                            : RouteImageSupport.unknown),
+                  evidenceSource: 'snapshot',
+                  rawOverride: overrideSnapshot,
                 )
-                .toList(growable: false);
-          }
-          return data;
-        })
-        .toList(growable: false);
+              : RouteCapabilityResolver(
+                  instances: getIt.isRegistered<ProviderInstanceRepository>()
+                      ? getIt<ProviderInstanceRepository>()
+                      : null,
+                  config: config,
+                  modelsDevService: modelsDevService,
+                ).resolveSync(
+                  providerInstanceId: instanceId ?? profile.name,
+                  modelId: resolvedModel,
+                  baseUrl: baseUrl,
+                ));
+
+      if (profileSnapshot.imageSupport == RouteImageSupport.unsupported) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unsupported,
+        );
+      } else if (profileSnapshot.imageSupport == RouteImageSupport.unknown) {
+        throw LocalImageCapabilityException(
+          modelId: resolvedModel,
+          imageSupport: RouteImageSupport.unknown,
+        );
+      }
+      supportsImages = true;
+    }
+
+    final verifiedAttachments =
+        await ToolResultWireCodec.loadVerifiedUserAttachments(
+          history,
+          attachmentStore: options.attachmentStore,
+        );
+
+    return ToolResultWireCodec.ollamaMessages(
+      history,
+      messageToWire: _messageToWire,
+      supportsImageInput: supportsImages,
+      verifiedAttachments: verifiedAttachments,
+    );
   }
 
   @override
@@ -288,7 +383,11 @@ class OllamaAdapter extends BaseOpenAIAdapter {
   }) async {
     final url = Uri.parse('${super.baseUrl}/api/chat');
     final resolvedModel = super.resolveModel(modelOverride);
-    final messages = _historyToMessages(history);
+    final messages = await _prepareMessages(
+      history,
+      resolvedModel: resolvedModel,
+      options: options,
+    );
     var body = _buildChatBody(
       resolvedModel: resolvedModel,
       messages: messages,
@@ -300,6 +399,8 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
+      requestClientFactory:
+          requestClientFactory ?? options.requestClientFactory,
     );
     late http.Response response;
     try {
@@ -395,11 +496,17 @@ class OllamaAdapter extends BaseOpenAIAdapter {
   }) async* {
     final url = Uri.parse('${super.baseUrl}/api/chat');
     final resolvedModel = super.resolveModel(modelOverride);
-    final messages = _historyToMessages(history);
+    final messages = await _prepareMessages(
+      history,
+      resolvedModel: resolvedModel,
+      options: options,
+    );
 
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
+      requestClientFactory:
+          requestClientFactory ?? options.requestClientFactory,
     );
     final request = http.Request('POST', url);
     request.headers['Content-Type'] = 'application/json';

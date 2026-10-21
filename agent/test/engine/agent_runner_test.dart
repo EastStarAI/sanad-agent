@@ -1,11 +1,17 @@
+import 'package:sanad_agent/core/models/view_image_media_metadata.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/translators/agent_to_canonical.dart';
+import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:test/test.dart';
+import 'package:logging/logging.dart';
 import 'package:get_it/get_it.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
@@ -22,6 +28,7 @@ import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -36,6 +43,8 @@ import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
+import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 
@@ -163,7 +172,15 @@ class ProviderStateRejectingAdapter implements LLMAdapter {
   }
 }
 
-class MockTool extends BaseTool {
+mixin _TypedTextTestTool on BaseTool {
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text(await execute(args, context: context));
+}
+
+class MockTool extends BaseTool with _TypedTextTestTool {
   @override
   ToolSchema get schema =>
       ToolSchema(name: 'test_tool', description: 'desc', parameters: {});
@@ -193,9 +210,19 @@ class StructuredErrorTool extends BaseTool {
         'Command timed out after 2000 ms.',
     'terminal_reason': 'timed_out',
   });
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text(
+    await execute(args, context: context),
+    isError: true,
+    errorCode: ToolResultErrorCode.timedOut,
+  );
 }
 
-class DelayedTool extends BaseTool {
+class DelayedTool extends BaseTool with _TypedTextTestTool {
   final Completer<void> started = Completer<void>();
   final Completer<void> release = Completer<void>();
 
@@ -527,6 +554,7 @@ class _AutoFailoverAdapter implements LLMAdapter {
 
 class _RateLimitOnceAdapter implements LLMAdapter {
   int callCount = 0;
+  final List<LLMRequestOptions> capturedOptions = [];
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async => 4096;
@@ -542,6 +570,7 @@ class _RateLimitOnceAdapter implements LLMAdapter {
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
     callCount += 1;
+    capturedOptions.add(options);
     if (callCount == 1) {
       throw const LlmHttpException(
         statusCode: 429,
@@ -672,6 +701,41 @@ class _AlwaysFailingAdapter implements LLMAdapter {
       tools: tools,
       modelOverride: modelOverride,
     );
+  }
+}
+
+class _GatedFailingStreamAdapter implements LLMAdapter {
+  final Completer<void> started = Completer<void>();
+  final Completer<void> release = Completer<void>();
+  int callCount = 0;
+
+  @override
+  Future<int> getContextLimit([String? modelOverride]) async => 4096;
+
+  @override
+  Future<List<ModelOption>> getAvailableModels() async => const [];
+
+  @override
+  Future<AgentResponse> generateResponse(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Stream<AgentResponse> generateStream(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async* {
+    callCount += 1;
+    if (!started.isCompleted) started.complete();
+    await release.future;
+    throw StateError('detached unwind failure');
   }
 }
 
@@ -915,6 +979,29 @@ class _FailOnceThenSucceedAdapter implements LLMAdapter {
   }
 }
 
+class _PreviewTool extends MockTool {
+  @override
+  ToolSchema get schema =>
+      ToolSchema(name: 'view_image', description: 'fixture', parameters: {});
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult(
+    blocks: [
+      ToolTextBlock(text: 'Image loaded (1×1, image/png, auto).'),
+      ToolImageBlock(
+        dataBase64: 'AQID',
+        mimeType: 'image/png',
+        width: 1,
+        height: 1,
+        detail: ToolImageDetail.auto,
+      ),
+    ],
+  );
+}
+
 void main() {
   group('AgentRunner', () {
     late ToolsRegistry registry;
@@ -993,6 +1080,251 @@ void main() {
     });
 
     test(
+      'preadmitted replacement with configured attachments survives commit and reopen without duplicate turn',
+      () async {
+        final attachment = UserAttachment(
+          id: 'att-preadmit-1',
+          mediaId: 'med-preadmit-1',
+          safeName: 'preadmit.png',
+          mimeType: 'image/png',
+          sizeBytes: 256,
+          sha256: 'c' * 64,
+          kind: UserAttachmentKind.image,
+          agentLocalReference: 'rel/preadmit.png',
+        );
+
+        final preadmitted = Message(
+          role: MessageRole.user,
+          content: 'preadmitted text',
+          metadata: {
+            'request_id': 'req-preadmitted',
+            'input_kind': MessageHistoryIdentity.rootTurn,
+            'history_status': MessageHistoryIdentity.active,
+          },
+        );
+        final session = sessionManager.createSession('mock');
+        final commitResult = sessionManager.appendRootUserMessage(
+          session.sessionId,
+          preadmitted,
+        );
+        expect(commitResult.inserted, isTrue);
+
+        final runner = AgentRunner(
+          MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'response',
+              ),
+            ),
+          ]),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+
+        runner.configureUserAttachments([attachment]);
+        final committed = await runner.commitUserMessage(
+          'preadmitted text',
+          requestId: 'req-preadmitted',
+        );
+
+        expect(committed.attachments, hasLength(1));
+        expect(committed.attachments.single.id, 'att-preadmit-1');
+        expect(runner.history.last.attachments, hasLength(1));
+
+        // Re-entry / reopen with same request ID returns same record without duplicate message
+        final reopenedCommit = await runner.commitUserMessage(
+          'preadmitted text',
+          requestId: 'req-preadmitted',
+        );
+        expect(reopenedCommit.attachments, hasLength(1));
+        expect(sessionManager.getMessages(session.sessionId), hasLength(1));
+
+        // A fresh runner reopening the persisted session sees the attachments
+        final reopenedRunner = AgentRunner(
+          MockAdapter([]),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+        expect(reopenedRunner.history, hasLength(1));
+        expect(reopenedRunner.history.first.attachments, hasLength(1));
+        expect(
+          reopenedRunner.history.first.attachments.single.id,
+          'att-preadmit-1',
+        );
+      },
+    );
+
+    test(
+      'parallel view_image starts redact paths and completions follow durable history',
+      () async {
+        registry.registerTool(_PreviewTool());
+        final runner = AgentRunner(MockAdapter([]), registry, sessionManager);
+        final calls = [
+          ToolCall(
+            id: 'parallel-preview-1',
+            name: 'view_image',
+            arguments: {'path': '/private/one.png'},
+          ),
+          ToolCall(
+            id: 'parallel-preview-2',
+            name: 'view_image',
+            arguments: {'path': '/private/two.png'},
+          ),
+        ];
+        runner.history.add(
+          Message(role: MessageRole.assistant, toolCalls: calls),
+        );
+        final inputs = <String>[];
+        var completed = 0;
+        await runner.executeToolCalls(
+          calls,
+          parallel: true,
+          onToolEvent:
+              ({
+                required toolName,
+                input,
+                output,
+                media,
+                required isError,
+                required isStart,
+                toolRunId,
+                startedAt,
+                terminalAt,
+                runtimeMs,
+              }) async {
+                if (isStart) {
+                  inputs.add(input ?? '');
+                } else {
+                  completed++;
+                  expect(media, isNotNull);
+                  expect(
+                    sessionManager
+                        .getMessages(runner.sessionId)
+                        .where((message) => message.role == MessageRole.tool),
+                    hasLength(2),
+                  );
+                }
+              },
+        );
+        expect(inputs, hasLength(2));
+        expect(inputs, everyElement(contains('[local image path redacted]')));
+        expect(inputs.join(), isNot(contains('/private/')));
+        expect(completed, 2);
+      },
+    );
+
+    test(
+      'view_image completion publishes byte-free live metadata matching history',
+      () async {
+        registry.registerTool(_PreviewTool());
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'preview-call',
+                  name: 'view_image',
+                  arguments: {'path': '/private/image.png'},
+                ),
+              ],
+            ),
+            isToolCall: true,
+          ),
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: 'done'),
+          ),
+        ]);
+        final runner = AgentRunner(adapter, registry, sessionManager);
+        ViewImageMediaMetadata? descriptor;
+        await runner
+            .streamMessage(
+              'preview',
+              onToolEvent:
+                  ({
+                    required toolName,
+                    input,
+                    output,
+                    media,
+                    required isError,
+                    required isStart,
+                    toolRunId,
+                    startedAt,
+                    terminalAt,
+                    runtimeMs,
+                  }) async {
+                    if (!isStart) {
+                      descriptor = media;
+                      expect(
+                        sessionManager
+                            .getMessages(runner.sessionId)
+                            .any(
+                              (message) =>
+                                  message.toolCallId == toolRunId &&
+                                  message.toolResult != null,
+                            ),
+                        isTrue,
+                        reason:
+                            'Live preview must not race durable media availability',
+                      );
+                    }
+                  },
+            )
+            .toList();
+        expect(descriptor, isNotNull);
+        expect(descriptor!.availability, CanonicalMediaAvailability.available);
+        final serialized = jsonEncode(descriptor!.toPublicJson());
+        expect(serialized, isNot(contains('AQID')));
+        expect(serialized, isNot(contains('/private/')));
+        final result = adapter.lastHistory!.firstWhere(
+          (message) => message.role == MessageRole.tool,
+        );
+        final hydrated = ViewImageMediaProjection.project(
+          sessionId: runner.sessionId,
+          toolName: 'view_image',
+          toolCallId: 'preview-call',
+          result: result.toolResult,
+        );
+        expect(descriptor!.toPublicJson(), hydrated!.toPublicJson());
+        final live = AgentToCanonical.translate(
+          GatewayResponse(
+            sessionId: runner.sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: result.content,
+              metadata: {'media': descriptor!.toPublicJson()},
+            ),
+            isToolResult: true,
+            toolName: 'view_image',
+            toolCallId: 'preview-call',
+          ),
+        );
+        expect(live.payload['media'], hydrated.toPublicJson());
+        expect(jsonEncode(live.toJson()), isNot(contains('AQID')));
+        final rejected = AgentToCanonical.translate(
+          GatewayResponse(
+            sessionId: runner.sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: result.content,
+              metadata: {
+                'media': {...descriptor!.toPublicJson(), 'dataBase64': 'AQID'},
+              },
+            ),
+            isToolResult: true,
+            toolName: 'view_image',
+            toolCallId: 'preview-call',
+          ),
+        );
+        expect(rejected.payload.containsKey('media'), isFalse);
+        expect(jsonEncode(rejected.toJson()), isNot(contains('AQID')));
+      },
+    );
+
+    test(
       'controlled restart parks an active tool loop before its next provider request',
       () async {
         final adapter = MockAdapter([
@@ -1029,6 +1361,7 @@ void main() {
                     required toolName,
                     input,
                     output,
+                    media,
                     required isError,
                     required isStart,
                     toolRunId,
@@ -1489,6 +1822,16 @@ void main() {
           .where((message) => message.role == MessageRole.tool)
           .toList();
       expect(toolResults, hasLength(2));
+      expect(
+        toolResults.every((message) => message.toolResult != null),
+        isTrue,
+      );
+      expect(
+        toolResults.every(
+          (message) => message.content == message.toolResult!.displayText,
+        ),
+        isTrue,
+      );
       expect(
         toolResults.map((message) => message.metadata?['run_id']).toSet(),
         {'run-segmented'},
@@ -1967,12 +2310,111 @@ void main() {
           expect(adapter.callCount, 1);
         }
         expect(resetProvider.callCount, 2);
+        expect(resetProvider.capturedOptions, hasLength(2));
+        expect(resetProvider.capturedOptions[0].requestId, isNot(contains(':retry_')));
+        expect(resetProvider.capturedOptions[1].requestId, contains(':retry_1'));
         expect(
           sessionManager.getSession(session.sessionId)?.providerId,
           'provider-e',
         );
       },
     );
+
+    test(
+      'L1: a non-cancellation failure during detached stream unwind is '
+      'surfaced as a severe log, not an uncaught zone error',
+      () async {
+        final adapter = _GatedFailingStreamAdapter();
+        GetIt.I.registerSingleton<AgentRuntimeService>(
+          _GenericRuntimeService(adapter),
+        );
+        final session = sessionManager.createSession('gpt-4o');
+        final runner = AgentRunner(
+          MockAdapter(const []),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+        final records = <LogRecord>[];
+        final previousLevel = Logger.root.level;
+        Logger.root.level = Level.ALL;
+        final logSub = Logger.root.onRecord.listen(records.add);
+        addTearDown(() async {
+          await logSub.cancel();
+          Logger.root.level = previousLevel;
+        });
+
+        final uncaught = <Object>[];
+        final done = Completer<void>();
+        runZonedGuarded(() async {
+          final sub = runner.streamMessage('hi').listen((_) {});
+          await adapter.started.future;
+          await sub.cancel();
+          adapter.release.complete();
+          await runner.debugDetachedTurnStreamUnwind;
+          for (var i = 0; i < 20; i++) {
+            await Future<void>.delayed(Duration.zero);
+          }
+          done.complete();
+        }, (error, stack) {
+          uncaught.add(error);
+          if (!done.isCompleted) done.complete();
+        });
+        await done.future;
+
+        expect(uncaught, isEmpty);
+        expect(
+          records.where(
+            (r) =>
+                r.loggerName == 'AgentRunner' &&
+                r.level >= Level.SEVERE &&
+                r.message.contains('StateError'),
+          ),
+          hasLength(1),
+        );
+        expect(
+          records.any((r) => r.message.contains('detached unwind failure')),
+          isFalse,
+          reason: 'error payloads must not enter logs',
+        );
+      },
+    );
+
+    test('AgentRunner passes attempt-isolated retry request IDs during 429 retry', () async {
+      final state = AgentStateDatabase.inMemory();
+      addTearDown(state.dispose);
+      final repo = ProviderInstanceRepository.fromDatabase(state.db);
+      final resetProvider = _RateLimitOnceAdapter();
+      final runtime = _GenericRuntimeService(resetProvider);
+      GetIt.I.registerSingleton<AgentRuntimeService>(runtime);
+      GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+      GetIt.I.registerSingleton<RuntimeRecoveryService>(
+        RuntimeRecoveryService(
+          repo,
+          ProviderRateLimiter(),
+          autoFailoverEnabled: true,
+          random: Random(1),
+        ),
+      );
+
+      final session = sessionManager.createSession('model-a');
+      sessionManager.updateSessionProviderId(session.sessionId, 'provider-a');
+      final runner = AgentRunner(
+        MockAdapter(const []),
+        registry,
+        sessionManager,
+        existingSessionId: session.sessionId,
+      );
+      runner.setTurnRequestId('test-turn-retry-123');
+
+      final response = await runner.sendMessage('Try this');
+
+      expect(response.content, 'Recovered after the reset window');
+      expect(resetProvider.callCount, 2);
+      expect(resetProvider.capturedOptions, hasLength(2));
+      expect(resetProvider.capturedOptions[0].requestId, 'test-turn-retry-123');
+      expect(resetProvider.capturedOptions[1].requestId, 'test-turn-retry-123:retry_1');
+    });
 
     test('should handle tool call loop', () async {
       final adapter = MockAdapter([
@@ -2031,6 +2473,7 @@ void main() {
                   required toolName,
                   input,
                   output,
+                  media,
                   required isError,
                   required isStart,
                   toolRunId,
@@ -3185,6 +3628,73 @@ void main() {
           recovery.abort(session.sessionId);
           recovery.clear(session.sessionId, reasonOverride: 'stopped');
           await expectLater(future, throwsA(isA<RuntimeRecoveryCancelled>()));
+        },
+      );
+
+      test(
+        'L1: stopping a stream waiting after 429 never escapes '
+        'RuntimeRecoveryCancelled as an uncaught zone error',
+        () async {
+          final adapter = _AlwaysFailingAdapter(
+            statusCode: 429,
+            body: 'Too Many Requests',
+          );
+          final runtime = _GenericRuntimeService(adapter);
+          GetIt.I.registerSingleton<AgentRuntimeService>(runtime);
+          final session = sessionManager.createSession('gpt-4o');
+          sessionManager.updateSessionProviderId(session.sessionId, 'prov-1');
+          final runner = AgentRunner(
+            MockAdapter(const []),
+            registry,
+            sessionManager,
+            existingSessionId: session.sessionId,
+          );
+          runner.beginAuthoritativeRun('run-stop');
+
+          final uncaught = <Object>[];
+          final forwardedErrors = <Object>[];
+          final done = Completer<void>();
+          runZonedGuarded(() async {
+            final sub = runner.streamMessage('hi').listen(
+              (_) {},
+              onError: forwardedErrors.add,
+            );
+            for (var i = 0; i < 200; i++) {
+              if (recovery.activeNotice(session.sessionId)?.status ==
+                  RuntimeNoticeStatus.waiting) {
+                break;
+              }
+              await Future<void>.delayed(Duration.zero);
+            }
+            expect(
+              recovery.activeNotice(session.sessionId)?.status,
+              RuntimeNoticeStatus.waiting,
+            );
+            // Mirrors SessionTurnExecutor stop: invalidate, cancel the
+            // subscription (stop ack does not await unwind), then release
+            // the recovery wait as `stopped`.
+            runner.requestStop();
+            await sub.cancel();
+            recovery.abort(session.sessionId, runId: 'run-stop');
+            recovery.clear(
+              session.sessionId,
+              runId: 'run-stop',
+              reasonOverride: 'stopped',
+            );
+            await runner.debugDetachedTurnStreamUnwind;
+            for (var i = 0; i < 20; i++) {
+              await Future<void>.delayed(Duration.zero);
+            }
+            done.complete();
+          }, (error, stack) {
+            uncaught.add(error);
+            if (!done.isCompleted) done.complete();
+          });
+          await done.future;
+
+          expect(uncaught, isEmpty);
+          expect(forwardedErrors, isEmpty);
+          expect(adapter.callCount, 1);
         },
       );
     });
@@ -5097,6 +5607,193 @@ void main() {
         },
       );
     });
+
+    group('turn capability profile admission and freezing', () {
+      test(
+        'freezes capability profile at turn admission and preserves across mid-turn config changes',
+        () async {
+          final configFile = File('${tempDir.path}/config.yaml');
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: true
+  model-v2:
+    supports_image_input: false
+''');
+
+          final config = Config();
+          GetIt.I.registerSingleton<Config>(config);
+
+          final repo = ProviderInstanceRepository.fromDatabase(stateDb.db);
+          GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+          final now = DateTime.now();
+          repo.createInstance(
+            ProviderInstance(
+              id: 'custom-provider',
+              templateId: kCustomProviderTemplateId,
+              displayName: 'Custom Provider',
+              protocol: 'openai_chat_completions',
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'First reply',
+              ),
+            ),
+          ]);
+
+          final runner = AgentRunner(adapter, registry, sessionManager);
+
+          // Turn admission via streamMessage
+          final stream = runner.streamMessage(
+            'Hello vision',
+            providerId: 'custom-provider',
+            model: 'model-v1',
+          );
+          await for (final _ in stream) {}
+
+          final admittedProfile = runner.debugTurnCapabilityProfile;
+          expect(admittedProfile, isNotNull);
+          expect(admittedProfile!.providerInstanceId, 'custom-provider');
+          expect(admittedProfile.modelId, 'model-v1');
+          expect(admittedProfile.imageSupport, RouteImageSupport.supported);
+          expect(admittedProfile.evidenceSource, 'override');
+          expect(
+            adapter.lastOptions?.routeCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+
+          // Mid-turn config file change on disk
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: false
+  model-v2:
+    supports_image_input: false
+''');
+          config.reloadModelAwarePolicy();
+
+          // Admitted profile remains frozen!
+          expect(
+            runner.debugTurnCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+
+          // Explicit updateTurnRoute updates the admitted profile for the new route
+          runner.updateTurnRoute(
+            providerId: 'custom-provider',
+            modelId: 'model-v2',
+          );
+
+          final updatedProfile = runner.debugTurnCapabilityProfile;
+          expect(updatedProfile, isNotNull);
+          expect(updatedProfile!.providerInstanceId, 'custom-provider');
+          expect(updatedProfile.modelId, 'model-v2');
+          expect(updatedProfile.imageSupport, RouteImageSupport.unsupported);
+        },
+      );
+
+      test(
+        'run admits profile and freezes it across turn iterations',
+        () async {
+          final configFile = File('${tempDir.path}/config.yaml');
+          configFile.writeAsStringSync('''
+model_capabilities:
+  model-v1:
+    supports_image_input: true
+''');
+
+          final config = Config();
+          GetIt.I.registerSingleton<Config>(config);
+
+          final repo = ProviderInstanceRepository.fromDatabase(stateDb.db);
+          GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+          final now = DateTime.now();
+          repo.createInstance(
+            ProviderInstance(
+              id: 'custom-provider',
+              templateId: kCustomProviderTemplateId,
+              displayName: 'Custom Provider',
+              protocol: 'openai_chat_completions',
+              authMethod: ProviderAuthMethod.apiKey,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(role: MessageRole.assistant, content: 'Done'),
+            ),
+          ]);
+
+          final runner = AgentRunner(adapter, registry, sessionManager);
+
+          await runner.sendMessage(
+            'Test message',
+            providerId: 'custom-provider',
+            model: 'model-v1',
+          );
+
+          expect(
+            runner.debugTurnCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+          expect(
+            adapter.lastOptions?.routeCapabilityProfile?.imageSupport,
+            RouteImageSupport.supported,
+          );
+        },
+      );
+    });
+
+    group('F1: context usage snapshot provider instance provenance', () {
+      test(
+        'preserves genuine provider instance ID in context usage snapshot when adapter response returns template name',
+        () async {
+          const instanceUuid = '96ce96b5-9d30-4c53-b6be-0e306c346881';
+          const templateName = 'opencode-go';
+
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'Response content',
+              ),
+              provider: templateName, // Adapter reports template name
+              usage: {
+                'input_tokens': 1234,
+                'output_tokens': 56,
+                'total_tokens': 1290,
+              },
+            ),
+          ]);
+
+          final runner = AgentRunner(adapter, registry, sessionManager);
+
+          await runner.sendMessage(
+            'Test message',
+            providerId: instanceUuid,
+            model: 'deepseek-v4.1-flash',
+          );
+
+          final snapshot = await runner.getContextUsageSnapshot();
+          expect(snapshot, isNotNull);
+          expect(
+            snapshot!['provider_instance_id'],
+            equals(instanceUuid),
+            reason:
+                'getContextUsageSnapshot must preserve genuine provider instance ID rather than collapsing to adapter template name',
+          );
+        },
+      );
+    });
   });
 }
 
@@ -5113,7 +5810,7 @@ class _ImmediateRetryRecoveryService extends RuntimeRecoveryService {
   }) async => true;
 }
 
-class GateDTestTool extends BaseTool {
+class GateDTestTool extends BaseTool with _TypedTextTestTool {
   final String _name;
   final Future<String> Function(Map<String, dynamic> args, ToolContext? context)
   _executeFn;

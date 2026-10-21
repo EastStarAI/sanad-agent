@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../../../core/models/tool_execution_result.dart';
 import '../../../infrastructure/platform/automation_service_factory.dart';
 import '../../models/local_tool_spec.dart';
 import '../base_tool.dart';
@@ -39,6 +40,15 @@ class KeyboardTool extends SpecBackedTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    final result = await executeResult(args, context: context);
+    return result.displayText;
+  }
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async {
     final action = args['action'] as String;
     final text = args['text']?.toString();
     final keys = (args['keys'] as List?)?.map((e) => e.toString()).toList();
@@ -53,6 +63,8 @@ class KeyboardTool extends SpecBackedTool {
 
     await service.simulateKeyboard(action: action, text: text, keys: keys);
 
-    return 'Keyboard action "$action" executed successfully.';
+    return ToolExecutionResult.text(
+      'Keyboard action "$action" executed successfully.',
+    );
   }
 }

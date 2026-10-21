@@ -93,14 +93,43 @@ void main() {
     expect(older.historyRevision, greaterThan(newest.historyRevision));
   });
 
-  test('rejects cursor when its durable boundary was rewritten', () {
+  test('rejects cursor when its durable boundary was rewritten in place', () {
     db.replaceMessages('session-1', messages(5));
     final newest = db.getPersistedMessagePage('session-1', limit: 2);
 
+    // Identity-aligned content rewrites keep the row id (Task 117), so the
+    // cursor goes stale through its boundary fingerprint.
     db.replaceMessages('session-1', [
       ...messages(3),
       Message(role: MessageRole.user, content: 'rewritten-4'),
       Message(role: MessageRole.user, content: 'message-5'),
+    ]);
+
+    expect(
+      () => db.getPersistedMessagePage(
+        'session-1',
+        limit: 2,
+        cursor: newest.nextCursor,
+      ),
+      throwsA(
+        isA<SessionHistoryCursorStaleException>().having(
+          (error) => error.reason,
+          'reason',
+          'cursor_boundary_changed',
+        ),
+      ),
+    );
+  });
+
+  test('rejects cursor when a structural insert re-inserted its boundary', () {
+    db.replaceMessages('session-1', messages(5));
+    final newest = db.getPersistedMessagePage('session-1', limit: 2);
+    final loaded = db.getMessages('session-1');
+
+    db.replaceMessages('session-1', [
+      ...loaded.take(2),
+      Message(role: MessageRole.user, content: 'inserted'),
+      ...loaded.skip(2),
     ]);
 
     expect(

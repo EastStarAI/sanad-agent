@@ -123,6 +123,44 @@ void main() {
     expect(first, isNot(changed));
   });
 
+  test('supports_attachments alone admits with safe attachment limits', () {
+    final capability = Capability.fromJson({
+      'supports_attachments': true,
+    });
+
+    expect(capability.supportsAttachments, isTrue);
+    expect(
+      capability.attachmentMaxFileBytes,
+      Capability.defaultAttachmentMaxFileBytes,
+    );
+    expect(
+      capability.attachmentMaxFilesPerMessage,
+      Capability.defaultAttachmentMaxFilesPerMessage,
+    );
+    expect(
+      capability.attachmentMaxTotalBytesPerMessage,
+      Capability.defaultAttachmentMaxTotalBytesPerMessage,
+    );
+  });
+
+  test('supports_attachments false fails closed despite a rich contract', () {
+    final capability = Capability.fromJson({
+      'supports_attachments': false,
+      'attachment_media_v1': {
+        'version': 1,
+        'ordered_references': true,
+        'max_file_bytes': 5 * 1024 * 1024,
+        'max_files_per_message': 4,
+        'max_total_bytes_per_message': 20 * 1024 * 1024,
+      },
+    });
+
+    expect(capability.supportsAttachments, isFalse);
+    expect(capability.attachmentMaxFileBytes, 0);
+    expect(capability.attachmentMaxFilesPerMessage, 0);
+    expect(capability.attachmentMaxTotalBytesPerMessage, 0);
+  });
+
   test('capability parses thinking_stream_mode from JSON', () {
     final capability = Capability.fromJson({
       'supports_stop': true,

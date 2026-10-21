@@ -226,6 +226,79 @@ void main() {
     expect(cacheRepository.newConversationDraft(agent.id).text, 'keep this draft');
   });
 
+  testWidgets('a provider-less New Conversation draft keeps the device route', (tester) async {
+    sessionMessagesCubit.setNextMessagePreferences(
+      providerId: 'provider-go',
+      model: 'glm-5.2',
+      thinkingMode: 'max',
+    );
+    // Half route as written by older clients: model and thinking, no provider.
+    cacheRepository.setNewConversationDraft(
+      agent.id,
+      text: 'keep my text',
+      model: 'deepseek-v4.1-flash',
+      thinkingMode: 'low',
+    );
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      conversationCacheRepository: cacheRepository,
+      child: ConversationInputPanel(onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {}),
+    );
+    await tester.pump();
+
+    expect(find.text('keep my text'), findsOneWidget);
+    expect(sessionMessagesCubit.state.nextMessageProviderId, 'provider-go');
+    expect(sessionMessagesCubit.state.nextMessageModel, 'glm-5.2');
+    expect(sessionMessagesCubit.state.nextMessageThinkingMode, 'max');
+  });
+
+  testWidgets('D2: an admitted route default is carried for the next send but never persisted into the draft', (
+    tester,
+  ) async {
+    final inputCubit = _TestConversationInputCubit(messagesCubit: sessionMessagesCubit);
+    sessionMessagesCubit.setNextMessagePreferences(providerId: 'provider-go', model: 'glm-5.2');
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      conversationInputCubit: inputCubit,
+      capabilities: capabilities,
+      conversationCacheRepository: cacheRepository,
+      child: ConversationInputPanel(onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {}),
+    );
+    await tester.pump();
+
+    final devicePrefBefore = sessionMessagesCubit.preferencesRepository.getLastThinkingMode(agent.id);
+    // What the route control does for a draft whose route declares Max.
+    inputCubit.admitRouteThinkingMode('max');
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(inputCubit.state.nextMessageThinkingMode, 'max', reason: 'the next send carries the shown default');
+    var draft = cacheRepository.newConversationDraft(agent.id);
+    expect(draft.providerId, 'provider-go');
+    expect(draft.model, 'glm-5.2');
+    expect(
+      draft.thinkingMode,
+      devicePrefBefore,
+      reason: 'a default fill is never persisted into the draft; only the explicit carried value is',
+    );
+    expect(draft.thinkingMode, isNot('max'));
+    expect(sessionMessagesCubit.preferencesRepository.getLastThinkingMode(agent.id), devicePrefBefore);
+
+    // Only an explicit pick is persisted.
+    await inputCubit.selectThinkingMode(scope: CapabilityValueScope.message, thinkingMode: 'high');
+    await tester.pump(const Duration(milliseconds: 600));
+    draft = cacheRepository.newConversationDraft(agent.id);
+    expect(draft.thinkingMode, 'high');
+    expect(sessionMessagesCubit.preferencesRepository.getLastThinkingMode(agent.id), 'high');
+  });
+
   testWidgets('loading an existing session never shows the New Conversation draft', (tester) async {
     cacheRepository.setNewConversationDraft(
       agent.id,
@@ -984,6 +1057,86 @@ void main() {
     },
   );
 
+  testWidgets(
+    'real composer consumption: model chip updates provider display name immediately on cubit catalog update without client restart',
+    (tester) async {
+      final countingClient = _CountingProviderClient();
+      getIt.registerSingleton<ProviderSetupClient>(countingClient);
+      final usageCubit = ProviderUsageCubit(localDeviceId: 'hardware-1', client: countingClient);
+      getIt.registerSingleton<ProviderUsageCubit>(usageCubit);
+      addTearDown(usageCubit.close);
+
+      await sessionCubit.selectSession(
+        Session(
+          id: 'session-1',
+          title: 'Chat',
+          deviceId: agent.id,
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+          model: 'glm-5.2',
+          modelProvider: 'provider-1',
+        ),
+      );
+
+      Widget actions() => ConversationBottomActions(
+        activeAgent: agent,
+        inputSlice: const ConversationInputSlice(
+          isProcessing: false,
+          nextMessageModel: 'glm-5.2',
+          nextMessageProviderId: 'provider-1',
+          nextMessageThinkingMode: null,
+          availableWorkspaces: [],
+          selectedWorkspace: null,
+          isLoadingWorkspaces: false,
+          requiresWorkspace: false,
+          permissionMode: WorkspacePermissionMode.defaultMode,
+          isLoadingPermissionMode: false,
+          pendingSuspendedRequest: null,
+          runtimeNotice: null,
+          queuedMessages: [],
+        ),
+        capabilities: const Capability(supportsModelChange: true, supportsThinkingModeChange: true),
+        dimTextColor: Colors.black,
+        chipBgColor: Colors.white,
+        borderColor: Colors.black12,
+        onConfirmFullAccess: () async => true,
+      );
+
+      await pumpTestApp(
+        tester,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        child: actions(),
+      );
+      await tester.pumpAndSettle();
+
+      // Initially renders with catalog name from model.snapshot
+      expect(find.text('Z.AI Coding Plan | glm-5.2'), findsOneWidget);
+
+      // Mutate catalog display names (simulating a provider rename from setup flow)
+      usageCubit.updateProviderDisplayNames(
+        agent: agent,
+        displayNames: {'provider-1': 'Z.AI Pro Plan'},
+      );
+      await tester.pumpAndSettle();
+
+      // Composer immediately reflects renamed provider display name without restart
+      expect(find.text('Z.AI Pro Plan | glm-5.2'), findsOneWidget);
+      expect(find.text('Z.AI Coding Plan | glm-5.2'), findsNothing);
+
+      // Mutate catalog display names to empty (simulating provider removal)
+      usageCubit.updateProviderDisplayNames(
+        agent: agent,
+        displayNames: const {},
+      );
+      await tester.pumpAndSettle();
+
+      // Composer immediately drops custom display name and falls back without restart
+      expect(find.text('Provider 1 | glm-5.2'), findsOneWidget);
+      expect(find.text('Z.AI Pro Plan | glm-5.2'), findsNothing);
+    },
+  );
+
   testWidgets('appends dropped file paths to input field when files are dragged and dropped', (tester) async {
     socket.setConnected(true);
     agent = DeviceConfig(
@@ -1048,7 +1201,16 @@ void main() {
 class _TestConversationInputCubit extends ConversationInputCubit {
   _TestConversationInputCubit({required super.messagesCubit});
 
+  bool _usesEmittedState = false;
+
+  /// A state emitted by this fake stands for explicit user choices, so its
+  /// thinking value is the explicit one a New Conversation draft persists.
+  @override
+  String? get explicitNextMessageThinkingMode =>
+      _usesEmittedState ? state.nextMessageThinkingMode : super.explicitNextMessageThinkingMode;
+
   void emitSessionMessagesState(SessionMessagesState state) {
+    _usesEmittedState = true;
     emit(
       ConversationInputState(
         isProcessing: state.isProcessing,

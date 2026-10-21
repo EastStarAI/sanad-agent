@@ -10,3 +10,21 @@ compaction:
     gpt-5.6-sol:
       threshold: 0.90
       targetRatio: 0.08
+
+# Thinking-control override (layer 1 of the thinking authority). Keyed by the
+# exact model id, with no wildcards and no provider scoping. It replaces the
+# provider-reported, shipped (`model_capability_defaults.yaml`) and models.dev
+# records for that model as a whole. Wires: openai_chat_effort,
+# codex_responses_effort, native_toggle_effort, toggle_effort,
+# anthropic_adaptive, anthropic_budget, google_thinking, nim_kimi_thinking,
+# nim_qwen_thinking.
+model_capabilities:
+  deepseek-v4.1-flash:
+    thinking_control:
+      status: supported
+      wire: native_toggle_effort
+      options:
+        off: false
+        high: high
+        max: max
+      default_option: high

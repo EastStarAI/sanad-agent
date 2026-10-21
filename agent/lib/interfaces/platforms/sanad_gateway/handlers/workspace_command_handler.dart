@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import 'package:sanad_agent/capabilities/runtime/workspace_path_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/env_file_service.dart';
 import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/infrastructure/platform/automation_service_factory.dart';
@@ -1092,16 +1093,27 @@ class WorkspaceCommandHandler {
 
     final mode = WorkspacePermissionMode.fromValue(permissionModeString);
     try {
-      final workspace = await _runtimeService.describeWorkspaceById(
-        workspaceId,
-      );
-      if (workspace == null) {
-        throw StateError('Workspace not found.');
+      final String workspacePath;
+      if (workspaceId.startsWith('exec_root:')) {
+        final rawPath = workspaceId.substring('exec_root:'.length);
+        final validated = const WorkspacePathResolver()
+            .validateAndNormalizeExecutionRoot(rawPath);
+        if (validated == null || validated.isEmpty) {
+          throw StateError('Invalid execution root path.');
+        }
+        workspacePath = validated;
+      } else {
+        final workspace = await _runtimeService.describeWorkspaceById(
+          workspaceId,
+        );
+        if (workspace == null) {
+          throw StateError('Workspace not found.');
+        }
+        if (workspace['is_missing'] == true) {
+          throw StateError('Workspace folder is unavailable.');
+        }
+        workspacePath = workspace['path'] as String;
       }
-      if (workspace['is_missing'] == true) {
-        throw StateError('Workspace folder is unavailable.');
-      }
-      final workspacePath = workspace['path'] as String;
       final current = await _policyStore!.readPolicy(workspacePath);
       final updated = current.copyWith(permissionMode: mode);
       await _policyStore.savePolicy(workspacePath, updated);

@@ -1,3 +1,8 @@
+---
+title: "Sanad CLI Architecture"
+description: "Attached and in-process transports, runtime ownership, automation output, cancellation, and test-isolation contracts."
+---
+
 # Sanad CLI Architecture & Gateway Runtime Contract
 
 ## 1. Overview
@@ -177,7 +182,7 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
 | `/session` | | Inspect session details, create new (`/session new`), list, or history |
 | `/skills` | | List installed and bundled agent skills with status |
 | `/mcp` | | List configured Model Context Protocol (MCP) servers and connection status |
-| `/compact` | | Trigger session context compaction (`session.compact`, Plan 53) |
+| `/compact` | | Trigger session context compaction (`session.compact`, Plan 53). One correlated dispatch, never resent; a timeout renders a neutral still-running notice (Task 119) |
 | `/steer <text>` | | Direct execution mid-flight; applies instructions at next step boundary |
 | `/queue <text>` | | Enqueue prompt to execute after active turn completes (`delivery_intent: queue`) |
 | `/stop` | | Cleanly interrupt active turn (also triggers on `Ctrl+C` during turns) |
@@ -194,7 +199,8 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
    - Sends `stop` command to the gateway for the active session.
    - Aborts ongoing turn cleanly and prevents orphan background processes.
 3. **Session Context Compaction (`/compact`):**
-   - Sends `session.compact` command to trigger the compaction coordinator (Plan 53).
+   - Sends one correlated `session.compact` query (`CliSlashCommandHandler._handleCompact` in `agent/lib/cli/repl/slash_command_handler.dart`, `resendOnTimeout: false`) to trigger the compaction coordinator (Plan 53).
+   - The daemon replies after compaction finishes, so `accepted` renders as completed and busy, in-progress or failure outcomes render with their reason. A timeout (`SlashCommandContext.defaultCompactAcknowledgementTimeout`, 10 s) is not a failure: the REPL renders a neutral notice that compaction may still be running and never resends (Task 119).
    - Summarizes past turns and prunes obsolete tool results while preserving the current goal.
 
 ---
@@ -204,6 +210,10 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
 E2E tests that initialize DI, open the on-disk SQLite owner, or launch an agent process use temporary roots for both `SANAD_HOME` and `SANAD_STATE_HOME`. Dart child processes receive both variables explicitly rather than inheriting the developer's environment. In-process tests set and clear both root overrides around each test.
 
 `AgentStateDatabase` additionally fails closed under the Dart test runner when no explicit state isolation is detectable. `test/guards/e2e_state_isolation_contract_test.dart` scans E2E persistent-runtime entry points and Dart child-process tests so newly added coverage cannot silently fall back to the user's normal Sanad database.
+
+### 8.1. Turn-Event Readiness in In-Process Runner Tests
+
+In-process `sanad run` coverage (`test/cli/run_delegation_test.dart`) gates turn events on **dispatch readiness** (`await client.turnDispatched.future`), never on the initial `running` artifact. `OneshotRunner` records that artifact through `RunArtifactCoordinator.recordInitial()` before it resolves the client, subscribes to the client's event streams and dispatches the turn, while the test transport publishes on a broadcast stream: an event emitted in that window has no subscriber, is dropped, and the awaiting observer can never resolve. The shared mock's intervention emitters therefore fail fast when nothing is subscribed, so a premature gate becomes a deterministic, actionable failure instead of a scheduler-dependent timeout.
 
 ---
 
@@ -218,6 +228,7 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
 | `list` | `sanad session list [--json]` | Lists active sessions discovered via the gateway. Appends `[Pending intervention]` when a session is suspended awaiting tool approval or user input. |
 | `show` | `sanad session show <session-id> [--json] [--include-messages]` | Authoritative session inspection. Exposes status (`needs_input`, `needs_permission`, `running`, `idle`), owner identities, in-flight execution details, pending request payloads, the effective route, timestamps, and message/tool count summaries. By default the projection is **bounded** and excludes the full messages payload; pass `--include-messages` to opt in to the complete conversation/history. |
 | `stop` | `sanad session stop <session-id> [--json]` | Halts execution strictly for the specified session, leaving other active sessions untouched. |
+| `compact` | `sanad session compact <session-id> [--json] [--timeout <seconds>]` | Requests manual context compaction for the specified session through a correlated `session.compact` query (`LocalGatewayCliClient.compactSession` with `resendOnTimeout: false`, `agent/lib/cli/runner/commands/session_command.dart`). The daemon replies only after compaction finishes (`SessionRunOrchestrator.handleCompactCommand` awaits `runCompaction`), so the CLI waits for the terminal outcome (`accepted` = completed, `no_op`, or a failure/rejection) up to `--timeout` (default 5 s). Dispatches exactly once; a timeout exits 1 without retry while the daemon may still be compacting. `dispatched` occurs only on the resend-on-timeout path, which this subcommand disables. |
 | `answer` | `sanad session answer <session-id> -r <req-id> --answer <text> [--file <path>] [--json]` | Explicit resolution path for pending `system_ask_user` questions. Accepts direct text or JSON/text file payload. |
 | `permission` | `sanad session permission <session-id> -r <req-id> (--allow \| --deny) [--decision allow\|deny] [--scope once\|session\|workspace] [--comment <text>] [--file <path>] [--json]` | Explicit decision path for gated tool approvals. Accepts boolean flags or a structured JSON file payload. Aliases: `permit`, `decide`. |
 | `new` | `sanad session new` | Generates and outputs a fresh UUID session identifier. |
@@ -254,3 +265,32 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
 - **Counts** (`message_count` + `summary`): total rows plus bounded `user_messages`, `final_answers`, `tool_calls`, `tool_results`, `reasoning_rows`, and `thought_rows` counts derived from the message history without copying any content.
 
 The complete conversation/history is **never** embedded by default. It is exposed only through the explicit `--include-messages` opt-in flag, which adds the full `messages` payload. The plain-text (non-`--json`) branch already renders a bounded human summary and, when history exists, reminds the operator that full history requires `--include-messages`.
+
+---
+
+## 10. Remote CLI Relay Architecture & Execution Seam (Plan 102)
+
+The Sanad CLI architecture provides a remote execution seam so that `sanad-client` can target any online Agent without shell execution or command reimplementation.
+
+### 10.1. Reusable Execution Seam
+- Incoming `device.cli.execute` commands supply an argument vector `argv` and optional `stdin`.
+- `RemoteCliCommandHandler` constructs `SanadCommandRunner` with injected `stdoutSink`, `stderrSink`, `stdinReader`, and `workspaceService`.
+- Ordinary local CLI behavior remains unchanged: when invoked from a terminal shell, standard `stdout`, `stderr`, and `stdin` are used as defaults.
+- Correlated stream events (`device.cli.stdout`, `device.cli.stderr`, `device.cli.event`) and a terminal `device.cli.result` envelope are published via the local or cloud gateway.
+- Full protocol specification, schemas, and safety boundaries are documented in [Remote CLI Relay Protocol](remote_cli_relay_protocol.md).
+
+### 10.2. Relay Boundaries per Command Family
+
+- Read and control commands (`devices`, `ws list`, `session show|answer|stop`,
+  `run`) execute through the remote runner and return ordered output plus one
+  terminal result.
+- `login` stays host-local by design: the remote runner has no interactive login
+  handler, so a forwarded `login` returns exit code 0 with no relayed output.
+  Hosts that need device authorization run `sanad login` locally in the target
+  Sanad Home.
+- File-backed caller input (`--brief-file`) is read by `sanad-client` and
+  transported as request content; the remote process never opens the caller path
+  and never evaluates a shell string.
+- Interrupting the caller (`SIGINT`) forwards `device.cli.cancel`; the remote
+  runner terminates the active command, the caller exits with code 130, and the
+  remote session run is cancelled.

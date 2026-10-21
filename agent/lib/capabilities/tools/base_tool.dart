@@ -1,3 +1,5 @@
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 
 import '../models/tool_schema.dart';
@@ -18,6 +20,21 @@ abstract class BaseTool {
   /// Defaults to false. Tools that spawn side effects must opt in explicitly.
   bool get isCooperativelyCancellable => false;
 
+  /// Authoritative provider-neutral result for one execution.
+  ///
+  /// Every production tool must implement this boundary explicitly. There is
+  /// no fallback that infers a typed result from legacy text.
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) => throw UnsupportedError(
+    'Tool implementations must provide typed executeResult output.',
+  );
+
+  /// Temporary text projection for direct legacy callers.
+  ///
+  /// The engine and coordinator must consume [executeResult], never this
+  /// compatibility surface.
   Future<String> execute(Map<String, dynamic> args, {ToolContext? context});
 }
 
@@ -29,6 +46,7 @@ class ToolContext {
   final int? generation;
   final RunCancellationScope? cancellationScope;
   final void Function(Map<String, dynamic> progress)? onExecutionProgress;
+  final RouteImageSupport imageSupport;
 
   ToolContext({
     required this.sessionId,
@@ -38,6 +56,7 @@ class ToolContext {
     this.generation,
     this.cancellationScope,
     this.onExecutionProgress,
+    this.imageSupport = RouteImageSupport.unknown,
   });
 
   bool get isCancellationRequested =>

@@ -284,7 +284,7 @@ void main() {
         title: 'Deterministic E2E Session',
       );
       expect(createdSession.id, isNotEmpty);
-      expect(createdSession.deviceId, equals(agent.id));
+      expect(createdSession.deviceId, equals(agent.hardwareId));
 
       final sessionId = createdSession.id;
       final finalAnswer = await _runThinkE2e(

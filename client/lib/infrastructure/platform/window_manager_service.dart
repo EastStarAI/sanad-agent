@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 // import 'package:macos_window_utils/macos/ns_window_button_type.dart';
@@ -36,6 +37,67 @@ class WindowManagerService with WindowListener {
 
   static ValueListenable<bool> get compactModeListenable => _isCompactMode;
   static ValueListenable<bool> get maximizedOrFullScreenListenable => _isMaximizedOrFullScreen;
+
+  static Future<void> Function()? _onCloseRequested;
+
+  static void setCloseRequestHandler(Future<void> Function()? handler) {
+    _onCloseRequested = handler;
+  }
+
+  /// The macOS delegate forwards Dock/Finder reopen requests to the Dart window
+  /// owner, because AppKit cannot un-hide a window that was ordered out.
+  static const String windowLifecycleChannelName = 'com.eaststarai.sanad/windowLifecycle';
+
+  static Future<void> Function()? _onReopenRequested;
+
+  static void setReopenRequestHandler(Future<void> Function()? handler) {
+    _onReopenRequested = handler;
+  }
+
+  static MethodChannel? _windowLifecycleChannel;
+
+  static void _registerReopenChannel() {
+    if (_windowLifecycleChannel != null) return;
+    final channel = const MethodChannel(windowLifecycleChannelName);
+    _windowLifecycleChannel = channel;
+    channel.setMethodCallHandler((call) async {
+      if (call.method != 'reopenRequested') return null;
+      final handler = _onReopenRequested;
+      if (handler != null) {
+        await handler();
+      }
+      return null;
+    });
+  }
+
+  static Future<void> hide() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+    await windowManager.hide();
+  }
+
+  static Future<void> show() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+    if (await windowManager.isMinimized()) {
+      await windowManager.restore();
+    }
+    await windowManager.show();
+  }
+
+  static Future<void> focus() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+    await windowManager.focus();
+  }
+
+  static Future<void> showAndFocus() async {
+    await show();
+    await focus();
+  }
+
+  static Future<void> closeOrDestroy() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+    await windowManager.setPreventClose(false);
+    await windowManager.destroy();
+  }
 
   static Future<void> toggleMaximized() async {
     if (!AppPlatform.isDesktop || !_isInitialized) return;
@@ -146,6 +208,10 @@ class WindowManagerService with WindowListener {
   static Future<void> initialize() async {
     if (!AppPlatform.isDesktop) return;
 
+    if (AppPlatform.isMacOS) {
+      _registerReopenChannel();
+    }
+
     await windowManager.ensureInitialized();
     windowManager.addListener(_instance);
 
@@ -217,6 +283,8 @@ class WindowManagerService with WindowListener {
 
       await windowManager.show();
       await windowManager.focus();
+
+      await windowManager.setPreventClose(true);
 
       if (isMaximized) {
         await windowManager.maximize();
@@ -400,5 +468,17 @@ class WindowManagerService with WindowListener {
   @override
   void onWindowLeaveFullScreen() {
     unawaited(_refreshMaximizedOrFullScreenState());
+  }
+
+  @override
+  void onWindowClose() async {
+    if (!AppPlatform.isDesktop) return;
+    if (_onCloseRequested != null) {
+      await _onCloseRequested!();
+      return;
+    }
+    // Background operation is the default on every desktop platform: hiding keeps
+    // the Agent and the Client CLI endpoint available until an explicit quit.
+    await hide();
   }
 }

@@ -7,7 +7,15 @@ rules = ["generic-api-key"]
 paths = [
   '''^agent/test/core/provider_runtime/provider_instance_service_test\.dart$''',
   '''^agent/test/core/secrets_redactor_test\.dart$''',
+  '''^agent/test/engine/adapters/codex_wire_pressure_regression_test\.dart$''',
   '''^agent/test/interfaces/interfaces_test\.dart$''',
   '''^agent/test/interfaces/remote_device_control_g6_security_test\.dart$''',
   '''^client/test/unit/services/sanad_socket_service_test\.dart$''',
+]
+
+[[allowlists]]
+description = "CocoaPods SPEC CHECKSUMS in the macOS lockfile are podspec hashes, not credentials"
+rules = ["generic-api-key"]
+paths = [
+  '''^client/macos/Podfile\.lock$''',
 ]

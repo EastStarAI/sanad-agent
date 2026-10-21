@@ -1,7 +1,13 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
@@ -10,6 +16,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_activity_bar.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_activity_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/tool_group_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/turn_replay_confirmation_dialog.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
@@ -17,6 +24,7 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_clock_scope.dart';
@@ -34,6 +42,8 @@ import '../widgets/sidebar/sidebar_composition.dart';
 /// • The first user message is top-anchored; later user messages are revealed
 ///   only by the minimum direct offset needed above the composer.
 class BrainActivityView extends StatefulWidget {
+  static ValueChanged<String>? debugOnReplayError;
+
   final Stream<List<CanonicalEvent>>? messagesStream;
   final List<CanonicalEvent> initialMessages;
   final void Function(String, {MessageDeliveryIntent intent}) onSendMessage;
@@ -56,6 +66,9 @@ class BrainActivityView extends StatefulWidget {
   final String? newerHistoryError;
   final Future<void> Function()? onLoadNewerHistory;
   final Future<void> Function(String eventId)? onLoadAnchoredHistory;
+  final Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles;
+  final ViewImageMediaLoader? viewImageMediaLoader;
+  final UserAttachmentMediaLoader? userAttachmentMediaLoader;
 
   const BrainActivityView({
     super.key,
@@ -81,6 +94,9 @@ class BrainActivityView extends StatefulWidget {
     this.newerHistoryError,
     this.onLoadNewerHistory,
     this.onLoadAnchoredHistory,
+    this.pickEditAttachmentFiles,
+    this.viewImageMediaLoader,
+    this.userAttachmentMediaLoader,
   });
 
   @override
@@ -112,12 +128,15 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   List<ConversationTimelineItem> _timelineItems = [];
   StreamSubscription<List<CanonicalEvent>>? _messagesSubscription;
   final Set<String> _expandedEventIds = {};
+  final Set<String> _explicitlyInteractedEventIds = {};
   final Set<String> _explicitlyInteractedToolGroupIds = {};
   late final ValueNotifier<DateTime> _clockNotifier = ValueNotifier<DateTime>(DateTime.now());
   Timer? _clockTimer;
   final Set<String> _pendingEntranceEventIds = {};
   TextEditingController? _editController;
   String? _editingEventId;
+  List<InlineEditAttachment> _editAttachments = const [];
+  String? _editAttachmentError;
   String? _replayPendingEventId;
   String? _forkPendingEventId;
   int _openAnchorIndex = 0;
@@ -377,9 +396,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   bool get _activityEligible =>
-      widget.activityEligible &&
-      widget.sessionId != null &&
-      widget.sessionId == widget.composerSessionId;
+      widget.activityEligible && widget.sessionId != null && widget.sessionId == widget.composerSessionId;
 
   void _syncClockTimer() {
     final hasRunningWork = _activityEligible || _messages.any((m) => m.status == EventStatus.running);
@@ -396,11 +413,16 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     }
   }
 
+  bool _isEventExpanded(CanonicalEvent event) =>
+      _expandedEventIds.contains(event.id) ||
+      (!_explicitlyInteractedEventIds.contains(event.id) && event.toolName == 'view_image');
+
   bool _isToolGroupExpanded(ConversationTimelineItem item) {
     final id = _toolGroupExpansionId(item);
     if (_explicitlyInteractedToolGroupIds.contains(id)) {
       return _expandedEventIds.contains(id);
     }
+    if (item.events.any((event) => event.toolName == 'view_image')) return true;
     final firstEventId = item.events.firstOrNull?.id;
     if (firstEventId != null) {
       return _expandedEventIds.contains(firstEventId);
@@ -948,6 +970,10 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     setState(() {
       _editController = TextEditingController(text: event.text);
       _editingEventId = event.id;
+      _editAttachments = List.unmodifiable(
+        event.userAttachments.map(InlineEditAttachment.existing),
+      );
+      _editAttachmentError = null;
     });
   }
 
@@ -955,8 +981,144 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     _editController?.dispose();
     _editController = null;
     _editingEventId = null;
+    _editAttachments = const [];
+    _editAttachmentError = null;
     if (notify && mounted) setState(() {});
   }
+
+  Future<void> _addInlineEditAttachments() async {
+    List<InlineEditAttachmentSelection> selections;
+    try {
+      selections = await (widget.pickEditAttachmentFiles?.call() ?? _pickInlineEditAttachments());
+    } on Object {
+      if (mounted) {
+        setState(
+          () => _editAttachmentError = 'Could not open the selected attachment.',
+        );
+      }
+      return;
+    }
+    for (final selection in selections) {
+      if (!mounted || _editingEventId == null) return;
+      final bytes = selection.bytes;
+      final name = _safeAttachmentName(selection.name);
+      final error = _inlineAttachmentValidationError(bytes.length);
+      final item = InlineEditAttachment(
+        id: const Uuid().v4(),
+        name: name,
+        sizeBytes: bytes.length,
+        isImage: RegExp(
+          r'\.(png|jpe?g|gif|webp)$',
+          caseSensitive: false,
+        ).hasMatch(name),
+        isExisting: false,
+        bytes: bytes,
+        status: error == null ? InlineEditAttachmentStatus.ready : InlineEditAttachmentStatus.failed,
+        error: error,
+      );
+      setState(() {
+        _editAttachments = List.unmodifiable([..._editAttachments, item]);
+        _editAttachmentError = error;
+      });
+    }
+  }
+
+  Future<List<InlineEditAttachmentSelection>> _pickInlineEditAttachments() async {
+    final files = await openFiles();
+    final selections = <InlineEditAttachmentSelection>[];
+    for (final file in files) {
+      selections.add(
+        InlineEditAttachmentSelection(
+          name: file.name,
+          bytes: await file.readAsBytes(),
+        ),
+      );
+    }
+    return selections;
+  }
+
+  String? _inlineAttachmentValidationError(
+    int nextBytes, {
+    String? excludingId,
+  }) {
+    final retained = _editAttachments.where((attachment) => attachment.id != excludingId).toList(growable: false);
+    if (retained.length >= 4) {
+      return 'A message accepts at most 4 attachments.';
+    }
+    if (nextBytes > 5 * 1024 * 1024) {
+      return 'Each attachment must be 5 MiB or smaller.';
+    }
+    final total =
+        retained.fold<int>(
+          0,
+          (sum, item) => sum + item.sizeBytes,
+        ) +
+        nextBytes;
+    if (total > 20 * 1024 * 1024) {
+      return 'Attachments must total 20 MiB or less per message.';
+    }
+    return null;
+  }
+
+  static String _safeAttachmentName(String input) {
+    final name = input.split(RegExp(r'[/\\]')).last.trim();
+    return name.isEmpty || name == '.' || name == '..' ? 'attachment' : name;
+  }
+
+  void _removeInlineEditAttachment(String id) {
+    setState(() {
+      _editAttachments = List.unmodifiable(
+        _editAttachments.where((attachment) => attachment.id != id),
+      );
+      _editAttachmentError = null;
+    });
+  }
+
+  void _retryInlineEditAttachment(String id) {
+    final index = _editAttachments.indexWhere((attachment) => attachment.id == id);
+    if (index < 0) return;
+    final item = _editAttachments[index];
+    final error = item.bytes == null
+        ? 'Could not read the selected attachment.'
+        : _inlineAttachmentValidationError(
+            item.bytes!.length,
+            excludingId: item.id,
+          );
+    setState(() {
+      _editAttachments = List.unmodifiable([
+        for (var i = 0; i < _editAttachments.length; i++)
+          if (i == index)
+            InlineEditAttachment(
+              id: item.id,
+              name: item.name,
+              sizeBytes: item.sizeBytes,
+              isImage: item.isImage,
+              isExisting: item.isExisting,
+              bytes: item.bytes,
+              status: error == null ? InlineEditAttachmentStatus.ready : InlineEditAttachmentStatus.failed,
+              error: error,
+            )
+          else
+            _editAttachments[i],
+      ]);
+      _editAttachmentError = error;
+    });
+  }
+
+  List<Map<String, dynamic>> _serializeInlineEditAttachments() => List.unmodifiable(
+    _editAttachments.map((attachment) {
+      if (attachment.isExisting) {
+        return <String, dynamic>{'reference_id': attachment.id};
+      }
+      final bytes = attachment.bytes!;
+      return <String, dynamic>{
+        'name': attachment.name,
+        'size_bytes': bytes.length,
+        'sha256': sha256.convert(bytes).toString(),
+        'data_base64': base64Encode(bytes),
+      };
+    }),
+  );
 
   Future<void> _replayTurn(
     CanonicalEvent event, {
@@ -968,55 +1130,72 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       return;
     }
     setState(() => _replayPendingEventId = event.id);
-    final cubit = context.read<ConversationInputCubit>();
+    final messagesCubit = context.read<SessionMessagesCubit>();
+    final attachmentEdits = action == TurnReplayAction.edit ? _serializeInlineEditAttachments() : null;
     var confirmedUnsafe = false;
     var confirmedDropSteers = false;
     var retriedAfterRevisionMismatch = false;
     late TurnReplayResult result;
-    while (true) {
-      result = await cubit.replayTurn(
-        targetRequestId: requestId,
-        targetMessageId: event.messageId,
-        targetTurnId: event.turnId,
-        action: action,
-        message: message,
-        confirmedReplayUnsafe: confirmedUnsafe,
-        confirmedDropSteers: confirmedDropSteers,
-      );
-      if (!mounted) return;
-      if (result.outcome == 'history_revision_mismatch' &&
-          !retriedAfterRevisionMismatch &&
-          result.historyRevision != null) {
-        retriedAfterRevisionMismatch = true;
-        continue;
-      }
-      final needsUnsafeConfirmation = result.requiresConfirmation && !confirmedUnsafe;
-      final needsSteerDropConfirmation =
-          (result.requiresSteerDropConfirmation || result.containsSteers) && !confirmedDropSteers;
-      if (needsUnsafeConfirmation || needsSteerDropConfirmation) {
-        final confirmed = await _confirmReplay(
+    try {
+      while (true) {
+        result = await messagesCubit.replayTurn(
+          targetRequestId: requestId,
+          targetMessageId: event.messageId,
+          targetTurnId: event.turnId,
           action: action,
-          safety: result.safety,
-          confirmsUnsafe: needsUnsafeConfirmation,
-          confirmsSteerDrop: needsSteerDropConfirmation,
+          message: message,
+          attachmentEdits: attachmentEdits,
+          confirmedReplayUnsafe: confirmedUnsafe,
+          confirmedDropSteers: confirmedDropSteers,
         );
         if (!mounted) return;
-        if (!confirmed) {
-          setState(() => _replayPendingEventId = null);
-          return;
+        if (result.outcome == 'history_revision_mismatch' &&
+            !retriedAfterRevisionMismatch &&
+            result.historyRevision != null) {
+          retriedAfterRevisionMismatch = true;
+          continue;
         }
-        confirmedUnsafe = confirmedUnsafe || needsUnsafeConfirmation;
-        confirmedDropSteers = confirmedDropSteers || needsSteerDropConfirmation;
-        continue;
+        final needsUnsafeConfirmation = result.requiresConfirmation && !confirmedUnsafe;
+        final needsSteerDropConfirmation =
+            (result.requiresSteerDropConfirmation || result.containsSteers) && !confirmedDropSteers;
+        if (needsUnsafeConfirmation || needsSteerDropConfirmation) {
+          final confirmed = await _confirmReplay(
+            action: action,
+            safety: result.safety,
+            confirmsUnsafe: needsUnsafeConfirmation,
+            confirmsSteerDrop: needsSteerDropConfirmation,
+          );
+          if (!mounted) return;
+          if (!confirmed) {
+            return;
+          }
+          confirmedUnsafe = confirmedUnsafe || needsUnsafeConfirmation;
+          confirmedDropSteers = confirmedDropSteers || needsSteerDropConfirmation;
+          continue;
+        }
+        break;
       }
-      break;
+      if (result.isAccepted) {
+        _cancelInlineEdit(notify: false);
+      } else {
+        final error = _turnReplayError(result.outcome);
+        BrainActivityView.debugOnReplayError?.call(error);
+        ToastUtils.showError(context, error);
+      }
+    } catch (_) {
+      if (mounted) {
+        const error = 'Replay outcome could not be confirmed. Check conversation history before retrying.';
+        BrainActivityView.debugOnReplayError?.call(error);
+        ToastUtils.showError(
+          context,
+          error,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _replayPendingEventId = null);
+      }
     }
-    if (result.isAccepted) {
-      _cancelInlineEdit(notify: false);
-    } else {
-      ToastUtils.showError(context, _turnReplayError(result.outcome));
-    }
-    setState(() => _replayPendingEventId = null);
   }
 
   Future<void> _forkSession(CanonicalEvent event) async {
@@ -1072,6 +1251,13 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     'target_precedes_compaction' => 'Messages before context compaction cannot be edited or retried.',
     'identity_incomplete' => 'This message does not have a reliable turn boundary.',
     'steer_reinjection_confirmation_required' => 'Retrying this turn will not send its steering messages again.',
+    'ownership_mismatch' => 'Attachment ownership could not be verified for replay.',
+    'attachments_unsupported' => 'Attachment replay is not supported on this connection.',
+    'missing_session' => 'No active conversation found for replay.',
+    'disconnected' => 'Disconnected from agent. Reconnect and check conversation history before retrying.',
+    'invalid_response' => 'Replay outcome could not be confirmed. Check conversation history before retrying.',
+    'timeout' => 'Replay request timed out. Check conversation history before retrying.',
+    'unconfirmed' => 'Replay outcome could not be confirmed. Check conversation history before retrying.',
     _ => 'Sanad could not edit or retry this message.',
   };
 
@@ -1113,164 +1299,165 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       clock: _clockNotifier,
       child: Container(
         color: Colors.transparent,
-      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: !_hasMeasuredComposer || _timelineItems.isEmpty
-                ? const SizedBox.shrink()
-                : Opacity(
-                    opacity: !_openAtTail || _hasResolvedOpeningTailAlignment ? 1 : 0,
-                    child: Container(
-                      key: const Key('chat_messages_list'),
-                      child: ShaderMask(
-                        shaderCallback: (Rect rect) {
-                          return const LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              Colors.black,
-                              Colors.black,
-                              Colors.transparent,
-                            ],
-                            stops: [0.0, 0.03, 0.97, 1.0],
-                          ).createShader(rect);
-                        },
-                        blendMode: BlendMode.dstIn,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final viewportHeight = constraints.maxHeight;
-                            final anchorPixels = _openAtTail
-                                ? _openingTailAnchorPixels ?? viewportHeight - bottomPadding
-                                : topPadding;
-                            final anchor = viewportHeight > 0
-                                ? (anchorPixels / viewportHeight).clamp(0.0, 1.0).toDouble()
-                                : 0.0;
+        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: !_hasMeasuredComposer || _timelineItems.isEmpty
+                  ? const SizedBox.shrink()
+                  : Opacity(
+                      opacity: !_openAtTail || _hasResolvedOpeningTailAlignment ? 1 : 0,
+                      child: Container(
+                        key: const Key('chat_messages_list'),
+                        child: ShaderMask(
+                          shaderCallback: (Rect rect) {
+                            return const LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black,
+                                Colors.black,
+                                Colors.transparent,
+                              ],
+                              stops: [0.0, 0.03, 0.97, 1.0],
+                            ).createShader(rect);
+                          },
+                          blendMode: BlendMode.dstIn,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final viewportHeight = constraints.maxHeight;
+                              final anchorPixels = _openAtTail
+                                  ? _openingTailAnchorPixels ?? viewportHeight - bottomPadding
+                                  : topPadding;
+                              final anchor = viewportHeight > 0
+                                  ? (anchorPixels / viewportHeight).clamp(0.0, 1.0).toDouble()
+                                  : 0.0;
 
-                            return SizedBox.expand(
-                              key: _scrollViewportKey,
-                              child: NotificationListener<ScrollNotification>(
-                                onNotification: _handleScrollNotification,
-                                child: KeyedSubtree(
-                                  key: ValueKey(
-                                    'conversation-timeline:${widget.sessionId ?? 'new'}',
-                                  ),
-                                  child: CustomScrollView(
-                                    key: const Key('conversation_timeline_scroll'),
-                                    controller: _scrollController,
-                                    center: _conversationAnchorKey,
-                                    anchor: anchor,
-                                    slivers: [
-                                      SliverPadding(
-                                        padding: EdgeInsets.fromLTRB(8, topPadding, 8, 0),
-                                        sliver: SliverList.builder(
-                                          itemCount: _openAnchorIndex,
-                                          itemBuilder: (context, index) {
-                                            final itemIndex = _openAnchorIndex - index - 1;
-                                            final item = _timelineItems[itemIndex];
-                                            return Center(
-                                              child: ConstrainedBox(
-                                                constraints: const BoxConstraints(
-                                                  maxWidth: SidebarBreakpoints.maxConversationWidth,
+                              return SizedBox.expand(
+                                key: _scrollViewportKey,
+                                child: NotificationListener<ScrollNotification>(
+                                  onNotification: _handleScrollNotification,
+                                  child: KeyedSubtree(
+                                    key: ValueKey(
+                                      'conversation-timeline:${widget.sessionId ?? 'new'}',
+                                    ),
+                                    child: CustomScrollView(
+                                      key: const Key('conversation_timeline_scroll'),
+                                      controller: _scrollController,
+                                      center: _conversationAnchorKey,
+                                      anchor: anchor,
+                                      slivers: [
+                                        SliverPadding(
+                                          padding: EdgeInsets.fromLTRB(8, topPadding, 8, 0),
+                                          sliver: SliverList.builder(
+                                            itemCount: _openAnchorIndex,
+                                            itemBuilder: (context, index) {
+                                              final itemIndex = _openAnchorIndex - index - 1;
+                                              final item = _timelineItems[itemIndex];
+                                              return Center(
+                                                child: ConstrainedBox(
+                                                  constraints: const BoxConstraints(
+                                                    maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                                  ),
+                                                  child: _buildViewportTrackedItem(item),
                                                 ),
-                                                child: _buildViewportTrackedItem(item),
-                                              ),
-                                            );
-                                          },
+                                              );
+                                            },
+                                          ),
                                         ),
-                                      ),
-                                      SliverPadding(
-                                        key: _conversationAnchorKey,
-                                        padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
-                                        sliver: SliverList.builder(
-                                          itemCount: _timelineItems.length - _openAnchorIndex,
-                                          itemBuilder: (context, index) {
-                                            final itemIndex = _openAnchorIndex + index;
-                                            final item = _timelineItems[itemIndex];
-                                            return Center(
-                                              child: ConstrainedBox(
-                                                constraints: const BoxConstraints(
-                                                  maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                        SliverPadding(
+                                          key: _conversationAnchorKey,
+                                          padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
+                                          sliver: SliverList.builder(
+                                            itemCount: _timelineItems.length - _openAnchorIndex,
+                                            itemBuilder: (context, index) {
+                                              final itemIndex = _openAnchorIndex + index;
+                                              final item = _timelineItems[itemIndex];
+                                              return Center(
+                                                child: ConstrainedBox(
+                                                  constraints: const BoxConstraints(
+                                                    maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                                  ),
+                                                  child: _buildViewportTrackedItem(item),
                                                 ),
-                                                child: _buildViewportTrackedItem(item),
-                                              ),
-                                            );
-                                          },
+                                              );
+                                            },
+                                          ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ),
-                            );
-                          },
+                              );
+                            },
+                          ),
                         ),
                       ),
                     ),
-                  ),
-          ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: SizeChangedLayoutNotifier(
-              child: NotificationListener<SizeChangedLayoutNotification>(
-                onNotification: (notification) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    _updateComposerHeight();
-                  });
-                  return true;
-                },
-                child: Container(
-                  key: _composerKey,
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(
-                        maxWidth: SidebarBreakpoints.maxConversationWidth,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_activityEligible)
-                            SizedBox(
-                              height: 38,
-                              child: OverflowBox(
-                                minHeight: 52,
-                                maxHeight: 52,
-                                alignment: Alignment.topCenter,
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                                  child: ConversationActivityBar(
-                                    key: const Key('fixed_conversation_activity_bar'),
-                                    clock: _clockNotifier,
-                                    activity: resolveCurrentActivity(
-                                      _messages,
-                                      activityEligible: _activityEligible,
+            ),
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: SizeChangedLayoutNotifier(
+                child: NotificationListener<SizeChangedLayoutNotification>(
+                  onNotification: (notification) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _updateComposerHeight();
+                    });
+                    return true;
+                  },
+                  child: Container(
+                    key: _composerKey,
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: SidebarBreakpoints.maxConversationWidth,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_activityEligible)
+                              SizedBox(
+                                height: 38,
+                                child: OverflowBox(
+                                  minHeight: 52,
+                                  maxHeight: 52,
+                                  alignment: Alignment.topCenter,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                                    child: ConversationActivityBar(
+                                      key: const Key('fixed_conversation_activity_bar'),
+                                      clock: _clockNotifier,
+                                      activity: resolveCurrentActivity(
+                                        _messages,
+                                        activityEligible: _activityEligible,
+                                      ),
+                                      latestDescription: resolveLatestToolDescription(_messages),
+                                      executionSnapshot: widget.executionSnapshot,
+                                      isRtl: resolveConversationIsRtl(_messages),
                                     ),
-                                    latestDescription: resolveLatestToolDescription(_messages),
-                                    executionSnapshot: widget.executionSnapshot,
-                                    isRtl: resolveConversationIsRtl(_messages),
                                   ),
                                 ),
                               ),
+                            ConversationInputPanel(
+                              onSendMessage: _handleSendMessage,
+                              onStop: widget.onStop,
+                              sessionId: widget.composerSessionId ?? widget.sessionId,
                             ),
-                          ConversationInputPanel(
-                            onSendMessage: _handleSendMessage,
-                            onStop: widget.onStop,
-                            sessionId: widget.composerSessionId ?? widget.sessionId,
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ));
+    );
   }
 
   Widget _buildViewportTrackedItem(ConversationTimelineItem item) {
@@ -1303,8 +1490,14 @@ class _BrainActivityViewState extends State<BrainActivityView> {
                 item: item,
                 isExpanded: _isToolGroupExpanded(item),
                 onToggleExpanded: (expanded) => _onToolGroupToggleExpanded(item, expanded),
-                expandedChildEventIds: _expandedEventIds,
+                expandedChildEventIds: {
+                  for (final event in item.events)
+                    if (_isEventExpanded(event)) event.id,
+                },
+                viewImageMediaLoader: widget.viewImageMediaLoader,
+                userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
                 onChildToggleExpanded: (eventId, expanded) {
+                  _explicitlyInteractedEventIds.add(eventId);
                   if (expanded) {
                     _expandedEventIds.add(eventId);
                   } else {
@@ -1328,11 +1521,14 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       builder: (context, pendingToolName) => EventTile(
         key: ValueKey(event.id),
         event: event,
+        viewImageMediaLoader: widget.viewImageMediaLoader,
+        userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
         waitingIndicator: event.status == EventStatus.running && pendingToolName == event.toolName
             ? (event.toolName == 'system_ask_user' ? ToolWaitingIndicator.question : ToolWaitingIndicator.permission)
             : ToolWaitingIndicator.none,
-        isExpanded: _expandedEventIds.contains(event.id),
+        isExpanded: _isEventExpanded(event),
         onToggleExpanded: (expanded) {
+          _explicitlyInteractedEventIds.add(event.id);
           if (expanded) {
             _expandedEventIds.add(event.id);
           } else {
@@ -1347,12 +1543,25 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         isEditing: _editingEventId == event.id,
         isReplayPending: _replayPendingEventId == event.id,
         editController: _editingEventId == event.id ? _editController : null,
+        editAttachments: _editingEventId == event.id ? _editAttachments : const [],
+        editAttachmentError: _editingEventId == event.id ? _editAttachmentError : null,
+        onAddEditAttachment: _editingEventId == event.id ? _addInlineEditAttachments : null,
+        onRemoveEditAttachment: _editingEventId == event.id ? _removeInlineEditAttachment : null,
+        onRetryEditAttachment: _editingEventId == event.id ? _retryInlineEditAttachment : null,
         onBeginEdit: canReplay ? () => _beginInlineEdit(event) : null,
         onCancelEdit: _cancelInlineEdit,
         onSubmitEdit: canReplay
             ? () async {
                 final text = _editController?.text.trim() ?? '';
-                if (text.isEmpty) return;
+                if (text.isEmpty && _editAttachments.isEmpty) return;
+                if (_editAttachments.any(
+                  (attachment) => attachment.status == InlineEditAttachmentStatus.failed,
+                )) {
+                  setState(() {
+                    _editAttachmentError = 'Remove or retry failed attachments before sending.';
+                  });
+                  return;
+                }
                 await _replayTurn(
                   event,
                   action: TurnReplayAction.edit,

@@ -1,4 +1,6 @@
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'dart:async';
+
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_command_gateway.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_commands.dart';
@@ -45,6 +47,37 @@ void main() {
     expect(store.isSessionProcessing('session-1'), isFalse);
     expect(socket.capturedCommands.single['command'], 'think');
     expect((socket.capturedCommands.single['payload'] as Map)['message'], 'hello');
+  });
+
+  test('remote attachment send waits for hosted admission before think', () async {
+    socket.hostedAdmissionCompleter = Completer<List<String>>();
+    final send = commands.sendMessageWithAttachments(
+      'inspect',
+      sessionId: 'session-1',
+      attachments: const [
+        {
+          'name': 'private.png',
+          'mime_type': 'image/png',
+          'size_bytes': 1,
+          'sha256': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          'data_base64': 'AA==',
+        },
+      ],
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(socket.capturedHostedAttachments, hasLength(1));
+    expect(socket.capturedCommands, isEmpty);
+
+    socket.hostedAdmissionCompleter!.complete(['opaque-attachment']);
+    await send;
+
+    final command = socket.capturedCommands.single;
+    expect(command['command'], 'think');
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(payload['attachment_ids'], ['opaque-attachment']);
+    expect(payload.containsKey('attachments'), isFalse);
+    expect(payload.toString(), isNot(contains('AA==')));
   });
 
   test('steerMessage preserves queued text and stable request identity', () async {

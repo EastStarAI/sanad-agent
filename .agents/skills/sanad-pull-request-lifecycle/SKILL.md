@@ -9,7 +9,17 @@ Use this skill after work is accepted and scoped. It may prepare local changes a
 
 ## Delegated Gate Flow
 
-In the delegated three-role workflow, open a **Draft PR after the first accepted gate** so CI runs on every push. Draft-to-Ready conversion, merge, and protected labels remain authorization boundaries unless the brief granted them up front.
+In the delegated three-role workflow, open a **Draft PR after the first accepted gate** so CI runs on every push. Draft-to-Ready conversion, merge, and protected labels remain authorization boundaries unless the brief granted them up front. Mandatory `type/*` and `comp/*` labels are never deferred to review or to merge time.
+
+## Label Gate
+
+An unlabeled pull request is an incomplete deliverable, not a cosmetic gap: without `type/*` and `comp/*` the change cannot be triaged, routed, or reviewed by category, and the protected-label CI job proves nothing about them.
+
+1. Read `.github/labels.yml` before classifying, and never apply a label that is absent from the manifest.
+2. Derive the labels from the complete changed-path list (`gh pr diff --name-only`), not from the pull-request summary or from the Issue it closes.
+3. Apply the mandatory minimum: exactly one `type/*` and at least one `comp/*`. Add `platform/*` only for platform-specific behavior and a `size/*` entry when the size is material.
+4. Apply non-protected labels with `gh pr edit <number> --add-label "<label>,<label>"`, then verify the applied set with `gh pr view <number> --json labels`. Re-verify before handoff whenever later commits change the diff, and repair the set in the same session.
+5. `All required checks pass` is never label evidence: the `Verify protected review labels` job checks protected labels only, so a green run can coexist with a pull request that carries no `type/*` or `comp/*` label.
 
 ## Prepare
 
@@ -26,7 +36,7 @@ In the delegated three-role workflow, open a **Draft PR after the first accepted
 4. Update the owning task checklist and evidence only after verification. When a task or plan is completed as part of the PR, move its file via `git mv` (task plan from `docs/plans/tasks/<name>.md` to `docs/plans/tasks/done/<name>.md`, or roadmap/major plan from `docs/plans/<name>.md` to `docs/plans/done/<name>.md`) and include the file relocation in the PR commit.
 5. Use a Conventional Commits pull-request title. The human PR will be squash merged, so the title must describe the final commit.
 6. Write the pull request with Problem/Goal, linked `Closes #...`, Changes, Verification, risk, cross-platform impact, documentation, and rollback.
-7. Map all modified paths against the repository label taxonomy before creating the pull request. Apply appropriate non-protected category labels such as `type/*` and `comp/*` only when the taxonomy calls for them. For any required protected positive-review label (`maintainer-reviewed`, `security-reviewed`, or `release-reviewed`), report why it is required and ask the responsible maintainer for explicit authorization after presenting the review evidence; never add a protected label merely to make CI pass. If authorization is withheld or unavailable, leave the label absent and report the merge blocker.
+7. Apply the mandatory labels before creating the pull request, following the Label Gate above: exactly one `type/*` and at least one `comp/*`, plus `platform/*` only when the scope is platform-specific and `size/*` when the size is material. For any required protected positive-review label (`maintainer-reviewed`, `security-reviewed`, or `release-reviewed`), report why it is required and ask the responsible maintainer for explicit authorization after presenting the review evidence; never add a protected label merely to make CI pass. If authorization is withheld or unavailable, leave the label absent and report the merge blocker.
 
 ## Release Delivery Route
 
@@ -82,6 +92,6 @@ No broad merge framework is introduced here: these are the smallest fail-closed 
 
 ## Pre-Merge Handoff
 
-Before merge, update the branch from current `main`, inspect the complete resulting diff, rerun affected checks, resolve review conversations, and confirm protected labels plus `All required checks pass`. Preserve human attribution through Git authorship, appropriate `Co-authored-by` trailers, and release notes.
+Before merge, update the branch from current `main`, inspect the complete resulting diff, rerun affected checks, resolve review conversations, and confirm the mandatory non-protected label set (exactly one `type/*`, at least one `comp/*`, plus any `platform/*` or `size/*` that reflects the change) together with the protected labels and `All required checks pass`. Preserve human attribution through Git authorship, appropriate `Co-authored-by` trailers, and release notes.
 
 Squash merge only after the required human decision. Then verify the final commit and linked Issue state, and delete the branch only when authorized. No lifecycle step that merges, closes work, or changes protection may run without explicit authorization.

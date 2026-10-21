@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:get_it/get_it.dart';
+import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:test/test.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
@@ -12,6 +15,8 @@ import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
+import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
@@ -127,6 +132,17 @@ class NoopCheckpointStore extends SuspendedCheckpointStore {
   Future<void> deleteByRequestId(String requestId) async {}
 }
 
+class _FakeSessionManager implements SessionManager {
+  final Map<String, Map<String, dynamic>> sessionMetas = {};
+
+  @override
+  Map<String, dynamic>? getSessionMetadata(String sessionId) =>
+      sessionMetas[sessionId];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   group('LocalRuntimeCatalog', () {
     late Directory tempDir;
@@ -137,11 +153,19 @@ void main() {
     late FakePlatformRuntimeBridge fakePlatformBridge;
     late WorkspacePolicyStore policyStore;
     late NoopCheckpointStore checkpointStore;
+    late List<String> admittedAttachmentPaths;
     late LocalRuntimeCatalog catalog;
+    late _FakeSessionManager fakeSessionManager;
 
     setUp(() async {
-      final rawTemp =
-          await Directory.systemTemp.createTemp('runtime-catalog-test');
+      fakeSessionManager = _FakeSessionManager();
+      if (GetIt.instance.isRegistered<SessionManager>()) {
+        GetIt.instance.unregister<SessionManager>();
+      }
+      GetIt.instance.registerSingleton<SessionManager>(fakeSessionManager);
+      final rawTemp = await Directory.systemTemp.createTemp(
+        'runtime-catalog-test',
+      );
       tempDir = Directory(rawTemp.resolveSymbolicLinksSync());
       workspaceDir = Directory('${tempDir.path}/workspace')
         ..createSync(recursive: true);
@@ -169,6 +193,7 @@ Use the review skill.''');
         settingsStore: SanadSettingsStore(homeDirectoryPath: tempDir.path),
       );
       checkpointStore = NoopCheckpointStore();
+      admittedAttachmentPaths = [];
       catalog = LocalRuntimeCatalog(
         workspaceRuntimeService: workspaceRuntimeService,
         mcpRuntimeManager: fakeMcpManager,
@@ -178,10 +203,15 @@ Use the review skill.''');
           checkpointStore: checkpointStore,
         ),
         platformRuntimeBridge: fakePlatformBridge,
+        admittedAttachmentPathsResolver: (sessionId) async =>
+            admittedAttachmentPaths,
       );
     });
 
     tearDown(() async {
+      if (GetIt.instance.isRegistered<SessionManager>()) {
+        GetIt.instance.unregister<SessionManager>();
+      }
       try {
         await tempDir.delete(recursive: true);
       } catch (_) {}
@@ -203,6 +233,22 @@ Use the review skill.''');
         // tool_search is temporarily disabled — see local_runtime_catalog.dart.
         expect(registry.getSpec('tool_search'), isNull);
         expect(registry.getSpec('file_read')?.workspaceRequired, isTrue);
+        final viewImageSpec = registry.getSpec('view_image')!;
+        expect(viewImageSpec.workspaceRequired, isTrue);
+        expect(registry.getTool('view_image')!.restartReplaySafe, isTrue);
+        expect(viewImageSpec.inputSchema, {
+          'type': 'object',
+          'properties': {
+            'path': {'type': 'string'},
+            'detail': {
+              'type': 'string',
+              'enum': ['low', 'auto', 'high', 'original'],
+              'default': 'auto',
+            },
+          },
+          'required': ['path'],
+          'additionalProperties': false,
+        });
         expect(registry.getSpec('web_search')?.category, equals('web'));
         final grepProperties =
             registry.getSpec('search_grep')!.inputSchema['properties']
@@ -223,6 +269,47 @@ Use the review skill.''');
         );
       },
     );
+
+    test('scopes view_image to workspace or admitted attachments', () async {
+      final noScopeTools = await catalog.buildTools(
+        registry: registry,
+        request: const AgentTurnRequest(
+          sessionId: 'thread-no-image-scope',
+          message: 'No file scope',
+        ),
+      );
+      registry.registerTools(noScopeTools);
+      expect(registry.getTool('view_image'), isNull);
+
+      final attachment = File('${tempDir.path}/attachment.png')
+        ..writeAsBytesSync(img.encodePng(img.Image(width: 3, height: 2)));
+      admittedAttachmentPaths = [attachment.path];
+      final attachmentRegistry = ToolsRegistry();
+      final attachmentTools = await catalog.buildTools(
+        registry: attachmentRegistry,
+        request: AgentTurnRequest(
+          sessionId: 'thread-attachment-image-scope',
+          message: 'Inspect attachment',
+        ),
+      );
+      attachmentRegistry.registerTools(attachmentTools);
+
+      final tool = attachmentRegistry.getTool('view_image')!;
+      final spec = attachmentRegistry.getSpec('view_image')!;
+      expect(spec.workspaceRequired, isFalse);
+      expect(spec.source['type'], 'builtin_attachment');
+      expect(tool.restartReplaySafe, isTrue);
+      final result = await tool.executeResult(
+        {'path': attachment.path},
+        context: ToolContext(
+          sessionId: 'thread-attachment-image-scope',
+          imageSupport: RouteImageSupport.supported,
+        ),
+      );
+      expect(result.isError, isFalse);
+      expect(result.blocks.length, 2);
+      expect(fakePlatformBridge.permissionRequestCount, 0);
+    });
 
     test(
       'builds and executes platform-provided tools through the bridge',
@@ -441,6 +528,8 @@ Use the review skill.''');
           ..createSync(recursive: true);
         final externalFile = File(p.join(externalDir.path, 'notes.txt'))
           ..writeAsStringSync('external hello');
+        final externalImage = File('${externalDir.path}/image.png')
+          ..writeAsBytesSync(img.encodePng(img.Image(width: 2, height: 2)));
         final tools = await catalog.buildTools(
           registry: registry,
           request: AgentTurnRequest(
@@ -457,6 +546,24 @@ Use the review skill.''');
         expect(
           jsonDecode(readResult)['file']['filePath'],
           equals(externalFile.path),
+        );
+
+        final imageResult = await registry.getTool('view_image')!.executeResult(
+          {'path': externalImage.path},
+          context: ToolContext(
+            sessionId: 'thread-external',
+            imageSupport: RouteImageSupport.supported,
+          ),
+        );
+        expect(imageResult.isError, isFalse);
+        expect(imageResult.blocks.length, 2);
+        expect(
+          fakePlatformBridge.lastPermissionPayload?['tool_name'],
+          'view_image',
+        );
+        expect(
+          fakePlatformBridge.lastPermissionPayload?['approval_key'],
+          'external_workspace_path::view_image::${externalImage.resolveSymbolicLinksSync()}',
         );
 
         await registry.getTool('file_edit')!.execute({
@@ -490,7 +597,7 @@ Use the review skill.''');
           'content': 'private content',
         });
 
-        expect(fakePlatformBridge.permissionRequestCount, equals(5));
+        expect(fakePlatformBridge.permissionRequestCount, equals(6));
         expect(fakePlatformBridge.lastPermissionPayload?['tool_input'], {
           'action': 'file_write',
           'path': File(createdFile).resolveSymbolicLinksSync(),
@@ -507,9 +614,47 @@ Use the review skill.''');
       },
     );
 
+    test('builds workspace tools when workspaceId has exec_root: prefix', () async {
+      final tools = await catalog.buildTools(
+        registry: registry,
+        request: AgentTurnRequest(
+          sessionId: 'thread-exec-root',
+          message: 'Work in execution root',
+          workspaceId: 'exec_root:${workspaceDir.path}',
+        ),
+      );
+      final names = tools.map((t) => t.schema.name).toList();
+      expect(names, contains('shell_execute'));
+      expect(names, contains('file_read'));
+      expect(names, contains('file_edit'));
+    });
+
+    test('explicit workspaceId on request takes precedence over stale session execution_root', () async {
+      final otherDir = Directory(p.join(tempDir.path, 'other-exec-root'))
+        ..createSync(recursive: true);
+      fakeSessionManager.sessionMetas['session-stale-root'] = {
+        'execution_root': otherDir.path,
+      };
+
+      final tools = await catalog.buildTools(
+        registry: registry,
+        request: AgentTurnRequest(
+          sessionId: 'session-stale-root',
+          message: 'Work in explicit workspace',
+          workspaceId: workspaceDir.path,
+        ),
+      );
+      final names = tools.map((t) => t.schema.name).toList();
+      expect(names, contains('shell_execute'));
+      expect(names, contains('file_read'));
+      expect(names, contains('file_edit'));
+    });
+
     test('full_access executes an external path without prompting', () async {
       final externalFile = File(p.join(tempDir.path, 'full-access.txt'))
         ..writeAsStringSync('allowed');
+      final externalImage = File('${tempDir.path}/full-access.png')
+        ..writeAsBytesSync(img.encodePng(img.Image(width: 2, height: 1)));
       await policyStore.savePolicy(
         workspaceDir.path,
         const WorkspacePolicy(
@@ -531,6 +676,14 @@ Use the review skill.''');
       });
 
       expect(result, contains('allowed'));
+      final imageResult = await registry.getTool('view_image')!.executeResult(
+        {'path': externalImage.path},
+        context: ToolContext(
+          sessionId: 'thread-full-access',
+          imageSupport: RouteImageSupport.supported,
+        ),
+      );
+      expect(imageResult.isError, isFalse);
       expect(fakePlatformBridge.permissionRequestCount, equals(0));
     });
 
@@ -559,7 +712,19 @@ Use the review skill.''');
       );
 
       expect(File(externalPath).existsSync(), isFalse);
-      expect(fakePlatformBridge.permissionRequestCount, equals(1));
+
+      final deniedImage = File('${tempDir.path}/denied.png')
+        ..writeAsBytesSync(img.encodePng(img.Image(width: 1, height: 1)));
+      final imageResult = await registry.getTool('view_image')!.executeResult(
+        {'path': deniedImage.path},
+        context: ToolContext(
+          sessionId: 'thread-denied',
+          imageSupport: RouteImageSupport.supported,
+        ),
+      );
+      expect(imageResult.isError, isTrue);
+      expect(imageResult.errorCode?.name, 'permissionDenied');
+      expect(fakePlatformBridge.permissionRequestCount, equals(2));
     });
 
     test('tool search is temporarily disabled and not registered', () async {

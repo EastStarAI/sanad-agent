@@ -29,6 +29,8 @@ description: "Regression matrix for typed results, user attachments, View Image 
 | PNG/JPEG/WebP with misleading extension | Magic MIME controls behavior. |
 | Empty/corrupt/text/animated/multi-frame | Typed terminal failure with no image block. |
 
+Automated coverage ownership: `agent/test/capabilities/view_image_handler_test.dart` proves canonical internal/external/symlink/attachment paths, approval-before-byte-read, safe ordered results, and text-only failures. `agent/test/capabilities/runtime_catalog_test.dart` proves source-scope registration, exact schema, replay safety, default approval, denial, and full-access behavior. `agent/test/capabilities/permission_manager_test.dart` remains the shared approval-owner regression suite.
+
 ## Locked boundary matrix
 
 Test boundary-1, boundary, and boundary+1 for each numeric limit.
@@ -52,9 +54,10 @@ Detail assertions: `low=768`, `auto=2048`, `high=4096`, and `original` preserves
 |---|---|
 | Codex Responses | Ordered `input_text`/`input_image` inside `function_call_output.output`, original `call_id`; `original` maps to wire `high`. |
 | Anthropic | Ordered text/image blocks inside the matching `tool_result`, original `tool_use_id`, valid alternation/merge. |
-| OpenAI-compatible Chat | Text projection plus one omission marker; no `image_url` or base64. |
-| Ollama/custom/missing | Same text-only projection; no retry/failover or canonical-history mutation. |
-| Rich-to-text failover | Destination request degrades locally; source history remains rich and unchanged. |
+| OpenAI-compatible Chat | Model-only override, validated exact discovery or exact trusted catalog evidence enables verified user image_url input and detached tool-image context after all paired results, including custom endpoints. Unknown/unsupported image routes halt before HTTP. Sync/stream, frozen admission, replay/pruning and immutable history agree. |
+| Native Ollama | Verified ordered user `images` arrays and detached tool-image arrays after a complete paired batch. Native `/api/show` vision evidence needs no override. Sync/stream PNG/JPEG, malformed capability lists, incomplete/orphaned/duplicate/mismatched batches and request-client lifecycle are covered. |
+| Custom route | Uses its actual protocol codec and the same exact model-owned evidence; no template or official-URL vision veto. |
+| Missing/unsupported evidence or rich-to-text destination | Pixel-bearing dispatch halts actionably; source history stays rich, with no lossy retry/failover. Legacy explicit compatibility projection is tested separately. |
 
 Both sync and stream paths use the same builder and pass identical assertions.
 
@@ -69,13 +72,21 @@ Both sync and stream paths use the same builder and pass identical assertions.
 | Current/incomplete loop | Image cannot be pruned. |
 | Latest three completed assistant turns | Images remain unless 24-MiB retained cap requires oldest-first pruning. |
 | Older/over-budget history | Image becomes the exact processed marker once; text/order/identity remain. |
+| Sequential/parallel image start | Private input path is redacted through the same helper in both modes. |
+| Legacy live descriptor fallback | Closed metadata validates before publication; unknown/private payload fields are rejected. |
 | Events/logs/plugins/history query | Bounded text/status only. |
 | Request dump | Deep-copy marker contains safe MIME/size only; live payload still contains the valid image. |
+
+Automated coverage ownership: `agent/test/engine/llm_request_dumper_test.dart` proves canonical/Anthropic/Responses typed-image, data-URI, raw-base64, malformed-size, secret-redaction, and non-mutation behavior. `agent/test/engine/history_image_pruner_test.dart` proves exact three-turn and 24-MiB policy, tool-loop turn counting, current-loop protection, oldest-first replacement, idempotency, and preservation of text/order/tool identity/error state. `agent/test/engine/agent_runner_test.dart` and `agent/test/interfaces/` retain runner persistence and binary-free event/history-query compatibility. `agent/e2e_test/view_image_tool_e2e_test.dart` additionally proves authenticated admission-before-turn, immediate exact-file `view_image` scope for an unscoped session, `PIXELS_MAGENTA` derived from admitted pixels, public-frame redaction, receiver-side count/size/hash rejection, partial-admission cleanup, external deny/allow-once/full-access, text-only fallback, controlled restart after durable completion, source deletion, and one stable tool identity.
+
+Automated model/policy ownership: `agent/test/core/models/user_attachment_test.dart` covers closed schema v1, durable/public projection separation, role and MIME/kind invariants, immutable ordering, legacy parsing, malformed metadata, and boundary-1/boundary/boundary+1 admission limits. `agent/test/evolution/attachment_store_test.dart` covers bounded chunking, verified MIME/hash/size, safe names and platform-neutral separators, 0600 payloads, exact-session grants, ownership mismatch, interruption/hash/overflow cleanup, message orphans, and idempotent session deletion.
 
 ## User attachment admission matrix
 
 | Scenario | Required result |
 |---|---|
+| Hosted composer map without MIME hint | Valid upload-start carries a generic hint; Agent derives actual MIME/kind from bytes and admission succeeds. Fixture must use the real composer map shape. |
+| New Conversation → first send → New Conversation | Successful submission clears the original attachment draft despite session creation; unrelated/newer drafts survive and a failed admission retains the original owner. |
 | `+` beside Permission Mode | Opens File Picker once and preserves composer focus/text. |
 | Paste image / drag file / picker file | Enters the same ordered draft attachment pipeline. |
 | File at 5 MiB | Accepted after client and agent validation. |
@@ -91,6 +102,7 @@ Both sync and stream paths use the same builder and pass identical assertions.
 
 | Scenario | Required result |
 |---|---|
+| Relative durable attachment reference | Local retrieval resolves within the selected Agent attachment store, not process working directory; hash/size/scope failures return no bytes. |
 | Sent user message | Ordered image thumbnails/file cards appear above text in live and history views. |
 | Image activation | Opens accessible Lightbox without exposing path or reusable credential. |
 | Enter Edit | Existing attachments appear ready immediately and are not uploaded again. |
@@ -103,30 +115,60 @@ Both sync and stream paths use the same builder and pass identical assertions.
 
 | Scenario | Required result |
 |---|---|
+| Live completion timing | Durable final guarded result exists before the byte-free descriptor is published; no first-fetch 404 race. |
+| Default expansion | Standalone image and containing tool group open by default; manual collapse survives rebuilds, ordinary tools remain unchanged. |
+| Concurrent hosted frames | In-order wire frames stay ordered through asynchronous processing; delayed start cannot be overtaken by chunk/complete. |
 | Live/history tool result | Title is `View Image`; thumbnail appears directly below it. |
 | Near/far viewport | Hydration starts only near viewport and cancels on disposal/switch. |
 | Local route | Authenticated Local Gateway returns only the bound media. |
 | Remote route | Compatible hosted capability returns media only to the authorized requester. |
 | Wrong user/device/session or expired identity | No bytes returned. |
 | Pruned/expired media | Stable row shows `Image no longer available`. |
+| Typed tool failure (`execution_failed`, unsupported/unknown route) | Explanation visible directly in the card body with error styling; header extracts file basename (e.g. `View Image: sample.png`); zero image blocks and unrelated final answer do not hide error. |
+| Ordinary file/decode/permission errors | Failure reason honestly visible without inventing network/contact-error banners. |
+| History hydration parity | Reopened session displays identical error presentation and title suffix as live stream. |
 | Event/cache JSON | Contains metadata and opaque `media_id`; no base64, private path, or public URL. |
 
-## Daemon-backed proof
+## Client Typed Tool Failure Presentation and Hydration Parity
 
-Use an isolated daemon and deterministic provider fixture that declares `imageToolResults`. First admit an attachment and prove the initial provider request contains user text plus the agent-local path projection but no attachment bytes. The fixture then asks for `view_image`, inspects the next request image block, and returns an answer available only in the pixels. Repeat locally and through the compatible remote contract, including restart after tool completion, Edit without re-upload, interrupted transfer, and source deletion before recovery. Execute port-binding tests with `--concurrency=1`; unit, widget, and codec suites remain parallel.
+### Implementation Symbols and Boundaries
+- `UnifiedDeviceMapper`:
+  - `mapLiveEvent` and `mapHistory` map `tool_result` events into `CanonicalEvent`.
+  - Extracts typed text blocks (`toolResult['blocks']` where `type == 'text'`) or compatibility `output`/`content`.
+  - Extracts `isError` from `event['isError']`, `toolResult?['isError']`, `errorCode`, or explicit error status.
+  - Populates `CanonicalEvent.text` and `tool['output']` with the extracted explanation string.
+- `ConversationState._merge`:
+  - Preserves `text: incoming.text.isNotEmpty ? incoming.text : existing.text` on `EventKind.toolCall` merge so failure explanations are not dropped when reconciling tool calls and results.
+- `ToolPresentationHelper`:
+  - `getToolDetailSuffix`: recognizes `view_image` and extracts the target filename from `mapInput['path']` or `mapOutput['path']`, avoiding blank suffix headers.
+  - `buildTitleWidget`: renders `View Image: <filename>` with error icon when status is `error`.
+- `EventTile`:
+  - `_buildToolContent`: when `toolName == 'view_image'`:
+    - When `status == EventStatus.running`, preserves executing indicator without any failure banner.
+    - When `widget.event.isError` is true (explicit error status, error kind, or typed `isError`/`errorCode`), renders dedicated `_buildViewImageError` card with safe displayText/text blocks (never stringified raw maps or base64).
+    - When non-error and media is present, renders `_ViewImageToolTile` thumbnail and lightbox.
+    - When non-error and media is missing/unhydrated, renders honest neutral `_UnavailableViewImage` (`Image unavailable`) without error banner or false unsupported claims.
 
 ## Security checklist
 
-- [ ] Authorization precedes every file-byte read.
-- [ ] Canonical target owns approval scope.
-- [ ] No remote or data-URI input path exists.
-- [ ] No binary enters logs, events, approvals, exceptions, plugin payloads, or history queries.
-- [ ] Declared extension cannot override magic MIME.
-- [ ] Batch and per-image budgets are deterministic in tool-call order.
-- [ ] Worker timeout terminates isolated processing and leaves no artifact.
-- [ ] Stale run cannot append a result to a newer owner.
-- [ ] Text fallback cannot start a provider retry loop.
-- [ ] User attachment bytes never enter the provider request before an explicit tool call.
-- [ ] Client-local remote paths never become agent/model paths.
-- [ ] Attachment and media access is isolated by user, device, and session.
-- [ ] Partial transfers, expired media, and session deletion leave no unauthorized durable artifact.
+Reconciled against the completed `77b1–77b2`, `77d1–77d3`, `77e1–77e2`, `77g1–77g2/G2` and `77I5` receipts, not inferred from source existence. The current Ollama delta additionally passed 171 independent adapter/resolver/dumper tests and clean Agent analysis; short native-image dump redaction and invalid/incomplete tool batches are covered. Final reconciled suites and thinking/delivery gates remain separately open in `77I5`.
+
+- [x] Authorization precedes every file-byte read.
+- [x] Canonical target owns approval scope.
+- [x] No remote or data-URI input path exists.
+- [x] No binary enters logs, events, approvals, exceptions, plugin payloads, or history queries.
+- [x] Declared extension cannot override magic MIME.
+- [x] Batch and per-image budgets are deterministic in tool-call order.
+- [x] Worker timeout terminates isolated processing and leaves no artifact.
+- [x] Stale run cannot append a result to a newer owner.
+- [x] Text fallback cannot start a provider retry loop.
+- [x] Supported routes receive only explicitly admitted, store-verified user image pixels or validated typed tool images through the actual mode's codec; unsupported/unknown image routes halt before lossy dispatch. The path-only deterministic fixture still requires an explicit `view_image` call before receiving pixels.
+- [x] Client-local remote paths never become agent/model paths.
+- [x] Attachment and media access is isolated by user, device, and session.
+- [x] Partial transfers, expired media, and session deletion leave no unauthorized durable artifact.
+- [x] Typed tool failures display truthful actionable explanations without leaking private paths, credentials, or provider internal UUIDs.
+
+
+Use isolated `SANAD_HOME` and `SANAD_STATE_HOME` directories with the deterministic `E2eFixtureAdapter`; never use a live provider or the primary user database. The test harness provisions `supports_image_input: true` under `model_capabilities` in `config.yaml` to satisfy authoritative route capability resolution, while `E2eFixtureAdapter` resolves admitted session attachments through `AttachmentStore` to invoke `view_image`. Admit through the authenticated private command, require its ACK before `think`, and prove the provider receives only text plus the Agent-owned path projection. The fixture must choose `view_image` before any bytes reach it and answer `PIXELS_MAGENTA` only after decoding the tool-result pixels. Public frame captures must contain neither base64 nor source/private paths. `agent/e2e_test/view_image_tool_e2e_test.dart` is the local daemon-backed owner and runs with `--concurrency=1`; the policy/store suites own 5 MiB and 4/20 MiB boundaries, restart orphan cleanup, exact ownership, unavailable references, and session deletion. Conversation widget/replay suites own thumbnail/Lightbox/history/Edit without re-upload. Unit, widget, and codec suites otherwise remain parallel.
+
+The hosted-process owner is `client/e2e_test/hosted_attachment_relay_e2e_test.dart`, backed by the isolated Agent fixture in `agent/test/fixtures/hosted_attachment_relay_fixture.dart`. It must run alone with `--concurrency=1` and prove Client upload/chunking, terminal Agent ACK before `think`, Agent-local model path, successful `view_image`, reverse media reconstruction, and binary/private-filename absence from canonical commands. Private hosted-relay tests remain the authority for authenticated wrong-user/device/session/hardware, exact-requester delivery, TTL/rate/concurrency, idempotency, and disconnect route cleanup; public Agent/Client tests own sequence/hash/limit/cancel and consumer behavior.

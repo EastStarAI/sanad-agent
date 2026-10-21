@@ -14,7 +14,9 @@ import 'package:sanad_client/features/conversations/presentation/bloc/composer_s
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/compaction_failure_formatter.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/composer_text_editing.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/skill_composer_utils.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
@@ -26,6 +28,7 @@ import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
 import 'package:sanad_client/features/voice/presentation/widgets/voice_stream_panel.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_context_chips.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
@@ -322,22 +325,42 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
     final result = await _inputCubit.compactSession();
     if (!mounted) return;
-    if (result.accepted) {
+    if (result.pending) {
+      // The acknowledgement was slower than the request window; the daemon
+      // may still be compacting. Say so neutrally and report the correlated
+      // late outcome without holding the runtime action in flight.
+      ToastUtils.showInfo(
+        context,
+        AppLocalizations.of(context)!.compactionPendingStillRunning,
+      );
+      if (result.settlement case final settlement?) {
+        unawaited(_presentLateCompactOutcome(sessionId, settlement));
+      }
       return;
     }
-    if (result.sessionBusy) {
-      _showValidationError('Session is busy. Try /compact again when idle.');
-      return;
-    }
-    if (result.compactionInProgress) {
-      _showValidationError('Context compaction is already in progress.');
-      return;
-    }
-    _showValidationError(
-      result.failureReason == null
-          ? 'Context compaction could not start.'
-          : 'Context compaction failed: ${result.failureReason}',
+    _presentCompactOutcome(result);
+  }
+
+  Future<void> _presentLateCompactOutcome(
+    String sessionId,
+    Future<SessionCompactResult> settlement,
+  ) async {
+    final result = await settlement;
+    // A late outcome belongs to the session that requested it. The lifecycle
+    // timeline tile stays the durable surface when this panel moved on, and an
+    // unconfirmed outcome is unknown rather than failed.
+    if (!mounted || widget.sessionId?.trim() != sessionId) return;
+    if (result.unconfirmed) return;
+    _presentCompactOutcome(result);
+  }
+
+  void _presentCompactOutcome(SessionCompactResult result) {
+    if (result.accepted) return;
+    final failure = CompactionFailureFormatter.resolveForResult(
+      result,
+      l10n: AppLocalizations.of(context),
     );
+    _showValidationError(failure.toToastMessage());
   }
 
   void _selectSlashSuggestion(SlashCommandEntry entry) {
@@ -410,7 +433,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
           model: preserveBoundContext ? existing?.model : inputState.nextMessageModel ?? existing?.model,
           thinkingMode: preserveBoundContext
               ? existing?.thinkingMode
-              : inputState.nextMessageThinkingMode ?? existing?.thinkingMode,
+              : _inputCubit.explicitNextMessageThinkingMode ?? existing?.thinkingMode,
           permissionMode: preserveBoundContext ? existing?.permissionMode : inputState.permissionMode.name,
           pendingRequestId: null,
           updatedAt: DateTime.now().toUtc(),
@@ -424,17 +447,21 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
           clearPendingRequest: true,
         );
       } else {
+        // Only an explicit thinking choice is persisted. A route default the
+        // control admitted for display and the next send is never a choice,
+        // so the draft keeps null and the same default resolves again.
+        final explicitThinking = _inputCubit.explicitNextMessageThinkingMode;
         repo.setNewConversationDraft(
           deviceId,
           text: text,
           workspaceId: inputState.selectedWorkspace?.id,
           providerId: inputState.nextMessageProviderId,
           model: inputState.nextMessageModel,
-          thinkingMode: inputState.nextMessageThinkingMode,
+          thinkingMode: explicitThinking,
           clearWorkspace: inputState.selectedWorkspace == null,
           clearProvider: inputState.nextMessageProviderId == null,
           clearModel: inputState.nextMessageModel == null,
-          clearThinkingMode: inputState.nextMessageThinkingMode == null,
+          clearThinkingMode: explicitThinking == null,
           clearPermissionMode: true,
           clearPendingRequest: true,
         );
@@ -511,10 +538,17 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
   bool _draftContextMatchesInput(ConversationDraft draft) {
     final state = _inputCubit.state;
+    // A draft without a complete route does not own the route, so the device
+    // route it leaves in place is not a mismatch to restore again.
+    if (!draft.hasCompleteRoute) {
+      return state.selectedWorkspace?.id == draft.workspaceId;
+    }
+    // Compare the explicit thinking value: a draft never stores an admitted
+    // route default, so comparing the next-send value would restore forever.
     return state.selectedWorkspace?.id == draft.workspaceId &&
         state.nextMessageProviderId == draft.providerId &&
         state.nextMessageModel == draft.model &&
-        state.nextMessageThinkingMode == draft.thinkingMode;
+        _inputCubit.explicitNextMessageThinkingMode == draft.thinkingMode;
   }
 
   Future<void> _restoreNewConversationDraftContext(
