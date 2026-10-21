@@ -18,6 +18,8 @@ import 'package:sanad_client/features/conversations/data/repositories/conversati
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_search_cubit.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_cache_store.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
@@ -185,8 +187,8 @@ void main() {
     history.dispose();
   });
 
-  Future<GoRouter> pumpHome(WidgetTester tester, String initialLocation) async {
-    tester.view.physicalSize = const Size(1400, 1000);
+  Future<GoRouter> pumpHome(WidgetTester tester, String initialLocation, {Size size = const Size(1400, 1000)}) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
@@ -338,7 +340,8 @@ void main() {
     history.setInitial(ConversationDestination.session(deviceId: deviceA.id, sessionId: sessionA.id));
     final router = await pumpHome(tester, AppRoutes.sessionLocation(deviceA.id, sessionA.id));
 
-    await tester.tap(find.byKey(const Key('sidebar_new_session_btn')));    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sidebar_new_session_btn')));
+    await tester.pumpAndSettle();
 
     // The resolver restores the device's workspace context, and the route uses
     // the resolved destination instead of a workspace-less location.
@@ -373,6 +376,247 @@ void main() {
     ]);
     expect(history.snapshot.forwardStack, isEmpty);
     expect(tester.takeException(), isNull);
+  });
+
+  group('search result then New Conversation (Task 124 item 4)', () {
+    Future<void> settleFrames(WidgetTester tester) async {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    Future<void> openSearchHit(
+      WidgetTester tester,
+      Session session, {
+      String? anchorEventId,
+      bool settle = true,
+    }) async {
+      conversationRepository.searchSessionsHandler = (agent, query, cursor) async => SessionSearchPage(
+        hits: [
+          SessionSearchHit(
+            session: session,
+            matchKind: SessionSearchMatchKind.content,
+            snippet: 'match',
+            anchorEventId: anchorEventId,
+          ),
+        ],
+        hasMore: false,
+      );
+      await tester.tap(find.byKey(const Key('conversation_search_button')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('conversation_search_field')), 'match');
+      await tester.pump(SessionSearchCubit.debounceDuration);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ValueKey('conversation_search_result:${session.id}')));
+      if (settle) {
+        await tester.pumpAndSettle();
+      } else {
+        await settleFrames(tester);
+      }
+    }
+
+    for (final (anchored, startNew, cached) in [
+      (false, false, true),
+      (true, false, true),
+      (false, true, true),
+      (true, true, true),
+      (true, true, false),
+      (false, true, false),
+    ]) {
+      testWidgets('New Conversation still navigates after opening a search result '
+          '(anchored: $anchored, from new: $startNew, cached: $cached)', (
+        tester,
+      ) async {
+        final sessionA2 = Session(
+          id: 'session-a2',
+          title: 'Conversation A2',
+          deviceId: deviceA.id,
+          workspaceId: workspace.id,
+          createdAt: DateTime(2026, 1, 3),
+          updatedAt: DateTime(2026, 1, 3),
+          lastMessageAt: DateTime(2026, 1, 3),
+        );
+        conversationRepository.seedSessions(deviceA, [sessionA, sessionA2]);
+        if (cached) cacheStore.applySessionCreated(deviceA.id, sessionA2);
+        final GoRouter router;
+        if (startNew) {
+          const start = ConversationDestination.newConversation(deviceId: 'device-a', workspaceId: 'workspace-1');
+          history.setInitial(start);
+          router = await pumpHome(tester, start.routePath);
+        } else {
+          history.setInitial(ConversationDestination.session(deviceId: deviceA.id, sessionId: sessionA.id));
+          router = await pumpHome(tester, AppRoutes.sessionLocation(deviceA.id, sessionA.id));
+        }
+
+        await openSearchHit(tester, sessionA2, anchorEventId: anchored ? 'event-1' : null);
+        expect(currentPath(router), AppRoutes.sessionLocation(deviceA.id, sessionA2.id));
+        expect(sessionCubitOf(tester).state.selectedSession?.id, sessionA2.id);
+
+        await tester.tap(find.byKey(const Key('sidebar_new_session_btn')));
+        await tester.pumpAndSettle();
+
+        const newConversation = ConversationDestination.newConversation(
+          deviceId: 'device-a',
+          workspaceId: 'workspace-1',
+        );
+        expect(currentPath(router), newConversation.routePath);
+        expect(history.snapshot.current, newConversation);
+        expect(sessionCubitOf(tester).state.selectedSession, isNull);
+        expect(messagesCubitOf(tester).state.visualState.isNewConversation, isTrue);
+
+        // Navigation keeps working afterwards.
+        await tester.tap(find.byKey(ValueKey('sidebar_session_title:${sessionA.id}')));
+        await tester.pumpAndSettle();
+        expect(currentPath(router), AppRoutes.sessionLocation(deviceA.id, sessionA.id));
+        expect(sessionCubitOf(tester).state.selectedSession?.id, sessionA.id);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    for (final anchor in [null, 'event-1']) {
+      testWidgets('New Conversation still navigates after opening a search result for the open session ($anchor)', (
+        tester,
+      ) async {
+        history.setInitial(ConversationDestination.session(deviceId: deviceA.id, sessionId: sessionA.id));
+        final router = await pumpHome(tester, AppRoutes.sessionLocation(deviceA.id, sessionA.id));
+
+        await openSearchHit(tester, sessionA, anchorEventId: anchor);
+        expect(currentPath(router), AppRoutes.sessionLocation(deviceA.id, sessionA.id));
+
+        await tester.tap(find.byKey(const Key('sidebar_new_session_btn')));
+        await tester.pumpAndSettle();
+
+        const newConversation = ConversationDestination.newConversation(
+          deviceId: 'device-a',
+          workspaceId: 'workspace-1',
+        );
+        expect(currentPath(router), newConversation.routePath);
+        expect(history.snapshot.current, newConversation);
+        expect(sessionCubitOf(tester).state.selectedSession, isNull);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    for (final (button, expected) in [
+      (
+        'sidebar_new_conversation_btn:workspace-1',
+        const ConversationDestination.newConversation(deviceId: 'device-a', workspaceId: 'workspace-1'),
+      ),
+    ]) {
+      for (final startNew in [false, true]) {
+        testWidgets('$button navigates after a search result (from new: $startNew)', (tester) async {
+          final sessionA2 = Session(
+            id: 'session-a2',
+            title: 'Conversation A2',
+            deviceId: deviceA.id,
+            workspaceId: workspace.id,
+            createdAt: DateTime(2026, 1, 3),
+            updatedAt: DateTime(2026, 1, 3),
+            lastMessageAt: DateTime(2026, 1, 3),
+          );
+          conversationRepository.seedSessions(deviceA, [sessionA, sessionA2]);
+          cacheStore.applySessionCreated(deviceA.id, sessionA2);
+          final start = startNew
+              ? expected
+              : ConversationDestination.session(deviceId: deviceA.id, sessionId: sessionA.id);
+          history.setInitial(start);
+          final router = await pumpHome(tester, start.routePath);
+
+          await openSearchHit(tester, sessionA2, anchorEventId: 'event-1');
+          expect(currentPath(router), AppRoutes.sessionLocation(deviceA.id, sessionA2.id));
+
+          await tester.tap(find.byKey(Key(button)));
+          await tester.pumpAndSettle();
+
+          expect(currentPath(router), expected.routePath);
+          expect(history.snapshot.current, expected);
+          expect(sessionCubitOf(tester).state.selectedSession, isNull);
+          expect(tester.takeException(), isNull);
+        });
+      }
+    }
+
+    testWidgets('New Conversation navigates while the search result history is still loading', (tester) async {
+      final sessionA2 = Session(
+        id: 'session-a2',
+        title: 'Conversation A2',
+        deviceId: deviceA.id,
+        workspaceId: workspace.id,
+        createdAt: DateTime(2026, 1, 3),
+        updatedAt: DateTime(2026, 1, 3),
+        lastMessageAt: DateTime(2026, 1, 3),
+      );
+      conversationRepository.seedSessions(deviceA, [sessionA, sessionA2]);
+      cacheStore.applySessionCreated(deviceA.id, sessionA2);
+      final pendingHistory = Completer<List<CanonicalEvent>>();
+      conversationRepository.loadAnchoredHistoryHandler = (agent, sessionId, anchor) => pendingHistory.future;
+      const start = ConversationDestination.newConversation(deviceId: 'device-a', workspaceId: 'workspace-1');
+      history.setInitial(start);
+      final router = await pumpHome(tester, start.routePath);
+
+      await openSearchHit(tester, sessionA2, anchorEventId: 'event-1', settle: false);
+      expect(currentPath(router), AppRoutes.sessionLocation(deviceA.id, sessionA2.id));
+
+      await tester.tap(find.byKey(const Key('sidebar_new_session_btn')));
+      await settleFrames(tester);
+      expect(currentPath(router), start.routePath);
+      pendingHistory.complete(const <CanonicalEvent>[]);
+      await tester.pumpAndSettle();
+
+      expect(currentPath(router), start.routePath);
+      expect(history.snapshot.current, start);
+      expect(sessionCubitOf(tester).state.selectedSession, isNull);
+      expect(messagesCubitOf(tester).state.visualState.isNewConversation, isTrue);
+
+      await tester.tap(find.byKey(ValueKey('sidebar_session_title:${sessionA2.id}')));
+      await tester.pumpAndSettle();
+      expect(currentPath(router), AppRoutes.sessionLocation(deviceA.id, sessionA2.id));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('drawer: New Conversation still navigates after opening a search result', (tester) async {
+      final sessionA2 = Session(
+        id: 'session-a2',
+        title: 'Conversation A2',
+        deviceId: deviceA.id,
+        workspaceId: workspace.id,
+        createdAt: DateTime(2026, 1, 3),
+        updatedAt: DateTime(2026, 1, 3),
+        lastMessageAt: DateTime(2026, 1, 3),
+      );
+      conversationRepository.seedSessions(deviceA, [sessionA, sessionA2]);
+      cacheStore.applySessionCreated(deviceA.id, sessionA2);
+      history.setInitial(ConversationDestination.session(deviceId: deviceA.id, sessionId: sessionA.id));
+      final router = await pumpHome(
+        tester,
+        AppRoutes.sessionLocation(deviceA.id, sessionA.id),
+        size: const Size(600, 1000),
+      );
+      ScaffoldState scaffold() => tester.state<ScaffoldState>(find.byType(Scaffold).first);
+
+      scaffold().openDrawer();
+      await tester.pumpAndSettle();
+      await openSearchHit(tester, sessionA2, anchorEventId: 'event-1');
+      expect(currentPath(router), AppRoutes.sessionLocation(deviceA.id, sessionA2.id));
+      expect(scaffold().isDrawerOpen, isFalse);
+
+      scaffold().openDrawer();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('sidebar_new_session_btn')));
+      await tester.pumpAndSettle();
+
+      const newConversation = ConversationDestination.newConversation(
+        deviceId: 'device-a',
+        workspaceId: 'workspace-1',
+      );
+      expect(currentPath(router), newConversation.routePath);
+      expect(history.snapshot.current, newConversation);
+      expect(
+        BlocProvider.of<SessionCubit>(tester.element(find.byType(Scaffold).first)).state.selectedSession,
+        isNull,
+      );
+      expect(tester.takeException(), isNull);
+    });
   });
 }
 
@@ -471,8 +715,7 @@ class _FakeAuthRepository implements IAuthRepository {
 /// The window status bar reads only gateway state; no probe or action is
 /// exercised by these navigation tests.
 class _FakeGatewayConnectionCubit extends Fake implements GatewayConnectionCubit {
-  final StreamController<GatewayConnectionStatus> _controller =
-      StreamController<GatewayConnectionStatus>.broadcast();
+  final StreamController<GatewayConnectionStatus> _controller = StreamController<GatewayConnectionStatus>.broadcast();
 
   @override
   GatewayConnectionStatus get state => const GatewayConnectionStatus.initial();

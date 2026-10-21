@@ -2,7 +2,7 @@
 id: 124
 title: Cloud and Client reliability follow-ups (G3)
 status: in_review
-gate: G4 (coordinator review) open
+gate: G4 (coordinator review) open; item 4 open
 created: 2026-10-21
 parent_task: none
 depends_on: []
@@ -22,7 +22,7 @@ Fix four reliability defects that were found live on Test Homes. All four predat
 | 1 | A remembered cloud device that can no longer appear leaves the Client on "No device selected" instead of falling back to the local device. | fixed |
 | 2 | After a cloud reconnect the session-list request races the device re-announce, and the open conversation stays on "Processing…" until it is reopened. | fixed |
 | 3 | An `emitWithResponse` late timeout calls `off(event)` and removes a newer same-event listener. | fixed |
-| 4 | Opening a search result, then pressing "+" for a new conversation, stops navigation until a Client restart. | pending |
+| 4 | Opening a search result, then pressing "+" for a new conversation, stops navigation until a Client restart. | not reproduced; guards added, needs the live NavTrace log |
 
 ## Item 3 — `emitWithResponse` removes only its own listener
 
@@ -106,3 +106,47 @@ A second sync would not have helped either. `getSessions` deduplicates an in-fli
 - `client/test/unit/services/connection_registries_test.dart`: "cloud reconnect re-syncs again once the device re-announces online". Its first request races the re-announce, the Online flip triggers a second request, and a further Online-to-Online update does not.
 - `client/test/unit/services/socket_conversation_client_test.dart`: "a re-sync supersedes an unanswered reconnect request and hydrates the open conversation".
 - Red → green: `temp/g3/item2-red.log` (2 failed), `temp/g3/item2-green.log` (23 passed).
+
+## Item 4 — Navigation after a search result (not reproduced)
+
+### What the log means
+
+The router logs `NavTrace router.redirect` when it parses every navigation and refresh (`AppRouter.handleRedirect`). It logs `router.buildHome` only when it builds a page (`AppRouter._buildHomePage`). `GoRouterDelegate.setNewRoutePath` (go_router 17.3.0) skips the rebuild when the parsed `RouteMatchList` equals `currentConfiguration`. So "redirect without buildHome" after "+" means one of three things:
+
+- the router was already at the New Conversation location;
+- a newer route information superseded it in the same frame;
+- the log line came from a refresh, and the "+" handler never called `context.go`.
+
+The main pane follows `SessionCubit` and `SessionMessagesCubit`, not the route. A stuck UI therefore also needs the cubits to keep, or restore, the search result's selection.
+
+### Investigation
+
+A widget harness drives the real `HomeScreen`, `AppRouter`, `ConversationHistoryController`, cache store, and cubits. It covers:
+
+- search from a session and from a New Conversation, with and without an anchor;
+- a hit that is not cached, a hit for the session that is already open, and a hit in another or no workspace;
+- the top New Session button and the workspace "+";
+- a "+" press while the anchored history load is still pending;
+- drawer (compact) mode;
+- navigation after the "+".
+
+Every variant navigates correctly on current code, so no red test could be written. The following candidates were checked and ruled out by code reading or the harness:
+
+- a double `onSelected` from Enter: on desktop, a handled key event is not passed to the text input, so it cannot also fire `onSubmitted`;
+- `context.mounted` early returns (the sidebar subtree is not remounted on these paths);
+- the HomeScreen selection "promote" listener;
+- the `startNewChat` early-return branch;
+- `onEnter` (not configured);
+- a search hit whose session carries a missing or foreign `device_id`.
+
+### Kept as regression guards
+
+`client/test/widget/conversation_navigation_back_forward_test.dart`, group "search result then New Conversation (Task 124 item 4)". Log: `temp/g3/item4-guards.log` (16 passed).
+
+### Needed to close
+
+The full Client NavTrace and AppRouterRedirect log of a live repro (`sanad-dev logs client`), including the lines from the search selection through the first failed "+". The decisive lines are `session.selectSession`, `nav.navigateTo`, `home.applyRoute`, `home.applySession`, `session.startNewChat`, `home.selectionListener`, and any `AppRouterRedirect ... redirectPath=` line that is not `allow`. Also record whether the result was opened by click or by Enter, which "+" was pressed, the layout (wide or compact), and the device scope (local or cloud).
+
+### Observed in passing (not changed)
+
+The unscoped "+" (`sidebar_new_unscoped_conversation_btn`, tooltip "New conversation without a workspace") calls `startNewChat(workspaceId: null)`. When it leaves an open session, that restores the open session's workspace, so the new draft is workspace-bound. Pressing a "+" whose resolved destination equals the current New Conversation is a deliberate no-op (redirect with no build). Either effect can look like a dead "+" and deserves a product decision.
