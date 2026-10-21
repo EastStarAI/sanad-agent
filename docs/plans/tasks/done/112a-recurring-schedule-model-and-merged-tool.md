@@ -1,6 +1,6 @@
 ---
 title: "Task 112a — Recurring Schedule Model and Merged Schedule Tool"
-status: ported onto current main (branch feat/112-port, awaiting review)
+status: done (ported onto current main; live acceptance r1 and r2 passed 2026-10-21)
 current_gate: A4
 remaining_estimate: 0%
 depends_on: "None"
@@ -293,6 +293,51 @@ full `fvm dart test` 3,084 passed, 14 skipped, 0 failed.
 Not changed: the reversed fold condition in the `@visibleForTesting` `ScheduleZone.simulatedDst`
 seam is dead code with a correct result (test-only); recorded here rather than altered.
 
+## Live acceptance (2026-10-21)
+
+Both runs used one isolated test Home with cloud disabled and a driver Client attached. Each run
+backed up the Home databases and `.env` first and restored them byte-identically afterwards (checked by
+SHA-256). Scenarios were driven through `schedule_task` tool calls in real model turns and checked
+against `sanad schedule list` and a read-only copy of `state.db`. No secret appears in this record.
+
+**r1 (candidate `10e8e840`): scheduler, recovery, ownership, migration and time awareness.**
+
+| # | Scenario | Result |
+|---|---|---|
+| S1 | daily schedule fires at its time, once; `next_run_at` advances one day; the fire turn and its reply are visible in the Client | PASS |
+| S2 | daily occurrence missed by 2 minutes during an agent outage fires once on restart inside the 120-minute grace and advances; the event reaches the conversation (P1 regression) | PASS |
+| S3 | daily occurrence missed by more than the grace is skipped | tests-only (`agent/test/evolution/cron_scheduler_recovery_test.dart`); the live interval analogue under S4 passed |
+| S4 | 10-minute interval: missed by 1 minute fires once on restart and stays on the original slot grid; missed by 6 minutes (beyond the 5-minute grace) records `skipped_missed`, delivers no event, keeps `last_run_at`, and the grid is unchanged | PASS |
+| S5 | partial `update` of a weekly schedule (time only) stays weekly on the same weekdays (P7) | PASS |
+| S6 | another conversation can list a schedule but cancelling it returns `permission_denied` and the row stays; the owning conversation cancels it | PASS |
+| S7 | time-awareness line: unset zone shows `Date: … (zone: local)` with no second date line; `+03:00` shows that zone; an IANA id and an invalid value fall back to `local` | PASS (the silent fallback found here became P12) |
+| S8 | a pre-112 one-shot row on the old five-column table survives the first open: the columns are added, `run_at` is kept, the row is `kind=once` and is re-armed | PASS |
+| — | `list_scheduled_tasks` alias resolves to the merged tool while the catalog lists one tool | tests-only (`agent/test/capabilities/registry_test.dart`) |
+
+**r2 (candidate `0dad77d1`): `sanad schedule list` and the zone warning.**
+
+| # | Scenario | Result |
+|---|---|---|
+| S1 | empty migrated Home: text prints `No scheduled tasks`; `--json` prints `count: 0`; exit 0 | PASS |
+| S2 | three schedules created by the model (daily, interval, weekly with `+03:00`): text and `--json` match `state.db` for id, kind, summary, next run, zone, enabled and owning session | PASS |
+| S3 | three list runs leave `state.db`, `state.db-wal` and `state.db-shm` hashes unchanged, and no Client connection or warning is logged | PASS |
+| S4 | after a model cancel, the list shows only the two remaining schedules | PASS |
+| S5 | `SCHEDULE_TIMEZONE=Africa/Cairo`: exactly one `WARNING` across two turns, and the context shows `zone: local` | PASS |
+
+### Residuals (accepted, not fixed in this change)
+
+- **Older agents on the same Home.** The migration is additive, so an older agent still starts on a
+  migrated Home, but it has no recurrence: it treats every recurring row as a one-shot task at
+  `run_at` and deletes the row after it fires or after its stale-task grace. Recurring rows survive
+  only while no older agent runs on that Home.
+- **IANA zone names are not supported.** `SCHEDULE_TIMEZONE` accepts `local` or `±HH:MM`. An IANA id
+  (for example `Africa/Cairo`) or an invalid value falls back to `local`, and the agent logs one
+  `WARNING` per distinct rejected value (P12), never one per turn.
+- **Pre-existing restart E2E failures.** F.2.1, F.2.6, F.2.8, F.2.11 and F.2.12 in
+  `agent/e2e_test/durable_recovery_restart_e2e_test.dart` fail identically on clean `main` and are not
+  related to scheduling. They are tracked as a separate follow-up (G1). F.2.2 (`schedule_task` side
+  effect exactly once across a restart) passes.
+
 ## Review gate and delivery
 
 The implementer's diff was reviewed by an independent agent before this task was closed. The
@@ -322,5 +367,5 @@ and 6 skipped in 14s, and the repaired code confirmed present in the delivered c
 Delivery: branch `feat/112-recurring-schedules-merged-tool` on top of
 `feature/view-image-docs-plan-77`, opened as a draft pull request with the mandatory labels. The
 recurring wake, recovery, and time-awareness work continues in
-`docs/plans/tasks/112b-recurring-wake-integration-and-recovery.md` on the same branch and pull
+`docs/plans/tasks/done/112b-recurring-wake-integration-and-recovery.md` on the same branch and pull
 request. No merge or ready-for-review transition happens without explicit authorization.

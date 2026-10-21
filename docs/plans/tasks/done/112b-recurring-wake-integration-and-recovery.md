@@ -1,6 +1,6 @@
 ---
 title: "Task 112b — Recurring Wake Integration, Recovery, and Time Awareness"
-status: ported onto current main (branch feat/112-port, awaiting review)
+status: done (ported onto current main; live acceptance r1 and r2 passed 2026-10-21)
 current_gate: B4
 remaining_estimate: 0%
 depends_on: "112a"
@@ -144,10 +144,41 @@ the agent today's date in the schedule's zone.
 Ported with 112a onto `adc128ec` on branch `feat/112-port`; the ownership map, schema-version note,
 and the port-review defects (P1 startup event drop, P8 interval anchor drift, and the B3 amendment
 P2/P3 belong to this record's scope) are recorded in
-`docs/plans/tasks/112a-recurring-schedule-model-and-merged-tool.md` under "Port onto current main",
+`docs/plans/tasks/done/112a-recurring-schedule-model-and-merged-tool.md` under "Port onto current main",
 together with the additive `scheduled_tasks` migration (no `run_at` rename; `run_at` mirrors
 `next_run_at` on every write) that keeps restart recovery working when a Home is shared with an
 older agent.
+
+## Live acceptance (2026-10-21)
+
+The live runs are recorded in full in
+`docs/plans/tasks/done/112a-recurring-schedule-model-and-merged-tool.md` under "Live acceptance". The
+scenarios that cover this record's scope are:
+
+| Run | # | Scenario (112b scope) | Result |
+|---|---|---|---|
+| r1 | S1 | durable daily dispatch fires once and advances; the turn reaches the owning conversation | PASS |
+| r1 | S2 | startup fire inside the grace window is delivered, not lost (P1, B-D2) | PASS |
+| r1 | S3 | daily occurrence missed beyond the grace is skipped | tests-only (`agent/test/evolution/cron_scheduler_recovery_test.dart`) |
+| r1 | S4 | interval restart: inside the grace fires once on the slot grid (P8, B-D3); beyond the grace records `skipped_missed`, keeps `last_run_at`, and delivers nothing | PASS |
+| r1 | S6 | mutation from a non-owning conversation is refused and the schedule stays armed | PASS |
+| r1 | S7 | B3 time awareness: one `Date: … (zone: X)` line for unset, `+03:00`, IANA and invalid values | PASS |
+| r1 | S8 | an existing one-shot row is re-armed after the additive migration | PASS |
+| r2 | S5 | an unsupported zone logs one `WARNING` and falls back to `local` (P12) | PASS |
+
+### Residuals (accepted, not fixed in this change)
+
+- **Older agents on the same Home.** The migration is additive, so an older agent still starts on a
+  migrated Home, but it has no recurrence: it treats every recurring row as a one-shot task at
+  `run_at` and deletes the row after it fires or after its stale-task grace. Recurring rows survive
+  only while no older agent runs on that Home.
+- **IANA zone names are not supported.** `SCHEDULE_TIMEZONE` accepts `local` or `±HH:MM`. An IANA id
+  (for example `Africa/Cairo`) or an invalid value falls back to `local`, and the agent logs one
+  `WARNING` per distinct rejected value (P12), never one per turn.
+- **Pre-existing restart E2E failures.** F.2.1, F.2.6, F.2.8, F.2.11 and F.2.12 in
+  `agent/e2e_test/durable_recovery_restart_e2e_test.dart` fail identically on clean `main` and are not
+  related to scheduling. They are tracked as a separate follow-up (G1). F.2.2 (`schedule_task` side
+  effect exactly once across a restart) passes.
 
 ## Review gate and delivery
 
