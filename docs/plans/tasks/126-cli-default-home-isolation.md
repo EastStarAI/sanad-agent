@@ -68,3 +68,21 @@ Contradictions with current docs, reported first:
 - **Churn:** the `scheduled_tasks` `_safeAddColumn` reformatting in `agent_state_database.dart` was produced by running `dart format` over the whole file, which `main` does not keep formatted. Nothing requires it, so it is reverted; that file's diff is now only the guard.
 - Gates: `fvm dart analyze` and `fvm flutter analyze` clean; full agent unit suite 3407 passed / 15 skipped (two explicit macOS Keychain tests excluded); `lint_wiki` passes.
 
+
+### Live round 1 — TH1 (`6b364147`, 2026-10-22)
+
+Verdict: **PASS** (5/5). TH1 ran agent-only (`sanad-dev run agent --background --no-cloud --home ~/.sanad-test`, port 58107). Every CLI call ran `bin/sanad_agent.dart` from the TH1 worktree with `SANAD_HOME` and `SANAD_STATE_HOME` unset; checks 1–3 and 5 also used a fresh temporary `HOME`.
+
+| # | Check | Result | Evidence |
+| --- | --- | --- | --- |
+| 1 | `--home ~/.sanad-test` read-only commands | PASS | `session list`, `providers`, `doctor` (Home `~/.sanad-test`, daemon 58107), `--home=` top-level `setup list`, `mcp list` report TH1 data; temporary `HOME` stays empty. |
+| 2 | Unknown flag (subcommand, top-level, with `--home`) | PASS | All exit `64` with a usage error; temporary `HOME` stays empty. |
+| 3 | `SANAD_E2E_TEST_MODE=true`, `--home <tmp>`, no `SANAD_STATE_HOME` | PASS | Exit `78` with the isolation error; the selected and the default Home stay empty. |
+| 4 | Real `HOME`, `--home ~/.sanad-test`, three read-only commands | PASS | Default Home: `provider_secrets.json`, `mcp_secrets.json` and `secret_vault_events.jsonl` stay absent; `secret_vault.generation` and `secret_vault.lock` mtime and size unchanged. |
+| 5 | Daemon turn on TH1 via `--home` only | PASS | `run --execution-root <tmp> --provider opencode-go --model deepseek-v4.1-flash` → `G0-LIVE-OK` in `oneshot-6f428dd0…`; the TH1 log shows the event; temporary `HOME` stays empty; 2 provider calls (turn and title). |
+
+Findings:
+
+- **Low:** an unknown command name without `--home` (for example `sanad nosuchcmd`) exits `64` but first bootstraps the default Home (`.env`, bundled skills, `secret_vault.lock`, so the vault opens). It is not an option parse error, so the §2 "unparseable command line" row does not cover it. With `--home`, the default Home is untouched. Optional fix: resolve the command before bootstrap, or narrow the §2 wording.
+- **Cosmetic:** `mcp list` prints a hardcoded `~/.sanad/mcp/` (`agent/lib/cli/runner/commands/mcp_command.dart:44`; also `slash_command_handler.dart:755`) whatever Home is selected.
+- **Harness note:** `fvm dart run` under a temporary `HOME` re-installs the Flutter SDK into it (about 1.5 GB). Live checks should call the pinned SDK `dart` directly.
