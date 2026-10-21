@@ -18,6 +18,13 @@ This contract applies to `agent/lib/evolution/db/`.
 ## Repository Ownership
 - Each table has one repository responsible for schema-facing CRUD and query semantics.
 - Composition facades may delegate but must not duplicate SQL or maintain parallel state.
+- Session database responsibilities are decomposed into cohesive owners behind the `SessionDB` facade:
+  - `SessionRepository`: session lifecycle, metadata, titles, and workspace records.
+  - `SessionMessageRepository`: message replace, append and read, history pages and projection, and originating tool-call lookup. It is the only owner of the history-rewrite algorithm.
+  - `ScheduledTaskRepository`: scheduled task persistence.
+  - `SuspendedCheckpointRepository`: suspended checkpoints and work-item state.
+  - `SessionForkCommitRepository`: fork, soft-rewind, and root-user commit records.
+  - `SessionDB`: delegating facade preserving the public API surface; it holds no SQL of its own and must never carry a second copy of a repository algorithm.
 - Keep DTO/enums at a stable export seam only while migration requires it.
 - Legacy tables and methods remain migration-only and cannot accept new production work.
 - `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps and the pending-vacuum marker.
@@ -27,7 +34,7 @@ This contract applies to `agent/lib/evolution/db/`.
 ## Session Data
 - Workspace identity is an immutable UUID; filesystem path and display name are mutable workspace properties and must never replace it in session or runtime references.
 - Persist workspace id and provider/model route as recoverable session state.
-- Replacing canonical history aligns rows by `message_id`, never by content: every identity-aligned row whose stored data differs is updated in place through `MessageHistoryIdentity.persist(sqliteId:)` and keeps `messages.id`, so content transforms (image pruning, provider-state clearing, steer stamping, metadata) never invalidate durable compaction ranges. Only the first structural divergence (insert, removal, reorder, identity change) deletes and re-inserts the remaining active rows; that delete is scoped to active rows and never removes superseded audit rows. Legacy rows without a stored `message_id` align by position only with a message that has no explicit id.
+- Replacing canonical history (owned by `SessionMessageRepository`; both `SessionDB.replaceMessages` and `replaceMessagesInTransaction` only delegate to it) aligns rows by `message_id`, never by content: every identity-aligned row whose stored data differs is updated in place through `MessageHistoryIdentity.persist(sqliteId:)` and keeps `messages.id`, so content transforms (image pruning, provider-state clearing, steer stamping, metadata) never invalidate durable compaction ranges. Only the first structural divergence (insert, removal, reorder, identity change) deletes and re-inserts the remaining active rows; that delete is scoped to active rows and never removes superseded audit rows. Legacy rows without a stored `message_id` align by position only with a message that has no explicit id.
 - Positional identity reuse for an incoming message without `message_id` must not take an id that another incoming message carries explicitly. Duplicate `message_id`s in one replacement throw before any write and roll back.
 - Anchored history hydration begins at the anchor's active persistence row and reads newer rows in chronological order. Older `has_more`/`next_cursor` and newer `has_newer`/`next_newer_cursor` are independent, opaque, fingerprinted keyset directions; an oldest-row anchor must retain following context and remain forward-pageable to the authoritative tail.
 - Compaction claims persist only a redacted semantic fingerprint and occurrence for the retained-tail end; history hydration uses it to relocate the same logical anchor after suffix row ids are rewritten.

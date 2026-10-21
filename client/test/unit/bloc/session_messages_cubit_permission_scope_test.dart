@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
@@ -220,6 +222,69 @@ void main() {
       agentCubit.emitState(DeviceActive(activeAgent: remoteAgent, agents: [localAgent, remoteAgent]));
       await pumpEventQueue();
       expect(messagesCubit.state.selectedWorkspace, isNull);
+    });
+    // Task 110 port guard: re-subscribing to an agent without a selected
+    // session keeps that agent's manually selected workspace. Only a resolved
+    // session workspace replaces it.
+    test('agent re-subscribe without a selected session keeps the manual workspace', () async {
+      final workspace = DeviceWorkspace(
+        id: 'ws-manual-1',
+        name: 'Manual Workspace',
+        path: '/manual/workspace',
+        trustState: 'untrusted',
+      );
+      socket.autoCapabilitiesPayload = const {
+        'supports_workspaces': true,
+        'supports_workspace_selection': true,
+      };
+      conversationRepository.workspaces.add(workspace);
+      await messagesCubit.refreshWorkspaces();
+      await pumpEventQueue();
+      messagesCubit.selectWorkspace(workspace);
+      await pumpEventQueue();
+      expect(messagesCubit.state.selectedWorkspace?.id, workspace.id);
+
+      agentCubit.emitState(DeviceActive(activeAgent: remoteAgent, agents: [localAgent, remoteAgent]));
+      await pumpEventQueue();
+      agentCubit.emitState(DeviceActive(activeAgent: localAgent, agents: [localAgent, remoteAgent]));
+      await pumpEventQueue();
+
+      expect(messagesCubit.state.selectedWorkspace?.id, workspace.id);
+    });
+
+    // Task 110 port guard: close() awaits the workspace-policy subscription
+    // cancel, as the cubit did before the workspace coordinator was extracted.
+    test('close awaits the workspace policy subscription cancel', () async {
+      final cancelGate = Completer<void>();
+      var cancelCalls = 0;
+      conversationRepository.onWorkspacePolicyCancel = () {
+        cancelCalls++;
+        return cancelGate.future;
+      };
+      final session = Session(
+        id: 'sess-close-cancel',
+        title: 'Close Cancel Session',
+        deviceId: localAgent.id,
+        workspaceId: 'exec_root:/local/project',
+        workspacePath: '/local/project',
+        metadata: {'execution_root': '/local/project'},
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      conversationRepository.seedSessions(localAgent, [session]);
+      await sessionCubit.selectSession(session);
+      await pumpEventQueue();
+      expect(cancelCalls, 0);
+
+      var closed = false;
+      final closing = messagesCubit.close().then((_) => closed = true);
+      await pumpEventQueue();
+      expect(cancelCalls, 1);
+      expect(closed, isFalse);
+
+      cancelGate.complete();
+      await closing;
+      expect(closed, isTrue);
     });
   });
 }

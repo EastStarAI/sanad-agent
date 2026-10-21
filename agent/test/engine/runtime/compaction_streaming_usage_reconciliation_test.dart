@@ -13,6 +13,9 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
+import 'package:sanad_agent/engine/adapters/provider_history_projection_exception.dart';
+import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
+import 'package:sanad_agent/core/provider_runtime/runtime_recovery_exception.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
@@ -433,6 +436,45 @@ class _CancellableStreamingAdapter implements LLMAdapter {
     LLMRequestOptions options = const LLMRequestOptions(),
   }) {
     return streamFactory();
+  }
+}
+
+class _HistoryProjectionRejectingAdapter implements LLMAdapter {
+  int callCount = 0;
+
+  ProviderHistoryProjectionException _rejection() =>
+      ProviderHistoryProjectionException(
+        route: 'provider-1/gpt-4o',
+        reasonCode: ProviderHistoryProjectionException.unpairedToolCall,
+        affectedCount: 1,
+      );
+
+  @override
+  Future<int> getContextLimit([String? modelOverride]) async => 100_000;
+
+  @override
+  Future<List<ModelOption>> getAvailableModels() async => const [];
+
+  @override
+  Future<AgentResponse> generateResponse(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    callCount++;
+    throw _rejection();
+  }
+
+  @override
+  Stream<AgentResponse> generateStream(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async* {
+    callCount++;
+    throw _rejection();
   }
 }
 
@@ -1722,4 +1764,117 @@ void main() {
       await pumpEventQueue();
     },
   );
+
+  // Task 110 port guard: a stream whose first chunks carry no usage and whose
+  // last chunk carries provider usage must still confirm the staged input
+  // baseline (the SRP orchestrator once cleared the pending baseline on every
+  // chunk, so a usage-less first chunk lost the confirmation).
+  test(
+    'stream with usage only in the last chunk confirms the input baseline',
+    () async {
+      final adapter = _StreamingTestAdapter(
+        streamChunks: () => [
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: 'part 1'),
+            finishReason: LLMFinishReason.unknown,
+            usage: null,
+          ),
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: 'part 2'),
+            finishReason: LLMFinishReason.stop,
+            usage: null,
+          ),
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: ''),
+            finishReason: LLMFinishReason.unknown,
+            usage: const {'prompt_tokens': 1234, 'completion_tokens': 9},
+          ),
+        ],
+      );
+      runtimeService.turnAdapter = adapter;
+      final runner = AgentRunner(
+        adapter,
+        registry,
+        sessionManager,
+        existingSessionId: 'session-stream',
+      );
+      expect(runner.debugConfirmedInputUsageBaseline, isNull);
+
+      await runner
+          .streamMessage(
+            'usage arrives last',
+            requestId: 'turn-usage-last',
+            providerId: 'provider-1',
+            model: 'gpt-4o',
+          )
+          .drain<void>();
+
+      final confirmed = runner.debugConfirmedInputUsageBaseline;
+      expect(confirmed, isNotNull);
+      expect(confirmed!.inputTokens, 1234);
+      expect(confirmed.routeSignature.providerInstanceId, 'provider-1');
+    },
+  );
+
+  // Task 110 port guard (Task 116): a provider-history projection rejection
+  // is a blocked local invalid request; it never fails over to a ready
+  // candidate and never retries on either the stream or non-stream path.
+  for (final streaming in [true, false]) {
+    test(
+      'history projection rejection neither fails over nor retries '
+      '(${streaming ? 'stream' : 'non-stream'})',
+      () async {
+        final primary = _HistoryProjectionRejectingAdapter();
+        final candidate = _SuccessStreamingAdapter();
+        runtimeService.adaptersByProvider['provider-1'] = primary;
+        runtimeService.adaptersByProvider['provider-2'] = candidate;
+        final runner = AgentRunner(
+          primary,
+          registry,
+          sessionManager,
+          existingSessionId: 'session-stream',
+        );
+
+        final matcher = throwsA(
+          isA<RuntimeRecoveryRequired>().having(
+            (error) => error.reason,
+            'reason',
+            RuntimeFailureReason.invalidRequest,
+          ),
+        );
+        if (streaming) {
+          await expectLater(
+            runner
+                .streamMessage(
+                  'project me',
+                  requestId: 'turn-projection-reject',
+                  providerId: 'provider-1',
+                  model: 'gpt-4o',
+                )
+                .toList(),
+            matcher,
+          );
+        } else {
+          await expectLater(
+            runner.sendMessage(
+              'project me',
+              requestId: 'turn-projection-reject',
+              providerId: 'provider-1',
+              model: 'gpt-4o',
+            ),
+            matcher,
+          );
+        }
+
+        expect(primary.callCount, 1, reason: 'no retry');
+        expect(candidate.callCount, 0, reason: 'no failover');
+        expect(runner.activeProvider, 'provider-1');
+        final notice = getIt<RuntimeRecoveryService>().activeNotice(
+          'session-stream',
+        );
+        expect(notice, isNotNull);
+        expect(notice!.title, 'Conversation history not supported by this model');
+      },
+    );
+  }
 }

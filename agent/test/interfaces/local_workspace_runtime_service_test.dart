@@ -296,6 +296,44 @@ void main() {
       );
     });
 
+    // Task 110 port guards: the file-system coordinator must keep main's
+    // browse payload, dot-folder visibility and nested-root rule exactly.
+    test('managed browse keeps entry stats and dot-folders', () async {
+      final workspace = await service.createWorkspace(
+        name: 'repo',
+        managedRemote: true,
+      );
+      final root = workspace['path'] as String;
+      Directory('$root/.git').createSync();
+      File('$root/readme.md').writeAsStringSync('hello');
+
+      final snapshot = await service.browseWorkspaceTree(
+        path: root,
+        managedRemote: true,
+      );
+      final entries = (snapshot['entries'] as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+      final names = entries.map((entry) => entry['name']).toSet();
+      expect(names, containsAll(['.git', 'readme.md']));
+      final readme = entries.singleWhere(
+        (entry) => entry['name'] == 'readme.md',
+      );
+      expect(readme['type'], 'file');
+      expect(readme['size'], 5);
+      expect(readme['modified_at'], isA<String>());
+      expect(readme.containsKey('is_directory'), isFalse);
+    });
+
+    test('managed roots list no workspace nested in the managed root', () async {
+      await service.createWorkspace(name: 'notes', managedRemote: true);
+      final snapshot = await service.browseWorkspaceTree(managedRemote: true);
+      final paths = (snapshot['entries'] as List<dynamic>)
+          .map((entry) => entry['path'])
+          .toList();
+      expect(paths, [managedRoot]);
+      expect(snapshot['truncated'], isFalse);
+    });
+
     test('rejects traversal and filesystem root browsing', () async {
       await expectLater(
         service.browseWorkspaceTree(
