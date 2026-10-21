@@ -68,7 +68,7 @@ This contract applies to `agent/lib/engine/runtime/`.
 - Latest provider usage replaces the presentation snapshot; normalize aliases, clear absent fields, and do not infer missing totals.
 - Internal accumulated usage may aggregate for accounting but never becomes the client context-usage projection.
 - Cached input remains an independent provider value; cache-write usage is excluded from client projection.
-- One failed automatic compaction opens a breaker for the active run; later model steps in that run must not repeat the attempt, while a new run and manual `/compact` remain eligible.
+- Automatic compaction means both Auto preflight and Overflow compaction. A failed attempt of either opens one breaker for the active run; while it is open neither runs again in that run (a later model step or provider overflow falls through to the ordinary path), while a new run and manual `/compact` remain eligible.
 - Manual compaction resolves the active model context window through the same precedence as normal provider execution: explicit request override, YAML exact-model override, adapter/provider model metadata, then a bounded last-resort estimate.
 
 ## Runner SRP Coordinators
@@ -76,7 +76,7 @@ This contract applies to `agent/lib/engine/runtime/`.
 - `RunnerRecoveryCoordinator` owns provider HTTP exception classification, retry budgets and delays, automatic failover candidates, secret-redacted error notices, rejected provider-state clearing, local image-capability, provider-history-projection and thinking-wire rejection notices, and thinking-route revalidation on failover.
   - A `ProviderHistoryProjectionException` is decided before the thinking-wire branch as one blocked invalid-request notice; it never fails over, retries, changes thinking, or mutates history.
   - Auto-failover re-resolves the turn capability profile for the candidate through the host. A retry wake keeps the frozen profile on the same route, revalidates thinking and re-resolves on a changed route, and clears it when no route remains.
-  - Overflow compaction is contained: a thrown pass falls through to the recovery notice. Its request carries `targetRatio`, and its last-resort policy fallback is `0.90`, the same as preflight. Overflow compaction does not yet read or open the per-run automatic-compaction breaker; the host exposes `autoCompactionBlockedForRun` and `markCompactionFailure` on `RunnerRecoveryHost` for Task 118a, which activates them. Until 118a lands, do not wire them, since that would change overflow behaviour.
+  - Overflow compaction is contained: a thrown pass falls through to the recovery notice. Its request carries `targetRatio`, and its last-resort policy fallback is `0.90`, the same as preflight. Overflow compaction reads the per-run automatic-compaction breaker through `RunnerRecoveryHost.autoCompactionBlockedForRun` and opens it with `markCompactionFailure` when its pass fails or throws (Task 118a).
 - `RunnerCompactionOrchestrator` owns preflight compaction (threshold, timeline, seed, cooldown, and the per-run breaker, which a failed or thrown pass opens), the pending and confirmed provider input baselines, and the wire proof.
   - A staged pending baseline stays staged until a response carries input tokens, so a stream whose usage arrives only in its last chunk still confirms it.
   - Post-boundary usage reconciles through the boundary-scoped `reconcilePostBoundaryUsage`. Dispatch reservations and typed missing-usage finalization are owned here.

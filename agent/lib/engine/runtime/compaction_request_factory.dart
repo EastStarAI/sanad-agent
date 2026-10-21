@@ -190,13 +190,22 @@ abstract final class CompactionRequestFactory {
       timeout: baseOptions?.timeout ?? defaultTimeout,
       maxOutputTokens: baseOptions?.maxOutputTokens ?? defaultMaxOutputTokens,
       cancellationScope: validScope,
-      watchdogs: baseOptions?.watchdogs ?? ProviderWatchdogConfig.defaults,
+      watchdogs: (baseOptions?.watchdogs ?? ProviderWatchdogConfig.defaults)
+          .copyWith(connectTimeout: compactionPassTimeout()),
       routeCapabilitySnapshot: routeSnapshot,
       routeCapabilityProfile: profile,
       attachmentStore: attachmentStore,
       requestClientFactory: baseOptions?.requestClientFactory,
     );
   }
+
+  /// The bound for one compaction provider pass to return its complete
+  /// response, from the central config (Task 118). It replaces only the
+  /// response-arrival watchdog; first-byte and stream-idle watchdogs and any
+  /// total timeout keep their normal-turn values.
+  static Duration compactionPassTimeout() => getIt.isRegistered<Config>()
+      ? getIt<Config>().compactionPassTimeout
+      : ModelAwareCompactionPolicy.defaultPassTimeout;
 
   static Future<int> resolveContextWindowTokens({
     required int? explicitOverride,

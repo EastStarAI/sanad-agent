@@ -74,11 +74,10 @@ abstract class RunnerRecoveryHost {
   void clearTurnCapabilityProfile();
 
   /// Per-run automatic-compaction breaker owned by the compaction
-  /// orchestrator. Not yet read by overflow compaction; Task 118a activates it.
+  /// orchestrator; overflow compaction is automatic too.
   bool get autoCompactionBlockedForRun;
 
-  /// Opens the per-run automatic-compaction breaker. Not yet called by
-  /// overflow compaction; Task 118a activates it.
+  /// Opens the per-run automatic-compaction breaker.
   void markCompactionFailure();
 }
 
@@ -348,9 +347,13 @@ class RunnerRecoveryCoordinator {
       body: providerBody,
       hasTrustedTemporaryReset: httpRetryAfter != null,
     );
+    // Overflow compaction is automatic too: the per-run breaker opened by a
+    // failed automatic or overflow compaction blocks it for the rest of the
+    // run (Task 118), and the overflow falls through to the recovery notice.
     if (reason == RuntimeFailureReason.contextOverflow &&
         !streamStarted &&
         !overflowCompactionRetried &&
+        !host.autoCompactionBlockedForRun &&
         getIt.isRegistered<CompactionCoordinator>() &&
         getIt.isRegistered<SessionHistoryRevisionRepository>() &&
         getIt.isRegistered<AgentRuntimeService>()) {
@@ -410,7 +413,12 @@ class RunnerRecoveryCoordinator {
               host.refreshCanonicalHistoryAfterCompaction();
               return true;
             }
-          } catch (_) {}
+            if (outcome?.status == CompactionStatus.failed) {
+              host.markCompactionFailure();
+            }
+          } catch (_) {
+            host.markCompactionFailure();
+          }
         }
       }
     }

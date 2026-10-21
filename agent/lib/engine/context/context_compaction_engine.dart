@@ -186,14 +186,7 @@ class ContextCompactionEngine {
           'duration_ms': generated.duration!.inMilliseconds,
       },
       decisionSnapshot: {
-        'context_window': request.contextWindowTokens,
-        'effective_input_budget': pressure.effectiveInputBudget,
-        'auto_threshold_tokens': pressure.thresholdTokens,
-        'target_request_tokens': request.targetRequestTokens,
-        if (request.targetRatio != null) 'target_ratio': request.targetRatio,
-        'target_scope': 'usable_budget',
-        if (request.thresholdRatio > 0)
-          'threshold_ratio': request.thresholdRatio,
+        ..._decisionSnapshot(request, pressure),
         ...generated.decisionSnapshot,
       },
       postBoundary: const CompactionPostBoundaryStatus(
@@ -368,16 +361,7 @@ class ContextCompactionEngine {
           if (effUsage.reasoningTokens != null)
             'reasoning_tokens': effUsage.reasoningTokens,
         },
-        decisionSnapshot: {
-          'context_window': request.contextWindowTokens,
-          'effective_input_budget': pressure.effectiveInputBudget,
-          'auto_threshold_tokens': pressure.thresholdTokens,
-          'target_request_tokens': request.targetRequestTokens,
-          if (request.targetRatio != null) 'target_ratio': request.targetRatio,
-          'target_scope': 'usable_budget',
-          if (request.thresholdRatio > 0)
-            'threshold_ratio': request.thresholdRatio,
-        },
+        decisionSnapshot: _decisionSnapshot(request, pressure),
       );
     }
 
@@ -399,8 +383,12 @@ class ContextCompactionEngine {
       _CompactionUsage aggregateUsage = const _CompactionUsage();
       _CompactionUsage acceptedUsage = const _CompactionUsage();
       CompactionContinuityResult? lastContinuity;
+      // Safe shape code of the latest unusable response, or null when the
+      // latest attempt was parsed (Task 118 Stage2).
+      String? lastShape;
       for (; attempts < 2; attempts++) {
         final passKind = attempts == 0 ? 'full' : 'repair';
+        final passWatch = Stopwatch()..start();
         final attemptRequestId = _buildAttemptRequestId(
           request: request,
           passKind: passKind,
@@ -424,7 +412,7 @@ class ContextCompactionEngine {
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: passKind,
             requestId: attemptRequestId,
-            duration: Duration.zero,
+            duration: passWatch.elapsed,
             outcome: 'error',
             failureReason: 'route_changed',
             relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -442,7 +430,7 @@ class ContextCompactionEngine {
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: passKind,
             requestId: attemptRequestId,
-            duration: Duration.zero,
+            duration: passWatch.elapsed,
             outcome: 'overflow',
             failureReason: 'context_overflow',
             relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -469,8 +457,9 @@ class ContextCompactionEngine {
         } on CompactionInvalidProviderResponse catch (error) {
           final errorUsage = _CompactionUsage.fromProvider(error.usage);
           aggregateUsage = aggregateUsage + errorUsage;
-          final attemptDuration = error.duration ?? Duration.zero;
+          final attemptDuration = error.duration ?? passWatch.elapsed;
           totalDuration += attemptDuration;
+          lastShape = error.reason;
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: passKind,
             requestId: attemptRequestId,
@@ -496,14 +485,14 @@ class ContextCompactionEngine {
           throw CompactionEngineFailure(
             CompactionFailureReason.summarizationFailed,
             stage: CompactionFailureStage.provider,
-            cause: CompactionFailureCause.invalidResponse,
+            cause: CompactionFailureCause.forSummaryShape(error.reason),
             diagnostics: failureDiagnostics(usage: aggregateUsage),
           );
         } on TimeoutException {
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: passKind,
             requestId: attemptRequestId,
-            duration: Duration.zero,
+            duration: passWatch.elapsed,
             outcome: 'error',
             failureReason: CompactionFailureCause.timeout,
             relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -525,7 +514,7 @@ class ContextCompactionEngine {
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: passKind,
             requestId: attemptRequestId,
-            duration: Duration.zero,
+            duration: passWatch.elapsed,
             outcome: 'error',
             failureReason: cause,
             relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -545,7 +534,7 @@ class ContextCompactionEngine {
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: passKind,
             requestId: attemptRequestId,
-            duration: Duration.zero,
+            duration: passWatch.elapsed,
             outcome: 'error',
             failureReason: classified.cause,
             relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -575,6 +564,7 @@ class ContextCompactionEngine {
             repairAttempts: attempts,
           );
           lastContinuity = continuity;
+          lastShape = null;
           if (continuity.passed) {
             acceptedUsage = passUsage;
             ledger.add(CompactionSummarizationAttemptRecord(
@@ -621,7 +611,8 @@ class ContextCompactionEngine {
           instruction = CompactionSummaryPrompt.buildJsonInstruction(
             missingFields: continuity.missingAnchors,
           );
-        } on FormatException catch (e) {
+        } on FormatException {
+          lastShape = CompactionFailureCause.summaryInvalidJson;
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: passKind,
             requestId: attemptRequestId,
@@ -632,7 +623,7 @@ class ContextCompactionEngine {
             outputTokens: passUsage.outputTokens,
             reasoningTokens: passUsage.reasoningTokens,
             outcome: 'invalid_response',
-            failureReason: 'format_error: $e',
+            failureReason: CompactionFailureCause.summaryInvalidJson,
             relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
               compactionId: request.compactionId,
               requestId: attemptRequestId,
@@ -642,6 +633,14 @@ class ContextCompactionEngine {
             missingFields: CompactionInternalSummary.requiredSectionKeys,
           );
         }
+      }
+      if (lastShape != null) {
+        throw CompactionEngineFailure(
+          CompactionFailureReason.summarizationFailed,
+          stage: CompactionFailureStage.provider,
+          cause: CompactionFailureCause.forSummaryShape(lastShape),
+          diagnostics: failureDiagnostics(usage: aggregateUsage),
+        );
       }
       throw CompactionEngineFailure(
         CompactionFailureReason.continuityValidationFailed,
@@ -776,14 +775,7 @@ class ContextCompactionEngine {
             'reasoning_tokens': effUsage.reasoningTokens,
         },
         decisionSnapshot: {
-          'context_window': request.contextWindowTokens,
-          'effective_input_budget': pressure.effectiveInputBudget,
-          'auto_threshold_tokens': pressure.thresholdTokens,
-          'target_request_tokens': request.targetRequestTokens,
-          if (request.targetRatio != null) 'target_ratio': request.targetRatio,
-          'target_scope': 'usable_budget',
-          if (request.thresholdRatio > 0)
-            'threshold_ratio': request.thresholdRatio,
+          ..._decisionSnapshot(request, pressure),
           ...decision,
           'recovery_provider_calls': providerCalls,
         },
@@ -851,6 +843,13 @@ class ContextCompactionEngine {
     var attempts = 0;
     var passIndex = 0;
     var splits = 0;
+    // A failing pass reports its own usage plus every earlier billed pass of
+    // this recovery, so a late failure never understates the aggregate.
+    CompactionDurableDiagnostics passFailureDiagnostics({
+      _CompactionUsage? usage,
+    }) => failureDiagnostics(
+      usage: aggregateUsage + (usage ?? const _CompactionUsage()),
+    );
 
     Future<void> summarizeChunk(
       List<List<IndexedConversationMessage>> chunk, {
@@ -870,7 +869,7 @@ class ContextCompactionEngine {
           passKind: 'chunk',
           chunkIndex: index,
           ledger: ledger,
-          failureDiagnostics: failureDiagnostics,
+          failureDiagnostics: passFailureDiagnostics,
           onProviderCall: () => providerCalls++,
         );
         partials.add(generated.summary);
@@ -925,7 +924,7 @@ class ContextCompactionEngine {
             passKind: 'reduce',
             chunkIndex: reduceIndex++,
             ledger: ledger,
-            failureDiagnostics: failureDiagnostics,
+            failureDiagnostics: passFailureDiagnostics,
             onProviderCall: () => providerCalls++,
           );
           next.add(CompactionSummaryPrompt.toJsonMap(generated.summary));
@@ -953,7 +952,7 @@ class ContextCompactionEngine {
         anchors: anchors,
         passKind: 'reduce',
         ledger: ledger,
-        failureDiagnostics: failureDiagnostics,
+        failureDiagnostics: passFailureDiagnostics,
         onProviderCall: () => providerCalls++,
       );
     } on _RecoveryPassOverflow catch (overflow) {
@@ -989,8 +988,10 @@ class ContextCompactionEngine {
     CompactionContinuityResult? lastContinuity;
     var aggregateUsage = const _CompactionUsage();
     var duration = Duration.zero;
+    String? lastShape;
     for (var attempt = 0; attempt < 2; attempt++) {
       final effectivePassKind = attempt == 0 ? passKind : 'repair';
+      final passWatch = Stopwatch()..start();
       final attemptRequestId = _buildAttemptRequestId(
         request: request,
         passKind: effectivePassKind,
@@ -1000,6 +1001,9 @@ class ContextCompactionEngine {
       final attemptOptions = request.providerRequestOptions.copyWith(
         requestId: attemptRequestId,
       );
+      // Usage of the billed response in this attempt, kept for every outcome
+      // that follows a provider answer (Task 118 round 2).
+      var passUsage = const _CompactionUsage();
       try {
         onProviderCall?.call();
         final result = await provider.summarizeProvider(
@@ -1011,7 +1015,7 @@ class ContextCompactionEngine {
             instruction: instruction,
           ),
         );
-        final passUsage = _CompactionUsage.fromProvider(result.usage);
+        passUsage = _CompactionUsage.fromProvider(result.usage);
         aggregateUsage = aggregateUsage + passUsage;
         duration += result.duration;
         final summary = _continuityValidator.redactSummary(
@@ -1023,6 +1027,7 @@ class ContextCompactionEngine {
           repairAttempts: attempt,
         );
         lastContinuity = continuity;
+        lastShape = null;
         if (continuity.passed) {
           ledger.add(CompactionSummarizationAttemptRecord(
             passKind: effectivePassKind,
@@ -1073,7 +1078,7 @@ class ContextCompactionEngine {
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
           requestId: attemptRequestId,
-          duration: Duration.zero,
+          duration: passWatch.elapsed,
           outcome: 'error',
           failureReason: 'route_changed',
           relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -1089,7 +1094,7 @@ class ContextCompactionEngine {
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
           requestId: attemptRequestId,
-          duration: Duration.zero,
+          duration: passWatch.elapsed,
           outcome: 'overflow',
           failureReason: 'context_overflow',
           relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -1102,8 +1107,9 @@ class ContextCompactionEngine {
       } on CompactionInvalidProviderResponse catch (error) {
         final errorUsage = _CompactionUsage.fromProvider(error.usage);
         aggregateUsage = aggregateUsage + errorUsage;
-        final attemptDuration = error.duration ?? Duration.zero;
+        final attemptDuration = error.duration ?? passWatch.elapsed;
         duration += attemptDuration;
+        lastShape = error.reason;
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
           requestId: attemptRequestId,
@@ -1128,7 +1134,7 @@ class ContextCompactionEngine {
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
           requestId: attemptRequestId,
-          duration: Duration.zero,
+          duration: passWatch.elapsed,
           outcome: 'error',
           failureReason: CompactionFailureCause.timeout,
           relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -1150,7 +1156,7 @@ class ContextCompactionEngine {
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
           requestId: attemptRequestId,
-          duration: Duration.zero,
+          duration: passWatch.elapsed,
           outcome: 'error',
           failureReason: cause,
           relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -1164,13 +1170,19 @@ class ContextCompactionEngine {
           cause: cause,
           diagnostics: failureDiagnostics(usage: aggregateUsage),
         );
-      } on FormatException catch (e) {
+      } on FormatException {
+        lastShape = CompactionFailureCause.summaryInvalidJson;
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
           requestId: attemptRequestId,
-          duration: Duration.zero,
+          duration: passWatch.elapsed,
+          inputTokens: passUsage.inputTokens,
+          cachedInputTokens: passUsage.cachedInputTokens,
+          cacheWriteTokens: passUsage.cacheWriteTokens,
+          outputTokens: passUsage.outputTokens,
+          reasoningTokens: passUsage.reasoningTokens,
           outcome: 'invalid_response',
-          failureReason: 'format_error: $e',
+          failureReason: CompactionFailureCause.summaryInvalidJson,
           relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
             compactionId: request.compactionId,
             requestId: attemptRequestId,
@@ -1186,7 +1198,7 @@ class ContextCompactionEngine {
         ledger.add(CompactionSummarizationAttemptRecord(
           passKind: effectivePassKind,
           requestId: attemptRequestId,
-          duration: Duration.zero,
+          duration: passWatch.elapsed,
           outcome: 'error',
           failureReason: classified.cause,
           relativeDumpPath: LLMRequestDumper.getRelativeDumpPath(
@@ -1201,6 +1213,14 @@ class ContextCompactionEngine {
           diagnostics: failureDiagnostics(usage: aggregateUsage),
         );
       }
+    }
+    if (lastShape != null) {
+      throw CompactionEngineFailure(
+        CompactionFailureReason.summarizationFailed,
+        stage: CompactionFailureStage.provider,
+        cause: CompactionFailureCause.forSummaryShape(lastShape),
+        diagnostics: failureDiagnostics(usage: aggregateUsage),
+      );
     }
     throw CompactionEngineFailure(
       CompactionFailureReason.continuityValidationFailed,
@@ -1343,6 +1363,25 @@ class ContextCompactionEngine {
     return '${text.substring(0, head)}$marker'
         '${text.substring(text.length - tail)}';
   }
+
+  /// Durable decision fields shared by candidate and failure diagnostics.
+  /// The threshold is reported over the full window `W` (Task 118); when the
+  /// usable-budget protection decided the trigger it is flagged explicitly.
+  static Map<String, dynamic> _decisionSnapshot(
+    CompactionEngineRequest request,
+    RequestPressureSnapshot pressure,
+  ) => {
+    'context_window': request.contextWindowTokens,
+    'effective_input_budget': pressure.effectiveInputBudget,
+    'auto_threshold_tokens': pressure.thresholdTokens,
+    'nominal_threshold_tokens': pressure.nominalThresholdTokens,
+    'threshold_scope': 'context_window',
+    'threshold_capped_by_usable_budget': pressure.thresholdCappedByUsableBudget,
+    'target_request_tokens': request.targetRequestTokens,
+    if (request.targetRatio != null) 'target_ratio': request.targetRatio,
+    'target_scope': 'usable_budget',
+    if (request.thresholdRatio > 0) 'threshold_ratio': request.thresholdRatio,
+  };
 
   static String _buildAttemptRequestId({
     required CompactionEngineRequest request,

@@ -55,6 +55,24 @@ abstract final class CompactionFailureCause {
   static const providerError = 'provider_error';
   static const summarizationFailed = 'summarization_failed';
 
+  /// Failed summary shapes (Task 118 Stage2). Each is a safe ledger
+  /// `failure_reason`; the first three are also terminal causes with their
+  /// own localized Client explanation.
+  static const summaryEmpty = 'summary_empty';
+  static const summaryReasoningOnly = 'summary_reasoning_only';
+  static const summaryTruncated = 'summary_truncated';
+
+  /// Ledger-only shapes whose terminal cause is [invalidResponse].
+  static const summaryInvalidJson = 'summary_invalid_json';
+  static const summaryToolCall = 'summary_tool_call';
+  static const summaryIncomplete = 'summary_incomplete';
+
+  /// Terminal cause for a summary shape that exhausted its bounded attempts.
+  static String forSummaryShape(String shape) => switch (shape) {
+    summaryEmpty || summaryReasoningOnly || summaryTruncated => shape,
+    _ => invalidResponse,
+  };
+
   // Validation stage
   static const continuityValidationFailed = 'continuity_validation_failed';
 
@@ -153,10 +171,10 @@ class CompactionDiagnostics {
     }
 
     if (error is CompactionInvalidProviderResponse) {
-      return const CompactionDiagnostics(
+      return CompactionDiagnostics(
         failureReason: CompactionFailureReason.summarizationFailed,
         stage: CompactionFailureStage.provider,
-        cause: CompactionFailureCause.invalidResponse,
+        cause: CompactionFailureCause.forSummaryShape(error.reason),
       );
     }
 

@@ -6,6 +6,9 @@ import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
+import 'package:sanad_agent/engine/compaction/compaction_diagnostics.dart';
+
+import 'compaction_summary_prompt.dart';
 
 /// Provider-neutral summarizer contract (Plan 53c Gate C3).
 abstract class CompactionSummarizer {
@@ -62,6 +65,8 @@ abstract interface class ProviderProjectionCompactionSummarizer {
 }
 
 class CompactionInvalidProviderResponse implements Exception {
+  /// Safe summary-shape code from [CompactionFailureCause] (for example
+  /// `summary_truncated`); never provider text.
   final String reason;
   final Map<String, dynamic>? usage;
   final Duration? duration;
@@ -154,19 +159,31 @@ class ProviderBackedCompactionSummarizer
     if (current != request.routeSignature) throw const CompactionRouteChanged();
   }
 
+  /// Classifies an unusable summary response into one safe shape code
+  /// (Task 118 Stage2). The content itself never leaves this method.
   static String? _invalidResponseReason(AgentResponse response) {
     if (response.isToolCall ||
         (response.message.toolCalls?.isNotEmpty ?? false)) {
-      return 'summarization response attempted a tool call';
+      return CompactionFailureCause.summaryToolCall;
     }
     if (response.finishReason == LLMFinishReason.incomplete ||
-        response.finishReason == LLMFinishReason.length ||
-        response.finishReason == LLMFinishReason.failed ||
-        response.finishReason == LLMFinishReason.cancelled) {
-      return 'summarization response was not complete';
+        response.finishReason == LLMFinishReason.length) {
+      return CompactionFailureCause.summaryTruncated;
     }
-    if ((response.message.content ?? '').trim().isEmpty) {
-      return 'summarization response was empty';
+    if (response.finishReason == LLMFinishReason.failed ||
+        response.finishReason == LLMFinishReason.cancelled) {
+      return CompactionFailureCause.summaryIncomplete;
+    }
+    final raw = response.message.content ?? '';
+    final visible = CompactionSummaryParser.stripProviderOnlyMarkup(raw);
+    if (visible.isEmpty) {
+      final hasReasoning =
+          raw.trim().isNotEmpty ||
+          (response.message.reasoning?.trim().isNotEmpty ?? false) ||
+          (response.message.thought?.trim().isNotEmpty ?? false);
+      return hasReasoning
+          ? CompactionFailureCause.summaryReasoningOnly
+          : CompactionFailureCause.summaryEmpty;
     }
     return null;
   }

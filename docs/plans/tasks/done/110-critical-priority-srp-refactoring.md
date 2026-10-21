@@ -367,3 +367,12 @@ r2 verification (logs under `temp/srp/r2-*`):
   inventory checklist (#210, 106b, 115, 116, 117, 118, 119, 120 and the SRP owners).
 - Re-port Task 118 onto `RunnerRecoveryCoordinator` once it merges.
 
+
+### Main sync and Task 118a re-port (2026-10-21)
+
+- Merged `origin/main` at `ba7f71a2` (Tasks 108 and 118a). The only conflict was `agent/lib/engine/agent_runner.dart`; the SRP side was kept.
+- 118a's overflow-breaker change now lives in `RunnerRecoveryCoordinator`. The overflow path skips compaction while `host.autoCompactionBlockedForRun` is set, and calls `host.markCompactionFailure()` on a `failed` outcome or a thrown pass. `agent/lib/engine/runtime/AGENTS.md` is updated to match.
+- Gates:
+  - Agent analyze is clean; the full agent suite passed (2,995 passed, 14 skipped).
+  - Client analyze is clean after `gen-l10n`; the full client suite passed (1,734 passed, 1 skipped).
+  - Mutation check: removing the guard fails "a failed automatic compaction blocks overflow compaction in the same run".

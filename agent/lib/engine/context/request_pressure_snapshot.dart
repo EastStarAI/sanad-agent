@@ -122,7 +122,23 @@ class RequestPressureSnapshot {
     );
   }
 
-  int get thresholdTokens => (effectiveInputBudget * thresholdRatio).floor();
+  /// The policy threshold over the full resolved window `W` (Task 118): the
+  /// public denominator, so 90% of W=258000 is 232200.
+  int get nominalThresholdTokens =>
+      ((inputLimitTokens ?? contextWindowTokens) * thresholdRatio).floor();
+
+  /// The automatic trigger: the nominal threshold, capped by the usable input
+  /// budget so the internal output/safety reservation is still protected.
+  int get thresholdTokens {
+    final nominal = nominalThresholdTokens;
+    final usable = effectiveInputBudget;
+    return nominal < usable ? nominal : usable;
+  }
+
+  /// True when the internal usable-budget protection, not the nominal
+  /// threshold, decides the trigger. Diagnostics must report it as such.
+  bool get thresholdCappedByUsableBudget =>
+      nominalThresholdTokens > effectiveInputBudget;
 
   bool get exceedsThreshold => estimatedRequestTokens > thresholdTokens;
 
