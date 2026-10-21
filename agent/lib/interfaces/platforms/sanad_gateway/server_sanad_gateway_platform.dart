@@ -346,7 +346,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
           envelope: envelope,
           runtimeBridge: getIt<PlatformRuntimeBridge>(),
           onResponse: (responseEnvelope) =>
-              _emitAgentEvent(responseEnvelope, clientTag: clientTag),
+              _emitCommandReply(responseEnvelope, clientTag: clientTag),
         );
         return;
       }
@@ -376,7 +376,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
         envelope: envelope,
         runtimeBridge: bridge,
         onResponse: (responseEnvelope) =>
-            _emitAgentEvent(responseEnvelope, clientTag: clientTag),
+            _emitCommandReply(responseEnvelope, clientTag: clientTag),
       );
       if (handled) {
         return;
@@ -482,7 +482,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
         event: event,
         runtimeBridge: bridge,
         onResponse: (responseEnvelope) =>
-            _emitAgentEvent(responseEnvelope, clientTag: clientTag),
+            _emitCommandReply(responseEnvelope, clientTag: clientTag),
         envelope: envelope,
       );
     });
@@ -577,7 +577,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
     await handleIncomingCommand(
       envelope: commandEnvelope,
       runtimeBridge: getIt<PlatformRuntimeBridge>(),
-      onResponse: (resp) => _emitAgentEvent(resp, clientTag: clientTag),
+      onResponse: (resp) => _emitCommandReply(resp, clientTag: clientTag),
     );
   }
 
@@ -620,7 +620,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
     await handleIncomingCommand(
       envelope: commandEnvelope,
       runtimeBridge: getIt<PlatformRuntimeBridge>(),
-      onResponse: (resp) => _emitAgentEvent(resp, clientTag: clientTag),
+      onResponse: (resp) => _emitCommandReply(resp, clientTag: clientTag),
     );
   }
 
@@ -632,7 +632,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
     String? clientTag,
   }) async {
     _logger.warning('Blocking remote MCP command');
-    await _emitAgentEvent({
+    await _emitCommandReply({
       'device_id': _registeredDeviceId ?? deviceId,
       'type': 'event',
       'event': 'error',
@@ -676,7 +676,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
     await handleIncomingCommand(
       envelope: commandEnvelope,
       runtimeBridge: getIt<PlatformRuntimeBridge>(),
-      onResponse: (resp) => _emitAgentEvent(resp, clientTag: clientTag),
+      onResponse: (resp) => _emitCommandReply(resp, clientTag: clientTag),
     );
   }
 
@@ -694,7 +694,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
     required String deviceId,
     String? clientTag,
   }) async {
-    await _emitAgentEvent({
+    await _emitCommandReply({
       'device_id': _registeredDeviceId ?? deviceId,
       'type': 'event',
       'event': 'error',
@@ -732,7 +732,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
             }),
       );
 
-      await _emitAgentEvent({
+      await _emitCommandReply({
         'device_id': deviceId,
         'type': 'event',
         'event': 'voice_session_started',
@@ -887,6 +887,27 @@ class ServerSanadGatewayPlatform extends BasePlatform
     while (_sessionClientTags.length > _maxSessionClientTags) {
       _sessionClientTags.remove(_sessionClientTags.keys.first);
     }
+  }
+
+  /// Emits a reply to a command received on this cloud socket. A correlated
+  /// reply (it carries the request's `request_id`) has a known cloud
+  /// requester, so delivery interest must not suppress it: right after a
+  /// Client cloud reconnect the Gateway's interest set can still omit that
+  /// Client, and a suppressed reply is never retried. Uncorrelated egress keeps
+  /// the interest gate.
+  Future<void> _emitCommandReply(
+    Map<String, dynamic> envelope, {
+    String? clientTag,
+  }) {
+    final payload = envelope['payload'];
+    final requestId =
+        envelope['request_id'] ?? (payload is Map ? payload['request_id'] : null);
+    final correlated = requestId != null && requestId.toString().isNotEmpty;
+    return _emitAgentEvent(
+      envelope,
+      egressClaimed: correlated,
+      clientTag: clientTag,
+    );
   }
 
   Future<void> _emitAgentEvent(

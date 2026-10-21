@@ -202,3 +202,24 @@ The live report is outside this repository.
 - a user-opened local route during the fallback persists local, and it wins when cloud returns.
 
 Red → green: `temp/g3/r2-d1-red.log` (1 failed), `temp/g3/r2-d1-green.log` (2 passed).
+
+### D2 — A reply after a Client cloud reconnect was dropped (Medium, pre-existing)
+
+**Root cause.** The fault is on the Agent side, in this repository:
+- `ServerSanadGatewayPlatform._emitAgentEvent` gated every cloud emission on `DeliveryPresenceController.claimCloudEgress()`.
+- When B's cloud socket drops, the Gateway sends A an interest set without B. A fresh empty `cloud - local` difference suppresses cloud egress.
+- After B reconnects, it sends `get_sessions` or `list_workspaces` right after `auth_success`, before the Gateway re-adds B to the interest set.
+- A handles the command, and the reply is suppressed by the same gate as a broadcast. Nothing ever retries it.
+
+The `get_appearance` request that was answered 64 ms later arrived after the refreshed interest. The private Gateway does not decide the drop.
+
+**Fix.**
+- Agent: replies to commands received on the cloud socket go through `_emitCommandReply`. A reply that carries the request's `request_id` skips the interest gate. Uncorrelated egress, meaning session channel events and `sendResponse` broadcasts, keeps the gate.
+- Client: a failed atomic history load (for example one lost in the disconnect) is re-issued when the device store publishes again, for example when the reconnect re-sync lands the history.
+- A timed-out request is not retried on the Client. With replies no longer dropped, the reconnect re-sync is answered. Correlated retries would only mask an Agent that never answers. An Agent from before this fix still drops the reply until the next re-announce or re-sync. That mixed-version case is not covered.
+
+**Tests.**
+- Agent, `agent/test/interfaces/server_sanad_gateway_platform_security_test.dart`: "answers a cloud request even before the requester is back in delivery interest". It also asserts that an uncorrelated broadcast stays suppressed. Red → green: `temp/g3/r2-d2-agent-red.log` (1 failed), `temp/g3/r2-d2-agent-green.log` (227 passed).
+- Client, `client/test/widget/conversation_navigation_back_forward_test.dart`: "a failed history load is re-issued once the transport delivers again". Red → green: `temp/g3/r2-d2-client-red.log` (1 failed), `temp/g3/r2-d2-client-green.log` (19 passed).
+
+**Overlap with Plan 83.** `feat/83-port` adds an `ingressAuthority` override and an import to `server_sanad_gateway_platform.dart`, near the top of the class. This change touches only the emit helpers and their call sites, so the textual merge should be trivial.

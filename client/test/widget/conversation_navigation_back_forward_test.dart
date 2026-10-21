@@ -287,6 +287,29 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('a failed history load is re-issued once the transport delivers again (Task 124 D2)', (tester) async {
+    conversationRepository.failingHistorySessionIds.add(sessionA.id);
+    history.setInitial(ConversationDestination.session(deviceId: deviceA.id, sessionId: sessionA.id));
+    await pumpHome(tester, AppRoutes.sessionLocation(deviceA.id, sessionA.id));
+    expect(find.byKey(const Key('retry_history_load_button')), findsOneWidget);
+    final attempts = conversationRepository.loadedHistorySessionIds.where((id) => id == sessionA.id).length;
+
+    // The disconnect ends; the reconnect re-sync lands the device's history in
+    // the store, which publishes it.
+    conversationRepository.failingHistorySessionIds.clear();
+    conversationRepository.setMessages(deviceA, const <CanonicalEvent>[]);
+    await tester.pumpAndSettle();
+
+    expect(
+      conversationRepository.loadedHistorySessionIds.where((id) => id == sessionA.id).length,
+      attempts + 1,
+    );
+    expect(find.byKey(const Key('retry_history_load_button')), findsNothing);
+    expect(messagesCubitOf(tester).state.historyLoadError, isNull);
+    expect(messagesCubitOf(tester).state.activeSessionId, sessionA.id);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Device switch makes URL, history, selection, and presentation agree', (tester) async {
     history.setInitial(ConversationDestination.session(deviceId: deviceA.id, sessionId: sessionA.id));
 

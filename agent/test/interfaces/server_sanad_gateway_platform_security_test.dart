@@ -861,6 +861,48 @@ void main() {
       expect(data['payload'], containsPair('request_id', 'req-list'));
     });
 
+    test(
+      'answers a cloud request even before the requester is back in delivery interest (Task 124 D2)',
+      () async {
+        // A Client cloud socket reconnected: the Gateway's current interest set
+        // does not list it yet, so broadcast egress is suppressed.
+        deliveryPresence.acceptInterest({
+          'protocol': deliveryPresenceProtocol,
+          'version': deliveryPresenceVersion,
+          'type': 'cloud.delivery_interest',
+          'revision': 1,
+          'cloud_recipient_instances_complete': true,
+          'cloud_recipient_instance_ids': const <String>[],
+          'lease_ms': 30000,
+        });
+        expect(deliveryPresence.shouldEmitCloud, isFalse);
+
+        await socket.trigger('execute_command', {
+          'command': CanonicalEventTypes.listWorkspaces,
+          'device_id': 'test-device-id',
+          'payload': {'request_id': 'req-after-reconnect', 'session_id': 'sess-list'},
+        });
+
+        final response = socket.emittedEvents.singleWhere(
+          (item) => item['event'] == 'device_event',
+        );
+        final data = response['data'] as Map<String, dynamic>;
+        expect(data['event'], CanonicalEventTypes.workspacesList);
+        expect(data['payload'], containsPair('request_id', 'req-after-reconnect'));
+
+        // Uncorrelated broadcast egress stays governed by delivery interest.
+        socket.emittedEvents.clear();
+        await platform.sendResponse(
+          GatewayResponse(
+            sessionId: 'session-1',
+            eventId: 'broadcast-1',
+            message: Message(role: MessageRole.assistant, content: 'answer'),
+          ),
+        );
+        expect(socket.emittedEvents.where((item) => item['event'] == 'device_event'), isEmpty);
+      },
+    );
+
     test('rejects list_workspaces without a device id', () async {
       await socket.trigger('execute_command', {
         'command': CanonicalEventTypes.listWorkspaces,

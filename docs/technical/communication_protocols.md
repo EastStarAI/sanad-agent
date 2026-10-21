@@ -52,7 +52,9 @@ The Agent attempts Local dispatch for every event, even with zero Local sockets.
 Gateway returns `cloud_delivery_interest` with a bounded current Cloud-recipient
 instance set, monotonic revision, and lease. The Agent derives
 `cloud_instances - local_instances`; a fresh empty difference suppresses Cloud
-serialization, while missing, malformed, stale, unsupported, disconnected, or
+serialization of uncorrelated egress (a request-correlated reply to a command
+received on the Cloud socket is always emitted, because its requester is a Cloud
+connection that may not be in the interest set yet after a reconnect), while missing, malformed, stale, unsupported, disconnected, or
 expired state enables Cloud egress. A Cloud copy carries bounded event-local ids
 actually delivered locally. Gateway rereads its current Cloud connections and
 sends to every interested connection except those ids; it stores no Local state.

@@ -23,6 +23,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Platform-family fan-out is Local-first and awaited before Cloud serialization. Local write failures are isolated and remain Cloud-eligible.
 - `DeliveryPresenceController` owns bounded in-memory event-local delivery results. The Cloud adapter consumes each result once, intersects it with the fresh Gateway-authored Cloud instance lease, and emits sorted `local_delivery_client_instance_ids` only for instances that received the same canonical `event_id` locally.
 - Local delivery results and Local membership never leave Agent memory except for that one event-local exclusion list; missing/expired/ambiguous state preserves Cloud egress.
+- Delivery-interest suppression applies only to uncorrelated egress. A reply that carries the `request_id` of a command received on the Cloud socket has a known Cloud requester and is always emitted to Cloud: right after a Client Cloud reconnect the Gateway interest set can still omit that requester, and a suppressed reply is never retried.
 
 ## Local Runtime Context
 - Rebuild per-turn workspace tools before assembling fresh runtime-owned system context for the runner.
