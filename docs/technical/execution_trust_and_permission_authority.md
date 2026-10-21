@@ -68,6 +68,7 @@ Every command and turn carries a daemon-derived `CommandAuthority`. User decisio
 - Everything else in the operator environment is inherited unchanged, including credentials the operator holds for other tools (for example another agent's token): only names Sanad itself reads are removed. A Direct shell therefore sees the same environment as the operator's terminal minus Sanad's own credentials.
 - It keeps `SANAD_HOME` and the `SANAD_DEV_*` runtime markers: they are routing identity, not credentials, and `sanad-dev restart agent` from a shell needs them.
 - Request overrides can never set `PATH`, `PATHEXT`, `COMSPEC`, identity and temp variables, interpreter start-up hooks, Git transport hooks, trust roots, proxies, or anything prefixed `LD_`, `DYLD_` or `SANAD_`, and can never reintroduce a Sanad credential. A rejection is logged by key and reason only.
+- User secrets (§10) are added only when the call names them in `secrets`; the default is none. They follow the same protected-key rule as request overrides.
 - Children are spawned with `includeParentEnvironment: false`; the policy-built map is the whole environment. Without it Dart merges the daemon environment, and every credential, back in.
 - Backend-generated values (`GIT_TERMINAL_PROMPT`, `GCM_INTERACTIVE`, `SSH_ASKPASS_REQUIRE`, `SANAD_REQUESTER_SESSION_ID`, `SANAD_REQUESTER_TOOL_CALL_ID`) are added after the policy.
 - Other spawns keep their own owners: MCP stdio starts through `StrictStdioClientTransport` with exactly its allowlist (`PATH`, `HOME`, user, locale, `TMPDIR`, proxies, CA roots, and the Windows system variables) plus server-owned values; supervisor restart and update installers relaunch Sanad itself; automation helpers run fixed system binaries without model input.
@@ -130,3 +131,20 @@ Provider credentials and MCP secrets live in `AgentSecretStore` (macOS Keychain,
 - User decision 2026-10-21: deleting the legacy files is approved; downgrade compatibility is not required. An older Agent on the same Home loses those secrets.
 - An unavailable vault keeps legacy values readable and rejects writes with `AgentSecretStoreUnavailable`; it never writes plaintext.
 - Vault lifecycle events (migration counts, a failed verification, an unavailable vault) are appended to the owner-only `secret_vault_events.jsonl` in Sanad Home, because the CLI has no agent log and the vault may open before a process logs. The daemon opens the vault after logging starts and replays and clears the file, so every migration that deletes files reaches the agent log. Events carry namespaces and counts only.
+
+## 10. User secrets (Plan 84)
+
+User secrets are credentials the user enters for the Agent to use in commands (for example a database password). They live only in the vault's `custom:` namespace, owned by `UserSecretVault`, keyed by their environment variable name.
+
+### Names
+
+A name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and must not be a protected operator variable or a Sanad credential (`ChildProcessSecurityContract.isDangerousRequestOverride`), so `PATH`, `LD_*`, `SANAD_*` or `OPENAI_API_KEY` can never be stored or injected.
+
+### Injection into a command
+
+- `shell_execute` accepts an optional `secrets` list of at most 16 names. Exactly those names are injected into that one child process. A call without `secrets` gets no user secret: there is no default, wildcard, workspace-wide or session-wide injection.
+- Injection requires a turn with stamped `owner` authority; otherwise the call is refused as `permission_denied` (`terminal_reason: secret_authority_required`) and the command does not run.
+- An unknown name fails as `not_found` (`terminal_reason: secret_not_found`) before approval, and the command does not run. A malformed or reserved name is invalid input.
+- The approval key of a call with secrets is `shell_execute::<command>::secrets=<sorted names>`, so a grant for a command without secrets never covers the same command with secrets, and the permission prompt shows the names (never values).
+- Every output the Direct backend reports (progress checkpoints, final, partial, timeout and error output) has each injected value replaced by `[REDACTED:<NAME>]` before it becomes a tool result, history row, request dump or client timeline entry. Only verbatim echoes are caught.
+

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:sanad_agent/capabilities/permissions/execution_mode.dart';
 import 'package:sanad_agent/capabilities/permissions/process_environment_policy.dart';
+import 'package:sanad_agent/capabilities/secrets/user_secret_vault.dart';
 import 'package:sanad_agent/capabilities/tools/system/process_tree_controller.dart';
 import 'package:sanad_agent/capabilities/tools/tool_execution_outcome.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
@@ -17,7 +18,9 @@ import 'execution_backend.dart';
 /// Keeps host-native command semantics, process-group ownership, bounded
 /// output, timeout and cancellation behaviour. The child environment comes
 /// from [ProcessEnvironmentPolicy]: the inherited developer environment minus
-/// Sanad-owned credentials, plus backend-generated values.
+/// Sanad-owned credentials, plus the user secrets explicitly requested for
+/// the call and backend-generated values. Every reported output (progress
+/// checkpoints, final and partial results) has those secret values redacted.
 class DirectExecutionBackend implements ExecutionBackend {
   DirectExecutionBackend({
     ProcessEnvironmentPolicy? processEnvironmentPolicy,
@@ -114,6 +117,11 @@ class DirectExecutionBackend implements ExecutionBackend {
     final stopwatch = request.stopwatch;
     final context = request.context;
     final shell = await _shellCommand(request.command);
+    final redactor = request.secretEnvironment.isEmpty
+        ? const SecretOutputRedactor.none()
+        : SecretOutputRedactor(request.secretEnvironment);
+    String render(({String text, int totalChars, bool truncated}) result) =>
+        redactor.redact(_renderBoundedOutput(result));
     Process? process;
     ProcessTreeHandle? tree;
     RunCancellationResourceHandle? cancellationHandle;
@@ -143,8 +151,8 @@ class DirectExecutionBackend implements ExecutionBackend {
       callback({
         'tool_name': 'shell_execute',
         'status': 'running',
-        'stdout': _renderBoundedOutput(stdoutSnapshot),
-        'stderr': _renderBoundedOutput(stderrSnapshot),
+        'stdout': render(stdoutSnapshot),
+        'stderr': render(stderrSnapshot),
         'stdout_total_chars': stdoutSnapshot.totalChars,
         'stderr_total_chars': stderrSnapshot.totalChars,
         'updated_at': now.toIso8601String(),
@@ -167,7 +175,7 @@ class DirectExecutionBackend implements ExecutionBackend {
     }) {
       final payload = <String, dynamic>{
         if (isError) 'isError': true,
-        'output': output,
+        'output': redactor.redact(output),
         'duration_ms': stopwatch.elapsedMilliseconds,
         'cleanup_outcome': ?cleanup?.outcome.name,
         'terminal_reason': ?terminalReason,
@@ -185,6 +193,7 @@ class DirectExecutionBackend implements ExecutionBackend {
       var childEnvironment = _environmentPolicy.buildChildEnvironment(
         purpose: ChildProcessPurpose.directDeveloper,
         inheritedEnvironment: _inheritedEnvironment(),
+        secretEnvironment: request.secretEnvironment,
       );
       if (_windowsSystemPath.isWindows) {
         final path = await _windowsSystemPath.resolve(
@@ -274,8 +283,8 @@ class DirectExecutionBackend implements ExecutionBackend {
           final stdoutResult = await stdoutFuture;
           final stderrResult = await stderrFuture;
           cancellationHandle?.release();
-          final stdoutStr = _renderBoundedOutput(stdoutResult);
-          final stderrStr = _renderBoundedOutput(stderrResult);
+          final stdoutStr = render(stdoutResult);
+          final stderrStr = render(stderrResult);
           var output = stdoutStr;
           if (stderrStr.isNotEmpty) {
             if (output.isNotEmpty) {
