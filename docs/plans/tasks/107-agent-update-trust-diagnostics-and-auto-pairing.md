@@ -94,6 +94,8 @@ owner. The port is a transplant with review fixes, not a merge.
 | D13 | `sanitizePlatformVerifierOutput` | Missed resolved `/private` artifact paths, a `HOME` outside `/Users` or `/home`, temp roots, `/var/folders`, and non-`C:` drives; kept newlines and ANSI; truncation could split a surrogate pair | Environment-aware roots, `/var/folders`, any drive, control collapse, rune-safe bound | `sanitizePlatformVerifierOutput` group |
 | D14 | `update_command.dart` | Hard-coded bash command printed on Windows; blamed "legacy v1.0.0–v1.0.4", which the printing (current) Agent never is; wrong range | Platform-aware `OfficialAgentInstaller`; accurate wording; docs give v1.0.0–v1.0.5 | `sanad update recovery guidance` group |
 | D15 | logging | Probe logs included full executable paths | Path-free messages | review |
+| D17 | `_updateStoppedAgent` (this port, found live in L4) | A started, usable newer Agent still returned `downgradeRejected`; **Run Sanad Locally** logged `[ERROR]`, marked the step failed and called `onFailure()`; no Settings surface showed anything | `newerAgentInUse` (`isSuccess`, `agentVersion`) for a healthy started or running newer Agent; `downgradeRejected` only when incompatible or not starting; localized en/ar notice in the install flow and the local device's Settings page | `7: a newer stopped agent…`, `a newer … cannot start…`, `… without a required service option…`, `a newer running agent…`, `records the last local agent lifecycle…`, `test/widget/newer_agent_notice_test.dart` |
+| D18 | stopped-agent replacement (this port, found live in L2) | `sanad.rollback` stayed on disk after a healthy replacement | Removed after target-version health; kept while a restore is possible | `the rollback copy is kept until…`, scenarios 1–2 |
 | D16 | old tests | Fakes answered `--help` before `install` (hiding D1); "old agent already running" tested an up-to-date one; tests read the developer's real `HOME`; trust-failure scenario did not assert the previous binary; controller tests had no guard against falling through to the real installer and the live release manifest | Version-faithful `FakeAgentCli`, isolated `HOME`, `noBootstrapExpected` guard, explicit preservation asserts | whole suites |
 
 ## Gates
@@ -124,7 +126,9 @@ owner. The port is a transplant with review fixes, not a merge.
 - [x] All eight original scenarios plus Ubuntu acceptance ported against a version-faithful fake CLI.
 
 ### G6 — Live acceptance (open)
-- [ ] L1–L7 in `docs/qa_maintenance/agent_update_trust_and_auto_pairing_qa.md` on an isolated Test Home and service instance.
+- [x] macOS r1 (`b2b0eecb`, Test Home `~/.sanad-qa107`, instance `qa107`): L2, L3, L6, L7 PASS; L4 core behavior passed but the result was reported as a failure (D17); L2 left `sanad.rollback` (D18).
+- [ ] macOS r2 of L2 and L4 after D17/D18.
+- [ ] L1 and L5 on Ubuntu with the current code. The Ubuntu evidence on PR #211 covers the old 107 code only and does not count.
 
 ## Acceptance Criteria
 
@@ -156,12 +160,20 @@ Logs live under `temp/107/` in the worktree (gitignored).
 - Client full: `fvm flutter test` → `+1771 ~1`, all passed (`temp/107/client-full.log`).
 - Client E2E: `fvm flutter test e2e_test/local_dual_connection_e2e_test.dart --concurrency=1` → `+13`, all passed (`temp/107/client-e2e-local.log`).
 - Analyzers: Agent, release contract, and Client report no issues (`temp/107/*-analyze.log`).
+- D17/D18 round (red first, `temp/107/l4-red.log`: 6 behavioral failures with the API stub; green `temp/107/l4-green-focused.log`: `+88`):
+  - Client full `+1780 ~1` (`temp/107/client-full-r2.log`); analyzers clean (`temp/107/*-analyze-r2.log`).
+  - Agent full first run hit one known-racy, 107-unrelated test (`test/cli/run_delegation_test.dart` reads `result.json` before it exists; 3/3 green alone) (`temp/107/agent-full-r2.log`); rerun `+3065 ~14` all passed (`temp/107/agent-full-r2b.log`).
 - `scripts/lint_wiki.dart`: only the existing `third_party_skills_install_qa.md` indexing error, also present on `origin/main`.
 - `shellcheck`: not installed; installer scripts are unchanged by this task, and neither supports a dry run.
+
+## Out-of-Scope Environment Issues (no code change)
+
+- `flutter build macos --release` fails in Cargokit/`super_native_extensions` with `E0463` (`proc_macro_error_attr`, `time_macros`) when `MACOSX_DEPLOYMENT_TARGET=12.0` is set with rustc 1.92 on macOS 27. The workaround used in live r1 was to prebuild both Rust targets into the Pods build directory without that variable.
+- After a v1.0.16 self-update through `/update`, the v1.0.16 launchd supervisor keeps running from the old image (its `txt` mapping is the `.rollback` inode); only the child runs the new version until the next service restart. This is the old Agent's design, not 107 Client code.
 
 ## Open Questions
 
 1. Should the Agent print `--version` and `help` before `SanadHomeBootstrap.prepareAll()` and bundled-skill reconciliation, so Client probes never write to the Home? It currently initializes the managed Home only.
-2. A newer stopped Agent is started (D6) to match newer-running behavior. Confirm that this is the intended policy rather than refusing to start it.
+2. Resolved by coordinator review: a started, healthy newer Agent is a success (`newerAgentInUse`) with an informational notice (D17).
 3. Should `DeviceInstallGuide` reuse `OfficialAgentInstaller` for its installer URLs? It belongs to the Client devices feature and is outside 107.
 4. When the bootstrap installer replaces a stopped Agent with a registered service, the existing service definition is reused. Should a version change force re-registration so the unit/plist/task matches the new Agent?

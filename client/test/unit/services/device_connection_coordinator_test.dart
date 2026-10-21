@@ -360,6 +360,18 @@ void main() {
       expect(daemon.calls, ['start', 'update']);
     });
 
+    test('records the last local agent lifecycle result for Settings', () async {
+      final daemon = _ScriptedDaemonController(running: true, updateStatus: AgentLifecycleStatus.newerAgentInUse);
+      final coordinator = _coordinatorFor(daemon);
+      addTearDown(coordinator.dispose);
+      expect(coordinator.localAgentLifecycle, isNull);
+      final changed = coordinator.changes.first;
+
+      expect(await coordinator.checkAndStartLocalDaemon(), isTrue);
+      await changed;
+      expect(coordinator.localAgentLifecycle?.status, AgentLifecycleStatus.newerAgentInUse);
+    });
+
     test('concurrent callers share one lifecycle attempt', () async {
       final daemon = _ScriptedDaemonController()..updateGate = Completer<void>();
       final coordinator = _coordinatorFor(daemon);

@@ -473,7 +473,9 @@ The Desktop Client keeps its local Agent at the Client's exact version. When it
 starts or you select **Run Sanad Locally**, an older Agent is updated, and a
 stopped Agent that is outdated or cannot register its service without
 elevation is replaced with the verified matching release before the service is
-registered and started. A newer Agent is never downgraded.
+registered and started. A newer Agent is never downgraded; if it can run, the
+Client keeps using it and shows an informational notice during **Run Sanad
+Locally** and in the device's Settings page.
 
 If `sanad update` reports that the download failed platform trust verification,
 the current Agent is unchanged. The message names the failed stage, for example
@@ -482,8 +484,7 @@ v1.0.5 can report this for a genuine release; reinstall with the official
 installer that the message prints:
 
 ```bash
-curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh
-bash install.sh --no-login
+curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh && bash install.sh --no-login
 ```
 
 ```powershell

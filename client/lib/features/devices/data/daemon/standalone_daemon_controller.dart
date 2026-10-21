@@ -328,9 +328,8 @@ class StandaloneDaemonController implements LocalDaemonController {
     if (currentVersion != null) {
       final comparison = _compareVersions(currentVersion, targetVersion);
       if (comparison > 0) {
-        return const AgentLifecycleResult(
-          AgentLifecycleStatus.downgradeRejected,
-        );
+        // A running newer agent is usable and is never downgraded.
+        return AgentLifecycleResult(AgentLifecycleStatus.newerAgentInUse, agentVersion: currentVersion);
       }
       if (comparison == 0) {
         return const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
@@ -400,10 +399,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       if (installedVersion != null) {
         final comparison = _compareVersions(installedVersion, targetVersion);
         final compatible = comparison >= 0 && await validateServiceInstallCompatibility();
-        if (comparison > 0) {
-          if (compatible) await _registerAndStartService();
-          return const AgentLifecycleResult(AgentLifecycleStatus.downgradeRejected);
-        }
+        if (comparison > 0) return _startNewerAgent(installedVersion, targetVersion, compatible: compatible);
         if (comparison == 0 && compatible) {
           return await _registerAndStartService() ?? await _waitForTargetVersion(targetVersion);
         }
@@ -425,13 +421,43 @@ class StandaloneDaemonController implements LocalDaemonController {
     }
 
     final outcome = await _registerAndStartService() ?? await _waitForTargetVersion(targetVersion);
-    if (!outcome.isSuccess && replacesExisting && await _restoreRollback(restart: false)) {
+    if (outcome.isSuccess) {
+      // The replacement is healthy at the target; a rollback is no longer possible.
+      await _discardRollback();
+      return outcome;
+    }
+    if (replacesExisting && await _restoreRollback(restart: false)) {
       return AgentLifecycleResult(
         AgentLifecycleStatus.rollbackCompleted,
         message: 'The update failed and the previous agent was restored: ${outcome.actionableMessage}',
       );
     }
     return outcome;
+  }
+
+  /// Starts a newer installed agent without replacing it. It is in use only
+  /// when it is compatible, starts, and reports healthy; otherwise the result
+  /// stays a rejected downgrade.
+  Future<AgentLifecycleResult> _startNewerAgent(
+    String installedVersion,
+    String targetVersion, {
+    required bool compatible,
+  }) async {
+    const rejected = AgentLifecycleResult(AgentLifecycleStatus.downgradeRejected);
+    if (!compatible || await _registerAndStartService() != null) return rejected;
+    final health = await _waitForTargetVersion(targetVersion);
+    // `_waitForTargetVersion` reports a healthy newer agent as a downgrade.
+    if (health.status != AgentLifecycleStatus.downgradeRejected) return rejected;
+    return AgentLifecycleResult(AgentLifecycleStatus.newerAgentInUse, agentVersion: installedVersion);
+  }
+
+  Future<void> _discardRollback() async {
+    final backup = File('${getExecutablePath()}.rollback');
+    try {
+      if (backup.existsSync()) await backup.delete();
+    } catch (error) {
+      _logger.info('Could not remove the superseded agent copy (${error.runtimeType}).');
+    }
   }
 
   /// Registers the service when needed and starts it. Returns null on success

@@ -4,6 +4,7 @@ import 'package:get_it/get_it.dart';
 import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 class InstallationTerminalView extends StatefulWidget {
   final String versionTag;
@@ -87,7 +88,13 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
       widget.onFailure(result.actionableMessage);
       return;
     }
-    _addLog('The exact verified agent is installed.');
+    final newerAgentVersion = result.status == AgentLifecycleStatus.newerAgentInUse ? result.agentVersion : null;
+    if (newerAgentVersion != null) {
+      if (!mounted) return;
+      _addLog(AppLocalizations.of(context)!.newerAgentInUseNotice(newerAgentVersion, targetVersion));
+    } else {
+      _addLog('The exact verified agent is installed.');
+    }
 
     setState(() => _currentStep = 'permissions');
     _addLog('Platform execution trust and permissions passed.');
@@ -96,7 +103,7 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
 
     setState(() => _currentStep = 'verify');
     _addLog(
-      'Health reports $targetVersion; authenticating the local socket...',
+      'Health reports ${newerAgentVersion ?? targetVersion}; authenticating the local socket...',
     );
     final socket = await _connectionCoordinator.ensureConnectedLocalRuntimeSocket();
     if (socket == null || !socket.isReady) {

@@ -35,11 +35,19 @@ it the stopped Agent instead of starting the service first:
 3. Reuse a compatible executable at the target version. Replace an absent,
    older, unparseable, or incompatible one through the verified bootstrap
    installer before any registration, so an old binary is never invoked with
-   an option it lacks. Never replace a newer executable; start it when
-   compatible and report `downgradeRejected`.
+   an option it lacks. Never replace a newer executable. Start it when
+   compatible; once healthy it is `newerAgentInUse` (`isSuccess` true, with
+   `agentVersion`). An incompatible or non-starting newer executable is
+   `downgradeRejected`.
 4. Register the service when needed, start it, and wait for target-version
    health. A failure after replacing an existing executable restores the
-   previous copy (see [Release and Update Architecture](update_architecture.md)).
+   previous copy (see [Release and Update Architecture](update_architecture.md));
+   success removes the `.rollback` copy.
+
+The coordinator records the last result as `localAgentLifecycle` and emits a
+change. `LocalAgentLifecycleNotice` renders the localized `newerAgentInUseNotice`
+(en/ar) for the local device in Settings, and **Run Sanad Locally**
+(`InstallationTerminalView`) logs the same notice as `[INFO]` and completes.
 
 ### Executable probes
 

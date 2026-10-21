@@ -4,6 +4,9 @@ enum AgentLifecycleStatus {
   ready,
   upToDate,
   sourceManaged,
+
+  /// An installed agent newer than this client was kept and is running.
+  newerAgentInUse,
   networkFailed,
   manifestInvalid,
   targetMismatch,
@@ -21,13 +24,19 @@ enum AgentLifecycleStatus {
 }
 
 class AgentLifecycleResult {
-  const AgentLifecycleResult(this.status, {this.message});
+  const AgentLifecycleResult(this.status, {this.message, this.agentVersion});
 
   final AgentLifecycleStatus status;
   final String? message;
 
+  /// The agent version in use when it differs from the client's target.
+  final String? agentVersion;
+
   bool get isSuccess => switch (status) {
-    AgentLifecycleStatus.ready || AgentLifecycleStatus.upToDate || AgentLifecycleStatus.sourceManaged => true,
+    AgentLifecycleStatus.ready ||
+    AgentLifecycleStatus.upToDate ||
+    AgentLifecycleStatus.sourceManaged ||
+    AgentLifecycleStatus.newerAgentInUse => true,
     _ => false,
   };
 
@@ -38,6 +47,8 @@ class AgentLifecycleResult {
           'Could not reach the official release service. Try again when the network is available.',
         AgentLifecycleStatus.manifestInvalid => 'The official release metadata is invalid. Try again later.',
         AgentLifecycleStatus.targetMismatch => 'The available agent does not match this Sanad Client version.',
+        AgentLifecycleStatus.newerAgentInUse =>
+          'A newer installed agent was kept and is in use. Update the client when convenient.',
         AgentLifecycleStatus.downgradeRejected =>
           'The installed agent is newer than this client. Update the client or use recovery.',
         AgentLifecycleStatus.unsupportedTarget => 'No compatible agent is published for this computer.',

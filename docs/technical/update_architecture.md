@@ -90,8 +90,11 @@ start, health, version, authentication, and socket stages.
 Client cannot reach a running Agent and the executable under the managed Sanad
 Home is absent, older than the Client, has no parseable `Version:` line, or does
 not support a required service option. A compatible executable at the exact
-target is reused without a download. A newer executable is never replaced; it
-is started when compatible and reported as `downgrade_rejected`. The installer
+target is reused without a download. A newer executable is never replaced: when
+it is compatible, starts, and reports healthy it is in use (`newerAgentInUse`, a
+success with an informational notice); when it is incompatible or cannot start
+the result is `downgrade_rejected`. A running newer Agent is also
+`newerAgentInUse`. The installer
 validates the exact manifest and artifact, stages beside the target, preserves
 the previous executable as a rollback copy, performs an atomic move, and
 restores the previous executable when replacement fails.
@@ -99,7 +102,9 @@ restores the previous executable when replacement fails.
 starts it, and polls authenticated health with bounded backoff. If registration,
 start, or health fails after an existing executable was replaced, the failed
 candidate is stopped, the previous executable is restored and left stopped, and
-the result is `rollback_completed` with the original failure appended.
+the result is `rollback_completed` with the original failure appended. The
+rollback copy is kept until the replacement reports target-version health and
+is removed then.
 
 The connection coordinator proves the authenticated local socket after health.
 A failed socket attempt is not cached permanently; a later retry creates a new
@@ -117,8 +122,7 @@ in place; the supported recovery is the official installer, which verifies the
 artifact itself with the current requirement:
 
 ```bash
-curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh
-bash install.sh --no-login
+curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh && bash install.sh --no-login
 ```
 
 On Windows PowerShell:

@@ -84,6 +84,7 @@ void main() {
       expect(cli.version, '1.0.17');
       expect(cli.serviceInstalled, isTrue);
       expect(cli.started, isTrue);
+      expect(File('${executable.path}.rollback').existsSync(), isFalse, reason: 'removed once healthy');
       expect(
         cli.calls.where((call) => call.contains('--user-scope')).length,
         1,
@@ -102,6 +103,7 @@ void main() {
       expect(result.status, AgentLifecycleStatus.ready);
       expect(cli.version, '1.0.17');
       expect(cli.started, isTrue);
+      expect(File('${executable.path}.rollback').existsSync(), isFalse, reason: 'removed once healthy');
       expect(
         cli.calls.where((call) => call.length >= 2 && call[1] == 'install' && !call.contains('--help')),
         isEmpty,
@@ -173,7 +175,9 @@ void main() {
 
       final result = await controller.updateDaemon(targetVersion: '1.0.17');
 
-      expect(result.status, AgentLifecycleStatus.downgradeRejected);
+      expect(result.status, AgentLifecycleStatus.newerAgentInUse);
+      expect(result.isSuccess, isTrue);
+      expect(result.agentVersion, '1.0.18');
       expect(executable.readAsStringSync(), 'agent 1.0.18');
     });
 
@@ -297,9 +301,80 @@ void main() {
 
       final result = await controller.updateDaemon(targetVersion: '1.0.17');
 
-      expect(result.status, AgentLifecycleStatus.downgradeRejected);
+      expect(result.status, AgentLifecycleStatus.newerAgentInUse);
+      expect(result.isSuccess, isTrue);
       expect(cli.started, isTrue);
       expect(await controller.isDaemonRunning(), isTrue);
+    });
+
+    test('a newer stopped agent that cannot start stays a rejected downgrade', () async {
+      executable.writeAsStringSync('agent 1.0.18');
+      final cli = FakeAgentCli('1.0.18');
+      final controller = controllerFor(
+        cli,
+        runner: (command, arguments) async {
+          if (arguments.length == 2 && arguments[1] == 'start') return ProcessResult(1, 1, '', 'failed');
+          return cli.run(command, arguments);
+        },
+      );
+
+      final result = await controller.updateDaemon(targetVersion: '1.0.17');
+
+      expect(result.status, AgentLifecycleStatus.downgradeRejected);
+      expect(result.isSuccess, isFalse);
+      expect(executable.readAsStringSync(), 'agent 1.0.18');
+    });
+
+    test('a newer stopped agent without a required service option is neither started nor replaced', () async {
+      executable.writeAsStringSync('agent 1.0.18');
+      final cli = FakeAgentCli('1.0.18');
+      final controller = controllerFor(
+        cli,
+        runner: (command, arguments) async => arguments.first == 'help'
+            ? ProcessResult(1, 0, 'Usage: sanad service install [arguments]', '')
+            : cli.run(command, arguments),
+      );
+
+      final result = await controller.updateDaemon(targetVersion: '1.0.17');
+
+      expect(result.status, AgentLifecycleStatus.downgradeRejected);
+      expect(cli.started, isFalse);
+      expect(executable.readAsStringSync(), 'agent 1.0.18');
+    });
+
+    test('a newer running agent is reported as in use', () async {
+      final cli = FakeAgentCli('1.0.18')..started = true;
+      final controller = controllerFor(cli);
+
+      final result = await controller.updateDaemon(targetVersion: '1.0.17');
+
+      expect(result.status, AgentLifecycleStatus.newerAgentInUse);
+      expect(result.isSuccess, isTrue);
+      expect(result.agentVersion, '1.0.18');
+      expect(cli.calls, isEmpty);
+    });
+
+    test('the rollback copy is kept until the replacement is healthy', () async {
+      executable.writeAsStringSync('agent 1.0.15');
+      final cli = FakeAgentCli('1.0.15');
+      final rollback = File('${executable.path}.rollback');
+      var rollbackPresentWhileStarting = false;
+      final controller = controllerFor(
+        cli,
+        installer: replacingInstaller(cli),
+        runner: (command, arguments) {
+          if (arguments.length == 2 && arguments[1] == 'start') {
+            rollbackPresentWhileStarting = rollback.existsSync();
+          }
+          return cli.run(command, arguments);
+        },
+      );
+
+      final result = await controller.updateDaemon(targetVersion: '1.0.17');
+
+      expect(result.status, AgentLifecycleStatus.ready);
+      expect(rollbackPresentWhileStarting, isTrue);
+      expect(rollback.existsSync(), isFalse);
     });
 
     test('a missing Version line is unparseable, never a kernel version', () async {

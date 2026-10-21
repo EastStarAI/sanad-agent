@@ -48,9 +48,9 @@ Test Home and a unique service instance.
 | # | Setup on the Test Home | Action | Expected |
 |---|---|---|---|
 | L1 | Ubuntu, v1.0.15 executable, no service | **Run Sanad Locally** | no sudo/pkexec prompt; executable replaced by the Client version; `sanad-agent-qa107.service` registered with `--user-scope`; health reports the Client version; local socket ready |
-| L2 | macOS or Linux, older executable, instance service registered, stopped | **Run Sanad Locally** | executable replaced; existing registration reused; ready at the Client version |
+| L2 | macOS or Linux, older executable, instance service registered, stopped | **Run Sanad Locally** | executable replaced; existing registration reused; ready at the Client version; no `sanad.rollback` left once healthy |
 | L3 | older agent running from the Test Home service | restart the Client | bootstrap updates through `/update` before connecting; ready at the Client version |
-| L4 | executable newer than the Client, stopped | **Run Sanad Locally** | executable unchanged; agent started and usable; Settings shows the downgrade message |
+| L4 | executable newer than the Client, stopped | **Run Sanad Locally** | executable unchanged; agent started and usable; the step completes (no `[ERROR]`, no failure) with the `[INFO]` notice "The installed agent <agent version> is newer than this client <client version>. It was kept and is in use; update the client when convenient." (Arabic in the Arabic locale); the local device's Settings page shows the same notice |
 | L5 | v1.0.0–v1.0.4 executable, Linux | **Run Sanad Locally** | no service registered before replacement (inspect `systemctl --user list-units 'sanad-agent*'` and the system unit list); replaced and registered once |
 | L6 | macOS, `SANAD_RELEASE_ARTIFACT_MIRROR_URL` build pointing at a mirror serving a re-signed or unsigned candidate with matching manifest size/SHA-256 | **Run Sanad Locally** or `sanad update` | `trust_failed` with `stage=publisher_requirement` or `stage=codesign_verification`; no user path in the message; previous executable unchanged |
 | L7 | any trust failure from L6 via `sanad update` | read the CLI output | the platform-appropriate official installer command and the service-restart warning |
