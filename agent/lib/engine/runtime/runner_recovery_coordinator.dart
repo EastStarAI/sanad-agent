@@ -74,10 +74,11 @@ abstract class RunnerRecoveryHost {
   void clearTurnCapabilityProfile();
 
   /// Per-run automatic-compaction breaker owned by the compaction
-  /// orchestrator; overflow compaction is automatic too.
+  /// orchestrator. Not yet read by overflow compaction; Task 118a activates it.
   bool get autoCompactionBlockedForRun;
 
-  /// Opens the per-run automatic-compaction breaker.
+  /// Opens the per-run automatic-compaction breaker. Not yet called by
+  /// overflow compaction; Task 118a activates it.
   void markCompactionFailure();
 }
 
