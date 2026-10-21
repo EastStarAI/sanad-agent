@@ -138,7 +138,7 @@ documented silent `stale_owner` / `recovery_owns_state` contract
       eligibility, and the thought/final-answer split.
 - [x] Agent analyzer and full agent suite pass. The Client is untouched, so no
       Client suite is needed.
-- [ ] Live verification scenarios are handed to the coordinator.
+- [x] Live verification scenarios are handed to the coordinator.
 - [x] Owning documentation is updated in the same session
       (`docs/technical/reasoning_thoughts_separation.md`,
       `docs/technical/communication_protocols.md`,
@@ -167,9 +167,9 @@ documented silent `stale_owner` / `recovery_owns_state` contract
 - [x] `fvm dart analyze` clean in `agent/`. `fvm flutter analyze` clean in
       `client/` as a no-regression check.
 - [x] Focused and full agent tests pass with the changed behavior covered.
-- [ ] Live verification scenarios recorded for the coordinator.
+- [x] Live verification scenarios recorded for the coordinator.
 - [x] Documentation updated; no stale or contradictory contract text remains.
-- [ ] No push or PR without explicit user authorization.
+- [x] No push or PR without explicit user authorization.
 
 ## Implementation
 
@@ -208,10 +208,35 @@ documented silent `stale_owner` / `recovery_owns_state` contract
 - No port-binding E2E run: no socket, daemon, or restart boundary changed.
 - `graphify update .`: succeeded — `graphify-update.log`.
 
+## Live acceptance (2026-10-21)
+
+Run on Test Home 3 against candidate `7f4b812a` (agent daemon from source,
+Client reconnected, cloud disabled). Result: **6/6 PASS**.
+
+| # | Scenario | Session | Result |
+| --- | --- | --- | --- |
+| S1 | Multi-turn footer after agent restart and Client reconnect | `da2ad415-6e76-44be-b9f8-c43ad83009e5` | PASS: hydrated sweep identical to live; finals show footer and Fork, pre-tool text copy-only |
+| S2 | Older page of a long session (543 active rows) | `774e49f7-05b2-4811-8a7a-5cae3b203a3a` | PASS: unstamped turn-ender 236 rows back renders as final answer with Fork |
+| S3 | Stamps survive later turns, steer, and restart; Fork an earlier reply | `da2ad415-6e76-44be-b9f8-c43ad83009e5` (child `4b589d33-bd88-4c44-9b60-5e4a36343455`) | PASS: four stamps intact while `history_revision` moved 5 to 32; Fork created the child |
+| S4 | Thoughts split: pre-tool text and steer-superseded partial answer | `da2ad415-6e76-44be-b9f8-c43ad83009e5` | PASS: both stay copy-only Thoughts; finals carry Fork |
+| S5 | Search opens an older reply as final answer | `9d426bc8-9ab4-4b9b-befa-d9fd28750ce3` | PASS: anchored tile is a final answer with Fork |
+| S6 | Legacy rows (unstamped, `finishReason: unknown`) | `1c046cf1-643c-4bb6-9ed8-59b75c1d782d` | PASS: footer renders; Fork is refused by the server as the locked contract requires |
+
+Observations outside this task's scope: history rows use synthetic
+timestamps (session creation plus index), so legacy footers can differ from
+the user bubble by a minute; one Client navigation stall after opening a
+search hit recovered with a Client restart. Neither touches the changed code.
+
+## Residual
+
+About 250 legacy rows on the primary Home lost their stamp before this fix
+**and** have `finishReason: unknown`. They now render the final-answer footer,
+but the server still refuses their Fork under the locked fork contract. New
+replies keep their stamp, so the gap does not grow. The user decided not to
+migrate these rows; a follow-up (111b) opens only on request.
+
 ## Current status
 
-Ported to `.agent/worktrees/111-port` on branch
-`fix/111-final-answer-terminal-classification-v2` from `origin/main`
-(`adc128ec`). G0–G3 are closed and automated verification is green. Live
-verification in the worktree runtime is pending with the coordinator. There is
-no push and no PR.
+Done. Branch `fix/111-final-answer-terminal-classification-v2` from
+`origin/main` (`adc128ec`); automated verification green and live acceptance
+6/6 PASS.
