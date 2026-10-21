@@ -185,3 +185,15 @@ Logs are in `temp/78/` (workspace root).
 | Agent full | `fvm dart test` | 3063 passed, 14 skipped, exit 0 | `temp/78/agent-full.log` |
 | Client full | `fvm flutter test` | 1733 passed, 1 skipped; 1 load error (`flutter_tester` WebSocket connect, harness) in `socket_conversation_client_test.dart`, which passes 14/14 on rerun | `temp/78/client-full.log`, `temp/78/client-full-rerun-socket.log` |
 | Local E2E | `fvm flutter test e2e_test/ --concurrency=1` | 14 passed | `temp/78/client-e2e.log` |
+
+### Round 2 evidence (head on `86a783d9`)
+
+| Check | Result | Log |
+|---|---|---|
+| Agent / client analyzers | No issues | `temp/78/r2-agent-analyze.log`, `temp/78/r2-client-analyze.log` |
+| Agent task tests | 13 passed | `temp/78/r2-agent-green.log` |
+| Agent focused | 265 passed | `temp/78/r2-agent-focused.log` |
+| Agent full | 3153 passed, 14 skipped | `temp/78/r2-agent-full.log` |
+| Client focused | 76 passed | `temp/78/r2-client-focused.log` |
+| Client full | 1747 passed, 1 skipped | `temp/78/r2-client-full.log` |
+| Local E2E `--concurrency=1` | 1st run 13 passed, 1 failed: the auth-exchange daemon was not ready in time, a startup case outside this scope that passed alone on rerun. 2nd full run 14 passed | `temp/78/r2-client-e2e.log`, `temp/78/r2-client-e2e-rerun-auth.log`, `temp/78/r2-client-e2e-2.log` |
