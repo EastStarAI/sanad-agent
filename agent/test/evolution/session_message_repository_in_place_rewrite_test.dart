@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/session_db.dart';
+import 'package:sanad_agent/evolution/db/session_message_repository.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:test/test.dart';
 
@@ -106,4 +107,21 @@ void main() {
       expect(total.first['n'], 4);
     });
   }
+
+  test('SessionMessageRepository owns the identity-aligned rewrite', () {
+    final repository = SessionMessageRepository(state);
+    final loaded = seed();
+    final before = activeRows();
+
+    final edited = List<Message>.of(loaded);
+    edited[2] = edited[2].copyWith(content: 'u2 pruned');
+    repository.replaceMessages(sessionId, edited);
+
+    final after = activeRows();
+    expect(after.map((row) => row.id), before.map((row) => row.id));
+    expect(
+      (jsonDecode(after[2].data) as Map<String, dynamic>)['content'],
+      'u2 pruned',
+    );
+  });
 }
