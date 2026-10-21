@@ -98,9 +98,18 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 ## Permission and Platform Tools
 - Sensitive approval uses canonical permission request/response and persists enough state for restart recovery.
 - `think` and `steer` never mutate Workspace permission policy. Only the
-  explicit `workspace.set_permission_mode` command may select `default` or
-  `full_access`, and it resolves the daemon-owned path from a registered
-  `workspace_id` rather than trusting a client-supplied path.
+  explicit `workspace.set_permission_mode` command may change it, and it
+  resolves the daemon-owned root from a registered `workspace_id` rather than
+  trusting a client-supplied path.
+- Every ingress path stamps `CommandAuthority` by overwriting the reserved
+  `command_authority` field. The authenticated loopback transport and the
+  authenticated Cloud Gateway transport are both `owner` (a sender may only
+  lower it); any other transport is `unverified`. Turn translation strips
+  approval-authority keys from non-owner turns. Widening workspace policy
+  requires `owner`. The remote CLI relay runs under its relay authority.
+- A command's `emitEnvelope` reaches only the requester. Family-wide events
+  that other clients must see (for example `workspace.policy_changed`) go
+  through `GatewayManager.publishFamilyEvent`.
 - Platform-provided tools use canonical platform call/result and remain distinct from daemon-local execution.
 - Permission resolution is first-writer-wins and resumed execution reapplies the persisted decision before invoking the gated tool.
 

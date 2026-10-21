@@ -674,6 +674,7 @@ class MockAgentRunner extends _i1.Mock implements _i9.AgentRunner {
     String? runtimeSystemPrompt,
     String? forcedOutput,
     bool? forcedIsError = false,
+    Object? forcedErrorCode,
     _i18.Future<void> Function({
       required bool isError,
       required bool isStart,
@@ -694,6 +695,7 @@ class MockAgentRunner extends _i1.Mock implements _i9.AgentRunner {
               #runtimeSystemPrompt: runtimeSystemPrompt,
               #forcedOutput: forcedOutput,
               #forcedIsError: forcedIsError,
+              #forcedErrorCode: forcedErrorCode,
               #onToolEvent: onToolEvent,
               #onThoughtDelta: onThoughtDelta,
               #onReasoningDelta: onReasoningDelta,

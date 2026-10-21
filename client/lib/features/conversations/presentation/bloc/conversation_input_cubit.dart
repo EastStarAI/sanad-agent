@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:sanad_client/features/conversations/presentation/bloc/session_workspace_coordinator.dart';
 import 'package:sanad_client/features/conversations/domain/models/conversation_draft.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -628,11 +629,13 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     }
   }
 
-  Future<void> setWorkspacePermissionMode(WorkspacePermissionMode permissionMode) async {
+  /// Returns why the change was not applied, for the caller to show.
+  Future<WorkspacePolicyChangeFailure?> setWorkspacePermissionMode(WorkspacePermissionMode permissionMode) async {
     try {
-      await messagesCubit.setWorkspacePermissionMode(permissionMode);
+      return await messagesCubit.setWorkspacePermissionMode(permissionMode);
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
+      return WorkspacePolicyChangeFailure.failed;
     }
   }
 

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
@@ -29,6 +30,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_br
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import '../support/memory_workspace_policy_store.dart';
 
 void main() {
   late Directory tempDir;
@@ -1438,6 +1440,59 @@ void main() {
     );
 
     test(
+      'get_session_history carries the typed code of a denied tool call',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-denied-tool-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-10-21T00:00:00Z'),
+            updatedAt: DateTime.parse('2026-10-21T00:01:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Delete the build'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-denied-1',
+                name: 'shell_execute',
+                arguments: const {'command': 'rm -rf build'},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-denied-1',
+            toolResult: ToolExecutionResult.text(
+              'Error executing tool: Exception: User denied permission for tool shell_execute.',
+              isError: true,
+              errorCode: ToolResultErrorCode.permissionDenied,
+            ),
+            metadata: const {'is_error': true},
+          ),
+        ]);
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {'request_id': 'req-denied-history', 'session_id': sessionId},
+        }, (envelope) async => emitted = envelope);
+
+        final messages = emitted?['payload']['messages'] as List;
+        final toolResult = messages.singleWhere(
+          (message) => message['type'] == 'tool_result',
+        );
+        expect(toolResult['errorCode'], 'permission_denied');
+        expect(toolResult['isError'], isTrue);
+      },
+    );
+
+    test(
       'get_session_history restores the complete cancelled tool terminal',
       () async {
         final bridge = SanadProtocolBridge();
@@ -2169,13 +2224,17 @@ void main() {
       'workspace.get_policy returns policy from WorkspacePolicyStore',
       () async {
         final bridge = SanadProtocolBridge();
-        final policyStore = WorkspacePolicyStore();
+        final policyStore = MemoryWorkspacePolicyStore();
         getIt.registerSingleton<WorkspacePolicyStore>(policyStore);
 
         final workspacePath = '${tempDir.path}/test_workspace';
         Directory(workspacePath).createSync();
-        await policyStore.savePolicy(
-          workspacePath,
+        final registered = await getIt<LocalWorkspaceRuntimeService>()
+            .createWorkspace(path: workspacePath);
+        final workspaceId = registered['id'] as String;
+        policyStore.bind(workspaceId, registered['path'] as String);
+        await policyStore.seed(
+          workspaceId,
           const WorkspacePolicy(
             permissionMode: WorkspacePermissionMode.fullAccess,
           ),
@@ -2207,13 +2266,21 @@ void main() {
       'workspace.set_permission_mode resolves the registered id and supports both modes',
       () async {
         final bridge = SanadProtocolBridge();
-        final policyStore = WorkspacePolicyStore();
+        final announced = <(String, WorkspacePolicy)>[];
+        getIt.registerSingleton<WorkspacePolicyAnnouncer>(
+          WorkspacePolicyAnnouncer((id, policy) => announced.add((id, policy))),
+        );
+        final policyStore = MemoryWorkspacePolicyStore();
         getIt.registerSingleton<WorkspacePolicyStore>(policyStore);
 
         final workspacePath = '${tempDir.path}/test_workspace_2';
         Directory(workspacePath).createSync();
         final workspace = await getIt<LocalWorkspaceRuntimeService>()
             .createWorkspace(path: workspacePath);
+        policyStore.bind(
+          workspace['id'] as String,
+          workspace['path'] as String,
+        );
         final forgedPath = '${tempDir.path}/forged_workspace';
         Directory(forgedPath).createSync();
 
@@ -2226,6 +2293,8 @@ void main() {
               'workspace_id': workspace['id'],
               'workspace_path': forgedPath,
               'permission_mode': 'full_access',
+              // Loopback ingress stamp; widening requires local owner.
+              CommandAuthority.payloadKey: CommandAuthority.owner.value,
             },
           },
           (envelope) async {
@@ -2234,22 +2303,16 @@ void main() {
         );
 
         expect(handled, isTrue);
-        expect(emittedEnvelopes, hasLength(2));
-
-        // Broadcast first
-        final broadcast = emittedEnvelopes[0];
+        // The reply goes to the requester; the change is announced to every
+        // client through WorkspacePolicyAnnouncer.
+        expect(emittedEnvelopes, hasLength(1));
+        expect(announced.single.$1, equals(workspace['id']));
         expect(
-          broadcast['event'],
-          equals(CanonicalEventTypes.workspacePolicyChanged),
-        );
-        expect(broadcast['payload']['workspace_id'], equals(workspace['id']));
-        expect(
-          broadcast['payload']['policy']['permissionMode'],
-          equals('full_access'),
+          announced.single.$2.permissionMode,
+          equals(WorkspacePermissionMode.fullAccess),
         );
 
-        // Response second
-        final response = emittedEnvelopes[1];
+        final response = emittedEnvelopes.single;
         expect(
           response['event'],
           equals(CanonicalEventTypes.workspaceSetPermissionMode),
@@ -2257,8 +2320,8 @@ void main() {
         expect(response['payload']['request_id'], equals('req-2'));
         expect(response['payload']['permissionMode'], equals('full_access'));
 
-        // Verify stored on disk
-        final policy = await policyStore.readPolicy(workspacePath);
+        // Verify stored in the daemon database under the registered id.
+        final policy = await policyStore.readPolicy(workspace['id'] as String);
         expect(
           policy.permissionMode,
           equals(WorkspacePermissionMode.fullAccess),
@@ -2280,7 +2343,8 @@ void main() {
           },
         }, (envelope) async => emittedEnvelopes.add(envelope));
 
-        expect(emittedEnvelopes, hasLength(2));
+        expect(emittedEnvelopes, hasLength(1));
+        expect(announced, hasLength(2));
         expect(
           emittedEnvelopes.last['payload']['permissionMode'],
           equals('default'),
@@ -2327,7 +2391,7 @@ void main() {
       'workspace.set_permission_mode rejects an unknown workspace id',
       () async {
         final bridge = SanadProtocolBridge();
-        final policyStore = WorkspacePolicyStore();
+        final policyStore = MemoryWorkspacePolicyStore();
         getIt.registerSingleton<WorkspacePolicyStore>(policyStore);
         final forgedPath = '${tempDir.path}/unregistered_workspace';
         Directory(forgedPath).createSync();

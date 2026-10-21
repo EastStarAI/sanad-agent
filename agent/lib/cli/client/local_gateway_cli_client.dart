@@ -1,3 +1,4 @@
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -764,6 +765,10 @@ class LocalGatewayCliClient implements CliTurnClient {
       ...payload,
       if (requestId != null && !payload.containsKey('request_id'))
         'request_id': requestId,
+      // The loopback gateway stamps owner authority; a CLI running
+      // inside a remote relay asks for the weaker authority instead.
+      if (!CommandAuthority.current.isOwner)
+        CommandAuthority.payloadKey: CommandAuthority.unverified.value,
     };
 
     final envelope = <String, dynamic>{

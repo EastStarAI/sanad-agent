@@ -1,0 +1,132 @@
+---
+title: "Execution Trust and Permission Authority"
+description: "Transport-derived command authority, daemon-private workspace policy, child-process environment policy, Direct/Protected backends, host discovery, project .env redaction, and the Agent secret vault."
+---
+
+# Execution Trust and Permission Authority
+
+Owner: Plan 83. This page describes who may decide workspace security policy, where that policy is stored, what a model-requested child process inherits, where commands run, and which values never reach a model-visible result.
+
+## 1. Authority comes from the transport
+
+Every command and turn carries a daemon-derived `CommandAuthority`. User decision (2026-10-21): the authenticated cloud client is as trusted as the local client.
+
+| Transport | Authority |
+|---|---|
+| Authenticated loopback Local Gateway (owner-only token in Sanad Home) | `owner` |
+| Authenticated Cloud Gateway relay (socket registered with the key-bound Device Credential) | `owner` |
+| In-process CLI (standalone runtime, terminal `CliPlatform`) | `owner` |
+| Remote CLI relay (`device.cli.execute`) | the relay command's own authority |
+| Any other or unauthenticated transport (mixin default) | `unverified` |
+
+- Ingress (`SanadGatewayBehavior.handleIncomingCommand` and `handleIncomingProtocolEvent`) overwrites the reserved `command_authority` payload field. An owner transport honours a sender's request for `unverified`; no sender can raise it. Any other spelling reads as `unverified`.
+- Turn translation applies the same stamp to turn metadata and removes `allow_all_tools` and `permission_mode` from non-owner turns. The orchestrator records each turn's own authority so a merged session can never carry an older stamp.
+- Repository content is never authority, whichever client is connected.
+
+## 2. Policy is daemon-private
+
+`workspace_security_policies` in the Agent state database is the only source of workspace security policy. `WorkspaceSecurityPolicyRepository` owns it; `WorkspacePolicyStore` is the facade.
+
+| Column | Meaning |
+|---|---|
+| `workspace_id` | Registered workspace UUID, or `exec_root:<validated root>` for an isolated execution root |
+| `canonical_path` | Root the row was recorded for |
+| `permission_mode` | `default` or `full_access` |
+| `execution_mode` | `direct` or `protected` |
+| `host_discovery_policy` | `owner_only` or `disabled` |
+| `permissions_json` | Durable workspace-scope allow/deny decisions |
+| `revision` | Monotonic compare-and-swap revision, `0` means no stored row |
+
+- Removing a workspace deletes its policy row (modes and grants) in the same transaction as the workspace record; re-adding the folder registers a new id and starts from clean defaults. Registration never reuses a removed id. `exec_root:` rows belong to their root and are kept.
+- Policy stays with the workspace id across relocation, so restrictions are never silently reset; `canonical_path` is refreshed on the next write. Revisions stay monotonic.
+- The governing policy is derived only from the validated tool root (`execution_root` when set, else the registered workspace path), never from workspace display metadata. The innermost registered workspace containing the root owns writes (durable grants), else the root's `exec_root:` key. Every containing registered workspace, plus the root's own `exec_root:` row when one exists, combines most restrictively: Full Access only when all grant it, Protected or disabled discovery when any requires it, denies from all scopes, allows only from the owning scope. Records of the same folder under different stored spellings (the daemon can register a session's raw path again at start-up) count as one scope: they share grants, the owning key is the lowest id, and only records with a stored policy combine, so an automatically created duplicate cannot cancel the owner's choice.
+- Clean defaults: `default` permission, `direct` execution, `owner_only` discovery, no grants.
+- Unknown stored values resolve to the restrictive posture (`protected`, `disabled`, `default`); a corrupt grant list grants nothing.
+- `<workspace>/.sanad/settings.json` is never read, seeded from, or written as policy. Legacy permission fields there are ignored and left untouched. There is no permission migration.
+- The table is additive. An older Agent on the same Sanad Home ignores it; no column is renamed or dropped.
+
+### Mutation rules
+
+- `workspace.set_permission_mode` is the only mutation command. It accepts any of `permission_mode`, `execution_mode`, `host_discovery_policy` and an optional `expected_revision`.
+- Widening any axis (`default -> full_access`, `protected -> direct`, `disabled -> owner_only`) requires `owner`, which every authenticated client transport has, local or cloud. Narrowing is always accepted.
+- Unknown values, a malformed revision, or an empty mutation fail with `invalid_request` and write nothing.
+- Typed error codes: `invalid_request`, `permission_denied`, `stale_revision` (with `current_revision`), `workspace_not_found`, `workspace_unavailable`, `policy_update_failed`. Error messages never echo exception text.
+- A successful change broadcasts `workspace.policy_changed` with the policy projection; responses to the caller also include `workspaceId` and `canWiden`. The projection includes the durable command allow and deny lists (for example `shell_execute::<command>`). With every authenticated client trusted as the owner this is accepted: the lists reach only the owner's Sanad clients and never contain secret values.
+- `PermissionManager` writes a workspace-scope approval only after the winning decision. When the workspace is not registered, the decision falls back to session scope.
+
+### Approval bypass
+
+- Workspace `full_access` skips prompts; explicit workspace `deny` entries still win.
+- Turn-level `allow_all_tools` is honoured only on an `owner` turn. Only the CLI sends it (`sanad run --yes`, locally or through the remote CLI relay); no Sanad Client, local or cloud, has an `allow_all_tools` control. Session metadata `permission_mode` never grants anything.
+
+## 3. Child-process environment
+
+`ProcessEnvironmentPolicy` is the single owner of the environment handed to model-requested commands.
+
+- Direct Developer starts from the inherited operator environment so `PATH`, SDK roots, caches, SSH agent, Docker and cloud selectors, proxies and CA roots keep working.
+- It removes credentials Sanad reads for itself: every provider registry `envApiKeyName` plus `LLM_API_KEY` and `SERPER_API_KEY`. Matching is case-insensitive.
+- Everything else in the operator environment is inherited unchanged, including credentials the operator holds for other tools (for example another agent's token): only names Sanad itself reads are removed. A Direct shell therefore sees the same environment as the operator's terminal minus Sanad's own credentials.
+- It keeps `SANAD_HOME` and the `SANAD_DEV_*` runtime markers: they are routing identity, not credentials, and `sanad-dev restart agent` from a shell needs them.
+- Request overrides can never set `PATH`, `PATHEXT`, `COMSPEC`, identity and temp variables, interpreter start-up hooks, Git transport hooks, trust roots, proxies, or anything prefixed `LD_`, `DYLD_` or `SANAD_`, and can never reintroduce a Sanad credential. A rejection is logged by key and reason only.
+- Children are spawned with `includeParentEnvironment: false`; the policy-built map is the whole environment. Without it Dart merges the daemon environment, and every credential, back in.
+- Backend-generated values (`GIT_TERMINAL_PROMPT`, `GCM_INTERACTIVE`, `SSH_ASKPASS_REQUIRE`, `SANAD_REQUESTER_SESSION_ID`, `SANAD_REQUESTER_TOOL_CALL_ID`) are added after the policy.
+- Other spawns keep their own owners: MCP stdio starts through `StrictStdioClientTransport` with exactly its allowlist (`PATH`, `HOME`, user, locale, `TMPDIR`, proxies, CA roots, and the Windows system variables) plus server-owned values; supervisor restart and update installers relaunch Sanad itself; automation helpers run fixed system binaries without model input.
+
+## 4. Where commands run
+
+`ShellExecuteTool` owns the schema, the workspace boundary and the permission check, then hands a `ShellCommandRequest` to the backend that `ExecutionBackendResolver` selects from the policy at that execution.
+
+- `DirectExecutionBackend` keeps the host-native command semantics, process-group ownership, bounded output, timeout and cancellation behaviour.
+- The backend is resolved before approval. A backend that will not run the command (`runsCommands: false`) answers without a permission prompt and without recording a durable grant.
+- An unreadable policy yields a typed `policy_unavailable` refusal (`executionFailed`); it never falls back to Direct and never echoes the error.
+- `ProtectedExecutionBackend` always fails closed in this release (user decision 2026-10-21: accepted until a real isolated backend exists): no isolated backend ships, the command is not run, and the host is never used as a fallback. The result is typed `permissionDenied` with `terminal_reason: protected_backend_unavailable`.
+- A policy change applies to the next command of the same session. A command already running keeps its backend. Nothing is replayed.
+- The working directory must be the canonical root or inside it; a sibling root that merely shares a name prefix is rejected.
+
+## 5. Host capability discovery
+
+`host_capability_discovery` reports whether named executables exist on the inherited `PATH`. It never runs a binary, never starts a shell, never lists directories, and never returns `PATH` or any other environment value. Names must be bare (`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`); Windows lookups follow `PATHEXT`.
+
+The catalog adds it only when all hold:
+
+1. the turn has a workspace policy scope;
+2. the turn carries stamped `owner` authority;
+3. policy is `owner_only`;
+4. no tool in the turn already reaches the host `PATH` (a Direct shell does).
+
+So it normally appears only in a Protected owner session. There is no prompt text or stub about it, and Full Access does not override `disabled`.
+
+## 6. Project `.env` files
+
+`file_read` and `search_grep` redact values of project environment files (`.env`, `.envrc`, `.env.*`, `*.env`) while keeping names, comments and line structure. Only exact template names (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`, `.env.defaults`) stay readable; `.env.example.local` and similar hold real values. A quoted value spanning lines is redacted on every line, including PEM and base64 lines; other shell lines in `.envrc` are redacted whole. `search_grep` matches against the redacted text, so it cannot confirm a secret value exists. Processes started in the workspace still open the file directly.
+
+## 7. Client
+
+- Full Access shows `FullAccessConfirmationDialog` once on `default -> full_access`; turning it off never prompts and no banner persists. All copy is localized (en, ar).
+- The conversation Full Access toggle sends `workspace.set_permission_mode` through `WorkspaceSecurityClient` (`DeviceCommandClient`, explicit device) with the policy revision last read or broadcast; a rejection keeps the Agent's state and shows its reason.
+- Every stored policy change, including a recorded workspace grant, is announced once by `WorkspacePolicyStore` through `WorkspacePolicyAnnouncer` (`workspace.policy_changed` with the new revision), so clients never keep a stale revision. If a toggle still hits `stale_revision`, the client re-reads the policy and retries once; a remaining failure shows a localized message. Device command rejections log their typed code, never content.
+- Every authenticated client (local or cloud) receives `canWiden: true`, so owner-only widening is available everywhere.
+- Workspace Settings > Overview shows `WorkspaceSecurityCard` through `WorkspaceSecurityClient` (`DeviceCommandClient`, explicit device). It sends only the changed axis with the revision on screen, disables choices the Agent reports it would reject (`canWiden: false`), and reloads Agent truth after any rejection.
+- A call that never ran shows in the timeline as "Not run" (localized) with the muted block icon, never as "Ran": a user or policy denial of any tool (the Agent raises `ToolPermissionDeniedException`, recorded with the typed `permission_denied` code, which the live `tool_result` and the `get_session_history` `tool_result` row both carry as `errorCode`; the durable resume path records it too), and a shell call refused before running (`protected_backend_unavailable`, `policy_unavailable`).
+- The Client never stores policy as authority.
+
+## 8. Known limits
+
+- Direct Developer shares the operating-system account. A shell command can still read files that account can read, including project `.env` files; Full Access copy states this. Shell output is not redacted.
+- Protected execution has no backend yet, so selecting it disables shell commands for that workspace.
+- `file_edit` on a `.env` file can still act as a value oracle.
+- An older Agent on the same Sanad Home ignores the policy table and still honours a repository's `.sanad/settings.json` `full_access`, and after the vault migration it no longer finds provider or MCP secrets.
+- A remote-chosen `execution_root` such as `$HOME` or `~/.sanad` is a valid tool root. In Full Access it gives approval-free file access there, which is accepted (user decision 2026-10-21: roots are not restricted in Full Access). Follow-up proposal, no code: outside Full Access, require approval for a root that is not inside a registered workspace.
+- The vault cache sees another process's write within the daemon's two-second generation poll. A CLI that switches Home after start-up without reopening the vault uses the legacy file store for that Home.
+- Client secure credential storage (Task 83d) is not implemented.
+
+## 9. Agent secret vault
+
+Provider credentials and MCP secrets live in `AgentSecretStore` (macOS Keychain, Windows DPAPI, Linux Secret Service, or the Linux headless owner-only fallback, which is not encryption), owned by `SecretVaults`.
+
+- Namespaces: `providers:<instance id>` (JSON `SecretRecord`) and `mcp:<mcp-secret:// reference>`, each with a `<prefix>index` list. `AgentSecretNamespaces` also reserves `agent:auth:` and `custom:`.
+- Reads come from a cache loaded when the vault opens. Writes are verified by read-back, then committed to the index under a cross-process file lock, and a generation marker in Sanad Home tells other processes to reload (the daemon polls it every two seconds).
+- The daemon and CLI open the vault at start-up. Opening migrates `provider_secrets.json` and `mcp_secrets.json`: entries not yet in the vault are written and verified, the index is committed, and only then is the file deleted. A failed migration keeps the file and its values readable (writes still go to the vault) and retries on the next open. A value already in the vault always wins over a legacy value.
+- User decision 2026-10-21: deleting the legacy files is approved; downgrade compatibility is not required. An older Agent on the same Home loses those secrets.
+- An unavailable vault keeps legacy values readable and rejects writes with `AgentSecretStoreUnavailable`; it never writes plaintext.
+- Vault lifecycle events (migration counts, a failed verification, an unavailable vault) are appended to the owner-only `secret_vault_events.jsonl` in Sanad Home, because the CLI has no agent log and the vault may open before a process logs. The daemon opens the vault after logging starts and replays and clears the file, so every migration that deletes files reaches the agent log. Events carry namespaces and counts only.

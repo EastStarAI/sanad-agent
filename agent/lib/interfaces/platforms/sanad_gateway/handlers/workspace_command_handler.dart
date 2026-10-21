@@ -2,13 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
-import 'package:sanad_agent/capabilities/runtime/workspace_path_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/env_file_service.dart';
 import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/infrastructure/platform/automation_service_factory.dart';
-import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/device_control.dart';
 import 'package:sanad_agent/interfaces/models/workspace_control.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
@@ -1034,37 +1033,35 @@ class WorkspaceCommandHandler {
     CanonicalEvent event,
   ) async {
     final requestId = event.payload['request_id'] as String?;
-    final workspacePath = event.payload['workspace_path'] as String?;
-
-    if (workspacePath == null || workspacePath.isEmpty) {
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: 'error',
-          payload: {
-            'request_id': requestId,
-            'message': 'workspace_path is required',
-          },
-        ),
-      );
-    }
-
+    final authority = CommandAuthority.fromStamped(
+      event.payload[CommandAuthority.payloadKey],
+    );
     try {
-      final policy = await _policyStore!.readPolicy(workspacePath);
+      final workspaceId = await _policyWorkspaceId(event.payload);
+      if (workspaceId == null) {
+        return _policyError(
+          requestId,
+          'invalid_request',
+          'workspace_id or a registered workspace_path is required',
+        );
+      }
+      final policy = await _policyStore!.readPolicy(workspaceId);
       return _bridge.buildAgentEventEnvelope(
         CanonicalEvent(
           type: CanonicalEventTypes.workspaceGetPolicy,
-          payload: {'request_id': requestId, ...policy.toJson()},
+          payload: {
+            'request_id': requestId,
+            ...policy.toJson(),
+            'workspaceId': workspaceId,
+            'canWiden': authority.isOwner,
+          },
         ),
       );
     } catch (e) {
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: 'error',
-          payload: {
-            'request_id': requestId,
-            'message': 'Failed to read workspace policy: $e',
-          },
-        ),
+      return _policyError(
+        requestId,
+        'policy_read_failed',
+        'Failed to read workspace policy.',
       );
     }
   }
@@ -1073,76 +1070,153 @@ class WorkspaceCommandHandler {
     CanonicalEvent event,
     Future<void> Function(Map<String, dynamic> envelope) emitEnvelope,
   ) async {
-    final requestId = event.payload['request_id'] as String?;
-    final workspaceId = event.payload['workspace_id'] as String?;
-    final permissionModeString = event.payload['permission_mode'] as String?;
+    final payload = event.payload;
+    final requestId = payload['request_id'] as String?;
+    final workspaceId = (payload['workspace_id'] as String?)?.trim();
+    final authority = CommandAuthority.fromStamped(
+      payload[CommandAuthority.payloadKey],
+    );
 
+    WorkspacePermissionMode? permissionMode;
+    ExecutionMode? executionMode;
+    HostDiscoveryPolicy? hostDiscoveryPolicy;
+    int? expectedRevision;
+    if (payload.containsKey('permission_mode')) {
+      permissionMode = WorkspacePermissionMode.tryParse(
+        payload['permission_mode']?.toString(),
+      );
+      if (permissionMode == null) {
+        return _policyError(requestId, 'invalid_request', 'Unknown permission_mode.');
+      }
+    }
+    if (payload.containsKey('execution_mode')) {
+      executionMode = ExecutionMode.tryParse(
+        payload['execution_mode']?.toString(),
+      );
+      if (executionMode == null) {
+        return _policyError(requestId, 'invalid_request', 'Unknown execution_mode.');
+      }
+    }
+    if (payload.containsKey('host_discovery_policy')) {
+      hostDiscoveryPolicy = HostDiscoveryPolicy.tryParse(
+        payload['host_discovery_policy']?.toString(),
+      );
+      if (hostDiscoveryPolicy == null) {
+        return _policyError(
+          requestId,
+          'invalid_request',
+          'Unknown host_discovery_policy.',
+        );
+      }
+    }
+    final rawRevision = payload['expected_revision'];
+    if (rawRevision != null) {
+      if (rawRevision is! int || rawRevision < 0) {
+        return _policyError(requestId, 'invalid_request', 'Invalid expected_revision.');
+      }
+      expectedRevision = rawRevision;
+    }
     if (workspaceId == null ||
         workspaceId.isEmpty ||
-        permissionModeString == null) {
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: 'error',
-          payload: {
-            'request_id': requestId,
-            'message': 'workspace_id and permission_mode are required',
-          },
-        ),
+        (permissionMode == null &&
+            executionMode == null &&
+            hostDiscoveryPolicy == null)) {
+      return _policyError(
+        requestId,
+        'invalid_request',
+        'workspace_id and at least one policy field are required',
       );
     }
 
-    final mode = WorkspacePermissionMode.fromValue(permissionModeString);
+    final WorkspacePolicy updated;
     try {
-      final String workspacePath;
-      if (workspaceId.startsWith('exec_root:')) {
-        final rawPath = workspaceId.substring('exec_root:'.length);
-        final validated = const WorkspacePathResolver()
-            .validateAndNormalizeExecutionRoot(rawPath);
-        if (validated == null || validated.isEmpty) {
-          throw StateError('Invalid execution root path.');
-        }
-        workspacePath = validated;
-      } else {
+      if (!workspaceId.startsWith(WorkspacePolicyStore.execRootPrefix)) {
         final workspace = await _runtimeService.describeWorkspaceById(
           workspaceId,
         );
         if (workspace == null) {
-          throw StateError('Workspace not found.');
+          return _policyError(requestId, 'workspace_not_found', 'Workspace not found.');
         }
         if (workspace['is_missing'] == true) {
-          throw StateError('Workspace folder is unavailable.');
+          return _policyError(
+            requestId,
+            'workspace_unavailable',
+            'Workspace folder is unavailable.',
+          );
         }
-        workspacePath = workspace['path'] as String;
       }
-      final current = await _policyStore!.readPolicy(workspacePath);
-      final updated = current.copyWith(permissionMode: mode);
-      await _policyStore.savePolicy(workspacePath, updated);
-
-      final broadcastEvent = CanonicalEvent(
-        type: CanonicalEventTypes.workspacePolicyChanged,
-        payload: {'workspace_id': workspaceId, 'policy': updated.toJson()},
-        delivery: const DeliveryPolicy.platformFamily(
-          PlatformFamily.sanadClient,
-        ),
+      updated = await _policyStore!.updateModes(
+        workspaceId,
+        authority: authority,
+        expectedRevision: expectedRevision,
+        permissionMode: permissionMode,
+        executionMode: executionMode,
+        hostDiscoveryPolicy: hostDiscoveryPolicy,
       );
-      await emitEnvelope(_bridge.buildAgentEventEnvelope(broadcastEvent));
-
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: CanonicalEventTypes.workspaceSetPermissionMode,
-          payload: {'request_id': requestId, ...updated.toJson()},
-        ),
+    } on WorkspacePolicyDenied catch (e) {
+      return _policyError(requestId, 'permission_denied', e.toString());
+    } on WorkspacePolicyConflict catch (e) {
+      return _policyError(requestId, 'stale_revision', e.toString(), {
+        'current_revision': e.currentRevision,
+      });
+    } on StateError {
+      return _policyError(
+        requestId,
+        'workspace_unavailable',
+        'Workspace or execution root is unavailable.',
       );
-    } catch (e) {
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: 'error',
-          payload: {
-            'request_id': requestId,
-            'message': 'Failed to update workspace policy: $e',
-          },
-        ),
+    } catch (_) {
+      return _policyError(
+        requestId,
+        'policy_update_failed',
+        'Failed to update workspace policy.',
       );
     }
+
+    // The store announces the change (with its new revision) to every
+    // client through WorkspacePolicyAnnouncer.
+
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.workspaceSetPermissionMode,
+        payload: {
+          'request_id': requestId,
+          ...updated.toJson(),
+          'workspaceId': workspaceId,
+          'canWiden': authority.isOwner,
+        },
+      ),
+    );
   }
+
+  /// Resolves the policy key of a query: an explicit id, the registered
+  /// workspace that owns a supplied path, or that path's `exec_root:` key.
+  /// The store validates the key; an invalid root reads clean defaults.
+  Future<String?> _policyWorkspaceId(Map<String, dynamic> payload) async {
+    final id = (payload['workspace_id'] as String?)?.trim();
+    if (id != null && id.isNotEmpty) return id;
+    final path = (payload['workspace_path'] as String?)?.trim();
+    if (path == null || path.isEmpty) return null;
+    final workspace = await _runtimeService.describeWorkspace(path);
+    final resolved = workspace?['id']?.toString();
+    if (resolved != null && resolved.isNotEmpty) return resolved;
+    return '${WorkspacePolicyStore.execRootPrefix}$path';
+  }
+
+  Map<String, dynamic> _policyError(
+    String? requestId,
+    String code,
+    String message, [
+    Map<String, dynamic> extra = const {},
+  ]) => _bridge.buildAgentEventEnvelope(
+    CanonicalEvent(
+      type: 'error',
+      payload: {
+        'request_id': requestId,
+        'code': code,
+        'message': message,
+        ...extra,
+      },
+    ),
+  );
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'sanad_protocol_bridge.dart';
 import 'protocol/authenticated_command_origin.dart';
@@ -14,6 +15,14 @@ mixin SanadGatewayBehavior {
   /// The transport name used in logs (e.g. 'ws' or 'socket').
   String get transportName;
 
+  /// Authority of commands received on this transport. Fails closed: only an
+  /// authenticated client transport overrides this with [CommandAuthority.owner].
+  CommandAuthority get ingressAuthority => CommandAuthority.unverified;
+
+  /// Overwrites the reserved authority field of an inbound payload.
+  Map<String, dynamic> stampAuthority(Map<String, dynamic> payload) =>
+      CommandAuthority.stampIngress(payload, ingressAuthority);
+
   /// Common logic to process an incoming protocol event.
   Future<void> handleIncomingProtocolEvent({
     required CanonicalEvent event,
@@ -22,6 +31,14 @@ mixin SanadGatewayBehavior {
     Map<String, dynamic>? envelope,
     AuthenticatedCommandOrigin? authenticatedOrigin,
   }) async {
+    event = CanonicalEvent(
+      type: event.type,
+      payload: stampAuthority(event.payload),
+      sessionId: event.sessionId,
+      runId: event.runId,
+      eventId: event.eventId,
+      delivery: event.delivery,
+    );
     final origin =
         authenticatedOrigin ??
         (envelope != null
@@ -55,9 +72,14 @@ mixin SanadGatewayBehavior {
     logFinePayload('⬇️ [$tag] Command payload:', envelope);
 
     final rawPayload = envelope['payload'];
-    final payload = rawPayload is Map
-        ? Map<String, dynamic>.from(rawPayload)
-        : <String, dynamic>{};
+    // Stamp in place: transports translate the same envelope into a turn
+    // after this returns, so the turn inherits the daemon-derived authority.
+    final payload = stampAuthority(
+      rawPayload is Map
+          ? Map<String, dynamic>.from(rawPayload)
+          : <String, dynamic>{},
+    );
+    envelope['payload'] = payload;
     if (commandName == CanonicalEventTypes.toolPermissionResponse) {
       final result = await runtimeBridge.handlePermissionResponse(
         CanonicalEvent(

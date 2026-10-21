@@ -5,7 +5,6 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/workspace_path_resolver.dart';
@@ -22,6 +21,7 @@ import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.d
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:test/test.dart';
+import '../support/memory_workspace_policy_store.dart';
 
 class _FakePlatformRuntimeBridge extends PlatformRuntimeBridge {
   Map<String, dynamic>? lastPermissionPayload;
@@ -278,7 +278,7 @@ void main() {
     test(
       'preserves full_access and default permission policy without enforcing workspace-only',
       () async {
-        final policyStore = const WorkspacePolicyStore();
+        final policyStore = MemoryWorkspacePolicyStore();
         final checkpointStore = _NoopCheckpointStore();
         final fakePlatformBridge = _FakePlatformRuntimeBridge();
         final permissionManager = PermissionManager(
@@ -301,7 +301,7 @@ void main() {
         final externalFile = File(p.join(externalDir.path, 'ext_allowed.txt'))
           ..writeAsStringSync('external_content');
 
-        await policyStore.savePolicy(
+        await policyStore.seed(
           workspaceDir.path,
           const WorkspacePolicy(
             permissionMode: WorkspacePermissionMode.fullAccess,
@@ -325,7 +325,7 @@ void main() {
         expect(fakePlatformBridge.permissionRequestCount, equals(0));
 
         // 2. Default mode: internal path executes without prompt
-        await policyStore.savePolicy(
+        await policyStore.seed(
           workspaceDir.path,
           const WorkspacePolicy(
             permissionMode: WorkspacePermissionMode.defaultMode,

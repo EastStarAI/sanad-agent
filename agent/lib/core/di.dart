@@ -1,3 +1,6 @@
+import 'package:sanad_agent/core/provider_runtime/vault_secret_store.dart';
+import 'package:sanad_agent/core/auth/secret_vault.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/engine/runtime/thinking_field_rejection.dart';
 import 'dart:io';
 
@@ -51,6 +54,7 @@ import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_resume_service.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/runtime/compaction_lifecycle_relay.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
@@ -186,7 +190,16 @@ void setupDI() {
     () => ProviderInstanceRepository(getIt<AgentStateDatabase>()),
   );
   // Plan 29: instance-keyed secret store (atomic, locked, owner-only).
-  getIt.registerLazySingleton<SecretStore>(() => SecureFileSecretStore());
+  // Plan 83 (Task 83c): provider credentials live in the Agent vault once the
+  // daemon or CLI opened it for the active Home; a Home this process never
+  // opened (temporary test Homes) keeps the owner-only file store.
+  getIt.registerLazySingleton<SecretStore>(() {
+    final vaults = SecretVaults.current;
+    return vaults != null ? VaultSecretStore(vaults) : SecureFileSecretStore();
+  });
+  getIt.registerLazySingleton<AgentSecretStore>(
+    () => SecretVaults.current?.store ?? createAgentSecretStore(),
+  );
   // Plan 29: instance credential edits (keep/replace/remove) + summaries.
   getIt.registerLazySingleton<ProviderCredentialService>(
     () => ProviderCredentialService(
@@ -445,8 +458,20 @@ void setupDI() {
   getIt.registerLazySingleton<SuspendedCheckpointStore>(
     () => SuspendedCheckpointStore(sessionManager: getIt<SessionManager>()),
   );
+  // Plan 83: every stored workspace policy change reaches every client.
+  getIt.registerLazySingleton<WorkspacePolicyAnnouncer>(
+    () => WorkspacePolicyAnnouncer((workspaceId, policy) {
+      if (!getIt.isRegistered<GatewayManager>()) return;
+      getIt<GatewayManager>().publishFamilyEvent(
+        CanonicalEvent(
+          type: CanonicalEventTypes.workspacePolicyChanged,
+          payload: {'workspace_id': workspaceId, 'policy': policy.toJson()},
+        ),
+      );
+    }),
+  );
   getIt.registerLazySingleton<WorkspacePolicyStore>(
-    () => const WorkspacePolicyStore(),
+    () => WorkspacePolicyStore(),
   );
   getIt.registerLazySingleton<PermissionManager>(
     () => PermissionManager(

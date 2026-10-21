@@ -1,7 +1,8 @@
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/interfaces/models/device_control.dart';
@@ -14,6 +15,7 @@ import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.d
 import 'package:test/test.dart';
 
 import '../../../../support/memory_agent_secret_store.dart';
+import '../../../../support/memory_workspace_policy_store.dart';
 
 void main() {
   final getIt = GetIt.instance;
@@ -23,6 +25,7 @@ void main() {
   late LocalWorkspaceRuntimeService runtime;
   late WorkspaceCommandHandler handler;
   late String workspacePath;
+  late MemoryWorkspacePolicyStore policyStore;
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp(
@@ -40,7 +43,9 @@ void main() {
     );
     handler = WorkspaceCommandHandler(
       runtimeService: runtime,
-      policyStore: const WorkspacePolicyStore(),
+      policyStore: policyStore = MemoryWorkspacePolicyStore(
+        paths: const {},
+      ),
       bridge: SanadProtocolBridge(),
       admission: admission,
     );
@@ -282,41 +287,223 @@ void main() {
     expect((servers.first as Map)['name'], 'other');
   });
 
+  Future<Map<String, dynamic>> setPolicy(
+    Map<String, dynamic> fields, {
+    CommandAuthority? authority = CommandAuthority.owner,
+    List<Map<String, dynamic>>? broadcasts,
+  }) => handler.buildWorkspaceSetPermissionModeEnvelope(
+    CanonicalEvent(
+      type: CanonicalEventTypes.workspaceSetPermissionMode,
+      payload: {
+        'request_id': 'req-policy',
+        ...fields,
+        if (authority != null) CommandAuthority.payloadKey: authority.value,
+      },
+    ),
+    (envelope) async => broadcasts?.add(envelope),
+  );
+
+  Map<String, dynamic> payloadOf(Map<String, dynamic> envelope) =>
+      Map<String, dynamic>.from(envelope['payload'] as Map);
+
   test('rejects set_permission_mode when exec_root path does not exist', () async {
-    final envelope = await handler.buildWorkspaceSetPermissionModeEnvelope(
-      CanonicalEvent(
-        type: CanonicalEventTypes.workspaceSetPermissionMode,
-        payload: {
-          'request_id': 'req-invalid-exec-root',
-          'workspace_id': 'exec_root:/nonexistent/directory/path/here',
-          'permission_mode': 'full_access',
-        },
-      ),
-      (_) async {},
-    );
+    final envelope = await setPolicy({
+      'workspace_id': 'exec_root:/nonexistent/directory/path/here',
+      'permission_mode': 'full_access',
+    });
 
     expect(envelope['event'], 'error');
-    final payload = Map<String, dynamic>.from(envelope['payload'] as Map);
-    expect(payload['message'], contains('Execution root directory does not exist'));
+    expect(payloadOf(envelope)['code'], 'workspace_unavailable');
   });
 
   test('validates and updates policy when exec_root path is a valid directory', () async {
     final validDir = Directory('${tempDir.path}/valid_root')..createSync();
-    final envelope = await handler.buildWorkspaceSetPermissionModeEnvelope(
-      CanonicalEvent(
-        type: CanonicalEventTypes.workspaceSetPermissionMode,
-        payload: {
-          'request_id': 'req-valid-exec-root',
-          'workspace_id': 'exec_root:${validDir.path}',
-          'permission_mode': 'full_access',
-        },
-      ),
-      (_) async {},
-    );
+    final envelope = await setPolicy({
+      'workspace_id': 'exec_root:${validDir.path}',
+      'permission_mode': 'full_access',
+    });
 
     expect(envelope['event'], CanonicalEventTypes.workspaceSetPermissionMode);
-    final payload = Map<String, dynamic>.from(envelope['payload'] as Map);
+    final payload = payloadOf(envelope);
     expect(payload['permissionMode'], 'full_access');
+    expect(payload['revision'], 1);
+    expect(payload['canWiden'], isTrue);
+  });
+
+  group('workspace security policy authority', () {
+    late String workspaceId;
+
+    setUp(() async {
+      final workspace = await runtime.describeWorkspace(workspacePath);
+      workspaceId = workspace!['id'] as String;
+      policyStore.bind(workspaceId, workspacePath);
+    });
+
+    test('an unstamped or unverified caller cannot widen any axis', () async {
+      for (final fields in [
+        {'permission_mode': 'full_access'},
+        {'execution_mode': 'direct'},
+        {'host_discovery_policy': 'owner_only'},
+      ]) {
+        await policyStore.seed(
+          workspaceId,
+          const WorkspacePolicy(
+            executionMode: ExecutionMode.protected,
+            hostDiscoveryPolicy: HostDiscoveryPolicy.disabled,
+          ),
+        );
+        for (final authority in [null, CommandAuthority.unverified]) {
+          final broadcasts = <Map<String, dynamic>>[];
+          final envelope = await setPolicy(
+            {'workspace_id': workspaceId, ...fields},
+            authority: authority,
+            broadcasts: broadcasts,
+          );
+          expect(payloadOf(envelope)['code'], 'permission_denied');
+          expect(broadcasts, isEmpty);
+        }
+      }
+      final stored = await policyStore.readPolicy(workspaceId);
+      expect(stored.permissionMode, WorkspacePermissionMode.defaultMode);
+      expect(stored.executionMode, ExecutionMode.protected);
+      expect(stored.hostDiscoveryPolicy, HostDiscoveryPolicy.disabled);
+    });
+
+    test('an unverified caller may narrow and the change is broadcast', () async {
+      await policyStore.seed(
+        workspaceId,
+        const WorkspacePolicy(permissionMode: WorkspacePermissionMode.fullAccess),
+      );
+      final broadcasts = <Map<String, dynamic>>[];
+      final envelope = await setPolicy(
+        {
+          'workspace_id': workspaceId,
+          'permission_mode': 'default',
+          'execution_mode': 'protected',
+          'host_discovery_policy': 'disabled',
+        },
+        authority: CommandAuthority.unverified,
+        broadcasts: broadcasts,
+      );
+      final payload = payloadOf(envelope);
+      expect(payload['permissionMode'], 'default');
+      expect(payload['executionMode'], 'protected');
+      expect(payload['hostDiscoveryPolicy'], 'disabled');
+      expect(payload['canWiden'], isFalse);
+      // The store announces the change; the requester gets only the reply.
+      expect(broadcasts, isEmpty);
+    });
+
+    test('policy_changed is announced to every client, not sent to the requester', () async {
+      final announced = <(String, WorkspacePolicy)>[];
+      final announcing = MemoryWorkspacePolicyStore(
+        paths: {workspaceId: workspacePath},
+        announceChange: (id, policy) => announced.add((id, policy)),
+      );
+      addTearDown(announcing.dispose);
+      final fanOut = WorkspaceCommandHandler(
+        runtimeService: runtime,
+        policyStore: announcing,
+        bridge: SanadProtocolBridge(),
+        admission: admission,
+      );
+      final requesterFrames = <Map<String, dynamic>>[];
+      await fanOut.buildWorkspaceSetPermissionModeEnvelope(
+        CanonicalEvent(
+          type: CanonicalEventTypes.workspaceSetPermissionMode,
+          payload: {
+            'request_id': 'req-fan-out',
+            'workspace_id': workspaceId,
+            'execution_mode': 'protected',
+            CommandAuthority.payloadKey: CommandAuthority.owner.value,
+          },
+        ),
+        (envelope) async => requesterFrames.add(envelope),
+      );
+      expect(announced.single.$1, workspaceId);
+      expect(announced.single.$2.executionMode, ExecutionMode.protected);
+      expect(announced.single.$2.revision, 1);
+      expect(requesterFrames, isEmpty);
+    });
+
+    test('an owner caller from any authenticated transport can widen', () async {
+      final envelope = await setPolicy({
+        'workspace_id': workspaceId,
+        'permission_mode': 'full_access',
+        'execution_mode': 'direct',
+        'host_discovery_policy': 'owner_only',
+      });
+      expect(payloadOf(envelope)['permissionMode'], 'full_access');
+      expect(payloadOf(envelope)['canWiden'], isTrue);
+    });
+
+    test('rejects unknown values and malformed revisions without writing', () async {
+      for (final fields in [
+        {'permission_mode': 'root'},
+        {'execution_mode': 'host'},
+        {'host_discovery_policy': 'everyone'},
+        {'permission_mode': 'default', 'expected_revision': 'one'},
+        <String, Object>{},
+      ]) {
+        final envelope = await setPolicy({'workspace_id': workspaceId, ...fields});
+        expect(payloadOf(envelope)['code'], 'invalid_request', reason: '$fields');
+      }
+      expect((await policyStore.readPolicy(workspaceId)).revision, 0);
+    });
+
+    test('a stale expected_revision is rejected with the current revision', () async {
+      final first = await setPolicy({
+        'workspace_id': workspaceId,
+        'permission_mode': 'full_access',
+        'expected_revision': 0,
+      });
+      expect(payloadOf(first)['revision'], 1);
+      final stale = await setPolicy({
+        'workspace_id': workspaceId,
+        'permission_mode': 'default',
+        'expected_revision': 0,
+      });
+      expect(payloadOf(stale)['code'], 'stale_revision');
+      expect(payloadOf(stale)['current_revision'], 1);
+      expect(
+        (await policyStore.readPolicy(workspaceId)).permissionMode,
+        WorkspacePermissionMode.fullAccess,
+      );
+    });
+
+    test('an unknown workspace id is rejected', () async {
+      final envelope = await setPolicy({
+        'workspace_id': 'missing-workspace',
+        'permission_mode': 'default',
+      });
+      expect(payloadOf(envelope)['code'], 'workspace_not_found');
+    });
+
+    test('get_policy ignores a forged workspace settings file', () async {
+      final settings = File('$workspacePath/.sanad/settings.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          '{"permissionMode":"full_access","executionMode":"direct",'
+          '"permissions":{"allow":["shell_execute::rm -rf /"]}}',
+        );
+      final envelope = await handler.buildWorkspaceGetPolicyEnvelope(
+        CanonicalEvent(
+          type: CanonicalEventTypes.workspaceGetPolicy,
+          payload: {
+            'request_id': 'req-get',
+            'workspace_path': workspacePath,
+            CommandAuthority.payloadKey: CommandAuthority.unverified.value,
+          },
+        ),
+      );
+      final payload = payloadOf(envelope);
+      expect(payload['workspaceId'], workspaceId);
+      expect(payload['permissionMode'], 'default');
+      expect(payload['revision'], 0);
+      expect(payload, isNot(contains('permissions')));
+      expect(payload['canWiden'], isFalse);
+      expect(settings.readAsStringSync(), contains('full_access'));
+    });
   });
 
   group('Task 123 managed confinement replies', () {

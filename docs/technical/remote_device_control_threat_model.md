@@ -24,7 +24,7 @@ this model; they do not reopen these trust decisions.
 | Attacker (other tenant, stolen Client session, malicious MCP server, filesystem adversary) | Untrusted | Attempt wrong-device, offline, traversal, symlink, stale confirmation, secret extraction, SSRF, log scraping | Succeed without a User session that owns the live device, or escape daemon-owned roots and redaction |
 
 Sensitive classes: Device Credential and P-256 key, User tokens, MCP bearer /
-header / env / OAuth secrets, Sanad Home files (`auth.json`, `mcp_secrets.json`,
+header / env / OAuth secrets, Sanad Home files (`auth.json`, legacy `mcp_secrets.json` before migration,
 provider credentials), host filesystem outside allowed roots, release
 artifacts, session and tool payloads.
 

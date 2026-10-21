@@ -65,6 +65,16 @@ the command process tree where supported. Child processes are not trusted to emi
 valid UTF-8: malformed byte sequences are replaced during bounded decoding rather
 than escaping the tool future and terminating the Agent daemon.
 
+Workspace `full_access`, durable grants, execution mode and host discovery are
+read from the Agent's private policy store, never from workspace files. A shell
+command runs on the backend selected by that policy at each execution: Direct
+Developer runs on the host with the inherited developer environment minus Sanad
+credentials, and Protected fails closed because no isolated backend ships yet.
+`file_read` and `search_grep` redact project `.env` values. The typed
+`host_capability_discovery` tool is offered only to local-owner turns that lack
+a Direct host shell. See
+[Execution Trust and Permission Authority](../technical/execution_trust_and_permission_authority.md).
+
 ## Tool Output Budgets
 
 The engine tool-execution boundary applies a provider-neutral output guard after

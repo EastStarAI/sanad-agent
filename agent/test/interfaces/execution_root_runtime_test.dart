@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:mockito/mockito.dart';
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
@@ -109,6 +110,30 @@ void main() {
         expect(metadata, containsPair('execution_root', executionRootDir.path));
         expect(metadata['workspace_id'], isNotNull);
         expect(metadata['workspace_path'], equals(logicalWorkspaceDir.path));
+      },
+    );
+
+    test(
+      'buildSessionMetadata records only the current turn authority',
+      () async {
+        Future<Object?> authorityOf(Map<String, dynamic> metadata) async =>
+            (await orchestrator.buildSessionMetadata(
+              AgentTurnRequest(
+                sessionId: 'sess-authority',
+                message: 'hello',
+                metadata: metadata,
+              ),
+            ))[CommandAuthority.payloadKey];
+
+        expect(
+          await authorityOf({CommandAuthority.payloadKey: 'owner'}),
+          'owner',
+        );
+        expect(await authorityOf(const {}), 'unverified');
+        expect(
+          await authorityOf({CommandAuthority.payloadKey: 'Owner'}),
+          'unverified',
+        );
       },
     );
 
@@ -500,7 +525,7 @@ void main() {
         contextBuilder = RecordingRuntimeContextBuilder();
 
         permissionManager = PermissionManager(
-          policyStore: const WorkspacePolicyStore(),
+          policyStore: WorkspacePolicyStore(),
           platformRuntimeBridge: PlatformRuntimeBridge(),
           checkpointStore: SuspendedCheckpointStore(
             sessionManager: mockSessionManager,
@@ -562,6 +587,7 @@ void main() {
               runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
               forcedOutput: anyNamed('forcedOutput'),
               forcedIsError: anyNamed('forcedIsError'),
+              forcedErrorCode: anyNamed('forcedErrorCode'),
               onToolEvent: anyNamed('onToolEvent'),
               onThoughtDelta: anyNamed('onThoughtDelta'),
               onReasoningDelta: anyNamed('onReasoningDelta'),

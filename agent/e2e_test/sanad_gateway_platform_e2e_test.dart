@@ -368,7 +368,7 @@ _startResumeRuntime({
   getIt.registerSingleton<RuntimeContextBuilder>(
     const MinimalRuntimeContextBuilder(),
   );
-  getIt.registerSingleton<WorkspacePolicyStore>(const WorkspacePolicyStore());
+  getIt.registerSingleton<WorkspacePolicyStore>(WorkspacePolicyStore());
   getIt.registerSingleton<SuspendedCheckpointStore>(
     SuspendedCheckpointStore(sessionManager: getIt<SessionManager>()),
   );

@@ -2,7 +2,12 @@ import 'dart:convert';
 
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
+import 'package:sanad_agent/capabilities/execution/execution_backend_resolver.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import 'package:sanad_agent/capabilities/tools/system/host_capability_discovery_tool.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/runtime/spec_backed_tool.dart';
@@ -44,7 +49,11 @@ class LocalRuntimeCatalog {
     PlatformRuntimeBridge? platformRuntimeBridge,
     WorkspacePathResolver? pathResolver,
     AdmittedAttachmentPathsResolver? admittedAttachmentPathsResolver,
+    WorkspacePolicyStore? workspacePolicyStore,
+    Map<String, String>? hostEnvironment,
   }) : _workspaceRuntimeService = workspaceRuntimeService,
+       _workspacePolicyStore = workspacePolicyStore ?? WorkspacePolicyStore(),
+       _hostEnvironment = hostEnvironment,
        _webSearchService = webSearchService ?? WebSearchService(),
        _webFetchService = webFetchService ?? WebFetchService(),
        _mcpRuntimeManager = mcpRuntimeManager ?? McpRuntimeManager(),
@@ -63,6 +72,8 @@ class LocalRuntimeCatalog {
   final PermissionManager _permissionManager;
   final PlatformRuntimeBridge _platformRuntimeBridge;
   final AdmittedAttachmentPathsResolver _admittedAttachmentPathsResolver;
+  final WorkspacePolicyStore _workspacePolicyStore;
+  final Map<String, String>? _hostEnvironment;
 
   static Future<List<String>> _noAdmittedAttachmentPaths(
     String sessionId,
@@ -107,6 +118,8 @@ class LocalRuntimeCatalog {
 
     if (workspacePath != null && workspacePath.isNotEmpty) {
       tools.addAll(_buildWorkspaceTools(workspacePath, request));
+      final discovery = await _hostDiscoveryTool(request, workspacePath, tools);
+      if (discovery != null) tools.add(discovery);
     }
     if ((workspacePath != null && workspacePath.isNotEmpty) ||
         admittedAttachmentPaths.isNotEmpty) {
@@ -493,6 +506,38 @@ class LocalRuntimeCatalog {
     );
   }
 
+  /// Adds typed host discovery only where it adds a capability the turn
+  /// lacks: the workspace policy allows it, the turn carries daemon-stamped
+  /// owner authority, and no tool in the turn already reaches the host
+  /// `PATH` (a Direct shell does). Otherwise the schema is omitted entirely.
+  Future<BaseTool?> _hostDiscoveryTool(
+    AgentTurnRequest request,
+    String root,
+    List<BaseTool> tools,
+  ) async {
+    final authority = CommandAuthority.fromStamped(
+      request.metadata[CommandAuthority.payloadKey],
+    );
+    if (!authority.isOwner) return null;
+    final effective = await _workspacePolicyStore.resolveForRoot(root);
+    if (effective == null) return null;
+    final policy = effective.policy;
+    final hasHostShell = tools.any(
+      (tool) =>
+          tool is SpecBackedTool &&
+          tool.toolSpec.category == 'shell_execution',
+    );
+    final present = HostDiscoveryPolicy.isToolPresent(
+      policy: policy.hostDiscoveryPolicy,
+      isOwner: authority.isOwner,
+      hasHostPathAccess:
+          hasHostShell && policy.executionMode == ExecutionMode.direct,
+    );
+    return present
+        ? HostCapabilityDiscoveryTool(environment: _hostEnvironment)
+        : null;
+  }
+
   List<BaseTool> _buildWorkspaceTools(
     String workspacePath,
     AgentTurnRequest request,
@@ -501,6 +546,9 @@ class LocalRuntimeCatalog {
       ShellExecuteTool(
         workspacePath: workspacePath,
         permissionManager: _permissionManager,
+        backendResolver: ExecutionBackendResolver(
+          policyStore: _workspacePolicyStore,
+        ),
       ),
       CallbackTool(
         toolSpec: _workspaceSpec(

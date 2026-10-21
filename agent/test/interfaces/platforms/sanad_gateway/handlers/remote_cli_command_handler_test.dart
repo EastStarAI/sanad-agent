@@ -3,8 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
-import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
 import 'package:sanad_agent/cli/workspace/cli_workspace_state.dart';
 import 'package:sanad_agent/cli/workspace/workspace_cli_service.dart';
@@ -21,6 +19,7 @@ import 'package:test/test.dart';
 
 import '../../../../support/isolated_sanad_test_home.dart';
 import '../../../../support/memory_agent_secret_store.dart';
+import '../../../../support/memory_workspace_policy_store.dart';
 
 class _MockAuthManager extends AuthManager {
   _MockAuthManager() : super(secretStore: MemoryAgentSecretStore());
@@ -677,8 +676,7 @@ void main() {
           sanadHomePath: tempHome.path,
           sessionDb: sessionDb,
         );
-        final settingsStore = SanadSettingsStore(homeDirectoryPath: tempHome.path);
-        final policyStore = WorkspacePolicyStore(settingsStore: settingsStore);
+        final policyStore = MemoryWorkspacePolicyStore();
         final stateStore = CliWorkspaceStateStore(sanadHomeOverride: tempHome.path);
 
         final wsService = WorkspaceCliService(

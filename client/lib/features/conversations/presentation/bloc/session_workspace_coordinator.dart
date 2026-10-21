@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:path/path.dart' as p;
+import 'package:sanad_client/features/devices/data/device_command_client.dart';
+import 'package:sanad_client/features/settings/data/workspace_security_client.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/conversation_resource_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
@@ -18,8 +20,21 @@ import 'package:sanad_client/infrastructure/local_tools/workspace_tool_runtime_c
 
 /// Encapsulates workspace resolution, caching, selection, browsing, folder creation,
 /// permission modes, and local tool broadcasting for [SessionMessagesCubit].
+/// Why a permission mode change was not applied; the caller shows it.
+enum WorkspacePolicyChangeFailure {
+  /// The policy kept changing elsewhere; it was refreshed, so retry.
+  staleRevision,
+
+  /// The Agent rejected the change or it could not be sent.
+  failed,
+}
+
 class SessionWorkspaceCoordinator {
   final ConversationRepository conversationRepository;
+
+  /// Explicit-device policy mutations. Null only in legacy test wiring, where
+  /// the conversation repository path remains.
+  final WorkspaceSecurityClient? workspaceSecurityClient;
   final ConversationCacheRepository? conversationCacheRepository;
   final DeviceCapabilitiesStore? capabilitiesStore;
   final LocalToolRuntimeService? localToolRuntime;
@@ -38,6 +53,7 @@ class SessionWorkspaceCoordinator {
   final Map<String, DeviceWorkspace> _selectedWorkspaceByAgentId = {};
   final Set<String> _loadingWorkspaceAgentIds = {};
   final Map<String, WorkspacePermissionMode> _permissionModesByWorkspaceId = {};
+  final Map<String, int> _policyRevisionsByWorkspaceId = {};
 
   /// Sessions whose full-access metadata the user explicitly downgraded.
   final Set<String> _downgradedSessionIds = {};
@@ -47,6 +63,7 @@ class SessionWorkspaceCoordinator {
 
   SessionWorkspaceCoordinator({
     required this.conversationRepository,
+    this.workspaceSecurityClient,
     this.conversationCacheRepository,
     this.capabilitiesStore,
     this.localToolRuntime,
@@ -286,12 +303,12 @@ class SessionWorkspaceCoordinator {
     }
   }
 
-  Future<void> setWorkspacePermissionMode(WorkspacePermissionMode permissionMode) async {
+  Future<WorkspacePolicyChangeFailure?> setWorkspacePermissionMode(WorkspacePermissionMode permissionMode) async {
     final agent = getCurrentAgent();
     final workspace = agent == null ? null : selectedWorkspaceForAgent(agent);
     if (workspace == null || workspace.path.trim().isEmpty) {
       emit(getState().copyWith(error: 'Select a workspace before changing its permission mode.'));
-      return;
+      return WorkspacePolicyChangeFailure.failed;
     }
 
     _workspacePolicyLoadIds[workspace.id] =
@@ -305,29 +322,75 @@ class SessionWorkspaceCoordinator {
       }
     }
     emit(getState().copyWith(isLoadingPermissionMode: true));
-    try {
-      final updatedPolicy = await conversationRepository.setWorkspacePermissionMode(
-        agent!,
-        workspaceId: workspace.id,
-        workspacePath: workspace.path,
-        mode: permissionMode,
-      );
-      _permissionModesByWorkspaceId[workspace.id] = updatedPolicy.permissionMode;
+
+    Future<WorkspacePolicy> send(int? expectedRevision) {
+      final securityClient = workspaceSecurityClient;
+      return securityClient != null
+          ? securityClient.update(
+              agent!,
+              workspace.id,
+              expectedRevision: expectedRevision,
+              permissionMode: permissionMode,
+            )
+          : conversationRepository.setWorkspacePermissionMode(
+              agent!,
+              workspaceId: workspace.id,
+              workspacePath: workspace.path,
+              mode: permissionMode,
+            );
+    }
+
+    void applied(WorkspacePolicy policy) {
+      _permissionModesByWorkspaceId[workspace.id] = policy.permissionMode;
+      _policyRevisionsByWorkspaceId[workspace.id] = policy.revision;
       emit(
         getState().copyWith(
           selectedWorkspace: workspace,
-          permissionMode: updatedPolicy.permissionMode,
+          permissionMode: policy.permissionMode,
           isLoadingPermissionMode: false,
           error: null,
         ),
       );
-    } catch (e) {
+    }
+
+    WorkspacePolicyChangeFailure failed(Object error, WorkspacePolicyChangeFailure failure) {
       emit(
         getState().copyWith(
           isLoadingPermissionMode: false,
-          error: e.toString(),
+          error: error.toString(),
         ),
       );
+      return failure;
+    }
+
+    try {
+      applied(await send(_policyRevisionsByWorkspaceId[workspace.id]));
+      return null;
+    } on DeviceCommandException catch (error) {
+      final securityClient = workspaceSecurityClient;
+      if (error.code != 'stale_revision' || securityClient == null) {
+        return failed(error, WorkspacePolicyChangeFailure.failed);
+      }
+      // The policy changed elsewhere (another client, the CLI, or a grant).
+      // The user's intent is unambiguous, so refresh and retry once.
+      try {
+        final fresh = await securityClient.read(agent!, workspace.id);
+        _permissionModesByWorkspaceId[workspace.id] = fresh.permissionMode;
+        _policyRevisionsByWorkspaceId[workspace.id] = fresh.revision;
+        applied(await send(fresh.revision));
+        return null;
+      } on DeviceCommandException catch (retryError) {
+        return failed(
+          retryError,
+          retryError.code == 'stale_revision'
+              ? WorkspacePolicyChangeFailure.staleRevision
+              : WorkspacePolicyChangeFailure.failed,
+        );
+      } catch (retryError) {
+        return failed(retryError, WorkspacePolicyChangeFailure.failed);
+      }
+    } catch (error) {
+      return failed(error, WorkspacePolicyChangeFailure.failed);
     }
   }
 
@@ -442,6 +505,7 @@ class SessionWorkspaceCoordinator {
           .watchWorkspacePolicy(agent, workspaceId)
           .listen((policy) {
         _permissionModesByWorkspaceId[workspaceId] = policy.permissionMode;
+        _policyRevisionsByWorkspaceId[workspaceId] = policy.revision;
         if (!getIsClosed() &&
             getCurrentAgent()?.id == agent.id &&
             selectedWorkspaceForAgent(agent)?.id == workspaceId) {
@@ -455,6 +519,7 @@ class SessionWorkspaceCoordinator {
           await conversationRepository.getWorkspacePolicy(agent!, workspacePath);
       if (_workspacePolicyLoadIds[workspaceId] == loadId) {
         _permissionModesByWorkspaceId[workspaceId] = policy.permissionMode;
+        _policyRevisionsByWorkspaceId[workspaceId] = policy.revision;
       }
     } catch (e) {
       if (!getIsClosed() &&

@@ -1,8 +1,18 @@
 import 'dart:async';
 
+import 'package:logging/logging.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:uuid/uuid.dart';
+
+/// A device rejected a command. [code] is the Agent's typed error code
+/// (for example `stale_revision`); [message] is its user-facing reason.
+class DeviceCommandException extends StateError {
+  DeviceCommandException(super.message, {this.code, this.command});
+
+  final String? code;
+  final String? command;
+}
 
 /// Correlated Sanad protocol request/response client for one target device.
 /// Transport resolution stays entirely inside [DeviceConnectionCoordinator].
@@ -15,6 +25,14 @@ class DeviceCommandClient {
 
   final DeviceConnectionCoordinator _connectionCoordinator;
   final Uuid _uuid;
+
+  static final _logger = Logger('DeviceCommandClient');
+
+  /// Uncorrelated events (broadcasts) from [device]'s connected endpoint.
+  Stream<Map<String, dynamic>> events(DeviceConfig device) async* {
+    final endpoint = await _connectionCoordinator.ensureConnectedEndpointForAgent(device);
+    yield* endpoint.socketService.events;
+  }
 
   Future<Map<String, dynamic>> request({
     required DeviceConfig device,
@@ -45,10 +63,15 @@ class DeviceCommandClient {
 
       final eventName = event['event']?.toString();
       if (eventName == 'error') {
+        final code = responsePayload['code']?.toString();
+        // Typed codes only; payload content and messages never enter logs.
+        _logger.warning('Device command $command rejected (code=${code ?? 'none'}).');
         if (!completer.isCompleted) {
           completer.completeError(
-            StateError(
+            DeviceCommandException(
               responsePayload['message']?.toString() ?? 'Device command failed.',
+              code: code,
+              command: command,
             ),
           );
         }

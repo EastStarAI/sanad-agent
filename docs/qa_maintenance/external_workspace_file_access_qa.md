@@ -13,7 +13,7 @@ description: "Regression matrix for permission-aware file and search access outs
 | `file_read`, `file_write`, `file_edit`, `search_glob`, or `search_grep` targets an external path in `default` mode | The turn suspends and emits a permission request before host content access or mutation. |
 | User approves once | The exact pending tool call resumes once with its original arguments. |
 | User approves for the session | Later calls for the same tool and canonical target execute in that session without another prompt. |
-| User approves for the workspace | The tool plus canonical-target grant persists in workspace policy. |
+| User approves for the workspace | The tool plus canonical-target grant persists in the Agent-owned workspace policy (state database), never in `.sanad/settings.json`; an unregistered workspace keeps the grant for the session only. |
 | User denies | No read/search/mutation occurs and the tool reports the denial. |
 | Workspace mode is `full_access` | External access executes without a permission request. |
 | Input escapes through `..` or an absolute path | Classification uses the same canonical external-path policy. |
@@ -24,6 +24,10 @@ description: "Regression matrix for permission-aware file and search access outs
 | One parallel tool batch targets multiple external paths | Permission prompts are presented FIFO with at most one unresolved request for the session; resolving or denying one exposes the next and the turn does not retain hidden waiters. |
 | Different sessions request external-path permission concurrently | Each session progresses independently; one session's pending prompt does not block another session. |
 | `workspace.set_permission_mode` targets an `exec_root:` path | Validates and normalizes target directory on disk; non-existent path or traversal rejects without writing policy. |
+| A repository ships `.sanad/settings.json` with `full_access` and allow entries | The file is ignored: policy reads clean defaults, prompts still appear, and the file is left untouched. |
+| An authenticated cloud client sends `workspace.set_permission_mode` to widen any axis | Accepted like a local client (user decision 2026-10-21). |
+| A command or turn from an unverified transport claims owner authority or `allow_all_tools` | The claim is overwritten at ingress: widening is rejected with `permission_denied` and every sensitive tool still prompts. |
+| A registered workspace is relocated | Policy and grants recorded for the previous root no longer apply; the workspace reads clean defaults. |
 | Turn-level `allow_all_tools: true` with explicit workspace policy `deny` | Explicit workspace policy deny entries take precedence and reject; `allow_all_tools` cannot bypass explicit deny rules. |
 | Turn-level `allow_all_tools` isolation | `allow_all_tools: true` on an authorized CLI one-shot turn does not persist across subsequent turns; subsequent turns default to requiring normal permission checks. |
 | Explicit `workspace_id` precedence over stale session `execution_root` | If a request provides an explicit workspace ID, tools bind to that workspace rather than an older execution root stored in session metadata. |
