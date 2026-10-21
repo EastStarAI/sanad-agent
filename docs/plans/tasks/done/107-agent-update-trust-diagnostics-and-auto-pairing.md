@@ -1,8 +1,8 @@
 ---
 id: 107
 title: Agent Update Trust Diagnostics and Client Auto-Pairing
-status: in_review
-gate: G6
+status: done
+gate: G6 (closed with user-waived live items)
 created: 2026-10-13
 updated: 2026-10-21
 branch: fix/107-port
@@ -137,11 +137,11 @@ owner. The port is a transplant with review fixes, not a merge.
 - [x] Review defects D1–D11 fixed with regressions.
 - [x] All eight original scenarios plus Ubuntu acceptance ported against a version-faithful fake CLI.
 
-### G6 — Live acceptance (open)
-- [x] macOS r1 (`b2b0eecb`, Test Home `~/.sanad-qa107`, instance `qa107`): L2, L3, L6, L7 PASS; L4 core behavior passed but the result was reported as a failure (D17); L2 left `sanad.rollback` (D18).
-- [x] L4 live: skipped by user decision (2026-10-21); covered by tests (`aaa7212d`).
+### G6 — Live acceptance (closed as scoped by the user)
+- [x] macOS r1 (`b2b0eecb`, Test Home `~/.sanad-qa107`, instance `qa107`, evidence `~/.sanad-delegate/runs/107/live-r1/`): L2, L3, L6, L7 PASS; L4 found D17 (the core behavior passed but the result was reported as a failure); L2 left `sanad.rollback` (D18).
+- [x] L4: D17 fixed in `aaa7212d`; a live re-run was skipped by user decision (2026-10-21); covered by tests.
 - [x] L2 rollback removal (D18): covered by tests; L2 itself passed live in macOS r1.
-- [ ] L1 and L5 on Ubuntu with the current code. The Ubuntu evidence on PR #211 covers the old 107 code only and does not count.
+- [ ] L1 and L5 (Ubuntu): not run, by user decision (2026-10-21). The Ubuntu evidence on PR #211 covers the OLD 107 code only and does not count for this code.
 
 ## Acceptance Criteria
 
@@ -154,15 +154,15 @@ owner. The port is a transplant with review fixes, not a merge.
 - [x] A network or verification failure keeps the previous Agent; a post-replacement start/health failure restores it; retry works.
 - [x] Agent child processes are pinned to the managed Home and service instance.
 - [x] Analyzers report zero issues.
-- [ ] Live L1–L7 pass on an isolated Test Home.
+- [ ] Live L1–L7 pass on an isolated Test Home: L2, L3, L6, L7 passed live; L4 (after D17) and D18 are covered by tests only; L1/L5 not run, by user decision.
 
 ## Definition of Done
 
 - [x] `fvm dart analyze` (agent, release contract) and `fvm flutter analyze` (client) clean.
 - [x] Focused and full Agent and Client suites pass (evidence below).
 - [x] Documentation and owning `AGENTS.md` updated.
-- [ ] Live acceptance G6.
-- [ ] Draft PR and independent review (not part of this port: no push, no PR).
+- [x] Live acceptance G6, as scoped by the user (see G6 for the waived items).
+- [x] Coordinator review of every round; PR supersedes #211.
 
 ## Evidence
 
