@@ -17,6 +17,7 @@ import 'package:sanad_client/features/conversations/presentation/utils/file_refe
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/multiline_submission_shortcuts.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/media/image_lightbox.dart';
 // ignore: depend_on_referenced_packages
 import 'package:markdown/markdown.dart' as md;
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
@@ -669,6 +670,7 @@ class _InlineEditAttachmentThumbnailState extends State<_InlineEditAttachmentThu
 
     return FutureBuilder<Uint8List>(
       future: load.bytes,
+      initialData: load.cachedBytes,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return GestureDetector(
@@ -700,6 +702,7 @@ class _InlineEditAttachmentThumbnailState extends State<_InlineEditAttachmentThu
             width: 28,
             height: 28,
             fit: BoxFit.cover,
+            gaplessPlayback: true,
             errorBuilder: (_, _, _) => GestureDetector(
               onTap: _retry,
               child: const Icon(
@@ -714,7 +717,9 @@ class _InlineEditAttachmentThumbnailState extends State<_InlineEditAttachmentThu
   }
 }
 
-class _UserAttachmentGrid extends StatelessWidget {
+/// Attachment grid of one user message. Its image attachments form one
+/// [LightboxGroup], so the lightbox navigates them in message order.
+class _UserAttachmentGrid extends StatefulWidget {
   const _UserAttachmentGrid({
     required this.attachments,
     required this.sessionId,
@@ -724,6 +729,32 @@ class _UserAttachmentGrid extends StatelessWidget {
   final List<UserMessageAttachment> attachments;
   final String sessionId;
   final UserAttachmentMediaLoader? loader;
+
+  @override
+  State<_UserAttachmentGrid> createState() => _UserAttachmentGridState();
+}
+
+class _UserAttachmentGridState extends State<_UserAttachmentGrid> {
+  final LightboxGroup _lightboxGroup = LightboxGroup();
+
+  void _syncOrder() => _lightboxGroup.setOrder([
+    for (final attachment in widget.attachments)
+      if (attachment.isImage) attachment.id,
+  ]);
+
+  @override
+  void initState() {
+    super.initState();
+    _syncOrder();
+  }
+
+  @override
+  void didUpdateWidget(covariant _UserAttachmentGrid oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncOrder();
+  }
+
+  List<UserMessageAttachment> get attachments => widget.attachments;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -741,8 +772,9 @@ class _UserAttachmentGrid extends StatelessWidget {
       itemBuilder: (context, index) => _UserAttachmentCard(
         key: ValueKey('user_attachment_${attachments[index].id}'),
         attachment: attachments[index],
-        sessionId: sessionId,
-        loader: loader,
+        sessionId: widget.sessionId,
+        loader: widget.loader,
+        lightboxGroup: _lightboxGroup,
       ),
     ),
   );
@@ -754,11 +786,13 @@ class _UserAttachmentCard extends StatefulWidget {
     required this.attachment,
     required this.sessionId,
     this.loader,
+    this.lightboxGroup,
   });
 
   final UserMessageAttachment attachment;
   final String sessionId;
   final UserAttachmentMediaLoader? loader;
+  final LightboxGroup? lightboxGroup;
 
   @override
   State<_UserAttachmentCard> createState() => _UserAttachmentCardState();
@@ -766,6 +800,7 @@ class _UserAttachmentCard extends StatefulWidget {
 
 class _UserAttachmentCardState extends State<_UserAttachmentCard> {
   ViewImageMediaLoad? _load;
+  LightboxImage? _lightboxImage;
   ViewImageMediaLoad? _fileLoad;
   bool _isOpeningFile = false;
   bool _fileUnavailable = false;
@@ -782,28 +817,54 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
     if (oldWidget.attachment.mediaId != widget.attachment.mediaId ||
         oldWidget.attachment.isAvailable != widget.attachment.isAvailable ||
         oldWidget.sessionId != widget.sessionId) {
+      _unregister(oldWidget.lightboxGroup, oldWidget.attachment.id);
       _load?.cancel();
       _fileLoad?.cancel();
       _isOpeningFile = false;
       _fileUnavailable = false;
       _startLoad();
+    } else if (oldWidget.lightboxGroup != widget.lightboxGroup || oldWidget.attachment.id != widget.attachment.id) {
+      _unregister(oldWidget.lightboxGroup, oldWidget.attachment.id);
+      _register();
     }
   }
 
   void _startLoad() {
     _load = null;
+    _lightboxImage = null;
     if (!widget.attachment.isImage || !widget.attachment.isAvailable || widget.sessionId.isEmpty) {
       return;
     }
     final loader = widget.loader ?? ViewImageMediaRepository.local();
-    _load = loader.loadAttachment(
+    final load = loader.loadAttachment(
       attachment: widget.attachment,
       sessionId: widget.sessionId,
     );
+    _load = load;
+    _lightboxImage = _lightboxImageFor(load.bytes, load.cachedBytes);
+    _register();
+  }
+
+  LightboxImage _lightboxImageFor(Future<Uint8List> bytes, Uint8List? cachedBytes) => LightboxImage(
+    bytes: bytes,
+    cachedBytes: cachedBytes,
+    semanticLabel: 'Full-size attached image ${widget.attachment.safeName}',
+    preferredFileName: widget.attachment.safeName,
+  );
+
+  void _register() {
+    final image = _lightboxImage;
+    if (image != null) widget.lightboxGroup?.register(widget.attachment.id, image);
+  }
+
+  void _unregister(LightboxGroup? group, String id) {
+    final image = _lightboxImage;
+    if (image != null) group?.unregister(id, image);
   }
 
   @override
   void dispose() {
+    _unregister(widget.lightboxGroup, widget.attachment.id);
     _load?.cancel();
     _fileLoad?.cancel();
     super.dispose();
@@ -816,6 +877,7 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
     if (load == null) return _unavailableCard(context);
     return FutureBuilder<Uint8List>(
       future: load.bytes,
+      initialData: load.cachedBytes,
       builder: (context, snapshot) {
         if (snapshot.hasError) return _unavailableCard(context);
         final bytes = snapshot.data;
@@ -842,6 +904,7 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
               child: Image.memory(
                 bytes,
                 fit: BoxFit.cover,
+                gaplessPlayback: true,
                 semanticLabel: 'Attached image ${widget.attachment.safeName}',
                 errorBuilder: (_, _, _) => _unavailableCard(context),
               ),
@@ -954,37 +1017,20 @@ class _UserAttachmentCardState extends State<_UserAttachmentCard> {
     ),
   );
 
-  Future<void> _showImage(BuildContext context, Uint8List bytes) => showDialog<void>(
-    context: context,
-    builder: (dialogContext) => Dialog(
-      key: const Key('user_attachment_lightbox'),
-      child: Stack(
-        children: [
-          InteractiveViewer(
-            minScale: 0.5,
-            maxScale: 5,
-            child: Center(
-              child: Image.memory(
-                bytes,
-                fit: BoxFit.contain,
-                semanticLabel: 'Full-size attached image ${widget.attachment.safeName}',
-              ),
-            ),
-          ),
-          PositionedDirectional(
-            top: 8,
-            end: 8,
-            child: IconButton(
-              key: const Key('user_attachment_lightbox_close'),
-              tooltip: 'Close attachment preview',
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              icon: const Icon(Icons.close),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
+  Future<void> _showImage(BuildContext context, Uint8List bytes) {
+    final opening = openLightboxGroup(
+      widget.lightboxGroup,
+      widget.attachment.id,
+      _lightboxImageFor(Future<Uint8List>.value(bytes), bytes),
+    );
+    return showImageLightbox(
+      context,
+      images: opening.images,
+      initialIndex: opening.index,
+      dialogKey: const Key('user_attachment_lightbox'),
+      closeKey: const Key('user_attachment_lightbox_close'),
+    );
+  }
 }
 
 /// Renders a file reference inside a user message as an inline chip

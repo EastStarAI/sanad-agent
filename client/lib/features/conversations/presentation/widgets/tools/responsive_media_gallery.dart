@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/media/image_lightbox.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/view_image_tool_card.dart';
 
 /// Responsive gallery that lays out consecutive runs of media-bearing tool
@@ -10,7 +11,10 @@ import 'package:sanad_client/features/conversations/presentation/widgets/tools/v
 /// columns = ((availableWidth + spacing) / (minItem + spacing)).floor().clamp(1, 4)
 /// itemWidth = (availableWidth - spacing * (columns - 1)) / columns
 /// where minItem = 160 and spacing = 8.
-class ResponsiveMediaGallery extends StatelessWidget {
+///
+/// The gallery owns one [LightboxGroup] so opening any card's lightbox
+/// navigates the whole run in display order.
+class ResponsiveMediaGallery extends StatefulWidget {
   const ResponsiveMediaGallery({
     super.key,
     required this.events,
@@ -43,16 +47,37 @@ class ResponsiveMediaGallery extends StatelessWidget {
   }
 
   @override
+  State<ResponsiveMediaGallery> createState() => _ResponsiveMediaGalleryState();
+}
+
+class _ResponsiveMediaGalleryState extends State<ResponsiveMediaGallery> {
+  final LightboxGroup _lightboxGroup = LightboxGroup();
+
+  @override
+  void initState() {
+    super.initState();
+    _lightboxGroup.setOrder([for (final event in widget.events) event.id]);
+  }
+
+  @override
+  void didUpdateWidget(covariant ResponsiveMediaGallery oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _lightboxGroup.setOrder([for (final event in widget.events) event.id]);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final events = widget.events;
     if (events.isEmpty) return const SizedBox.shrink();
+    const spacing = ResponsiveMediaGallery.spacing;
 
     return Padding(
-      padding: padding,
+      padding: widget.padding,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final availableWidth = constraints.maxWidth.isFinite ? constraints.maxWidth : 600.0;
-          final columns = calculateColumns(availableWidth);
-          final itemWidth = calculateItemWidth(availableWidth, columns);
+          final columns = ResponsiveMediaGallery.calculateColumns(availableWidth);
+          final itemWidth = ResponsiveMediaGallery.calculateItemWidth(availableWidth, columns);
           // Guard against floating point epsilon causing premature wrap
           final childWidth = columns > 1 ? (itemWidth - 0.001).clamp(0.0, availableWidth) : itemWidth;
 
@@ -66,8 +91,9 @@ class ResponsiveMediaGallery extends StatelessWidget {
                   width: childWidth,
                   child: ViewImageToolCard(
                     event: event,
-                    loader: viewImageMediaLoader,
+                    loader: widget.viewImageMediaLoader,
                     minWidth: 0,
+                    lightboxGroup: _lightboxGroup,
                   ),
                 ),
             ],

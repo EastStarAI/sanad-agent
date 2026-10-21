@@ -436,5 +436,14 @@
   "compactionActionRetry": "حاول تشغيل الضغط مرة أخرى.",
   "compactionPendingStillRunning": "لا يزال ضغط سياق المحادثة قيد التشغيل. ستظهر نتيجته في هذه المحادثة عند انتهائه.",
   "compactionFailurePrefix": "الفشل: {explanation}",
-  "compactionNextActionPrefix": "الإجراء التالي: {action}"
+  "compactionNextActionPrefix": "الإجراء التالي: {action}",
+  "lightboxPreviousImage": "الصورة السابقة",
+  "lightboxNextImage": "الصورة التالية",
+  "lightboxCounter": "{current} / {total}",
+  "lightboxClose": "إغلاق معاينة الصورة",
+  "lightboxDownload": "تنزيل الصورة",
+  "lightboxDownloadSaved": "تم حفظ {fileName} في التنزيلات",
+  "lightboxDownloadStarted": "جارٍ تنزيل {fileName}",
+  "lightboxDownloadFailed": "تعذّر حفظ الصورة",
+  "lightboxImageUnavailable": "الصورة غير متاحة"
 }

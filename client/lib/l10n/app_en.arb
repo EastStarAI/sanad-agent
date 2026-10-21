@@ -493,5 +493,59 @@
         "type": "String"
       }
     }
+  },
+  "lightboxPreviousImage": "Previous image",
+  "@lightboxPreviousImage": {
+    "description": "Tooltip for the lightbox button that shows the previous image in the group (reading-direction start side)."
+  },
+  "lightboxNextImage": "Next image",
+  "@lightboxNextImage": {
+    "description": "Tooltip for the lightbox button that shows the next image in the group (reading-direction end side)."
+  },
+  "lightboxCounter": "{current} / {total}",
+  "@lightboxCounter": {
+    "description": "Position of the shown image within its lightbox group, for example 2 / 5.",
+    "placeholders": {
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "lightboxClose": "Close image preview",
+  "@lightboxClose": {
+    "description": "Tooltip for the button that closes the image lightbox."
+  },
+  "lightboxDownload": "Download image",
+  "@lightboxDownload": {
+    "description": "Tooltip for the lightbox button that saves the shown image to the Downloads folder."
+  },
+  "lightboxDownloadSaved": "Saved {fileName} to Downloads",
+  "@lightboxDownloadSaved": {
+    "description": "Shown after the lightbox image was written to the Downloads folder.",
+    "placeholders": {
+      "fileName": {
+        "type": "String"
+      }
+    }
+  },
+  "lightboxDownloadStarted": "Downloading {fileName}",
+  "@lightboxDownloadStarted": {
+    "description": "Shown on Web after the browser download of the lightbox image was triggered.",
+    "placeholders": {
+      "fileName": {
+        "type": "String"
+      }
+    }
+  },
+  "lightboxDownloadFailed": "Couldn't save the image",
+  "@lightboxDownloadFailed": {
+    "description": "Shown when saving the lightbox image to Downloads failed."
+  },
+  "lightboxImageUnavailable": "Image unavailable",
+  "@lightboxImageUnavailable": {
+    "description": "Shown in the lightbox when the selected image's bytes could not be loaded."
   }
 }

@@ -222,7 +222,21 @@ paths and media credentials are never displayed.
 A `view_image` tool row is titled `View Image` and places its thumbnail directly
 below the title. It loads only near the viewport and opens the full image on
 activation. Local and remote routes present the same row; expired or pruned
-media leaves the row visible with `Image no longer available`. Multiline
+media leaves the row visible with `Image no longer available`.
+
+When several images sit together (a gallery of consecutive View Image or
+screenshot results, or the images attached to one message), the lightbox shows
+previous/next arrows and a `2 / 5` counter. It stops at the first and last
+image rather than wrapping. Arrows follow reading direction, so in Arabic the
+next image is on the left, and the keyboard Left/Right arrows move toward the
+arrow on that side. A single image shows no arrows. A Download button saves the
+shown image to the Downloads folder on macOS, Windows, and Linux under its
+attachment name, or `image-<date>-<time>` for tool images. An existing file is
+never replaced: a ` (1)` style number is added instead. A short localized
+message names the saved file or reports the failure. On Web the browser
+downloads the image; on mobile the button is hidden. Images already seen are
+kept in a bounded in-memory cache per device, so returning to a conversation,
+gallery, or lightbox shows them immediately without loading again. Multiline
 Markdown code blocks keep programming languages and untyped `Code` content LTR,
 opening long lines from the left even when they contain Arabic strings. Fenced
 `text` blocks detect their own content direction and open from the right for

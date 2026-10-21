@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/media/image_lightbox.dart';
 
 /// Reusable card widget for presenting image media results (view_image and
 /// media-bearing system_screenshot).
@@ -18,11 +19,16 @@ class ViewImageToolCard extends StatefulWidget {
     required this.event,
     this.loader,
     this.minWidth = 160,
+    this.lightboxGroup,
   });
 
   final CanonicalEvent event;
   final ViewImageMediaLoader? loader;
   final double? minWidth;
+
+  /// The gallery this card belongs to; the lightbox then navigates the
+  /// whole group. `null` opens a single-image lightbox.
+  final LightboxGroup? lightboxGroup;
 
   @override
   State<ViewImageToolCard> createState() => _ViewImageToolCardState();
@@ -30,6 +36,7 @@ class ViewImageToolCard extends StatefulWidget {
 
 class _ViewImageToolCardState extends State<ViewImageToolCard> {
   ViewImageMediaLoad? _load;
+  LightboxImage? _lightboxImage;
 
   @override
   void initState() {
@@ -45,22 +52,45 @@ class _ViewImageToolCardState extends State<ViewImageToolCard> {
         oldWidget.event.sessionId != widget.event.sessionId ||
         oldWidget.event.status != widget.event.status ||
         oldWidget.event.isError != widget.event.isError) {
+      _unregister(oldWidget.lightboxGroup, oldWidget.event.id);
       _load?.cancel();
       _startLoad();
+    } else if (oldWidget.lightboxGroup != widget.lightboxGroup || oldWidget.event.id != widget.event.id) {
+      _unregister(oldWidget.lightboxGroup, oldWidget.event.id);
+      _register();
     }
   }
 
   void _startLoad() {
     _load = null;
+    _lightboxImage = null;
     final media = widget.event.viewImageMedia;
     final sessionId = widget.event.sessionId ?? '';
     if (media == null || !media.isAvailable || sessionId.isEmpty) return;
     final loader = widget.loader ?? ViewImageMediaRepository.local();
-    _load = loader.load(media: media, sessionId: sessionId);
+    final load = loader.load(media: media, sessionId: sessionId);
+    _load = load;
+    _lightboxImage = LightboxImage(
+      bytes: load.bytes,
+      cachedBytes: load.cachedBytes,
+      semanticLabel: 'View Image full-size preview',
+    );
+    _register();
+  }
+
+  void _register() {
+    final image = _lightboxImage;
+    if (image != null) widget.lightboxGroup?.register(widget.event.id, image);
+  }
+
+  void _unregister(LightboxGroup? group, String id) {
+    final image = _lightboxImage;
+    if (image != null) group?.unregister(id, image);
   }
 
   @override
   void dispose() {
+    _unregister(widget.lightboxGroup, widget.event.id);
     _load?.cancel();
     super.dispose();
   }
@@ -159,6 +189,7 @@ class _ViewImageToolCardState extends State<ViewImageToolCard> {
 
     return FutureBuilder<Uint8List>(
       future: load.bytes,
+      initialData: load.cachedBytes,
       builder: (context, snapshot) {
         if (snapshot.hasError) return const UnavailableViewImage();
         final bytes = snapshot.data;
@@ -189,6 +220,7 @@ class _ViewImageToolCardState extends State<ViewImageToolCard> {
                   child: Image.memory(
                     bytes,
                     fit: BoxFit.contain,
+                    gaplessPlayback: true,
                     semanticLabel: 'View Image thumbnail',
                     errorBuilder: (_, _, _) => const UnavailableViewImage(),
                   ),
@@ -202,41 +234,19 @@ class _ViewImageToolCardState extends State<ViewImageToolCard> {
   }
 
   Future<void> _showLightbox(BuildContext context, Uint8List bytes) {
-    return showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (dialogContext) => Dialog(
-        key: const Key('view_image_lightbox'),
-        insetPadding: const EdgeInsets.all(24),
-        child: Stack(
-          children: [
-            Semantics(
-              label: 'View Image full-size preview',
-              child: InteractiveViewer(
-                minScale: 0.5,
-                maxScale: 5,
-                child: Center(
-                  child: Image.memory(
-                    bytes,
-                    fit: BoxFit.contain,
-                    semanticLabel: 'View Image full-size preview',
-                  ),
-                ),
-              ),
-            ),
-            PositionedDirectional(
-              top: 8,
-              end: 8,
-              child: IconButton(
-                key: const Key('view_image_lightbox_close'),
-                tooltip: 'Close image preview',
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                icon: const Icon(Icons.close),
-              ),
-            ),
-          ],
-        ),
-      ),
+    final group = widget.lightboxGroup;
+    final self = LightboxImage(
+      bytes: Future<Uint8List>.value(bytes),
+      cachedBytes: bytes,
+      semanticLabel: 'View Image full-size preview',
+    );
+    final opening = openLightboxGroup(group, widget.event.id, self);
+    return showImageLightbox(
+      context,
+      images: opening.images,
+      initialIndex: opening.index,
+      dialogKey: const Key('view_image_lightbox'),
+      closeKey: const Key('view_image_lightbox_close'),
     );
   }
 

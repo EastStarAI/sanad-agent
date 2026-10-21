@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/features/conversations/data/repositories/conversation_media_byte_cache.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
 
@@ -184,10 +184,19 @@ extension UserMessageAttachmentsEvent on CanonicalEvent {
 typedef CancelMediaLoad = void Function();
 
 class ViewImageMediaLoad {
-  const ViewImageMediaLoad({required this.bytes, required this.cancel});
+  const ViewImageMediaLoad({required this.bytes, required this.cancel, this.cachedBytes});
+
+  /// A load already satisfied by [ConversationMediaByteCache]: presentation
+  /// can paint [cachedBytes] on the first frame instead of a loading state.
+  ViewImageMediaLoad.cached(Uint8List value) : bytes = Future<Uint8List>.value(value), cancel = _noop, cachedBytes = value;
 
   final Future<Uint8List> bytes;
   final CancelMediaLoad cancel;
+
+  /// Synchronously available bytes when the load was a cache hit.
+  final Uint8List? cachedBytes;
+
+  static void _noop() {}
 }
 
 abstract interface class ViewImageMediaLoader {
@@ -211,11 +220,11 @@ class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMe
     LocalGatewayCredentialProvider credentialProvider = const LocalGatewayCredentialProvider(),
     Future<Map<String, String>> Function()? headerProvider,
     http.Client Function()? clientFactory,
-    this.maximumCacheEntries = 12,
-    this.maximumCacheBytes = 24 * 1024 * 1024,
+    ConversationMediaByteCache? cache,
     this.maximumMediaBytes = 12 * 1024 * 1024,
   }) : _headerProvider = headerProvider ?? credentialProvider.headers,
-       _clientFactory = clientFactory ?? http.Client.new;
+       _clientFactory = clientFactory ?? http.Client.new,
+       _cache = cache ?? ConversationMediaByteCache.shared;
 
   static ViewImageMediaRepository? _localInstance;
 
@@ -228,12 +237,9 @@ class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMe
   final String hardwareId;
   final Future<Map<String, String>> Function() _headerProvider;
   final http.Client Function() _clientFactory;
-  final int maximumCacheEntries;
-  final int maximumCacheBytes;
   final int maximumMediaBytes;
-  final LinkedHashMap<String, Uint8List> _cache = LinkedHashMap();
+  final ConversationMediaByteCache _cache;
   final Map<String, _SharedMediaRequest> _inFlight = {};
-  int _cachedBytes = 0;
 
   @override
   ViewImageMediaLoad load({
@@ -245,6 +251,7 @@ class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMe
     route: 'view-image',
     mimeType: media.mimeType,
     maximumBytes: maximumMediaBytes,
+    kind: 'view-image',
   );
 
   @override
@@ -257,6 +264,8 @@ class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMe
     route: 'attachment',
     mimeType: attachment.mimeType,
     maximumBytes: 5 * 1024 * 1024,
+    kind: 'attachment',
+    sha256: attachment.sha256,
   );
 
   ViewImageMediaLoad _loadResource({
@@ -265,16 +274,19 @@ class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMe
     required String route,
     required String mimeType,
     required int maximumBytes,
+    required String kind,
+    String? sha256,
   }) {
-    final key = '$route\u0000$hardwareId\u0000$sessionId\u0000$mediaId';
-    final cached = _cache.remove(key);
-    if (cached != null) {
-      _cache[key] = cached;
-      return ViewImageMediaLoad(
-        bytes: Future<Uint8List>.value(cached),
-        cancel: () {},
-      );
-    }
+    final key = ConversationMediaByteCache.keyFor(
+      transport: 'local',
+      deviceId: hardwareId,
+      sessionId: sessionId,
+      kind: kind,
+      mediaId: mediaId,
+      sha256: sha256,
+    );
+    final cached = _cache.get(key);
+    if (cached != null) return ViewImageMediaLoad.cached(cached);
 
     final existing = _inFlight[key];
     if (existing != null) {
@@ -295,7 +307,7 @@ class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMe
               maximumBytes: maximumBytes,
             )
             .then((bytes) {
-              if (!shared.cancelled) _store(key, bytes);
+              if (!shared.cancelled) _cache.put(key, bytes);
               return bytes;
             })
             .whenComplete(() {
@@ -364,18 +376,6 @@ class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMe
       builder.add(chunk);
     }
     return builder.takeBytes();
-  }
-
-  void _store(String key, Uint8List bytes) {
-    if (bytes.length > maximumCacheBytes || maximumCacheEntries <= 0) return;
-    final replaced = _cache.remove(key);
-    if (replaced != null) _cachedBytes -= replaced.length;
-    _cache[key] = bytes;
-    _cachedBytes += bytes.length;
-    while (_cache.length > maximumCacheEntries || _cachedBytes > maximumCacheBytes) {
-      final oldestKey = _cache.keys.first;
-      _cachedBytes -= _cache.remove(oldestKey)!.length;
-    }
   }
 }
 

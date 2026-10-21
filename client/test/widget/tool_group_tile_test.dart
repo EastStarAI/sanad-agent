@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
+import 'package:sanad_client/features/conversations/data/repositories/conversation_media_byte_cache.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
@@ -744,7 +745,7 @@ void main() {
       baseUrl: 'http://127.0.0.1:58184',
       hardwareId: 'hardware-1',
       headerProvider: () async => {'x-sanad-local-token': 'test-token'},
-      maximumCacheEntries: 1,
+      cache: ConversationMediaByteCache(maximumBytes: _onePixelPng.length),
       clientFactory: () => MockClient((request) async {
         requests++;
         expect(request.headers['x-sanad-local-token'], 'test-token');
