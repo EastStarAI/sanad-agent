@@ -11,18 +11,12 @@ const sanadReleaseRepository = 'EastStarAI/sanad-agent';
 
 enum ReleaseChannel { rc, stable }
 
-typedef PlatformArtifactVerifier = Future<bool> Function(
-  File file,
-  String operatingSystem,
-);
-typedef PlatformArtifactDetailedVerifier = Future<PlatformTrustResult> Function(
-  File file,
-  String operatingSystem,
-);
-typedef ReleaseProcessRunner = Future<ProcessResult> Function(
-  String executable,
-  List<String> arguments,
-);
+typedef PlatformArtifactVerifier =
+    Future<bool> Function(File file, String operatingSystem);
+typedef PlatformArtifactDetailedVerifier =
+    Future<PlatformTrustResult> Function(File file, String operatingSystem);
+typedef ReleaseProcessRunner =
+    Future<ProcessResult> Function(String executable, List<String> arguments);
 
 const macosAgentPublisherRequirement =
     '=anchor apple generic and '

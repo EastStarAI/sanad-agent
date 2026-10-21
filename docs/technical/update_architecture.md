@@ -135,7 +135,10 @@ The installer replaces the executable and refreshes the background service,
 briefly interrupting connected Clients; existing sign-in is kept. A current
 Agent prints the same platform-appropriate command after any `trust_failed`
 update result. The command text comes from `OfficialAgentInstaller` in the
-shared release contract, which is the only host recovery guidance may name.
+shared release contract, which is the only host recovery guidance may name. The
+Client's **Add device** guide takes its pairing commands from the same class
+(`pairingCommand`, POSIX- or PowerShell-quoted token), so CLI and Client
+installer text cannot diverge.
 
 ## Installed Agent update
 

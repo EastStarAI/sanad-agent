@@ -31,7 +31,7 @@ This contract applies to `client/lib/features/devices/`.
 - The Add Device flow may hold the creation-only pairing token transiently only
   to build one installer command. It must never receive, display, copy, or
   persist the durable device token, and it must continue automatically when
-  the authoritative inventory reports the created device online. Its POSIX command follows the conventional `curl -fsSL ... | bash` bootstrap, shell-quotes the creation token, and passes it only to the installer; the installer must feed it to the Agent through stdin rather than an Agent process argument or log it.
+  the authoritative inventory reports the created device online. Its commands come only from `OfficialAgentInstaller.pairingCommand` in the shared release contract, never from local URL literals. Its POSIX command follows the conventional `curl -fsSL ... | bash` bootstrap, shell-quotes the creation token, and passes it only to the installer; the installer must feed it to the Agent through stdin rather than an Agent process argument or log it.
 
 ## Client and Transport Ownership
 - Use `IDeviceClientRegistry` and `ManagedConversationClientRegistry` to preserve one managed client per device.

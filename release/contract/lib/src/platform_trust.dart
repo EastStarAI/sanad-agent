@@ -165,6 +165,22 @@ abstract final class OfficialAgentInstaller {
   /// new interactive sign-in. Existing authentication is retained.
   static String recoveryCommand(String operatingSystem) =>
       operatingSystem == 'windows'
-      ? '& ([scriptblock]::Create((irm $windowsScriptUrl))) -NoLogin'
+      ? '$_windowsInvocation -NoLogin'
       : 'curl -fsSL $posixScriptUrl -o install.sh && bash install.sh --no-login';
+
+  /// The Add device command. The installer reads [token] and passes it to the
+  /// Agent through stdin; the token is quoted for its shell and never logged.
+  static String pairingCommand(String operatingSystem, String token) =>
+      operatingSystem == 'windows'
+      ? '$_windowsInvocation -PairingToken ${_quotePowerShell(token)}'
+      : 'curl -fsSL $posixScriptUrl | bash -s -- --pairing-token ${_quotePosix(token)}';
+
+  static const _windowsInvocation =
+      '& ([scriptblock]::Create((irm $windowsScriptUrl)))';
+
+  static String _quotePosix(String value) =>
+      "'${value.replaceAll("'", "'\\''")}'";
+
+  static String _quotePowerShell(String value) =>
+      "'${value.replaceAll("'", "''")}'";
 }

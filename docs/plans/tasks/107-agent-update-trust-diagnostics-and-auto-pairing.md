@@ -58,6 +58,9 @@ stopped Agent without manual commands or elevation.
     `version`, `help …`, and `-h`/`--help` at any command level answer before
     any Home preparation and never create or write anything in `SANAD_HOME`
     or `SANAD_STATE_HOME` (`SanadCommandRunner.isPureQuery`).
+11. **Single installer source (Q3, coordinator decision).** The CLI recovery
+    guidance and the Client `DeviceInstallGuide` take installer URLs and
+    commands only from `OfficialAgentInstaller`.
 
 ## Port Mapping (PR #211 → `fix/107-port`)
 
@@ -177,5 +180,5 @@ Logs live under `temp/107/` in the worktree (gitignored).
 
 1. Resolved (coordinator decision): version and usage queries are pure. `agent/test/cli/pure_cli_queries_test.dart` runs ten queries against an empty Home and state Home and asserts both stay empty (red `temp/107/q1-red.log`, green `temp/107/q1-green.log`).
 2. Resolved by coordinator review: a started, healthy newer Agent is a success (`newerAgentInUse`) with an informational notice (D17).
-3. Should `DeviceInstallGuide` reuse `OfficialAgentInstaller` for its installer URLs? It belongs to the Client devices feature and is outside 107.
+3. Resolved (coordinator decision): `DeviceInstallGuide` uses `OfficialAgentInstaller.pairingCommand`; the PowerShell token is now escaped (`'` → `''`), which the old literal did not do. Red `temp/107/q3-red.log`, green `temp/107/q3-green.log`.
 4. When the bootstrap installer replaces a stopped Agent with a registered service, the existing service definition is reused. Should a version change force re-registration so the unit/plist/task matches the new Agent?

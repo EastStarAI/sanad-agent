@@ -285,6 +285,17 @@ void main() {
       expect(guidance, isNot(contains('bash')));
     });
 
+    test('pairing commands quote the token for their shell', () {
+      expect(
+        OfficialAgentInstaller.pairingCommand('linux', "pairing' token"),
+        "curl -fsSL https://sanad.eaststarai.com/install.sh | bash -s -- --pairing-token 'pairing'\\'' token'",
+      );
+      expect(
+        OfficialAgentInstaller.pairingCommand('windows', "pairing' token"),
+        "& ([scriptblock]::Create((irm https://sanad.eaststarai.com/install.ps1))) -PairingToken 'pairing'' token'",
+      );
+    });
+
     test('never names a host other than the documented installer host', () {
       for (final os in ['macos', 'linux', 'windows']) {
         final hosts = RegExp(r'https://([^/\s]+)')
