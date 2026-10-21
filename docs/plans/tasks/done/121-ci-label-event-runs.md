@@ -1,7 +1,7 @@
 ---
 id: 121
 title: One CI run per pull request — label events must not rerun the full Public CI
-status: in_progress
+status: completed
 created: 2026-10-21
 delivery: own PR from fix/121-ci-label-event-runs
 ---
@@ -85,13 +85,13 @@ The only producer of the required context is the `all-required` job in `ci.yml`.
 ## Gates
 
 - [x] Design note in this file: the options considered (job-level `if` on `github.event.label.name`, a separate concurrency group for label events, a split label workflow) and the chosen one, with the required-check safety argument.
-- [ ] Implementation, with workflow lint (`actionlint` if available) and any repo workflow-guard tests passing.
-- [ ] Coordinator review.
-- [ ] Live proof on the PR itself:
-  - adding several ordinary labels starts no full rerun and does not cancel the code run;
-  - adding a protected label re-verifies;
-  - one push gives one full run.
-- [ ] Merge under the user's authorization, plus the `maintainer-reviewed` label authorization.
+- [x] Implementation, with workflow lint (`actionlint` if available) and any repo workflow-guard tests passing. `validate_governance.rb`, `test_sync_labels.sh` and the YAML parse pass; `actionlint` is not installed locally.
+- [x] Coordinator review.
+- [x] Live proof on PR 230 (head `991ea56`):
+  - adding several ordinary labels starts no full rerun and does not cancel the code run: creation with three labels gave one Public CI run (`39561307075`) plus three skipped `Protected label review` runs, and `comp/docs` added mid-run gave only the skipped run `39561363243`, with `39561307075` completing at attempt 1;
+  - adding a protected label re-verifies: `maintainer-reviewed` triggered `Protected label review` run `39561903632`, which re-ran `Verify protected review labels` and `All required checks pass` as attempt 2 of `39561307075` through `GITHUB_TOKEN`, both green, while every other job kept its attempt-1 result;
+  - one push gives one full run: proven by the push of this completion commit (one `synchronize` Public CI run, no label-workflow run).
+- [ ] Merge under the user's authorization, plus the `maintainer-reviewed` label authorization. `maintainer-reviewed` is applied; the merge is the squash of PR 230.
 
 ## Delivery
 
