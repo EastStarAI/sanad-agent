@@ -3,6 +3,7 @@ import 'dart:io';
 import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
+import 'project_env_redactor.dart';
 
 class SearchGrepHandler {
   static const int _maxReadBytes = 10 * 1024 * 1024;
@@ -158,6 +159,11 @@ class SearchGrepHandler {
       String fileContent;
       try {
         fileContent = await entity.readAsString();
+        // Match against the redacted projection so a search for a secret
+        // value cannot confirm it exists.
+        if (ProjectEnvRedactor.isProjectEnvFile(entity.path)) {
+          fileContent = ProjectEnvRedactor.redact(fileContent);
+        }
       } catch (_) {
         // File contains non-UTF-8 bytes (e.g. binary files that passed
         // looksBinary). Skip silently.

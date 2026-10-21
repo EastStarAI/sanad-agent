@@ -8,11 +8,12 @@ This contract applies to `agent/lib/capabilities/mcp/`.
 - Persist client-requested mutations through the same settings owner used by runtime discovery.
 - Clients consume refreshed daemon snapshots and never become configuration truth.
 - Keep secret values out of snapshots, logs, protocol errors, export, and Advanced JSON.
-- Store MCP credentials only through the owner-protected `McpSecretStore`; configuration files contain opaque references and non-secret metadata, including secret STDIO argument values associated with recognized credential flags.
+- Store MCP credentials only through `McpSecretStore`, which uses the Agent vault `mcp:` namespace when the process opened the vault for that Home; configuration files contain opaque references and non-secret metadata, including secret STDIO argument values associated with recognized credential flags.
 - Import is preview-first and bounded; Advanced JSON is one-server-only with a reviewed revision before mutation.
 
 ## Runtime Manager
 - Own discovery and execution for enabled stdio, SSE, and streamable-HTTP servers.
+- Start STDIO servers only through `StrictStdioClientTransport` (`includeParentEnvironment: false`) with the allowlisted environment; never use `StdioClientTransport.create`, which merges the daemon environment.
 - Maintain persistent managed sessions rather than spawning and closing a server for each turn.
 - Cache tool specifications by a fast fingerprint of merged effective configuration.
 - Invalidate cache and rebuild connections when effective configuration changes.

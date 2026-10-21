@@ -731,7 +731,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         if (fileName.isNotEmpty) {
           return FileExtensionIcon(fileName: fileName, size: 18);
         }
-      } else if (cleanName == 'Ran') {
+      } else if (cleanName == 'Ran' &&
+          !ToolPresentationHelper.wasNotRun(widget.event)) {
         return const FileExtensionIcon(fileName: 'terminal', size: 18);
       } else if (cleanName == 'Search' || cleanName == 'Grep') {
         return const FileExtensionIcon(fileName: 'search', size: 18);

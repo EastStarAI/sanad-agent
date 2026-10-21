@@ -1194,6 +1194,7 @@ void main() {
                 startedAt,
                 terminalAt,
                 runtimeMs,
+                errorCode,
               }) async {
                 if (isStart) {
                   inputs.add(input ?? '');
@@ -1255,6 +1256,7 @@ void main() {
                     startedAt,
                     terminalAt,
                     runtimeMs,
+                    errorCode,
                   }) async {
                     if (!isStart) {
                       descriptor = media;
@@ -1368,6 +1370,7 @@ void main() {
                     startedAt,
                     terminalAt,
                     runtimeMs,
+                    errorCode,
                   }) async {
                     if (!isStart && !drainStarted.isCompleted) {
                       runner.beginControlledRestartDrain();
@@ -2480,6 +2483,7 @@ void main() {
                   startedAt,
                   terminalAt,
                   runtimeMs,
+                  errorCode,
                 }) async {
                   events.add({
                     'tool_name': toolName,

@@ -3,8 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
-import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/cli/cli.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
@@ -12,6 +10,7 @@ import 'package:sanad_agent/evolution/db/session_db.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:test/test.dart';
 import '../support/isolated_sanad_test_home.dart';
+import '../support/memory_workspace_policy_store.dart';
 
 class MockWebSocket implements WebSocket {
   final _incomingController = StreamController<dynamic>();
@@ -292,7 +291,7 @@ void main() {
     late SessionDB sessionDb;
     late AgentStateDatabase stateDb;
     late LocalWorkspaceRuntimeService runtimeService;
-    late WorkspacePolicyStore policyStore;
+    late MemoryWorkspacePolicyStore policyStore;
     late CliWorkspaceStateStore stateStore;
     late WorkspaceCliService service;
     late StringBuffer stdoutBuf;
@@ -322,10 +321,7 @@ void main() {
         sessionDb: sessionDb,
       );
 
-      final settingsStore = SanadSettingsStore(
-        homeDirectoryPath: tempSanadHome.path,
-      );
-      policyStore = WorkspacePolicyStore(settingsStore: settingsStore);
+      policyStore = MemoryWorkspacePolicyStore();
       stateStore = CliWorkspaceStateStore(
         sanadHomeOverride: tempSanadHome.path,
       );
@@ -636,6 +632,8 @@ void main() {
       ]);
       expect(exitCode, 0);
       expect(stdoutBuf.toString(), contains('Permission Mode: full_access'));
+      expect(stdoutBuf.toString(), contains('Execution Mode:  direct'));
+      expect(stdoutBuf.toString(), contains('Host Discovery:  owner_only'));
 
       // 4. Reject invalid policy
       stderrBuf.clear();

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:sanad_client/features/settings/data/workspace_security_client.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
@@ -172,6 +173,9 @@ class _HomeScreenState extends State<HomeScreen> {
             capabilitiesStore: getIt<DeviceCapabilitiesStore>(),
             localToolRuntime: getIt<LocalToolRuntimeService>(),
             workspaceRuntimeContext: getIt<WorkspaceToolRuntimeContext>(),
+            workspaceSecurityClient: getIt.isRegistered<WorkspaceSecurityClient>()
+                ? getIt<WorkspaceSecurityClient>()
+                : null,
           ),
         ),
         BlocProvider(

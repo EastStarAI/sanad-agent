@@ -23,7 +23,7 @@ To ensure complete user privacy and offline functionality, all conversation logs
 
 When constructed without an injected `SessionManager`, suspended-checkpoint and resume collaborators acquire one only when a persistence or resume operation first needs session state. Constructing an unused standalone collaborator, including a test double that overrides its persistence methods, does not open or migrate `state.db`; production DI continues to inject the shared manager explicitly.
 
-Plan 29 provider tables hold **no secrets**; API keys and OAuth tokens live only in the `SecretStore` (`provider_secrets.json`), keyed by instance UUID.
+Plan 29 provider tables hold **no secrets**; API keys and OAuth tokens live only in the `SecretStore` (the Agent vault `providers:` namespace), keyed by instance UUID.
 
 ---
 
@@ -314,7 +314,7 @@ Legacy databases with `workspaces(path PRIMARY KEY)` are migrated atomically. Th
 
 ## 4. Provider Tables in `state.db` (Plan 29)
 
-Three tables created inside `state.db` (no separate database file) by `AgentStateDatabase`. They store the **Template/Instance** model that separates static provider templates (`ProviderProfile` in `ProviderRegistry`) from user-created connections (`ProviderInstance`). The schema is owned by the single `AgentStateDatabase` connection and accessed via `ProviderInstanceRepository` (`sanad-agent/agent/lib/core/provider_runtime/provider_instance_repository.dart`), which shares that connection with `SessionDB`. Secrets never live here — they are stored only in the `SecretStore` (`provider_secrets.json`), keyed by instance UUID.
+Three tables created inside `state.db` (no separate database file) by `AgentStateDatabase`. They store the **Template/Instance** model that separates static provider templates (`ProviderProfile` in `ProviderRegistry`) from user-created connections (`ProviderInstance`). The schema is owned by the single `AgentStateDatabase` connection and accessed via `ProviderInstanceRepository` (`sanad-agent/agent/lib/core/provider_runtime/provider_instance_repository.dart`), which shares that connection with `SessionDB`. Secrets never live here — they are stored only in the `SecretStore` (the Agent vault `providers:` namespace), keyed by instance UUID.
 
 ### 4.1. Entity-Relationship
 

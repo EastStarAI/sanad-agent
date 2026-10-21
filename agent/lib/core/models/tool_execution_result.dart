@@ -223,6 +223,10 @@ final class ToolExecutionResult {
   final bool isError;
   final ToolResultErrorCode? errorCode;
 
+  /// The stable wire value of [errorCode], for transport projections.
+  String? get errorCodeWire =>
+      errorCode == null ? null : _errorCodeWireValues[errorCode];
+
   String get displayText =>
       blocks.whereType<ToolTextBlock>().map((block) => block.text).join('\n');
 

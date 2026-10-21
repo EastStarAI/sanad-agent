@@ -28,6 +28,7 @@ This contract applies to `agent/lib/evolution/db/`.
   - `SessionDB`: delegating facade preserving the public API surface; it holds no SQL of its own and must never carry a second copy of a repository algorithm.
 - Keep DTO/enums at a stable export seam only while migration requires it.
 - Legacy tables and methods remain migration-only and cannot accept new production work.
+- `WorkspaceSecurityPolicyRepository` (`capabilities/permissions/`) is the sole owner of `workspace_security_policies`; `AgentStateDatabase` only creates the table. The table is additive and rollback-safe: never rename or drop its columns. Workspace removal deletes the workspace's policy row in the same transaction (`LocalWorkspaceRuntimeService.removeWorkspace` on the `SessionDB.state` connection); `exec_root:` rows are kept.
 - `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps and the pending-vacuum marker.
 - `AgentStateMaintenanceService` owns post-ready maintenance policy: idle/grace gating, bounded orphan and terminal deletion batches, 14-day retention, prune/vacuum throttles, and vacuum thresholds. It must not perform cleanup before daemon readiness or expose user-facing settings.
 - Full `VACUUM` is never a startup or serving-path operation. The service marks qualifying work pending and may execute it only at the controlled-exit boundary after restart drain and response flush.

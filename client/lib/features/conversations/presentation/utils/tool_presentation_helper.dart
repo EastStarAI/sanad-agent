@@ -558,8 +558,32 @@ class ToolPresentationHelper {
     };
   }
 
+  /// Shell terminal reasons that mean the command was refused before it ran
+  /// (Protected execution without a backend, or an unreadable policy).
+  static const _notRunReasons = {'protected_backend_unavailable', 'policy_unavailable'};
+
+  /// Whether [event] is a call that never ran: the user or policy denied it
+  /// (`permission_denied`, any tool), or the Agent refused a shell command
+  /// before running it.
+  static bool wasNotRun(CanonicalEvent event) {
+    if (event.tool?['errorCode'] == 'permission_denied') return true;
+    if (event.toolName != 'shell_execute') return false;
+    var output = event.toolOutput;
+    if (output is String) {
+      try {
+        output = jsonDecode(output);
+      } catch (_) {
+        return false;
+      }
+    }
+    return output is Map && _notRunReasons.contains(output['terminal_reason']);
+  }
+
   static String displayToolTitle(CanonicalEvent event, {AppLocalizations? l10n, bool isArabic = false}) {
     final cleanTitle = cleanToolTitle(event.toolName ?? 'Using Tool');
+    if (wasNotRun(event)) {
+      return l10n?.statusNotRun ?? (isArabic ? 'لم يُنفَّذ' : 'Not run');
+    }
     if (event.status == EventStatus.cancelled) {
       return l10n?.statusCancelled ?? (isArabic ? 'ملغى' : 'Cancelled');
     }
@@ -614,6 +638,9 @@ class ToolPresentationHelper {
   }
 
   static (IconData, Color) getEventIconData(BuildContext context, CanonicalEvent event) {
+    if (wasNotRun(event)) {
+      return (Icons.block_outlined, Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6));
+    }
     if (event.status == EventStatus.cancelled) {
       return (Icons.cancel_outlined, Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6));
     }

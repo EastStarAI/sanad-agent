@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -118,6 +119,25 @@ class GatewayManager {
   /// of each event; this manager selects the destination platforms by
   /// declared `delivery` and platform `descriptor.family`, without a switch
   /// over event names or platform-id strings.
+  /// Publishes a session-independent canonical [event] to every Sanad client
+  /// on every platform (local sockets and the cloud), not only the client
+  /// whose command produced it.
+  void publishFamilyEvent(CanonicalEvent event) {
+    _onOrchestratorResponse(
+      GatewayResponse(
+        sessionId: event.sessionId ?? '',
+        message: Message(
+          role: MessageRole.assistant,
+          metadata: {
+            'canonical_event_type': event.type,
+            'canonical_payload': event.payload,
+          },
+        ),
+        delivery: DeliveryPolicy.platformFamily(PlatformFamily.sanadClient),
+      ),
+    );
+  }
+
   void _onOrchestratorResponse(GatewayResponse response) {
     final originPlatform = _resolveOriginPlatform(response.platformId);
     final originContext = originPlatform != null

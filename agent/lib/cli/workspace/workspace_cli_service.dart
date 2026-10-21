@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
@@ -17,7 +18,11 @@ import 'workspace_locator.dart';
 class WorkspaceCliService {
   final LocalGatewayCliClient? gatewayClient;
   final LocalWorkspaceRuntimeService runtimeService;
-  final WorkspacePolicyStore policyStore;
+  final WorkspacePolicyStore? _policyStoreOverride;
+
+  /// Daemon-equivalent policy owner used when no Gateway is connected.
+  late final WorkspacePolicyStore policyStore =
+      _policyStoreOverride ?? _standalonePolicyStore(runtimeService);
   final CliWorkspaceStateStore stateStore;
   final String sanadHome;
   final bool isGatewayMode;
@@ -39,15 +44,7 @@ class WorkspaceCliService {
              sanadHomePath:
                  sanadHome ?? const LocalGatewayDiscovery().resolveSanadHome(),
            ),
-       policyStore =
-           policyStore ??
-           WorkspacePolicyStore(
-             settingsStore: SanadSettingsStore(
-               homeDirectoryPath:
-                   sanadHome ??
-                   const LocalGatewayDiscovery().resolveSanadHome(),
-             ),
-           ),
+       _policyStoreOverride = policyStore,
        stateStore =
            stateStore ??
            CliWorkspaceStateStore(
@@ -57,6 +54,17 @@ class WorkspaceCliService {
        isGatewayMode =
            isGatewayMode ??
            (gatewayClient != null && gatewayClient.isConnected);
+
+  static WorkspacePolicyStore _standalonePolicyStore(
+    LocalWorkspaceRuntimeService runtimeService,
+  ) => WorkspacePolicyStore(
+    database: () => runtimeService.stateDatabase,
+    resolveRegisteredPath: (id) async {
+      final workspace = await runtimeService.describeWorkspaceById(id);
+      if (workspace == null || workspace['is_missing'] == true) return null;
+      return workspace['path']?.toString();
+    },
+  );
 
   WorkspaceLocator get locator => WorkspaceLocator(
     gatewayClient: gatewayClient,
@@ -199,42 +207,40 @@ class WorkspaceCliService {
   }
 
   /// Reads the workspace security policy.
+  ///
+  /// The running daemon is authoritative; the local store is consulted only
+  /// when no Gateway is connected.
   Future<WorkspacePolicy> getWorkspacePolicy(String workspacePath) async {
     if (gatewayClient != null && gatewayClient!.isConnected) {
-      try {
-        final raw = await gatewayClient!.getWorkspacePolicy(
-          workspacePath: workspacePath,
-        );
-        return WorkspacePolicy.fromJson(raw);
-      } catch (e) {
-        _logger.warning(
-          'Failed to read policy via gateway: $e; reading local policy store',
-        );
-      }
+      final raw = await gatewayClient!.getWorkspacePolicy(
+        workspacePath: workspacePath,
+      );
+      return WorkspacePolicy.fromJson(raw);
     }
-    return await policyStore.readPolicy(workspacePath);
+    final workspace = await runtimeService.describeWorkspace(workspacePath);
+    return policyStore.readPolicy(workspace?['id']?.toString());
   }
 
   /// Updates the security permission mode (`default` or `full_access`).
+  ///
+  /// A Gateway rejection is final and never falls back to a local write.
   Future<void> setWorkspacePermissionMode({
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
   }) async {
     if (gatewayClient != null && gatewayClient!.isConnected) {
-      try {
-        await gatewayClient!.setWorkspacePermissionMode(
-          workspaceId: workspaceId,
-          permissionMode: mode.value,
-        );
-        return;
-      } catch (e) {
-        _logger.warning(
-          'Failed to set permission mode via gateway: $e; saving to local policy store',
-        );
-      }
+      await gatewayClient!.setWorkspacePermissionMode(
+        workspaceId: workspaceId,
+        permissionMode: mode.value,
+      );
+      return;
     }
-    await policyStore.savePermissionMode(workspacePath, mode);
+    await policyStore.updateModes(
+      workspaceId,
+      authority: CommandAuthority.current,
+      permissionMode: mode,
+    );
   }
 
   /// Retrieves list of MCP servers configured for a workspace.

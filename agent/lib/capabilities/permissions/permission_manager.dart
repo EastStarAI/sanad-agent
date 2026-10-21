@@ -7,15 +7,29 @@ import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 
+import 'command_authority.dart';
 import 'workspace_policy.dart';
+import 'workspace_policy_scope.dart';
 import 'workspace_policy_store.dart';
+
+/// The user or workspace policy refused a tool call; the tool never ran.
+///
+/// Keeps the exact model-facing text of the previous plain exception.
+class ToolPermissionDeniedException implements Exception {
+  const ToolPermissionDeniedException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'Exception: $message';
+}
 
 class PermissionManager {
   PermissionManager({
     WorkspacePolicyStore? policyStore,
     PlatformRuntimeBridge? platformRuntimeBridge,
     SuspendedCheckpointStore? checkpointStore,
-  }) : _policyStore = policyStore ?? const WorkspacePolicyStore(),
+  }) : _policyStore = policyStore ?? WorkspacePolicyStore(),
        _platformRuntimeBridge =
            platformRuntimeBridge ?? PlatformRuntimeBridge(),
        _checkpointStore = checkpointStore ?? SuspendedCheckpointStore();
@@ -28,19 +42,6 @@ class PermissionManager {
   final Map<String, Set<String>> _sessionDeny = {};
   final Map<String, Set<String>> _oneShotAllow = {};
   final Map<String, Future<void>> _sessionPermissionTails = {};
-
-  Future<void> syncWorkspacePermissionMode({
-    required String workspacePath,
-    String? permissionMode,
-  }) async {
-    if (permissionMode == null || permissionMode.trim().isEmpty) {
-      return;
-    }
-    await _policyStore.savePermissionMode(
-      workspacePath,
-      WorkspacePermissionMode.fromValue(permissionMode),
-    );
-  }
 
   Future<void> ensureAuthorized({
     required LocalToolSpec tool,
@@ -73,22 +74,22 @@ class PermissionManager {
     Map<String, dynamic>? permissionDisplayArguments,
   }) async {
     final sessionMetadata = context.metadata;
-    final rawWorkspace = sessionMetadata['workspace'];
-    final workspace = rawWorkspace is Map
-        ? rawWorkspace.cast<String, dynamic>()
-        : null;
-    final workspacePath = workspace?['path']?.toString();
-    final workspaceId = workspace?['id']?.toString();
-    final workspaceName = workspace?['name']?.toString();
+    final workspaceScope = WorkspacePolicyScope.fromMetadata(sessionMetadata);
+    final workspacePath = workspaceScope.path;
+    final workspaceId = workspaceScope.id;
+    final workspaceName = workspaceScope.name;
     final approvalKey = approvalKeyOverride ?? _approvalKey(tool, arguments);
     final permissionClass =
         tool.approval['permission_class']?.toString() ?? tool.category;
 
-    WorkspacePolicy? workspacePolicy;
-    if (workspacePath != null && workspacePath.isNotEmpty) {
-      workspacePolicy = await _policyStore.readPolicy(workspacePath);
+    final effective = await _policyStore.resolveForRoot(
+      WorkspacePolicyScope.toolRoot(sessionMetadata),
+    );
+    final policyKey = effective?.key;
+    if (effective != null) {
+      final workspacePolicy = effective.policy;
       if (workspacePolicy.permissions.deny.contains(approvalKey)) {
-        throw Exception('Tool ${tool.name} is denied by workspace policy.');
+        throw ToolPermissionDeniedException('Tool ${tool.name} is denied by workspace policy.');
       }
       if (workspacePolicy.permissionMode ==
           WorkspacePermissionMode.fullAccess) {
@@ -100,11 +101,10 @@ class PermissionManager {
       }
     }
 
-    final isBypassed =
-        sessionMetadata['allow_all_tools'] == true ||
-        sessionMetadata['allow_all_tools'] == 'true' ||
-        sessionMetadata['permission_mode'] == 'full_access';
-    if (isBypassed) {
+    // A turn-level bypass is honored only when transport ingress stamped the
+    // turn as owner authority (for example `sanad run --yes` or an authenticated client). Turn
+    // payload content can never claim it.
+    if (_isOwnerBypass(sessionMetadata)) {
       return;
     }
 
@@ -113,7 +113,7 @@ class PermissionManager {
     }
 
     if (_sessionDeny[context.sessionId]?.contains(approvalKey) ?? false) {
-      throw Exception('Tool ${tool.name} is denied for this session.');
+      throw ToolPermissionDeniedException('Tool ${tool.name} is denied for this session.');
     }
 
     final oneShotAllow = _oneShotAllow[context.sessionId];
@@ -126,9 +126,7 @@ class PermissionManager {
 
     final defaultScope =
         tool.approval['scope']?.toString() ??
-        (workspacePath != null && workspacePath.isNotEmpty
-            ? 'workspace'
-            : 'once');
+        (policyKey != null ? 'workspace' : 'once');
     final requestId = _nextPermissionRequestId();
     final toolCallId = context.toolCallId ?? 'toolcall-$requestId';
     final permissionPayload = <String, dynamic>{
@@ -137,6 +135,7 @@ class PermissionManager {
       'permission_class': permissionClass,
       'scope': defaultScope,
       'workspace_id': workspaceId,
+      'policy_key': policyKey,
       'workspace_name': workspaceName,
       'workspace_path': workspacePath,
       'session_id': context.sessionId,
@@ -174,11 +173,11 @@ class PermissionManager {
     if (!isAllowed) {
       final denyComment = decision['comment']?.toString().trim();
       if (denyComment != null && denyComment.isNotEmpty) {
-        throw Exception(
+        throw ToolPermissionDeniedException(
           'User denied permission for tool ${tool.name}.\nUser comment: $denyComment',
         );
       } else {
-        throw Exception('User denied permission for tool ${tool.name}.');
+        throw ToolPermissionDeniedException('User denied permission for tool ${tool.name}.');
       }
     }
 
@@ -187,8 +186,7 @@ class PermissionManager {
       scope: scope,
       approvalKey: approvalKey,
       sessionId: context.sessionId,
-      workspacePath: workspacePath,
-      currentPolicy: workspacePolicy,
+      workspaceId: policyKey,
     );
   }
 
@@ -227,15 +225,18 @@ class PermissionManager {
       permissionPayload['tool_input'] as Map? ?? const {},
     );
     final sessionId = permissionPayload['session_id']?.toString() ?? '';
-    final workspacePath = permissionPayload['workspace_path']?.toString();
+    final rawWorkspaceId =
+        (permissionPayload['policy_key'] ?? permissionPayload['workspace_id'])
+            ?.toString()
+            .trim();
+    final workspaceId = rawWorkspaceId == null || rawWorkspaceId.isEmpty
+        ? null
+        : rawWorkspaceId;
     final scope = decision['scope']?.toString() ?? 'once';
     final allowed = decision['allowed'] == true;
     final approvalKey =
         permissionPayload['approval_key']?.toString() ??
         _approvalKey(tool, arguments);
-    final currentPolicy = workspacePath == null || workspacePath.isEmpty
-        ? null
-        : await _policyStore.readPolicy(workspacePath);
 
     if (!allowed) {
       return;
@@ -250,8 +251,7 @@ class PermissionManager {
       scope: scope,
       approvalKey: approvalKey,
       sessionId: sessionId,
-      workspacePath: workspacePath,
-      currentPolicy: currentPolicy,
+      workspaceId: workspaceId,
     );
   }
 
@@ -270,40 +270,40 @@ class PermissionManager {
     required String scope,
     required String approvalKey,
     required String sessionId,
-    required String? workspacePath,
-    required WorkspacePolicy? currentPolicy,
+    required String? workspaceId,
   }) async {
-    if (scope == 'workspace' &&
-        workspacePath != null &&
-        workspacePath.isNotEmpty) {
-      final policy =
-          currentPolicy ?? await _policyStore.readPolicy(workspacePath);
-      final allow = [...policy.permissions.allow];
-      final deny = [...policy.permissions.deny];
-      allow.remove(approvalKey);
-      deny.remove(approvalKey);
-      if (allowed) {
-        allow.add(approvalKey);
-      } else {
-        deny.add(approvalKey);
+    var effectiveScope = scope;
+    if (scope == 'workspace') {
+      if (workspaceId != null) {
+        try {
+          await _policyStore.recordDecision(
+            workspaceId,
+            approvalKey: approvalKey,
+            allowed: allowed,
+          );
+          return;
+        } on StateError {
+          // The workspace is no longer registered or storage is unavailable;
+          // keep the decision for this session instead of dropping it.
+        }
       }
-      await _policyStore.savePolicy(
-        workspacePath,
-        policy.copyWith(
-          permissions: WorkspaceToolPermissions(
-            allow: allow,
-            deny: deny,
-            ask: policy.permissions.ask,
-          ),
-        ),
-      );
-      return;
+      effectiveScope = 'session';
     }
 
-    if (scope == 'session' || scope == 'thread') {
+    if (effectiveScope == 'session' || effectiveScope == 'thread') {
       final cache = allowed ? _sessionAllow : _sessionDeny;
       cache.putIfAbsent(sessionId, () => <String>{}).add(approvalKey);
     }
+  }
+
+  static bool _isOwnerBypass(Map<String, dynamic> metadata) {
+    final requested =
+        metadata['allow_all_tools'] == true ||
+        metadata['allow_all_tools'] == 'true';
+    return requested &&
+        CommandAuthority.fromStamped(
+          metadata[CommandAuthority.payloadKey],
+        ).isOwner;
   }
 
   String _approvalKey(LocalToolSpec tool, Map<String, dynamic> arguments) {

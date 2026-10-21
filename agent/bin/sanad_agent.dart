@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/capabilities/skills/bundled_skill_manager.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
 import 'package:sanad_agent/core/hot_restart_manager.dart';
@@ -34,6 +35,8 @@ void main(List<String> arguments) async {
   // are secured individually by their read/write owners; startup never walks
   // the complete Home tree.
   await SanadHomeBootstrap.prepareAll();
+  // Plan 83: CLI commands read and write secrets through the Agent vault.
+  await SecretVaults.open();
   final machineOutput =
       arguments.contains('--json') ||
       arguments.contains('--quiet') ||

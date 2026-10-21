@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
+import 'project_env_redactor.dart';
 
 class FileReadHandler {
   static const int _maxReadBytes = 10 * 1024 * 1024;
@@ -152,7 +153,10 @@ class FileReadHandler {
       throw FileSystemException('File appears to be binary.', resolvedPath);
     }
 
-    final content = await file.readAsString();
+    final rawContent = await file.readAsString();
+    final content = ProjectEnvRedactor.isProjectEnvFile(resolvedPath)
+        ? ProjectEnvRedactor.redact(rawContent)
+        : rawContent;
     final result = content.length > 65536
         ? await Isolate.run(() => _extractLines(content, offset, limit))
         : _extractLines(content, offset, limit);

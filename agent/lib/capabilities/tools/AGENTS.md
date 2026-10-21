@@ -23,6 +23,13 @@ This contract applies to `agent/lib/capabilities/tools/`.
 - Preserve bounded stdout/stderr on timeout and non-user interruption. Only an explicit user Stop may report `cancelled_by_user`; timeout reports `timed_out`, while daemon shutdown/crash recovery reports `agent_interrupted` with outcome and cleanup metadata.
 - Persist a redacted shell process fingerprint and bounded output progress while the command runs so startup can verify and reclaim the exact orphan containment without signaling a reused PID.
 - Propagate session and tool-call identity to child processes through the reserved restart-request environment boundary; never expose message content or tool arguments there.
+- Build the child environment only through `ProcessEnvironmentPolicy` and spawn with `includeParentEnvironment: false`; Dart otherwise merges the daemon environment back in.
+- `ShellExecuteTool` owns schema, workspace boundary, and permission checks, then delegates to the `ExecutionBackend` chosen from daemon policy at each execution. A backend never grants approval. The backend is resolved before approval and a refusing backend (`runsCommands: false`) answers without a prompt or durable grant. Protected execution and an unreadable policy fail closed and never fall back to the host.
+- The working directory must equal the canonical workspace root or lie within it; prefix matching is not containment.
+
+## Host Capability Discovery
+- `host_capability_discovery` never executes a binary, starts a shell, lists directories, or returns `PATH` or other environment values.
+- Its presence is decided by the runtime catalog from daemon policy and stamped authority; the tool itself never decides visibility and no prompt text may announce it.
 - Keep command output bounded and free of injected operational instructions.
 - Shell typed error status comes from terminal execution state, never output-string parsing; preserve the legacy encoded payload as the text projection.
 

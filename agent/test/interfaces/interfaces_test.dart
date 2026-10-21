@@ -29,7 +29,6 @@ import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
-import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
@@ -3715,7 +3714,7 @@ Use the review skill.''',
           sessionManager: mockSessionManager,
         );
         final permissionManager = PermissionManager(
-          policyStore: const WorkspacePolicyStore(),
+          policyStore: WorkspacePolicyStore(),
           platformRuntimeBridge: PlatformRuntimeBridge(),
           checkpointStore: checkpointStore,
         );
@@ -4125,7 +4124,7 @@ Use the review skill.''',
           ),
           workspaceRuntimeService: getIt<LocalWorkspaceRuntimeService>(),
           permissionManager: PermissionManager(
-            policyStore: const WorkspacePolicyStore(),
+            policyStore: WorkspacePolicyStore(),
             platformRuntimeBridge: PlatformRuntimeBridge(),
             checkpointStore: checkpointStore,
           ),
@@ -7100,7 +7099,7 @@ Use the review skill.''',
 
 class _NoopMcpRuntimeManager extends McpRuntimeManager {
   _NoopMcpRuntimeManager()
-    : super(settingsStore: const SanadSettingsStore(homeDirectoryPath: '/tmp'));
+    : super();
 
   @override
   Future<List<LocalToolSpec>> listToolSpecs({String? workspacePath}) async {

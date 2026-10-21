@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:logging/logging.dart';
 
 import '../../capabilities/registry/tools_registry.dart';
+import '../../core/models/tool_execution_result.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/llm_provider_state.dart';
 import '../../core/models/llm_usage_snapshot.dart';
@@ -830,6 +831,7 @@ class RunnerStreamCoordinator {
     String? runtimeSystemPrompt,
     String? forcedOutput,
     bool forcedIsError = false,
+    ToolResultErrorCode? forcedErrorCode,
     ToolEventCallback? onToolEvent,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -842,6 +844,7 @@ class RunnerStreamCoordinator {
         emitStartEvent: false,
         forcedOutput: forcedOutput,
         forcedIsError: forcedIsError,
+      forcedErrorCode: forcedErrorCode,
       );
     } catch (e) {
       host.checkpointCoordinator.blockWorkItemOnResumeFailure(e);

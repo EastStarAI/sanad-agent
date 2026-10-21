@@ -1,3 +1,4 @@
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -366,8 +367,16 @@ class RemoteCliCommandHandler {
       }
     });
 
+    // The relayed CLI runs in-process; its loopback and in-process calls must
+    // keep the relay command's authority instead of the local owner's.
+    final relayAuthority = CommandAuthority.fromStamped(
+      event.payload[CommandAuthority.payloadKey],
+    );
     try {
-      final runFuture = runner.run(effectiveArgv);
+      final runFuture = CommandAuthority.runAs(
+        relayAuthority,
+        () => runner.run(effectiveArgv),
+      );
       unawaited(runFuture.catchError((_) => 0));
       final exitCode = await Future.any([
         runFuture,

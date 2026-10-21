@@ -1,3 +1,4 @@
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -58,6 +59,13 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   @override
   String get transportName => 'client';
+
+  /// Every request on this transport passed loopback binding and the
+  /// owner-only local credential, so it acts for the device owner. A sender
+  /// may still lower its own authority.
+  @override
+  CommandAuthority get ingressAuthority => CommandAuthority.owner;
+
   final _eventController = StreamController<GatewayEvent>.broadcast();
   final _clients = <WebSocket>{};
   final _sessionClients = <String, WebSocket>{};

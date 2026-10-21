@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 
@@ -347,14 +348,19 @@ class SessionTurnReplayCommandHandler {
             ? null
             : thinkingMode,
         requestId: commandRequestId,
-        metadata: {
-          'turn_replay_action': action,
-          'replayed_request_id': targetRequestId,
-          if (replayAttachments.isNotEmpty)
-            'attachment_ids': replayAttachments
-                .map((attachment) => attachment.id)
-                .toList(growable: false),
-        },
+        metadata: CommandAuthority.stampTurnMetadata(
+          {
+            'turn_replay_action': action,
+            'replayed_request_id': targetRequestId,
+            if (replayAttachments.isNotEmpty)
+              'attachment_ids': replayAttachments
+                  .map((attachment) => attachment.id)
+                  .toList(growable: false),
+          },
+          CommandAuthority.fromStamped(
+            event.payload[CommandAuthority.payloadKey],
+          ),
+        ),
       );
       final gatewayEvent = GatewayEvent(
         sessionId: sessionId,

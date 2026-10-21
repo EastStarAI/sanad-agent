@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
+import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
@@ -72,6 +73,29 @@ class _MediaResultTool extends BaseTool {
   }) async => (await executeResult(args, context: context)).displayText;
 }
 
+class _DenyingTool extends BaseTool {
+  @override
+  ToolSchema get schema => ToolSchema(
+    name: 'shell_execute',
+    description: 'denied',
+    parameters: const {'type': 'object'},
+  );
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => throw const ToolPermissionDeniedException(
+    'User denied permission for tool shell_execute.',
+  );
+
+  @override
+  Future<String> execute(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => (await executeResult(args, context: context)).displayText;
+}
+
 class _RecordingCallbacks extends ToolExecutionCallbacks {
   final Map<String, String> results = {};
   int historySaveCount = 0;
@@ -84,6 +108,7 @@ class _RecordingCallbacks extends ToolExecutionCallbacks {
     DateTime? startedAt,
     DateTime? terminalAt,
     int? runtimeMs,
+    String? errorCode,
   }) async {
     results[toolCall.id] = result;
   }
@@ -198,6 +223,7 @@ void main() {
               DateTime? startedAt,
               DateTime? terminalAt,
               int? runtimeMs,
+              String? errorCode,
             }) async {
               observations.add((
                 toolName: toolName,
@@ -217,7 +243,9 @@ void main() {
         contains('Screenshot taken successfully'),
       );
 
-      final mediaEvents = observations.where((event) => event.hasMedia).toList();
+      final mediaEvents = observations
+          .where((event) => event.hasMedia)
+          .toList();
       expect(
         mediaEvents,
         hasLength(1),
@@ -316,6 +344,7 @@ void main() {
               DateTime? startedAt,
               DateTime? terminalAt,
               int? runtimeMs,
+              String? errorCode,
             }) async {
               observations.add((
                 toolName: toolName,
@@ -330,9 +359,78 @@ void main() {
             },
       );
 
-      final mediaEvents = observations.where((event) => event.hasMedia).toList();
+      final mediaEvents = observations
+          .where((event) => event.hasMedia)
+          .toList();
       expect(mediaEvents, hasLength(1));
       expect(mediaEvents.single.toolMessagePresent, isTrue);
     },
   );
+
+  test('a denied call reports the typed code to the live tool event', () async {
+    registry.registerTool(_DenyingTool());
+    final codes = <String?>[];
+    await coordinator.executeToolCalls(
+      [
+        ToolCall(
+          id: 'deny_1',
+          name: 'shell_execute',
+          arguments: const {'command': 'rm -rf build'},
+        ),
+      ],
+      parallel: false,
+      callbacks: _RecordingCallbacks(),
+      ctx: (currentTurnStartIndex: 0, currentModelStepId: 'model-step-deny'),
+      onToolEvent:
+          ({
+            required String toolName,
+            String? input,
+            String? output,
+            ViewImageMediaMetadata? media,
+            required bool isError,
+            required bool isStart,
+            String? toolRunId,
+            DateTime? startedAt,
+            DateTime? terminalAt,
+            int? runtimeMs,
+            String? errorCode,
+          }) async {
+            if (!isStart) codes.add(errorCode);
+          },
+    );
+    expect(codes, ['permission_denied']);
+  });
+
+  test('a resumed user denial records and reports permission_denied', () async {
+    final codes = <String?>[];
+    await coordinator.executeSingleToolCall(
+      ToolCall(
+        id: 'deny_resume_1',
+        name: 'shell_execute',
+        arguments: const {'command': 'ls'},
+      ),
+      callbacks: _RecordingCallbacks(),
+      forcedOutput:
+          'Error executing tool: Exception: User denied permission for tool shell_execute.',
+      forcedIsError: true,
+      forcedErrorCode: ToolResultErrorCode.permissionDenied,
+      onToolEvent:
+          ({
+            required String toolName,
+            String? input,
+            String? output,
+            ViewImageMediaMetadata? media,
+            required bool isError,
+            required bool isStart,
+            String? toolRunId,
+            DateTime? startedAt,
+            DateTime? terminalAt,
+            int? runtimeMs,
+            String? errorCode,
+          }) async {
+            if (!isStart) codes.add(errorCode);
+          },
+    );
+    expect(codes, ['permission_denied']);
+  });
 }

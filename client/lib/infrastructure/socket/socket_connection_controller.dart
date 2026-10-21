@@ -670,7 +670,14 @@ class SocketConnectionController {
         if (payload['version'] is num) 'version': payload['version'],
       };
     }
-    return {'field_count': payload.length};
+    // A typed error code is a short identifier, never content; log it so a
+    // rejected command is diagnosable.
+    final nested = payload['payload'];
+    final code = payload['code'] ?? (nested is Map ? nested['code'] : null);
+    return {
+      'field_count': payload.length,
+      if (code is String && RegExp(r'^[a-z0-9_]{1,64}$').hasMatch(code)) 'code': code,
+    };
   }
 
   String _formatDebugData(dynamic data, {int maxLength = 500}) {

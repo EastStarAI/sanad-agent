@@ -91,7 +91,7 @@ class _E2EFakeSuspendedResumeService extends SuspendedResumeService {
             skillLoadService: SkillLoadService(registry: const SkillRegistry()),
           ),
           permissionManager: PermissionManager(
-            policyStore: const WorkspacePolicyStore(),
+            policyStore: WorkspacePolicyStore(),
             platformRuntimeBridge: PlatformRuntimeBridge(),
             checkpointStore: SuspendedCheckpointStore(
               sessionManager: SessionManager(),
@@ -107,7 +107,7 @@ class _E2EFakeSuspendedResumeService extends SuspendedResumeService {
           skillLoadService: SkillLoadService(registry: const SkillRegistry()),
         ),
         permissionManager: PermissionManager(
-          policyStore: const WorkspacePolicyStore(),
+          policyStore: WorkspacePolicyStore(),
           platformRuntimeBridge: PlatformRuntimeBridge(),
           checkpointStore: SuspendedCheckpointStore(
             sessionManager: SessionManager(),

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:logging/logging.dart';
+import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -35,6 +36,12 @@ Future<void> main(List<String> args) async {
 
   final config = getIt<Config>();
   initLogger(config);
+
+  // Plan 83: open the Agent vault (migrating legacy secret files) after
+  // logging starts and before any service resolves a secret, replay vault
+  // events a CLI recorded without a log, and follow other processes' writes.
+  (await SecretVaults.open()).startWatching();
+  SecretVaults.drainStartupEvents();
 
   print('--- Sanad Agent Daemon ---');
 
