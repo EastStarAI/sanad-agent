@@ -1,10 +1,10 @@
 ---
 title: "Task 114f: Remote Attachment Disclosure on the Model Wire"
-status: "in_review"
+status: "done"
 priority: "high"
 depends_on: "none"
-current_gate: "G3 (integration/live acceptance)"
-remaining_estimate: "15%"
+current_gate: "closed (live acceptance r1 and r2 recorded)"
+remaining_estimate: "0%"
 evidence_id: "114-input-media"
 evidence_fingerprint: "sha256:4372c21c241d96d7b56042f56f93b79b5a851f9914bcb72305a2191332612f0e"
 ---
@@ -47,20 +47,20 @@ evidence_fingerprint: "sha256:4372c21c241d96d7b56042f56f93b79b5a851f9914bcb72305
 - [x] عدم انحدار مسارات الصور الآمنة الحالية.
 
 ### G3 — Live/integration & docs
-- [ ] تحقق تكاملي: جلسة على وكيل بعيد/محاكى بمرفق PDF → النموذج يرى السطر ويستطيع قراءة الملف بأدواته.
+- [x] تحقق تكاملي: جلسة على وكيل بعيد/محاكى بمرفق PDF → النموذج يرى السطر ويستطيع قراءة الملف بأدواته. — r1 S11 and R-PDF (the model read the disclosed file with `file`).
 - [x] تحديث docs بروتوكول/سلك المرفقات ذات الصلة.
 
 ## Acceptance criteria
 
-- [ ] رسالة مستخدم تحمل مرفق PDF من وكيل بعيد: سلك النموذج يحوي سطرًا مرجعيًا بمسار الوكيل + توجيه، وبلا أي مسار عميل.
-- [ ] صورة PNG آمنة تُسقط كجزء صورة كما اليوم؛ HEIC لا يُسقط كجزء صورة أبدًا.
-- [ ] لا انحدار على المحولات الأربعة (اختباراتها الخضراء).
+- [x] رسالة مستخدم تحمل مرفق PDF من وكيل بعيد: سلك النموذج يحوي سطرًا مرجعيًا بمسار الوكيل + توجيه، وبلا أي مسار عميل. — r1 S11, r2 D4 request dumps.
+- [x] صورة PNG آمنة تُسقط كجزء صورة كما اليوم؛ HEIC لا يُسقط كجزء صورة أبدًا. — r1 R-PNG and R-HEIC, r2 D4.
+- [x] لا انحدار على المحولات الأربعة (اختباراتها الخضراء). — adapter suites green; live on the Chat Completions and Responses wires.
 
 ## Definition of Done
 
 - [x] `fvm dart analyze` ناجح.
 - [x] focused agent tests ناجحة.
-- [ ] تحقق تكاملي موثق.
+- [x] تحقق تكاملي موثق. — see the live acceptance log below.
 - [x] تحديث docs ذات الصلة.
 - [x] `graphify update .` ناجح.
 - [x] تحديث gate ونسبة المتبقي.
@@ -79,3 +79,7 @@ evidence_fingerprint: "sha256:4372c21c241d96d7b56042f56f93b79b5a851f9914bcb72305
 - Observation, not changed: `engine/context/compaction_token_estimator.dart` (from 116) still counts every `image/*` attachment as an image. This over-estimates for disclosed exotic formats, which is the safe direction.
 - Verification on `feat/114-port`: agent and client analyzers report no issues; full agent suite 3,038 passed / 14 skipped; full client suite 1,810 passed / 1 skipped (`-j 4`); daemon E2E media and attachment-relay suites pass with `--concurrency=1`; `graphify update .` run.
 - Not verified: a session on a remote agent with a PDF attachment where the model reads the disclosed file with its tools.
+
+### 2026-10-21 — live acceptance r1 and r2 (coordinator, Test Homes 2 and 3)
+- r1 on `389caede`: S11 passes. From a remote client, a PDF+HEIC+PNG message reaches the agent wire as two reference lines with agent-side paths, tool guidance, and one PNG image part; HEIC is never an image part. The model read the PDF and HEIC with its tools. Two minors were found (an underscored `[v2]` label, singular guidance for several files) and fixed in round 5.
+- r2 on `571844f6`: six sends of PDF+HEIC+PNG and PDF+PNG on ChatGPT `gpt-6-luna`, OpenRouter `gpt-4o-mini`, and OpenCode Go `deepseek-v4.1-flash` pass. The dumps show the escaped `My (1) \[v2\].pdf` label, plural or singular guidance, and the PNG image part.

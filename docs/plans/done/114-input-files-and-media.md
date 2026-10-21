@@ -1,9 +1,9 @@
 ---
 title: "Input Files and Media Presentation"
 description: "Unified paste/drop/picker file routing with composer path tokens, user-message newline and file-chip rendering, inline-edit image previews, a responsive view_image gallery, screenshot-as-media parity, and remote attachment disclosure."
-status: in_review
-current_gate: G-live (coordinator live acceptance on a Test Home)
-remaining_estimate: 15%
+status: done
+current_gate: closed (live acceptance r1 and r2 recorded)
+remaining_estimate: 0%
 port_base_commit: adc128ec
 port_branch: feat/114-port
 evidence_id: "114-input-media"
@@ -33,7 +33,7 @@ Fix the reported post-Plan-77 defects and land one coherent input/media behavior
 - **Image-part projection is format-gated**: only PNG/JPEG/WebP/GIF attachments may become `image_url`/image parts on the wire; every other file (including exotic image formats) is delivered as a reference line with an agent-side path plus one-line tool guidance, and never leaks a client-side path.
 - **User messages preserve typed newlines**: Shift+Enter line breaks render as real line breaks in the conversation history.
 - **Screenshot parity**: `system_screenshot` returns an image block plus its existing human-readable summary; the client renders it exactly like a `view_image` result (thumbnail + lightbox), and the model receives the image content through the existing generic tool-image projection.
-- Local commits on the port branch were authorized for the SRP port; push, pull request, and merge still require explicit user authorization.
+- Local commits on the port branch were authorized for the SRP port; push, pull request, and squash merge were authorized after live acceptance r2.
 
 ## Task breakdown
 
@@ -171,14 +171,12 @@ See each task file's progress log for locations and regression tests.
 - `graphify update .` run in the port worktree.
 - Logs live in the ignored `temp/114/` folder of the port worktree.
 
-### Remaining
+### Live acceptance (coordinator, Test Homes 2 and 3)
 
-- Coordinator-owned live acceptance on a Test Home for every part (see each task's live gate).
-- live-r2:
-  - [ ] D4: remote PDF+HEIC+PNG and PDF+PNG send on ChatGPT `gpt-6-luna` and OpenRouter `gpt-4o-mini` (agent dump shows the PDF/HEIC reference lines, the plural guidance, the escaped `My (1) \[v2\].pdf` label, and the PNG image part); a forced admission failure shows the localized "could not be sent" line and keeps the draft.
-  - [ ] D2: a refused first send in a new remote conversation keeps the attachments with the text in the created conversation; the next new conversation starts with an empty rail.
-  - [ ] D3: a multi-file paste (`.py` + PNG) within 2 s of opening a conversation and right after a turn finishes always shows every file (or a visible per-file read error).
-  - [ ] D1: editing a sent message with a file token shows the icon+name chip (no raw path), and saving unchanged keeps the exact link.
-  - [ ] Minor: pasting the same file twice leaves one rail item; the HEIC token and attachment use the image icon.
-  - [ ] non-image files (e.g. `.pdf`, `.dart`) show their file-type icon in the composer attachment rail, in the sent user message, and in the inline message editor, while images still show a preview.
-- Delivery (push and Draft pull request) after explicit authorization.
+Method: real macOS pasteboard contents with Cmd+V and `desktop_drop` messages injected through the client VM service, request dumps on the agent, and VM-breakpoint probes on the media loader. Each task's progress log records its scenarios.
+
+- **r1 on `389caede`:** scenarios 1, 2, 4–7, 9, 11, and 12 pass; 3 (drop/paste parity) and 8 (inline edit with an image) partial; 10 (`system_screenshot`) is tests-only by user decision, because `COMPUTER_USE` is off on the Test Homes. Defects D1–D4 and the minors above were fixed in round 5.
+- **r2 on `571844f6`:** D1–D4 and every minor pass; the lightbox, download, media byte cache, attachment errors (en and ar), and file type icons pass; r1 scenarios 3 and 8 pass on re-check. Model-facing sends ran on ChatGPT `gpt-6-luna`, OpenRouter `gpt-4o-mini`, and OpenCode Go `deepseek-v4.1-flash`.
+- r2 found that the r1 clipboard writer sometimes left only the first file on the pasteboard, which likely explains part or all of the r1 D3 report.
+- **BLOCKED live:** the hosted media cache refetch after sign-out and sign-in, because signing back in needs the user's credentials. Covered by `conversation_media_cache_test.dart` ("account binding").
+- **Tests-only:** the inline-edit attachment error (the editor adds files only through the native picker); non-default device limits (compile-time constants in `agent/lib/core/models/user_attachment.dart`); the native `+` picker; a real OS drag on macOS; Windows/Linux keyboard paste; the Web lightbox download and the mobile build without Download; a live `system_screenshot`.

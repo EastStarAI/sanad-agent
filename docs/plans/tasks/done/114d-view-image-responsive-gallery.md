@@ -1,10 +1,10 @@
 ---
 title: "Task 114d: Responsive view_image Gallery for Consecutive Results"
-status: "in_review"
+status: "done"
 priority: "medium"
 depends_on: "none"
-current_gate: "G3 (live acceptance)"
-remaining_estimate: "15%"
+current_gate: "closed (live acceptance r1 and r2 recorded)"
+remaining_estimate: "0%"
 ---
 
 # Task 114d: معرض متجاوب لنتائج view_image المتتالية
@@ -40,19 +40,19 @@ remaining_estimate: "15%"
 - [x] فتح الـlightbox لكل صورة؛ حالات التحميل/الخطأ؛ لا انحدار للمفاتيح.
 
 ### G3 — Live acceptance & docs
-- [ ] تحقق حي: جلسة تُنتج 3+ نتائج `view_image` متتالية → شبكة متجاوبة عند تغيير حجم النافذة.
+- [x] تحقق حي: جلسة تُنتج 3+ نتائج `view_image` متتالية → شبكة متجاوبة عند تغيير حجم النافذة. — r1 S9.
 - [x] تحديث docs عرض الوسائط في المحادثة.
 
 ## Acceptance criteria
 
-- [ ] 3 نتائج `view_image` متتالية تُعرض في شبكة، وعدد الصور بالسطر يتغير مع حجم الشاشة.
-- [ ] لا انحدار في عرض نتيجة منفردة أو في أدوات أخرى.
+- [x] 3 نتائج `view_image` متتالية تُعرض في شبكة، وعدد الصور بالسطر يتغير مع حجم الشاشة. — r1 S9: 3 columns at 1400 px, 2 at 450 px.
+- [x] لا انحدار في عرض نتيجة منفردة أو في أدوات أخرى. — r2 single-image lightbox.
 
 ## Definition of Done
 
 - [x] `fvm flutter analyze` ناجح.
 - [x] focused widget tests ناجحة.
-- [ ] تحقق حي موثق.
+- [x] تحقق حي موثق. — see the live acceptance log below.
 - [x] تحديث docs ذات الصلة.
 - [x] `graphify update .` ناجح.
 - [x] تحديث gate ونسبة المتبقي.
@@ -92,7 +92,7 @@ User additions in the 114 scope, delivered on `feat/114-port`.
 - `fvm flutter build macos --debug` succeeded; the signed app carries the downloads entitlement (`temp/114/114g-macos-build.log`).
 - Agent untouched; the agent suite was not run.
 
-### Live scenarios still to run
+### Live scenarios (results in the 2026-10-21 live acceptance log below)
 
 1. Gallery of 3+ `view_image` results: open the middle image. The counter reads `2 / N`. `lightbox_next`/`lightbox_prev` move one image at a time; the arrow is disabled at each end. ArrowRight/ArrowLeft behave the same on desktop.
 2. Arabic UI: the same gallery shows `lightbox_next` on the left; ArrowLeft advances.
@@ -102,3 +102,13 @@ User additions in the 114 scope, delivered on `feat/114-port`.
 6. Download from a cloud (hosted) device's image: same result, no new relay fetch.
 7. Web build: Download triggers a browser download named after the image. Mobile build: no `lightbox_download`.
 8. Reload regression: open a conversation with images (local and cloud device), switch to another conversation and back. The images appear immediately with no spinner and no new `/media/...` or relay request. The same holds when reopening the lightbox and scrolling a gallery out of view and back.
+
+### 2026-10-21 — live acceptance r1 and r2 (coordinator, Test Homes 2 and 3)
+- r1 on `389caede`: S9 passes. Three `view_image` results form one gallery that reflows from 3 columns to 2 when the window narrows; the lightbox opens and closes.
+- r2 on `571844f6` (114g addendum scenarios):
+  - 1–3 pass: the counter, disabled ends, and arrow keys in en; RTL arrow placement and ArrowLeft-advances in ar; a single image shows only Download and Close.
+  - 4 passes: a user message with two images and a PDF gives a two-image lightbox in message order.
+  - 5–6 pass: two downloads of one hosted image give `img114_red.png` then `img114_red (1).png`, with en and ar messages; `view_image` results are named `image-<timestamp>`. A VM-breakpoint probe showed no fetch during download or lightbox use, for local and hosted media.
+  - 8 passes: after a client restart the first open fetches each image once; switching away and back, scrolling, and reopening the lightbox make no new fetch (local and hosted). One first-return miss was an image newly scrolled into view.
+  - BLOCKED live: the hosted cache refetch after sign-out and sign-in, because signing back in needs the user's credentials. Covered by `conversation_media_cache_test.dart` ("account binding").
+  - Not run live: 7 (the Web browser download and the mobile build without Download). Covered by tests only.

@@ -1,10 +1,10 @@
 ---
 title: "Task 114a: Composer Input Routing, Paste Repair, and File Path Tokens"
-status: "in_review"
+status: "done"
 priority: "high"
 depends_on: "none"
-current_gate: "G4 (live acceptance)"
-remaining_estimate: "15%"
+current_gate: "closed (live acceptance r1 and r2 recorded)"
+remaining_estimate: "0%"
 evidence_id: "114-input-media"
 evidence_fingerprint: "sha256:4372c21c241d96d7b56042f56f93b79b5a851f9914bcb72305a2191332612f0e"
 ---
@@ -63,7 +63,7 @@ evidence_fingerprint: "sha256:4372c21c241d96d7b56042f56f93b79b5a851f9914bcb72305
 ### G1 — Paste capture repair
 - [x] توثيق المرحلة الفاشلة فعليًا على macOS بتشخيص مؤقت (السببان: مراقب NSEvent الأصلي يحجب Cmd+V + مسار fallback معطّل/أحادي الصيغة).
 - [x] تنفيذ الالتقاط الموثوق (صورة/ملفات/متعدد) مع إبقاء لصق النص.
-- [ ] تحقق حي: لصق لقطة شاشة → مرفق؛ لصق ملف Finder → مسار حسب المصفوفة؛ لصق نص → كما هو. (يملكه المنسّق)
+- [x] تحقق حي: لصق لقطة شاشة → مرفق؛ لصق ملف Finder → مسار حسب المصفوفة؛ لصق نص → كما هو. (يملكه المنسّق) — live r1 S1 pass.
 
 ### G2 — Unified routing & drop unification
 - [x] دالة توجيه واحدة تُستخدم من اللصق والإفلات وزر `+`.
@@ -78,22 +78,22 @@ evidence_fingerprint: "sha256:4372c21c241d96d7b56042f56f93b79b5a851f9914bcb72305
 ### G4 — Alignment, integration & live acceptance
 - [x] محاذاة الشريط إلى start + تحديث/إضافة اختبارات.
 - [x] اختبارات تكامل للمداخل الثلاثة (مصفوفة كاملة: صورة/غير آمنة/ملف/محلي/بعيد).
-- [ ] تحقق حي موثق على macOS (لصق، إفلات، زر +، محاذاة) + تحديث docs المدخل. (التحقق الحي يملكه المنسّق؛ تحديث docs المدخل قيد المراجعة)
+- [x] تحقق حي موثق على macOS (لصق، إفلات، زر +، محاذاة) + تحديث docs المدخل. (التحقق الحي يملكه المنسّق؛ تحديث docs المدخل قيد المراجعة) — paste, drop, and alignment live (r1 S1, S3, S12; r2 C3); the `+` picker is tests-only (not drivable).
 
 ## Acceptance criteria
 
-- [ ] لصق صورة (لقطة شاشة) عبر Cmd+V يُنتج مرفقًا على macOS.
-- [ ] لصق ملف منسوخ من Finder على وكيل نفس الجهاز يُنتج توكن مسار؛ وعلى وكيل بعيد يُنتج مرفقًا (≤ 5 MiB) أو رفضًا واضحًا.
-- [ ] إفلات `.md` على وكيل نفس الجهاز يُنتج توكنًا، وإفلات `.png` يُنتج مرفقًا، وكلاهما بنفس نتيجة اللصق وزر `+`.
-- [ ] التوكن يعرض أيقونة نوع الملف والاسم، ويُصدَّر عند الإرسال بصيغة `[name](file:///…)` دون حد عدد.
-- [ ] لا يوجد أي مسار مطلق يظهر كنص خام في المدخل أو سجل المحادثة.
-- [ ] شريط المرفقات يبدأ من بداية السطر (start) وليس متمركزًا.
+- [x] لصق صورة (لقطة شاشة) عبر Cmd+V يُنتج مرفقًا على macOS. — r1 S1.
+- [x] لصق ملف منسوخ من Finder على وكيل نفس الجهاز يُنتج توكن مسار؛ وعلى وكيل بعيد يُنتج مرفقًا (≤ 5 MiB) أو رفضًا واضحًا. — r1 S1, S2; r2 attachment error.
+- [x] إفلات `.md` على وكيل نفس الجهاز يُنتج توكنًا، وإفلات `.png` يُنتج مرفقًا، وكلاهما بنفس نتيجة اللصق وزر `+`. — drop/paste parity r2 C3; `+` tests-only.
+- [x] التوكن يعرض أيقونة نوع الملف والاسم، ويُصدَّر عند الإرسال بصيغة `[name](file:///…)` دون حد عدد. — r1 S6.
+- [x] لا يوجد أي مسار مطلق يظهر كنص خام في المدخل أو سجل المحادثة. — r1 S6/S7; inline editor fixed by D1, r2 pass.
+- [x] شريط المرفقات يبدأ من بداية السطر (start) وليس متمركزًا. — r1 S12.
 
 ## Definition of Done
 
 - [x] `fvm flutter analyze` ناجح.
 - [x] focused unit/widget tests ناجحة (توجيه، توكنات، محاذاة، لصق).
-- [ ] تحقق حي موثق على macOS.
+- [x] تحقق حي موثق على macOS. — see the live acceptance log below.
 - [x] تحديث docs المدخل/المرفقات ذات الصلة.
 - [x] `graphify update .` ناجح.
 - [x] تحديث gate ونسبة المتبقي.
@@ -121,3 +121,10 @@ evidence_fingerprint: "sha256:4372c21c241d96d7b56042f56f93b79b5a851f9914bcb72305
 - `fvm flutter build macos --debug` succeeds (Swift monitor removal compiles).
 - Verification on `feat/114-port`: agent and client analyzers report no issues; full agent suite 3,038 passed / 14 skipped; full client suite 1,810 passed / 1 skipped (`-j 4`); daemon E2E media and attachment-relay suites pass with `--concurrency=1`; `graphify update .` run.
 - Not verified: live macOS paste (screenshot, Finder file, multi-item), drop and `+` on a real same-machine and remote agent, Windows/Linux keyboard paste, and real web drop (proved only by unit tests).
+
+### 2026-10-21 — live acceptance r1 and r2 (coordinator, Test Homes 2 and 3)
+- Method: real macOS pasteboard contents (`pbcopy`, PNG flavour, file URLs as Finder writes them) with Cmd+V and `desktop_drop` messages injected through the client VM service. These are not OS keystrokes or a real OS drag; the native `+` picker (`NSOpenPanel`) was not drivable.
+- r1 on `389caede`: S1 (text, PNG, and Finder-file paste), S2 (remote), S4 (large PNG + HEIC drop), S5 (Cmd+V in another field stays there), S6 (bracketed names, draft restore, exact export), and S12 (rail at line start) pass; S3 (drop/paste parity) partial. Defects D2, D3, D4 and two minors (duplicate paste, HEIC icon) were found and fixed in round 5 (see the plan).
+- r2 on `571844f6`: D2, D3, and D4 pass on ChatGPT `gpt-6-luna`, OpenRouter `gpt-4o-mini`, and OpenCode Go `deepseek-v4.1-flash`; duplicate-paste dedupe and the HEIC image icon pass; drop/paste parity passes locally and remotely (S3 re-check); the composer attachment error passes in en and ar with every clear path (×, remove, next add, text-only send, scope change).
+- r2 also found that the r1 clipboard writer (JXA `writeObjects` then exit) sometimes left only the first file on the pasteboard, which likely explains part or all of the r1 D3 report.
+- Tests-only: the native `+` picker, a real OS drag on macOS, Windows/Linux keyboard paste, real Web drop, and non-default device limits (the agent limits are compile-time constants).

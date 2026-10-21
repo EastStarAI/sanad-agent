@@ -1,10 +1,10 @@
 ---
 title: "Task 114b: User-Message Newlines and File Reference Chips"
-status: "in_review"
+status: "done"
 priority: "high"
 depends_on: "none"
-current_gate: "G3 (live acceptance)"
-remaining_estimate: "15%"
+current_gate: "closed (live acceptance r1 and r2 recorded)"
+remaining_estimate: "0%"
 ---
 
 # Task 114b: عرض رسالة المستخدم — إظهار أسطر Shift+Enter + شرائح مراجع الملفات
@@ -42,20 +42,20 @@ remaining_estimate: "15%"
 - [x] اختبارات ويدجت: شريحة تظهر لمرجع ملف؛ رابط https يبقى رابطًا؛ لا استدعاء لفتح خارجي.
 
 ### G3 — Live acceptance & docs
-- [ ] تحقق حي: إرسال رسالة بأسطر Shift+Enter ومرجع ملف، وفحص السجل.
+- [x] تحقق حي: إرسال رسالة بأسطر Shift+Enter ومرجع ملف، وفحص السجل. — r1 S7.
 - [x] تحديث docs عرض المحادثة ذات الصلة.
 
 ## Acceptance criteria
 
-- [ ] أي سطر يُضاف بـ Shift+Enter يظهر كسطر فعلي في رسالة المستخدم بسجل المحادثة.
-- [ ] مرجع الملف يظهر كشريحة أيقونة+اسم في رسالة المستخدم ولا يظهر المسار كنص.
-- [ ] لا انحدار في الطي/النسخ/تحديد النص.
+- [x] أي سطر يُضاف بـ Shift+Enter يظهر كسطر فعلي في رسالة المستخدم بسجل المحادثة. — r1 S7 (newlines entered by the driver; the physical Shift+Enter keystroke is covered by tests).
+- [x] مرجع الملف يظهر كشريحة أيقونة+اسم في رسالة المستخدم ولا يظهر المسار كنص. — r1 S6, S7.
+- [x] لا انحدار في الطي/النسخ/تحديد النص. — r1 S6 copy returns the exact link; S7 "Read more" count 0.
 
 ## Definition of Done
 
 - [x] `fvm flutter analyze` ناجح.
 - [x] focused widget tests ناجحة.
-- [ ] تحقق حي موثق.
+- [x] تحقق حي موثق. — see the live acceptance log below.
 - [x] تحديث docs ذات الصلة.
 - [x] `graphify update .` ناجح.
 - [x] تحديث gate ونسبة المتبقي.
@@ -77,3 +77,7 @@ remaining_estimate: "15%"
 - Docs: `docs/product/client_interface.md` states inline flow, unchanged link style, and the measure rule.
 - Verification on `feat/114-port`: agent and client analyzers report no issues; full agent suite 3,038 passed / 14 skipped; full client suite 1,810 passed / 1 skipped (`-j 4`); daemon E2E media and attachment-relay suites pass with `--concurrency=1`; `graphify update .` run.
 - Not verified: live send of a Shift+Enter message with file references and history inspection.
+
+### 2026-10-21 — live acceptance r1 and r2 (coordinator, Test Homes 2 and 3)
+- r1 on `389caede`: S7 passes. A four-line message with two file links and a URL with parentheses renders as real lines, with inline icon+name chips and no raw path. S6: Copy returns the exact pinned link form.
+- r2 on `571844f6`: sent HEIC file cards use the image icon and PDF cards the PDF icon (file type icons, 114j).

@@ -1,10 +1,10 @@
 ---
 title: "Task 114e: Screenshot as Media (Agent + Client)"
-status: "in_review"
+status: "done"
 priority: "high"
 depends_on: "none"
-current_gate: "G3 (live acceptance)"
-remaining_estimate: "15%"
+current_gate: "closed (live acceptance r1 and r2 recorded)"
+remaining_estimate: "0%"
 ---
 
 # Task 114e: أداة سكرين شوت كوسائط — إرسال المحتوى للنموذج وعرضه في الواجهة
@@ -53,7 +53,7 @@ remaining_estimate: "15%"
 
 ### G3 — Wire pinning & live acceptance
 - [x] اختبار محول: صورة اللقطة تصل على سلك النموذج (كجزء صورة) لصيغة آمنة.
-- [ ] تحقق حي: تنفيذ أداة سكرين شوت في جلسة حية → اللقطة تظهر في الواجهة وتُستعرض بالـlightbox. (يملكه المنسّق)
+- [x] تحقق حي: تنفيذ أداة سكرين شوت في جلسة حية → اللقطة تظهر في الواجهة وتُستعرض بالـlightbox. — tests-only by user decision: `COMPUTER_USE` is off on the Test Homes, so `system_screenshot` is not registered.
 - [x] تحديث docs الأداة/الوسائط ذات الصلة.
 
 ## Acceptance criteria
@@ -66,7 +66,7 @@ remaining_estimate: "15%"
 
 - [x] `fvm dart analyze` (agent) و`fvm flutter analyze` (client) ناجحان.
 - [x] focused tests على الجانبين ناجحة.
-- [ ] تحقق حي موثق. (يملكه المنسّق)
+- [x] تحقق حي موثق. — tests-only by user decision (see the log below).
 - [x] تحديث docs ذات الصلة.
 - [x] `graphify update .` ناجح.
 - [x] تحديث gate ونسبة المتبقي.
@@ -123,3 +123,6 @@ red/green evidence collected for every added regression. Remaining: orchestrator
 - Observations, not changed (pre-existing): the backup copy is always named `.jpg` whatever the captured format; the `imagePaht` typo is kept as stable summary text.
 - Verification on `feat/114-port`: agent and client analyzers report no issues; full agent suite 3,038 passed / 14 skipped; full client suite 1,810 passed / 1 skipped (`-j 4`); daemon E2E media and attachment-relay suites pass with `--concurrency=1`; `graphify update .` run.
 - Not verified: a live `system_screenshot` on a vision route (thumbnail, lightbox), on a non-vision route (text-only row), and through the hosted relay.
+
+### 2026-10-21 — live acceptance r1 and r2 (coordinator, Test Homes 2 and 3)
+- r1 on `389caede`: S10 not run live. The Test Homes run with `COMPUTER_USE=false`, so the agent does not register `system_screenshot`; enabling it also exposes the mouse and keyboard tools and needs macOS Screen Recording. By user decision this task is verified by its agent and client tests only.

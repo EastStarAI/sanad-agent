@@ -1,10 +1,10 @@
 ---
 title: "Task 114c: Inline-Edit Image Previews for Existing Attachments"
-status: "in_review"
+status: "done"
 priority: "high"
 depends_on: "none"
-current_gate: "G3 (live acceptance)"
-remaining_estimate: "15%"
+current_gate: "closed (live acceptance r1 and r2 recorded)"
+remaining_estimate: "0%"
 ---
 
 # Task 114c: معاينة الصور للمرفقات الموجودة في وضع تعديل الرسالة
@@ -39,19 +39,19 @@ remaining_estimate: "15%"
 - [x] فشل التحميل → fallback دون كسر الشريط؛ المرفق الجديد كما هو.
 
 ### G3 — Live acceptance & docs
-- [ ] تحقق حي: تعديل رسالة بصورة → المعاينة تظهر؛ إضافة صورة جديدة → كما هي.
+- [x] تحقق حي: تعديل رسالة بصورة → المعاينة تظهر؛ إضافة صورة جديدة → كما هي. — preview r1 S8, r2 D1/C8; adding a new image uses the native picker only, so it is tests-only.
 - [x] تحديث docs تعديل الرسائل ذات الصلة.
 
 ## Acceptance criteria
 
-- [ ] فتح تعديل رسالة تحتوي صورة يعرض معاينتها الصحيحة دون أخطاء.
-- [ ] لا انحدار في إزالة/إضافة المرفقات داخل وضع التعديل ولا في الإرسال.
+- [x] فتح تعديل رسالة تحتوي صورة يعرض معاينتها الصحيحة دون أخطاء. — r1 S8, r2.
+- [x] لا انحدار في إزالة/إضافة المرفقات داخل وضع التعديل ولا في الإرسال. — remove + send r1 S8 and r2 C8; add is tests-only.
 
 ## Definition of Done
 
 - [x] `fvm flutter analyze` ناجح.
 - [x] focused widget tests ناجحة.
-- [ ] تحقق حي موثق.
+- [x] تحقق حي موثق. — see the live acceptance log below.
 - [x] تحديث docs ذات الصلة.
 - [x] `graphify update .` ناجح.
 - [x] تحديث gate ونسبة المتبقي.
@@ -68,3 +68,8 @@ remaining_estimate: "15%"
 - Docs: `docs/product/message_edit_retry_ux.md`.
 - Verification on `feat/114-port`: agent and client analyzers report no issues; full agent suite 3,038 passed / 14 skipped; full client suite 1,810 passed / 1 skipped (`-j 4`); daemon E2E media and attachment-relay suites pass with `--concurrency=1`; `graphify update .` run.
 - Not verified: live edit of a message with an image (preview visible, adding a new image unchanged, save path).
+
+### 2026-10-21 — live acceptance r1 and r2 (coordinator, Test Homes 2 and 3)
+- r1 on `389caede`: S8 partial. The inline editor showed the existing image thumbnail ("Ready · existing") and removing it then sending worked, but the editor showed a file token as a raw Markdown link with its path (D1, fixed in round 5).
+- r2 on `571844f6`: D1 passes. The editor shows icon+name chips, and an unchanged save keeps the exact link text (`cmp` identical). C8 passes: removing the image keeps the file chips. A remote message's editor shows two image thumbnails and a PDF chip with the PDF icon.
+- Tests-only: adding an image in the editor (native picker only; the editor takes no paste or drop) and the inline-edit attachment error.

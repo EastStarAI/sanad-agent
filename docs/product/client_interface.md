@@ -173,8 +173,8 @@ opened by the `+` button on the left beside Permission Mode, which now share one
 behavior. Provider-safe images (PNG, JPEG, WebP, GIF) up to 5 MiB become
 attachment-rail items above the text field. Other image formats and non-image
 files become inline file tokens (displaying a file-type icon and name) when the
-active agent runs on the same machine; the token exports as `[name](file:///…)`
-on send, with no count or size cap because nothing is uploaded. When targeting a
+active agent runs on the same machine; the token exports as a Markdown link (label: the file name;
+destination: its `file:///…` URL) on send, with no count or size cap because nothing is uploaded. When targeting a
 same-machine agent, an image above 5 MiB becomes a token instead of a rejection.
 On a remote agent, those same files become attachment-rail items (up to 5 MiB,
 with a clear rejection above). "Same machine" means a desktop client whose
