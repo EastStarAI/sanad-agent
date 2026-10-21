@@ -115,7 +115,11 @@ See each task file's progress log for locations and regression tests.
   - `test/widget/composer_input_routing_and_paste_test.dart` ("Attachment rejection feedback"): the old code showed `5 MiB` for a 1 MiB agent limit and had no dismiss;
   - `test/widget/brain_activity_inline_edit_test.dart` (inline dismiss/remove/next add).
 
-  Red logs: `temp/114/114h-red-cubit.log`, `temp/114/114h-red-widget.log`. The inline editor has no device capability in scope and enforces the canonical default limits. Its other non-limit messages ("Could not open the selected attachment.", "Remove or retry failed attachments before sending.") remain English.
+  Red logs: `temp/114/114h-red-cubit.log`, `temp/114/114h-red-widget.log`. Follow-up (114i):
+  - the inline editor now receives the presented device's `Capability` limits (`BrainActivityView.attachmentCapability`, wired by `HomeScreen` from `DeviceCapabilitiesCubit`);
+  - its open-failure, read-failure, and "remove or retry before sending" messages are localized (en/ar);
+  - tests: `test/widget/brain_activity_inline_edit_test.dart` covers a non-default 1 MiB limit and the localized open failure.
+- **114g privacy follow-up (114i):** `ConversationMediaByteCache.shared` was never cleared, so hosted (cloud) media bytes fetched under one account could survive into the next session. `AppAuthListener`, the existing auth teardown owner, now calls `bindAccount(userId)` on `AuthAuthenticated` and `bindAccount(null)` on `AuthUnauthenticated` (sign-out, revoked or lost auth). A different account or sign-out drops every hosted entry; local device media is kept, mirroring `clearCloudUserScope`. Test: `test/unit/conversations/conversation_media_cache_test.dart` ("account binding").
 
 ### Verification (port worktree)
 

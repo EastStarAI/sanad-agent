@@ -61,7 +61,7 @@ final class HostedViewImageMediaRepository implements ViewImageMediaLoader, User
     String? sha256,
   }) {
     final key = ConversationMediaByteCache.keyFor(
-      transport: 'hosted',
+      transport: ConversationMediaByteCache.hostedTransport,
       deviceId: _deviceId,
       sessionId: sessionId,
       kind: kind,

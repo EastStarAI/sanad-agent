@@ -582,5 +582,17 @@
   "attachmentErrorDismiss": "Dismiss",
   "@attachmentErrorDismiss": {
     "description": "Tooltip of the close control that dismisses an attachment error."
+  },
+  "attachmentErrorOpenFailed": "Could not open the selected attachment.",
+  "@attachmentErrorOpenFailed": {
+    "description": "Inline message editor: the attachment picker could not open the chosen files."
+  },
+  "attachmentErrorReadFailed": "Could not read the selected attachment.",
+  "@attachmentErrorReadFailed": {
+    "description": "Inline message editor: a retried attachment has no readable bytes."
+  },
+  "attachmentErrorResolveFailedBeforeSend": "Remove or retry failed attachments before sending.",
+  "@attachmentErrorResolveFailedBeforeSend": {
+    "description": "Inline message editor: Send is blocked while an attachment is in the failed state."
   }
 }

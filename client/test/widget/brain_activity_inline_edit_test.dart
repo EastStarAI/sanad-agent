@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/features/devices/domain/models/capability.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
@@ -141,6 +143,7 @@ void main() {
     required List<CanonicalEvent> initialMessages,
     Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles,
     UserAttachmentMediaLoader? userAttachmentMediaLoader,
+    Capability Function()? attachmentCapability,
   }) async {
     await pumpTestApp(
       tester,
@@ -153,6 +156,7 @@ void main() {
         visualState: ConversationVisualState.activeSession,
         userAttachmentMediaLoader: userAttachmentMediaLoader ?? _FakeAttachmentLoader(),
         pickEditAttachmentFiles: pickEditAttachmentFiles,
+        attachmentCapability: attachmentCapability,
       ),
       agentCubit: agentCubit,
       sessionCubit: sessionCubit,
@@ -845,5 +849,48 @@ void main() {
     await tester.tap(find.byTooltip('Remove attachment').last);
     await tester.pumpAndSettle();
     expect(error(), findsNothing);
+  });
+
+  testWidgets('inline edit enforces the device attachment limits, not the defaults', (tester) async {
+    const oneMiB = 1024 * 1024;
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      attachmentCapability: () => const Capability(supportsAttachments: true, attachmentMaxFileBytes: oneMiB),
+      pickEditAttachmentFiles: () async => [InlineEditAttachmentSelection(name: 'two.png', bytes: Uint8List(2 * oneMiB))],
+    );
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<Text>(find.byKey(const Key('inline_edit_attachment_error'))).data,
+      'Each attachment must be 1 MiB or smaller.',
+      reason: 'a 2 MiB file passes the 5 MiB default but not this device limit',
+    );
+  });
+
+  testWidgets('inline edit picker failure shows the localized open-failure message', (tester) async {
+    await pumpView(
+      tester,
+      initialMessages: [initialUserEvent],
+      pickEditAttachmentFiles: () async => throw StateError('picker unavailable'),
+    );
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+    await tester.pumpAndSettle();
+
+    final en = lookupAppLocalizations(const Locale('en'));
+    final ar = lookupAppLocalizations(const Locale('ar'));
+    expect(tester.widget<Text>(find.byKey(const Key('inline_edit_attachment_error'))).data, en.attachmentErrorOpenFailed);
+    for (final (english, arabic) in [
+      (en.attachmentErrorOpenFailed, ar.attachmentErrorOpenFailed),
+      (en.attachmentErrorReadFailed, ar.attachmentErrorReadFailed),
+      (en.attachmentErrorResolveFailedBeforeSend, ar.attachmentErrorResolveFailedBeforeSend),
+    ]) {
+      expect(arabic, isNot(english), reason: 'every inline attachment message has an Arabic translation');
+    }
   });
 }

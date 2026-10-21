@@ -71,6 +71,11 @@ class BrainActivityView extends StatefulWidget {
   final Future<void> Function()? onLoadNewerHistory;
   final Future<void> Function(String eventId)? onLoadAnchoredHistory;
   final Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles;
+
+  /// The presented device's attachment capability, read when an inline-edit
+  /// attachment is validated so it enforces the same limits as the composer.
+  /// `null` applies the canonical default limits.
+  final Capability Function()? attachmentCapability;
   final ViewImageMediaLoader? viewImageMediaLoader;
   final UserAttachmentMediaLoader? userAttachmentMediaLoader;
 
@@ -99,6 +104,7 @@ class BrainActivityView extends StatefulWidget {
     this.onLoadNewerHistory,
     this.onLoadAnchoredHistory,
     this.pickEditAttachmentFiles,
+    this.attachmentCapability,
     this.viewImageMediaLoader,
     this.userAttachmentMediaLoader,
   });
@@ -997,7 +1003,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     } on Object {
       if (mounted) {
         setState(
-          () => _editAttachmentError = 'Could not open the selected attachment.',
+          () => _editAttachmentError = _attachmentL10n.attachmentErrorOpenFailed,
         );
       }
       return;
@@ -1041,9 +1047,8 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     return selections;
   }
 
-  /// Inline edit has no device capability in scope, so it enforces the
-  /// canonical attachment limits through the same policy as the composer.
-  static const Capability _inlineAttachmentCapability = Capability(supportsAttachments: true);
+  /// Fallback when no device capability is wired: the canonical limits.
+  static const Capability _defaultAttachmentCapability = Capability(supportsAttachments: true);
 
   String? _inlineAttachmentValidationError(
     int nextBytes, {
@@ -1051,13 +1056,28 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }) {
     final retained = _editAttachments.where((attachment) => attachment.id != excludingId).toList(growable: false);
     final rejection = DraftAttachmentPolicy.check(
-      capability: _inlineAttachmentCapability,
+      // Inline edit edits an already-admitted turn, so it always admits
+      // attachments and applies only the device's size and count limits.
+      capability: _inlineAttachmentLimits(),
       existingCount: retained.length,
       existingBytes: retained.fold<int>(0, (sum, item) => sum + item.sizeBytes),
       nextBytes: nextBytes,
     );
     if (rejection == null) return null;
-    return DraftAttachmentErrorText.describe(AppLocalizations.of(context) ?? AppLocalizationsEn(), rejection);
+    return DraftAttachmentErrorText.describe(_attachmentL10n, rejection);
+  }
+
+  AppLocalizations get _attachmentL10n => AppLocalizations.of(context) ?? AppLocalizationsEn();
+
+  Capability _inlineAttachmentLimits() {
+    final capability = widget.attachmentCapability?.call();
+    if (capability == null) return _defaultAttachmentCapability;
+    return Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: capability.attachmentMaxFileBytes,
+      attachmentMaxFilesPerMessage: capability.attachmentMaxFilesPerMessage,
+      attachmentMaxTotalBytesPerMessage: capability.attachmentMaxTotalBytesPerMessage,
+    );
   }
 
   void _dismissInlineEditAttachmentError() {
@@ -1084,7 +1104,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     if (index < 0) return;
     final item = _editAttachments[index];
     final error = item.bytes == null
-        ? 'Could not read the selected attachment.'
+        ? _attachmentL10n.attachmentErrorReadFailed
         : _inlineAttachmentValidationError(
             item.bytes!.length,
             excludingId: item.id,
@@ -1566,7 +1586,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
                   (attachment) => attachment.status == InlineEditAttachmentStatus.failed,
                 )) {
                   setState(() {
-                    _editAttachmentError = 'Remove or retry failed attachments before sending.';
+                    _editAttachmentError = _attachmentL10n.attachmentErrorResolveFailedBeforeSend;
                   });
                   return;
                 }

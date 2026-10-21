@@ -278,7 +278,7 @@ class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMe
     String? sha256,
   }) {
     final key = ConversationMediaByteCache.keyFor(
-      transport: 'local',
+      transport: ConversationMediaByteCache.localTransport,
       deviceId: hardwareId,
       sessionId: sessionId,
       kind: kind,

@@ -61,6 +61,36 @@ void main() {
       expect(hosted, isNot(key('device-1', 'm')));
     });
 
+    test('account binding drops hosted bytes on sign-out and account change, keeping local bytes', () {
+      final cache = ConversationMediaByteCache(maximumBytes: 1024);
+      String hosted(String media) => ConversationMediaByteCache.keyFor(
+        transport: ConversationMediaByteCache.hostedTransport,
+        deviceId: 'cloud-1',
+        sessionId: 'session-1',
+        kind: 'view-image',
+        mediaId: media,
+      );
+      final local = key('hardware-1', 'local-media');
+
+      cache.bindAccount('user-a');
+      cache.put(hosted('a'), Uint8List(4));
+      cache.put(local, Uint8List(4));
+
+      cache.bindAccount('user-a');
+      expect(cache.get(hosted('a')), isNotNull, reason: 're-binding the same account keeps its media');
+
+      cache.bindAccount(null);
+      expect(cache.get(hosted('a')), isNull, reason: 'sign-out or auth loss drops hosted media');
+      expect(cache.get(local), isNotNull, reason: 'local device media is not account data');
+      expect(cache.bytes, 4);
+
+      cache.bindAccount('user-a');
+      cache.put(hosted('b'), Uint8List(4));
+      cache.bindAccount('user-b');
+      expect(cache.get(hosted('b')), isNull, reason: 'an account change drops the previous account\'s media');
+      expect(cache.length, 1);
+    });
+
     test('the shared default is bounded by configuration', () {
       expect(ConversationMediaByteCache.shared.maximumBytes, 64 * 1024 * 1024);
     });

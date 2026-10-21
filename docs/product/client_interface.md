@@ -241,7 +241,8 @@ never replaced: a ` (1)` style number is added instead. A short localized
 message names the saved file or reports the failure. On Web the browser
 downloads the image; on mobile the button is hidden. Images already seen are
 kept in a bounded in-memory cache per device, so returning to a conversation,
-gallery, or lightbox shows them immediately without loading again. Multiline
+gallery, or lightbox shows them immediately without loading again. Images from
+cloud devices are forgotten on sign-out or when another account signs in. Multiline
 Markdown code blocks keep programming languages and untyped `Code` content LTR,
 opening long lines from the left even when they contain Arabic strings. Fenced
 `text` blocks detect their own content direction and open from the right for
