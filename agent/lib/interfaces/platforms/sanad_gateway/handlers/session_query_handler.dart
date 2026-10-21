@@ -18,6 +18,7 @@ import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
+import 'package:sanad_agent/evolution/db/terminal_assistant_classifier.dart';
 import 'package:sanad_agent/evolution/compaction/model_context_projection.dart';
 import 'package:sanad_agent/evolution/models/session_route_transition.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
@@ -206,15 +207,6 @@ class SessionQueryHandler {
 
     final historyMessages = <Map<String, dynamic>>[];
     final historyStartByMessageRowId = <int, int>{};
-    Message? legacyFinalAssistant;
-    for (final candidate in messages.reversed) {
-      if (candidate.role == MessageRole.assistant &&
-          candidate.metadata?['superseded_by_steer'] != true &&
-          (candidate.toolCalls == null || candidate.toolCalls!.isEmpty)) {
-        legacyFinalAssistant = candidate;
-        break;
-      }
-    }
     final toolResultByCallId = <String, Message>{};
     for (final pm in persistedMessages) {
       final m = pm.message;
@@ -466,9 +458,12 @@ class SessionQueryHandler {
       final meta = message.metadata;
       final reasoning = _nonEmpty(message.reasoning);
       final typedThought = _nonEmpty(message.thought);
-      final isTerminalAssistant =
-          meta?['terminal_work_item_id'] != null ||
-          identical(message, legacyFinalAssistant);
+      final isTerminalAssistant = TerminalAssistantClassifier.isTerminal(
+        message,
+        next: messageIndex + 1 < persistedMessages.length
+            ? persistedMessages[messageIndex + 1].message
+            : page.followingMessage,
+      );
       if (reasoning != null) {
         historyMessages.add({
           'id': msgId,

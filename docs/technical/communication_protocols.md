@@ -854,6 +854,13 @@ then `stopped`, then the final `session.execution_state_changed` snapshot for
 `idle` or preserved newer queued work. Durable work cancellation commits before
 `stopped`; only snapshot publication is deferred to preserve wire order.
 
+`get_session_history` delivers an assistant row as `final_answer` exactly when
+`TerminalAssistantClassifier` marks it terminal with session scope (see
+`docs/technical/reasoning_thoughts_separation.md` §Terminal classification in
+history), independent of `limit`, cursor direction, or anchor. Session-search
+`final_answer` anchors use the same SQL predicate, so a search hit always opens
+on the same event kind that history renders.
+
 `get_session_history` emits these same identities and ordering. Legacy rows without a model-step identity use deterministic message/segment order. Canonical history is consumed directly and is never converted through a legacy model that requires numeric IDs; route-transition UUIDs therefore remain valid.
 
 Compaction history is causally anchored after the durable retained-tail end row
