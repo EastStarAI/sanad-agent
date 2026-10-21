@@ -139,6 +139,8 @@ See each task file's progress log for locations and regression tests.
   - `038bffd1`: chunk, commit, cancel, and disconnect wait for the in-flight start.
   - D4 client commit: the relay fails fast on any terminal rejection, and a failed attachment send shows the localized `sendFailed` reason in the dismissible attachment line while the draft stays. The client never refuses this mix by itself; a luna-like route test hands all three files to the agent.
 
+- **D2 (HIGH, from D4):** a refused first send in a New remote conversation had already created the session and moved the text there. `ConversationInputCubit` left the attachments in the New-conversation scope, so they reappeared in the next new conversation and were once sent unintentionally (`evt_67cda46d`). Fix: when a New-conversation send creates a session but is not accepted, its submitted attachments move with the text into the created session's scope, wherever each scope lives (active state or cache). The New scope keeps nothing that was submitted; acceptance already removed submitted ids. Red-first tests cover both orders: the composer following the new session after the failure and during admission.
+
 ### Verification (port worktree)
 
 - `fvm dart analyze` (agent): no issues. `fvm flutter analyze` (client): no issues.

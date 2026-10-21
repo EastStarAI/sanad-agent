@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'dart:io';
 
@@ -1336,6 +1337,55 @@ void main() {
       expect(conversationRepository.sentAttachmentRequests, hasLength(1));
       expect(inputCubit.state.attachmentError, isNotNull, reason: 'a refused send is never silent');
       expect(inputCubit.state.draftAttachments, hasLength(3), reason: 'the draft is kept for a retry');
+    });
+
+    test('a refused first send in a new conversation moves its attachments with the text (114 D2)', () async {
+      await lunaRoute();
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      await addMix();
+      conversationRepository.failAttachmentAdmission = true;
+
+      await inputCubit.sendMessage('describe these');
+
+      final created = messagesCubit.state.activeSessionId;
+      expect(created, isNotNull, reason: 'the first send created the session and moved the text there');
+      // The composer follows the created session.
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: created);
+      expect(inputCubit.state.draftAttachments, hasLength(3), reason: 'attachments travel with the text');
+
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      expect(
+        inputCubit.state.draftAttachments,
+        isEmpty,
+        reason: 'nothing submitted may reappear in the next new conversation',
+      );
+    });
+
+    test('the move also holds when the composer already switched to the created session (114 D2)', () async {
+      await lunaRoute();
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      await addMix();
+      // Admission completes only after the composer followed the new session.
+      final admissionGate = Completer<void>();
+      conversationRepository.beforeAttachmentAdmission = () => admissionGate.future;
+      conversationRepository.failAttachmentAdmission = true;
+      final follow = messagesCubit.stream.listen((state) {
+        final created = state.activeSessionId;
+        if (created != null && !admissionGate.isCompleted) {
+          inputCubit.setDraftScope(deviceId: agent.id, sessionId: created);
+          admissionGate.complete();
+        }
+      });
+      addTearDown(follow.cancel);
+
+      await inputCubit.sendMessage('describe these');
+
+      final created = messagesCubit.state.activeSessionId!;
+      expect(inputCubit.state.draftAttachments, hasLength(3), reason: 'shown in the created session composer');
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: null);
+      expect(inputCubit.state.draftAttachments, isEmpty);
+      inputCubit.setDraftScope(deviceId: agent.id, sessionId: created);
+      expect(inputCubit.state.draftAttachments, hasLength(3));
     });
 
     test('an explicit dismiss clears it', () async {

@@ -225,10 +225,17 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
             },
         ],
       );
-      if (!accepted && attachments.isNotEmpty && _draftScope == submittedScope) {
+      if (!accepted && attachments.isNotEmpty) {
+        // A refused first send in a New conversation has already created the
+        // session and moved the text there: the attachments move with it, so
+        // nothing submitted stays behind in the New draft.
+        final createdScope = _createdSessionScope(submittedScope);
+        if (createdScope != null) _moveDraftAttachments(submittedIds, from: submittedScope, to: createdScope);
         // Never refuse silently: the attachments stay in the draft and the
         // composer states that the send did not go through.
-        emit(state.copyWith(attachmentError: const DraftAttachmentError(DraftAttachmentErrorKind.sendFailed)));
+        if (_draftScope == submittedScope || _draftScope == createdScope) {
+          emit(state.copyWith(attachmentError: const DraftAttachmentError(DraftAttachmentErrorKind.sendFailed)));
+        }
       }
       if (accepted && attachments.isNotEmpty) {
         final cached = _draftsByScope[submittedScope];
@@ -250,6 +257,43 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
     }
+  }
+
+  /// The scope of the session a New-conversation send at [submittedScope]
+  /// created, or `null` when the send targeted an existing session or created
+  /// none.
+  String? _createdSessionScope(String submittedScope) {
+    final separator = submittedScope.indexOf('\u0000');
+    if (separator < 0 || separator != submittedScope.length - 1) return null;
+    final created = messagesCubit.state.activeSessionId?.trim();
+    if (created == null || created.isEmpty) return null;
+    return '${submittedScope.substring(0, separator)}\u0000$created';
+  }
+
+  List<DraftAttachment> _scopeAttachments(String scope) =>
+      scope == _draftScope ? state.draftAttachments : _draftsByScope[scope] ?? const [];
+
+  void _setScopeAttachments(String scope, List<DraftAttachment> attachments) {
+    final value = List<DraftAttachment>.unmodifiable(attachments);
+    if (scope == _draftScope) {
+      emit(state.copyWith(draftAttachments: value));
+    } else if (value.isEmpty) {
+      _draftsByScope.remove(scope);
+    } else {
+      _draftsByScope[scope] = value;
+    }
+  }
+
+  /// Moves the attachments with [ids] from scope [from] to scope [to],
+  /// wherever each scope currently lives (the active state or the cache).
+  void _moveDraftAttachments(Set<String> ids, {required String from, required String to}) {
+    final source = _scopeAttachments(from);
+    final moving = source.where((item) => ids.contains(item.id)).toList(growable: false);
+    if (moving.isEmpty) return;
+    _setScopeAttachments(from, source.where((item) => !ids.contains(item.id)).toList(growable: false));
+    final target = _scopeAttachments(to);
+    final present = target.map((item) => item.id).toSet();
+    _setScopeAttachments(to, [...target, ...moving.where((item) => !present.contains(item.id))]);
   }
 
   /// Applies the daemon-owned route, preserving user intent unless the caller
