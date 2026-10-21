@@ -153,7 +153,10 @@ Logs live under `temp/107/` in the worktree (gitignored).
 
 - Agent full: `fvm dart test` → `+3065 ~14`, all passed (`temp/107/agent-full.log`).
 - Client focused (6 files) → `+79`, all passed (`temp/107/client-focused.log`).
-- Client full: see `temp/107/client-full.log`.
+- Client full: `fvm flutter test` → `+1771 ~1`, all passed (`temp/107/client-full.log`).
+- Client E2E: `fvm flutter test e2e_test/local_dual_connection_e2e_test.dart --concurrency=1` → `+13`, all passed (`temp/107/client-e2e-local.log`).
+- Analyzers: Agent, release contract, and Client report no issues (`temp/107/*-analyze.log`).
+- `scripts/lint_wiki.dart`: only the existing `third_party_skills_install_qa.md` indexing error, also present on `origin/main`.
 - `shellcheck`: not installed; installer scripts are unchanged by this task, and neither supports a dry run.
 
 ## Open Questions
