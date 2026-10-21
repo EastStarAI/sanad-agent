@@ -53,9 +53,11 @@ stopped Agent without manual commands or elevation.
    explicit Run Locally. `checkAndStartLocalDaemon` is single-flight.
 8. **Home isolation.** Every agent child process receives the managed
    `SANAD_HOME` and `SANAD_SERVICE_INSTANCE`.
-9. **Out of scope.** Installer scripts (unchanged), making the Agent's own
-   `--version`/`help` side-effect free, and consolidating the Client
-   `DeviceInstallGuide` installer literals into `OfficialAgentInstaller`.
+9. **Out of scope.** Installer scripts (unchanged).
+10. **Pure CLI queries (Q1, coordinator decision).** `--version`, `-v`,
+    `version`, `help …`, and `-h`/`--help` at any command level answer before
+    any Home preparation and never create or write anything in `SANAD_HOME`
+    or `SANAD_STATE_HOME` (`SanadCommandRunner.isPureQuery`).
 
 ## Port Mapping (PR #211 → `fix/107-port`)
 
@@ -173,7 +175,7 @@ Logs live under `temp/107/` in the worktree (gitignored).
 
 ## Open Questions
 
-1. Should the Agent print `--version` and `help` before `SanadHomeBootstrap.prepareAll()` and bundled-skill reconciliation, so Client probes never write to the Home? It currently initializes the managed Home only.
+1. Resolved (coordinator decision): version and usage queries are pure. `agent/test/cli/pure_cli_queries_test.dart` runs ten queries against an empty Home and state Home and asserts both stay empty (red `temp/107/q1-red.log`, green `temp/107/q1-green.log`).
 2. Resolved by coordinator review: a started, healthy newer Agent is a success (`newerAgentInUse`) with an informational notice (D17).
 3. Should `DeviceInstallGuide` reuse `OfficialAgentInstaller` for its installer URLs? It belongs to the Client devices feature and is outside 107.
 4. When the bootstrap installer replaces a stopped Agent with a registered service, the existing service definition is reused. Should a version change force re-registration so the unit/plist/task matches the new Agent?

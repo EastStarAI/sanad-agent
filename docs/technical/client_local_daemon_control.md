@@ -62,9 +62,9 @@ Every agent child process the controller runs (probes and `service install`,
 `start`, and `stop`) receives `SANAD_HOME` for the managed Home and, when
 configured, `SANAD_SERVICE_INSTANCE`. The agent resolves its Home only from
 that variable (else `~/.sanad`), so a Client built for an isolated Home can
-never register, start, or stop the default service. Current
-Agents prepare their Home and bundled skills on any non-daemon invocation, so a
-probe may initialize that same managed Home but never another one.
+never register, start, or stop the default service. Agents from this release
+answer `--version` and `help …` before preparing any Home, so a probe writes
+nothing; older Agents may still initialize the managed Home, never another one.
 `registerService` repeats the capability check and refuses to run
 `service install` with options the executable does not support.
 
