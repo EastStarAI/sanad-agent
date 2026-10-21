@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/data/device_command_client.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
 
 import '../../mocks/mock_socket_service.dart';
@@ -68,6 +69,20 @@ void main() {
       expect(snapshotCommands(), hasLength(2));
       answer(snapshotCommands().last, 'inst-2');
       expect((await third).instances.single.id, 'inst-2');
+    });
+
+    test('an agent-less load publishes under the resolved current device id', () async {
+      final publications = <ModelSnapshotPublication>[];
+      final sub = client.modelSnapshots.listen(publications.add);
+      final load = client.modelSnapshot();
+      await pumpEventQueue();
+      answer(snapshotCommands().single, 'inst-1');
+      await load;
+      await pumpEventQueue();
+
+      expect(publications.single.deviceId, 'this-hardware');
+      expect(publications.single.isCurrentDevice, isTrue);
+      await sub.cancel();
     });
   });
 

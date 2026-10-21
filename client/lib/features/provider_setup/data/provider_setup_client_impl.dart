@@ -381,7 +381,15 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
     ).then((payload) {
       final snapshot = ModelCacheSnapshotDto.fromJson(payload);
       if (!_snapshotPublications.isClosed) {
-        _snapshotPublications.add(ModelSnapshotPublication(deviceId: agent?.id, snapshot: snapshot));
+        final currentDeviceId = _connectionCoordinator.currentDeviceId;
+        _snapshotPublications.add(
+          ModelSnapshotPublication(
+            deviceId: key.isEmpty ? null : key,
+            snapshot: snapshot,
+            isCurrentDevice:
+                agent == null || (currentDeviceId.isNotEmpty && agent.representsDeviceId(currentDeviceId)),
+          ),
+        );
       }
       return snapshot;
     });

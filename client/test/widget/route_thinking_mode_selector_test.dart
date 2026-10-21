@@ -2234,6 +2234,65 @@ void main() {
       cloud.dispose();
     });
 
+    testWidgets('an agent-less snapshot load clears the Retry of a selector on the current device (Task 124 D5)', (
+      tester,
+    ) async {
+      final impl = ProviderSetupClientImpl(connectionCoordinator: coordinator);
+      await getIt.unregister<ProviderSetupClient>();
+      getIt.registerSingleton<ProviderSetupClient>(impl);
+      final currentDevice = DeviceConfig(id: 'this-hardware', name: 'This device', hardwareId: 'this-hardware', isOnline: true);
+
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: createInputSlice(nextMessageProviderId: 'provider-1', nextMessageModel: 'model-a'),
+          activeAgent: currentDevice,
+        ),
+      );
+      // The selector's own snapshot request goes unanswered and times out.
+      await tester.pump(const Duration(seconds: 11));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsOneWidget);
+
+      // Another consumer loads the snapshot without naming a device.
+      local.clearCaptured();
+      final load = impl.modelSnapshot();
+      await tester.pump();
+      final command = local.capturedCommands.singleWhere((entry) => entry['command'] == 'model.snapshot');
+      final requestId = (command['payload'] as Map)['request_id'] as String;
+      local.debugEmitEvent({
+        'device_id': 'this-hardware',
+        'event': 'model.snapshot_result',
+        'request_id': requestId,
+        'payload': {
+          'request_id': requestId,
+          'instances': [
+            {
+              'id': 'provider-1',
+              'display_name': 'P1',
+              'status': 'ready',
+              'models': [
+                {
+                  'id': 'model-a',
+                  'thinking_control': {
+                    'status': 'supported',
+                    'options': [
+                      {'id': 'high', 'label': 'High'},
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+          'recent': <Object>[],
+        },
+      });
+      await load;
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsNothing);
+      expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+    });
+
     testWidgets(
       'filters missing, malformed, foreign identity and unknown status while accepting allowed aliases on both transports',
       (tester) async {

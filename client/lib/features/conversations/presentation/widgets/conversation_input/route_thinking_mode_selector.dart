@@ -90,7 +90,9 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     if (!widget.capabilities.usesModelThinkingControls) return;
     final activeAgent = widget.activeAgent;
     final deviceId = publication.deviceId;
-    final matches = activeAgent == null ? deviceId == null : deviceId != null && activeAgent.representsDeviceId(deviceId);
+    final matches = activeAgent == null
+        ? publication.isCurrentDevice || deviceId == null
+        : deviceId != null && activeAgent.representsDeviceId(deviceId);
     if (!matches) return;
     _loadToken = null;
     setState(() {

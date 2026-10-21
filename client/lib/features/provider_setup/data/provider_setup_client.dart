@@ -179,11 +179,20 @@ abstract class ProviderSetupClient {
   );
 }
 
-/// One successful `model.snapshot` result for [deviceId] (`null` when the
-/// request targeted this machine without an explicit device).
+/// One successful `model.snapshot` result for the resolved target device.
+///
+/// [deviceId] is the id the request was resolved and coalesced under: the
+/// explicit device, or this machine's device id when the caller passed none.
+/// It is `null` only when no device id could be resolved at all.
+/// [isCurrentDevice] marks a request that targeted this machine.
 class ModelSnapshotPublication {
-  const ModelSnapshotPublication({required this.deviceId, required this.snapshot});
+  const ModelSnapshotPublication({
+    required this.deviceId,
+    required this.snapshot,
+    this.isCurrentDevice = false,
+  });
 
   final String? deviceId;
   final ModelCacheSnapshotDto snapshot;
+  final bool isCurrentDevice;
 }

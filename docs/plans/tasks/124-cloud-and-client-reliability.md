@@ -314,11 +314,14 @@ B also sent two concurrent `model.snapshot` requests per screen (provider setup 
 
 **Fix.**
 - `ConversationCacheRepository` watches each refreshed device's session-list publications. On a publication, it refreshes only the sections and workspace list still in `staleError`, once each. Nothing stale means no request. `dispose()` cancels the subscriptions.
-- `ProviderSetupClient.modelSnapshots` publishes each successful snapshot with its target device. A selector on its fetch-failure surface adopts a matching snapshot without a new request.
+- `ProviderSetupClient.modelSnapshots` publishes each successful snapshot under the resolved device id. That is the same id used for coalescing: the explicit device, or this machine's id when the caller passed none. `null` is used only when no id resolves at all, and `isCurrentDevice` marks a request that targeted this machine. A selector on its fetch-failure surface adopts a matching snapshot without a new request.
+  - Review fix: the first version published `agent?.id`. An agent-less load therefore never matched a selector whose `activeAgent` is the current device, and its Retry stayed up.
 
 **Tests.**
 - `client/test/unit/repositories/conversation_cache_repository_pagination_efficiency_test.dart`: "a failed section refresh is retried when the device publishes its session list". It also checks that no request is sent when nothing is stale. Red → green: `temp/g3/r3-d5-sidebar-red.log`, `temp/g3/r3-d5-sidebar-green.log` (28 passed).
 - `client/test/widget/route_thinking_mode_selector_test.dart`: "a later successful snapshot for the device clears the Retry chip". Red → green: `temp/g3/r3-d5-thinking-red.log`, `temp/g3/r3-d5-thinking-green.log` (58 passed).
+- `client/test/widget/route_thinking_mode_selector_test.dart`: "an agent-less snapshot load clears the Retry of a selector on the current device". It uses the real `ProviderSetupClientImpl`: the selector's own load times out, then an `agent: null` load is answered. Red → green: `temp/g3/r3b-d5-red.log` (1 failed), `temp/g3/r3b-d5-green.log` (77 passed, together with the provider-setup unit tests).
+- `client/test/unit/provider_setup/provider_setup_client_impl_test.dart`: "an agent-less load publishes under the resolved current device id".
 
 ### D6 — `device.fallback restored` is in-process only (Low, by design)
 
