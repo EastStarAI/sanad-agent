@@ -65,6 +65,17 @@ extension ViewImageMediaEvent on CanonicalEvent {
   /// Whether this row is presented as media: a media-bearing tool, or any
   /// tool row that carries validated media metadata.
   bool get isMediaToolEvent => isMediaToolName || viewImageMedia != null;
+
+  /// Whether this row renders through the shared image media card (running,
+  /// error, thumbnail, or neutral unavailable state). A completed
+  /// `system_screenshot` without any media metadata is a text-only outcome and
+  /// keeps the regular tool presentation instead. The single-row branch and
+  /// the tool-group gallery both use this rule.
+  bool get rendersAsMediaCard {
+    if (!isMediaToolEvent) return false;
+    if (status == EventStatus.running || isError) return true;
+    return toolName == 'view_image' || tool?['media'] != null;
+  }
 }
 
 int? _positiveInt(Object? value) {

@@ -119,6 +119,16 @@ For the local path, the Agent derives `media_id = SHA-256(session_id NUL tool_ca
 
 `ViewImageMediaMetadata` in `core/models` derives the shared byte-free descriptor. Legacy live descriptor maps are revalidated against the closed safe schema before publication; retrieval projections inherit the same byte-free serialization rather than duplicating it. Engine completion publishes it only after final guarded tool-result persistence, preventing a live fetch from racing durable media availability; normal/resumed interface callbacks retain it without forwarding rich blocks. The Client mapper preserves the identical metadata map for live and hydrated rows, and maps typed failure text (`displayText` from `toolResult.blocks` or `output`) and error status into `CanonicalEvent`. A typed repository validator rejects malformed identity, unsafe names, unsupported MIME, non-positive dimensions, and unknown availability before retrieval. Local hydration uses the active hardware identity and owner-only credential header, enforces a 12 MiB response ceiling, coalesces in-flight loads, cancels transport when the last listener leaves, and retains at most 12 entries/24 MiB in an in-memory LRU. The timeline renders loading, unavailable, thumbnail, decode-failure, typed execution failure, and accessible zoomable lightbox states without owning HTTP or credential access.
 
+### Responsive View Image Gallery
+
+Consecutive media-bearing results (`view_image` and media-bearing `system_screenshot`) inside an expanded tool group render as a single responsive gallery (`ResponsiveMediaGallery` with `LayoutBuilder` + `Wrap`) instead of one image per row.
+The column count dynamically adapts to available width using the pinned formula:
+`columns = ((availableWidth + spacing) / (minItem + spacing)).floor().clamp(1, 4)`
+`itemWidth = (availableWidth - spacing * (columns - 1)) / columns`
+where `minItem = 160` and `spacing = 8`.
+Each tile independently hydrates its media card via `ViewImageToolCard`, retaining 120-280px height constraints, aspect-ratio containment, unavailable/error/loading states, and tap-to-lightbox behavior. Isolated single media events and non-media tools preserve their individual `EventTile` presentation.
+Gallery membership and the single-row media branch share one rule (`rendersAsMediaCard` on the client `ViewImageMediaEvent` extension): a media-bearing tool row that is running, failed, `view_image`, or carries media metadata. A completed text-only `system_screenshot` therefore keeps its regular summary row and splits a run. A card reloads only when its media identity, availability, session, status, or error state changes, never because a rebuilt parent passes a new loader instance.
+
 ## Provider capability and translation
 
 `LLMAdapter` exposes one closed media capability: `textOnly` or `imageToolResults`. Wrappers delegate the exact inner value. Capability is protocol-owned in v1, not inferred from model names or learned from a failed request.
