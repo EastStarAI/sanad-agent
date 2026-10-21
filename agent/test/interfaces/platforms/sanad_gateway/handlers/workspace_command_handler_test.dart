@@ -318,6 +318,186 @@ void main() {
     final payload = Map<String, dynamic>.from(envelope['payload'] as Map);
     expect(payload['permissionMode'], 'full_access');
   });
+
+  group('Task 123 managed confinement replies', () {
+    var sequence = 0;
+    String nextId() => 'req-123-${sequence++}';
+
+    Map<String, dynamic> errorPayload(Map<String, dynamic> envelope) {
+      expect(envelope['event'], 'error');
+      return Map<String, dynamic>.from(envelope['payload'] as Map);
+    }
+
+    String managedRoot() => Directory(
+      '${tempDir.path}/${SanadHomeBootstrap.managedWorkspacesDirectoryName}',
+    ).resolveSymbolicLinksSync();
+
+    Future<Map<String, dynamic>> browse(String path) =>
+        handler.buildWorkspaceTreeEnvelope(
+          managedEvent(CanonicalEventTypes.browseWorkspaceTree, {
+            'request_id': nextId(),
+            'path': path,
+          }),
+        );
+
+    Future<Map<String, dynamic>> createFolder(String parent) =>
+        handler.buildCreateFolderEnvelope(
+          managedEvent(CanonicalEventTypes.createFolder, {
+            'request_id': nextId(),
+            'parent_path': parent,
+            'name': 'child',
+          }),
+        );
+
+    Future<Map<String, dynamic>> pick(String path) =>
+        handler.buildCreateWorkspaceEnvelope(
+          managedEvent(CanonicalEventTypes.createWorkspace, {
+            'request_id': nextId(),
+            'path': path,
+          }),
+        );
+
+    test('S1 a NUL path replies path_not_allowed', () async {
+      final path = '${managedRoot()}/a\u0000b';
+      for (final reply in [
+        await browse(path),
+        await createFolder(path),
+        await pick(path),
+      ]) {
+        expect(
+          errorPayload(reply)['code'],
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+        );
+      }
+    });
+
+    test('S2 a raw .. segment replies path_not_allowed', () async {
+      final path = '$workspacePath/../notes';
+      for (final reply in [
+        await browse(path),
+        await createFolder(path),
+        await pick(path),
+      ]) {
+        expect(
+          errorPayload(reply)['code'],
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+        );
+      }
+      expect(Directory('$workspacePath/child').existsSync(), isFalse);
+    });
+
+    test('S4 an outside absolute path replies path_not_allowed', () async {
+      final outside = Directory('${tempDir.path}-outside')..createSync();
+      addTearDown(() => outside.delete(recursive: true));
+      for (final reply in [
+        await browse(outside.path),
+        await createFolder(outside.path),
+        await pick(outside.path),
+      ]) {
+        expect(
+          errorPayload(reply)['code'],
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+        );
+      }
+      expect(Directory('${outside.path}/child').existsSync(), isFalse);
+    });
+
+    test(
+      'S6 an outside registered workspace replies path_not_allowed',
+      () async {
+        final outside = Directory('${tempDir.path}-host')..createSync();
+        addTearDown(() => outside.delete(recursive: true));
+        final local = await runtime.createWorkspace(path: outside.path);
+        final byId = await handler.buildWorkspaceTreeEnvelope(
+          managedEvent(CanonicalEventTypes.browseWorkspaceTree, {
+            'request_id': nextId(),
+            'workspace_id': local['id'],
+          }),
+        );
+        expect(
+          errorPayload(byId)['code'],
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+        );
+        expect(
+          errorPayload(await browse(outside.path))['code'],
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+        );
+      },
+    );
+
+    test('S12 picking the managed root replies path_not_allowed', () async {
+      expect(
+        errorPayload(await pick(managedRoot()))['code'],
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+      );
+    });
+
+    test(
+      'S14 workspace_in_use reaches the rename and delete replies',
+      () async {
+        final rename = await handler.buildRenameFolderEnvelope(
+          managedEvent(CanonicalEventTypes.renameFolder, {
+            'request_id': nextId(),
+            'path': workspacePath,
+            'new_name': 'moved',
+          }),
+        );
+        expect(
+          errorPayload(rename)['code'],
+          WorkspaceCommandErrorCodes.workspaceInUse,
+        );
+        final delete = await handler.buildDeleteFolderEnvelope(
+          managedEvent(CanonicalEventTypes.deleteFolder, {
+            'request_id': nextId(),
+            'path': workspacePath,
+          }),
+        );
+        expect(
+          errorPayload(delete)['code'],
+          WorkspaceCommandErrorCodes.workspaceInUse,
+        );
+        expect(Directory(workspacePath).existsSync(), isTrue);
+      },
+    );
+
+    test('S16 create_workspace path and name are exclusive', () async {
+      final both = await handler.buildCreateWorkspaceEnvelope(
+        managedEvent(CanonicalEventTypes.createWorkspace, {
+          'request_id': nextId(),
+          'name': 'x',
+          'path': workspacePath,
+        }),
+      );
+      expect(
+        errorPayload(both)['code'],
+        WorkspaceCommandErrorCodes.invalidRequest,
+      );
+      final neither = await handler.buildCreateWorkspaceEnvelope(
+        managedEvent(CanonicalEventTypes.createWorkspace, {
+          'request_id': nextId(),
+        }),
+      );
+      expect(
+        errorPayload(neither)['code'],
+        WorkspaceCommandErrorCodes.invalidRequest,
+      );
+    });
+
+    test('a nested pick replies workspace_created with the folder', () async {
+      final nested = await runtime.createFolder(
+        parentPath: workspacePath,
+        name: 'nested',
+        managedRemote: true,
+      );
+      final reply = await pick(nested);
+      expect(reply['event'], CanonicalEventTypes.workspaceCreated);
+      final workspace = Map<String, dynamic>.from(
+        (reply['payload'] as Map)['workspace'] as Map,
+      );
+      expect(workspace['path'], nested);
+      expect(workspace['name'], 'nested');
+    });
+  });
 }
 
 class _HardwareAuthManager extends AuthManager {
