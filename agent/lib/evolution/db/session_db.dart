@@ -278,6 +278,25 @@ class SessionDB {
     maxPersistedBytes: maxPersistedBytes,
   );
 
+  String? latestActiveMessageId(String sessionId) =>
+      _messageRepository.latestActiveMessageId(sessionId);
+
+  int? activeRowIdForMessageId(String sessionId, String messageId) =>
+      _messageRepository.activeRowIdForMessageId(sessionId, messageId);
+
+  int? legacyRouteNoticeAnchorRowId(
+    String sessionId,
+    String requestId,
+    DateTime at,
+  ) => _messageRepository.legacyRouteNoticeAnchorRowId(
+    sessionId,
+    requestId,
+    at,
+  );
+
+  int? lastActiveForkCopiedRowId(String sessionId) =>
+      _messageRepository.lastActiveForkCopiedRowId(sessionId);
+
   OriginatingToolCallContext? findOriginatingToolCall(
     String sessionId, {
     required String toolCallId,

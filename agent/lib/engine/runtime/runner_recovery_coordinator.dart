@@ -43,6 +43,10 @@ abstract class RunnerRecoveryHost {
   TurnRouteState get turnRoute;
   List<Message> get history;
   set history(List<Message> newHistory);
+
+  /// `message_id` of the newest durable history row; anchors an automatic
+  /// failover notice to the timeline position the user saw it at.
+  String? latestPersistedMessageId();
   void saveHistory();
   Future<int?> getContextTokens();
   String assembleSystemPrompt();
@@ -450,6 +454,7 @@ class RunnerRecoveryCoordinator {
         );
         if (getIt.isRegistered<SessionRouteMutationCoordinator>()) {
           final routeCoordinator = getIt<SessionRouteMutationCoordinator>();
+          final anchorMessageId = host.latestPersistedMessageId();
           final persisted = getIt
               .isRegistered<PersistedRuntimeStateRepository>();
           final claimed = persisted
@@ -466,6 +471,7 @@ class RunnerRecoveryCoordinator {
                     (match) => '_${match.group(1)!.toLowerCase()}',
                   ),
                   requestId: host.turnRoute.turnRequestId,
+                  anchorMessageId: anchorMessageId,
                   publish: true,
                 )
               : routeCoordinator.mutate(
@@ -478,6 +484,7 @@ class RunnerRecoveryCoordinator {
                     (match) => '_${match.group(1)!.toLowerCase()}',
                   ),
                   requestId: host.turnRoute.turnRequestId,
+                  anchorMessageId: anchorMessageId,
                   publish: true,
                 );
           if (persisted && claimed == null) {

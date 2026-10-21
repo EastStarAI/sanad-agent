@@ -874,6 +874,12 @@ class AgentStateDatabase {
       'ALTER TABLE session_route_transitions '
       'ADD COLUMN provider_display_name TEXT',
     );
+    // Task 78: causal history anchor for automatic-failover notices.
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_route_transitions '
+      'ADD COLUMN anchor_message_id TEXT',
+    );
     db.execute('''
       CREATE INDEX IF NOT EXISTS idx_session_route_transitions_created
       ON session_route_transitions(session_id, created_at);
