@@ -160,10 +160,10 @@ Proposed owners:
       with no lost file; `merge_validate` reports ok for any conflict-resolved file.
 - [x] **T1-X2 Tier verification** — on the frozen tier candidate: agent analyzer and suite,
       then client analyzer and suite, run serially with recorded counts.
-- [x] **T1-X3 Delivery** — accepted tier work is merged into the single SRP pull request head branch
-      `feature/110-critical-priority-srp-refactoring` (PR #225) instead of opening a new pull request; that
-      PR's title, body and labels are updated to describe the full diff, and its checks must be green on the
-      exact pushed SHA. Ready-conversion and merge remain user-owned.
+- [x] **T1-X3 Delivery** — accepted tier work rides the Task 110 port branch `refactor/110-srp-port`
+      in the single SRP pull request, which supersedes the original draft on
+      `feature/110-critical-priority-srp-refactoring`. That PR's title, body and labels describe the full
+      diff, and its checks must be green on the exact pushed SHA. Ready-conversion and merge remain user-owned.
 - [x] **T1-X4 Worktree lifecycle** — per-target worktrees and branches removed after their
       work is pushed into the tier branch and CI is green.
 
@@ -186,7 +186,7 @@ Proposed owners:
 
 - [ ] All tier and target gates closed with recorded evidence (command, exit code, counts,
       duration, log path).
-- [ ] Pushed into the single SRP pull request (#225) with labels, title and body reflecting the full
+- [ ] Pushed into the single SRP pull request from `refactor/110-srp-port` with labels, title and body reflecting the full
       diff, and CI green on the exact head SHA.
 - [ ] `graphify` graph refreshed with `graphify update .` and this plan moved to
       `docs/plans/tasks/done/` with `status: completed` and `remaining_estimate: 0%` when the

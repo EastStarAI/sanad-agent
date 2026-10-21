@@ -361,13 +361,6 @@ r2 verification (logs under `temp/srp/r2-*`):
 - `fvm dart test` (agent, full suite): 2,956 passed, 14 skipped, 0 failed (`r2-agent-full-suite.log`).
 - `fvm flutter test` (client, full suite): 1,732 passed, 1 skipped, 0 failed (`r2-client-full-suite.log`).
 
-### Remaining
-
-- Live regression on worktree-isolated homes and ports, serial agent then client, per the port
-  inventory checklist (#210, 106b, 115, 116, 117, 118, 119, 120 and the SRP owners).
-- Re-port Task 118 onto `RunnerRecoveryCoordinator` once it merges.
-
-
 ### Main sync and Task 118a re-port (2026-10-21)
 
 - Merged `origin/main` at `ba7f71a2` (Tasks 108 and 118a). The only conflict was `agent/lib/engine/agent_runner.dart`; the SRP side was kept.
@@ -376,3 +369,44 @@ r2 verification (logs under `temp/srp/r2-*`):
   - Agent analyze is clean; the full agent suite passed (2,995 passed, 14 skipped).
   - Client analyze is clean after `gen-l10n`; the full client suite passed (1,734 passed, 1 skipped).
   - Mutation check: removing the guard fails "a failed automatic compaction blocks overflow compaction in the same run".
+
+### Live acceptance (2026-10-21)
+
+Candidate `6e302012` ran on two worktree-isolated test homes with distinct identities: TH1 (`test-home`) and TH2 (`test-home-2`). Full notes are under `~/.sanad-delegate/runs/srp-110/live-r1/`: `TH1-CLOUD-NOTES.md` covers the cloud scenarios and `TH2-NOTES.md` the local ones. Afterwards both slots were reset to `origin/main` and unlocked.
+
+**Cloud, from TH1 against TH2: R1–R4 PASS.**
+
+- **R1, remote browse and list:** the workspace list returned. The tree browse returned only the allowed roots, and each entry carried `size` and `modified_at`. Browse by managed root and by workspace id both worked.
+- **R2, remote create:** the in-app "New Workspace" popup opened. The native picker opens only on a local-reachable device. TH2 created the workspace folder and emitted `workspace_created`.
+- **R3, path safety:** 22 of 22 unsafe requests were rejected, with no file-system effect. The cases were null byte, `..` traversal, absolute paths outside the roots, a symlink, the Sanad Home and its files, and `/`. The agent logged no exceptions.
+- **R4, remote chat:** session `b2570f20-a9a3-4da9-b1e8-a72a2f7e6ddf` streamed reasoning, a `file_read` tool call and its result, and the final answer over cloud. An earlier attempt, `d775b81e`, hit a provider "model unavailable" outage, not a code fault.
+
+**Local, on TH2: A–I PASS.**
+
+| Scenario | Result | Session |
+|---|---|---|
+| A, turn and workspace write | PASS | `7807e96b` |
+| B, permission approve and deny | PASS | `7807e96b` |
+| C, clarifying question | PASS | `dcb9f728` |
+| D, steer from the UI and the CLI, plus the FIFO queue | PASS | `7807e96b` |
+| E1/E1b, stop, and stop with steer-draft recovery | PASS | `7807e96b` |
+| F, manual `/compact` | PASS on `c87717a2`. On `7807e96b` it ended `projection_still_over_budget`: the engine is identical to main, so this is not a regression. | `c87717a2`, `7807e96b` |
+| G(i), controlled restart during a run, with drain-queue recovery | PASS | `7807e96b` |
+| G(ii), SIGKILL with a pending user-input wait (Task 108) | PASS | `dcb9f728` |
+| H, policy change, per-session drafts, reconnect, close and reopen | PASS | `7807e96b`, `dcb9f728` |
+| I, local native picker, MCP settings, workspace page | PASS | — |
+
+**Stop paths:**
+
+- The managed stop driven live (`sanad-dev stop agent`) took the resumable pause path, `completePreparedPause`. The active run resumed after the restart (`7807e96b`), and the open wait was restored as waiting (`dcb9f728`).
+- That pause path does not call `requestStopAll`. Neither the `DaemonRestartCoordinator.stop()` path, which calls `requestStopAll(preserveInteractiveWaits: true)`, nor the terminal stop-all was exercised live. Both are covered only by the automated suites.
+
+**Pre-existing gaps, the same on `origin/main` and not fixed here:**
+
+- **Cloud reconnect re-sync:** after `auth_success`, `get_sessions` can arrive before the refreshed delivery-presence interest is acknowledged. The client then times out, and an open conversation is not re-synced until it is reopened.
+- **Stale cloud device selection:** after a `--no-cloud` restart, the cloud device selection is stale.
+- **`emitWithResponse` late timeout:** it calls `off(event)` on the live socket, which also removes a newer same-event listener. This is recorded as a skipped test.
+
+### Remaining
+
+- None for the port: live acceptance is above, and Task 118a is re-ported. Merge is user-owned.
