@@ -242,3 +242,24 @@ A narrow-width test exposed a second overflow at the same width: the desktop sta
 - **Driver Enter action: skipped.**
   - The driver contract (`docs/technical/flutter_vm_driver_cli.md`) has no key-event primitive. Adding one would need a new Client VM extension, a controller action, a CLI command, and a `sanad-dev ui` passthrough, each with its own tests. That is not a small, clean addition.
   - A synthetic framework key event would also bypass the platform text-input path, which is exactly what the Enter-double-delivery hypothesis concerns.
+
+### Round 2 Verification
+
+`origin/main` is unchanged (`4fa4dd72`), so no merge was needed.
+
+| Gate | Result | Log |
+|---|---|---|
+| `fvm flutter analyze` (client) | no issues | — |
+| `fvm dart analyze` (agent) | no issues | — |
+| Client full suite | 1,956 passed | `temp/g3/r2-final-client-suite.log` |
+| Agent full suite, including the gateway E2E files | 3,232 passed, 14 skipped | `temp/g3/r2-final-agent-suite.log` |
+| Client E2E (`local_dual_connection`, `hosted_attachment_relay`), `--concurrency=1` | 14 passed | `temp/g3/r2-final-e2e.log` |
+| `fvm dart run scripts/lint_wiki.dart` | success | — |
+
+### Round 2 Live Checks
+
+- **D1:** repeat S1b. On B with cloud on, pick A, then `run --no-cloud`. `active_device_id` must stay A, and the log must show `device.fallback entered`. `run` with cloud on must restore A, and the log must show `device.fallback restored`. Opening a different local conversation during the fallback must log `ended by explicit selection` and keep local.
+- **D2:** after a spontaneous or induced Client-only cloud reconnect:
+  - the first `get_sessions` and `list_workspaces` after `auth_success` must be answered, with no 10 s timeout and no "Could not refresh" banner;
+  - a history load lost in the disconnect must reload without pressing Retry.
+- **D3:** the compact layout (phone-size window) must log no RenderFlex overflow.
