@@ -101,7 +101,8 @@ class SanadCommandRunner extends CommandRunner<int> {
       )
       ..addOption(
         'thinking-mode',
-        help: 'Explicit thinking option id for the route (for example: high, off)',
+        help:
+            'Explicit thinking option id for the route (for example: high, off)',
         allowed: cliThinkingModes,
       )
       ..addFlag(
@@ -339,6 +340,41 @@ class SanadCommandRunner extends CommandRunner<int> {
   }
 
   /// Guards early daemon execution before Home bootstrap and process supervisor startup.
+  /// Whether [arguments] only print version or usage text, or the read-only
+  /// `service definition` report.
+  ///
+  /// Such queries run before any Sanad Home preparation and never create or
+  /// write anything there: installed-agent probes (`--version`,
+  /// `help service install`) must be side-effect free. Classification only
+  /// parses the arguments; an unparseable command line is not a query.
+  static bool isPureQuery(List<String> arguments) {
+    if (arguments.isEmpty || arguments.contains('--child-process')) {
+      return false;
+    }
+    final ArgResults results;
+    try {
+      results = SanadCommandRunner().parse(arguments);
+    } catch (_) {
+      return false;
+    }
+    if (results['version'] == true || results['help'] == true) return true;
+    final name = results.command?.name;
+    if (name == 'version' || name == 'help') return true;
+    if (name == 'service' && results.command?.command?.name == 'definition') {
+      return true;
+    }
+    for (
+      var command = results.command;
+      command != null;
+      command = command.command
+    ) {
+      if (command.options.contains('help') && command['help'] == true) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   static bool handleEarlyDaemonHelpOrInvalidArguments(
     List<String> arguments, {
     StringSink? stdoutOutput,

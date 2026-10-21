@@ -103,13 +103,15 @@ class AgentUpdateService {
     String? operatingSystem,
     String? architecture,
     PlatformArtifactVerifier? platformVerifier,
+    PlatformArtifactDetailedVerifier? detailedPlatformVerifier,
     Future<bool> Function(String script)? replacementScheduler,
     Uri? artifactMirrorUri,
   }) : _client = client ?? http.Client(),
        manifestUri = manifestUri ?? Uri.parse(_defaultReleaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
        architecture = architecture ?? _detectArchitecture(),
-       _platformVerifier = platformVerifier ?? verifyPlatformCodeSignature,
+       _platformVerifier = platformVerifier,
+       _detailedPlatformVerifier = detailedPlatformVerifier,
        _replacementScheduler = replacementScheduler,
        _artifactMirrorUri =
            artifactMirrorUri ??
@@ -124,7 +126,8 @@ class AgentUpdateService {
   final String operatingSystem;
   final String architecture;
   final http.Client _client;
-  final PlatformArtifactVerifier _platformVerifier;
+  final PlatformArtifactVerifier? _platformVerifier;
+  final PlatformArtifactDetailedVerifier? _detailedPlatformVerifier;
   final Future<bool> Function(String script)? _replacementScheduler;
   final Uri? _artifactMirrorUri;
 
@@ -260,16 +263,19 @@ class AgentUpdateService {
           message: 'Downloaded artifact failed size or SHA-256 verification.',
         );
       }
-      if (!await verifyReleaseArtifactTrust(
+      final trust = await verifyReleaseArtifactTrustDetailed(
         staged,
         artifact: artifact,
+        detailedVerifier: _detailedPlatformVerifier,
         platformVerifier: _platformVerifier,
-      )) {
+      );
+      if (!trust.isTrusted) {
         return _result(
           AgentUpdateStatus.trustFailed,
           available,
           message:
-              'Downloaded artifact failed the declared platform trust policy.',
+              'Downloaded artifact failed the declared platform trust policy '
+              '(${trust.summary}).',
         );
       }
 

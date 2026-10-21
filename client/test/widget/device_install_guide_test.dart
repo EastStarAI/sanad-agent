@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/presentation/widgets/device_install_guide.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
+import 'package:sanad_release_contract/release_contract.dart';
 
 void main() {
   testWidgets(
@@ -100,5 +103,26 @@ void main() {
     expect(find.byKey(const ValueKey('posix-install-command')), findsOneWidget);
     expect(find.byKey(const ValueKey('windows-install-command')), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shows exactly the shared official installer commands', (tester) async {
+    const token = "pairing' token";
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: DeviceInstallGuide(token: token)),
+      ),
+    );
+
+    for (final os in ['linux', 'windows']) {
+      expect(find.textContaining(OfficialAgentInstaller.pairingCommand(os, token)), findsOneWidget, reason: os);
+    }
+    expect(find.textContaining("-PairingToken 'pairing'' token'"), findsOneWidget);
+  });
+
+  test('the guide names no installer host of its own', () {
+    final source = File('lib/features/devices/presentation/widgets/device_install_guide.dart').readAsStringSync();
+    expect(source, isNot(contains('sanad.eaststarai.com')));
+    expect(source, isNot(contains('install.sh')));
+    expect(source, isNot(contains('install.ps1')));
   });
 }

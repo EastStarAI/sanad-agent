@@ -630,5 +630,16 @@
   "workspaceBrowserErrorWorkspaceInUse": "This folder is or contains a workspace. Remove that workspace first.",
   "workspaceBrowserErrorStaleConfirmation": "The folder changed before the action finished. Review it and try again.",
   "workspaceBrowserErrorGeneric": "The device could not complete this folder action.",
-  "workspaceBrowserErrorLoad": "Could not open this folder on the device."
+  "workspaceBrowserErrorLoad": "Could not open this folder on the device.",
+  "newerAgentInUseNotice": "The installed agent {agentVersion} is newer than this client {clientVersion}. It was kept and is in use; update the client when convenient.",
+  "@newerAgentInUseNotice": {
+    "placeholders": {
+      "agentVersion": {
+        "type": "String"
+      },
+      "clientVersion": {
+        "type": "String"
+      }
+    }
+  }
 }

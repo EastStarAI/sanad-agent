@@ -14,6 +14,12 @@ final String version = loadAgentVersion();
 
 void main(List<String> arguments) async {
   if (_handleEarlyHelpOrInvalidArguments(arguments)) return;
+  // Version and usage queries are pure: they answer before the Sanad Home is
+  // prepared, so a Client probe never initializes or writes to a Home.
+  if (SanadCommandRunner.isPureQuery(arguments)) {
+    await _executeCommand(arguments);
+    return;
+  }
 
   // A supervised daemon parent must remain a lightweight process owner. Its
   // child prepares the secure Home roots before any daemon dependency is
@@ -74,7 +80,11 @@ bool _handleEarlyHelpOrInvalidArguments(List<String> arguments) {
   if (arguments.isNotEmpty && arguments.first.toLowerCase() == 'service') {
     final remaining = arguments.sublist(1);
     if (remaining.isEmpty ||
-        const {'help', '-h', '--help'}.contains(remaining.first.toLowerCase())) {
+        const {
+          'help',
+          '-h',
+          '--help',
+        }.contains(remaining.first.toLowerCase())) {
       service_cmd.main(remaining);
       return true;
     }

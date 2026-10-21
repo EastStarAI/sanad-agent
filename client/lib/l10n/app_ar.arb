@@ -475,5 +475,6 @@
   "workspaceBrowserErrorWorkspaceInUse": "هذا المجلد مساحة عمل أو يحتوي على مساحة عمل. أزل مساحة العمل أولًا.",
   "workspaceBrowserErrorStaleConfirmation": "تغيّر المجلد قبل اكتمال الإجراء. راجعه وحاول مرة أخرى.",
   "workspaceBrowserErrorGeneric": "تعذّر على الجهاز إكمال هذا الإجراء على المجلد.",
-  "workspaceBrowserErrorLoad": "تعذّر فتح هذا المجلد على الجهاز."
+  "workspaceBrowserErrorLoad": "تعذّر فتح هذا المجلد على الجهاز.",
+  "newerAgentInUseNotice": "الوكيل المثبَّت {agentVersion} أحدث من هذا العميل {clientVersion}. أُبقي عليه وهو قيد الاستخدام؛ حدِّث العميل عندما يناسبك."
 }

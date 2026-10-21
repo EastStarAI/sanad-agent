@@ -65,7 +65,7 @@ class ServiceManager {
     }
     if (Platform.isMacOS) {
       final configPath = getServiceConfigPath();
-      final content = _buildLaunchdPlist(
+      final content = buildLaunchdPlist(
         executable: invocation.executable,
         arguments: invocation.arguments,
         sanadHome: sanadHome,
@@ -368,6 +368,15 @@ class ServiceManager {
           },
   );
 
+  /// The service instance this process registers (empty for the default).
+  static String get serviceInstance => _instance;
+
+  /// The executable and arguments `install` writes into the definition.
+  static ({String executable, List<String> arguments}) daemonInvocation() {
+    final invocation = _daemonInvocation();
+    return (executable: invocation.executable, arguments: invocation.arguments);
+  }
+
   static _DaemonInvocation _daemonInvocation() {
     final executable = Platform.resolvedExecutable;
     final isDartVm =
@@ -381,12 +390,17 @@ class ServiceManager {
     );
   }
 
-  static String _buildLaunchdPlist({
+  static String buildLaunchdPlist({
     required String executable,
     required List<String> arguments,
     required String sanadHome,
-  }) =>
-      '''<?xml version="1.0" encoding="UTF-8"?>
+    String? serviceInstance,
+  }) {
+    final instance = serviceInstance ?? _instance;
+    final label = instance.isEmpty
+        ? 'com.eaststarai.sanad.agent'
+        : 'com.eaststarai.sanad.agent.$instance';
+    return '''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>${_xml(label)}</string>
@@ -396,9 +410,10 @@ class ServiceManager {
 <key>Umask</key><integer>63</integer>
 <key>StandardOutPath</key><string>${_xml(p.join(sanadHome, 'logs', 'daemon.log'))}</string>
 <key>StandardErrorPath</key><string>${_xml(p.join(sanadHome, 'logs', 'daemon.error.log'))}</string>
-<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string><key>SANAD_HOME</key><string>${_xml(sanadHome)}</string>${_instance.isEmpty ? '' : '<key>SANAD_SERVICE_INSTANCE</key><string>${_xml(_instance)}</string>'}</dict>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string><key>SANAD_HOME</key><string>${_xml(sanadHome)}</string>${instance.isEmpty ? '' : '<key>SANAD_SERVICE_INSTANCE</key><string>${_xml(instance)}</string>'}</dict>
 </dict></plist>
 ''';
+  }
 
   static String buildWindowsDaemonCommand({
     required String executable,
