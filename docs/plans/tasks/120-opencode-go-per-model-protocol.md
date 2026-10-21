@@ -1,8 +1,8 @@
 ---
 id: 120
 title: OpenCode Go per-model wire protocol
-status: planned
-gate: blocked-on-116
+status: in-progress
+gate: independent-review
 created: 2026-10-21
 parent_task: none (split from 106)
 depends_on: [116]
@@ -39,11 +39,24 @@ Live round 1 of [Task 106](docs/plans/tasks/done/106-compaction-resilience-and-t
 
 ## Gates
 
-- [ ] Wire fixtures for Responses and Messages against Go-shaped endpoints, and provider-state round-trips across a same-instance protocol change.
-- [ ] Regression: unchanged Chat models keep the same issuer and wire.
-- [ ] Owning docs: `docs/technical/provider_protocol.md`, `agent/lib/engine/adapters/AGENTS.md`.
+- [x] Wire fixtures for Responses and Messages against Go-shaped endpoints, and provider-state round-trips across a same-instance protocol change.
+- [x] Regression: unchanged Chat models keep the same issuer and wire.
+- [x] Owning docs: `docs/technical/provider_protocol.md`, `agent/lib/engine/adapters/AGENTS.md`.
 - [ ] Independent review and delegated Sanad live acceptance on the Test Home: Go `gpt-6-luna` with a thinking selection, and one Messages-served model, with explicit scalar evidence.
 
 ## Dependencies
 
 - Depends on [Task 116](docs/plans/tasks/done/116-deepseek-reasoning-replay-across-tool-history.md): 116 lands the model stamp and issuer comparison first.
+
+## Implementation Round 1 — 2026-10-21 (writer record, unreviewed)
+
+- Base `0a6d85ae`, branch `fix/120-opencode-go-per-model-protocol`. No commit, push, live call or runtime action.
+- **Resolution.** `ProviderModelWire` (`agent/lib/core/provider_runtime/provider_model_wire.dart`) maps the serving vendor's exact models.dev entry: `provider.npm` `@ai-sdk/openai` → Responses (`codex_responses`), `@ai-sdk/anthropic` → Messages. The base URL is the entry's own https `provider.api`. It applies only to templates with the new `ProviderProfile.catalogModelWire` flag (`opencode-go`). A missing package or `provider.api`, a Google or openai-compatible package, a custom instance or a non-opted template keeps the configured wire.
+- **Freeze.** `resolveSignature` writes the wire into `RouteSignature` (`protocol`, `normalizedBaseUrl`, and an additive `apiMode` included in equality). `_buildAdapter` derives the profile with `ProviderProfile.withRouteWire`. The compaction route persists `api_mode` in an additive nullable column, including on fork copy. The wire proof adds `api_mode` only when it is set.
+- **Thinking.** `ThinkingCapabilityAssembler.routeInstance` gives a transient per-model instance view (`ProviderInstance.routeTemplate`). It is applied in `resolveLayer`/`assemble` and in `ThinkingSelectionResolver.resolve`, so `apiModeFor`, `policyIdFor`, `isWireCompatible` and `ModelsDevThinkingWire.forRoute` all see the dispatched wire.
+- **Issuer stability.** Chat models keep the template base `https://opencode.ai/zen/go/v1` and the issuer `<id>|openai_compatible|<base>` byte-for-byte; no equivalence set is needed. New issuers are `<id>|codex_responses|https://opencode.ai/inference/go/openai/v1` and `<id>|anthropic_compatible|https://opencode.ai/inference/go/anthropic/v1`.
+- **Auth.** `CodexResponsesAdapter` already works as a generic API-key Responses client (bearer key, `{base}/responses`, `store: false`); Codex discovery stays gated on `openai-codex`. `BaseAnthropicAdapter` sends `x-api-key` plus `anthropic-version` to `{base}/messages`. That matches the `@ai-sdk/anthropic` default the Go docs name, but it has no live evidence yet.
+- **Tests.** `agent/test/core/provider_runtime/opencode_go_model_wire_routing_test.dart` (runtime routing plus the Chat issuer regression) and `agent/test/engine/adapters/opencode_go_model_wire_test.dart` (wire fixtures, Chat → Responses → Messages → Responses → Messages → Chat round-trip, signature, thinking, compaction persistence). `layered_thinking_authority_test.dart` now dispatches on the routed wire, so Go `gpt-6-luna` asserts `reasoning.effort`.
+- **Recorded gap (not changed).** Responses `reasoning_items` are still not model-stamped (Task 116 D6). Go Responses models such as `gpt-6-luna` and `grok-4.7` share one issuer, so a cross-model encrypted replay is possible; it relies on the bounded `invalid_encrypted_content` recovery.
+- Remaining: independent review and delegated live acceptance on the Test Home.
+

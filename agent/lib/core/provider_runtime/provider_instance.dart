@@ -69,6 +69,10 @@ class ProviderInstance {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// Transient per-model route view (Task 120): the template re-pointed at one
+  /// model's catalog-declared wire. Never persisted; `null` for stored rows.
+  final ProviderProfile? routeTemplate;
+
   const ProviderInstance({
     required this.id,
     required this.templateId,
@@ -85,6 +89,7 @@ class ProviderInstance {
     this.allowAutoFailover = true,
     required this.createdAt,
     required this.updatedAt,
+    this.routeTemplate,
   });
 
   /// Whether local rate limiting is active for this instance
@@ -94,7 +99,7 @@ class ProviderInstance {
   /// Resolves the backing template. Returns null for unknown template ids
   /// (callers must fail closed — Plan 29 §3.10).
   ProviderProfile? get template =>
-      ProviderRegistry.findByNameOrAlias(templateId);
+      routeTemplate ?? ProviderRegistry.findByNameOrAlias(templateId);
 
   /// Whether this instance was created from the reserved Custom template.
   bool get isCustom => templateId == kCustomProviderTemplateId;
@@ -135,8 +140,32 @@ class ProviderInstance {
       allowAutoFailover: allowAutoFailover ?? this.allowAutoFailover,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      routeTemplate: routeTemplate,
     );
   }
+
+  /// This instance viewed through [wireTemplate] for one model's route: the
+  /// protocol, base URL and template follow the catalog-declared wire while
+  /// identity and revisions stay unchanged (Task 120).
+  ProviderInstance withRouteTemplate(ProviderProfile wireTemplate) =>
+      ProviderInstance(
+        id: id,
+        templateId: templateId,
+        displayName: displayName,
+        protocol: wireTemplate.effectiveProtocol,
+        authMethod: authMethod,
+        baseUrl: wireTemplate.defaultBaseUrl,
+        defaultModel: defaultModel,
+        status: status,
+        isDefault: isDefault,
+        configRevision: configRevision,
+        credentialRevision: credentialRevision,
+        requestsPerMinute: requestsPerMinute,
+        allowAutoFailover: allowAutoFailover,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+        routeTemplate: wireTemplate,
+      );
 
   /// Transport-safe map. Never includes secrets.
   Map<String, dynamic> toMap() => {

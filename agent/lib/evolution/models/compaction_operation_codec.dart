@@ -33,6 +33,7 @@ abstract final class CompactionOperationCodec {
       modelId: row['model_id'] as String,
       configRevision: row['config_revision'] as int,
       credentialRevision: row['credential_revision'] as int,
+      apiMode: row['api_mode'] as String?,
     );
     final sourceRange = CompactionMessageRange(
       start: CompactionMessageIdentity(row['source_start_message_id'] as int),
@@ -145,6 +146,7 @@ abstract final class CompactionOperationCodec {
       route.normalizedBaseUrl,
       route.configRevision,
       route.credentialRevision,
+      route.apiMode,
       record.startedAt.toUtc().toIso8601String(),
       record.diagnostics == null
           ? null

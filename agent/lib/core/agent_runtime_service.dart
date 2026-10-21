@@ -5,6 +5,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.d
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_endpoint_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_id.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_model_wire.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -33,6 +34,11 @@ class RouteSignature {
   final int configRevision;
   final int credentialRevision;
 
+  /// Catalog-resolved per-model api mode (Task 120), frozen at resolution.
+  /// `null` means the instance's configured wire; when set, [protocol] and
+  /// [normalizedBaseUrl] are the model's catalog-declared wire as well.
+  final String? apiMode;
+
   const RouteSignature({
     required this.providerInstanceId,
     required this.templateId,
@@ -41,6 +47,7 @@ class RouteSignature {
     required this.modelId,
     required this.configRevision,
     required this.credentialRevision,
+    this.apiMode,
   });
 
   /// Composite cache key used by [AgentRuntimeService]. Deliberately excludes
@@ -58,7 +65,8 @@ class RouteSignature {
           normalizedBaseUrl == other.normalizedBaseUrl &&
           modelId == other.modelId &&
           configRevision == other.configRevision &&
-          credentialRevision == other.credentialRevision;
+          credentialRevision == other.credentialRevision &&
+          apiMode == other.apiMode;
 
   @override
   int get hashCode => Object.hash(
@@ -69,11 +77,12 @@ class RouteSignature {
     modelId,
     configRevision,
     credentialRevision,
+    apiMode,
   );
 
   @override
   String toString() =>
-      'RouteSignature($cacheKey, template=$templateId, protocol=$protocol, configRev=$configRevision, credRev=$credentialRevision)';
+      'RouteSignature($cacheKey, template=$templateId, protocol=$protocol${apiMode == null ? '' : ', apiMode=$apiMode'}, configRev=$configRevision, credRev=$credentialRevision)';
 }
 
 /// Owns the composite-keyed [LLMAdapter] cache, replacing the previous
@@ -153,17 +162,25 @@ class AgentRuntimeService {
       rawModelId: effModel,
     );
 
-    final effBaseUrl = instance.effectiveBaseUrl ?? '';
+    // Task 120: a model the catalog serves on another wire is frozen onto
+    // that wire here; every other route keeps the configured wire and base.
+    final wire = ProviderModelWire.resolve(
+      instance,
+      normalizedModel,
+      lookup: _modelsDevService?.modelEntrySync,
+    );
+    final effBaseUrl = wire?.baseUrl ?? instance.effectiveBaseUrl ?? '';
     final normalizedUrl = ProviderEndpointResolver.normalizeBaseUrl(effBaseUrl);
 
     return RouteSignature(
       providerInstanceId: instance.id,
       templateId: instance.templateId,
-      protocol: instance.protocol,
+      protocol: wire?.protocol ?? instance.protocol,
       normalizedBaseUrl: normalizedUrl,
       modelId: normalizedModel,
       configRevision: instance.configRevision,
       credentialRevision: instance.credentialRevision,
+      apiMode: wire?.apiMode,
     );
   }
 
@@ -278,7 +295,15 @@ class AgentRuntimeService {
       }
     }
 
-    final profile = _profileForSignature(signature);
+    final registeredProfile = _profileForSignature(signature);
+    final routeApiMode = signature.apiMode;
+    final profile = routeApiMode == null
+        ? registeredProfile
+        : registeredProfile.withRouteWire(
+            apiMode: routeApiMode,
+            protocol: signature.protocol,
+            baseUrl: signature.normalizedBaseUrl,
+          );
     int? modelContextLimitLookup(String modelId) =>
         _catalogContextLimit(signature, modelId);
 

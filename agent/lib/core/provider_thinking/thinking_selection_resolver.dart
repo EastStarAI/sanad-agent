@@ -75,13 +75,15 @@ class ThinkingSelectionResolver {
     required String modelId,
     required String? selectionId,
   }) {
-    final instance = _instances.findById(providerInstanceId);
-    if (instance == null) {
+    final stored = _instances.findById(providerInstanceId);
+    if (stored == null) {
       throw ThinkingSelectionException(
         code: ThinkingSelectionErrorCode.instanceNotFound,
         message: 'Provider instance not found for thinking validation.',
       );
     }
+    // Task 120: validate against the wire this model is actually dispatched on.
+    final instance = _assembler.routeInstance(stored, modelId);
 
     final model = _modelForRoute(instance: instance, modelId: modelId);
     final descriptor = _descriptorForRoute(instance: instance, model: model);
