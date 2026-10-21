@@ -61,6 +61,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
   String? _lastSessionId;
 
   StreamSubscription<ModelCacheUpdateEvent>? _modelUpdatesSub;
+  StreamSubscription<ModelSnapshotPublication>? _modelSnapshotsSub;
 
   @override
   void initState() {
@@ -75,6 +76,30 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
         _modelUpdatesSub = getIt<ProviderSetupClient>().modelUpdates.listen(_handleModelUpdate);
       }
     } catch (_) {}
+    try {
+      if (getIt.isRegistered<ProviderSetupClient>()) {
+        _modelSnapshotsSub = getIt<ProviderSetupClient>().modelSnapshots.listen(_handleSnapshotPublication);
+      }
+    } catch (_) {}
+  }
+
+  /// A later successful snapshot for this device (loaded by any consumer)
+  /// ends this selector's fetch failure without a new request.
+  void _handleSnapshotPublication(ModelSnapshotPublication publication) {
+    if (!mounted || !_hasFetchError) return;
+    if (!widget.capabilities.usesModelThinkingControls) return;
+    final activeAgent = widget.activeAgent;
+    final deviceId = publication.deviceId;
+    final matches = activeAgent == null ? deviceId == null : deviceId != null && activeAgent.representsDeviceId(deviceId);
+    if (!matches) return;
+    _loadToken = null;
+    setState(() {
+      _snapshot = publication.snapshot;
+      _isAuthoritativeSnapshot = true;
+      _isLoading = false;
+      _hasFetchError = false;
+    });
+    unawaited(_applyEffectiveSelection(publication.snapshot));
   }
 
   void _handleModelUpdate(ModelCacheUpdateEvent event) {
@@ -116,6 +141,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
   @override
   void dispose() {
     unawaited(_modelUpdatesSub?.cancel());
+    unawaited(_modelSnapshotsSub?.cancel());
     super.dispose();
   }
 

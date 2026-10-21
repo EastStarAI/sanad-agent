@@ -305,3 +305,21 @@ B also sent two concurrent `model.snapshot` requests per screen (provider setup 
 **Tests.**
 - Agent, `agent/test/interfaces/sanad_bridge_provider_test.dart`, "model.snapshot stays a bounded client projection of a large aggregator catalog": 400 models with raw metadata. It asserts no `model_metadata` in the reply, the fields the Client reads preserved, and the serialized envelope under 150 KB. Red → green: `temp/g3/r3-d4-agent-red.log` (1 failed), `temp/g3/r3-d4-agent-green.log` (34 passed).
 - Client, `client/test/unit/provider_setup/provider_setup_client_impl_test.dart`, "concurrent snapshots for one device share a single request": one `model.snapshot` command for two callers, and a fresh request after completion. Red → green: `temp/g3/r3-d4-client-red.log` (1 failed), `temp/g3/r3-d4-client-green.log` (17 passed).
+
+### D5 — Stale banners after a later success (Low)
+
+**Root cause.**
+- "Could not refresh all sections" comes from sidebar sections in `staleError`. Only a refresh of that same section cleared it. The reconnect re-sync (`synchronizeAfterReconnect`) fetches the default session list, not the sections, so the banner stayed.
+- The thinking-mode "Retry" chip cleared only on a tap or a model-cache update. A later successful snapshot loaded by another consumer was ignored.
+
+**Fix.**
+- `ConversationCacheRepository` watches each refreshed device's session-list publications. On a publication, it refreshes only the sections and workspace list still in `staleError`, once each. Nothing stale means no request. `dispose()` cancels the subscriptions.
+- `ProviderSetupClient.modelSnapshots` publishes each successful snapshot with its target device. A selector on its fetch-failure surface adopts a matching snapshot without a new request.
+
+**Tests.**
+- `client/test/unit/repositories/conversation_cache_repository_pagination_efficiency_test.dart`: "a failed section refresh is retried when the device publishes its session list". It also checks that no request is sent when nothing is stale. Red → green: `temp/g3/r3-d5-sidebar-red.log`, `temp/g3/r3-d5-sidebar-green.log` (28 passed).
+- `client/test/widget/route_thinking_mode_selector_test.dart`: "a later successful snapshot for the device clears the Retry chip". Red → green: `temp/g3/r3-d5-thinking-red.log`, `temp/g3/r3-d5-thinking-green.log` (58 passed).
+
+### D6 — `device.fallback restored` is in-process only (Low, by design)
+
+The fallback marker lives in memory. `device.fallback restored` can only fire when the remembered device reappears while the same process is running, for example when a failed cloud socket recovers. A `stop`/`run` restart resolves the persisted device directly and logs no fallback line. That is the expected outcome, and it is proved by the selected device and `active_device_id`, not by the log line. The wording is now in `client/lib/features/devices/AGENTS.md`.

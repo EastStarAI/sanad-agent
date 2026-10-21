@@ -133,6 +133,11 @@ abstract class ProviderSetupClient {
   /// emitted on terminal model refreshes and authoritative daemon notifications.
   Stream<ModelCacheUpdateEvent> get modelUpdates => const Stream.empty();
 
+  /// Broadcast stream of successful `model.snapshot` results, so a consumer
+  /// whose own load failed can adopt a later snapshot another consumer loaded
+  /// for the same device instead of staying on its failure surface.
+  Stream<ModelSnapshotPublication> get modelSnapshots => const Stream.empty();
+
   Future<List<RecentModelDto>> modelRecentList({DeviceConfig? agent});
 
   Future<void> modelRecentRecord({
@@ -172,4 +177,13 @@ abstract class ProviderSetupClient {
   }) async => ProviderUsageSupportDto(
     support: {for (final id in providerInstanceIds) id: false},
   );
+}
+
+/// One successful `model.snapshot` result for [deviceId] (`null` when the
+/// request targeted this machine without an explicit device).
+class ModelSnapshotPublication {
+  const ModelSnapshotPublication({required this.deviceId, required this.snapshot});
+
+  final String? deviceId;
+  final ModelCacheSnapshotDto snapshot;
 }

@@ -37,6 +37,7 @@ class ConversationCacheRepository {
   final Map<String, Future<void>> _loadMoreInFlight = {};
   final Map<String, DateTime> _lastSectionRefreshStartedAt = {};
   final Map<String, DateTime> _lastDeviceSidebarRefreshStartedAt = {};
+  final Map<String, StreamSubscription<List<Session>>> _sessionPublications = {};
 
   ConversationCacheRepository({
     required ConversationCacheStore cache,
@@ -108,6 +109,7 @@ class ConversationCacheRepository {
   /// Refresh all sidebar resources for one device while preserving its cached
   /// snapshot until each authoritative response arrives.
   Future<void> refreshDeviceSidebar(DeviceConfig device, {bool force = false}) {
+    _watchSessionPublications(device);
     final existing = _deviceSidebarRefreshInFlight[device.id];
     if (existing != null) return existing;
 
@@ -144,6 +146,42 @@ class ConversationCacheRepository {
       refreshUnscopedConversations(device, force: force),
       for (final workspaceId in workspaceIds) refreshWorkspaceConversations(device, workspaceId, force: force),
     ]);
+  }
+
+  /// A device session-list publication (for example the reconnect re-sync)
+  /// proves the device answers again, so sections whose last refresh failed
+  /// are refreshed once instead of keeping their stale error until the user
+  /// retries. Sections that are not stale issue no request.
+  void _watchSessionPublications(DeviceConfig device) {
+    if (_sessionPublications.containsKey(device.id)) return;
+    _sessionPublications[device.id] = _transport
+        .watchSessions(device)
+        .listen((_) => unawaited(_refreshStaleSections(device)));
+  }
+
+  Future<void> _refreshStaleSections(DeviceConfig device) async {
+    final context = _cache.snapshot.contexts[device.id];
+    if (context == null) return;
+    bool isStale(ConversationResourceState state) => state == ConversationResourceState.staleError;
+    if (isStale(context.workspaces.state)) {
+      await refreshWorkspaces(device, force: true);
+    }
+    final staleSections = <String?>[
+      if (isStale(context.unscopedConversations.state)) null,
+      for (final entry in context.workspaceConversationPages.entries)
+        if (isStale(entry.value.state)) entry.key,
+    ];
+    await Future.wait([
+      for (final workspaceId in staleSections) _refreshSection(device, workspaceId: workspaceId, force: true),
+    ]);
+  }
+
+  /// Cancels the session-list publication subscriptions.
+  void dispose() {
+    for (final subscription in _sessionPublications.values) {
+      unawaited(subscription.cancel());
+    }
+    _sessionPublications.clear();
   }
 
   // ---------------------------------------------------------------------------

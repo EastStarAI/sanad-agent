@@ -362,6 +362,11 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
   /// catalog both load it when a screen opens) share one request instead of
   /// relaying the same catalog several times over the cloud path.
   final Map<String, Future<ModelCacheSnapshotDto>> _snapshotsInFlight = {};
+  final StreamController<ModelSnapshotPublication> _snapshotPublications =
+      StreamController<ModelSnapshotPublication>.broadcast();
+
+  @override
+  Stream<ModelSnapshotPublication> get modelSnapshots => _snapshotPublications.stream;
 
   @override
   Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) {
@@ -373,7 +378,13 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
       payload: const {},
       expectedEvent: 'model.snapshot_result',
       agent: agent,
-    ).then(ModelCacheSnapshotDto.fromJson);
+    ).then((payload) {
+      final snapshot = ModelCacheSnapshotDto.fromJson(payload);
+      if (!_snapshotPublications.isClosed) {
+        _snapshotPublications.add(ModelSnapshotPublication(deviceId: agent?.id, snapshot: snapshot));
+      }
+      return snapshot;
+    });
     _snapshotsInFlight[key] = future;
     return future.whenComplete(() {
       if (identical(_snapshotsInFlight[key], future)) unawaited(_snapshotsInFlight.remove(key));

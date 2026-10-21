@@ -126,6 +126,11 @@ class _FakeProviderSetupClient extends Fake implements ProviderSetupClient {
   @override
   Stream<ModelCacheUpdateEvent> get modelUpdates => modelUpdatesController.stream;
 
+  final modelSnapshotsController = StreamController<ModelSnapshotPublication>.broadcast();
+
+  @override
+  Stream<ModelSnapshotPublication> get modelSnapshots => modelSnapshotsController.stream;
+
   @override
   Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async {
     callCount++;
@@ -273,6 +278,7 @@ void main() {
 
   tearDown(() async {
     await fakeClient.modelUpdatesController.close();
+    await fakeClient.modelSnapshotsController.close();
     if (getIt.isRegistered<ProviderSetupClient>()) {
       await getIt.unregister<ProviderSetupClient>();
     }
@@ -482,6 +488,51 @@ void main() {
       findsOneWidget,
     );
     expect(thinkingMenuOptionIds(tester), contains('high'));
+  });
+
+  testWidgets('a later successful snapshot for the device clears the Retry chip (Task 124 D5)', (tester) async {
+    fakeClient.shouldThrow = true;
+    final inputSlice = createInputSlice(
+      nextMessageProviderId: 'provider-1',
+      nextMessageModel: 'model-a',
+    );
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsOneWidget);
+    final callsAfterFailure = fakeClient.callCount;
+
+    // Another consumer's snapshot load for this device succeeds later.
+    fakeClient.modelSnapshotsController.add(
+      const ModelSnapshotPublication(
+        deviceId: null,
+        snapshot: ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsNothing);
+    expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+    expect(fakeClient.callCount, callsAfterFailure, reason: 'the published snapshot is adopted without a new request');
   });
 
   testWidgets(
