@@ -47,6 +47,9 @@ class DeviceRepositoryImpl implements IDeviceRepository {
   }
 
   @override
+  bool get isCloudInventoryPending => _manager?.isCloudInventoryPending ?? false;
+
+  @override
   Future<void> setActiveAgent(String? deviceId) {
     return _readyManager.setActiveAgent(deviceId);
   }

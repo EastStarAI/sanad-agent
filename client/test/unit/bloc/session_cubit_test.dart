@@ -2637,6 +2637,9 @@ class _FakeDeviceClientRegistry implements IDeviceClientRegistry, ConversationCl
 }
 
 class _FakeDeviceRepository implements IDeviceRepository {
+  @override
+  bool get isCloudInventoryPending => true;
+
   final _agentsController = StreamController<List<DeviceConfig>>.broadcast();
   List<DeviceConfig> _agents = [];
   String? _activeAgentId;

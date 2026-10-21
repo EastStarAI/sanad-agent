@@ -31,6 +31,7 @@ class DeviceManager {
   final Duration _fetchTimeout;
 
   List<DeviceConfig> _cloudAgents = [];
+  bool _hasAuthoritativeInventory = false;
   List<DeviceConfig> _agents = [];
   List<DeviceConfig> get agents => _agents;
 
@@ -268,6 +269,7 @@ class DeviceManager {
   Future<void> clearAgents() async {
     await setActiveAgent(null);
     _cloudAgents = [];
+    _hasAuthoritativeInventory = false;
     _rebuildInventory();
     _emitAgentsUpdate();
   }
@@ -308,6 +310,22 @@ class DeviceManager {
     _connectionCoordinator.synchronizeCloudInterests(_cloudAgents);
   }
 
+  /// See [IDeviceRepository.isCloudInventoryPending].
+  bool get isCloudInventoryPending {
+    // The cloud gateway is disabled for this Client (local-only development).
+    if (_socket.isLocalTransport) return false;
+    // Signed out: no cloud socket can authenticate.
+    if (!_socket.hasAccessToken) return false;
+    return switch (_socket.lifecycleState) {
+      SocketLifecycleState.connecting || SocketLifecycleState.authenticating => true,
+      // Before the first connect and while Socket.IO reconnects.
+      SocketLifecycleState.disconnected => !_hasAuthoritativeInventory,
+      SocketLifecycleState.ready => !_hasAuthoritativeInventory,
+      SocketLifecycleState.error || SocketLifecycleState.authFailed => false,
+    };
+  }
+
+
   bool get _isCloudGatewayReady => !_socket.isLocalTransport && _socket.lifecycleState == SocketLifecycleState.ready;
 
   Future<void> _handleDevicesResponse(dynamic data) async {
@@ -316,6 +334,7 @@ class DeviceManager {
       _cloudAgents =
           (rawDevices as List?)?.map((json) => DeviceConfig.fromApiResponse(json as Map<String, dynamic>)).toList() ??
           [];
+      _hasAuthoritativeInventory = true;
       _rebuildInventory();
 
       // A successful devices_response is authoritative. If another client

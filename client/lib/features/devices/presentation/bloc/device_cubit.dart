@@ -19,6 +19,11 @@ class DeviceCubit extends Cubit<DeviceState> {
   int _backendFetchesInFlight = 0;
   int _inventoryEpoch = 0;
 
+  /// True while the active device is a fallback for a remembered device that
+  /// cannot appear. The remembered preference is kept, so it is restored when
+  /// it becomes available again unless the user picks a device first.
+  bool _isFallbackSelection = false;
+
   DeviceCubit({
     required this.socketService,
     required this.agentRepository,
@@ -54,7 +59,7 @@ class DeviceCubit extends Cubit<DeviceState> {
 
       final active = _resolveInitialActiveAgent(agentRepository.agents);
       if (active != null) {
-        await switchAgent(active);
+        await _activate(active);
       } else {
         emit(
           DeviceNoActive(
@@ -156,13 +161,19 @@ class DeviceCubit extends Cubit<DeviceState> {
 
     if (state is DeviceActive) {
       final s = state as DeviceActive;
+      final remembered = _isFallbackSelection ? agentRepository.getActiveAgent() : null;
+      if (remembered != null && !remembered.representsDeviceId(s.activeAgent.id)) {
+        _isFallbackSelection = false;
+        unawaited(_activate(remembered));
+        return;
+      }
       final activeMatches = stableAgents.where(
         (agent) => agent.representsDeviceId(s.activeAgent.id) || s.activeAgent.representsDeviceId(agent.id),
       );
       if (activeMatches.isEmpty) {
         final replacement = _resolveInitialActiveAgent(stableAgents);
         if (replacement != null) {
-          unawaited(switchAgent(replacement));
+          unawaited(_activate(replacement));
         } else {
           emit(
             DeviceNoActive(
@@ -180,7 +191,7 @@ class DeviceCubit extends Cubit<DeviceState> {
     } else {
       final active = _resolveInitialActiveAgent(agents);
       if (active != null) {
-        unawaited(switchAgent(active));
+        unawaited(_activate(active));
       } else {
         emit(
           DeviceNoActive(
@@ -203,18 +214,35 @@ class DeviceCubit extends Cubit<DeviceState> {
   /// the wrong device. The subsequent `_handleAgentsUpdated` once the list
   /// arrives will then resolve the persisted device correctly.
   ///
-  /// Only when NO device id is persisted at all do we fall back to a
-  /// sensible default (online registered device, else the local device).
+  /// When NO device id is persisted we fall back to a sensible default
+  /// (online registered device, else the local device). When a persisted
+  /// device can no longer appear because no cloud inventory is pending (cloud
+  /// disabled, signed out, or the cloud socket failed), we fall back the same
+  /// way but keep the persisted id, so the remembered device is restored if it
+  /// returns before the user picks another one.
   DeviceConfig? _resolveInitialActiveAgent(List<DeviceConfig> agents) {
     final persisted = agentRepository.getActiveAgent();
-    if (persisted != null) return persisted;
+    if (persisted != null) {
+      _isFallbackSelection = false;
+      return persisted;
+    }
+    final hasPersistedId = agentRepository.getActiveAgentId() != null;
     // A device id is saved but its config is not loaded yet -> wait for the
     // device list instead of switching to an arbitrary default.
-    if (agentRepository.getActiveAgentId() != null) return null;
-    return _defaultActiveAgent(agents);
+    if (hasPersistedId && agentRepository.isCloudInventoryPending) return null;
+    final fallback = _defaultActiveAgent(agents);
+    _isFallbackSelection = hasPersistedId && fallback != null;
+    return fallback;
   }
 
+  /// Explicit device selection (user or navigation). It ends any fallback,
+  /// so a remembered device is no longer restored over the user's choice.
   Future<void> switchAgent(DeviceConfig config) async {
+    _isFallbackSelection = false;
+    await _activate(config);
+  }
+
+  Future<void> _activate(DeviceConfig config) async {
     agentClientRegistry.getOrCreateClientForAgent(config);
     conversationClientRegistry?.getOrCreateConversationClientForAgent(config);
 
@@ -266,12 +294,13 @@ class DeviceCubit extends Cubit<DeviceState> {
   Future<void> resetForLogout() async {
     _inventoryEpoch++;
     _backendFetchesInFlight = 0;
+    _isFallbackSelection = false;
     await agentRepository.clearAgents();
     agentClientRegistry.retainClientsFor(agentRepository.agents);
     conversationClientRegistry?.retainClientsFor(agentRepository.agents);
     final active = _defaultActiveAgent(agentRepository.agents);
     if (active != null) {
-      await switchAgent(active);
+      await _activate(active);
     } else {
       emit(DeviceNoActive(agents: agentRepository.agents));
     }

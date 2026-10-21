@@ -61,7 +61,17 @@ start and across device switches:
   persisted cloud id is absent, `DeviceManager` clears it before publishing
   the merged inventory so the cubit can select a valid fallback. This
   reconciliation excludes the local-device id because temporary local-daemon
-  unreachability is not authoritative deletion.
+  unreachability is not authoritative deletion. Waiting applies only while a
+  cloud inventory can still arrive (`IDeviceRepository.isCloudInventoryPending`:
+  cloud gateway enabled, access token present, cloud socket connecting,
+  authenticating, reconnecting, or ready before its first authoritative
+  response). When none can arrive (cloud disabled, signed out, `error` or
+  `authFailed`), the cubit selects the default device as a fallback but keeps
+  the persisted id. While that fallback is active, the remembered device is
+  restored as soon as it reappears in inventory; an explicit selection
+  (`switchAgent`, or `setActiveAgent` from a device-scoped route) ends the
+  fallback and the route applies its own device. With no available device the
+  cubit stays `DeviceNoActive` and invents no selection.
 - **Cross-device selection invalidation.** `SessionCubit` treats a
   `selectedSession` whose `deviceId` differs from the snapshot's
   `activeDeviceId` as no selection for the new device. It then restores the
