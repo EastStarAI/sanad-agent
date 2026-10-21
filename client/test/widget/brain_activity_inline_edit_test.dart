@@ -810,5 +810,40 @@ void main() {
     expect(find.descendant(of: chip, matching: find.byIcon(Icons.insert_drive_file_outlined)), findsOneWidget);
     expect(loader.loadedIds, isEmpty);
   });
-}
 
+  testWidgets('inline edit oversized add shows a dismissible error that clears on remove and next valid add', (tester) async {
+    var picks = [InlineEditAttachmentSelection(name: 'huge.png', bytes: Uint8List(5 * 1024 * 1024 + 1))];
+    await pumpView(tester, initialMessages: [initialUserEvent], pickEditAttachmentFiles: () async => picks);
+    await tester.tap(find.byTooltip('Edit message'));
+    await tester.pumpAndSettle();
+
+    Future<void> add() async {
+      await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+      await tester.pumpAndSettle();
+    }
+
+    Finder error() => find.byKey(const Key('inline_edit_attachment_error'));
+
+    // Explicit dismiss.
+    await add();
+    expect(tester.widget<Text>(error()).data, 'Each attachment must be 5 MiB or smaller.');
+    await tester.tap(find.byKey(const Key('inline_edit_attachment_error_dismiss')));
+    await tester.pumpAndSettle();
+    expect(error(), findsNothing);
+
+    // Next valid add clears a fresh rejection.
+    await add();
+    expect(error(), findsOneWidget);
+    picks = [InlineEditAttachmentSelection(name: 'small.txt', bytes: Uint8List.fromList(const [1]))];
+    await add();
+    expect(error(), findsNothing);
+
+    // Removing an attachment clears a fresh rejection.
+    picks = [InlineEditAttachmentSelection(name: 'huge2.png', bytes: Uint8List(5 * 1024 * 1024 + 1))];
+    await add();
+    expect(error(), findsOneWidget);
+    await tester.tap(find.byTooltip('Remove attachment').last);
+    await tester.pumpAndSettle();
+    expect(error(), findsNothing);
+  });
+}

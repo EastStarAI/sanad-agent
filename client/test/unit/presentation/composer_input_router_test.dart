@@ -358,7 +358,10 @@ void main() {
         source: DraftAttachmentSource.picker,
       );
 
-      expect(inputCubit.state.attachmentError, 'Each attachment must be 5 MiB or smaller.');
+      expect(
+        inputCubit.state.attachmentError,
+        const DraftAttachmentError(DraftAttachmentErrorKind.tooLarge, limit: 5 * 1024 * 1024),
+      );
       expect(inputCubit.state.draftAttachments, isEmpty);
       expect(controller.fileTokensByMarker, isEmpty);
     });

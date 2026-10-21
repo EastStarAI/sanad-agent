@@ -17,6 +17,8 @@ import 'package:sanad_client/features/conversations/presentation/bloc/session_me
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/composer_input_router.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/draft_attachment_error_text.dart';
+import 'package:sanad_client/l10n/app_localizations_en.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/provider_route_label.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
@@ -430,7 +432,7 @@ class _AttachmentRail extends StatelessWidget {
   });
 
   final List<DraftAttachment> attachments;
-  final String? error;
+  final DraftAttachmentError? error;
   final Color borderColor;
   final Color dimTextColor;
 
@@ -509,19 +511,47 @@ class _AttachmentRail extends StatelessWidget {
                   ),
               ],
             ),
-          if (error != null) ...[
+          if (error case final error?) ...[
             const SizedBox(height: 6),
-            Text(
-              error!,
-              key: const Key('attachment_error'),
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontSize: 12,
-              ),
+            _AttachmentErrorLine(
+              error: error,
+              onDismiss: () => context.read<ConversationInputCubit>().clearAttachmentError(),
             ),
           ],
         ],
       ),
+    );
+  }
+}
+
+/// Transient attachment rejection with an explicit dismiss control.
+class _AttachmentErrorLine extends StatelessWidget {
+  const _AttachmentErrorLine({required this.error, required this.onDismiss});
+
+  final DraftAttachmentError error;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context) ?? AppLocalizationsEn();
+    final color = Theme.of(context).colorScheme.error;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            DraftAttachmentErrorText.describe(l10n, error),
+            key: const Key('attachment_error'),
+            style: TextStyle(color: color, fontSize: 12),
+          ),
+        ),
+        IconButton(
+          key: const Key('attachment_error_dismiss'),
+          tooltip: l10n.attachmentErrorDismiss,
+          onPressed: onDismiss,
+          icon: Icon(Symbols.close, size: 16, color: color),
+          visualDensity: VisualDensity.compact,
+        ),
+      ],
     );
   }
 }

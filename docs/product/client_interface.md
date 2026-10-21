@@ -185,8 +185,13 @@ text paste is unchanged. File-token names and paths are escaped in the exported
 link, so names with brackets and paths with parentheses survive send and draft
 restore, where a saved draft turns its file links back into tokens.
 
-Attachment limits (5 MiB per file, at most four files, and 20 MiB total per
-message) apply to the rail only. Image tiles on the rail show a thumbnail, safe
+Attachment limits (by default 5 MiB per file, at most four files, and 20 MiB
+total per message, or the limits the agent advertises) apply to the rail only.
+A rejected file shows a short localized message stating the limit that applied,
+with a close control. The message is temporary: it disappears when dismissed,
+when any attachment is removed, after the next successful add, on Send, and when
+switching to another conversation, and it never comes back with a restored
+draft. The inline message editor behaves the same way. Image tiles on the rail show a thumbnail, safe
 name, size, status, and remove action; other files admitted to the rail use
 compact icon cards with the same controls. Validation or remote transfer shows
 progress, and Send remains unavailable until every attachment is ready. A failed

@@ -24,6 +24,10 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/draft_attachment_error_text.dart';
+import 'package:sanad_client/features/devices/domain/models/capability.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/l10n/app_localizations_en.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -1037,27 +1041,28 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     return selections;
   }
 
+  /// Inline edit has no device capability in scope, so it enforces the
+  /// canonical attachment limits through the same policy as the composer.
+  static const Capability _inlineAttachmentCapability = Capability(supportsAttachments: true);
+
   String? _inlineAttachmentValidationError(
     int nextBytes, {
     String? excludingId,
   }) {
     final retained = _editAttachments.where((attachment) => attachment.id != excludingId).toList(growable: false);
-    if (retained.length >= 4) {
-      return 'A message accepts at most 4 attachments.';
-    }
-    if (nextBytes > 5 * 1024 * 1024) {
-      return 'Each attachment must be 5 MiB or smaller.';
-    }
-    final total =
-        retained.fold<int>(
-          0,
-          (sum, item) => sum + item.sizeBytes,
-        ) +
-        nextBytes;
-    if (total > 20 * 1024 * 1024) {
-      return 'Attachments must total 20 MiB or less per message.';
-    }
-    return null;
+    final rejection = DraftAttachmentPolicy.check(
+      capability: _inlineAttachmentCapability,
+      existingCount: retained.length,
+      existingBytes: retained.fold<int>(0, (sum, item) => sum + item.sizeBytes),
+      nextBytes: nextBytes,
+    );
+    if (rejection == null) return null;
+    return DraftAttachmentErrorText.describe(AppLocalizations.of(context) ?? AppLocalizationsEn(), rejection);
+  }
+
+  void _dismissInlineEditAttachmentError() {
+    if (_editAttachmentError == null) return;
+    setState(() => _editAttachmentError = null);
   }
 
   static String _safeAttachmentName(String input) {
@@ -1550,6 +1555,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         onAddEditAttachment: _editingEventId == event.id ? _addInlineEditAttachments : null,
         onRemoveEditAttachment: _editingEventId == event.id ? _removeInlineEditAttachment : null,
         onRetryEditAttachment: _editingEventId == event.id ? _retryInlineEditAttachment : null,
+        onDismissEditAttachmentError: _editingEventId == event.id ? _dismissInlineEditAttachmentError : null,
         onBeginEdit: canReplay ? () => _beginInlineEdit(event) : null,
         onCancelEdit: _cancelInlineEdit,
         onSubmitEdit: canReplay

@@ -1202,6 +1202,91 @@ void main() {
       'model-reconfigured',
     );
   });
+
+  group('draft attachment error is transient feedback (114 live defect)', () {
+    const capability = Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: 5 * 1024 * 1024,
+      attachmentMaxFilesPerMessage: 4,
+      attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+    );
+
+    Future<void> addOversized() => inputCubit.addDraftAttachment(
+      name: 'huge.png',
+      bytes: Uint8List(5 * 1024 * 1024 + 1),
+      source: DraftAttachmentSource.picker,
+      capability: capability,
+    );
+
+    Future<void> addValid([String name = 'small.png']) => inputCubit.addDraftAttachment(
+      name: name,
+      bytes: Uint8List.fromList(const [1, 2, 3]),
+      source: DraftAttachmentSource.picker,
+      capability: capability,
+    );
+
+    Future<void> readyRoute() async {
+      messagesCubit.emitState(
+        const SessionMessagesState(nextMessageProviderId: 'provider-1', nextMessageModel: 'model-1'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await inputCubit.selectModel(scope: CapabilityValueScope.message, providerId: 'provider-1', model: 'model-1');
+      inputCubit.selectWorkspace(workspace);
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('user repro: oversized add, remove another attachment, switch away and back, error stays gone', () async {
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-a');
+      await addValid();
+      await addOversized();
+      expect(inputCubit.state.attachmentError, isNotNull);
+
+      inputCubit.removeDraftAttachment(inputCubit.state.draftAttachments.single.id);
+      expect(inputCubit.state.attachmentError, isNull);
+
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-b');
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-a');
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    test('switching sessions clears the error and never restores it from the draft cache', () async {
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-a');
+      await addValid();
+      await addOversized();
+      expect(inputCubit.state.attachmentError, isNotNull);
+
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-b');
+      expect(inputCubit.state.attachmentError, isNull);
+
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'session-a');
+      expect(inputCubit.state.attachmentError, isNull, reason: 'the error is not part of the draft');
+      expect(inputCubit.state.draftAttachments, hasLength(1), reason: 'the attachments themselves are restored');
+    });
+
+    test('the next successful add clears it', () async {
+      await addOversized();
+      expect(inputCubit.state.attachmentError, isNotNull);
+      await addValid();
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    test('a text-only send clears it', () async {
+      await readyRoute();
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+      await addOversized();
+      expect(inputCubit.state.attachmentError, isNotNull);
+
+      await inputCubit.sendMessage('hello');
+      expect(conversationRepository.sentMessages, ['hello']);
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    test('an explicit dismiss clears it', () async {
+      await addOversized();
+      inputCubit.clearAttachmentError();
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+  });
 }
 
 SessionRouteSnapshot _route({

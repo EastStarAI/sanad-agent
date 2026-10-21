@@ -101,6 +101,22 @@ See each task file's progress log for locations and regression tests.
 - **114e:** the media tool names were duplicated across three agent and four client sites; the deferred-result completion path still deferred only `view_image`.
 - **114f:** no behavioral defect; port adaptation for the changed OpenAI serializer signature; exactly-once disclosure assertions added.
 
+### Live-found defects
+
+- **114a (Test Home 3, candidate `389caede`):** after "Each attachment must be 5 MiB or smaller." appeared in the composer it could not be dismissed and stayed after the user removed attachments. Causes:
+  - the rejected file never enters the rail, so there was nothing to remove for it;
+  - no dismiss control existed;
+  - a text-only send did not clear the error;
+  - `ConversationInputCubit` cached the error with each draft scope, so returning to a session restored it;
+  - the copy was hardcoded English with fixed 4 / 5 MiB / 20 MiB, even when the agent advertises other limits, and the inline editor duplicated the rule.
+
+  Fix (114h on `feat/114-port`): a typed `DraftAttachmentError` from one `DraftAttachmentPolicy`, never cached per scope. It clears on remove, next successful add, send, scope change, and an explicit × (`attachment_error_dismiss`, `inline_edit_attachment_error_dismiss`), with localized en/ar copy stating the enforced limit. Red-first regressions:
+  - `test/unit/bloc/conversation_input_cubit_test.dart` ("transient feedback" group): the scope-restore and text-only-send cases failed on the old code;
+  - `test/widget/composer_input_routing_and_paste_test.dart` ("Attachment rejection feedback"): the old code showed `5 MiB` for a 1 MiB agent limit and had no dismiss;
+  - `test/widget/brain_activity_inline_edit_test.dart` (inline dismiss/remove/next add).
+
+  Red logs: `temp/114/114h-red-cubit.log`, `temp/114/114h-red-widget.log`. The inline editor has no device capability in scope and enforces the canonical default limits. Its other non-limit messages ("Could not open the selected attachment.", "Remove or retry failed attachments before sending.") remain English.
+
 ### Verification (port worktree)
 
 - `fvm dart analyze` (agent): no issues. `fvm flutter analyze` (client): no issues.

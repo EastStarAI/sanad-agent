@@ -54,6 +54,7 @@ class EventTile extends StatefulWidget {
   final Future<void> Function()? onAddEditAttachment;
   final ValueChanged<String>? onRemoveEditAttachment;
   final ValueChanged<String>? onRetryEditAttachment;
+  final VoidCallback? onDismissEditAttachmentError;
 
   const EventTile({
     super.key,
@@ -82,6 +83,7 @@ class EventTile extends StatefulWidget {
     this.onAddEditAttachment,
     this.onRemoveEditAttachment,
     this.onRetryEditAttachment,
+    this.onDismissEditAttachmentError,
   });
 
   @override
@@ -224,6 +226,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           onAddEditAttachment: widget.onAddEditAttachment,
           onRemoveEditAttachment: widget.onRemoveEditAttachment,
           onRetryEditAttachment: widget.onRetryEditAttachment,
+          onDismissEditAttachmentError: widget.onDismissEditAttachmentError,
         );
       case EventKind.informational:
         if (widget.event.metadata?['informational_kind'] == 'session_fork') {

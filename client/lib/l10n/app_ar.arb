@@ -445,5 +445,10 @@
   "lightboxDownloadSaved": "تم حفظ {fileName} في التنزيلات",
   "lightboxDownloadStarted": "جارٍ تنزيل {fileName}",
   "lightboxDownloadFailed": "تعذّر حفظ الصورة",
-  "lightboxImageUnavailable": "الصورة غير متاحة"
+  "lightboxImageUnavailable": "الصورة غير متاحة",
+  "attachmentErrorUnsupported": "هذا الوكيل لا يدعم المرفقات.",
+  "attachmentErrorTooLarge": "يجب ألا يتجاوز حجم كل مرفق {limit}.",
+  "attachmentErrorTooMany": "تقبل الرسالة {count} مرفقات كحد أقصى.",
+  "attachmentErrorTotalTooLarge": "يجب ألا يتجاوز مجموع المرفقات {limit} لكل رسالة.",
+  "attachmentErrorDismiss": "إغلاق"
 }

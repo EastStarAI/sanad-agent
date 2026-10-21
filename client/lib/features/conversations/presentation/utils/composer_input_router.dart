@@ -152,7 +152,7 @@ class ComposerRoutableItem {
 class ComposerInputRouter {
   ComposerInputRouter._();
 
-  static const int defaultMaxAttachmentBytes = 5 * 1024 * 1024; // 5 MiB
+  static const int defaultMaxAttachmentBytes = Capability.defaultAttachmentMaxFileBytes;
 
   static ComposerItemFormatKind detectFormatKind(String fileName) {
     final ext = fileName.toLowerCase().split('.').lastOrNull ?? '';
@@ -252,9 +252,7 @@ class ComposerInputRouter {
     required DraftAttachmentSource source,
   }) async {
     final isSameMachine = isSameMachineAgent(activeAgent);
-    final maxAttachmentBytes = capability.attachmentMaxFileBytes > 0
-        ? capability.attachmentMaxFileBytes
-        : defaultMaxAttachmentBytes;
+    final maxAttachmentBytes = DraftAttachmentPolicy.maxFileBytes(capability);
     final decision = decideRoute(
       item: item,
       isSameMachine: isSameMachine,
@@ -280,11 +278,13 @@ class ComposerInputRouter {
         break;
 
       case ComposerRoutingDecision.rejectTooLarge:
-        inputCubit.setAttachmentError(ConversationInputCubit.attachmentTooLargeError);
+        inputCubit.setAttachmentError(
+          DraftAttachmentError(DraftAttachmentErrorKind.tooLarge, limit: maxAttachmentBytes),
+        );
         break;
 
       case ComposerRoutingDecision.rejectUnsupported:
-        inputCubit.setAttachmentError(ConversationInputCubit.attachmentsUnsupportedError);
+        inputCubit.setAttachmentError(const DraftAttachmentError(DraftAttachmentErrorKind.unsupported));
         break;
     }
   }

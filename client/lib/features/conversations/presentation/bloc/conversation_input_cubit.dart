@@ -27,7 +27,9 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
 
   final SessionMessagesCubit messagesCubit;
   StreamSubscription? _messagesSubscription;
-  final Map<String, ({List<DraftAttachment> attachments, String? error})> _draftsByScope = {};
+  /// Draft attachments per device/session scope. The attachment error is
+  /// transient feedback and is deliberately not part of this cache.
+  final Map<String, List<DraftAttachment>> _draftsByScope = {};
   String _draftScope = '';
 
   ConversationInputCubit({
@@ -50,18 +52,13 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     final nextScope = '${deviceId ?? ''}\u0000${sessionId ?? ''}';
     if (nextScope == _draftScope) return;
     if (_draftScope.isNotEmpty) {
-      _draftsByScope[_draftScope] = (
-        attachments: state.draftAttachments,
-        error: state.attachmentError,
-      );
+      _draftsByScope[_draftScope] = state.draftAttachments;
     }
     _draftScope = nextScope;
-    final restored = _draftsByScope[nextScope];
     emit(
       state.copyWith(
-        draftAttachments: restored?.attachments ?? const [],
-        attachmentError: restored?.error,
-        clearAttachmentError: restored?.error == null,
+        draftAttachments: _draftsByScope[nextScope] ?? const [],
+        clearAttachmentError: true,
       ),
     );
   }
@@ -71,47 +68,21 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     emit(state.copyWith(isAwaitingMessageAcceptance: isPending));
   }
 
-  /// Draft-attachment rejection copy shared by the cubit and the composer
-  /// input router so both surfaces report the same reason.
-  static const String attachmentsUnsupportedError = 'Attachments are not supported by this agent.';
-  static const String attachmentTooLargeError = 'Each attachment must be 5 MiB or smaller.';
-
   Future<void> addDraftAttachment({
     required String name,
     required Uint8List bytes,
     required DraftAttachmentSource source,
     required Capability capability,
   }) async {
-    if (!capability.supportsAttachments) {
-      emit(
-        state.copyWith(
-          attachmentError: attachmentsUnsupportedError,
-        ),
-      );
-      return;
-    }
     final current = state.draftAttachments;
-    final maxFileBytes = capability.attachmentMaxFileBytes > 0
-        ? capability.attachmentMaxFileBytes
-        : Capability.defaultAttachmentMaxFileBytes;
-    final maxFiles = capability.attachmentMaxFilesPerMessage > 0
-        ? capability.attachmentMaxFilesPerMessage
-        : Capability.defaultAttachmentMaxFilesPerMessage;
-    final maxTotalBytes = capability.attachmentMaxTotalBytesPerMessage > 0
-        ? capability.attachmentMaxTotalBytesPerMessage
-        : Capability.defaultAttachmentMaxTotalBytesPerMessage;
-
-    if (bytes.length > maxFileBytes) {
-      emit(state.copyWith(attachmentError: attachmentTooLargeError));
-      return;
-    }
-    if (current.length >= maxFiles) {
-      emit(state.copyWith(attachmentError: 'A message accepts at most 4 attachments.'));
-      return;
-    }
-    final total = current.fold<int>(0, (sum, item) => sum + item.sizeBytes) + bytes.length;
-    if (total > maxTotalBytes) {
-      emit(state.copyWith(attachmentError: 'Attachments must total 20 MiB or less per message.'));
+    final rejection = DraftAttachmentPolicy.check(
+      capability: capability,
+      existingCount: current.length,
+      existingBytes: current.fold<int>(0, (sum, item) => sum + item.sizeBytes),
+      nextBytes: bytes.length,
+    );
+    if (rejection != null) {
+      emit(state.copyWith(attachmentError: rejection));
       return;
     }
     final item = DraftAttachment(
@@ -153,7 +124,7 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     );
   }
 
-  void setAttachmentError(String error) {
+  void setAttachmentError(DraftAttachmentError error) {
     emit(state.copyWith(attachmentError: error));
   }
 
@@ -237,6 +208,8 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
       return;
     }
 
+    // Sending is a new user action: earlier rejection feedback is stale.
+    if (state.attachmentError != null) emit(state.copyWith(clearAttachmentError: true));
     try {
       final accepted = await messagesCubit.sendMessage(
         trimmedText,
@@ -255,11 +228,11 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
       if (accepted && attachments.isNotEmpty) {
         final cached = _draftsByScope[submittedScope];
         if (cached != null) {
-          final remaining = cached.attachments.where((item) => !submittedIds.contains(item.id)).toList(growable: false);
+          final remaining = cached.where((item) => !submittedIds.contains(item.id)).toList(growable: false);
           if (remaining.isEmpty) {
             _draftsByScope.remove(submittedScope);
           } else {
-            _draftsByScope[submittedScope] = (attachments: List.unmodifiable(remaining), error: cached.error);
+            _draftsByScope[submittedScope] = List.unmodifiable(remaining);
           }
         }
         if (_draftScope == submittedScope) {

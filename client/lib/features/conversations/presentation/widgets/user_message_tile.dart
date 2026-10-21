@@ -18,6 +18,8 @@ import 'package:sanad_client/features/conversations/presentation/utils/text_util
 import 'package:sanad_client/features/conversations/presentation/widgets/multiline_submission_shortcuts.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/media/image_lightbox.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/l10n/app_localizations_en.dart';
 // ignore: depend_on_referenced_packages
 import 'package:markdown/markdown.dart' as md;
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
@@ -87,6 +89,9 @@ class UserMessageTile extends StatefulWidget {
   final Future<void> Function()? onAddEditAttachment;
   final ValueChanged<String>? onRemoveEditAttachment;
   final ValueChanged<String>? onRetryEditAttachment;
+
+  /// Dismisses [editAttachmentError]; `null` hides the close control.
+  final VoidCallback? onDismissEditAttachmentError;
   final Future<void> Function(String? url)? onOpenUrl;
 
   const UserMessageTile({
@@ -109,6 +114,7 @@ class UserMessageTile extends StatefulWidget {
     this.onAddEditAttachment,
     this.onRemoveEditAttachment,
     this.onRetryEditAttachment,
+    this.onDismissEditAttachmentError,
     this.onOpenUrl,
   });
 
@@ -546,10 +552,24 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
       ),
       if (widget.editAttachmentError case final error?) ...[
         const SizedBox(height: 6),
-        Text(
-          error,
-          key: const Key('inline_edit_attachment_error'),
-          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                error,
+                key: const Key('inline_edit_attachment_error'),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+            if (widget.onDismissEditAttachmentError case final dismiss?)
+              IconButton(
+                key: const Key('inline_edit_attachment_error_dismiss'),
+                tooltip: (AppLocalizations.of(context) ?? AppLocalizationsEn()).attachmentErrorDismiss,
+                visualDensity: VisualDensity.compact,
+                onPressed: dismiss,
+                icon: Icon(Icons.close, size: 16, color: Theme.of(context).colorScheme.error),
+              ),
+          ],
         ),
       ],
     ],

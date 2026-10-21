@@ -547,5 +547,40 @@
   "lightboxImageUnavailable": "Image unavailable",
   "@lightboxImageUnavailable": {
     "description": "Shown in the lightbox when the selected image's bytes could not be loaded."
+  },
+  "attachmentErrorUnsupported": "Attachments are not supported by this agent.",
+  "@attachmentErrorUnsupported": {
+    "description": "Composer feedback when the agent does not accept attachments."
+  },
+  "attachmentErrorTooLarge": "Each attachment must be {limit} or smaller.",
+  "@attachmentErrorTooLarge": {
+    "description": "Composer feedback for a file over the agent's per-file limit; {limit} is a formatted size such as 5 MiB.",
+    "placeholders": {
+      "limit": {
+        "type": "String"
+      }
+    }
+  },
+  "attachmentErrorTooMany": "A message accepts at most {count} attachments.",
+  "@attachmentErrorTooMany": {
+    "description": "Composer feedback when the agent's per-message attachment count is reached.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "attachmentErrorTotalTooLarge": "Attachments must total {limit} or less per message.",
+  "@attachmentErrorTotalTooLarge": {
+    "description": "Composer feedback for exceeding the agent's per-message total size; {limit} is a formatted size such as 20 MiB.",
+    "placeholders": {
+      "limit": {
+        "type": "String"
+      }
+    }
+  },
+  "attachmentErrorDismiss": "Dismiss",
+  "@attachmentErrorDismiss": {
+    "description": "Tooltip of the close control that dismisses an attachment error."
   }
 }

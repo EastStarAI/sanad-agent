@@ -172,6 +172,7 @@ void main() {
     Capability capabilities = const Capability(supportsAttachments: true),
     Future<ClipboardReader?> Function()? readClipboard,
     Future<List<XFile>> Function()? pickAttachmentFiles,
+    Locale? locale,
   }) async {
     final agentSlice = ConversationInputAgentSlice(
       activeAgent: activeAgent,
@@ -186,6 +187,7 @@ void main() {
           BlocProvider<ConversationInputCubit>.value(value: inputCubit),
         ],
         child: MaterialApp(
+          locale: locale,
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: kSupportedLocales,
           home: Scaffold(
@@ -527,6 +529,47 @@ void main() {
       expect(chatController.text, 'pasted text');
       expect(inputCubit.state.draftAttachments, isEmpty);
       expect(chatController.fileTokensByMarker, isEmpty);
+    });
+  });
+
+  group('Attachment rejection feedback (114 live defect)', () {
+    // A 1 MiB agent limit proves the copy states the advertised limit
+    // instead of a fixed "5 MiB".
+    const oneMiB = 1024 * 1024;
+    const limited = Capability(supportsAttachments: true, attachmentMaxFileBytes: oneMiB);
+
+    Future<void> pickOversized(WidgetTester tester, {Locale? locale}) async {
+      await pumpComposer(
+        tester,
+        activeAgent: remoteAgent,
+        capabilities: limited,
+        locale: locale,
+        pickAttachmentFiles: () async => [XFile.fromData(Uint8List(2 * oneMiB), path: 'huge.png')],
+      );
+      await tester.tap(find.byKey(const Key('composer_add_attachment')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    testWidgets('states the real limit and is dismissed with its close control', (tester) async {
+      await pickOversized(tester);
+
+      expect(inputCubit.state.draftAttachments, isEmpty);
+      expect(tester.widget<Text>(find.byKey(const Key('attachment_error'))).data, 'Each attachment must be 1 MiB or smaller.');
+
+      await tester.tap(find.byKey(const Key('attachment_error_dismiss')));
+      await tester.pump();
+      expect(find.byKey(const Key('attachment_error')), findsNothing);
+      expect(inputCubit.state.attachmentError, isNull);
+    });
+
+    testWidgets('is localized in Arabic with the same limit', (tester) async {
+      await pickOversized(tester, locale: const Locale('ar'));
+
+      final ar = lookupAppLocalizations(const Locale('ar'));
+      expect(tester.widget<Text>(find.byKey(const Key('attachment_error'))).data, ar.attachmentErrorTooLarge('1 MiB'));
+      expect(ar.attachmentErrorTooLarge('1 MiB'), isNot('Each attachment must be 1 MiB or smaller.'));
+      expect(find.byKey(const Key('attachment_error_dismiss')), findsOneWidget);
     });
   });
 
