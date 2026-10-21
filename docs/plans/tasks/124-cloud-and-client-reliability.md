@@ -323,3 +323,24 @@ B also sent two concurrent `model.snapshot` requests per screen (provider setup 
 ### D6 — `device.fallback restored` is in-process only (Low, by design)
 
 The fallback marker lives in memory. `device.fallback restored` can only fire when the remembered device reappears while the same process is running, for example when a failed cloud socket recovers. A `stop`/`run` restart resolves the persisted device directly and logs no fallback line. That is the expected outcome, and it is proved by the selected device and `active_device_id`, not by the log line. The wording is now in `client/lib/features/devices/AGENTS.md`.
+
+### Round 3 Verification
+
+`origin/main` is unchanged (`4fa4dd72`).
+
+| Gate | Result | Log |
+|---|---|---|
+| `fvm flutter analyze` (client) | no issues | — |
+| `fvm dart analyze` (agent) | no issues | — |
+| Client full suite | 1,959 passed | `temp/g3/r3-final-client-suite.log` |
+| Agent full suite | 3,233 passed, 14 skipped | `temp/g3/r3-final-agent-suite.log` |
+| Client E2E (`local_dual_connection`, `hosted_attachment_relay`), `--concurrency=1` | 14 passed | `temp/g3/r3-final-e2e.log` |
+| `fvm dart run scripts/lint_wiki.dart` | success | — |
+
+### Round 3 Live Checks
+
+- **D4:** with B on cloud and A selected, run `sanad-dev restart client` on B.
+  - B must send one `model.snapshot` where it used to send two concurrent ones.
+  - `model.snapshot_result` must reach B in seconds, not 18–60 s.
+  - All five section `sessions_list` replies must arrive before the 10 s timeout, with no "Failed to get sessions".
+- **D5:** force a section failure, then let a later `get_sessions` succeed (for example through the R4 Agent restart). The "Could not refresh all sections" banner and a thinking-mode "Retry" chip must clear without a tap.
