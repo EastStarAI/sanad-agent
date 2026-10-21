@@ -544,7 +544,7 @@ Cleanup rules:
 
 1. Resources register a cleanup callback and receive a `release()` handle.
 2. `cancel()` is idempotent and joins one bounded cleanup operation.
-3. The default cleanup deadline is five seconds (`RunCancellationScope.defaultCleanupDeadline`), shared with `SessionRunOrchestrator.runStopCleanupTimeout`.
+3. The default cleanup deadline is five seconds (`RunCancellationScope.defaultCleanupDeadline`), shared with `SessionStopCoordinator.defaultRunStopCleanupTimeout` (aliased as `SessionRunOrchestrator.runStopCleanupTimeout`).
 4. Deadline or cleanup failure becomes `cleanup_failed`; the session must not remain in `stopping` indefinitely.
 
 See also `docs/technical/run_cancellation_and_process_ownership.md`.

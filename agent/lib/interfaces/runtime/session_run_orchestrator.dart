@@ -66,12 +66,16 @@ typedef PersistedSuspendedDecisionResumer = Future<bool> Function({
 });
 
 class SessionRunOrchestrator implements SessionQueueProviderOverride {
-  static const controlledRestartCheckpointTimeout = Duration(minutes: 1);
-  static const providerRestartCancellationTimeout = Duration(seconds: 5);
-  static const runStopCleanupTimeout = Duration(seconds: 5);
-  static const controlledRestartCheckpointPollInterval = Duration(
-    milliseconds: 25,
-  );
+  // Restart and stop timeouts are owned by the restart checkpoint manager and
+  // the stop coordinator; these aliases keep the orchestrator's public names.
+  static const controlledRestartCheckpointTimeout =
+      SessionRestartCheckpointManager.controlledRestartCheckpointTimeout;
+  static const providerRestartCancellationTimeout =
+      SessionRestartCheckpointManager.providerRestartCancellationTimeout;
+  static const runStopCleanupTimeout =
+      SessionStopCoordinator.defaultRunStopCleanupTimeout;
+  static const controlledRestartCheckpointPollInterval =
+      SessionRestartCheckpointManager.controlledRestartCheckpointPollInterval;
   final _logger = Logger('SessionRunOrchestrator');
 
   final Map<String, SuspendedRun> _suspendedEvents = {};

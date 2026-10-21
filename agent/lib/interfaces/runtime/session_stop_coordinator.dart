@@ -16,6 +16,9 @@ import 'session_turn_executor.dart';
 /// Coordinates graceful and authoritative session stopping, active run
 /// cancellation, tool terminalization, stop draft recovery, and queue draining.
 class SessionStopCoordinator {
+  /// Bound on waiting for an active run to unwind after a stop request.
+  static const defaultRunStopCleanupTimeout = Duration(seconds: 5);
+
   SessionStopCoordinator({
     required SessionTurnExecutor turnExecutor,
     required SessionQueueCoordinator queueCoordinator,
@@ -26,7 +29,7 @@ class SessionStopCoordinator {
     listRecoverableSuspensions,
     required void Function(GatewayResponse) emitResponse,
     required void Function(String sessionId) drainNextQueuedEvent,
-    this.runStopCleanupTimeout = const Duration(seconds: 5),
+    this.runStopCleanupTimeout = defaultRunStopCleanupTimeout,
     Logger? logger,
   })  : _turnExecutor = turnExecutor,
         _queueCoordinator = queueCoordinator,
