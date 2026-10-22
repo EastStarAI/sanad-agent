@@ -125,6 +125,64 @@ class UiElement {
   }
 }
 
+/// Evidence channel behind an action's post-condition verdict.
+///
+/// `verification` is always one of these wire values and `verified` is always
+/// the matching boolean, so a strict consumer can type both fields. The channel
+/// is a property of what was observed, not of what the caller asked for: the
+/// same physical outcome reports the same value with or without `--verify`.
+///
+/// A channel that proves the post-condition (`key`, `present`, `absent`, `text`,
+/// `tree`) reports `verified: true`. The remaining values describe why no
+/// positive proof exists:
+///
+/// - `no_observable_change`: the action was dispatched and the bounded window
+///   elapsed without an observable change.
+/// - `none`: no evidence channel exists or produced a verdict at all — the
+///   action failed before observation, verification was disabled, or the step
+///   makes no post-condition claim.
+/// - `type_census`: the rendered type census proved that the type is still
+///   rendered, so the requested absence cannot be claimed.
+enum UiVerification {
+  key('key'),
+  present('present'),
+  absent('absent'),
+  text('text'),
+  tree('tree'),
+  noObservableChange('no_observable_change'),
+  none('none'),
+  typeCensus('type_census');
+
+  const UiVerification(this.wire);
+
+  /// Stable JSON value of this channel; part of the public command contract.
+  final String wire;
+
+  /// Whether this channel proves the action's post-condition.
+  bool get verified => _provingChannels.contains(this);
+
+  /// Every wire value, in declaration order, for documentation and tests.
+  static List<String> get wireValues =>
+      UiVerification.values.map((channel) => channel.wire).toList();
+
+  /// Parses a wire value back to its channel, or null when it is not part of
+  /// the documented set.
+  static UiVerification? fromWire(String value) {
+    for (final channel in UiVerification.values) {
+      if (channel.wire == value) return channel;
+    }
+    return null;
+  }
+}
+
+const Set<UiVerification> _provingChannels = {
+  UiVerification.key,
+  UiVerification.present,
+  UiVerification.absent,
+  UiVerification.text,
+  UiVerification.tree,
+};
+
 /// The result of an executed UI action.
 class DriverActionResult {
   final bool success;
@@ -133,21 +191,54 @@ class DriverActionResult {
   final Map<String, dynamic>? data;
   final Duration duration;
 
+  /// Exact widget key of the resolved target, when the action resolved one.
+  final String? targetKey;
+
+  /// Rendered target position in global coordinates, when the action reports
+  /// one (tap).
+  final int? x;
+  final int? y;
+
+  /// Snapshot generation observed after the action completed.
+  final int? generation;
+
+  /// Evidence channel behind this action's post-condition verdict. Always set,
+  /// so `verification` is never absent from an action result.
+  final UiVerification verification;
+
+  /// Whether [verification] proves the post-condition. Always a boolean on the
+  /// wire.
+  bool get verified => verification.verified;
+
   const DriverActionResult({
     required this.success,
     required this.action,
     required this.message,
     this.data,
     required this.duration,
+    this.targetKey,
+    this.x,
+    this.y,
+    this.generation,
+    required this.verification,
   });
 
-  Map<String, dynamic> toJson() => {
-    'success': success,
-    'action': action,
-    'message': message,
-    'duration_ms': duration.inMilliseconds,
-    if (data != null) 'data': data,
-  };
+  Map<String, dynamic> toJson() {
+    final payload = <String, dynamic>{
+      'success': success,
+      'action': action,
+      'message': message,
+      'duration_ms': duration.inMilliseconds,
+      if (data != null) 'data': data,
+      if (targetKey != null) 'key': targetKey,
+      if (x != null) 'x': x,
+      if (y != null) 'y': y,
+    };
+    if (generation != null) payload['generation'] = generation;
+    payload['verified'] = verified;
+    payload['verification'] = verification.wire;
+    return payload;
+  }
 
   @override
   String toString() =>
@@ -175,6 +266,22 @@ class BatchStep {
   final int? delayMs;
   final int? sleepMs;
 
+  /// Post-condition keys for a `tap` step.
+  final String? expect;
+  final String? expectAbsent;
+
+  /// Skips post-condition verification for a single step.
+  final bool noVerify;
+
+  /// Turns an unchanged tree from "reported" into a step failure.
+  final bool strictVerify;
+
+  /// Requests a quiesced re-capture for a `snapshot` step.
+  final bool fresh;
+
+  /// Judges the first probe of a `wait_for` step instead of waiting.
+  final bool noWait;
+
   const BatchStep({
     required this.action,
     this.key,
@@ -194,6 +301,12 @@ class BatchStep {
     this.timeoutSeconds,
     this.delayMs,
     this.sleepMs,
+    this.expect,
+    this.expectAbsent,
+    this.noVerify = false,
+    this.strictVerify = false,
+    this.fresh = false,
+    this.noWait = false,
   });
 
   factory BatchStep.fromJson(Map<String, dynamic> json) {
@@ -222,6 +335,13 @@ class BatchStep {
           json['sleep_ms'] as int? ??
           json['sleep'] as int? ??
           json['ms'] as int?,
+      expect: json['expect'] as String?,
+      expectAbsent:
+          json['expect_absent'] as String? ?? json['expect_gone'] as String?,
+      noVerify: json['no_verify'] as bool? ?? false,
+      strictVerify: json['verify'] as bool? ?? false,
+      fresh: json['fresh'] as bool? ?? false,
+      noWait: json['no_wait'] as bool? ?? false,
     );
   }
 
@@ -244,5 +364,11 @@ class BatchStep {
     if (timeoutSeconds != null) 'timeout_seconds': timeoutSeconds,
     if (delayMs != null) 'delay_ms': delayMs,
     if (sleepMs != null) 'sleep_ms': sleepMs,
+    if (expect != null) 'expect': expect,
+    if (expectAbsent != null) 'expect_absent': expectAbsent,
+    if (noVerify) 'no_verify': noVerify,
+    if (strictVerify) 'verify': strictVerify,
+    if (fresh) 'fresh': fresh,
+    if (noWait) 'no_wait': noWait,
   };
 }
