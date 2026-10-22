@@ -91,6 +91,26 @@ Automated owners:
 
 ---
 
+## G2.1 — Platform Boundary (Desktop-Only Registration)
+
+| Area | Pass | Fail |
+|---|---|---|
+| Web startup | A Release Web build composes dependencies and reaches the signed-out application UI; no `Unsupported operation` escapes before `runApp` | Web aborts during dependency setup and the splash never yields to the app, as in v1.0.18 |
+| Remote-only dependency state | Web and mobile register no Client CLI host, settings cubit, or ownership record, and the resolved default socket stays the cloud service | A remote-only platform registers the host or resolves a native Sanad Home |
+| Desktop registration | Desktop still registers the host and settings cubit, resolves the Home from `--home`/`SANAD_HOME`/user home, and keeps the Settings card plus approval overlay working | Desktop loses the feature, resolves the wrong Home, or binds a server at registration time |
+| Home resolution timing | Home resolution runs inside the host's lazy factory; registration and dependency setup perform no native read | `configureDependencies()` reads the process environment |
+| Platform ownership | Startup and composition branch through `AppPlatform`; the Client CLI boundary is `ClientCliPlatform.isSupported` | Shared composition inspects `dart:io` `Platform` or an ad-hoc Web check directly |
+
+Automated owners:
+- `client/test/web/web_startup_platform_guard_test.dart` (real Chrome composition; the default VM run reports it as skipped by design)
+- `client/test/unit/client_cli/client_cli_platform_boundary_test.dart` (desktop kept, remote-only skipped, module fails closed)
+- `client/test/tool/app_web_startup_contract_test.dart` (startup/composition guards stay behind the platform boundary)
+- Enforcement: the public `client` CI job runs the Chrome guard after the fast suite, and the `client-linux-web` release job runs it before the release build; a failing guard blocks the candidate.
+
+Runtime evidence: build the Production profile and load it in a clean browser; the signed-out shell must render with an empty console.
+
+---
+
 ## G3 — Delegation Integration and Documentation
 
 | Area | Pass | Fail |
@@ -120,4 +140,7 @@ cd client && fvm flutter test test/unit/client_cli/ test/widget/client_cli/ 2>&1
 
 # 3. Run Agent CLI relay tests (102a foundation)
 cd agent && fvm dart test test/interfaces/platforms/sanad_gateway/handlers/remote_cli_command_handler_test.dart 2>&1 | tail -5
+
+# 4. Run the real-browser Web startup guard (desktop-only composition stays out of Web)
+cd client && fvm flutter test --platform chrome test/web/web_startup_platform_guard_test.dart 2>&1 | tail -5
 ```

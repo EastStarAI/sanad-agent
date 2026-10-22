@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/core/presentation/app/app_auth_listener.dart';
@@ -49,7 +48,7 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
     if (state == AppLifecycleState.resumed) {
       if (_wasBackgrounded) {
         _wasBackgrounded = false;
-        if (AppPlatform.isMobile || kIsWeb) {
+        if (AppPlatform.isMobile || AppPlatform.isWeb) {
           appCtrl.onAppResumed();
         }
       }

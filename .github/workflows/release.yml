@@ -346,6 +346,7 @@ jobs:
           fvm flutter analyze
           fvm flutter test test/tool/app_web_startup_contract_test.dart
           fvm flutter test test/tool/linux_release_compatibility_contract_test.dart
+          fvm flutter test --platform chrome test/web/web_startup_platform_guard_test.dart 2>&1 | tail -5
           fvm flutter build linux --release --dart-define-from-file=config/prod.json
           fvm flutter build web --release --dart-define-from-file=config/prod.json
           printf '%s\n' '{"version":"${{ needs.validate.outputs.artifact_version }}","build":${{ needs.validate.outputs.build }}}' \

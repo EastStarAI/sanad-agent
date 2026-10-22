@@ -16,7 +16,6 @@ import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/windows_scheme_registrar.dart';
 import 'package:sanad_client/utils/inspector_helper.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -38,7 +37,10 @@ class AppBootstrap {
   );
 
   static Future<void> _trace(String phase) async {
-    if (!_startupTraceEnabled || kIsWeb) return;
+    // Tracing writes native files under the Sanad Home, so it exists on desktop
+    // only. AppPlatform owns the platform decision; startup code never inspects
+    // native platform APIs directly.
+    if (!_startupTraceEnabled || !AppPlatform.isDesktop) return;
     final configured = AppConfig.sanadHome.trim();
     final home = configured.isNotEmpty
         ? configured
