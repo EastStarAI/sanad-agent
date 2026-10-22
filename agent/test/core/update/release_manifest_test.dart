@@ -549,18 +549,21 @@ void main() {
         expect(await service.scheduleWindowsReplacement(result), isTrue);
         final resultFile = File('${target.path}.update-result.json');
         final replacementScript = File('${staged.path}.replace.ps1');
-        for (
-          var attempt = 0;
-          attempt < 40 &&
-              (!resultFile.existsSync() || replacementScript.existsSync());
-          attempt++
-        ) {
-          await Future<void>.delayed(const Duration(milliseconds: 100));
-        }
-        expect(resultFile.existsSync(), isTrue);
+        await _awaitDetachedHandshake(
+          resultFile: resultFile,
+          replacementScript: replacementScript,
+        );
+        expect(
+          resultFile.existsSync(),
+          isTrue,
+          reason:
+              'no detached replacement result within '
+              '${_detachedHandshakeBudget.inSeconds}s',
+        );
         expect(jsonDecode(resultFile.readAsStringSync())['status'], 'started');
         expect(replacementScript.existsSync(), isFalse);
       },
+      timeout: _detachedHandshakeTestTimeout,
       skip: Platform.isWindows ? false : 'Windows native PowerShell gate.',
     );
 
@@ -604,6 +607,28 @@ void main() {
       },
     );
   });
+}
+
+/// The replacement runs in a detached PowerShell process outside this test's
+/// control, so its only observable contract is the result file it writes.
+/// Wait on a generous wall-clock deadline and exit as soon as the handshake is
+/// visible; the poll interval only samples that OS boundary.
+const _detachedHandshakeBudget = Duration(seconds: 60);
+const _detachedHandshakePollInterval = Duration(milliseconds: 100);
+
+/// Stays above [_detachedHandshakeBudget] so a stalled detached process reports
+/// the bounded handshake reason instead of a test-runner timeout.
+const _detachedHandshakeTestTimeout = Timeout(Duration(seconds: 120));
+
+Future<void> _awaitDetachedHandshake({
+  required File resultFile,
+  required File replacementScript,
+}) async {
+  final deadline = DateTime.now().add(_detachedHandshakeBudget);
+  while (DateTime.now().isBefore(deadline)) {
+    if (resultFile.existsSync() && !replacementScript.existsSync()) return;
+    await Future<void>.delayed(_detachedHandshakePollInterval);
+  }
 }
 
 Map<String, dynamic> _manifestJson({required List<int> bytes}) => {

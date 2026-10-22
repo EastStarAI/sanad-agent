@@ -845,7 +845,10 @@ void main() {
         .listen((chunk) => output.write(chunk));
 
     try {
-      final deadline = DateTime.now().add(const Duration(seconds: 45));
+      // The daemon subprocess compiles its own source before it can print the
+      // readiness signal, so the wait is deadline-based, generous for slow
+      // runners, and exits as soon as the signal appears.
+      final deadline = DateTime.now().add(_daemonReadinessBudget);
       var ready = false;
       while (DateTime.now().isBefore(deadline)) {
         final text = output.toString();
@@ -873,8 +876,16 @@ void main() {
     final repo = SessionWorkItemRepository(verify);
     expect(repo.findWorkItem('w-old-terminal'), isNotNull);
     expect(repo.findWorkItem('w-active'), isNotNull);
-  }, timeout: const Timeout(Duration(seconds: 60)));
+  }, timeout: _daemonReadinessTestTimeout);
 }
+
+/// Bounded observation of a real spawned daemon: the readiness signal is the
+/// contract, so the poll interval only samples it and never retries the daemon.
+const _daemonReadinessBudget = Duration(seconds: 120);
+
+/// Stays above [_daemonReadinessBudget] so a stalled daemon reports the
+/// readiness assertion instead of a test-runner timeout.
+const _daemonReadinessTestTimeout = Timeout(Duration(seconds: 150));
 
 void _seedSession(AgentStateDatabase db, String sessionId) {
   db.db.execute(
