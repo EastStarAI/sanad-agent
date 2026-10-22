@@ -19,6 +19,9 @@ const WATCH_STATUSES = new Set([
   'opencode_unavailable',
   'needs_input',
   'needs_permission',
+  // `queued_stall` is a notice, not a state change, but it is exactly the
+  // "nothing is happening" signal an orchestrator waits for.
+  'queued_stall',
 ]);
 const HELP = `watch-once
 

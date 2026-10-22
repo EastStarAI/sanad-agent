@@ -1,6 +1,6 @@
 ---
 title: "Sanad Delegate CLI Relay Specification"
-description: "Machine contract for the native `sanad run` relay: argument/workspace security boundaries, versioned result and event artifacts, exit codes, and supervisor lifecycle with event-first intervention."
+description: "Machine contract for the native `sanad run` relay: argument/workspace security boundaries, versioned result and event artifacts, exit codes, and supervisor lifecycle with event-first intervention, queue control, cancellation, and stall detection."
 ---
 
 # Sanad Delegate CLI Relay Specification
@@ -185,15 +185,27 @@ For source development, `delegate-task-supervisor` spawns `fvm dart run <entry>/
 For temporary execution without logical continuity, use `--execution-root <target-worktree-path>` alone. For delegated work tied to an existing logical workspace, supply both `--workspace <logical-workspace-id>` and `--execution-root <target-worktree-path>`; the latter must match the supervisor task's filesystem `workspace` and remains the tool/context boundary.
 
 ### 5.2. Long-Lived Dynamic Run Lifecycle
-1. **`start --spec <tasks.json> --run-dir <dir>`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open.
-2. **`add --run <dir> --spec <tasks.json>`:** Registers additional tasks in `held` state without immediate execution.
-3. **`enqueue --run <dir> (--task <id> | --spec <tasks.json>)`:** Transitions held tasks to `queued` or appends and queues a new spec in one operation, launching available tasks up to `--max-concurrency`.
-4. **`close --run <dir>`:** Explicitly closes the run, disallowing further task registrations and draining in-flight/queued tasks before the supervisor process terminates.
+1. **`start --spec <tasks.json> --run-dir <dir> [--max-concurrency <n>] [--queued-stall-ms <n>]`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open. Concurrency is never a hidden default: the handshake prints the effective `maxConcurrency`, `queuedStallMs`, and `tasks` count, and omitting `--max-concurrency` means one slot per spec task (no artificial queueing).
+2. **`add --run <dir> --spec <tasks.json>`:** Registers additional tasks in `held` state without immediate execution, and reports each added task as `held` with the live active/max counts.
+3. **`enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>)`:** Transitions held tasks to `queued` or appends and queues a new spec in one operation, launching available tasks up to `--max-concurrency`. Every enqueued task is reported individually as `started` or `queued at position N of M`, with the reason it is waiting and the active/max counts (text and `--json`).
+4. **`cancel --run <dir> --task <id>`:** Cancels one task without closing the run. A `queued` or `held` task becomes `aborted` and never starts; an in-flight task is signalled and recorded as `cancelled` (see §5.4).
+5. **`set-concurrency --run <dir> --max <n>`:** Changes the slot ceiling of a live run, reports `previous -> maxConcurrency`, and starts queued tasks when the ceiling rises.
+6. **`close --run <dir> [--abort-queued]`:** Explicitly closes the run, disallowing further task registrations and draining in-flight/queued tasks before the supervisor process terminates. `--abort-queued` additionally aborts every `queued` task (held tasks are always aborted on close) so a run can finish without waiting for work that has not started.
 
 ### 5.3. Event-First Intervention & Timeline Observation
 - The supervisor monitors child `events.jsonl` files event-first via directory watchers with race-closing rescans.
 - Intervention events (`needs_input`, `needs_permission`) are immediately promoted into the supervisor's `manifest.json` and monotonic `events.jsonl` journal.
 - Resumed turns (`resumed`) transition tasks back to `running`.
-- Terminal child process exit is authoritative and locks the final state (`completed`, `failed`, `timeout`, `interrupted`, `cancelled`).
-- `watch-once` wakes by default on `needs_input`, `needs_permission`, `blocked`, `waiting`, `resuming`, or terminal states. Routine `running` transitions still require `--all`.
+- Terminal child process exit is authoritative and locks the final state (`completed`, `failed`, `timeout`, `interrupted`, `cancelled`). An operator cancellation is the one exception: once `cancel` is recorded, the terminal state is `cancelled` even if the signalled child publishes `interrupted` or exits non-zero.
+- `watch-once` wakes by default on `needs_input`, `needs_permission`, `blocked`, `waiting`, `resuming`, `queued_stall`, or terminal states. Routine `running` transitions still require `--all`.
 - **Quiet watch continuity:** a caller tool timeout on `watch-once` ends only the caller's wait; the worker and supervised tasks keep running. Re-enter from the cursor (`--since <last returned seq>`, or read `seq` from a bounded `status --json`) and keep using bounded status/inspect reads. Never schedule polling or stop the worker because a watcher call timed out.
+
+### 5.4. Queue Visibility, Stall Detection, and Cancellation
+
+**Queue order and reasons.** Entering `queued` stamps a FIFO sequence and a queue timestamp in `manifest.json`. `status` reports, for every queued task, its position, how long it has been waiting, and why: `awaiting_slot` when every slot is busy, `launch_pending` when a slot is free but the launch has not happened yet. The same data is machine-readable under `queue` (run snapshot) and `tasks[<id>].queue` (per task) in `status --json`.
+
+**Queued stall.** A task that stays queued past `--queued-stall-ms` (default `120000`) while slots are occupied is a stall, not progress. The worker journals exactly one `queued_stall` notice per task per queue episode, carrying the queue age, position, active/max counts, and the reason; `watch-once` returns it as a wake-up event, and `status` repeats the condition on read (`QUEUED_STALL` in text, `stalled: true` in JSON) so a caller that never watched is not left blind. A stall notice never changes task state; entering `running` clears it.
+
+**Cancellation path.** `cancel` records the request in the journal (`cancel_requested`), then follows the relay's own timeout semantics: the child receives `SIGTERM` (force-killed with `SIGKILL` after a bounded grace period if it ignores the signal), and its daemon session is stopped explicitly by session id when one is already known (`sanad session stop <id>` built from the task's own invocation form, including its declared `--home`). Remote `sanad-client` tasks and non-Sanad implementers have no local daemon session, so only the signal path applies. The session id is captured from any timeline event that carries one, not just from launch, so the stop can target a turn that was already running before the cancel.
+
+**Lowering concurrency never kills.** `set-concurrency` down to a lower ceiling applies to future fills only: running tasks are not signalled or aborted, `active` stays honest (it can exceed the new ceiling until tasks settle), and the queue drains from the new limit onward.

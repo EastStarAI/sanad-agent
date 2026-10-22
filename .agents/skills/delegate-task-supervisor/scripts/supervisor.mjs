@@ -52,19 +52,40 @@ const SANAD_CLIENT_COMMAND = /^sanad-client(\.(exe|cmd|bat))?$/;
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const SHELL_META = /[|;&<>$`]/;
 const WINDOWS_BATCH_META = /[|;&<>$`%^!]/;
+// A task that waits for a slot while every slot is busy is normal; a task that
+// stays invisible in the queue for minutes is the silent stall live rounds
+// reported. The worker journals one `queued_stall` notice per task per queue
+// episode after this default, and `status` recomputes the same condition on
+// read so a caller that never watched still sees it.
+const DEFAULT_QUEUED_STALL_MS = 120_000;
+const STALL_CHECK_MIN_MS = 200;
+const STALL_CHECK_MAX_MS = 15_000;
+// Cancellation is cooperative first: SIGTERM follows the relay's own timeout
+// path. A child that ignores it is force-killed after this grace period so a
+// cancelled task can never block run completion.
+const CANCEL_FORCE_KILL_MS = 10_000;
 const HELP = `delegate-task-supervisor
 
 Usage:
-  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>]
+  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>]
   supervisor.mjs add --run <dir> --spec <tasks.json> [--json]
   supervisor.mjs enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--json]
-  supervisor.mjs close --run <dir> [--wait] [--json]
+  supervisor.mjs cancel --run <dir> --task <id> [--json]
+  supervisor.mjs set-concurrency --run <dir> --max <n> [--json]
+  supervisor.mjs close --run <dir> [--abort-queued] [--wait] [--json]
   supervisor.mjs status --run <dir> [--json]
   supervisor.mjs inspect --run <dir> --task <id>
   supervisor.mjs timeline --run <dir> --task <id> [--follow]
   supervisor.mjs logs --run <dir> --task <id> [--stream stdout|stderr|both] [--tail <n>] [--follow]
   supervisor.mjs view --run <dir> --task <id>
   supervisor.mjs identity --workspace <absolute-path>
+
+Concurrency is always reported. When --max-concurrency is omitted, start uses
+one slot per spec task (no artificial queueing) and prints the effective value as
+\`maxConcurrency\` in its JSON handshake. Queued tasks report their position,
+the active/max counts, and the reason they are waiting; \`status\` repeats that
+for every queued task and flags a task that stalled past --queued-stall-ms
+(default ${DEFAULT_QUEUED_STALL_MS}ms).
 `;
 
 function fail(message, code = 2) {
@@ -81,7 +102,7 @@ function parseOptions(argv) {
       continue;
     }
     const key = token.slice(2);
-    if (['follow', 'json', 'wait'].includes(key)) {
+    if (['follow', 'json', 'wait', 'abort-queued'].includes(key)) {
       options[key] = true;
       continue;
     }
@@ -660,7 +681,7 @@ function launchThroughWindowsExplorer(scriptPath) {
   // The caller verifies the requested effect instead of trusting that status.
 }
 
-function writeWindowsWorkerBroker(runDir, paths, maxConcurrency) {
+function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs) {
   const workerPath = join(runDir, 'start-supervisor.cmd');
   const brokerPath = join(runDir, 'start-supervisor.vbs');
   const command = [
@@ -669,6 +690,7 @@ function writeWindowsWorkerBroker(runDir, paths, maxConcurrency) {
     '__worker',
     '--run', runDir,
     '--max-concurrency', String(maxConcurrency),
+    '--queued-stall-ms', String(queuedStallMs),
   ].map(windowsBatchQuote).join(' ');
   writeFileSync(
     workerPath,
@@ -716,12 +738,22 @@ function startCommand(options) {
     fail(`run directory already contains supervisor state: ${runDir}`);
   }
   const tasks = validateSpec(readJson(resolve(options.spec), 'task spec'));
+  // Concurrency is never a hidden default: the effective value is validated,
+  // persisted, and printed by `start`. Omitting the flag means one slot per spec
+  // task, so a fresh run never silently queues behind a single slot.
   const maxConcurrency = options['max-concurrency'] == null
     ? Math.max(1, tasks.length)
     : Number(options['max-concurrency']);
   if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
     fail('--max-concurrency must be a positive integer');
   }
+  const queuedStallMs = options['queued-stall-ms'] == null
+    ? DEFAULT_QUEUED_STALL_MS
+    : Number(options['queued-stall-ms']);
+  if (!Number.isInteger(queuedStallMs) || queuedStallMs < 1) {
+    fail('--queued-stall-ms must be a positive integer');
+  }
+  const startedAt = new Date().toISOString();
   writeJsonAtomic(paths.tasks, { version: 'delegate-task-spec.v1', tasks });
   writeJsonAtomic(paths.manifest, {
     version: 'delegate-supervisor.v1',
@@ -730,21 +762,31 @@ function startCommand(options) {
     status: 'starting',
     closed: false,
     seq: 0,
-    startedAt: new Date().toISOString(),
+    startedAt,
     finishedAt: null,
     maxConcurrency,
-    tasks: Object.fromEntries(tasks.map((task) => [task.id, publicTask(task, runDir, 'queued')])),
+    active: 0,
+    queuedStallMs,
+    queueSeq: tasks.length,
+    tasks: Object.fromEntries(tasks.map((task, index) => [task.id, {
+      ...publicTask(task, runDir, 'queued'),
+      queuedAt: startedAt,
+      queuedSeq: index + 1,
+    }])),
   });
 
   if (process.platform === 'win32') {
     try {
-      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency);
+      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs);
       launchThroughWindowsExplorer(brokerPath);
       const running = waitForWindowsWorkerHandshake(paths);
       process.stdout.write(`${JSON.stringify({
         runDir,
         supervisorPid: running.supervisorPid,
         cursor: 0,
+        maxConcurrency,
+        queuedStallMs,
+        tasks: tasks.length,
       })}\n`);
     } catch (error) {
       fail(error.message, 1);
@@ -758,6 +800,7 @@ function startCommand(options) {
     '__worker',
     '--run', runDir,
     '--max-concurrency', String(maxConcurrency),
+    '--queued-stall-ms', String(queuedStallMs),
   ], {
     detached: true,
     windowsHide: true,
@@ -765,13 +808,39 @@ function startCommand(options) {
   });
   closeSync(logFd);
   child.unref();
-  process.stdout.write(`${JSON.stringify({ runDir, supervisorPid: child.pid, cursor: 0 })}\n`);
+  process.stdout.write(`${JSON.stringify({
+    runDir,
+    supervisorPid: child.pid,
+    cursor: 0,
+    maxConcurrency,
+    queuedStallMs,
+    tasks: tasks.length,
+  })}\n`);
+}
+
+// Commands are spawned directly except Windows `.cmd`/`.bat` wrappers, which
+// need Node's shell mode after shell metacharacters have been rejected at
+// validation time. Both task launches and session-stop requests share it.
+function spawnCommand(command, args, spawnOptions) {
+  const isBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+  if (!isBatch) return spawn(command, args, spawnOptions);
+  const batchCommand = [command, ...args].map(windowsBatchQuote).join(' ');
+  return spawn(
+    process.env.ComSpec || 'cmd.exe',
+    ['/d', '/s', '/c', `"${batchCommand}"`],
+    { ...spawnOptions, windowsVerbatimArguments: true },
+  );
 }
 
 function workerCommand(options) {
   const runDir = resolve(options.run || '');
-  const maxConcurrency = Number(options['max-concurrency']);
-  if (!runDir || !Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
+  let maxConcurrency = Number(options['max-concurrency']);
+  const queuedStallMs = options['queued-stall-ms'] == null
+    ? DEFAULT_QUEUED_STALL_MS
+    : Number(options['queued-stall-ms']);
+  if (!runDir
+    || !Number.isInteger(maxConcurrency) || maxConcurrency < 1
+    || !Number.isInteger(queuedStallMs) || queuedStallMs < 1) {
     fail('invalid internal worker invocation');
   }
   const paths = runPaths(runDir);
@@ -783,9 +852,13 @@ function workerCommand(options) {
 
   let seq = 0;
   let active = 0;
+  let queueSeq = initialTasks.length;
   const settled = new Set();
   const timelineWatchers = new Map();
+  const children = new Map();
+  const forceKillTimers = new Map();
 
+  const workerStartedAt = new Date().toISOString();
   const manifest = {
     version: 'delegate-supervisor.v1',
     runDir,
@@ -793,19 +866,37 @@ function workerCommand(options) {
     status: 'running',
     closed: false,
     seq,
-    startedAt: new Date().toISOString(),
+    startedAt: workerStartedAt,
     finishedAt: null,
     maxConcurrency,
-    tasks: Object.fromEntries(initialTasks.map((task) => [task.id, publicTask(task, runDir, 'queued')])),
+    active,
+    queuedStallMs,
+    queueSeq,
+    tasks: Object.fromEntries(initialTasks.map((task, index) => [task.id, {
+      ...publicTask(task, runDir, 'queued'),
+      queuedAt: workerStartedAt,
+      queuedSeq: index + 1,
+    }])),
   };
 
-  const persist = () => writeJsonAtomic(paths.manifest, manifest);
+  // The manifest is the only state a read-only `status` sees, so the live
+  // counters are written with every state change instead of being derived.
+  const persist = () => {
+    manifest.active = active;
+    manifest.queueSeq = queueSeq;
+    writeJsonAtomic(paths.manifest, manifest);
+  };
 
   const transition = (task, to, extra = {}) => {
     const state = manifest.tasks[task.id];
     if (!state) return;
     const from = state.status;
-    Object.assign(state, extra, { status: to });
+    // Entering the queue stamps FIFO order and start time; entering a running
+    // state clears any stall flag from the previous queue episode.
+    const queueFields = to === 'queued'
+      ? { queuedAt: new Date().toISOString(), queuedSeq: ++queueSeq, queueStall: null }
+      : (to === 'running' ? { queueStall: null } : {});
+    Object.assign(state, queueFields, extra, { status: to });
     manifest.seq = ++seq;
     const event = {
       seq,
@@ -821,10 +912,71 @@ function workerCommand(options) {
     persist();
   };
 
+  // Non-transition notices (`queued_stall`, `cancel_requested`, `session_stop`)
+  // never change task state but share the monotonic sequence, so a watcher
+  // cursor stays valid across both kinds of journal record.
+  const notice = (task, kind, extra = {}) => {
+    const state = task ? manifest.tasks[task.id] : null;
+    manifest.seq = ++seq;
+    const event = {
+      seq,
+      taskId: task?.id ?? null,
+      implementer: task?.implementer ?? null,
+      workspace: task?.workspace ?? null,
+      from: state?.status ?? null,
+      to: kind,
+      kind,
+      at: new Date().toISOString(),
+      ...extra,
+    };
+    appendFileSync(paths.journal, `${JSON.stringify(event)}\n`, 'utf8');
+    persist();
+    return event;
+  };
+
+  // A queued task that outlives the stall threshold while every slot is busy is
+  // journaled exactly once per queue episode; `status` recomputes the same
+  // condition on read so a caller that never watched is not left blind.
+  const flagQueueStall = (id) => {
+    const task = taskMap.get(id);
+    const state = manifest.tasks[id];
+    if (!task || !state || state.status !== 'queued' || state.queueStall) return;
+    const description = describeQueuedTask(manifest, id);
+    if (!description || !description.stalled) return;
+    const at = new Date().toISOString();
+    state.queueStall = {
+      at,
+      queuedForMs: description.queuedForMs,
+      thresholdMs: description.stallThresholdMs,
+      active: description.active,
+      maxConcurrency: description.maxConcurrency,
+      position: description.position,
+      queuedTop: description.queuedTotal,
+      reason: description.reason,
+    };
+    notice(task, 'queued_stall', { ...state.queueStall });
+  };
+
+  const stallCheckMs = Math.max(
+    STALL_CHECK_MIN_MS,
+    Math.min(STALL_CHECK_MAX_MS, Math.floor(queuedStallMs / 4)),
+  );
+  const stallTimer = setInterval(() => {
+    for (const [id, state] of Object.entries(manifest.tasks)) {
+      if (state.status === 'queued' && !state.queueStall) flagQueueStall(id);
+    }
+  }, stallCheckMs);
+
   const finishTask = (task, code, signal, launchError = null) => {
     if (settled.has(task.id)) return;
     settled.add(task.id);
     active -= 1;
+    children.delete(task.id);
+    const forceKillTimer = forceKillTimers.get(task.id);
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+      forceKillTimers.delete(task.id);
+    }
 
     if (timelineWatchers.has(task.id)) {
       try { timelineWatchers.get(task.id).close(); } catch {}
@@ -843,6 +995,10 @@ function workerCommand(options) {
       }
     }
     const reportedStatus = result?.status ?? null;
+    // An operator cancellation is authoritative: a signalled child may publish
+    // `interrupted` or leave a stale `failed`, and neither may mask the fact
+    // that this task was cancelled.
+    const cancellationRequested = manifest.tasks[task.id]?.cancellationRequested === true;
     const remoteExit = task.remote && !TERMINAL_STATUSES.has(reportedStatus)
       ? REMOTE_EXIT_STATUSES.get(code) ?? null
       : null;
@@ -850,15 +1006,17 @@ function workerCommand(options) {
     // trusted as a completed turn: the Client CLI also reports success when the
     // control socket closes without a terminal result frame.
     const remoteCaptureMissing = task.remote && !launchError && code === 0 && result == null;
-    const status = TERMINAL_STATUSES.has(reportedStatus)
-      ? reportedStatus
-      : remoteExit
-        ? remoteExit.status
-        : remoteCaptureMissing
-          ? 'incomplete'
-          : code === 0 && !launchError
-            ? 'completed'
-            : 'failed';
+    const status = cancellationRequested
+      ? 'cancelled'
+      : TERMINAL_STATUSES.has(reportedStatus)
+        ? reportedStatus
+        : remoteExit
+          ? remoteExit.status
+          : remoteCaptureMissing
+            ? 'incomplete'
+            : code === 0 && !launchError
+              ? 'completed'
+              : 'failed';
     const remoteDiagnostic = task.remote && (remoteExit || remoteCaptureMissing)
       ? lastDiagnosticLine(task.stderrPath)
       : null;
@@ -877,15 +1035,24 @@ function workerCommand(options) {
       signal,
       reportedStatus,
       identity,
+      ...(cancellationRequested ? { cause: 'cancelled', cancelledAt: finishedAt } : {}),
       ...(task.remote ? { resultCaptured: result != null } : {}),
-      ...(remoteExit ? { cause: remoteExit.cause } : {}),
-      ...(remoteCaptureMissing ? { cause: 'missing_result_envelope' } : {}),
+      ...(remoteExit && !cancellationRequested ? { cause: remoteExit.cause } : {}),
+      ...(remoteCaptureMissing && !cancellationRequested ? { cause: 'missing_result_envelope' } : {}),
       ...(remoteDiagnostic ? { error: remoteDiagnostic } : {}),
       ...(launchError ? { error: launchError.message } : {}),
     });
 
     checkRunCompletion();
     launchAvailable();
+  };
+
+  const recordSessionId = (task, sessionId) => {
+    if (!sessionId) return;
+    const state = manifest.tasks[task.id];
+    if (!state || state.sessionId === sessionId) return;
+    state.sessionId = sessionId;
+    persist();
   };
 
   // One processed timeline record. Local tasks tail an artifact file and remote
@@ -908,6 +1075,12 @@ function workerCommand(options) {
       const data = event.data || {};
       const sessionId = event.session_id || event.sessionId || data.session_id || data.sessionId || null;
       const requestId = data.request_id || data.requestId || null;
+
+      // The session id can arrive on any event, and usually after the launch
+      // transition already reported `running`. Recording it here is what lets
+      // `cancel` stop the exact daemon session later; it persists only when the
+      // id actually changes, so per-token events cost nothing.
+      recordSessionId(task, sessionId);
 
       if (type === 'needs_input' || type === 'needs_permission') {
         if (lastSeenType === type && lastSeenRequestId === requestId) return;
@@ -1074,11 +1247,132 @@ function workerCommand(options) {
     });
   };
 
+  // Cancelling a Sanad task must also stop its daemon session: SIGTERM can land
+  // after the CLI already published a session id, and a lost signal would leave
+  // the daemon turn running. The stop command mirrors the task's own invocation
+  // form so it targets the same binary, source entry, and Home as the task did.
+  const sessionStopInvocation = (task, sessionId) => {
+    if (!sessionId) return { reason: 'no_session_id' };
+    if (task.remote) return { reason: 'remote_session' };
+    if (task.implementer !== 'sanad') return { reason: 'not_a_sanad_task' };
+    const base = basename(task.command).toLowerCase();
+    let args;
+    if (/^sanad(\.(exe|cmd|bat))?$/.test(base)) {
+      args = ['session', 'stop', sessionId];
+    } else if (/^fvm(\.(exe|cmd|bat))?$/.test(base)
+      && task.args[0] === 'dart' && task.args[1] === 'run') {
+      args = ['dart', 'run', task.args[2], 'session', 'stop', sessionId];
+    } else {
+      return { reason: 'unsupported_invocation' };
+    }
+    if (task.home) args.push('--home', task.home);
+    return { command: task.command, args, cwd: task.spawnCwd || task.workspace };
+  };
+
+  const requestSessionStop = (task, sessionId) => {
+    const invocation = sessionStopInvocation(task, sessionId);
+    if (!invocation.command) {
+      return { requested: false, sessionId: sessionId ?? null, reason: invocation.reason };
+    }
+    let child;
+    try {
+      child = spawnCommand(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
+        env: taskEnvironment(task, process.env),
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+    } catch (error) {
+      return { requested: false, sessionId, reason: error.message };
+    }
+    child.once('error', (error) => notice(task, 'session_stop', {
+      sessionId,
+      result: 'error',
+      error: error.message,
+    }));
+    child.once('exit', (code, signal) => notice(task, 'session_stop', {
+      sessionId,
+      result: code === 0 ? 'completed' : 'failed',
+      exitCode: code,
+      signal,
+    }));
+    return { requested: true, sessionId };
+  };
+
+  const cancelTask = (id) => {
+    const state = manifest.tasks[id];
+    if (!state) return { ok: false, error: `task not found: ${id}` };
+    const task = taskMap.get(id);
+    if (!task) return { ok: false, error: `task not found: ${id}` };
+    if (settled.has(id) || TERMINAL_STATUSES.has(state.status)) {
+      return { ok: false, error: `task ${id} is already ${state.status}` };
+    }
+    const from = state.status;
+    if (from === 'queued' || from === 'held') {
+      // A task that never started is cancelled outright: no signal, no daemon
+      // session, and no later launch because settlement is already recorded.
+      settled.add(id);
+      transition(task, 'aborted', {
+        cancellationRequested: true,
+        cancelledAt: new Date().toISOString(),
+        error: from === 'queued'
+          ? 'cancelled while queued; the task never started'
+          : 'cancelled while held; the task was never queued',
+      });
+      checkRunCompletion();
+      return { ok: true, taskId: id, from, status: 'aborted', signalled: null, sessionStop: null };
+    }
+
+    // In-flight turns (running, blocked, waiting, resuming, intervention) share
+    // one cancellation path: the relay's own timeout semantics plus an explicit
+    // daemon session stop when the session id is already known.
+    if (state.cancellationRequested) {
+      // A repeated cancel must not signal twice or spawn a second session stop;
+      // the first request is already waiting for the child to settle.
+      return { ok: true, taskId: id, from, status: 'cancelling', signalled: null, sessionStop: null, alreadyRequested: true };
+    }
+    state.cancellationRequested = true;
+    const sessionId = state.sessionId ?? null;
+    const sessionStop = requestSessionStop(task, sessionId);
+    const child = children.get(id) ?? null;
+    let signalled = null;
+    if (child) {
+      try {
+        child.kill('SIGTERM');
+        signalled = 'SIGTERM';
+      } catch {
+        signalled = null;
+      }
+    }
+    if (signalled) {
+      const timer = setTimeout(() => {
+        if (settled.has(id)) return;
+        try { child.kill('SIGKILL'); } catch {}
+      }, CANCEL_FORCE_KILL_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+      forceKillTimers.set(id, timer);
+    }
+    notice(task, 'cancel_requested', {
+      sessionId,
+      signalled,
+      sessionStop: sessionStop.requested === true,
+      ...(sessionStop.reason ? { sessionStopReason: sessionStop.reason } : {}),
+    });
+    return {
+      ok: true,
+      taskId: id,
+      from,
+      status: 'cancelling',
+      signalled,
+      sessionId,
+      sessionStop,
+    };
+  };
+
   const launchTask = (task) => {
     active += 1;
     const stdoutFd = openSync(manifest.tasks[task.id].stdoutPath, 'a');
     const stderrFd = openSync(manifest.tasks[task.id].stderrPath, 'a');
-    const isBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(task.command);
     const effectiveArgs = task.effectiveArgs || task.args;
     const streamRelay = task.remote === true;
     let fdsClosed = false;
@@ -1099,27 +1393,21 @@ function workerCommand(options) {
         windowsHide: true,
         stdio: streamRelay ? ['ignore', 'pipe', 'pipe'] : ['ignore', stdoutFd, stderrFd],
       };
-      if (isBatch) {
-        const batchCommand = [task.command, ...effectiveArgs].map(windowsBatchQuote).join(' ');
-        child = spawn(
-          process.env.ComSpec || 'cmd.exe',
-          ['/d', '/s', '/c', `"${batchCommand}"`],
-          { ...spawnOptions, windowsVerbatimArguments: true },
-        );
-      } else {
-        child = spawn(task.command, effectiveArgs, spawnOptions);
-      }
+      child = spawnCommand(task.command, effectiveArgs, spawnOptions);
     } catch (error) {
       closeTaskFds();
       finishTask(task, 127, null, error);
       return;
     }
+    children.set(task.id, child);
     if (!streamRelay) closeTaskFds();
     const startedAt = new Date().toISOString();
     transition(task, 'running', {
       pid: child.pid,
       startedAt,
       stateSince: startedAt,
+      queueStall: null,
+      cancellationRequested: false,
     });
 
     if (streamRelay) {
@@ -1174,6 +1462,7 @@ function workerCommand(options) {
       appendFileSync(paths.journal, `${JSON.stringify(event)}\n`, 'utf8');
       persist();
       clearInterval(keepAliveTimer);
+      clearInterval(stallTimer);
       try { reqWatcher.close(); } catch {}
       process.exit(0);
     }
@@ -1198,13 +1487,24 @@ function workerCommand(options) {
         transition(task, 'held');
       }
       persist();
-      return { ok: true, taskIds: newTasks.map((t) => t.id) };
+      const addedIds = newTasks.map((t) => t.id);
+      // Held tasks are reported per task too: an added task never starts until
+      // it is explicitly enqueued, and the caller must see that.
+      return {
+        ok: true,
+        taskIds: addedIds,
+        active,
+        maxConcurrency,
+        queued: queueSnapshot(manifest).queued.length,
+        tasks: queueOutcomes(manifest, addedIds),
+      };
     }
 
     if (req.type === 'enqueue') {
       if (manifest.closed) {
         return { ok: false, error: 'cannot enqueue tasks to closed run' };
       }
+      let ids;
       if (req.spec) {
         const newTasks = req.tasks || [];
         for (const t of newTasks) {
@@ -1219,28 +1519,66 @@ function workerCommand(options) {
           manifest.tasks[task.id] = publicTask(task, runDir, 'queued');
           transition(task, 'queued');
         }
-        persist();
-        launchAvailable();
-        return { ok: true, taskIds: newTasks.map((t) => t.id) };
-      }
-
-      const ids = req.taskIds || [];
-      for (const id of ids) {
-        const taskEntry = manifest.tasks[id];
-        if (!taskEntry) {
-          return { ok: false, error: `task not found: ${id}` };
+        ids = newTasks.map((t) => t.id);
+      } else {
+        ids = req.taskIds || [];
+        for (const id of ids) {
+          const taskEntry = manifest.tasks[id];
+          if (!taskEntry) {
+            return { ok: false, error: `task not found: ${id}` };
+          }
+          if (taskEntry.status !== 'held') {
+            return { ok: false, error: `task ${id} is not held (status: ${taskEntry.status})` };
+          }
         }
-        if (taskEntry.status !== 'held') {
-          return { ok: false, error: `task ${id} is not held (status: ${taskEntry.status})` };
+        for (const id of ids) {
+          const task = taskMap.get(id);
+          transition(task, 'queued');
         }
-      }
-      for (const id of ids) {
-        const task = taskMap.get(id);
-        transition(task, 'queued');
       }
       persist();
       launchAvailable();
-      return { ok: true, taskIds: ids };
+      // `launchAvailable` fills every free slot synchronously, so the per-task
+      // outcome already reflects started-versus-queued plus the live counts.
+      return {
+        ok: true,
+        taskIds: ids,
+        active,
+        maxConcurrency,
+        queued: queueSnapshot(manifest).queued.length,
+        tasks: queueOutcomes(manifest, ids),
+      };
+    }
+
+    if (req.type === 'cancel') {
+      const ids = req.taskIds || [];
+      if (ids.length !== 1) {
+        return { ok: false, error: 'cancel requires exactly one task id' };
+      }
+      return cancelTask(ids[0]);
+    }
+
+    if (req.type === 'set-concurrency') {
+      const requested = Number(req.maxConcurrency);
+      if (!Number.isInteger(requested) || requested < 1) {
+        return { ok: false, error: 'max concurrency must be a positive integer' };
+      }
+      const previous = maxConcurrency;
+      maxConcurrency = requested;
+      manifest.maxConcurrency = requested;
+      persist();
+      const queuedBefore = queueSnapshot(manifest).queued.map((entry) => entry.id);
+      launchAvailable();
+      const started = queuedBefore.filter((id) => manifest.tasks[id]?.status === 'running');
+      return {
+        ok: true,
+        previous,
+        maxConcurrency,
+        active,
+        started,
+        queued: queueSnapshot(manifest).queued.length,
+        tasks: queueOutcomes(manifest, started),
+      };
     }
 
     if (req.type === 'close') {
@@ -1248,15 +1586,26 @@ function workerCommand(options) {
         return { ok: true, alreadyClosed: true };
       }
       manifest.closed = true;
+      const aborted = [];
       for (const [id, tEntry] of Object.entries(manifest.tasks)) {
         if (tEntry.status === 'held') {
           const task = taskMap.get(id);
           settled.add(id);
           transition(task, 'aborted', { error: 'run closed while task was held' });
+          aborted.push(id);
+        } else if (req.abortQueued && tEntry.status === 'queued') {
+          const task = taskMap.get(id);
+          settled.add(id);
+          transition(task, 'aborted', {
+            cancellationRequested: true,
+            cancelledAt: new Date().toISOString(),
+            error: 'queued task aborted by close --abort-queued',
+          });
+          aborted.push(id);
         }
       }
       persist();
-      return { ok: true, closed: true };
+      return { ok: true, closed: true, aborted, abortQueued: req.abortQueued === true };
     }
 
     return { ok: false, error: `unknown request type: ${req.type}` };
@@ -1410,9 +1759,19 @@ async function addCommand(options) {
       tasks,
     });
     if (options.json) {
-      process.stdout.write(`${JSON.stringify({ runDir, added: true, taskIds: ack.taskIds }, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        added: true,
+        taskIds: ack.taskIds,
+        active: ack.active,
+        maxConcurrency: ack.maxConcurrency,
+        tasks: ack.tasks,
+      }, null, 2)}\n`);
     } else {
-      process.stdout.write(`Added ${ack.taskIds.length} task(s) to run: ${ack.taskIds.join(', ')}\n`);
+      process.stdout.write(`Added ${ack.taskIds.length} held task(s) to run: ${ack.taskIds.join(', ')}\n`);
+      for (const outcome of ack.tasks || []) {
+        process.stdout.write(`  ${formatQueueOutcome(outcome)}\n`);
+      }
     }
   } catch (error) {
     fail(error.message, 1);
@@ -1422,46 +1781,118 @@ async function addCommand(options) {
 async function enqueueCommand(options) {
   if (!options.run) fail('enqueue requires --run');
   const runDir = resolve(options.run);
+  let request;
   if (options.spec) {
     const manifest = loadManifest(runDir);
     const existingIds = new Set(Object.keys(manifest.tasks || {}));
     const tasks = validateSpec(readJson(resolve(options.spec), 'task spec'), existingIds);
-    try {
-      const ack = await sendControlRequest(runDir, {
-        type: 'enqueue',
-        spec: true,
-        tasks,
-      });
-      if (options.json) {
-        process.stdout.write(`${JSON.stringify({ runDir, enqueued: true, taskIds: ack.taskIds }, null, 2)}\n`);
-      } else {
-        process.stdout.write(`Enqueued ${ack.taskIds.length} task(s) from spec: ${ack.taskIds.join(', ')}\n`);
-      }
-    } catch (error) {
-      fail(error.message, 1);
-    }
-    return;
-  }
-
-  let taskIds = [];
-  if (options.task) {
-    taskIds = [options.task];
-  } else if (options.tasks) {
-    taskIds = options.tasks.split(',').map((s) => s.trim()).filter(Boolean);
+    request = { type: 'enqueue', spec: true, tasks };
   } else {
-    fail('enqueue requires --spec, --task <id>, or --tasks <id1,id2>');
+    let taskIds = [];
+    if (options.task) {
+      taskIds = [options.task];
+    } else if (options.tasks) {
+      taskIds = options.tasks.split(',').map((s) => s.trim()).filter(Boolean);
+    } else {
+      fail('enqueue requires --spec, --task <id>, or --tasks <id1,id2>');
+    }
+    request = { type: 'enqueue', spec: false, taskIds };
   }
 
   try {
+    const ack = await sendControlRequest(runDir, request);
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        enqueued: true,
+        taskIds: ack.taskIds,
+        active: ack.active,
+        maxConcurrency: ack.maxConcurrency,
+        queued: ack.queued,
+        tasks: ack.tasks,
+      }, null, 2)}\n`);
+    } else {
+      process.stdout.write(`Enqueued ${ack.taskIds.length} task(s): ${ack.taskIds.join(', ')}\n`);
+      for (const outcome of ack.tasks || []) {
+        process.stdout.write(`  ${formatQueueOutcome(outcome)}\n`);
+      }
+    }
+  } catch (error) {
+    fail(error.message, 1);
+  }
+}
+
+async function cancelCommand(options) {
+  if (!options.run) fail('cancel requires --run');
+  if (!options.task) fail('cancel requires --task <id>');
+  const runDir = resolve(options.run);
+  try {
+    const ack = await sendControlRequest(runDir, { type: 'cancel', taskIds: [options.task] });
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        cancelled: true,
+        taskId: ack.taskId,
+        from: ack.from,
+        status: ack.status,
+        signalled: ack.signalled,
+        sessionId: ack.sessionId ?? null,
+        sessionStop: ack.sessionStop ?? null,
+        alreadyRequested: ack.alreadyRequested === true,
+      }, null, 2)}\n`);
+      return;
+    }
+    if (ack.alreadyRequested) {
+      process.stdout.write(`Cancellation for task ${ack.taskId} was already requested; waiting for it to settle.\n`);
+      return;
+    }
+    if (ack.status === 'aborted') {
+      process.stdout.write(`Cancelled task ${ack.taskId} (${ack.from} -> aborted); it will never start.\n`);
+      return;
+    }
+    const signalText = ack.signalled ? `signalled ${ack.signalled}` : 'no live process to signal';
+    const sessionText = ack.sessionStop?.requested
+      ? `session ${ack.sessionStop.sessionId} stop requested`
+      : `daemon session stop not requested (${ack.sessionStop?.reason || 'unknown'})`;
+    process.stdout.write(
+      `Cancelling task ${ack.taskId} (${ack.from}): ${signalText}; ${sessionText}. `
+      + `The terminal state is recorded as cancelled.\n`,
+    );
+  } catch (error) {
+    fail(error.message, 1);
+  }
+}
+
+async function setConcurrencyCommand(options) {
+  if (!options.run) fail('set-concurrency requires --run');
+  if (options.max == null) fail('set-concurrency requires --max <n>');
+  const runDir = resolve(options.run);
+  const requested = Number(options.max);
+  if (!Number.isInteger(requested) || requested < 1) {
+    fail('--max must be a positive integer');
+  }
+  try {
     const ack = await sendControlRequest(runDir, {
-      type: 'enqueue',
-      spec: false,
-      taskIds,
+      type: 'set-concurrency',
+      maxConcurrency: requested,
     });
     if (options.json) {
-      process.stdout.write(`${JSON.stringify({ runDir, enqueued: true, taskIds: ack.taskIds }, null, 2)}\n`);
-    } else {
-      process.stdout.write(`Enqueued task(s): ${ack.taskIds.join(', ')}\n`);
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        previous: ack.previous,
+        maxConcurrency: ack.maxConcurrency,
+        active: ack.active,
+        queued: ack.queued,
+        started: ack.started,
+        tasks: ack.tasks,
+      }, null, 2)}\n`);
+      return;
+    }
+    process.stdout.write(
+      `Concurrency ${ack.previous} -> ${ack.maxConcurrency} (${ack.active}/${ack.maxConcurrency} active, ${ack.queued} queued)\n`,
+    );
+    for (const outcome of ack.tasks || []) {
+      process.stdout.write(`  ${formatQueueOutcome(outcome)}\n`);
     }
   } catch (error) {
     fail(error.message, 1);
@@ -1517,18 +1948,27 @@ function waitForRunCompletion(runDir, timeoutMs = 60_000) {
 async function closeCommand(options) {
   if (!options.run) fail('close requires --run');
   const runDir = resolve(options.run);
+  const abortQueued = options['abort-queued'] === true;
   try {
-    await sendControlRequest(runDir, { type: 'close' });
+    const ack = await sendControlRequest(runDir, { type: 'close', abortQueued });
     if (options.wait) await waitForRunCompletion(runDir);
     const finalManifest = loadManifest(runDir);
+    const aborted = ack.aborted || [];
     if (options.json) {
       process.stdout.write(`${JSON.stringify({
         runDir,
         closed: true,
         status: finalManifest.status,
+        abortQueued,
+        aborted,
       }, null, 2)}\n`);
     } else {
       process.stdout.write(`Closed run ${runDir} (status: ${finalManifest.status})\n`);
+      if (aborted.length) {
+        process.stdout.write(`  aborted ${aborted.length} task(s): ${aborted.join(', ')}\n`);
+      } else if (abortQueued) {
+        process.stdout.write('  no queued or held tasks needed aborting\n');
+      }
     }
   } catch (error) {
     fail(error.message, 1);
@@ -1544,6 +1984,106 @@ function formatDuration(ms) {
   if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+function parseIsoMillis(value) {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+// Queue ages and stall thresholds are often sub-second during a live
+// investigation; printing `0s` for a configured 600ms limit hides the setting.
+function formatShortDuration(ms) {
+  if (ms == null || isNaN(ms) || ms < 0) return 'unknown';
+  return ms < 1000 ? `${Math.round(ms)}ms` : formatDuration(ms);
+}
+
+function queuedStallThreshold(manifest) {
+  const configured = Number(manifest?.queuedStallMs);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_QUEUED_STALL_MS;
+}
+
+// Queue order is FIFO by the moment a task entered `queued`: the worker stamps
+// `queuedSeq` on every transition, so a read-only `status` reproduces exactly
+// the positions the worker uses when it fills slots.
+function queueSnapshot(manifest) {
+  const active = Number.isInteger(manifest?.active) ? manifest.active : 0;
+  const maxConcurrency = Number.isInteger(manifest?.maxConcurrency) ? manifest.maxConcurrency : null;
+  const entries = Object.entries(manifest?.tasks || {});
+  const queued = entries
+    .filter(([, state]) => state?.status === 'queued')
+    .map(([id, state], index) => ({
+      id,
+      state,
+      order: Number.isInteger(state.queuedSeq)
+        ? state.queuedSeq
+        : Number.MAX_SAFE_INTEGER - entries.length + index,
+    }))
+    .sort((left, right) => left.order - right.order)
+    .map((entry, index) => ({ id: entry.id, state: entry.state, position: index + 1 }));
+  return { active, maxConcurrency, queued };
+}
+
+// Why a task is still waiting: a full slot is the honest answer, and a task
+// that outlives the stall threshold while slots are occupied is flagged so a
+// silent queue can never be mistaken for progress.
+function describeQueuedTask(manifest, id, now = Date.now()) {
+  const snapshot = queueSnapshot(manifest);
+  const entry = snapshot.queued.find((item) => item.id === id);
+  if (!entry) return null;
+  const counts = `${snapshot.active}/${snapshot.maxConcurrency ?? '?'} active`;
+  const queuedAt = entry.state.queuedAt ?? null;
+  const queuedForMs = queuedAt == null ? null : Math.max(0, now - (parseIsoMillis(queuedAt) ?? now));
+  const awaitingSlot = snapshot.maxConcurrency != null && snapshot.active >= snapshot.maxConcurrency;
+  return {
+    position: entry.position,
+    queuedTotal: snapshot.queued.length,
+    active: snapshot.active,
+    maxConcurrency: snapshot.maxConcurrency,
+    queuedAt,
+    queuedForMs,
+    stallThresholdMs: queuedStallThreshold(manifest),
+    stalled: entry.state.queueStall != null
+      || (awaitingSlot && queuedForMs != null && queuedForMs >= queuedStallThreshold(manifest)),
+    reason: awaitingSlot ? 'awaiting_slot' : 'launch_pending',
+    reasonText: awaitingSlot
+      ? `waiting for a concurrency slot (${counts})`
+      : `slot is free but the task is not launched yet (${counts})`,
+  };
+}
+
+function queueOutcomes(manifest, ids) {
+  const snapshot = queueSnapshot(manifest);
+  return ids.map((id) => {
+    const state = manifest?.tasks?.[id];
+    if (state?.status === 'queued') {
+      return { id, status: 'queued', ...describeQueuedTask(manifest, id) };
+    }
+    return {
+      id,
+      // A launched task is reported as `started`, the operator-facing word for
+      // "it left the queue and is now occupying a slot".
+      status: state?.status === 'running' ? 'started' : (state?.status ?? 'unknown'),
+      position: null,
+      queuedTotal: snapshot.queued.length,
+      active: snapshot.active,
+      maxConcurrency: snapshot.maxConcurrency,
+    };
+  });
+}
+
+function formatQueueOutcome(outcome) {
+  const counts = `${outcome.active}/${outcome.maxConcurrency ?? '?'} active`;
+  if (outcome.status === 'started') return `${outcome.id}: started (${counts})`;
+  if (outcome.status === 'queued') {
+    return `${outcome.id}: queued at position ${outcome.position} of ${outcome.queuedTotal}`
+      + ` — ${outcome.reasonText}, queued for ${formatShortDuration(outcome.queuedForMs)}`;
+  }
+  if (outcome.status === 'held') {
+    return `${outcome.id}: held — not queued until enqueue --task ${outcome.id} (${counts})`;
+  }
+  return `${outcome.id}: ${outcome.status} (${counts})`;
 }
 
 function resolveSessionDetails(task, manifest) {
@@ -1657,13 +2197,28 @@ function statusCommand(options) {
     manifest.staleReason = 'Supervisor process is not running.';
   }
   if (options.json) {
+    const snapshot = queueSnapshot(manifest);
     for (const task of Object.values(manifest.tasks || {})) {
       const details = resolveSessionDetails(task, manifest);
       task.sessionState = details.sessionState;
       task.sessionCause = details.cause;
       task.lastProgressAt = details.lastProgressAt !== '-' ? details.lastProgressAt : null;
       task.stateSince = details.stateSince !== '[unknown time]' ? details.stateSince : null;
+      // A queued task always carries its position, the live counts, the reason
+      // it is waiting, and whether it already exceeded the stall threshold.
+      const queue = task.status === 'queued' ? describeQueuedTask(manifest, task.id) : null;
+      if (queue) task.queue = queue;
     }
+    manifest.active = snapshot.active;
+    manifest.queuedStallMs = queuedStallThreshold(manifest);
+    manifest.queue = {
+      active: snapshot.active,
+      maxConcurrency: snapshot.maxConcurrency,
+      queued: snapshot.queued.map((entry) => ({
+        id: entry.id,
+        ...describeQueuedTask(manifest, entry.id),
+      })),
+    };
     process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
     return;
   }
@@ -1672,6 +2227,23 @@ function statusCommand(options) {
   process.stdout.write('TASK\tIMPLEMENTER\tSTATUS\tPID\tWORKSPACE\n');
   for (const task of Object.values(manifest.tasks)) {
     process.stdout.write(`${task.id}\t${task.implementer}\t${task.status}\t${task.pid ?? '-'}\t${task.workspace}\n`);
+  }
+
+  const snapshot = queueSnapshot(manifest);
+  if (snapshot.queued.length > 0) {
+    process.stdout.write(
+      `\nQUEUE active=${snapshot.active}/${snapshot.maxConcurrency ?? '?'}`
+      + `  queued=${snapshot.queued.length}  stall-after=${formatShortDuration(queuedStallThreshold(manifest))}\n`,
+    );
+    for (const entry of snapshot.queued) {
+      const description = describeQueuedTask(manifest, entry.id);
+      process.stdout.write(
+        `  ${entry.id}\tposition ${description.position} of ${description.queuedTotal}`
+        + `\tqueued ${formatShortDuration(description.queuedForMs)}`
+        + `\t${description.reason}: ${description.reasonText}`
+        + `${description.stalled ? '  QUEUED_STALL' : ''}\n`,
+      );
+    }
   }
 
   if (options.task) {
@@ -2017,6 +2589,8 @@ async function main() {
     case '__worker': workerCommand(options); break;
     case 'add': await addCommand(options); break;
     case 'enqueue': await enqueueCommand(options); break;
+    case 'cancel': await cancelCommand(options); break;
+    case 'set-concurrency': await setConcurrencyCommand(options); break;
     case 'close': await closeCommand(options); break;
     case 'status': statusCommand(options); break;
     case 'inspect': inspectCommand(options); break;

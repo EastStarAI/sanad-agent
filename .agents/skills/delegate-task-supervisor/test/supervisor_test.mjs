@@ -15,12 +15,19 @@ function waitForFileChange(directory, predicate, timeoutMs = 8_000) {
   return new Promise((resolvePromise, reject) => {
     let watcher;
     let timer;
+    let watchdog;
+    // The watchdog is cleared on success: a pending timeout would otherwise keep
+    // the test process alive for its whole duration and inflate suite timing.
+    const cleanup = () => {
+      clearInterval(timer);
+      clearTimeout(watchdog);
+      try { watcher?.close(); } catch {}
+    };
     const check = () => {
       try {
         const value = predicate();
         if (!value) return;
-        clearInterval(timer);
-        watcher?.close();
+        cleanup();
         resolvePromise(value);
       } catch {
         // The writer may be between atomic rename operations; the next event retries.
@@ -30,9 +37,8 @@ function waitForFileChange(directory, predicate, timeoutMs = 8_000) {
       watcher = watch(directory, check);
     } catch {}
     timer = setInterval(check, 100);
-    setTimeout(() => {
-      clearInterval(timer);
-      watcher?.close();
+    watchdog = setTimeout(() => {
+      cleanup();
       reject(new Error(`condition not met within ${timeoutMs}ms`));
     }, timeoutMs);
     check();
@@ -1826,4 +1832,448 @@ test('watch-once wakes on journaled incomplete and needs_review terminals', () =
   assert.equal(first.to, 'incomplete');
   const second = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(first.seq)]));
   assert.equal(second.to, 'needs_review');
+});
+
+// --- Queue controls (S1-S5) -------------------------------------------------
+
+// Shared fixture: a task records that it actually started (so a cancelled or
+// aborted task can be proven never to have run) and settles after its delay.
+function writePacedFixture(root) {
+  const fixture = join(root, 'paced_task.mjs');
+  writeFileSync(fixture, `
+    import {mkdirSync, writeFileSync} from 'node:fs';
+    import {dirname} from 'node:path';
+    const [delay, resultPath, markerPath] = process.argv.slice(2);
+    mkdirSync(dirname(markerPath), {recursive:true});
+    writeFileSync(markerPath, 'started');
+    setTimeout(() => {
+      mkdirSync(dirname(resultPath), {recursive:true});
+      writeFileSync(resultPath, JSON.stringify({status:'completed', exitCode:0}));
+      process.exit(0);
+    }, Number(delay));
+  `, 'utf8');
+  return fixture;
+}
+
+function pacedTask(fixture, workspace, results, id, delay) {
+  const out = join(results, id);
+  return {
+    id,
+    implementer: 'opencode',
+    workspace,
+    command: process.execPath,
+    args: [fixture, String(delay), join(out, 'result.json'), taskMarker(results, id)],
+    resultPath: join(out, 'result.json'),
+  };
+}
+
+function taskMarker(results, id) {
+  return join(results, id, 'started.marker');
+}
+
+function readJournal(runDir) {
+  const path = join(runDir, 'events.jsonl');
+  if (!existsSync(path)) return [];
+  return readFileSync(path, 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function queueFixture(root, name) {
+  const workspace = join(root, `${name}-workspace`);
+  const results = join(root, `${name}-results`);
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(results, { recursive: true });
+  return { workspace, results };
+}
+
+test('start reports the effective concurrency and enqueue reports per-task position and counts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-queue-report-test-'));
+  const fixture = writePacedFixture(root);
+  const config = join(root, 'config');
+  mkdirSync(config, { recursive: true });
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+
+  // S1: omitting the flag is not a hidden single slot. One slot per spec task
+  // is the documented default and the handshake states it.
+  const defaultRun = join(root, 'run-default');
+  const defaultTasks = queueFixture(root, 'default');
+  const defaultSpec = join(root, 'default.json');
+  writeFileSync(defaultSpec, JSON.stringify({ tasks: [
+    pacedTask(fixture, defaultTasks.workspace, defaultTasks.results, 'auto-1', 150),
+    pacedTask(fixture, defaultTasks.workspace, defaultTasks.results, 'auto-2', 150),
+  ] }), 'utf8');
+  const handshake = JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', defaultSpec, '--run-dir', defaultRun,
+  ], env));
+  assert.equal(handshake.maxConcurrency, 2);
+  assert.equal(handshake.tasks, 2);
+  assert.equal(handshake.queuedStallMs, 120000);
+  runNode(SUPERVISOR, ['close', '--run', defaultRun, '--wait'], env);
+
+  // S2: every enqueued task reports started-or-queued, its position, and the
+  // live active/max counts, in text and in JSON.
+  const runDir = join(root, 'run-limited');
+  const tasks = queueFixture(root, 'limited');
+  const limitedSpec = join(root, 'limited.json');
+  writeFileSync(limitedSpec, JSON.stringify({ tasks: [
+    pacedTask(fixture, tasks.workspace, tasks.results, 'runner', 2_000),
+  ] }), 'utf8');
+  const limited = JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', limitedSpec, '--run-dir', runDir, '--max-concurrency', '1',
+  ], env));
+  assert.equal(limited.maxConcurrency, 1);
+  // Wait until the worker is provably live and draining before queueing, so the
+  // positions below describe a real running slot rather than a startup race.
+  await waitForFileChange(runDir, () => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    return manifest.tasks.runner?.status === 'running' ? manifest : null;
+  }, 15_000);
+
+  const extraSpec = join(root, 'extra.json');
+  writeFileSync(extraSpec, JSON.stringify({ tasks: [
+    pacedTask(fixture, tasks.workspace, tasks.results, 'wait-1', 10),
+    pacedTask(fixture, tasks.workspace, tasks.results, 'wait-2', 10),
+  ] }), 'utf8');
+  const enqueueText = runNode(SUPERVISOR, ['enqueue', '--run', runDir, '--spec', extraSpec], env);
+  assert.match(enqueueText, /Enqueued 2 task\(s\): wait-1, wait-2/);
+  assert.match(enqueueText, /wait-1: queued at position 1 of 2/);
+  assert.match(enqueueText, /wait-2: queued at position 2 of 2/);
+  assert.match(enqueueText, /waiting for a concurrency slot \(1\/1 active\)/);
+
+  const thirdSpec = join(root, 'third.json');
+  writeFileSync(thirdSpec, JSON.stringify({ tasks: [
+    pacedTask(fixture, tasks.workspace, tasks.results, 'wait-3', 10),
+  ] }), 'utf8');
+  const enqueued = JSON.parse(runNode(SUPERVISOR, [
+    'enqueue', '--run', runDir, '--spec', thirdSpec, '--json',
+  ], env));
+  assert.equal(enqueued.enqueued, true);
+  assert.equal(enqueued.active, 1);
+  assert.equal(enqueued.maxConcurrency, 1);
+  assert.equal(enqueued.queued, 3);
+  assert.equal(enqueued.tasks[0].status, 'queued');
+  assert.equal(enqueued.tasks[0].position, 3);
+  assert.equal(enqueued.tasks[0].queuedTotal, 3);
+  assert.equal(enqueued.tasks[0].reason, 'awaiting_slot');
+  assert.equal(enqueued.tasks[0].stalled, false);
+
+  // `add` reports held tasks per task as well; they never start on `add`.
+  const heldSpec = join(root, 'held.json');
+  writeFileSync(heldSpec, JSON.stringify({ tasks: [
+    pacedTask(fixture, tasks.workspace, tasks.results, 'hold-1', 10),
+  ] }), 'utf8');
+  const addText = runNode(SUPERVISOR, ['add', '--run', runDir, '--spec', heldSpec], env);
+  assert.match(addText, /hold-1: held — not queued until enqueue --task hold-1 \(1\/1 active\)/);
+
+  // S5 prelude + "status shows the queue reason per queued task".
+  const statusText = runNode(SUPERVISOR, ['status', '--run', runDir], env);
+  assert.match(statusText, /QUEUE active=1\/1\s+queued=3\s+stall-after=2m 0s/);
+  assert.match(statusText, /wait-1\s+position 1 of 3/);
+  assert.match(statusText, /wait-2\s+position 2 of 3/);
+  assert.match(statusText, /awaiting_slot: waiting for a concurrency slot \(1\/1 active\)/);
+
+  const statusJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  assert.equal(statusJson.active, 1);
+  assert.equal(statusJson.queue.maxConcurrency, 1);
+  assert.deepEqual(statusJson.queue.queued.map((entry) => entry.id), ['wait-1', 'wait-2', 'wait-3']);
+  assert.equal(statusJson.queue.queued[0].position, 1);
+  assert.equal(statusJson.tasks['wait-2'].queue.reason, 'awaiting_slot');
+  assert.equal(statusJson.tasks['wait-2'].queue.stalled, false);
+  assert.equal(statusJson.tasks['hold-1'].status, 'held');
+
+  // `close --abort-queued` clears queued and held tasks; the running task is
+  // left to finish, and aborted tasks never launched.
+  const closed = JSON.parse(runNode(SUPERVISOR, [
+    'close', '--run', runDir, '--abort-queued', '--json',
+  ], env));
+  assert.deepEqual(closed.aborted.sort(), ['hold-1', 'wait-1', 'wait-2', 'wait-3']);
+
+  const completed = await waitForFileChange(runDir, () => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    return manifest.status === 'completed' ? manifest : null;
+  }, 15_000);
+  assert.equal(completed.tasks['wait-1'].status, 'aborted');
+  assert.equal(completed.tasks['hold-1'].status, 'aborted');
+  assert.equal(completed.tasks.runner.status, 'completed');
+  assert.equal(existsSync(taskMarker(tasks.results, 'wait-1')), false);
+  assert.equal(existsSync(taskMarker(tasks.results, 'wait-3')), false);
+  assert.equal(existsSync(taskMarker(tasks.results, 'hold-1')), false);
+  assert.equal(existsSync(taskMarker(tasks.results, 'runner')), true);
+  const aborted = readJournal(runDir).filter((event) => event.to === 'aborted');
+  assert.ok(aborted
+    .filter((event) => event.taskId !== 'hold-1')
+    .every((event) => event.cancellationRequested === true));
+});
+
+test('cancel aborts a queued task before it can start and wakes a watcher', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-cancel-queued-test-'));
+  const fixture = writePacedFixture(root);
+  const { workspace, results } = queueFixture(root, 'cancel');
+  const runDir = join(root, 'run');
+  const config = join(root, 'config');
+  mkdirSync(config, { recursive: true });
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+
+  const specPath = join(root, 'tasks.json');
+  writeFileSync(specPath, JSON.stringify({ tasks: [
+    pacedTask(fixture, workspace, results, 'runner', 1_800),
+    pacedTask(fixture, workspace, results, 'wait-1', 10),
+  ] }), 'utf8');
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  await waitForFileChange(runDir, () => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    const runner = manifest.tasks.runner;
+    const waiting = manifest.tasks['wait-1'];
+    return runner?.status === 'running' && waiting?.status === 'queued' ? manifest : null;
+  }, 15_000);
+
+  const cancelText = runNode(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'wait-1'], env);
+  assert.match(cancelText, /Cancelled task wait-1 \(queued -> aborted\); it will never start\./);
+
+  const statusJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  assert.equal(statusJson.tasks['wait-1'].status, 'aborted');
+  assert.equal(statusJson.queue.queued.length, 0);
+
+  const abortedEvent = readJournal(runDir).find((event) => event.taskId === 'wait-1' && event.to === 'aborted');
+  assert.ok(abortedEvent, 'queued cancel journals an aborted transition');
+  assert.equal(abortedEvent.from, 'queued');
+  assert.equal(abortedEvent.cancellationRequested, true);
+  assert.match(abortedEvent.error, /never started/);
+
+  const watched = JSON.parse(runNode(WATCH_ONCE, [
+    '--run', runDir, '--since', String(abortedEvent.seq - 1),
+  ], env));
+  assert.equal(watched.taskId, 'wait-1');
+  assert.equal(watched.to, 'aborted');
+
+  const repeatError = runNodeThrows(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'wait-1'], env);
+  assert.match(repeatError, /already aborted/);
+  const missingError = runNodeThrows(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'no-such-task'], env);
+  assert.match(missingError, /task not found/);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+  assert.equal(existsSync(taskMarker(results, 'wait-1')), false);
+  assert.equal(existsSync(taskMarker(results, 'runner')), true);
+});
+
+test('cancel signals a running task, stops its daemon session by id, and records cancelled', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-cancel-running-test-'));
+  const workspace = join(root, 'worktree');
+  const runDir = join(root, 'run');
+  const outDir = join(root, 'task_out');
+  const binDir = join(root, 'bin');
+  const config = join(root, 'config');
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  mkdirSync(config, { recursive: true });
+  const briefFile = join(root, 'brief.txt');
+  writeFileSync(briefFile, 'Cancel brief', 'utf8');
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+
+  // The mock publishes its session id and then stays alive until signalled;
+  // `session stop <id>` is recorded so the stop can be proven by session id.
+  const stopLog = join(root, 'session-stop.log');
+  const mockSanad = join(root, 'mock_sanad.mjs');
+  writeFileSync(mockSanad, `
+    import {appendFileSync, mkdirSync} from 'node:fs';
+    import {dirname, resolve} from 'node:path';
+    const NL = String.fromCharCode(10);
+    const args = process.argv.slice(2);
+    if (args[0] === 'session' && args[1] === 'stop') {
+      appendFileSync(${JSON.stringify(stopLog)}, args[2] + NL);
+      process.exit(0);
+    }
+    let outDir = '';
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--out-dir' || args[i] === '-o') outDir = args[i + 1];
+    }
+    const eventsPath = resolve(outDir, 'events.jsonl');
+    mkdirSync(dirname(eventsPath), {recursive:true});
+    appendFileSync(eventsPath, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: 'running',
+      session_id: 'ses_cancel_1',
+      data: {},
+    }) + NL);
+    setInterval(() => {}, 1000);
+  `, 'utf8');
+  const sanadCommand = createSanadWrapper(binDir, mockSanad);
+
+  const specPath = join(root, 'tasks.json');
+  writeFileSync(specPath, JSON.stringify({ tasks: [{
+    id: 'sanad-cancel',
+    implementer: 'sanad',
+    workspace,
+    command: sanadCommand,
+    args: [
+      'run',
+      '--brief-file', briefFile,
+      '--workspace', 'ws_logical',
+      '--out-dir', outDir,
+      '--events',
+    ],
+  }] }), 'utf8');
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  const running = await waitForFileChange(runDir, () => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    const task = manifest.tasks['sanad-cancel'];
+    return task.status === 'running' && task.sessionId === 'ses_cancel_1' ? manifest : null;
+  }, 15_000);
+  assert.equal(running.active, 1);
+
+  const cancelled = JSON.parse(runNode(SUPERVISOR, [
+    'cancel', '--run', runDir, '--task', 'sanad-cancel', '--json',
+  ], env));
+  assert.equal(cancelled.from, 'running');
+  assert.equal(cancelled.status, 'cancelling');
+  assert.equal(cancelled.signalled, 'SIGTERM');
+  assert.equal(cancelled.sessionId, 'ses_cancel_1');
+  assert.equal(cancelled.sessionStop.requested, true);
+
+  const terminal = await waitForFileChange(runDir, () => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    const task = manifest.tasks['sanad-cancel'];
+    return task.status === 'cancelled' ? manifest : null;
+  }, 15_000);
+  assert.equal(terminal.tasks['sanad-cancel'].cause, 'cancelled');
+  assert.equal(terminal.active, 0);
+
+  await waitForFileChange(root, () => (
+    existsSync(stopLog) && readFileSync(stopLog, 'utf8').includes('ses_cancel_1') ? true : null
+  ), 15_000);
+
+  const journal = readJournal(runDir);
+  assert.ok(journal.some((event) => event.kind === 'cancel_requested' && event.signalled === 'SIGTERM'));
+  assert.ok(journal.some((event) => event.taskId === 'sanad-cancel' && event.to === 'cancelled'));
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('set-concurrency raises live slots and lowering never kills running tasks', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-concurrency-test-'));
+  const fixture = writePacedFixture(root);
+  const { workspace, results } = queueFixture(root, 'concurrency');
+  const runDir = join(root, 'run');
+  const config = join(root, 'config');
+  mkdirSync(config, { recursive: true });
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+
+  const specPath = join(root, 'tasks.json');
+  writeFileSync(specPath, JSON.stringify({ tasks: [
+    pacedTask(fixture, workspace, results, 'runner', 2_000),
+    pacedTask(fixture, workspace, results, 'slot-1', 1_200),
+    pacedTask(fixture, workspace, results, 'slot-2', 1_200),
+  ] }), 'utf8');
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  await waitForFileChange(runDir, () => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    const runner = manifest.tasks.runner;
+    const waiting = manifest.tasks['slot-1'];
+    return runner?.status === 'running' && waiting?.status === 'queued' ? manifest : null;
+  }, 15_000);
+
+  const raised = JSON.parse(runNode(SUPERVISOR, [
+    'set-concurrency', '--run', runDir, '--max', '3', '--json',
+  ], env));
+  assert.equal(raised.previous, 1);
+  assert.equal(raised.maxConcurrency, 3);
+  assert.equal(raised.active, 3);
+  assert.equal(raised.queued, 0);
+  assert.deepEqual(raised.started.sort(), ['slot-1', 'slot-2']);
+  assert.ok(raised.tasks.every((task) => task.status === 'started'));
+
+  // Lowering the ceiling applies to future fills only: nothing running is
+  // signalled or aborted, and the counts stay honest.
+  const lowered = JSON.parse(runNode(SUPERVISOR, [
+    'set-concurrency', '--run', runDir, '--max', '2', '--json',
+  ], env));
+  assert.equal(lowered.previous, 3);
+  assert.equal(lowered.maxConcurrency, 2);
+  assert.equal(lowered.active, 3);
+  assert.deepEqual(lowered.started, []);
+
+  const statusJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  assert.equal(statusJson.maxConcurrency, 2);
+  assert.equal(statusJson.active, 3);
+  for (const id of ['runner', 'slot-1', 'slot-2']) {
+    assert.equal(statusJson.tasks[id].status, 'running');
+  }
+
+  const invalid = runNodeThrows(SUPERVISOR, ['set-concurrency', '--run', runDir, '--max', '0'], env);
+  assert.match(invalid, /--max must be a positive integer/);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+  const finalManifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+  assert.equal(finalManifest.status, 'completed');
+  for (const id of ['runner', 'slot-1', 'slot-2']) {
+    assert.equal(finalManifest.tasks[id].status, 'completed');
+  }
+});
+
+test('a task queued past the stall threshold journals one queued_stall visible in watch-once and status', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-queued-stall-test-'));
+  const fixture = writePacedFixture(root);
+  const { workspace, results } = queueFixture(root, 'stall');
+  const runDir = join(root, 'run');
+  const config = join(root, 'config');
+  mkdirSync(config, { recursive: true });
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+
+  const specPath = join(root, 'tasks.json');
+  writeFileSync(specPath, JSON.stringify({ tasks: [
+    pacedTask(fixture, workspace, results, 'runner', 2_500),
+    pacedTask(fixture, workspace, results, 'wait-1', 10),
+  ] }), 'utf8');
+  const started = JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir,
+    '--max-concurrency', '1', '--queued-stall-ms', '400',
+  ], env));
+  assert.equal(started.queuedStallMs, 400);
+
+  const stallEvent = await waitForFileChange(runDir, () => (
+    readJournal(runDir).find((event) => event.to === 'queued_stall') ?? null
+  ), 15_000);
+  assert.equal(stallEvent.taskId, 'wait-1');
+  assert.equal(stallEvent.kind, 'queued_stall');
+  assert.equal(stallEvent.active, 1);
+  assert.equal(stallEvent.maxConcurrency, 1);
+  assert.equal(stallEvent.position, 1);
+  assert.equal(stallEvent.reason, 'awaiting_slot');
+  assert.ok(stallEvent.queuedForMs >= 400, `stall age ${stallEvent.queuedForMs}ms`);
+
+  const watched = JSON.parse(runNode(WATCH_ONCE, [
+    '--run', runDir, '--since', String(stallEvent.seq - 1),
+  ], env));
+  assert.equal(watched.seq, stallEvent.seq);
+  assert.equal(watched.taskId, 'wait-1');
+  assert.equal(watched.to, 'queued_stall');
+
+  const statusText = runNode(SUPERVISOR, ['status', '--run', runDir], env);
+  assert.match(statusText, /QUEUED_STALL/);
+  assert.match(statusText, /stall-after=400ms/);
+  const statusJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  assert.equal(statusJson.tasks['wait-1'].queue.stalled, true);
+  assert.equal(statusJson.queue.queued[0].stalled, true);
+  assert.equal(statusJson.queuedStallMs, 400);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+  const finalManifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+  assert.equal(finalManifest.status, 'completed');
+  assert.equal(finalManifest.tasks['wait-1'].status, 'completed');
+  assert.equal(finalManifest.tasks['wait-1'].queueStall, null);
+  // One notice per queue episode, never a stream of duplicates.
+  assert.equal(readJournal(runDir).filter((event) => event.to === 'queued_stall').length, 1);
 });
