@@ -119,8 +119,9 @@ enum ReplayCell {
 }
 
 /// [asRecorded] sends exactly what was recorded (omitting what is absent or
-/// foreign); [reject] raises [ProviderHistoryProjectionException] pre-dispatch.
-enum ReplayDecision { asRecorded, reject }
+/// foreign); [emptyString] sends the provider's zero-reasoning shape ("");
+/// [reject] raises [ProviderHistoryProjectionException] pre-dispatch.
+enum ReplayDecision { asRecorded, emptyString, reject }
 
 /// One assistant message's reasoning wire fields for this request.
 final class ChatReasoningReplay {
@@ -151,12 +152,13 @@ class ChatReasoningReplayPolicy {
   static const echoField = ProviderStateProvenance.reasoningContentKey;
 
   /// Conservative default until live probes P1–P5 decide each cell: send
-  /// exactly what was recorded. A probe outcome is a one-line change here
-  /// (all echo-required routes) or in [routeOverrides] (one exact route).
+  /// exactly what was recorded, except for same-route tool turns with absent
+  /// or null reasoning on echo-required routes which send the provider's
+  /// zero-reasoning shape ("") when in thinking mode (Task 131).
   static const Map<ReplayCell, ReplayDecision> defaultDecisions = {
     ReplayCell.sameRouteEmpty: ReplayDecision.asRecorded, // P1
-    ReplayCell.sameRouteAbsent: ReplayDecision.asRecorded, // P2
-    ReplayCell.sameRouteNull: ReplayDecision.asRecorded, // P3
+    ReplayCell.sameRouteAbsent: ReplayDecision.emptyString, // P2
+    ReplayCell.sameRouteNull: ReplayDecision.emptyString, // P3
     ReplayCell.foreignEarlierTurn: ReplayDecision.asRecorded, // P4
     ReplayCell.foreignCurrentTurn: ReplayDecision.asRecorded, // P5
   };
@@ -215,8 +217,9 @@ class ChatReasoningReplayPolicy {
   }) {
     final result = Map<Message, ChatReasoningReplay>.identity();
     final echoRequired = routeEchoField == echoField;
+    final isThinkingDisabled = thinkingDisabled(thinkingDirective);
     final mayReject =
-        enforce && echoRequired && !thinkingDisabled(thinkingDirective);
+        enforce && echoRequired && !isThinkingDisabled;
     final currentTurnStart = history.lastIndexWhere(
       (message) => message.role == MessageRole.user,
     );
@@ -234,26 +237,43 @@ class ChatReasoningReplayPolicy {
         normalizeModel: normalizeModel,
       );
       final hasToolCalls = message.toolCalls?.isNotEmpty ?? false;
-      final replay = sameRoute
-          ? _recorded(message.providerState!, echoRequired: echoRequired)
+      ChatReasoningReplay replay = sameRoute
+          ? _recorded(
+              message.providerState!,
+              echoRequired: echoRequired && !isThinkingDisabled,
+            )
           : ChatReasoningReplay.none;
-      result[message] = replay;
-      if (!echoRequired || !hasToolCalls) continue;
 
-      final cell = sameRoute
-          ? _sameRouteCell(message.providerState!)
-          : (index > currentTurnStart
-                ? ReplayCell.foreignCurrentTurn
-                : ReplayCell.foreignEarlierTurn);
-      if (cell == null || !mayReject) continue;
-      if (decisionFor(cell, routeKey: routeKey) != ReplayDecision.reject) {
-        continue;
+      if (echoRequired && hasToolCalls) {
+        final cell = sameRoute
+            ? _sameRouteCell(message.providerState!)
+            : (index > currentTurnStart
+                  ? ReplayCell.foreignCurrentTurn
+                  : ReplayCell.foreignEarlierTurn);
+        if (cell != null) {
+          final decision = decisionFor(cell, routeKey: routeKey);
+          if (sameRoute && !isThinkingDisabled) {
+            if (decision == ReplayDecision.emptyString) {
+              final details =
+                  message.providerState!.data[
+                      ProviderStateProvenance.reasoningDetailsKey];
+              replay = ChatReasoningReplay(
+                emitContent: true,
+                content: '',
+                details: details is List ? details : null,
+              );
+            }
+          }
+          if (mayReject && decision == ReplayDecision.reject) {
+            if (sameRoute) {
+              sameRouteRejected++;
+            } else {
+              foreignRejected++;
+            }
+          }
+        }
       }
-      if (sameRoute) {
-        sameRouteRejected++;
-      } else {
-        foreignRejected++;
-      }
+      result[message] = replay;
     }
 
     if (foreignRejected > 0) {
@@ -282,15 +302,20 @@ class ChatReasoningReplayPolicy {
     final data = state.data;
     final details = data[ProviderStateProvenance.reasoningDetailsKey];
     if (data.containsKey(ProviderStateProvenance.reasoningContentKey)) {
-      return ChatReasoningReplay(
-        emitContent: true,
-        content: data[ProviderStateProvenance.reasoningContentKey],
-        details: details is List ? details : null,
-      );
+      final content = data[ProviderStateProvenance.reasoningContentKey];
+      if (content != null) {
+        return ChatReasoningReplay(
+          emitContent: true,
+          content: content,
+          details: details is List ? details : null,
+        );
+      }
     }
     // A recorded explicit null is echoed only to a route that declares the
     // field; strict routes never receive a reasoning key they did not send.
     final recordedNull =
+        (data.containsKey(ProviderStateProvenance.reasoningContentKey) &&
+            data[ProviderStateProvenance.reasoningContentKey] == null) ||
         ReasoningFieldObservation.parse(
           data[ProviderStateProvenance.reasoningFieldKey],
         ) ==
@@ -305,6 +330,7 @@ class ChatReasoningReplayPolicy {
     final data = state.data;
     if (data.containsKey(ProviderStateProvenance.reasoningContentKey)) {
       final value = data[ProviderStateProvenance.reasoningContentKey];
+      if (value == null) return ReplayCell.sameRouteNull;
       return value is String && value.isEmpty
           ? ReplayCell.sameRouteEmpty
           : null;

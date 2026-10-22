@@ -52,12 +52,14 @@ Matcher _rejection(String code, int count) =>
         .having((e) => e.route, 'route', '$goInstance/$deepseek');
 
 void main() {
-  test('shipped defaults are the conservative probe-pending seam', () {
-    expect(
-      ChatReasoningReplayPolicy.defaultDecisions.values,
-      everyElement(ReplayDecision.asRecorded),
-    );
-    expect(ChatReasoningReplayPolicy.defaultDecisions.keys, ReplayCell.values);
+  test('shipped defaults define the echo policy seam', () {
+    expect(ChatReasoningReplayPolicy.defaultDecisions, {
+      ReplayCell.sameRouteEmpty: ReplayDecision.asRecorded,
+      ReplayCell.sameRouteAbsent: ReplayDecision.emptyString,
+      ReplayCell.sameRouteNull: ReplayDecision.emptyString,
+      ReplayCell.foreignEarlierTurn: ReplayDecision.asRecorded,
+      ReplayCell.foreignCurrentTurn: ReplayDecision.asRecorded,
+    });
     expect(ChatReasoningReplayPolicy.routeOverrides, isEmpty);
   });
 
