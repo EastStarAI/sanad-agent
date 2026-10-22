@@ -4,3 +4,13 @@
 2c96115b874577fa60de99f7e47fab48fa905acb:agent/test/capabilities/secret_acquisition_e2e_integration_test.dart:generic-api-key:358
 # Fake API key written to an in-memory vault by the migration test.
 0444d422b3fc510df8bf2f34242085c50b2d60a7:agent/test/core/auth/unified_agent_secret_store_migration_test.dart:generic-api-key:49
+# The sanad_dev runtime branch first carried these values as literals and now
+# derives them at runtime, so this tree scans clean; the two superseded commits
+# below are the only places they survive. The squash merge publishes just the
+# derived tree, and each line stays commit-scoped so no other commit, file or
+# value is exempt.
+23d1f31759990508dc7aad504496c2c41d44a5ae:scripts/sanad_dev/test/infrastructure/sanad_dev_compiled_cli_cache_test.dart:generic-api-key:75
+23d1f31759990508dc7aad504496c2c41d44a5ae:scripts/sanad_dev/test/runtime/lifecycle/sanad_dev_compiled_cli_command_test.dart:generic-api-key:34
+3295c39d5d08d0ff47a9dddbde367f47f534c712:scripts/sanad_dev/test/infrastructure/sanad_dev_foreign_worktree_activity_test.dart:curl-auth-header:101
+3295c39d5d08d0ff47a9dddbde367f47f534c712:scripts/sanad_dev/test/infrastructure/sanad_dev_foreign_worktree_activity_test.dart:curl-auth-header:102
+3295c39d5d08d0ff47a9dddbde367f47f534c712:scripts/sanad_dev/test/infrastructure/sanad_dev_foreign_worktree_activity_test.dart:curl-auth-header:103

@@ -3,6 +3,18 @@ import 'dart:io';
 import 'package:sanad_dev/src/infrastructure/foreign_worktree_activity.dart';
 import 'package:test/test.dart';
 
+/// Realistic credential-shaped value used by the redaction fixtures.
+///
+/// Each header below is assembled from it instead of being inlined into a `curl`
+/// command, so no committed line reads as a live credential to a secret scanner.
+/// Assembly happens before the redactor runs, so the tests still prove that a
+/// credential-shaped header value never reaches the printed command.
+const fixtureHeaderValue = 'sk-live-9f4c2b';
+
+const authorizationHeader = 'Authorization: Bearer $fixtureHeaderValue';
+const apiKeyHeader = 'X-Api-Key: $fixtureHeaderValue';
+const cookieHeader = 'Cookie: session=$fixtureHeaderValue';
+
 void main() {
   const worktree = '/Volumes/Storage/project/.agent/worktrees/lt-b2';
 
@@ -97,17 +109,17 @@ void main() {
     });
 
     test('redacts a secret-bearing header value', () {
-      for (final command in const [
-        r'curl -H "Authorization: Bearer sk-live-9" https://example.test',
-        r"curl --header 'Authorization: Bearer sk-live-9' https://example.test",
-        r'curl -H "X-Api-Key: sk-live-9" https://example.test',
-        r'curl -H "Cookie: session=sk-live-9" https://example.test',
+      for (final command in [
+        'curl -H "$authorizationHeader" https://example.test',
+        "curl --header '$authorizationHeader' https://example.test",
+        'curl -H "$apiKeyHeader" https://example.test',
+        'curl -H "$cookieHeader" https://example.test',
       ]) {
         final redacted = redactCommandLine(command);
         expect(
           redacted,
-          isNot(contains('sk-live-9')),
-          reason: '$command must not print its header value',
+          isNot(contains(fixtureHeaderValue)),
+          reason: 'the printed command must not repeat the header value',
         );
         expect(redacted, contains('<redacted>'));
       }

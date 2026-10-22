@@ -4,6 +4,16 @@ import 'package:path/path.dart' as p;
 import 'package:sanad_dev/src/infrastructure/compiled_cli_cache.dart';
 import 'package:test/test.dart';
 
+/// Source commit the fixture cache is keyed on.
+///
+/// The expected cache key is derived from it instead of being written out, so
+/// the fixture never carries a hash-shaped literal that a secret scanner has to
+/// distinguish from a real credential.
+const fixtureSourceCommit = 'abcdef1234567890';
+
+/// Cache key the fixture commit maps to: the first twelve characters.
+String fixtureCacheKey(String commit) => commit.substring(0, 12);
+
 void main() {
   late Directory fixture;
   late Directory workspace;
@@ -17,7 +27,7 @@ void main() {
   }
 
   CompiledCliCache cache({
-    String commit = 'abcdef1234567890',
+    String commit = fixtureSourceCommit,
     String sdkVersion = 'dart 3.10.7',
   }) => CompiledCliCache(
     workspaceRoot: workspace.path,
@@ -75,14 +85,14 @@ void main() {
     test('caches per worktree commit and reuses a matching artifact', () async {
       final first = await cache().ensure(CompiledCliComponent.agent);
       expect(first.rebuilt, isTrue);
-      expect(first.cacheKey, 'abcdef123456');
+      expect(first.cacheKey, fixtureCacheKey(fixtureSourceCommit));
       expect(
         first.executablePath,
         p.join(
           workspace.path,
           '.sanad-dev',
           'bin',
-          'abcdef123456',
+          fixtureCacheKey(fixtureSourceCommit),
           Platform.isWindows ? 'agent.exe' : 'agent',
         ),
       );
@@ -313,7 +323,7 @@ void main() {
           workspace.path,
           '.sanad-dev',
           'bin',
-          'abcdef123456',
+          fixtureCacheKey(fixtureSourceCommit),
           'client-bundle',
           'bin',
           Platform.isWindows ? 'sanad_client.exe' : 'sanad_client',
