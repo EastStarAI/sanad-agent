@@ -367,6 +367,14 @@ manual repair and remains fail-closed for ambiguous unsafe execution.
 
 All user-facing restart entry points share this checkpoint-preserving path. `daemon` and `start` commands always launch a supervisor parent in source and compiled-executable deployments; no environment setting enables or disables it. The terminal restart trigger sends the same controlled `/restart` request used by developer tooling and waits for the daemon child to exit; the supervisor then starts a replacement. Forced child termination is only a bounded fallback when the endpoint cannot respond.
 
+Exit status carries three distinct meanings, and each one owns a different outcome:
+
+- A controlled refresh exits `0`, so the supervisor starts a replacement. Nothing about a restart depends on a signal.
+- A permanent stop exits `123`, so the supervisor ends instead of restarting.
+- A termination signal exits `128 + <signal number>` — `143` for `SIGTERM`, `130` for `SIGINT` — for both the daemon and the supervisor parent. A daemon that caught the signal and exited `0` would look like a requested clean stop to everything that waits on it: the macOS service plist keeps `KeepAlive { SuccessfulExit = false }`, so `launchd` would stop relaunching the Agent after a stray `SIGTERM`, and a shell would report success instead of a signal. The first signal owns the status, and a later one only repeats a stop that is already underway.
+
+A terminal `Ctrl+C` reaches the whole foreground process group, so the daemon and its supervisor both see it. Only the daemon owns the Home's runtime record: it runs one bounded cleanup and exits, while the supervisor waits for that exit and then reports the same signal status. The supervisor never restarts a child while its own shutdown is underway — the daemon's `143`/`130` is then an exit it is waiting on, not a crash to respawn, so no replacement daemon can be orphaned behind a supervisor that is already leaving. `sanad-dev stop` is unaffected because it never signals the daemon: it asks the daemon through `/shutdown`, which exits `123`.
+
 ### 5.2. Startup Recovery Flow
 When the daemon restarts, `SessionRunOrchestrator.restorePersistedState()`:
 0. Selects only `queued`, `running`, `waiting`, `blocked`, and `resuming`

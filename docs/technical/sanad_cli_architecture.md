@@ -104,7 +104,10 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
      daemon can never delete a successor runtime's republished record. An
      unclean death (`SIGKILL`) leaves the record to fail closed as
      `home_runtime_stale`, which is the signal that the previous runtime did not
-     stop cleanly.
+     stop cleanly. The hook keeps the signal's own exit status
+     (`128 + signal`: `143` for `SIGTERM`, `130` for `SIGINT`) instead of
+     exiting `0`, so a shell, `sanad-dev`, and a real supervisor still see a
+     signal termination rather than a requested clean stop.
    - **Inherited values never override a selection.** `SANAD_GATEWAY_URL`,
      `LOCAL_GATEWAY_URL`, and `LOCAL_GATEWAY_PORT` come from a parent process
      (a launcher, a test harness, another runtime) and are ignored entirely when

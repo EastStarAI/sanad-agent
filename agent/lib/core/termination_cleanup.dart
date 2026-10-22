@@ -1,6 +1,21 @@
 import 'dart:async';
 import 'dart:io';
 
+/// The exit status that preserves a terminating signal for whoever waits on the
+/// process.
+///
+/// A process that dies *from* a signal is reported by a shell as
+/// `128 + <signal number>` (143 for SIGTERM, 130 for SIGINT), and a supervisor
+/// classifies the same shape as a signal exit. A process that catches the
+/// signal and exits `0` instead looks like a requested clean stop: the macOS
+/// service plist keeps `KeepAlive { SuccessfulExit = false }`, so a stray
+/// SIGTERM would silently leave the Agent down.
+///
+/// Every signal-driven exit therefore reports this mapping, which keeps
+/// "stopped by a signal" distinguishable from "finished its work" for shells,
+/// `launchd`, `sanad-dev`, and any wrapper.
+int signalExitCode(ProcessSignal signal) => 128 + signal.signalNumber;
+
 /// Runs one bounded cleanup step and then ends the process when the runtime is
 /// asked to terminate.
 ///
@@ -11,8 +26,9 @@ import 'dart:io';
 /// in fact stopped cleanly.
 ///
 /// The contract is deliberately small: the cleanup runs at most once, it
-/// finishes before the process exits, and a failed cleanup still ends the
-/// process instead of leaving a runtime alive with no signal handler.
+/// finishes before the process exits, a failed cleanup still ends the process
+/// instead of leaving a runtime alive with no signal handler, and the exit
+/// status keeps the signal semantics of [signalExitCode].
 class TerminationCleanup {
   TerminationCleanup({
     required Future<void> Function() cleanup,
@@ -52,7 +68,7 @@ class TerminationCleanup {
     _watchers.clear();
   }
 
-  Future<void> _handleSignal(ProcessSignal _) async {
+  Future<void> _handleSignal(ProcessSignal signal) async {
     if (_stopping) return;
     _stopping = true;
     try {
@@ -61,7 +77,9 @@ class TerminationCleanup {
       // The caller's cleanup owns reporting, and the process must still end:
       // staying alive here would leave a runtime that ignores SIGTERM.
     } finally {
-      _exitProcess(0);
+      // The first signal owns the exit status; a later one only repeats a stop
+      // that is already underway.
+      _exitProcess(signalExitCode(signal));
     }
   }
 }
