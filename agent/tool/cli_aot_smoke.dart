@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sanad_agent/core/auth/secret_vault_policy.dart';
+
 import 'fake_local_gateway.dart';
 
 const _cleanupAttempts = 20;
@@ -87,10 +89,7 @@ Future<void> main() async {
       );
     }
 
-    await _verifyGatewayCommands(
-      executable: executable.path,
-      root: root,
-    );
+    await _verifyGatewayCommands(executable: executable.path, root: root);
   } finally {
     await deleteDirectoryWithRetry(root);
   }
@@ -125,15 +124,16 @@ Future<void> _verifyGatewayCommands({
   const token = 'fake-gateway-token';
   await File('${home.path}/.local_token').writeAsString(token, flush: true);
 
-  final baseEnvironment = <String, String>{
-    ...Platform.environment,
-    'SANAD_HOME': home.path,
-    'SANAD_STATE_HOME': stateHome.path,
-  }
-    ..remove('SANAD_E2E_TEST_MODE')
-    ..remove('SANAD_GATEWAY_URL')
-    ..remove('LOCAL_GATEWAY_URL')
-    ..remove('LOCAL_GATEWAY_PORT');
+  final baseEnvironment =
+      <String, String>{
+          ...Platform.environment,
+          'SANAD_HOME': home.path,
+          'SANAD_STATE_HOME': stateHome.path,
+        }
+        ..remove('SANAD_E2E_TEST_MODE')
+        ..remove('SANAD_GATEWAY_URL')
+        ..remove('LOCAL_GATEWAY_URL')
+        ..remove('LOCAL_GATEWAY_PORT');
 
   final gateway = await FakeLocalGateway.start();
   try {
@@ -205,19 +205,38 @@ Future<void> _verifyGatewayCommands({
       );
     }
 
-    // `models list` is a local query that may legitimately open the vault for
-    // provider credentials. It must still *finish*: without interactive
-    // authorization the Keychain answer must close the vault, never wait for a
-    // prompt that no CLI can answer.
+    // `models list` is a local query that does open the vault for provider
+    // credentials, and this process has no terminal. The vault must therefore
+    // open and its read must finish without starting an OS authorization
+    // dialog: the run may report a closed vault, but it must never wait for a
+    // prompt nobody can answer, and it must never print the waiting notice that
+    // belongs to an interactive run.
     final modelsRun = await _runAotProcess(
       executable,
       ['models', 'list', '--home', home.path],
       environment: baseEnvironment,
       operation: 'AOT models list',
     );
-    if (modelsRun.exitCode != 0 && modelsRun.stderr.trim().isEmpty) {
+    if (modelsRun.exitCode != 0) {
       throw StateError(
-        'AOT models list failed (${modelsRun.exitCode}) with no diagnostic.',
+        'AOT models list failed (${modelsRun.exitCode}): '
+        'stdout=${modelsRun.stdout} stderr=${modelsRun.stderr}',
+      );
+    }
+    if (modelsRun.stderr.contains(keychainApprovalWaitNotice())) {
+      throw StateError(
+        'AOT models list announced a Keychain approval for a process with no '
+        'terminal: stderr=${modelsRun.stderr}',
+      );
+    }
+    final vaultOpened = home
+        .listSync()
+        .map((entry) => entry.path.split(Platform.pathSeparator).last)
+        .any((name) => name.startsWith('secret_vault'));
+    if (!vaultOpened) {
+      throw StateError(
+        'AOT models list never opened the Agent vault, so a command that reads '
+        'provider credentials was classified as secret-free.',
       );
     }
   } finally {

@@ -36,13 +36,67 @@ void main() {
     });
 
     test('pure queries never open the vault', () {
-      expect(SanadCommandRunner.requiresSecretVault(const ['--version']), isFalse);
-      expect(SanadCommandRunner.requiresSecretVault(const ['version']), isFalse);
+      expect(
+        SanadCommandRunner.requiresSecretVault(const ['--version']),
+        isFalse,
+      );
+      expect(
+        SanadCommandRunner.requiresSecretVault(const ['version']),
+        isFalse,
+      );
       expect(SanadCommandRunner.requiresSecretVault(const ['--help']), isFalse);
       expect(
         SanadCommandRunner.requiresSecretVault(const ['session', '--help']),
         isFalse,
       );
+    });
+
+    test('a secret-bearing subcommand keeps the vault in its own family', () {
+      for (final arguments in <List<String>>[
+        // `schedule` only exempts `list`; a bare family command and every other
+        // subcommand open the vault.
+        ['schedule'],
+        ['schedule', 'add', '0 9 * * *', 'ping'],
+        ['skills'],
+        ['skills', 'add', '/tmp/skill'],
+        ['skills', 'update'],
+        ['skills', 'remove', 'skill-1'],
+      ]) {
+        expect(
+          SanadCommandRunner.requiresSecretVault(arguments),
+          isTrue,
+          reason: '${arguments.join(' ')} is not a secret-free subcommand',
+        );
+      }
+    });
+
+    test('a daemon dispatch is never classified from the daemon stdio', () {
+      for (final arguments in <List<String>>[
+        ['daemon'],
+        ['start'],
+        ['daemon', '--child-process'],
+        // A supervisor that puts the private marker first must still be
+        // recognized before the vault opens.
+        ['--child-process', 'daemon'],
+        ['--home', '/tmp/sanad-home', 'daemon', '--child-process'],
+      ]) {
+        expect(
+          SanadCommandRunner.dispatchesToDaemon(arguments),
+          isTrue,
+          reason: arguments.join(' '),
+        );
+      }
+      for (final arguments in <List<String>>[
+        ['session', 'list'],
+        ['models', 'list'],
+        const <String>[],
+      ]) {
+        expect(
+          SanadCommandRunner.dispatchesToDaemon(arguments),
+          isFalse,
+          reason: arguments.join(' '),
+        );
+      }
     });
 
     test('secret-bearing and unrecognized commands keep the vault', () {
@@ -86,15 +140,16 @@ void main() {
         await File(
           '${home.path}/.local_token',
         ).writeAsString(token, flush: true);
-        final environment = <String, String>{
-          ...Platform.environment,
-          'SANAD_HOME': home.path,
-          'SANAD_STATE_HOME': stateHome.path,
-        }
-          ..remove('SANAD_E2E_TEST_MODE')
-          ..remove('SANAD_GATEWAY_URL')
-          ..remove('LOCAL_GATEWAY_URL')
-          ..remove('LOCAL_GATEWAY_PORT');
+        final environment =
+            <String, String>{
+                ...Platform.environment,
+                'SANAD_HOME': home.path,
+                'SANAD_STATE_HOME': stateHome.path,
+              }
+              ..remove('SANAD_E2E_TEST_MODE')
+              ..remove('SANAD_GATEWAY_URL')
+              ..remove('LOCAL_GATEWAY_URL')
+              ..remove('LOCAL_GATEWAY_PORT');
         try {
           final result = await _runBounded(binaryPath!, [
             'session',

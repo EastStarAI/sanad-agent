@@ -57,13 +57,25 @@ void main(List<String> arguments) async {
   // are secured individually by their read/write owners; startup never walks
   // the complete Home tree.
   await SanadHomeBootstrap.prepareAll();
-  // Plan 83: CLI commands read and write secrets through the Agent vault, and
-  // a command that can touch a secret must open it before dispatch. The vault
-  // is the OS credential vault, so opening it on behalf of a command that has
-  // no secrets (a gateway command such as `session list`) would make the CLI
-  // wait on an OS authorization prompt it can never answer, with no output and
-  // no socket. Those commands therefore never open it.
-  if (SanadCommandRunner.requiresSecretVault(arguments)) {
+  // Plan 83: CLI commands read and write secrets through the Agent vault, and a
+  // command that can touch a secret must open it before dispatch. The vault is
+  // the OS credential vault, so opening it on behalf of a command that has no
+  // secrets (a gateway command such as `session list`) would only expose that
+  // process to an OS authorization dialog it has no reason to show. Those
+  // commands therefore never open it, and a process that skips the vault can
+  // never write a secret to a plaintext fallback.
+  final vaultRequired = SanadCommandRunner.requiresSecretVault(arguments);
+  // A process may only start a Keychain dialog when a person is present to
+  // answer it. The daemon keeps the prompt by design; a CLI is classified from
+  // explicit evidence (machine-output flags, a supervised child, a closed pipe,
+  // or a spawner's declaration) instead of guessing.
+  SecretVaultPolicy.apply(
+    SanadCommandRunner.dispatchesToDaemon(arguments)
+        ? SecretVaultPolicy.daemonEntryDecision
+        : detectSecretVaultInteraction(arguments),
+    vaultSkipped: !vaultRequired,
+  );
+  if (vaultRequired) {
     await SecretVaults.open();
   }
   final machineOutput =

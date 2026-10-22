@@ -399,21 +399,29 @@ class SanadCommandRunner extends CommandRunner<int> {
     return false;
   }
 
-  /// Commands whose whole code path is served by the Local Gateway or by local
+  /// Commands whose every subcommand is served by the Local Gateway or by local
   /// files, and that therefore never read or write an Agent secret.
   ///
   /// `session` is the gateway-only surface the Client and automation poll;
-  /// `workspace`, `memory` and `skills` are gateway or file operations, and
-  /// `schedule list` reads the agent-state database read-only.
-  static const Set<String> secretFreeCommands = {
+  /// `workspace` and `memory` are gateway or file operations.
+  static const Set<String> secretFreeCommandFamilies = {
     'session',
     'workspace',
     // `workspace` also answers to `ws`, and the parsed command name keeps the
     // alias the caller typed.
     'ws',
     'memory',
-    'schedule',
-    'skills',
+  };
+
+  /// Individual subcommands of an otherwise secret-bearing family that are
+  /// still secret-free, so an unrelated subcommand of the same family keeps the
+  /// vault instead of inheriting a blanket exemption.
+  ///
+  /// `schedule list` reads the agent-state database read-only, and
+  /// `skills list` reads the bundled and user skill directories.
+  static const Map<String, Set<String>> secretFreeSubcommands = {
+    'schedule': {'list'},
+    'skills': {'list'},
   };
 
   /// Whether [arguments] must open the Agent vault before the command runs.
@@ -422,14 +430,15 @@ class SanadCommandRunner extends CommandRunner<int> {
   /// Linux Secret Service). Opening it reads each namespace owner index, and an
   /// item that was created by a *different* code identity (an earlier Agent
   /// build, or the JIT `dartvm` a source checkout ran) makes macOS answer with
-  /// an interactive authorization prompt instead of data. A CLI has no way to
-  /// answer that prompt, and the read blocks *inside* the security framework
-  /// before the event loop can serve anything: the process then produces no
-  /// output, opens no socket, and never exits. Only a command that can read or
-  /// write a secret may therefore open the vault at all.
+  /// an interactive authorization dialog instead of data. A process with no
+  /// person in front of it — the Client, a scheduler, a delegate relay, a pipe —
+  /// cannot show that dialog, so the read blocks inside the security framework:
+  /// the process produces no output, opens no socket, and never exits. Only a
+  /// command that can read or write a secret therefore opens the vault at all.
   ///
-  /// Everything that is not recognized keeps the conservative answer and opens
-  /// the vault, so a new command can never silently lose its credentials.
+  /// Classification is per subcommand, so an exemption never widens to sibling
+  /// subcommands. Everything unrecognized keeps the conservative answer and
+  /// opens the vault, so a new command can never silently lose its credentials.
   static bool requiresSecretVault(List<String> arguments) {
     if (arguments.isEmpty || arguments.contains('--child-process')) return true;
     final ArgResults results;
@@ -439,10 +448,38 @@ class SanadCommandRunner extends CommandRunner<int> {
       return true;
     }
     if (results['version'] == true || results['help'] == true) return false;
-    final name = results.command?.name;
-    if (name == null) return true;
+    final command = results.command;
+    if (command == null) return true;
+    final name = command.name;
     if (name == 'version' || name == 'help') return false;
-    return !secretFreeCommands.contains(name);
+    if (secretFreeCommandFamilies.contains(name)) return false;
+    final freeSubcommands = secretFreeSubcommands[name];
+    if (freeSubcommands == null) return true;
+    final subcommand = command.command?.name;
+    if (subcommand == null) return true;
+    return !freeSubcommands.contains(subcommand);
+  }
+
+  /// Whether [arguments] dispatch to the daemon instead of running a CLI
+  /// command.
+  ///
+  /// The daemon owns its own Keychain interaction policy, so an entry point must
+  /// not classify its command from the daemon's stdio shape. The private
+  /// `--child-process` marker is tolerated in any position, because a supervised
+  /// child must be recognized before it opens the vault, not after.
+  static bool dispatchesToDaemon(List<String> arguments) {
+    if (arguments.isEmpty) return false;
+    final visible = arguments
+        .where((argument) => argument != '--child-process')
+        .toList(growable: false);
+    if (visible.isEmpty) return false;
+    try {
+      final command = SanadCommandRunner().parse(visible).command;
+      if (command == null) return false;
+      return command.name == 'daemon' || command.name == 'start';
+    } catch (_) {
+      return false;
+    }
   }
 
   /// The Sanad Home that [arguments] select, resolved exactly as

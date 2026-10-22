@@ -179,51 +179,6 @@ jobs:
           cmake --build build/windows-launcher --config Release
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
           fvm dart run tool/package_windows_launcher.dart --agent "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe" --launcher "build/windows-launcher/out/sanad-launcher.exe"
-      - name: Smoke-test embedded skills
-        if: matrix.platform != 'windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
-          home="$RUNNER_TEMP/sanad-bundled-skills-home"
-          rm -rf "$home"
-          # `version` is a pure query and answers before Home preparation, so it
-          # proves nothing about the embedded skills and must create nothing.
-          SANAD_HOME="$home" "$agent" version >/dev/null
-          if [ -e "$home" ]; then
-            echo "version created a Sanad Home; pure queries must stay side-effect free." >&2
-            exit 1
-          fi
-          # `skills list` is read-only but not pure: it runs Home bootstrap and
-          # the bundled-skill reconcile, then lists. It starts no daemon and
-          # opens no network connection.
-          SANAD_HOME="$home" "$agent" skills list --json >/dev/null
-          test -f "$home/skills/skill-creator/SKILL.md"
-          test -f "$home/skills/skill-creator/references/schemas.md"
-          test -f "$home/skills/find-skills/LICENSE.txt"
-          test -f "$home/skills/agent-browser/LICENSE.txt"
-          # A gateway command must reach the gateway without opening the Agent
-          # vault: opening the OS credential vault can block the shipped binary
-          # in an authorization prompt no CLI can answer, with no output and no
-          # socket. With no daemon present `session list` reports a connection
-          # error, which is fine; not finishing, or leaving a vault artifact in
-          # a Home that owns no secrets, is not.
-          gateway_home="$RUNNER_TEMP/sanad-gateway-smoke-home"
-          rm -rf "$gateway_home"
-          mkdir -p "$gateway_home"
-          printf 'release-smoke-token' > "$gateway_home/.local_token"
-          set +e
-          perl -e 'alarm 60; exec @ARGV' env SANAD_HOME="$gateway_home" "$agent" session list --json >/dev/null 2>&1
-          gateway_status=$?
-          set -e
-          if [ "$gateway_status" -ge 128 ]; then
-            echo "session list did not finish (status $gateway_status); a gateway command must never block." >&2
-            exit 1
-          fi
-          if ls "$gateway_home"/secret_vault* >/dev/null 2>&1; then
-            echo "session list opened the Agent vault; a gateway command must never require an OS credential prompt." >&2
-            exit 1
-          fi
       - name: Smoke-test embedded skills on Windows
         if: matrix.platform == 'windows'
         shell: pwsh
@@ -255,6 +210,27 @@ jobs:
             if (-not (Test-Path (Join-Path $sanadHome $_) -PathType Leaf)) {
               throw "Missing extracted bundled skill file: $_"
             }
+          }
+          # A gateway command must reach the gateway without opening the Agent
+          # vault. Windows DPAPI never prompts, so this guards the classification
+          # rather than a hang: a gateway command must leave no vault artifact in
+          # a Home that owns no secrets, and must finish.
+          $gatewayHome = Join-Path $env:RUNNER_TEMP "sanad-gateway-smoke-home"
+          if (Test-Path $gatewayHome) { Remove-Item -Recurse -Force $gatewayHome }
+          New-Item -ItemType Directory -Path $gatewayHome -Force | Out-Null
+          Set-Content -Path (Join-Path $gatewayHome ".local_token") -Value "release-smoke-token" -NoNewline
+          $env:SANAD_HOME = $gatewayHome
+          $gatewayLog = Join-Path $env:RUNNER_TEMP "sanad-gateway-smoke.log"
+          $gatewayProcess = Start-Process -FilePath (Resolve-Path $agent).Path `
+            -ArgumentList "session", "list", "--json" -PassThru -NoNewWindow `
+            -RedirectStandardOutput $gatewayLog -RedirectStandardError "$gatewayLog.err"
+          if (-not $gatewayProcess.WaitForExit(60000)) {
+            Stop-Process -Id $gatewayProcess.Id -Force
+            throw "session list did not finish; a gateway command must never block."
+          }
+          Get-Content $gatewayLog, "$gatewayLog.err" -ErrorAction SilentlyContinue | Write-Host
+          if (Get-ChildItem -Path $gatewayHome -Filter "secret_vault*" -ErrorAction SilentlyContinue) {
+            throw "session list opened the Agent vault; a gateway command must never require an OS credential prompt."
           }
       - name: Import Apple Developer ID
         if: matrix.platform == 'macos'
@@ -342,6 +318,55 @@ jobs:
               .arch == $arch and
               .digestAlgorithm == "SHA-256")
           ' "$notary_log" >/dev/null
+      # The smoke runs on the shipped binary: after codesign and notarization, so
+      # it also proves the signed, notarized executable is the one that answers
+      # pure queries, extracts bundled skills, and reaches a gateway command
+      # without opening the OS credential vault.
+      - name: Smoke-test the shipped agent binary
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
+          home="$RUNNER_TEMP/sanad-bundled-skills-home"
+          rm -rf "$home"
+          # `version` is a pure query and answers before Home preparation, so it
+          # proves nothing about the embedded skills and must create nothing.
+          SANAD_HOME="$home" "$agent" version >/dev/null
+          if [ -e "$home" ]; then
+            echo "version created a Sanad Home; pure queries must stay side-effect free." >&2
+            exit 1
+          fi
+          # `skills list` is read-only but not pure: it runs Home bootstrap and
+          # the bundled-skill reconcile, then lists. It starts no daemon and
+          # opens no network connection.
+          SANAD_HOME="$home" "$agent" skills list --json >/dev/null
+          test -f "$home/skills/skill-creator/SKILL.md"
+          test -f "$home/skills/skill-creator/references/schemas.md"
+          test -f "$home/skills/find-skills/LICENSE.txt"
+          test -f "$home/skills/agent-browser/LICENSE.txt"
+          # A gateway command must reach the gateway without opening the Agent
+          # vault: opening the OS credential vault can make the shipped binary
+          # wait in an authorization dialog nobody answers, with no output and
+          # no socket. With no daemon present `session list` reports a connection
+          # error, which is fine; not finishing, or leaving a vault artifact in
+          # a Home that owns no secrets, is not.
+          gateway_home="$RUNNER_TEMP/sanad-gateway-smoke-home"
+          rm -rf "$gateway_home"
+          mkdir -p "$gateway_home"
+          printf 'release-smoke-token' > "$gateway_home/.local_token"
+          set +e
+          perl -e 'alarm 60; exec @ARGV' env SANAD_HOME="$gateway_home" "$agent" session list --json >/dev/null 2>&1
+          gateway_status=$?
+          set -e
+          if [ "$gateway_status" -ge 128 ]; then
+            echo "session list did not finish (status $gateway_status); a gateway command must never block." >&2
+            exit 1
+          fi
+          if ls "$gateway_home"/secret_vault* >/dev/null 2>&1; then
+            echo "session list opened the Agent vault; a gateway command must never require an OS credential prompt." >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.platform }}-${{ matrix.architecture }}

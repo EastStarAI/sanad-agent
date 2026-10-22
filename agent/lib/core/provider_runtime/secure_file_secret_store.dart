@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:logging/logging.dart';
 
 import '../../engine/adapters/provider_registry.dart';
+import '../auth/secret_vault_policy.dart';
 import '../constants.dart';
 import '../sanad_home/sanad_home_bootstrap.dart';
 import 'provider_protocol_constants.dart';
@@ -221,6 +222,7 @@ class SecureFileSecretStore implements SecretStore {
 
   @override
   Future<void> write(String instanceId, SecretRecord record) async {
+    SecretVaultPolicy.rejectPlaintextSecretMutation('write');
     await _withLock(() async {
       final data = _readRaw(backupIfCorrupted: true);
       final instances =
@@ -238,6 +240,7 @@ class SecureFileSecretStore implements SecretStore {
 
   @override
   Future<void> remove(String instanceId) async {
+    SecretVaultPolicy.rejectPlaintextSecretMutation('delete');
     await _withLock(() async {
       final data = _readRaw(backupIfCorrupted: true);
       final instances =
@@ -262,6 +265,7 @@ class SecureFileSecretStore implements SecretStore {
 
   @override
   Future<void> pruneOrphans(Set<String> validInstanceIds) async {
+    SecretVaultPolicy.rejectPlaintextSecretMutation('delete');
     await _withLock(() async {
       final data = _readRaw(backupIfCorrupted: true);
       final instances =
