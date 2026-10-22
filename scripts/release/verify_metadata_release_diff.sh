@@ -15,6 +15,7 @@ expected_paths=$(cat <<'PATHS'
 agent/CHANGELOG.md
 agent/pubspec.lock
 agent/pubspec.yaml
+client/lib/features/client_cli/domain/models/client_cli_version.dart
 client/pubspec.lock
 client/pubspec.yaml
 client/release/windows/sanad_client_installer.iss
@@ -63,6 +64,8 @@ validate_changed_lines() {
     case "$path" in
       agent/pubspec.yaml|release/contract/pubspec.yaml)
         [[ "$content" =~ ^version:\ [0-9]+\.[0-9]+\.[0-9]+$ ]] ;;
+      client/lib/features/client_cli/domain/models/client_cli_version.dart)
+        [[ "$content" =~ ^const\ String\ sanadClientCliVersion\ =\ \'[0-9]+\.[0-9]+\.[0-9]+\'\;$ ]] ;;
       client/pubspec.yaml)
         [[ "$content" =~ ^version:\ [0-9]+\.[0-9]+\.[0-9]+\+[1-9][0-9]*$ ]] ;;
       agent/pubspec.lock|client/pubspec.lock)
