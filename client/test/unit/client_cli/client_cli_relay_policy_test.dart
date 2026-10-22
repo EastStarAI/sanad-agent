@@ -2,41 +2,48 @@ import 'package:args/args.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/client_cli/domain/models/client_cli_relay_policy.dart';
 
-/// Builds the Agent's own grammar for one `session` subcommand.
-///
-/// The Agent CLI declares these options on `SanadCommand.addCommonOptions` and
-/// on each subcommand class; the relay policy must resolve a session exactly as
-/// `package:args` does for that grammar, so this table is the test's authority
-/// for the four subcommands the relay approves by session.
-ArgParser _agentSessionParser(String subcommand) {
-  final parser = ArgParser()
-    ..addOption('workspace', abbr: 'w')
-    ..addOption('session', abbr: 's')
-    ..addOption('model', abbr: 'm')
-    ..addOption('provider')
-    ..addFlag('thinking', negatable: true)
-    ..addOption('thinking-mode')
-    ..addFlag('quiet', abbr: 'q', negatable: false)
-    ..addFlag('json', negatable: false)
-    ..addOption('timeout')
-    ..addOption('account')
-    ..addFlag('standalone', negatable: false)
-    ..addOption('home')
-    ..addOption('gateway-url', aliases: const ['url']);
+import '../../helpers/cli_relay_grammar_contract.dart';
 
-  switch (subcommand) {
-    case 'steer':
-      parser
-        ..addOption('message')
-        ..addOption('message-file', abbr: 'f');
-    case 'answer':
-      parser
-        ..addOption('request-id', abbr: 'r')
-        ..addOption('answer', abbr: 'a')
-        ..addOption('file', abbr: 'f');
-    case 'stop':
-    case 'retry':
-      break;
+/// The contract, read once for the whole suite.
+final CliRelayGrammarContract _contract = CliRelayGrammarContract.load();
+
+/// Builds the Agent's own grammar from the checked-in relay contract.
+///
+/// The Agent's real `SanadCommandRunner` is the grammar's owner and
+/// `agent/test/cli/cli_relay_grammar_contract_test.dart` proves the contract
+/// matches it, so this suite reads the same file instead of keeping a second
+/// hand-written table that could drift from the options the relay resolves.
+///
+/// The contract is the union across parsers, which is also how `package:args`
+/// behaves in practice: a name a subcommand does not declare is resolved by the
+/// parent parser, so every contract name is live inside a `session` subcommand.
+ArgParser _agentSessionParser(String subcommand) {
+  assert(subcommand.isNotEmpty);
+  final valueOptions = _contract.longValueOptions.toSet();
+  final flags = _contract.longFlags.toSet();
+
+  /// The long name that carries each abbreviation here. A letter can name
+  /// different long options per subcommand (`-f` is `--message-file` on
+  /// `session steer` and `--file` on `session answer`), and the relay reads the
+  /// shape, not the name.
+  final abbreviationOwner = <String, String>{};
+  for (final entry in _contract.abbreviations.entries) {
+    final candidates = entry.value.names.where(
+      (name) => entry.value.takesValue
+          ? valueOptions.contains(name)
+          : flags.contains(name),
+    );
+    if (candidates.isNotEmpty) {
+      abbreviationOwner[candidates.first] ??= entry.key;
+    }
+  }
+
+  final parser = ArgParser();
+  for (final name in _contract.longFlags) {
+    parser.addFlag(name, abbr: abbreviationOwner[name]);
+  }
+  for (final name in _contract.longValueOptions) {
+    parser.addOption(name, abbr: abbreviationOwner[name]);
   }
   return parser;
 }

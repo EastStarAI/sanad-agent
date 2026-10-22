@@ -49,7 +49,13 @@ const Set<String> _clientCliStdinCommands = {'run', 'chat', 'cli'};
 /// policy acts on: every value option must consume its value so a value that
 /// looks like an option (for example `--message -s`) is never re-read as a
 /// session flag.
-const Set<String> _clientCliLongValueOptions = {
+///
+/// The checked-in contract `agent/test/fixtures/cli_relay_grammar.json` is the
+/// generated source of truth; this table is a literal copy of its
+/// `long_value_options` so the `sanad-client` entry stays free of `agent/`
+/// imports, and `client_cli_relay_grammar_contract_test.dart` fails the moment
+/// the two disagree.
+const Set<String> clientCliRelayLongValueOptions = {
   'account',
   'answer',
   'brief-file',
@@ -77,6 +83,8 @@ const Set<String> _clientCliLongValueOptions = {
   'scope',
   'session',
   'skill',
+  // Registered alias of `--sub-path`.
+  'sub',
   'sub-path',
   'thinking-mode',
   'timeout',
@@ -84,14 +92,20 @@ const Set<String> _clientCliLongValueOptions = {
 };
 
 /// Short options and whether each one consumes a value (`args` abbreviations).
-const Map<String, bool> _clientCliShortOptions = {
+///
+/// One letter must take a value everywhere the Agent accepts it or nowhere,
+/// because this reading is name-agnostic: `-f` is `--message-file` on
+/// `session steer` and `--file` on `session answer`. The contract's
+/// `abbreviations` section holds the same shape plus the names that declare it.
+const Map<String, bool> clientCliRelayShortOptions = {
   'a': true, // --answer
   'b': true, // --brief-file
   'c': true, // --comment
   'd': true, // --decision
   'f': true, // --message-file / --file
+  'h': false, // --help
   'm': true, // --model
-  'n': true, // --name
+  'n': true, // --name / --max-entries
   'o': true, // --out-dir
   'p': true, // --prompt
   'q': false, // --quiet
@@ -102,12 +116,13 @@ const Map<String, bool> _clientCliShortOptions = {
 };
 
 /// Long name of each short option, so both forms resolve identically.
-const Map<String, String> _clientCliShortNames = {
+const Map<String, String> clientCliRelayShortNames = {
   'a': 'answer',
   'b': 'brief-file',
   'c': 'comment',
   'd': 'decision',
   'f': 'message-file',
+  'h': 'help',
   'm': 'model',
   'n': 'name',
   'o': 'out-dir',
@@ -226,7 +241,8 @@ class _ClientCliToken {
 
 /// Splits [argv] into option and argument tokens with the Agent's grammar.
 ///
-/// Only [ _clientCliLongValueOptions] and [_clientCliShortOptions] are known.
+/// Only [clientCliRelayLongValueOptions] and [clientCliRelayShortOptions] are
+/// known.
 /// An unknown option is treated as a flag, which cannot desynchronize the walk:
 /// the Agent rejects an unknown option before it acts, so a misread there can
 /// never approve a session the command goes on to use. A collapsed short group
@@ -249,7 +265,7 @@ List<_ClientCliToken> _tokenize(List<String> argv) {
         final name = equalsAt == -1
             ? token.substring(2)
             : token.substring(2, equalsAt);
-        final takesValue = _clientCliLongValueOptions.contains(name);
+        final takesValue = clientCliRelayLongValueOptions.contains(name);
         var value = equalsAt == -1 ? null : token.substring(equalsAt + 1);
         if (takesValue && value == null && i + 1 < argv.length) {
           value = argv[++i];
@@ -262,8 +278,8 @@ List<_ClientCliToken> _tokenize(List<String> argv) {
       if (token.startsWith('-') && token.length > 1) {
         final body = token.substring(1);
         final short = body[0];
-        final shortName = _clientCliShortNames[short] ?? short;
-        if (_clientCliShortOptions[short] ?? false) {
+        final shortName = clientCliRelayShortNames[short] ?? short;
+        if (clientCliRelayShortOptions[short] ?? false) {
           // `args` treats the rest of the token as the value verbatim; an empty
           // rest takes the next token instead.
           var value = body.substring(1);

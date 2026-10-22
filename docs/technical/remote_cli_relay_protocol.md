@@ -91,6 +91,49 @@ The remote relay executes against `SanadCommandRunner`, which registers the foll
 All global options supported by `SanadCommand` and `SanadCommandRunner` are parsed on the target Agent:
 - `--workspace` (`-w`), `--session` (`-s`), `--model` (`-m`), `--provider`, `--thinking`, `--thinking-mode`, `--quiet` (`-q`), `--json`, `--timeout`, `--account`, `--standalone`, `--home`, `--gateway-url`, `--version` (`-v`), `--help` (`-h`).
 
+### 2.1. Relay Grammar Contract
+
+`sanad-client` reads a relayed `argv` with the Agent's `args` grammar before it
+forwards anything, and approves the execution against the session that reading
+names (§7.4). Two hand-written option tables drift: an option the Agent reads as
+taking a value but the relay reads as a flag consumes the next token on one side
+only, so `session steer --foo B A` is approved for `B` and acts on `A`.
+
+The grammar is therefore one checked-in, generated contract:
+
+| Item | Path |
+|---|---|
+| Contract | `agent/test/fixtures/cli_relay_grammar.json` |
+| Generator | `agent/tool/generate_cli_relay_grammar.dart` |
+| Regenerate | `cd agent && fvm dart run tool/generate_cli_relay_grammar.dart` |
+| Verify | `cd agent && fvm dart run tool/generate_cli_relay_grammar.dart --check` |
+
+The document is extracted from the real `SanadCommandRunner` — every command and
+subcommand parser recursively, plus the global parser — and carries three
+sections:
+
+- `long_value_options`: every long option that consumes a value, aliases
+  included (`--url` for `--gateway-url`, `--sub` for `--sub-path`);
+- `long_flags`: every long flag;
+- `abbreviations`: every short option, whether it takes a value, and the long
+  names that declare it (`-f` is `--message-file` on `session steer` and
+  `--file` on `session answer`, and takes a value in both).
+
+It is the union across parsers, which is how `package:args` resolves an `argv` in
+practice: a name a subcommand does not declare is resolved by its parent parser.
+Extraction fails when one name is both a value option and a flag, or when one
+abbreviation takes a value in some parsers and not in others, because neither
+shape has a single reading.
+
+`agent/test/cli/cli_relay_grammar_contract_test.dart` fails once the file no
+longer matches the CLI and prints the regenerate command;
+`client/test/unit/client_cli/client_cli_relay_grammar_contract_test.dart` fails
+once the relay tables in
+`client/lib/features/client_cli/domain/models/client_cli_relay_policy.dart` no
+longer agree with the file. Reading a name no parser declares stays safe: the
+Agent rejects an unknown option before it acts, so a misread there can never
+approve a session the command goes on to use.
+
 ---
 
 ## 3. Remote Execution Seam
@@ -433,7 +476,8 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
   the wait. A session that is already approved emits no notice. The caller writes
   the message once to standard error and never to standard output, keeping
   `--json` output parseable. Approval is keyed on **the session the forwarded
-  command will act on**, resolved with the Agent's own `args` grammar: the
+  command will act on**, resolved with the Agent's own `args` grammar (the
+  checked-in grammar contract, §2.1): the
   positional session id of a `session` subcommand and/or an explicit
   `--session`/`-s`, while every value-taking option keeps its value — so
   `session steer B --message -s A` is approved against `B` (the parser consumes
