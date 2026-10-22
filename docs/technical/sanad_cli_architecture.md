@@ -60,11 +60,40 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
    - The CLI reads the local gateway token from `SANAD_HOME/.local_token`.
    - File permissions are validated to ensure owner-only access.
    - The token is never exposed in logs, CLI arguments, or printed output.
+   - Each Home owns a distinct token. `.local_token.home` binds `.local_token`
+     to the SHA-256 identity of that Home root, so a Home cloned or restored
+     from another Home (the Test-Home practice that once produced one shared
+     `.local_token` across `~/.sanad-test-*`) is detected and rotated instead of
+     inheriting the source credential.
+   - Migration: on the next daemon start `LocalGatewayCredentials.loadOrCreate`
+     rotates the credential when the binding is missing (a pre-binding Home) or
+     names a different Home, then writes the binding. Rotation is safe because
+     the daemon is the only token holder at that moment: it rotates before the
+     listener serves, and native clients read `.local_token` per request.
+     `tryRead` treats a token bound to another Home as absent, so a clone never
+     lends its credential to the Home it was copied into.
+   - A `.local_token` whose binding names another Home is refused by discovery
+     with `token_bound_to_other_home`; start the Agent for that Home to issue
+     its own credential.
 
 3. **Port Resolution & Probing:**
-   - Explicit override: `--url <url>` or `--port <port>` or `LOCAL_GATEWAY_PORT`.
-   - Default probe: `http://127.0.0.1:58085/health` with `x-sanad-local-token: <token>`.
-   - Worktree range scan: If 58085 does not answer, the discovery service scans ports `58086`–`58185` with bounded timeout to find the instance matching the active workspace.
+   - Explicit override: `--url <url>`, `SANAD_GATEWAY_URL`, or `--port <port>`.
+   - **Selected Home:** when `--home` or `SANAD_HOME` selects a Home, the CLI
+     resolves the endpoint from that Home's own runtime record
+     (`.local_gateway_endpoint.json`, written by the daemon after it binds and
+     removed on shutdown) and probes only that endpoint. The record is trusted
+     only when its `home_id` matches the selected Home's identity, and the
+     answer is accepted only when `/health` reports the same `home_id`.
+   - A selected Home with no live record, an unreachable recorded endpoint, or a
+     daemon that serves another Home fails closed with exit code `78` and an
+     actionable message. A Home-selected call never probes `58085` and never
+     scans the range, so an unpinned mutating command can no longer attach to
+     another Home's runtime.
+   - An inherited `LOCAL_GATEWAY_PORT` is honoured only when no Home is selected;
+     it never redirects a Home-selected call away from that Home's record.
+   - Default Home only: probe `http://127.0.0.1:58085/health`, then scan
+     `58086`–`58185` with a bounded timeout. Every candidate must prove the
+     resolved Home identity over `/health`, not merely accept the token.
 
 ---
 

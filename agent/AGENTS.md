@@ -56,6 +56,8 @@ This contract applies to `agent/`.
 ### Persistence and Identity Authority
 - Durable sessions, work items, notices, pending input, provider metadata, and route transitions use one shared agent-state database connection with one repository owner per table.
 - The daemon and in-process standalone CLI acquire the same exclusive state-root ownership lease before opening the agent-state database; a second runtime fails closed and never competes for SQLite.
+- A Home-selected CLI call (`--home` or `SANAD_HOME`) resolves its local-gateway endpoint from that Home's own runtime record (`.local_gateway_endpoint.json`, written by the daemon after it binds and removed on shutdown) and fails closed when the Home has no live record; it never falls through to the default port or the worktree port scan. A record or `/health` answer is evidence only when its `home_id` matches the selected Home, and an inherited `LOCAL_GATEWAY_PORT` never overrides the record.
+- Each Home owns one local-gateway credential: `.local_token.home` binds `.local_token` to that Home identity, a missing or foreign binding rotates the credential on the next daemon start, and a credential bound to another Home is treated as absent rather than presented.
 - Read-only CLI inspection (`sanad schedule list`) is not a runtime: it takes no lease and opens the agent-state database only through `AgentStateDatabase.readOnlyAtPath`, never migrating or writing it. Schedule mutations stay with the daemon's `CronScheduler`.
 - Admission, terminal commit, failover, stop cleanup, and cross-table execution transitions remain transactional through their aggregate owner.
 - `hardware_id` is persistent local machine identity and is distinct from backend-assigned device ids.

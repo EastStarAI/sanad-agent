@@ -10,12 +10,21 @@ import 'dart:math';
 import 'package:logging/logging.dart';
 
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 
 class LocalGatewayCredentials {
   static final _logger = Logger('LocalGatewayCredentials');
 
   /// Canonical relative path under the Sanad Home.
   static const String relativePath = '.local_token';
+
+  /// Owner-only file that binds [relativePath] to one Home identity.
+  ///
+  /// A Home that was cloned from another Home carries the source token; the
+  /// binding is what proves the token was generated for this root, so a copied
+  /// token is rotated on the copy's next daemon start instead of letting two
+  /// Homes accept the same credential.
+  static const String bindingRelativePath = '.local_token.home';
 
   /// Custom header used for the credential over HTTP and the WebSocket
   /// upgrade. The same value is also accepted as `Authorization: Bearer`.
@@ -24,6 +33,10 @@ class LocalGatewayCredentials {
   /// Returns the persisted credential, generating a fresh one and
   /// writing it through [SanadHomeBootstrap.writeSecret] on first use.
   /// Idempotent and serialized across concurrent processes sharing one Home.
+  ///
+  /// A missing, foreign, or unreadable Home binding rotates the credential,
+  /// which is the documented migration for Homes cloned or restored from
+  /// another Home.
   static Future<LocalGatewayCredential> loadOrCreate() async {
     final boundary = SanadHomeBootstrap.identity();
     await boundary.prepare();
@@ -60,14 +73,28 @@ class LocalGatewayCredentials {
       }
     }
     try {
+      final expected = sanadHomeIdentity(boundary.canonicalRoot());
       final persisted = _readFrom(boundary);
-      if (persisted != null) return persisted;
+      if (persisted != null && _readBinding(boundary) == expected) {
+        return persisted;
+      }
 
       final generated = _generate();
       await boundary.writeSecretBytes(
         relativePath,
         utf8.encode(generated.value),
       );
+      await boundary.writeSecretBytes(
+        bindingRelativePath,
+        utf8.encode(expected),
+      );
+      if (persisted != null) {
+        // Never log a credential value; only that a rotation happened.
+        _logger.warning(
+          'Local gateway credential was not bound to this Sanad Home; '
+          'rotated it for this Home.',
+        );
+      }
       return _readFrom(boundary) ?? generated;
     } finally {
       await lock.unlock();
@@ -78,6 +105,9 @@ class LocalGatewayCredentials {
   /// Returns the persisted credential, or null if none exists. Does
   /// NOT generate one. Used by the desktop client for read-only lookup
   /// before the daemon has started.
+  ///
+  /// A credential whose binding names a different Home is treated as absent,
+  /// so a clone never lends its credential to the Home it was cloned into.
   static LocalGatewayCredential? tryRead() {
     return _readFrom(SanadHomeBootstrap.identity());
   }
@@ -88,9 +118,36 @@ class LocalGatewayCredentials {
       final bytes = boundary.readSecretBytes(relativePath);
       final value = utf8.decode(bytes).trim();
       if (value.isEmpty) return null;
+      if (isBoundToAnotherHome(boundary)) return null;
       return LocalGatewayCredential(value);
     } catch (error) {
       _logger.warning('Failed to decode the local token; regenerating.');
+      return null;
+    }
+  }
+
+  /// Whether [boundary]'s credential is explicitly bound to a different Home.
+  ///
+  /// A missing binding is a legacy or freshly cloned Home, not foreign proof
+  /// on its own; the next [loadOrCreate] writes the binding or rotates.
+  static bool isBoundToAnotherHome(SanadHomeBootstrap boundary) {
+    final binding = _readBinding(boundary);
+    if (binding == null) return false;
+    try {
+      return binding != sanadHomeIdentity(boundary.canonicalRoot());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String? _readBinding(SanadHomeBootstrap boundary) {
+    if (!boundary.fileExists(bindingRelativePath)) return null;
+    try {
+      final value = utf8
+          .decode(boundary.readSecretBytes(bindingRelativePath))
+          .trim();
+      return value.isEmpty ? null : value;
+    } catch (_) {
       return null;
     }
   }

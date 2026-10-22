@@ -30,6 +30,15 @@ Every HTTP route and WebSocket upgrade requires the credential stored in
 `x-sanad-local-token` header. The credential never enters a URL, query string,
 compile-time define, process argument, preference store, response, or log.
 
+One Home, one credential: `.local_token.home` records the identity of the Home
+root that owns `.local_token`, and a daemon start rotates a credential whose
+binding is missing or names a different Home. Without that binding, a Home
+cloned from another Home (for example a test Home copied from a fixture) would
+present the source Home's credential, and token acceptance alone could not tell
+two Homes apart. `/health` therefore also reports the non-secret `home_id`
+(SHA-256 prefix of the canonical Home path), which a CLI caller uses to prove
+that the daemon answering on a port serves the Home it selected.
+
 Every request also supplies a valid loopback `Host` for the configured port.
 If an `Origin` is present, it must match the explicit native/development
 allowlist. A missing `Origin` is acceptable only for an authenticated native

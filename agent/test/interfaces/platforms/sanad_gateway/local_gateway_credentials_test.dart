@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 
 void main() {
@@ -49,7 +50,10 @@ void main() {
         List.generate(12, (_) => LocalGatewayCredentials.loadOrCreate()),
       );
 
-      expect(credentials.map((credential) => credential.value).toSet(), hasLength(1));
+      expect(
+        credentials.map((credential) => credential.value).toSet(),
+        hasLength(1),
+      );
       final lock = File(SanadHomeBootstrap.resolveChild('.local_token.lock'));
       expect(lock.existsSync(), isTrue);
       if (!Platform.isWindows) {
@@ -96,6 +100,114 @@ void main() {
     test('toString does not leak the token value', () async {
       final created = await LocalGatewayCredentials.loadOrCreate();
       expect(created.toString(), isNot(contains(created.value)));
+    });
+
+    group('per-Home credential binding', () {
+      late Directory otherHome;
+
+      setUp(() async {
+        otherHome = Directory.systemTemp.createTempSync(
+          'sanad-credentials-other-home-',
+        );
+      });
+
+      tearDown(() {
+        if (otherHome.existsSync()) {
+          try {
+            otherHome.deleteSync(recursive: true);
+          } catch (_) {}
+        }
+      });
+
+      Future<void> useHome(Directory directory) async {
+        setSanadHomeOverride(directory.path);
+        setSanadStateHomeOverride(directory.path);
+        await SanadHomeBootstrap.prepareAll();
+      }
+
+      test('each Home generates its own credential', () async {
+        final first = await LocalGatewayCredentials.loadOrCreate();
+        final firstBinding = File(
+          SanadHomeBootstrap.resolveChild(
+            LocalGatewayCredentials.bindingRelativePath,
+          ),
+        ).readAsStringSync();
+
+        await useHome(otherHome);
+        final second = await LocalGatewayCredentials.loadOrCreate();
+        final secondBinding = File(
+          SanadHomeBootstrap.resolveChild(
+            LocalGatewayCredentials.bindingRelativePath,
+          ),
+        ).readAsStringSync();
+
+        expect(second.value, isNot(first.value));
+        expect(firstBinding, sanadHomeIdentity(tempHome.path));
+        expect(secondBinding, sanadHomeIdentity(otherHome.path));
+      });
+
+      test('a credential copied from another Home is rotated', () async {
+        final source = await LocalGatewayCredentials.loadOrCreate();
+        final sourceToken = File(
+          SanadHomeBootstrap.resolveChild(LocalGatewayCredentials.relativePath),
+        ).readAsStringSync();
+        final sourceBinding = File(
+          SanadHomeBootstrap.resolveChild(
+            LocalGatewayCredentials.bindingRelativePath,
+          ),
+        ).readAsStringSync();
+
+        // A Test Home cloned from another Home carries both files verbatim.
+        await useHome(otherHome);
+        File(
+          SanadHomeBootstrap.resolveChild(LocalGatewayCredentials.relativePath),
+        ).writeAsStringSync(sourceToken);
+        File(
+          SanadHomeBootstrap.resolveChild(
+            LocalGatewayCredentials.bindingRelativePath,
+          ),
+        ).writeAsStringSync(sourceBinding);
+
+        expect(LocalGatewayCredentials.tryRead(), isNull);
+
+        final migrated = await LocalGatewayCredentials.loadOrCreate();
+
+        expect(migrated.value, isNot(source.value));
+        expect(
+          File(
+            SanadHomeBootstrap.resolveChild(
+              LocalGatewayCredentials.bindingRelativePath,
+            ),
+          ).readAsStringSync(),
+          sanadHomeIdentity(otherHome.path),
+        );
+        expect(LocalGatewayCredentials.tryRead()?.value, migrated.value);
+      });
+
+      test('a legacy credential without a binding is rotated once', () async {
+        await useHome(tempHome);
+        final legacy = File(
+          SanadHomeBootstrap.resolveChild(LocalGatewayCredentials.relativePath),
+        );
+        legacy.writeAsStringSync('legacy-shared-token');
+
+        final migrated = await LocalGatewayCredentials.loadOrCreate();
+
+        expect(migrated.value, isNot('legacy-shared-token'));
+        expect(
+          File(
+            SanadHomeBootstrap.resolveChild(
+              LocalGatewayCredentials.bindingRelativePath,
+            ),
+          ).readAsStringSync(),
+          sanadHomeIdentity(tempHome.path),
+        );
+        // The binding makes the rotation a one-time migration.
+        expect(
+          (await LocalGatewayCredentials.loadOrCreate()).value,
+          migrated.value,
+        );
+      });
     });
   });
 }

@@ -1159,5 +1159,35 @@ void main() {
         expect(decoded['status'], equals('resolved'));
       });
     });
+
+    group('selected Home endpoint resolution', () {
+      test('fails closed when the Home has no live runtime record', () async {
+        final home = Directory.systemTemp.createTempSync('sanad-home-cli-');
+        addTearDown(() {
+          if (home.existsSync()) home.deleteSync(recursive: true);
+        });
+        File(
+          '${home.path}${Platform.pathSeparator}.local_token',
+        ).writeAsStringSync('home-token');
+
+        // No client override: this exercises real discovery, whose Home branch
+        // must resolve the endpoint from the record and never probe a default
+        // port that another Home's runtime may own.
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+        final exitCode = await runner.run([
+          'session',
+          'list',
+          '--home',
+          home.path,
+        ]);
+
+        expect(stderrBuf.toString(), contains('No live runtime record'));
+        expect(stderrBuf.toString(), contains(home.path));
+        expect(exitCode, equals(78));
+      });
+    });
   });
 }
