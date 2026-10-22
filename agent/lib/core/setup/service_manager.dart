@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
@@ -31,6 +32,29 @@ class ServiceManager {
       : 'sanad-agent-$_instance.service';
   static String get taskName =>
       _instance.isEmpty ? 'SanadAgent' : 'SanadAgent-$_instance';
+
+  /// Runs one `launchctl` invocation.
+  ///
+  /// Tests replace it so the launchd lifecycle can be exercised without a real
+  /// user domain.
+  @visibleForTesting
+  static Future<ProcessResult> Function(List<String> arguments) launchctl =
+      (arguments) => Process.run('launchctl', arguments);
+
+  /// The uid that names the `gui` domain [launchdBootoutArguments] targets.
+  ///
+  /// Tests replace it so a stop does not depend on the account running them.
+  @visibleForTesting
+  static Future<int> Function() launchdUserId = _readLaunchdUserId;
+
+  static Future<int> _readLaunchdUserId() async {
+    final result = await Process.run('id', ['-u']);
+    final uid = int.tryParse(result.stdout.toString().trim());
+    if (uid == null) {
+      throw const FormatException('The current user id is unavailable.');
+    }
+    return uid;
+  }
 
   static String getHomeDirectory() => Platform.isWindows
       ? Platform.environment['USERPROFILE'] ?? ''
@@ -74,8 +98,8 @@ class ServiceManager {
         final file = File(configPath);
         await file.parent.create(recursive: true);
         await file.writeAsString(content, flush: true);
-        await Process.run('launchctl', ['unload', configPath]);
-        final activated = await Process.run('launchctl', ['load', configPath]);
+        await launchctl(['unload', configPath]);
+        final activated = await launchctl(['load', configPath]);
         final status = await getStatus();
         if (activated.exitCode == 0 && status.running) {
           await CliPathManager.ensureOnPath();
@@ -142,7 +166,7 @@ class ServiceManager {
       ProcessResult result;
       if (Platform.isMacOS) {
         final path = getServiceConfigPath();
-        result = await Process.run('launchctl', ['unload', path]);
+        result = await launchctl(['unload', path]);
         final file = File(path);
         if (file.existsSync()) await file.delete();
       } else if (Platform.isWindows) {
@@ -191,13 +215,7 @@ class ServiceManager {
     try {
       ProcessResult result;
       if (Platform.isMacOS) {
-        final path = getServiceConfigPath();
-        result = command == 'start'
-            ? await Process.run('launchctl', ['load', path])
-            : await Process.run('launchctl', ['unload', path]);
-        if (result.exitCode != 0) {
-          result = await Process.run('launchctl', [command, label]);
-        }
+        result = await _launchdLifecycle(command);
       } else if (Platform.isWindows) {
         final verb = switch (command) {
           'start' => 'Start',
@@ -233,6 +251,57 @@ class ServiceManager {
     }
   }
 
+  /// Runs the `launchctl` steps for one lifecycle command until one succeeds.
+  static Future<ProcessResult> _launchdLifecycle(String command) async {
+    final plan = launchdLifecyclePlan(
+      command: command,
+      configPath: getServiceConfigPath(),
+      label: label,
+      // Only a stop needs the `gui` domain target. Resolving it before any
+      // step also keeps a stop from falling back to signalling when the
+      // domain name is unavailable.
+      userId: await launchdUserId(),
+    );
+    var result = await launchctl(plan.first);
+    for (final arguments in plan.skip(1)) {
+      if (result.exitCode == 0) break;
+      result = await launchctl(arguments);
+    }
+    return result;
+  }
+
+  /// The ordered `launchctl` invocations for one lifecycle command.
+  ///
+  /// The first step targets the plist path this Agent installed. The second is
+  /// the fallback for a job that is loaded from somewhere else.
+  ///
+  /// A stop must unload the job rather than signal it. The plist keeps
+  /// `KeepAlive { SuccessfulExit = false }`, so the daemon's signal exit status
+  /// (`143` for `SIGTERM`) counts as an unsuccessful exit and `launchctl stop`
+  /// would make `launchd` launch the Agent again. `bootout` removes the job
+  /// from the user's domain, so nothing can respawn it.
+  static List<List<String>> launchdLifecyclePlan({
+    required String command,
+    required String configPath,
+    required String label,
+    required int userId,
+  }) => command == 'stop'
+      ? <List<String>>[
+          <String>['unload', configPath],
+          launchdBootoutArguments(label: label, userId: userId),
+        ]
+      : <List<String>>[
+          <String>['load', configPath],
+          <String>['start', label],
+        ];
+
+  /// The `launchctl` target that unloads [label] from the caller's `gui`
+  /// domain.
+  static List<String> launchdBootoutArguments({
+    required String label,
+    required int userId,
+  }) => <String>['bootout', 'gui/$userId/$label'];
+
   static Future<ServiceStatus> getStatus() async {
     if (Platform.isLinux) return _linux(_daemonInvocation()).status();
     if (Platform.isMacOS) {
@@ -244,7 +313,7 @@ class ServiceManager {
         );
       }
       try {
-        final result = await Process.run('launchctl', ['list', label]);
+        final result = await launchctl(['list', label]);
         final running = result.exitCode == 0;
         return ServiceStatus(
           state: running ? ServiceState.running : ServiceState.installedStopped,

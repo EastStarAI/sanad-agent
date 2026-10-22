@@ -48,12 +48,34 @@ void main() {
     expect(unit, contains('Group=sanad-agent'));
     expect(unit, contains('UMask=0077'));
     expect(unit, contains('Restart=on-failure'));
+    expect(unit, contains('SuccessExitStatus=130 143'));
     expect(unit, contains('KillMode=control-group'));
     expect(unit, contains('TimeoutStopSec=90'));
     expect(unit, contains('WantedBy=multi-user.target'));
     expect(unit, contains(r'WorkingDirectory=/var/lib/Sanad\x20Agent'));
     expect(unit, isNot(contains('WorkingDirectory="')));
     expect(unit, contains('ExecStart="/opt/Sanad Agent/sanad" "daemon"'));
+  });
+
+  test('systemd unit accepts the daemon signal exit statuses as success', () {
+    final unit = LinuxServiceManager.buildSystemdUnit(
+      executable: '/opt/sanad',
+      arguments: const ['daemon'],
+      sanadHome: '/home/sanad/.sanad',
+      systemScope: false,
+      user: 'sanad',
+      group: 'sanad',
+      home: '/home/sanad',
+    );
+
+    // The daemon catches SIGTERM and SIGINT and exits with their codes instead
+    // of dying from them, so the unit must accept `128 + signal` explicitly.
+    // Without it a requested `systemctl --user stop` ends in the `failed` state
+    // and `sanad service status` reports `Failed`.
+    expect(unit, contains('SuccessExitStatus=130 143'));
+    // A crash still has to be supervised.
+    expect(unit, contains('Restart=on-failure'));
+    expect(unit, isNot(contains('Restart=always')));
   });
 
   test(

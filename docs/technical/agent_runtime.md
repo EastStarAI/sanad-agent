@@ -375,6 +375,12 @@ Exit status carries three distinct meanings, and each one owns a different outco
 
 A terminal `Ctrl+C` reaches the whole foreground process group, so the daemon and its supervisor both see it. Only the daemon owns the Home's runtime record: it runs one bounded cleanup and exits, while the supervisor waits for that exit and then reports the same signal status. The supervisor never restarts a child while its own shutdown is underway — the daemon's `143`/`130` is then an exit it is waiting on, not a crash to respawn, so no replacement daemon can be orphaned behind a supervisor that is already leaving. `sanad-dev stop` is unaffected because it never signals the daemon: it asks the daemon through `/shutdown`, which exits `123`.
 
+Each platform supervisor is adapted to that exit status:
+
+- **Linux.** The generated systemd unit declares `SuccessExitStatus=130 143`, because the daemon reports those statuses as *exit codes* rather than dying from the signal. Without it a requested `stop` ends in the `failed` state and `sanad service status` reports `Failed`; see [Linux Agent Service Lifecycle](linux_service_lifecycle.md).
+- **macOS.** `launchctl unload` removes the job, so its `143` cannot matter. The `launchctl stop` fallback would have: the plist keeps `KeepAlive { SuccessfulExit = false }`, so a stopped job whose daemon exits `143` counts as unsuccessful and `launchd` launches it again. The fallback therefore boots the job out of the caller's `gui` domain (`launchctl bootout gui/<uid>/<label>`) instead of signalling it.
+- **Windows.** There is no `SIGTERM` watcher on Windows, so the daemon never takes the signal path: `sanad service stop` stops the Scheduled Task and no exit status changes meaning.
+
 ### 5.2. Startup Recovery Flow
 When the daemon restarts, `SessionRunOrchestrator.restorePersistedState()`:
 0. Selects only `queued`, `running`, `waiting`, `blocked`, and `resuming`
