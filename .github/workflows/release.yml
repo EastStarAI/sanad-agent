@@ -28,6 +28,12 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   RELEASE_ARTIFACT_RETENTION_DAYS: 14
+  # One signing identifier for every released Agent executable. It must never
+  # carry the release version or the architecture: macOS stores a signed code
+  # requirement in the Keychain ACL of every item the Agent creates, so a
+  # versioned identifier would turn each upgrade into a different application
+  # and re-prompt (or hang) on vault access.
+  SANAD_AGENT_CODESIGN_IDENTIFIER: com.eaststarai.sanad.agent
 
 jobs:
   validate:
@@ -262,12 +268,25 @@ jobs:
             sed -n 's/.*"\(Developer ID Application: NanoSoft LY LLC ([^"]*)\)".*/\1/p' |
             head -n 1)"
           test -n "$identity"
+          agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
           codesign --force --options runtime --timestamp \
+            --identifier "$SANAD_AGENT_CODESIGN_IDENTIFIER" \
             --entitlements .github/release/macos_agent.entitlements \
             --sign "$identity" \
-            "dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
-          agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
+            "$agent"
           codesign --verify --strict --verbose=2 "$agent"
+          # The identifier is part of the designated requirement, and macOS
+          # records that requirement as the trusted application of the Keychain
+          # items the Agent creates. Prove the artifact carries the stable
+          # identifier and NanoSoft team requirement before notarization.
+          signed_identifier="$(codesign -d --verbose=2 "$agent" 2>&1 |
+            sed -n 's/^Identifier=//p' | head -n 1)"
+          test "$signed_identifier" = "$SANAD_AGENT_CODESIGN_IDENTIFIER"
+          designated_requirement="$(codesign -d -r- "$agent" 2>&1)"
+          printf '%s\n' "$designated_requirement" |
+            grep -F "identifier \"$SANAD_AGENT_CODESIGN_IDENTIFIER\"" >/dev/null
+          printf '%s\n' "$designated_requirement" |
+            grep -E 'certificate leaf\[subject\.OU\] = "?UC2824B99G"?' >/dev/null
           "$agent" version | grep -F "Version: ${{ needs.validate.outputs.version }}"
       - name: Notarize macOS agent
         if: matrix.platform == 'macos'
