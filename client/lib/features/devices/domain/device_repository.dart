@@ -23,6 +23,15 @@ abstract class IDeviceRepository {
   /// Used to distinguish "no saved device" (safe to fall back to a default)
   /// from "saved device not loaded yet" (must not fall back).
   String? getActiveAgentId();
+
+  /// Whether a cloud device inventory can still arrive for this Client: the
+  /// cloud gateway is enabled, a Sanad account session exists, and the cloud
+  /// socket is connecting, authenticating, reconnecting, or ready without an
+  /// authoritative inventory yet. While it is pending, a persisted device that
+  /// is not loaded yet is awaited; once it is not pending (cloud disabled,
+  /// signed out, or the cloud socket failed) the persisted device cannot
+  /// appear, so the active device falls back without forgetting it.
+  bool get isCloudInventoryPending;
   Future<void> setActiveAgent(String? deviceId);
   void createAgent(String name, {String type = 'computer'});
   Future<void> renameAgent(DeviceConfig device, String name);

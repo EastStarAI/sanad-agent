@@ -568,6 +568,19 @@ class OneshotRunner {
         activeClient.permissionStream.listen((event) async {
           if (event.sessionId == null ||
               event.sessionId == effectiveSessionId) {
+            // A secret request is never auto-approved or answered here: it
+            // stays pending until a Sanad Client submits the values.
+            if (event.isSecretRequest) {
+              coordinator.recordPendingIntervention(
+                kind: 'needs_input',
+                requestId: event.requestId,
+                toolName: event.toolName,
+              );
+              if (!json && !quiet) {
+                err.writeln(event.secretRequestNotice(effectiveSessionId));
+              }
+              return;
+            }
             if (event.isUserQuestion) {
               coordinator.recordPendingIntervention(
                 kind: 'needs_input',

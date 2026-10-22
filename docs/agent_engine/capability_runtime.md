@@ -75,6 +75,14 @@ credentials, and Protected fails closed because no isolated backend ships yet.
 a Direct host shell. See
 [Execution Trust and Permission Authority](../technical/execution_trust_and_permission_authority.md).
 
+User secrets (Plan 84) have three owner-only tools, offered only on a turn with
+stamped `owner` authority: `system_request_secret` suspends the call on a
+Client form that collects values outside the conversation (sharing the durable
+checkpoint path of `system_ask_user` through `InteractiveUserInput`),
+`system_list_secrets` returns names only, and `system_delete_secret` removes
+names after an explicit approval. The model receives names and an outcome,
+never a value, and uses a stored name only through `shell_execute` `secrets`.
+
 ## Tool Output Budgets
 
 The engine tool-execution boundary applies a provider-neutral output guard after

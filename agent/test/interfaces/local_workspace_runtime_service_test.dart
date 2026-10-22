@@ -8,8 +8,10 @@ import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/interfaces/models/workspace_control.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:test/test.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 void main() {
+  useIsolatedSanadStateRoot();
   group('LocalWorkspaceRuntimeService.browseWorkspaceTree', () {
     late Directory tempDir;
     late Directory workspaceDir;

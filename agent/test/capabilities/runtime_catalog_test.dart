@@ -23,6 +23,7 @@ import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import '../support/memory_workspace_policy_store.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 class FakeMcpRuntimeManager extends McpRuntimeManager {
   FakeMcpRuntimeManager()
@@ -145,6 +146,7 @@ class _FakeSessionManager implements SessionManager {
 }
 
 void main() {
+  useIsolatedSanadStateRoot();
   group('LocalRuntimeCatalog', () {
     late Directory tempDir;
     late Directory workspaceDir;
@@ -259,6 +261,36 @@ Use the review skill.''');
         });
         expect(byName, contains('API_TOKEN=<redacted>'));
         expect(byName, isNot(contains(secret)));
+      });
+    });
+
+    group('secret tools presence', () {
+      Future<Set<String>> names(String authority) async => (await catalog
+              .buildTools(
+                registry: ToolsRegistry(),
+                request: AgentTurnRequest(
+                  sessionId: 'thread-secrets',
+                  message: 'connect',
+                  metadata: {CommandAuthority.payloadKey: authority},
+                ),
+              ))
+          .map((tool) => tool.schema.name)
+          .toSet();
+
+      const secretTools = {
+        'system_request_secret',
+        'system_list_secrets',
+        'system_delete_secret',
+      };
+
+      test('are offered on an owner turn', () async {
+        expect(await names('owner'), containsAll(secretTools));
+      });
+
+      test('are absent on an unverified turn', () async {
+        final present = await names('unverified');
+        expect(present.intersection(secretTools), isEmpty);
+        expect(present, contains('system_ask_user'));
       });
     });
 

@@ -198,6 +198,7 @@ abstract class ConversationClient {
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   });
   Future<WorkspacePolicy> getWorkspacePolicy(String workspacePath);
   Future<WorkspacePolicy> setWorkspacePermissionMode({

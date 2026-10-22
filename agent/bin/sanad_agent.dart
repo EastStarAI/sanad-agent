@@ -6,6 +6,7 @@ import 'package:sanad_agent/core/hot_restart_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/setup/env_template.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/test_runtime_isolation.dart';
 import 'daemon.dart' as daemon;
 import 'setup.dart' as setup;
 import 'login.dart' as login_cmd;
@@ -20,6 +21,27 @@ void main(List<String> arguments) async {
   if (SanadCommandRunner.isPureQuery(arguments)) {
     await _executeCommand(arguments);
     return;
+  }
+
+  // G0: select the Home before anything can resolve one. Bootstrap, the vault
+  // (whose open migrates and deletes legacy secret files), the bundled-skill
+  // sync, `.env` seeding and the supervisor parent all resolve the active Home
+  // and must never fall back to `SANAD_HOME`/`~/.sanad` when `--home` names
+  // another. An unparseable command line only yields a usage error, so it
+  // touches no Home at all.
+  final selection = SanadCommandRunner.selectedHome(arguments);
+  if (!selection.parsed) {
+    await _executeCommand(arguments);
+    return;
+  }
+  if (selection.home != null) selectSanadHome(selection.home!);
+  // The E2E runtime must run on temporary roots only; refuse before any Home
+  // access rather than bootstrapping the real default Home.
+  try {
+    requireSanadE2eTestIsolation();
+  } on StateError catch (error) {
+    stderr.writeln('Error: ${error.message}');
+    exit(78);
   }
 
   // A supervised daemon parent must remain a lightweight process owner. Its

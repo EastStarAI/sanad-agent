@@ -28,6 +28,7 @@ import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:test/test.dart';
+import '../../support/isolated_sanad_test_home.dart';
 
 const _instanceId = 'inst-go';
 const _model = 'glm-5.2';
@@ -108,6 +109,7 @@ void _unregisterState() {
 }
 
 void main() {
+  useIsolatedSanadStateRoot();
   late Directory stateHome;
 
   setUp(() {

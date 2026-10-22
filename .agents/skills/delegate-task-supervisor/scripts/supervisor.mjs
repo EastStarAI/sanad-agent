@@ -447,6 +447,18 @@ function publicTask(task, runDir, initialStatus = 'queued') {
   };
 }
 
+// A worker with a declared task Home receives that Home in its environment as
+// well as through `--home`: `SANAD_HOME` names it, and an inherited
+// `SANAD_STATE_HOME` is removed so runtime state resolves inside the same Home
+// (the worktree Home model). Nothing the worker starts can then fall back to
+// the caller's Home, even before it parses `--home`.
+function taskEnvironment(task, baseEnv) {
+  if (!task.home) return baseEnv;
+  const env = { ...baseEnv, SANAD_HOME: task.home };
+  delete env.SANAD_STATE_HOME;
+  return env;
+}
+
 function windowsBatchQuote(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
@@ -828,7 +840,7 @@ function workerCommand(options) {
     try {
       const spawnOptions = {
         cwd: task.spawnCwd || task.workspace,
-        env: process.env,
+        env: taskEnvironment(task, process.env),
         windowsHide: true,
         stdio: ['ignore', stdoutFd, stderrFd],
       };

@@ -15,6 +15,7 @@ import 'package:sanad_client/features/conversations/domain/conversation_client.d
 import 'package:sanad_client/features/conversations/data/repositories/socket_conversation_repository.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_cache_store.dart';
+import 'package:sanad_client/features/conversations/domain/models/conversation_resource_state.dart';
 import '../../helpers/fake_device_preferences_repository.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
@@ -178,6 +179,50 @@ void main() {
 
     // Call count should NOT have increased because the active device did not change
     expect(client.getSessionsCalls, initialCalls);
+
+    await cubit.close();
+    cacheStore.dispose();
+  });
+
+  test('the active device coming back Online refreshes a stale workspace list once (Task 124 D5)', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final cacheStore = ConversationCacheStore();
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: cacheRepository,
+    );
+    await pumpEventQueue();
+    expect(cacheStore.snapshot.contexts[agent.id]!.workspaces.state, ConversationResourceState.ready);
+
+    // A later refresh of the workspace list fails while the sections succeed.
+    client.workspacesError = StateError('Failed to get workspaces');
+    await cubit.refreshSessions();
+    await pumpEventQueue();
+    expect(cacheStore.snapshot.contexts[agent.id]!.workspaces.state, ConversationResourceState.staleError);
+
+    // The Agent restarts: the device goes offline, then comes back Online.
+    client.workspacesError = null;
+    final callsBefore = client.getWorkspacesCalls;
+    agentCubit.emitState(DeviceActive(activeAgent: agent.copyWith(isOnline: false), agents: [agent.copyWith(isOnline: false)]));
+    await pumpEventQueue();
+    expect(client.getWorkspacesCalls, callsBefore);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    await pumpEventQueue();
+
+    expect(client.getWorkspacesCalls, callsBefore + 1);
+    expect(cacheStore.snapshot.contexts[agent.id]!.workspaces.state, ConversationResourceState.ready);
+
+    // A later Online update with nothing stale issues no request.
+    agentCubit.emitState(DeviceActive(activeAgent: agent.copyWith(name: 'Renamed'), agents: [agent]));
+    await pumpEventQueue();
+    expect(client.getWorkspacesCalls, callsBefore + 1);
 
     await cubit.close();
     cacheStore.dispose();
@@ -2637,6 +2682,9 @@ class _FakeDeviceClientRegistry implements IDeviceClientRegistry, ConversationCl
 }
 
 class _FakeDeviceRepository implements IDeviceRepository {
+  @override
+  bool get isCloudInventoryPending => true;
+
   final _agentsController = StreamController<List<DeviceConfig>>.broadcast();
   List<DeviceConfig> _agents = [];
   String? _activeAgentId;
@@ -3024,8 +3072,14 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
 
   @override
   Future<List<DeviceWorkspace>> getWorkspaces() async {
+    getWorkspacesCalls += 1;
+    final error = workspacesError;
+    if (error != null) throw error;
     return const [];
   }
+
+  int getWorkspacesCalls = 0;
+  Object? workspacesError;
 
   @override
   Future<List<SlashCommandEntry>> searchSlashCommands({
@@ -3099,6 +3153,7 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) async {
     _pendingSuspendedRequest = allow ? null : _pendingSuspendedRequest;
     _pendingSuspendedController.add(_pendingSuspendedRequest);

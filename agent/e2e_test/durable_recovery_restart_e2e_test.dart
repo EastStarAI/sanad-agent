@@ -39,12 +39,16 @@ import 'package:test/test.dart';
 
 import 'support/local_gateway_test_support.dart';
 import 'support/workspace_policy_seed.dart';
+import '../test/support/isolated_sanad_test_home.dart';
 
 const _template = 'openai';
 const _authMethod = 'api_key';
 const _protocol = 'openai_compatible';
 
 void main() {
+  // In-process seeding and inspection open the temporary state roots the
+  // spawned daemons use; declare that isolation for the G0 test guard.
+  useIsolatedSanadStateRoot();
   test(
     'F.2.1 waiting notice survives forced restart and auto-resumes at resume_at',
     () async {

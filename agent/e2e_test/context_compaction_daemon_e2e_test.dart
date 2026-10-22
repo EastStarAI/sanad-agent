@@ -30,6 +30,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonica
 import 'package:test/test.dart';
 
 import 'support/local_gateway_test_support.dart';
+import '../test/support/isolated_sanad_test_home.dart';
 
 const _template = 'openai';
 const _authMethod = 'api_key';
@@ -57,6 +58,9 @@ const _structuredPngBytes = [
 ];
 
 void main() {
+  // In-process seeding and inspection open the temporary state roots the
+  // spawned daemons use; declare that isolation for the G0 test guard.
+  useIsolatedSanadStateRoot();
   test(
     'F.53.1 manual compact emits lifecycle and history row over real daemon',
     () async {
@@ -849,6 +853,74 @@ void main() {
           expect(siblingAnswer['content'], 'e2e-success');
         } finally {
           await client.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+  );
+
+  test(
+    'F.53.11 Task 118 Stage3B: true pressure compacts once, a restart and a follow-up do not repeat it, and a small session never compacts',
+    () async {
+      final h = await _CompactionHarness.create();
+      try {
+        final sessionId = 'plan53-non-repeat-${_unique()}';
+        final smallId = 'plan53-below-threshold-${_unique()}';
+        await h.seedSession(
+          sessionId: sessionId,
+          providerInstanceId: h.providerInstanceId,
+          withStructuredToolResult: true,
+        );
+        await h.seedSession(
+          sessionId: smallId,
+          providerInstanceId: h.providerInstanceId,
+          fillerCount: 3,
+          fillerLength: 40,
+        );
+
+        final client1 = await h.startDaemon();
+        try {
+          final execution = await client1.executeAuto(
+            sessionId: sessionId,
+            requestId: 'auto-non-repeat-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(execution.compactionIds, hasLength(1));
+          expect(execution.lifecycle, ['started', 'completed']);
+
+          await client1.executeThink(
+            sessionId: smallId,
+            requestId: 'think-small-${_unique()}',
+            message: 'a short question',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(await h.compactionLifecycleRowCount(smallId), 0);
+        } finally {
+          await client1.close();
+        }
+
+        await h.killDaemon();
+
+        final client2 = await h.startDaemon();
+        try {
+          final answer = await client2.executeThink(
+            sessionId: sessionId,
+            requestId: 'think-after-restart-${_unique()}',
+            message: 'continue after the restart',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(answer, isNotEmpty);
+          await client2.executeThink(
+            sessionId: sessionId,
+            requestId: 'think-second-follow-up-${_unique()}',
+            message: 'one more step',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(await h.compactionLifecycleRowCount(sessionId), 1);
+          expect(await h.compactionLifecycleRowCount(smallId), 0);
+        } finally {
+          await client2.close();
         }
       } finally {
         await h.dispose();

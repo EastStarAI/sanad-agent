@@ -24,4 +24,5 @@ This contract applies to `client/lib/features/home/`.
 ## Navigation Integration
 - Use the shared conversation history controller and typed destinations as the navigation authority.
 - Route listeners must avoid update loops by comparing the requested route with the current history destination before navigation.
+- A route Home navigates to on its own (no-route restore, New Conversation alignment, missing-device fallback, first-send promotion) is not a device pick: applying it must not call `DeviceCubit.setActiveAgent`, so it neither persists the device nor ends a remembered-device fallback. Only a user-opened route persists its device.
 - Do not create Home-local copies of conversation, device, provider, or gateway state.

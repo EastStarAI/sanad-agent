@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 
 import '../constants.dart';
 import '../sanad_home/sanad_home_bootstrap.dart';
+import '../sanad_home/test_runtime_isolation.dart';
 import 'agent_secret_namespaces.dart';
 import 'agent_secret_store.dart';
 
@@ -18,8 +19,9 @@ class SecretVaultNamespace {
   final String prefix;
   final String indexKey;
 
-  /// Legacy owner-only plaintext file this namespace migrates from.
-  final String legacyFile;
+  /// Legacy owner-only plaintext file this namespace migrates from; `null`
+  /// for a namespace that never had a plaintext predecessor.
+  final String? legacyFile;
 
   final Map<String, String> _values = {};
 
@@ -61,6 +63,11 @@ class SecretVaults {
         AgentSecretNamespaces.mcpPrefix,
         AgentSecretNamespaces.mcpIndexKey,
         'mcp_secrets.json',
+      ),
+      custom = SecretVaultNamespace._(
+        AgentSecretNamespaces.customPrefix,
+        AgentSecretNamespaces.customIndexKey,
+        null,
       );
 
   static final _logger = Logger('SecretVaults');
@@ -118,6 +125,10 @@ class SecretVaults {
   final SecretVaultNamespace providers;
   final SecretVaultNamespace mcp;
 
+  /// User secrets acquired through `system_request_secret` (Plan 84). Created
+  /// in the vault only; there is no plaintext file to migrate from.
+  final SecretVaultNamespace custom;
+
   bool _available = true;
   String? _seenGeneration;
   Timer? _watch;
@@ -125,7 +136,7 @@ class SecretVaults {
   /// Whether the platform vault answered when this instance opened.
   bool get available => _available;
 
-  List<SecretVaultNamespace> get _namespaces => [providers, mcp];
+  List<SecretVaultNamespace> get _namespaces => [providers, mcp, custom];
 
   /// The vault opened by this process for the Home at [homePath], if any.
   static SecretVaults? forHome(String homePath) =>
@@ -138,6 +149,7 @@ class SecretVaults {
   /// legacy files. Never throws: an unavailable vault keeps legacy values
   /// readable and rejects writes.
   static Future<SecretVaults> open({AgentSecretStore? store}) async {
+    _rejectUnisolatedTestOpen();
     final key = _canonical(getSanadHome());
     final existing = _opened[key];
     if (existing != null) return existing;
@@ -149,6 +161,7 @@ class SecretVaults {
   /// Opens an instance that is not registered for this process (another
   /// process's view in tests).
   static Future<SecretVaults> openDetached({AgentSecretStore? store}) async {
+    _rejectUnisolatedTestOpen();
     final home = SanadHomeBootstrap.identity();
     AgentSecretStore? backend = store;
     if (backend == null) {
@@ -166,6 +179,13 @@ class SecretVaults {
     await vaults._initialize();
     return vaults;
   }
+
+  /// Opening migrates and deletes legacy secret files, so a Dart test may
+  /// open a vault only for an explicitly isolated, non-default Home.
+  static void _rejectUnisolatedTestOpen() => rejectUnisolatedTestHomeAccess(
+    'open the Agent secret vault',
+    path: getSanadHome(),
+  );
 
   /// Closes every vault this process opened.
   static Future<void> closeAll() async {
@@ -324,9 +344,11 @@ class SecretVaults {
   /// Migrates one legacy file. Returns without deleting it when anything
   /// fails; vault values already present are never overwritten.
   Future<void> _migrate(SecretVaultNamespace namespace) async {
+    final legacyFile = namespace.legacyFile;
+    if (legacyFile == null) return;
     final legacy = _readLegacy(namespace);
     if (legacy == null) {
-      if (_home.fileExists(namespace.legacyFile)) {
+      if (_home.fileExists(legacyFile)) {
         // Unreadable legacy file: keep it for manual recovery.
         namespace._legacy = const {};
       }
@@ -340,15 +362,15 @@ class SecretVaults {
       };
       await _writeVerified(namespace, pending);
       await _writeIndex(namespace, {...index, ...pending.keys});
-      _home.deleteFileSync(namespace.legacyFile);
-      final sidecar = '${namespace.legacyFile}.lock';
+      _home.deleteFileSync(legacyFile);
+      final sidecar = '$legacyFile.lock';
       if (_home.fileExists(sidecar)) _home.deleteFileSync(sidecar);
       namespace._legacy = const {};
       _bumpGeneration();
       _event(
         Level.INFO,
         'Migrated ${pending.length} ${namespace.prefix} secret(s) into the '
-        'Agent vault and deleted ${namespace.legacyFile}.',
+        'Agent vault and deleted $legacyFile.',
       );
     } on AgentSecretStoreUnavailable {
       rethrow;
@@ -357,7 +379,7 @@ class SecretVaults {
       _event(
         Level.WARNING,
         'Secret migration for ${namespace.prefix} did not verify '
-        '(${error.runtimeType}); ${namespace.legacyFile} stays in place.',
+        '(${error.runtimeType}); $legacyFile stays in place.',
       );
     }
   }
@@ -365,9 +387,10 @@ class SecretVaults {
   /// Parses a legacy plaintext file into `id -> stored value`; `null` when the
   /// file is absent or unreadable. Values are never logged.
   Map<String, String>? _readLegacy(SecretVaultNamespace namespace) {
-    if (!_home.fileExists(namespace.legacyFile)) return null;
+    final legacyFile = namespace.legacyFile;
+    if (legacyFile == null || !_home.fileExists(legacyFile)) return null;
     try {
-      final bytes = _home.readSecretBytes(namespace.legacyFile);
+      final bytes = _home.readSecretBytes(legacyFile);
       if (bytes.isEmpty) return const {};
       final decoded = jsonDecode(utf8.decode(bytes));
       if (decoded is! Map) return null;
@@ -385,10 +408,7 @@ class SecretVaults {
           entry.key.toString(): entry.value.toString(),
       };
     } catch (_) {
-      _event(
-        Level.WARNING,
-        'Legacy ${namespace.legacyFile} is unreadable; kept.',
-      );
+      _event(Level.WARNING, 'Legacy $legacyFile is unreadable; kept.');
       return null;
     }
   }

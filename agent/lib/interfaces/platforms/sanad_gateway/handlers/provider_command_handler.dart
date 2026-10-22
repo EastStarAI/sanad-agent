@@ -996,8 +996,13 @@ class ProviderCommandHandler {
         .toList(growable: false);
   }
 
+  /// Projects one cached model onto the `model.snapshot_result` contract.
+  /// The cache keeps the provider's raw `/models` record (`model_metadata`)
+  /// for Agent-side capability derivation; it is not part of the snapshot
+  /// contract and dominated the payload (about 1.2 MB of a 1.5 MB aggregator
+  /// catalog), which stalled every later reply on the relayed cloud path.
   Map<String, dynamic> _normalizeModelEntry(Map<String, dynamic> map) {
-    final normalized = Map<String, dynamic>.from(map);
+    final normalized = Map<String, dynamic>.from(map)..remove('model_metadata');
     final value = normalized['value']?.toString();
     if (value != null && value.isNotEmpty) {
       normalized['id'] ??= value;

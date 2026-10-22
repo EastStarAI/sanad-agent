@@ -20,12 +20,16 @@ import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart
 import 'package:test/test.dart';
 
 import 'support/local_gateway_test_support.dart';
+import '../test/support/isolated_sanad_test_home.dart';
 
 const _template = 'openai';
 const _authMethod = 'api_key';
 const _protocol = 'openai_compatible';
 
 void main() {
+  // In-process seeding and inspection open the temporary state roots the
+  // spawned daemons use; declare that isolation for the G0 test guard.
+  useIsolatedSanadStateRoot();
   test(
     'I.1 supported selection reaches provider payload with reasoning_effort',
     () async {

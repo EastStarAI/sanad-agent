@@ -26,6 +26,7 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 
 import 'session_queue_coordinator.dart';
+import 'local_runtime_orchestrator.dart';
 import 'session_turn_executor.dart';
 import 'session_recovery_restorer.dart';
 import 'session_turn_request_helpers.dart';
@@ -723,8 +724,19 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     final CompactionEngineRequest? engineRequest;
     try {
       final compactionRunner = getIt<AgentRunner>(param1: sessionId);
-      final providerSeed =
-          await compactionRunner.prepareCompactionProviderSeed();
+      // Task 118b: the seed carries the per-turn tools and runtime context of
+      // the next ordinary request, so its fixed overhead is what that request
+      // will transmit and the summary pass keeps the ordinary tool list.
+      final runtimeSystemPrompt =
+          getIt.isRegistered<LocalRuntimeOrchestrator>()
+          ? await getIt<LocalRuntimeOrchestrator>().prepareIdleRequest(
+              agentRunner: compactionRunner,
+              sessionId: sessionId,
+            )
+          : null;
+      final providerSeed = await compactionRunner.prepareCompactionProviderSeed(
+        runtimeSystemPrompt: runtimeSystemPrompt,
+      );
       engineRequest = await CompactionRequestFactory.forSession(
         sessionId: sessionId,
         trigger: CompactionTrigger.manual,

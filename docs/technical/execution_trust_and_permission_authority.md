@@ -1,11 +1,11 @@
 ---
 title: "Execution Trust and Permission Authority"
-description: "Transport-derived command authority, daemon-private workspace policy, child-process environment policy, Direct/Protected backends, host discovery, project .env redaction, and the Agent secret vault."
+description: "Transport-derived command authority, daemon-private workspace policy, child-process environment policy, Direct/Protected backends, host discovery, project .env redaction, the Agent secret vault, and user secrets."
 ---
 
 # Execution Trust and Permission Authority
 
-Owner: Plan 83. This page describes who may decide workspace security policy, where that policy is stored, what a model-requested child process inherits, where commands run, and which values never reach a model-visible result.
+Owner: Plan 83 (§10: Plan 84). This page describes who may decide workspace security policy, where that policy is stored, what a model-requested child process inherits, where commands run, and which values never reach a model-visible result.
 
 ## 1. Authority comes from the transport
 
@@ -68,6 +68,7 @@ Every command and turn carries a daemon-derived `CommandAuthority`. User decisio
 - Everything else in the operator environment is inherited unchanged, including credentials the operator holds for other tools (for example another agent's token): only names Sanad itself reads are removed. A Direct shell therefore sees the same environment as the operator's terminal minus Sanad's own credentials.
 - It keeps `SANAD_HOME` and the `SANAD_DEV_*` runtime markers: they are routing identity, not credentials, and `sanad-dev restart agent` from a shell needs them.
 - Request overrides can never set `PATH`, `PATHEXT`, `COMSPEC`, identity and temp variables, interpreter start-up hooks, Git transport hooks, trust roots, proxies, or anything prefixed `LD_`, `DYLD_` or `SANAD_`, and can never reintroduce a Sanad credential. A rejection is logged by key and reason only.
+- User secrets (§10) are added only when the call names them in `secrets`; the default is none. They follow the same protected-key rule as request overrides.
 - Children are spawned with `includeParentEnvironment: false`; the policy-built map is the whole environment. Without it Dart merges the daemon environment, and every credential, back in.
 - Backend-generated values (`GIT_TERMINAL_PROMPT`, `GCM_INTERACTIVE`, `SSH_ASKPASS_REQUIRE`, `SANAD_REQUESTER_SESSION_ID`, `SANAD_REQUESTER_TOOL_CALL_ID`) are added after the policy.
 - Other spawns keep their own owners: MCP stdio starts through `StrictStdioClientTransport` with exactly its allowlist (`PATH`, `HOME`, user, locale, `TMPDIR`, proxies, CA roots, and the Windows system variables) plus server-owned values; supervisor restart and update installers relaunch Sanad itself; automation helpers run fixed system binaries without model input.
@@ -124,9 +125,54 @@ So it normally appears only in a Protected owner session. There is no prompt tex
 
 Provider credentials and MCP secrets live in `AgentSecretStore` (macOS Keychain, Windows DPAPI, Linux Secret Service, or the Linux headless owner-only fallback, which is not encryption), owned by `SecretVaults`.
 
-- Namespaces: `providers:<instance id>` (JSON `SecretRecord`) and `mcp:<mcp-secret:// reference>`, each with a `<prefix>index` list. `AgentSecretNamespaces` also reserves `agent:auth:` and `custom:`.
+- Namespaces: `providers:<instance id>` (JSON `SecretRecord`), `mcp:<mcp-secret:// reference>` and `custom:<NAME>` (user secrets, Plan 84, see §10), each with a `<prefix>index` list. `AgentSecretNamespaces` also reserves `agent:auth:`. `custom:` has no legacy file and is never migrated from one.
 - Reads come from a cache loaded when the vault opens. Writes are verified by read-back, then committed to the index under a cross-process file lock, and a generation marker in Sanad Home tells other processes to reload (the daemon polls it every two seconds).
-- The daemon and CLI open the vault at start-up. Opening migrates `provider_secrets.json` and `mcp_secrets.json`: entries not yet in the vault are written and verified, the index is committed, and only then is the file deleted. A failed migration keeps the file and its values readable (writes still go to the vault) and retries on the next open. A value already in the vault always wins over a legacy value.
+- The daemon and CLI open the vault at start-up, always for the selected Home: the CLI entry applies `--home` before it opens the vault (Task 126), so a command aimed at another Home never migrates the default Home. Opening migrates `provider_secrets.json` and `mcp_secrets.json`: entries not yet in the vault are written and verified, the index is committed, and only then is the file deleted. A failed migration keeps the file and its values readable (writes still go to the vault) and retries on the next open. A value already in the vault always wins over a legacy value.
 - User decision 2026-10-21: deleting the legacy files is approved; downgrade compatibility is not required. An older Agent on the same Home loses those secrets.
+- Test isolation: under the Dart test runner the vault refuses to open without explicit state isolation or for the real default Home, and the test runner and `SANAD_E2E_TEST_MODE=true` processes use the owner-only file store instead of the OS credential vault. E2E mode selects that store only for temporary roots: it refuses the real default Home and a state root that is not separate from the identity Home.
 - An unavailable vault keeps legacy values readable and rejects writes with `AgentSecretStoreUnavailable`; it never writes plaintext.
 - Vault lifecycle events (migration counts, a failed verification, an unavailable vault) are appended to the owner-only `secret_vault_events.jsonl` in Sanad Home, because the CLI has no agent log and the vault may open before a process logs. The daemon opens the vault after logging starts and replays and clears the file, so every migration that deletes files reaches the agent log. Events carry namespaces and counts only.
+
+## 10. User secrets (Plan 84)
+
+User secrets are credentials the user enters for the Agent to use in commands (for example a database password). They live only in the vault's `custom:` namespace, owned by `UserSecretVault`, keyed by their environment variable name.
+
+### Names
+
+A name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and must not be a protected operator variable or a Sanad credential (`ChildProcessSecurityContract.isDangerousRequestOverride`), so `PATH`, `LD_*`, `SANAD_*` or `OPENAI_API_KEY` can never be stored or injected.
+
+### Injection into a command
+
+- `shell_execute` accepts an optional `secrets` list of at most 16 names. Exactly those names are injected into that one child process. A call without `secrets` gets no user secret: there is no default, wildcard, workspace-wide or session-wide injection.
+- Injection requires a turn with stamped `owner` authority; otherwise the call is refused as `permission_denied` (`terminal_reason: secret_authority_required`) and the command does not run.
+- An unknown name fails as `not_found` (`terminal_reason: secret_not_found`) before approval, and the command does not run. A malformed or reserved name is invalid input.
+- The approval key of a call with secrets is `shell_execute::<command>::secrets=<sorted names>`, so a grant for a command without secrets never covers the same command with secrets, and the permission prompt shows the names (never values).
+- Every output the Direct backend reports (progress checkpoints, final, partial, timeout and error output) has each injected value replaced by `[REDACTED:<NAME>]` before it becomes a tool result, history row, request dump or client timeline entry. Only verbatim echoes are caught.
+
+### Acquisition
+
+- `system_request_secret` takes a `reason` (at most 500 characters) and 1 to 10 `fields` (`name`, `label`, optional `description`, `masked` default true, `required` default true). Names are validated as above and must be unique. It is offered, and runs, only on an `owner` turn, and fails without prompting when the vault is unavailable.
+- The call suspends like `system_ask_user`: a durable checkpoint (tool name, fields, reason, and `replaces` for names already stored, never values) is written first, then `tool.permission_request` reaches the Client.
+- The Client answers with `tool_permission_response` carrying `secret_values` (`{NAME: value}`) to save, or `allowed: false` to skip. `PlatformRuntimeBridge` accepts it only when the ingress stamped `owner` authority (`PERMISSION_DENIED` otherwise), refuses `answer`, unrequested names, non-text or oversized values and missing required values (`INVALID_SECRET_VALUES`), and in every refusal keeps the request pending and logs the code only.
+- `SecretAcquisition` writes accepted values to the vault and replaces the decision with `{allowed, secret_outcome: stored|skipped|failed, secret_names}`. Only that value-free decision is retained in memory, handed to the waiting tool, claimed into `suspended_checkpoints.resolved_decision`, or resumed after a restart, where `SuspendedResumeService` returns the same result instead of re-running the tool.
+- The tool result is `{"status":"stored","secrets":[names]}`, `{"status":"skipped"}` or `{"status":"failed"}` (vault refused the write). It never contains a value. Re-entering a stored name replaces its value.
+- Terminal clients do not collect secrets: `sanad run` never auto-approves a secret request and records `needs_input`, the REPL leaves it pending for the Sanad Client, and the in-process terminal platform skips it.
+
+### Client
+
+- `SecretRequestCard` (composer, en/ar) shows the model's reason, one input per field (masked fields hide the value, disable suggestions and autocorrect, and offer a show/hide toggle), a "Replaces the saved value" note for names in `replaces`, and Save to vault / Skip.
+- Save requires every required field and sends `secret_values` exactly as typed through `ConversationInputCubit.submitSecretRequest`; Skip sends a plain denial. The controllers are cleared immediately and the values never enter Client state, caches, the timeline, or logs. Driver keys are listed in [Flutter VM Driver CLI QA](../qa_maintenance/flutter_vm_driver_cli_qa.md).
+- The timeline shows the tool call (reason, field names and labels) and the value-free result.
+
+### Listing, deletion and revocation
+
+- `system_list_secrets` returns the sorted names in `custom:` only; it never lists `providers:` or `mcp:` entries.
+- `system_delete_secret` takes 1 to 16 names. It is sensitive (`permission_class: secret_management`) and asks the user every time, then reports `deleted` and `not_found`. Deletion removes the vault entry and its index id, so later calls naming it fail as `secret_not_found`. A command already running keeps the environment it started with.
+
+### Limits
+
+- Redaction catches verbatim echoes only. A command that encodes, splits or transforms a value, or a value cut at an output truncation boundary, is not detected. Injection therefore stays behind the shell approval (or Full Access) and the owner check.
+- In Full Access, a command naming secrets runs without a prompt, as any other command does.
+- Secret values travel from the Client to the Agent inside `tool_permission_response`; for a cloud client that path is the TLS Cloud Gateway relay. Neither side logs payloads.
+- If the daemon stops after a decision is claimed and before the vault write completes, the recovered decision still reports `stored`; the next use then fails as `secret_not_found` and the user can enter it again.
+

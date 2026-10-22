@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/data/device_command_client.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
 
 import '../../mocks/mock_socket_service.dart';
@@ -30,6 +31,59 @@ void main() {
     coordinator.dispose();
     local.dispose();
     cloud.dispose();
+  });
+
+  group('ProviderSetupClientImpl.modelSnapshot coalescing (Task 124 D4)', () {
+    List<Map<String, dynamic>> snapshotCommands() =>
+        local.capturedCommands.where((entry) => entry['command'] == 'model.snapshot').toList();
+
+    void answer(Map<String, dynamic> command, String instanceId) {
+      final requestId = (command['payload'] as Map)['request_id'] as String;
+      local.debugEmitEvent({
+        'device_id': 'this-hardware',
+        'event': 'model.snapshot_result',
+        'request_id': requestId,
+        'payload': {
+          'request_id': requestId,
+          'instances': [
+            {'id': instanceId, 'display_name': instanceId, 'models': <Object>[]},
+          ],
+          'recent': <Object>[],
+        },
+      });
+    }
+
+    test('concurrent snapshots for one device share a single request', () async {
+      final first = client.modelSnapshot();
+      final second = client.modelSnapshot();
+      await pumpEventQueue();
+
+      expect(snapshotCommands(), hasLength(1));
+      answer(snapshotCommands().single, 'inst-1');
+      final results = await Future.wait([first, second]);
+      expect(results.map((snapshot) => snapshot.instances.single.id), ['inst-1', 'inst-1']);
+
+      // A later call after completion issues a fresh request.
+      final third = client.modelSnapshot();
+      await pumpEventQueue();
+      expect(snapshotCommands(), hasLength(2));
+      answer(snapshotCommands().last, 'inst-2');
+      expect((await third).instances.single.id, 'inst-2');
+    });
+
+    test('an agent-less load publishes under the resolved current device id', () async {
+      final publications = <ModelSnapshotPublication>[];
+      final sub = client.modelSnapshots.listen(publications.add);
+      final load = client.modelSnapshot();
+      await pumpEventQueue();
+      answer(snapshotCommands().single, 'inst-1');
+      await load;
+      await pumpEventQueue();
+
+      expect(publications.single.deviceId, 'this-hardware');
+      expect(publications.single.isCurrentDevice, isTrue);
+      await sub.cancel();
+    });
   });
 
   group('ProviderSetupClientImpl.modelUpdates', () {

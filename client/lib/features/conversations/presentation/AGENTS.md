@@ -76,6 +76,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Preserve pending UI until authoritative resolution.
 - Permission cards use action-specific titles and readable labeled fields for known command, file, search, and MCP actions; unknown tools fall back to action-neutral language. Render only daemon-provided display input and never reconstruct redacted arguments. Visually separate the darker request content from the prompt and choices.
 - A running tool row whose matching suspension awaits permission shows the permission shield instead of progress. Running `system_ask_user` timeline rows remain hidden because the composer owns the active question; completed question/answer content renders without generic tool-header chrome. Unblocked running tools retain progress.
+- A `system_request_secret` suspension renders `SecretRequestCard`: masked inputs without suggestions or autocorrect, localized copy, and Save/Skip. Typed values go only into `ConversationInputCubit.submitSecretRequest` (the `secret_values` field of the response) and are cleared from the controllers on submit or skip; they never enter cubit state, caches, the timeline, or logs.
 - Keep background suspension and recovery state out of the active composer while surfacing its session-row attention state.
 
 ## Atomic Session Presentation
@@ -144,11 +145,12 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Route replacement after current deletion must prevent the deleted URL from re-entering history.
 
 ## Presentation Fidelity
-- Compaction separators consume the full available conversation width around an intrinsic centered label. Only the centered label is interactive; divider space must not open details. The compact detail card uses daemon-owned effective-input and threshold metrics, replaces the provisional after-estimate with the provider-confirmed value on reconciliation, and recomputes reclaimed context from that value.
+- Compaction separators consume the full available conversation width around an intrinsic centered label. Only the centered label is interactive; divider space must not open details. The compact detail card uses daemon-owned metrics with the full resolved window `W` as the only percentage denominator (before, after, threshold) and does not display the internal usable-input budget; replaces the provisional after-estimate with the provider-confirmed value on reconciliation, and recomputes reclaimed context from that value.
 - Running and completed assistant Markdown enter through one application-owned renderer boundary; progressive rendering must not own timeline scrolling, add artificial typing, or be silently bypassed in widget tests.
 - Rendered user and assistant message bodies expose stable Driver keys scoped by canonical event id (`user_message_body:<eventId>` and `assistant_message_body:<eventId>`); never replace them with kind-only keys that collide across mounted timeline rows.
 - Provider chips render daemon-owned display names and model names, never raw provider UUIDs. Session display metadata is valid only when its provider identity matches the active or staged provider route.
 - Context-usage UI shows only the latest active-session snapshot, includes cached input only when available, and never displays cache-write usage.
+- A `/compact` result of `no_op` (nothing to compact, for example a conversation already within the target) is a localized neutral notice, never a failure toast.
 - Compaction timeline labels keep a localized 44-logical-pixel interaction target, remain centered without narrow-width overflow, and expose the same redacted multiline details by hover, tap, and keyboard focus; the surrounding full-width separator remains non-interactive.
 - Composer controls remain horizontally bounded on narrow layouts and expose Material semantics, labels, and keyboard focus.
 - Narrow conversation headers share one navigation/window-action surface across New Conversation and active sessions; native-desktop actions reuse the wide-header geometry and neutral color, and macOS reserves the leading title-bar region for native traffic-light controls.

@@ -74,6 +74,9 @@ class _FakeTransport implements ConversationRepository {
 
   // The rest of the interface is not needed for these tests.
   @override
+  Stream<List<Session>> watchSessions(DeviceConfig agent) => const Stream.empty();
+
+  @override
   dynamic noSuchMethod(Invocation invocation) {}
 }
 

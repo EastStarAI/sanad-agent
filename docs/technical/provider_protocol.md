@@ -216,7 +216,7 @@ controls, not the selectable values themselves:
 - `thinking_mode_source`: `model` when options come from the active model snapshot; legacy agents omit this field and clients treat `thinking_modes_list` as authoritative.
 - `thinking_modes_list`: retained for backward compatibility only. Current agents emit an empty list when `thinking_mode_source` is `model`.
 
-Each model entry in `model.snapshot_result.instances[].models[]` may include:
+Each model entry in `model.snapshot_result.instances[].models[]` is a bounded client projection of the cached model. The cache keeps the provider's raw `/models` record (`model_metadata`) for Agent-side capability derivation, but the snapshot never relays it: on an aggregator catalog it made up most of the payload and stalled later replies on the relayed cloud path. Entries may include:
 
 - `supports_reasoning_output`: whether the model may emit reasoning output.
 - `thinking_control`: descriptor with `status` (`supported` | `unsupported` | `unknown`), optional `kind`, ordered `options[]` (`id`, English `label`, `is_off`, `is_provider_default`, optional `budget_tokens`), `default_option_id`, `capability_revision`, and `source`.

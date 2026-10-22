@@ -57,6 +57,6 @@ This contract applies to `client/lib/features/conversations/data/`.
 ## Authoritative Responses
 - Draft acceptance, queue mutation, pending-steer lifecycle, deletion, replay, stop, retry, and provider-route changes apply only from their matching authoritative response/event.
 - Queue lifecycle events consume their typed field: `state` belongs to `session.queued_message_changed`, while command acknowledgements such as `session.queued_message_delete_result` use `outcome`. A successful delete removes the matching raw request projection.
-- Reply to suspension requests through `tool_permission_response` with explicit device/session ids, raw request id, optional denial comment, and text answer when required.
+- Reply to suspension requests through `tool_permission_response` with explicit device/session ids, raw request id, optional denial comment, and text answer when required. A secret request reply carries `secret_values` exactly as typed (never trimmed, never as `answer`) and nothing else; the transport logs field counts only.
 - Retain a pending suspension until authoritative resolution or terminal lifecycle delivery clears it.
 - Latest-turn edit/retry transport uses daemon-authoritative replay intent keyed by the raw user request id.

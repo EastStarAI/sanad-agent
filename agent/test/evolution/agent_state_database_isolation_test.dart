@@ -17,7 +17,7 @@ void main() {
         isA<StateError>().having(
           (error) => error.message,
           'message',
-          contains('Refusing to open the inherited Sanad state database'),
+          contains('without explicit Sanad state isolation'),
         ),
       ),
     );
@@ -39,20 +39,25 @@ void main() {
     expect(File('${tempDir.path}/state.db').existsSync(), isTrue);
   });
 
-  test('in-memory and explicit-path databases need no global override', () {
+  test('in-memory databases need no global override', () {
     final memory = AgentStateDatabase.inMemory();
     addTearDown(memory.dispose);
 
+    expect(memory.db.select('SELECT 1').single.values.single, 1);
+  });
+
+  test('explicit-path databases require explicit test isolation (G0)', () {
     final tempDir = Directory.systemTemp.createTempSync(
       'sanad-agent-explicit-state-',
     );
     addTearDown(() {
       if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
     });
+    expect(() => AgentStateDatabase.atPath(tempDir.path), throwsStateError);
+
+    setSanadStateHomeOverride(tempDir.path);
     final explicit = AgentStateDatabase.atPath(tempDir.path);
     addTearDown(explicit.dispose);
-
-    expect(memory.db.select('SELECT 1').single.values.single, 1);
     expect(File('${tempDir.path}/state.db').existsSync(), isTrue);
   });
 }

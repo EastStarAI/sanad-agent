@@ -126,6 +126,11 @@ class _FakeProviderSetupClient extends Fake implements ProviderSetupClient {
   @override
   Stream<ModelCacheUpdateEvent> get modelUpdates => modelUpdatesController.stream;
 
+  final modelSnapshotsController = StreamController<ModelSnapshotPublication>.broadcast();
+
+  @override
+  Stream<ModelSnapshotPublication> get modelSnapshots => modelSnapshotsController.stream;
+
   @override
   Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async {
     callCount++;
@@ -273,6 +278,7 @@ void main() {
 
   tearDown(() async {
     await fakeClient.modelUpdatesController.close();
+    await fakeClient.modelSnapshotsController.close();
     if (getIt.isRegistered<ProviderSetupClient>()) {
       await getIt.unregister<ProviderSetupClient>();
     }
@@ -482,6 +488,103 @@ void main() {
       findsOneWidget,
     );
     expect(thinkingMenuOptionIds(tester), contains('high'));
+  });
+
+  testWidgets('a later successful snapshot for the device clears the Retry chip (Task 124 D5)', (tester) async {
+    fakeClient.shouldThrow = true;
+    final inputSlice = createInputSlice(
+      nextMessageProviderId: 'provider-1',
+      nextMessageModel: 'model-a',
+    );
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsOneWidget);
+    final callsAfterFailure = fakeClient.callCount;
+
+    // Another consumer's snapshot load for this device succeeds later.
+    fakeClient.modelSnapshotsController.add(
+      const ModelSnapshotPublication(
+        deviceId: null,
+        snapshot: ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsNothing);
+    expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+    expect(fakeClient.callCount, callsAfterFailure, reason: 'the published snapshot is adopted without a new request');
+  });
+
+  testWidgets('the active device coming back Online refetches a failed snapshot once (Task 124 D5)', (tester) async {
+    final online = DeviceConfig(id: 'device-a', name: 'A', isOnline: true);
+    final offline = online.copyWith(isOnline: false);
+    fakeClient.shouldThrow = true;
+    final inputSlice = createInputSlice(
+      nextMessageProviderId: 'provider-1',
+      nextMessageModel: 'model-a',
+    );
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice, activeAgent: online));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsOneWidget);
+    final callsAfterFailure = fakeClient.callCount;
+
+    // The Agent restarts: the device goes offline, then comes back Online.
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice, activeAgent: offline));
+    await tester.pumpAndSettle();
+    expect(fakeClient.callCount, callsAfterFailure);
+    fakeClient.shouldThrow = false;
+    fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+      instances: [
+        ModelCacheInstanceDto(
+          id: 'provider-1',
+          displayName: 'P1',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: [
+            ModelCacheModelDto(
+              id: 'model-a',
+              thinkingControl: ThinkingControlDescriptorDto(
+                status: ThinkingCapabilityStatus.supported,
+                options: [ThinkingControlOptionDto(id: 'high', label: 'High')],
+              ),
+            ),
+          ],
+        ),
+      ],
+      recent: [],
+    );
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice, activeAgent: online));
+    await tester.pumpAndSettle();
+
+    expect(fakeClient.callCount, callsAfterFailure + 1);
+    expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsNothing);
+    expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+
+    // Staying Online issues no further request.
+    await tester.pumpWidget(createWidget(inputSlice: inputSlice, activeAgent: online.copyWith(name: 'A2')));
+    await tester.pumpAndSettle();
+    expect(fakeClient.callCount, callsAfterFailure + 1);
   });
 
   testWidgets(
@@ -2181,6 +2284,65 @@ void main() {
       coordinator.dispose();
       local.dispose();
       cloud.dispose();
+    });
+
+    testWidgets('an agent-less snapshot load clears the Retry of a selector on the current device (Task 124 D5)', (
+      tester,
+    ) async {
+      final impl = ProviderSetupClientImpl(connectionCoordinator: coordinator);
+      await getIt.unregister<ProviderSetupClient>();
+      getIt.registerSingleton<ProviderSetupClient>(impl);
+      final currentDevice = DeviceConfig(id: 'this-hardware', name: 'This device', hardwareId: 'this-hardware', isOnline: true);
+
+      await tester.pumpWidget(
+        createWidget(
+          inputSlice: createInputSlice(nextMessageProviderId: 'provider-1', nextMessageModel: 'model-a'),
+          activeAgent: currentDevice,
+        ),
+      );
+      // The selector's own snapshot request goes unanswered and times out.
+      await tester.pump(const Duration(seconds: 11));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsOneWidget);
+
+      // Another consumer loads the snapshot without naming a device.
+      local.clearCaptured();
+      final load = impl.modelSnapshot();
+      await tester.pump();
+      final command = local.capturedCommands.singleWhere((entry) => entry['command'] == 'model.snapshot');
+      final requestId = (command['payload'] as Map)['request_id'] as String;
+      local.debugEmitEvent({
+        'device_id': 'this-hardware',
+        'event': 'model.snapshot_result',
+        'request_id': requestId,
+        'payload': {
+          'request_id': requestId,
+          'instances': [
+            {
+              'id': 'provider-1',
+              'display_name': 'P1',
+              'status': 'ready',
+              'models': [
+                {
+                  'id': 'model-a',
+                  'thinking_control': {
+                    'status': 'supported',
+                    'options': [
+                      {'id': 'high', 'label': 'High'},
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+          'recent': <Object>[],
+        },
+      });
+      await load;
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsNothing);
+      expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
     });
 
     testWidgets(

@@ -458,10 +458,8 @@ List<Directory> _provenanceRoots(String workspace) => [
 /// Applies `--home` before any path is resolved, then mirrors the platform
 /// environment so the registry scans the same roots the daemon would.
 Map<String, String> _environmentFor(SanadCommand command) {
-  final home = command.getOption('home');
-  if (home != null && home.isNotEmpty) {
-    setSanadHomeOverride(home);
-  }
+  final home = normalizeSanadHomeOption(command.getOption('home'));
+  if (home != null) selectSanadHome(home);
   final environment = Map<String, String>.from(Platform.environment);
   environment['SANAD_HOME'] = getSanadHome();
   return environment;

@@ -88,9 +88,11 @@ class StatusBar extends StatelessWidget {
               Expanded(
                 child: Row(
                   children: [
-                    _GatewayStatusButton(
-                      status: status,
-                      foregroundColor: foregroundColor,
+                    Flexible(
+                      child: _GatewayStatusButton(
+                        status: status,
+                        foregroundColor: foregroundColor,
+                      ),
                     ),
                     if (worktreeName.isNotEmpty) ...[
                       const SizedBox(width: 4),
@@ -276,12 +278,17 @@ class _GatewayStatusButton extends StatelessWidget {
                 color: foregroundColor,
               ),
               const SizedBox(width: 6),
-              Text(
-                status.summary,
-                style: TextStyle(
-                  color: foregroundColor,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
+              Flexible(
+                child: Text(
+                  status.summary,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: foregroundColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
               const SizedBox(width: 4),

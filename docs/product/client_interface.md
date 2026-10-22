@@ -26,6 +26,14 @@ Changing the selected device changes the workspaces, conversations, provider
 configuration, and runtime state displayed by the client. It does not create a
 new conversation.
 
+The client remembers the last selected device. If that device cannot appear
+(the cloud gateway is disabled for this client, the user is signed out, or the
+cloud connection failed), the client selects the local device, or the first
+available device, instead of showing no device. It keeps remembering the
+previous device and switches back to it when it becomes available again, unless
+the user has picked or opened another device in the meantime. While a cloud
+device list is still loading, the client waits for it instead of switching.
+
 The compact Home gateway/status bar is a native-desktop surface. Web and mobile
 never render it, regardless of browser or viewport width. Its gateway and
 optional worktree badge consume only the expandable leading region; desktop
@@ -390,9 +398,13 @@ pixels and opens the same redacted multiline metrics through desktop hover,
 touch/click, or keyboard focus. Hovering or clicking the divider space does
 nothing; narrow layouts may wrap the label but must not overflow.
 The flat detail card omits lifecycle `Type`, `Trigger`, and `Status` rows. It
-shows before, after, reclaimed context, retained tail, automatic threshold,
-usable input, and full window. Before/after percentages use the daemon-owned
-usable input budget; reclaimed percentage uses the before value. Once provider
+shows before, after, reclaimed context, retained tail, automatic threshold
+and full window. Before, after and threshold percentages use the full window
+`W`, the daemon's public denominator for the threshold and the complete-request
+target (Task 118); the internal usable input budget is not shown. A before
+value above `W` is labelled as history. Reclaimed percentage uses the before
+value. A `/compact` that finds nothing to compact shows a neutral notice, not a
+failure. Once provider
 reconciliation arrives, after uses the confirmed value, marks it `Confirmed`,
 suppresses the superseded estimate, and recomputes reclaimed context from it.
 Persistence may retain the provisional estimate for bounded diagnostics.

@@ -10,6 +10,7 @@ import 'package:sanad_client/features/conversations/domain/models/device_suspend
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_command_failure.dart';
@@ -520,6 +521,71 @@ void main() {
         ),
       ),
     );
+  });
+
+  group('a correlated Gateway error is a failure, never an empty success (Task 124 D7)', () {
+    void replyError(String command) {
+      final payload = socket.capturedCommands.lastWhere((entry) => entry['command'] == command)['payload'] as Map;
+      socket.eventRouter.routeEvent({
+        'device_id': 'agent-1',
+        'event': 'error',
+        'payload': {
+          'request_id': payload['request_id'],
+          'code': 'device_unavailable',
+          'message': 'The device did not answer.',
+        },
+      });
+    }
+
+    test('getSessions throws instead of returning no conversations', () async {
+      final future = commands.getSessions(query: SessionQueryRequest(unscopedOnly: true, limit: 6));
+      replyError('get_sessions');
+      await expectLater(future, throwsA(isA<StateError>()));
+    });
+
+    test('getWorkspaces throws instead of returning no workspaces', () async {
+      final future = commands.getWorkspaces();
+      replyError('list_workspaces');
+      await expectLater(future, throwsA(isA<StateError>()));
+    });
+
+    test('searchSessions surfaces the coded rejection', () async {
+      final future = commands.searchSessions(query: 'shell');
+      replyError('search_sessions');
+      await expectLater(
+        future,
+        throwsA(isA<SessionSearchException>().having((error) => error.code, 'code', 'device_unavailable')),
+      );
+    });
+
+    test('searchSlashCommands throws instead of returning no commands', () async {
+      final future = commands.searchSlashCommands(query: 'he');
+      replyError('search_slash_commands');
+      await expectLater(future, throwsA(isA<StateError>()));
+    });
+
+    test('loadSessionHistory throws and keeps no empty history', () async {
+      final future = commands.loadSessionHistory('session-1');
+      replyError('get_session_history');
+      await expectLater(future, throwsA(isA<StateError>()));
+      expect(store.currentMessages, isEmpty);
+    });
+
+    test('createSession and deleteSession throw on a rejection', () async {
+      final created = commands.createSession(title: 'New');
+      replyError('create_session');
+      await expectLater(created, throwsA(isA<StateError>()));
+
+      final deleted = commands.deleteSession('session-1');
+      replyError('delete_session');
+      await expectLater(deleted, throwsA(isA<StateError>()));
+    });
+
+    test('updateSessionPreferences throws on a rejection', () async {
+      final future = commands.updateSessionPreferences(sessionId: 'session-1', model: 'model-a');
+      replyError('update_session_preferences');
+      await expectLater(future, throwsA(isA<StateError>()));
+    });
   });
 
   test('createWorkspace sends path and returns the created workspace', () async {
@@ -2021,6 +2087,38 @@ void main() {
       'comment': 'Use ls instead',
     });
     expect(store.currentPendingSuspendedRequest, isNotNull);
+  });
+
+  test('a secret response carries secret_values untrimmed and never an answer', () async {
+    store.activateSession('session-1');
+    const request = DeviceSuspendedRequest(
+      requestId: 'secret-1',
+      sessionId: 'session-1',
+      toolName: 'system_request_secret',
+      permissionClass: '',
+      scope: 'once',
+      workspaceId: null,
+      workspaceName: null,
+      workspacePath: null,
+      toolInput: {},
+      tool: {},
+    );
+
+    await commands.respondToSuspendedRequest(
+      request,
+      allow: true,
+      secretValues: const {'DEMO_TOKEN': ' dummy value '},
+    );
+
+    final emitted = socket.capturedCommands.last;
+    expect(emitted['command'], 'tool_permission_response');
+    expect(emitted['payload'], {
+      'session_id': 'session-1',
+      'request_id': 'secret-1',
+      'allowed': true,
+      'scope': 'once',
+      'secret_values': {'DEMO_TOKEN': ' dummy value '},
+    });
   });
 }
 

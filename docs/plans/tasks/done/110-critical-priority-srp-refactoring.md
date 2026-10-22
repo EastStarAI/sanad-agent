@@ -403,9 +403,9 @@ Candidate `6e302012` ran on two worktree-isolated test homes with distinct ident
 
 **Pre-existing gaps, the same on `origin/main` and not fixed here:**
 
-- **Cloud reconnect re-sync:** after `auth_success`, `get_sessions` can arrive before the refreshed delivery-presence interest is acknowledged. The client then times out, and an open conversation is not re-synced until it is reopened.
-- **Stale cloud device selection:** after a `--no-cloud` restart, the cloud device selection is stale.
-- **`emitWithResponse` late timeout:** it calls `off(event)` on the live socket, which also removes a newer same-event listener. This is recorded as a skipped test.
+- **Cloud reconnect re-sync:** after `auth_success`, `get_sessions` can arrive before the refreshed delivery-presence interest is acknowledged. The client then times out, and an open conversation is not re-synced until it is reopened. Fixed by [Task 124](docs/plans/tasks/124-cloud-and-client-reliability.md).
+- **Stale cloud device selection:** after a `--no-cloud` restart, the cloud device selection is stale. Fixed by [Task 124](docs/plans/tasks/124-cloud-and-client-reliability.md).
+- **`emitWithResponse` late timeout:** it calls `off(event)` on the live socket, which also removes a newer same-event listener. This is recorded as a skipped test. Fixed by [Task 124](docs/plans/tasks/124-cloud-and-client-reliability.md).
 
 ### Remaining
 

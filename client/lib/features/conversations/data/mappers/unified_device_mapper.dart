@@ -139,6 +139,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
             metadata['failure_cause'] ??
             metadata['failureCause'],
         'context_window_tokens': row['context_window_tokens'] ?? metadata['context_window_tokens'],
+        'auto_threshold_tokens': row['auto_threshold_tokens'] ?? metadata['auto_threshold_tokens'],
         'estimated_request_tokens_before':
             row['estimated_request_tokens_before'] ?? metadata['estimated_request_tokens_before'],
         'estimated_request_tokens_after':

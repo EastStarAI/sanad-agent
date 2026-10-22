@@ -6,7 +6,7 @@ import 'package:sanad_agent/core/models/user_attachment.dart';
 
 /// Conservative token estimator for compaction preflight (Plan 53c C0).
 ///
-/// Text uses a fixed chars-per-token heuristic. Model-facing image material is
+/// Text uses chars/4 for ASCII and an encoding-aware rule for other text. Model-facing image material is
 /// priced from its dimensions (tiles) rather than from the compressed or
 /// base64-encoded transport that carries it, because the transport size of an
 /// image has no relationship to what the provider charges for it. Declared
@@ -15,6 +15,12 @@ abstract final class CompactionTokenEstimator {
   CompactionTokenEstimator._();
 
   static const int charsPerToken = 4;
+
+  /// Wire keys carrying opaque provider-owned state (for example Codex
+  /// `encrypted_content` reasoning replay). The provider prices that state
+  /// under its own token model, so the text estimate never prices it; its
+  /// actual cost is known only from a proven provider receipt.
+  static const Set<String> opaqueWireKeys = {'encrypted_content'};
 
   /// Conservative tokens per ~1 KiB of media payload (image/audio/file bytes).
   static const int tokensPerKiBMedia = 85;
@@ -42,12 +48,52 @@ abstract final class CompactionTokenEstimator {
   );
   static final RegExp _longBase64Pattern = RegExp(r'^[A-Za-z0-9+/=\s]{500,}$');
 
+  /// Text estimate (Task 118b round 5). ASCII costs `ceil(chars / 4)`.
+  /// Other text is priced from its encoding, because chars/4 counted Arabic,
+  /// Cyrillic, Greek and Indic text at about half its real BPE cost: CJK,
+  /// Hangul and Kana code points cost one token each, and every other code
+  /// point costs its UTF-8 bytes, `ceil(bytes / 4)` in total. Accented Latin
+  /// barely moves. A lone surrogate is priced as a 3-byte code point.
   static int estimateText(String? text) {
     if (text == null || text.isEmpty) {
       return 0;
     }
-    return (text.length / charsPerToken).ceil();
+    var ascii = true;
+    for (final unit in text.codeUnits) {
+      if (unit > 0x7f) {
+        ascii = false;
+        break;
+      }
+    }
+    if (ascii) {
+      return (text.length / charsPerToken).ceil();
+    }
+    var dense = 0;
+    var bytes = 0;
+    for (final rune in text.runes) {
+      if (_isTokenDense(rune)) {
+        dense++;
+      } else if (rune < 0x80) {
+        bytes += 1;
+      } else if (rune < 0x800) {
+        bytes += 2;
+      } else if (rune < 0x10000) {
+        bytes += 3;
+      } else {
+        bytes += 4;
+      }
+    }
+    return dense + (bytes / charsPerToken).ceil();
   }
+
+  /// CJK, Hangul and Kana blocks, where one code point is about one token.
+  static bool _isTokenDense(int rune) =>
+      (rune >= 0x1100 && rune <= 0x11ff) ||
+      (rune >= 0x2e80 && rune <= 0x9fff) ||
+      (rune >= 0xa960 && rune <= 0xa97f) ||
+      (rune >= 0xac00 && rune <= 0xd7af) ||
+      (rune >= 0xf900 && rune <= 0xfaff) ||
+      (rune >= 0xff00 && rune <= 0xffef);
 
   /// Model-facing cost of one image at the requested detail.
   ///

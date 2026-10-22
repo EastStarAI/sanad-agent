@@ -14,8 +14,10 @@ import 'package:sanad_agent/evolution/db/session_db.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 void main() {
+  useIsolatedSanadStateRoot();
   late PersistedRuntimeStateRepository repo;
   late AgentStateDatabase db;
 

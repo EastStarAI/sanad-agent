@@ -12,6 +12,44 @@ void setSanadStateHomeOverride(String? path) {
   _sanadStateHomeOverride = path;
 }
 
+/// The Home selected with [setSanadHomeOverride], if any.
+String? get sanadHomeOverride => _sanadHomeOverride;
+
+/// Normalizes a `--home` option value: blank selects nothing, anything else
+/// becomes an absolute normalized path resolved against the working directory.
+String? normalizeSanadHomeOption(String? value) {
+  final trimmed = value?.trim();
+  if (trimmed == null || trimmed.isEmpty) return null;
+  return p.normalize(p.absolute(trimmed));
+}
+
+/// Whether this process runs the deterministic E2E runtime
+/// (`SANAD_E2E_TEST_MODE=true`), which test harnesses set together with
+/// temporary `SANAD_HOME` and `SANAD_STATE_HOME` roots.
+bool isSanadE2eTestMode() =>
+    Platform.environment['SANAD_E2E_TEST_MODE']?.trim().toLowerCase() == 'true';
+
+/// Selects [home] as this process's Sanad Home.
+///
+/// An explicit Home is authoritative and self-contained: identity,
+/// credentials, the vault and runtime state all resolve inside it, so an
+/// inherited `SANAD_HOME` or `SANAD_STATE_HOME` can never leak another Home's
+/// state into the selected one. Entry points call this before any Home access.
+///
+/// The one exception is the E2E runtime ([isSanadE2eTestMode]): its harness
+/// sets `SANAD_STATE_HOME` deliberately, separate from the identity Home, and
+/// E2E isolation requires that separation, so an explicitly set
+/// `SANAD_STATE_HOME` keeps owning runtime state there.
+void selectSanadHome(String home) {
+  setSanadHomeOverride(home);
+  final stateHome = Platform.environment['SANAD_STATE_HOME']?.trim() ?? '';
+  if (isSanadE2eTestMode() && stateHome.isNotEmpty) {
+    setSanadStateHomeOverride(null);
+    return;
+  }
+  setSanadStateHomeOverride(home);
+}
+
 /// Whether runtime state has been explicitly redirected away from the
 /// process's inherited Sanad Home.
 ///
@@ -41,14 +79,21 @@ String getSanadHome() {
     return envHome;
   }
 
-  final String? home = Platform.isWindows
-      ? Platform.environment['USERPROFILE']
-      : Platform.environment['HOME'];
-
+  final home = defaultSanadHome();
   if (home == null) {
     throw Exception("Could not determine home directory.");
   }
+  return home;
+}
 
+/// The default Sanad Home of the OS user (`$HOME/.sanad`, or
+/// `%USERPROFILE%\.sanad`), ignoring every override; `null` when the user
+/// home directory is unknown.
+String? defaultSanadHome() {
+  final String? home = Platform.isWindows
+      ? Platform.environment['USERPROFILE']
+      : Platform.environment['HOME'];
+  if (home == null) return null;
   return p.join(home, '.sanad');
 }
 

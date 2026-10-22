@@ -1,6 +1,13 @@
 import 'dart:async';
 
+import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/models/agent_response.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/context/context.dart';
@@ -64,6 +71,63 @@ class _ThrowingProviderSummarizer
   }
 }
 
+/// Route adapter whose only role here is its wire measurement (Task 118).
+class _MeasuringAdapter implements LLMAdapter, WireInputUsageMeasurer {
+  int measurements = 0;
+  LLMRequestOptions? lastOptions;
+
+  @override
+  Future<WireInputMeasurement?> measureInput(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    measurements++;
+    lastOptions = options;
+    return WireInputMeasurement(
+      estimatedTokens: CompactionTokenEstimator.estimateMessages(history),
+      stableMaterialFingerprint: 'stable',
+      inputItemFingerprints: [for (final m in history) m.content ?? ''],
+    );
+  }
+
+  @override
+  Future<int> getContextLimit([String? modelOverride]) async => 3_000;
+
+  @override
+  Future<List<ModelOption>> getAvailableModels() async => const [];
+
+  @override
+  Future<AgentResponse> generateResponse(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) => throw UnsupportedError('summaries come from the test summarizer');
+
+  @override
+  Stream<AgentResponse> generateStream(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) => throw UnsupportedError('summaries come from the test summarizer');
+}
+
+class _MeasuringRuntime extends AgentRuntimeService {
+  _MeasuringRuntime(super.config, super.repo, this.adapter);
+
+  final LLMAdapter adapter;
+
+  @override
+  RouteSignature resolveSignature({String? providerId, String? modelId}) =>
+      _route();
+
+  @override
+  LLMAdapter adapterFor(RouteSignature signature) => adapter;
+}
+
 List<IndexedConversationMessage> _heavyTimeline() {
   return [
     IndexedConversationMessage(
@@ -98,7 +162,9 @@ void main() {
     required List<IndexedConversationMessage> timeline,
     CompactionTrigger trigger = CompactionTrigger.auto,
     int contextWindowTokens = 3_000,
-    int targetRequestTokens = 2_000,
+    // Fixture sessions are small; a small complete-request target keeps
+    // manual compaction above it (Task 118 small-session no-op).
+    int targetRequestTokens = 100,
     String? compactionId,
     List<Message>? providerProjection,
   }) {
@@ -290,6 +356,67 @@ void main() {
         ),
         isFalse,
       );
+    },
+  );
+
+  test(
+    'Task 118: the coordinator measures the complete request on the route wire',
+    () async {
+      final adapter = _MeasuringAdapter();
+      final measured = CompactionCoordinator(
+        engine: ContextCompactionEngine(
+          summarizer: StructuredCompactionSummarizer(),
+        ),
+        boundaries: boundaries,
+        activation: activation,
+        projectionBuilder: ModelProjectionBuilder(
+          sessions: sessions,
+          boundaries: boundaries,
+        ),
+        runtime: _MeasuringRuntime(
+          Config(),
+          ProviderInstanceRepository.fromDatabase(state.db),
+          adapter,
+        ),
+      );
+      sessions.replaceMessages(
+        'session-a',
+        [for (final entry in _heavyTimeline()) entry.message],
+      );
+      final canonical = ModelProjectionBuilder(
+        sessions: sessions,
+        boundaries: boundaries,
+      ).loadCanonicalTimeline('session-a');
+      final request = requestFor(
+        sessionId: 'session-a',
+        compactionId: 'cmp-wire-measured',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        providerProjection: [
+          Message(role: MessageRole.system, content: 'system'),
+          for (final entry in canonical.messages) entry.message,
+        ],
+      );
+
+      final outcome = await measured.runCompaction(
+        request: request,
+        force: true,
+      );
+
+      expect(outcome?.status, CompactionStatus.completed);
+      expect(adapter.measurements, greaterThan(2));
+      expect(adapter.lastOptions, same(request.providerRequestOptions));
+      final decision = boundaries
+          .findById('cmp-wire-measured')!
+          .diagnostics!
+          .decisionSnapshot!;
+      expect(decision['fixed_overhead_measurement'], 'wire_estimate');
+      expect(decision['target_scope'], 'context_window');
     },
   );
 
@@ -561,7 +688,9 @@ void main() {
     final record = boundaries.findById(outcome.compactionId);
     expect(record?.metrics?.providerConfirmedRequestTokensAfter, 1_250);
     expect(record?.diagnostics?.postBoundary.status, 'confirmed');
-    expect(record?.diagnostics?.postBoundary.targetOutcome, TargetOutcome.unknown);
+    // Task 118: 1,250 confirmed tokens exceed the fixture's complete-request
+    // target, so the outcome is not met.
+    expect(record?.diagnostics?.postBoundary.targetOutcome, TargetOutcome.notMet);
     expect(record?.diagnostics?.postBoundary.requestId, 'req-first-call');
     expect(record?.diagnostics?.postBoundary.cachedTokens, 300);
 
@@ -980,7 +1109,7 @@ void main() {
     expect(record.diagnostics!.attempts, isNotEmpty);
     expect(record.diagnostics!.attempts.first.outcome, 'invalid_response');
     expect(record.diagnostics!.attempts.first.inputTokens, 1200);
-    expect(record.diagnostics!.decisionSnapshot?['target_scope'], 'usable_budget');
+    expect(record.diagnostics!.decisionSnapshot?['target_scope'], 'context_window');
     expect(record.diagnostics!.decisionSnapshot?['context_window'], 100_000);
   });
 

@@ -13,6 +13,7 @@ import 'package:sanad_agent/evolution/db/session_history_revision_repository.dar
 import 'package:sanad_agent/evolution/models/compaction_operation_record.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:test/test.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 RouteSignature _route() {
   return const RouteSignature(
@@ -79,6 +80,7 @@ CompactionCandidate _candidate({
 }
 
 void main() {
+  useIsolatedSanadStateRoot();
   late AgentStateDatabase state;
   late SessionDB sessions;
   late CompactionBoundaryRepository boundaries;
@@ -772,6 +774,68 @@ void main() {
     expect(persisted.diagnostics!.decisionSnapshot?['target_ratio'], 0.10);
   });
 
+  test(
+    'Task 118b D4: a failed operation records its attempts and billed usage in the accounting columns',
+    () {
+      final claim = boundaries.tryClaim(
+        compactionId: 'cmp-failed-accounting',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        sourceRange: _sourceRange(),
+        retainedTailRange: _tailRange(),
+        routeSignature: _route(),
+        startedAt: DateTime.utc(2026, 10, 21, 1),
+      );
+      expect(claim.outcome, CompactionClaimOutcome.claimed);
+
+      boundaries.failStarted(
+        compactionId: 'cmp-failed-accounting',
+        failureReason: CompactionFailureReason.summarizationFailed,
+        completedAt: DateTime.utc(2026, 10, 21, 1, 1),
+        diagnostics: const CompactionDurableDiagnostics(
+          attempts: [
+            CompactionSummarizationAttemptRecord(
+              passKind: 'full',
+              requestId: 'compaction:cmp-failed-accounting:full:0',
+              duration: Duration(seconds: 9),
+              inputTokens: 43925,
+              outputTokens: 440,
+              outcome: 'invalid_response',
+              failureReason: 'summary_schema_mismatch',
+            ),
+            CompactionSummarizationAttemptRecord(
+              passKind: 'repair',
+              requestId: 'compaction:cmp-failed-accounting:repair:1',
+              duration: Duration(seconds: 8),
+              inputTokens: 43956,
+              outputTokens: 455,
+              outcome: 'invalid_response',
+              failureReason: 'summary_invalid_json',
+            ),
+          ],
+          aggregateUsage: {
+            'input_tokens': 87881,
+            'cached_input_tokens': 1920,
+            'output_tokens': 895,
+            'duration_ms': 17000,
+          },
+        ),
+      );
+
+      final row = state.db.select(
+        'SELECT * FROM session_compaction_operations WHERE compaction_id = ?',
+        ['cmp-failed-accounting'],
+      ).single;
+      expect(row['status'], 'failed');
+      expect(row['summarization_attempts'], 2);
+      expect(row['summarization_input_tokens'], 87881);
+      expect(row['summarization_cached_input_tokens'], 1920);
+      expect(row['summarization_output_tokens'], 895);
+      expect(row['summarization_reasoning_tokens'], isNull);
+      expect(row['duration_ms'], 17000);
+    },
+  );
+
   test('reconcilePostBoundaryUsage leaves targetOutcome unknown when target_ratio is absent', () {
     final startedAt = DateTime.utc(2026, 8, 29, 1);
     final claim = boundaries.tryClaim(
@@ -815,6 +879,62 @@ void main() {
     expect(post.targetOutcome, TargetOutcome.unknown);
     expect(post.postInputRatio, closeTo(10_000 / 128_000, 0.0001));
   });
+
+  for (final (inputTokens, expected) in [
+    (25_800, TargetOutcome.met),
+    (25_801, TargetOutcome.notMet),
+  ]) {
+    test(
+      'Task 118: first confirmed post-input $inputTokens decides the complete-request target over W',
+      () {
+        final startedAt = DateTime.utc(2026, 8, 29, 1);
+        final claim = boundaries.tryClaim(
+          compactionId: 'cmp-target-$inputTokens',
+          sessionId: 'session-1',
+          trigger: CompactionTrigger.auto,
+          sourceRange: _sourceRange(),
+          retainedTailRange: _tailRange(),
+          routeSignature: _route(),
+          startedAt: startedAt,
+        );
+        boundaries.completeStarted(
+          candidate: _candidate(
+            compactionId: 'cmp-target-$inputTokens',
+            sessionId: 'session-1',
+            revision: claim.record!.sourceHistoryRevision,
+            contextWindowTokens: 258_000,
+            diagnostics: const CompactionDurableDiagnostics(
+              decisionSnapshot: {
+                'target_ratio': 0.10,
+                'target_request_tokens': 25_800,
+                'target_scope': 'context_window',
+              },
+            ),
+          ),
+          startedAt: startedAt,
+          completedAt: DateTime.utc(2026, 8, 29, 2),
+        );
+        boundaries.reservePostBoundaryDispatch(
+          compactionId: 'cmp-target-$inputTokens',
+          requestId: 'req-target',
+          routeSignature: _route(),
+          dispatchedAt: DateTime.utc(2026, 8, 29, 2, 4),
+        );
+
+        final reconciled = boundaries.reconcilePostBoundaryUsage(
+          compactionId: 'cmp-target-$inputTokens',
+          requestId: 'req-target',
+          observedAt: DateTime.utc(2026, 8, 29, 2, 5),
+          inputTokens: inputTokens,
+          routeSignature: _route(),
+        );
+
+        final post = reconciled!.diagnostics!.postBoundary;
+        expect(post.targetOutcome, expected);
+        expect(post.postInputRatio, closeTo(inputTokens / 258_000, 0.000001));
+      },
+    );
+  }
 
   test('reconcilePostBoundaryUsage rejects route mismatch and preserves pending state', () {
     final startedAt = DateTime.utc(2026, 8, 29, 1);

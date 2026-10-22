@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:logging/logging.dart';
+import 'package:sanad_agent/capabilities/secrets/secret_acquisition.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
@@ -33,10 +34,13 @@ class PendingPermissionEntry {
     required this.payload,
   });
 
+  bool get isSecretRequest => toolName == SecretToolNames.request;
+
   bool get isUserQuestion =>
-      toolName == 'system_ask_user' ||
-      (payload['questions'] is List &&
-          (payload['questions'] as List).isNotEmpty);
+      !isSecretRequest &&
+      (toolName == 'system_ask_user' ||
+          (payload['questions'] is List &&
+              (payload['questions'] as List).isNotEmpty));
 }
 
 class PermissionDecisionOutcome {
@@ -70,6 +74,13 @@ class ResolvedPermissionRecord {
 }
 
 class PlatformRuntimeBridge {
+  PlatformRuntimeBridge({SecretAcquisition? secretAcquisition})
+    : _secretAcquisitionProvided = secretAcquisition;
+
+  final SecretAcquisition? _secretAcquisitionProvided;
+  late final SecretAcquisition _secretAcquisition =
+      _secretAcquisitionProvided ?? SecretAcquisition();
+
   static final Logger _logger = Logger('PlatformRuntimeBridge');
   static const int _resolvedPermissionRetention = 256;
   final Map<String, PlatformSessionChannel> _sessionChannels = {};
@@ -353,6 +364,53 @@ class PlatformRuntimeBridge {
     return null;
   }
 
+  PermissionDecisionOutcome? _validateSecretDecision(
+    Map<String, dynamic> permissionPayload,
+    Map<String, dynamic> decision,
+  ) {
+    final failure = SecretAcquisition.validate(permissionPayload, decision);
+    if (failure == null) return null;
+    // Typed code only: the message never quotes a submitted value.
+    _logger.warning('Secret response rejected: code=${failure.code}');
+    return PermissionDecisionOutcome.failure(
+      outcome: failure.code == 'PERMISSION_DENIED'
+          ? 'permission_denied'
+          : 'invalid_decision',
+      errorCode: failure.code,
+      errorMessage: failure.message,
+    );
+  }
+
+  /// Resolves a live secret request: the values are written to the vault and
+  /// the waiting tool receives only names and an outcome.
+  Future<PermissionDecisionOutcome> _resolvePendingSecret(
+    PendingPermissionEntry pending,
+    Map<String, dynamic> payload,
+  ) async {
+    final failure = _validateSecretDecision(pending.payload, payload);
+    if (failure != null) return failure;
+    _pendingPermissionRequests.remove(pending.requestId);
+    final prepared = _secretAcquisition.prepare({
+      ...payload,
+      'session_id': pending.sessionId,
+    });
+    // Claim the request id before the vault write so a duplicate response
+    // during the write is already resolved rather than resumed again.
+    _rememberPermissionResolution(
+      pending.requestId,
+      prepared.decision,
+      sessionId: pending.sessionId,
+    );
+    await prepared.commit();
+    _rememberPermissionResolution(
+      pending.requestId,
+      prepared.decision,
+      sessionId: pending.sessionId,
+    );
+    pending.completer.complete(prepared.decision);
+    return const PermissionDecisionOutcome.success();
+  }
+
   /// Processes an incoming permission or clarification decision with strict
   /// identity and kind validation. Stale, duplicate, cross-session, or wrong-kind
   /// responses fail closed without consuming the pending request.
@@ -394,6 +452,9 @@ class PlatformRuntimeBridge {
       }
 
       // 2. Kind and consistency validation
+      if (pending.isSecretRequest) {
+        return _resolvePendingSecret(pending, event.payload);
+      }
       final kindFailure = pending.isUserQuestion
           ? _validateClarificationDecision(event.payload)
           : _validateToolDecision(event.payload);
@@ -456,6 +517,9 @@ class PlatformRuntimeBridge {
         ? getIt<SuspendedCheckpointStore>()
         : null;
 
+    // A secret response never travels on with its values: only the
+    // value-free prepared decision may be claimed, persisted or retained.
+    PreparedSecretDecision? prepared;
     if (checkpointStore != null) {
       final checkpoint = await checkpointStore.getByRequestId(requestId);
       if (checkpoint == null) {
@@ -488,12 +552,24 @@ class PlatformRuntimeBridge {
         );
       }
 
-      final isAskUser = checkpoint.toolName == 'system_ask_user';
-      final kindFailure = isAskUser
-          ? _validateClarificationDecision(event.payload)
-          : _validateToolDecision(event.payload);
-      if (kindFailure != null) {
-        return kindFailure;
+      if (checkpoint.toolName == SecretToolNames.request) {
+        final failure = _validateSecretDecision(
+          checkpoint.permissionPayload,
+          event.payload,
+        );
+        if (failure != null) return failure;
+        prepared = _secretAcquisition.prepare({
+          ...event.payload,
+          'session_id': sessionId,
+        });
+      } else {
+        final isAskUser = checkpoint.toolName == 'system_ask_user';
+        final kindFailure = isAskUser
+            ? _validateClarificationDecision(event.payload)
+            : _validateToolDecision(event.payload);
+        if (kindFailure != null) {
+          return kindFailure;
+        }
       }
     }
 
@@ -512,7 +588,8 @@ class PlatformRuntimeBridge {
           emitter: emitter,
           sessionId: sessionId,
           requestId: requestId,
-          decision: event.payload,
+          decision: prepared?.decision ?? event.payload,
+          beforeClaimAnnounced: prepared?.commit,
           onClaimSuccess: () {
             if (!claimCompleter.isCompleted) {
               claimCompleter.complete(
@@ -543,6 +620,7 @@ class PlatformRuntimeBridge {
     required String sessionId,
     required String requestId,
     required Map<String, dynamic> decision,
+    Future<void> Function()? beforeClaimAnnounced,
     required void Function() onClaimSuccess,
     required void Function(PermissionDecisionOutcome outcome) onClaimFailure,
   }) async {
@@ -554,6 +632,7 @@ class PlatformRuntimeBridge {
         decision: decision,
         emitResponse: emitter,
         onClaimed: () async {
+          await beforeClaimAnnounced?.call();
           _rememberPermissionResolution(
             requestId,
             decision,

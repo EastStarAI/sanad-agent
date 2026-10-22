@@ -672,7 +672,12 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
   @override
   String? get historyNextNewerCursor => _store.historyNextNewerCursor;
 
+  /// Re-syncs the session list and the open conversation after a reconnect or
+  /// a device re-announce. A request still in flight from an earlier attempt
+  /// may never be answered (it raced the re-announce), so this always issues a
+  /// fresh request instead of joining it.
   Future<void> synchronizeAfterReconnect() async {
+    _invalidateSessionsSnapshot();
     await getSessions();
     final activeSessionId = _store.currentSessionId;
     if (activeSessionId != null && activeSessionId.isNotEmpty && isConnected) {
@@ -701,6 +706,7 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
     String? scope,
     String? comment,
     String? answer,
+    Map<String, String>? secretValues,
   }) {
     return _commands!.respondToSuspendedRequest(
       request,
@@ -708,6 +714,7 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
       scope: scope,
       comment: comment,
       answer: answer,
+        secretValues: secretValues,
     );
   }
 

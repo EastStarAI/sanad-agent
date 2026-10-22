@@ -141,6 +141,22 @@ void main() {
       expect(env, isEmpty);
     });
 
+    test('requested user secrets follow the protected-key rule', () {
+      final rejected = <RejectedEnvironmentOverride>[];
+      final env = policy.buildChildEnvironment(
+        purpose: ChildProcessPurpose.directDeveloper,
+        inheritedEnvironment: const {'PATH': '/usr/bin'},
+        secretEnvironment: const {
+          'DEMO_TOKEN': 'dummy-token',
+          'PATH': 'dummy-path',
+          'OPENAI_API_KEY': 'dummy-key',
+        },
+        onRejectedOverride: rejected.add,
+      );
+      expect(env, {'PATH': '/usr/bin', 'DEMO_TOKEN': 'dummy-token'});
+      expect(rejected.map((r) => r.key), ['PATH', 'OPENAI_API_KEY']);
+    });
+
     test('the protected purpose never inherits the host environment', () {
       final env = policy.buildChildEnvironment(
         purpose: ChildProcessPurpose.protectedExecution,

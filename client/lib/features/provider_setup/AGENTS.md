@@ -63,3 +63,4 @@ This contract applies to `client/lib/features/provider_setup/`.
 - Details, OAuth, and model steps keep their current actions in a fixed footer for bounded hosts and let only the body scroll; unbounded Settings embedding keeps normal document flow.
 - Instance-card mutations remain scoped to the targeted card and must not replace or reload-hide the configured list.
 - OAuth polling belongs to the cubit and must stop on completion, cancellation, navigation away, or disposal.
+- Concurrent `model.snapshot` requests for the same target device share one in-flight request in `ProviderSetupClientImpl`; consumers must not issue their own parallel snapshot loads to work around it.

@@ -9,6 +9,7 @@ import 'package:sanad_agent/evolution/db/session_db.dart';
 import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:test/test.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 RouteSignature _route() => const RouteSignature(
   providerInstanceId: 'provider-1',
@@ -54,6 +55,7 @@ CompactionCandidate _candidate({
 }
 
 void main() {
+  useIsolatedSanadStateRoot();
   late Directory tempDir;
 
   setUp(() {

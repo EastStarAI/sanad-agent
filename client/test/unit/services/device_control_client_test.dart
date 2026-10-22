@@ -137,6 +137,9 @@ void main() {
 }
 
 class _MemoryInventory implements IDeviceRepository {
+  @override
+  bool get isCloudInventoryPending => true;
+
   _MemoryInventory(DeviceConfig initial) : _agents = [initial];
 
   List<DeviceConfig> _agents;

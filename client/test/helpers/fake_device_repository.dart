@@ -49,6 +49,12 @@ class FakeDeviceRepository implements IDeviceRepository {
   @override
   String? getActiveAgentId() => _activeAgentId;
 
+  /// Defaults to a cloud inventory that can still arrive, the cold-start case.
+  bool cloudInventoryPending = true;
+
+  @override
+  bool get isCloudInventoryPending => cloudInventoryPending;
+
   @override
   Future<void> setActiveAgent(String? deviceId) async {
     _activeAgentId = deviceId;

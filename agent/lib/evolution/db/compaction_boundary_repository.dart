@@ -267,6 +267,24 @@ class CompactionBoundaryRepository {
     });
   }
 
+  /// Target outcome of the first confirmed post-boundary input (Task 118
+  /// Stage3A): met when the complete request fits the target recorded over
+  /// the full window `W`. Operations recorded under the earlier usable-budget
+  /// tail-only scope, or without a target, stay `unknown`.
+  static TargetOutcome _targetOutcomeFor(
+    CompactionOperationRecord operation,
+    int inputTokens,
+  ) {
+    final snapshot = operation.diagnostics?.decisionSnapshot;
+    final target = snapshot?['target_request_tokens'];
+    if (snapshot?['target_scope'] != 'context_window' ||
+        target is! num ||
+        target <= 0) {
+      return TargetOutcome.unknown;
+    }
+    return inputTokens <= target ? TargetOutcome.met : TargetOutcome.notMet;
+  }
+
   /// Records the exact post-boundary provider confirmation, binding to the
   /// specific first request that used the compaction boundary and route.
   CompactionOperationRecord? reconcilePostBoundaryUsage({
@@ -319,10 +337,9 @@ class CompactionBoundaryRepository {
         return null;
       }
 
-      // In Stage 1, target outcome remains unknown; postInputRatio is truthfully recorded
       final w = existing.metrics!.contextWindowTokens;
       final double? postInputRatio = w > 0 ? inputTokens / w : null;
-      const targetOutcome = TargetOutcome.unknown;
+      final targetOutcome = _targetOutcomeFor(existing, inputTokens);
 
       final updatedPostStatus = CompactionPostBoundaryStatus(
         status: 'confirmed',
@@ -534,10 +551,9 @@ class CompactionBoundaryRepository {
       if (existing.diagnostics == null) {
         return null;
       }
-      // In Stage 1, target outcome remains unknown; postInputRatio is truthfully recorded
       final w = existing.metrics!.contextWindowTokens;
       final double? postInputRatio = w > 0 ? inputTokens / w : null;
-      const targetOutcome = TargetOutcome.unknown;
+      final targetOutcome = _targetOutcomeFor(existing, inputTokens);
       final updatedPostStatus = CompactionPostBoundaryStatus(
         status: 'confirmed',
         observedAt: DateTime.now().toUtc(),
@@ -624,12 +640,24 @@ class CompactionBoundaryRepository {
       final diagnosticsJson = effectiveDiagnostics != null
           ? jsonEncode(effectiveDiagnostics.toJson())
           : null;
+      // Task 118b D4: a failed operation accounts for its summarization
+      // attempts and billed usage in the same columns a completed one does.
+      // The before/after estimate columns stay NULL, so no projection metrics
+      // are implied for a failed operation.
+      final usage = diagnostics?.aggregateUsage ?? const <String, int?>{};
       tx.db.execute(
         '''
         UPDATE session_compaction_operations
         SET status = ?, failure_reason = ?, failure_detail_json = ?,
             diagnostics_json = COALESCE(?, diagnostics_json),
-            completed_at = ?
+            completed_at = ?,
+            summarization_attempts = ?,
+            summarization_input_tokens = ?,
+            summarization_cached_input_tokens = ?,
+            summarization_cache_write_tokens = ?,
+            summarization_output_tokens = ?,
+            summarization_reasoning_tokens = ?,
+            duration_ms = COALESCE(?, duration_ms)
         WHERE compaction_id = ? AND status = ?
         ''',
         [
@@ -638,6 +666,13 @@ class CompactionBoundaryRepository {
           detailJson,
           diagnosticsJson,
           completedAt.toUtc().toIso8601String(),
+          diagnostics?.attempts.length ?? 0,
+          usage['input_tokens'],
+          usage['cached_input_tokens'],
+          usage['cache_write_tokens'],
+          usage['output_tokens'],
+          usage['reasoning_tokens'],
+          usage['duration_ms'],
           compactionId,
           CompactionStatus.started.wireValue,
         ],
