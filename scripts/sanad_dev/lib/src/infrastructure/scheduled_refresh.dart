@@ -235,6 +235,16 @@ String _windowsQuoted(String value) {
       'A scheduled refresh path or argument contains a quote or line break.',
     );
   }
+  // `cmd` expands `%NAME%` inside quotes and treats `&` as a command separator
+  // outside them. Neither can be escaped reliably on a `schtasks /TR` command
+  // line (there is no literal `%` escape outside a batch file), so a value that
+  // carries either is refused instead of being handed to cmd to interpret.
+  if (value.contains('%') || value.contains('&')) {
+    throw FormatException(
+      'A scheduled refresh path or argument contains "%" or "&", which cmd.exe '
+      'would expand or split: $value',
+    );
+  }
   return '"$value"';
 }
 
@@ -361,11 +371,29 @@ String buildSanadDevRefreshScript({
     'expected_branch=\$4',
     'expected_head=\$5',
     'task_name=\$6',
+    'sleep_pid=',
+    'cancel() {',
+    '  status=\$1',
+    '  if [ -n "\${sleep_pid:-}" ]; then kill "\$sleep_pid" 2>/dev/null || true; fi',
+    '  rm -f -- "\$0"',
+    '  exit "\$status"',
+    '}',
+    // A trap that only deletes the script does not cancel the refresh: the shell
+    // resumes after the interrupted command and still pulls and restarts. Each
+    // signal trap therefore deletes the script and exits with the conventional
+    // 128+signal status, and the wait below is interruptible so the exit is
+    // immediate instead of delayed by the remaining sleep.
+    "trap 'rm -f -- \"\$0\"' EXIT",
+    "trap 'cancel 129' HUP",
+    "trap 'cancel 130' INT",
+    "trap 'cancel 143' TERM",
     'exec >>"\$log_file" 2>&1',
-    "# The script deletes itself on every exit path, including failure.",
-    "trap 'rm -f -- \"\$0\"' EXIT HUP INT TERM",
-    if (scheduler == SanadDevRefreshScheduler.detachedShell)
-      'sleep ${delay.inSeconds}',
+    if (scheduler == SanadDevRefreshScheduler.detachedShell) ...[
+      'sleep ${delay.inSeconds} &',
+      'sleep_pid=\$!',
+      'wait "\$sleep_pid" || true',
+      'sleep_pid=',
+    ],
     'echo "[refresh] start \$(date -u +%Y-%m-%dT%H:%M:%SZ) \$task_name '
         'head=\$expected_head"',
     'if [ ! -d "\$repo" ]; then '

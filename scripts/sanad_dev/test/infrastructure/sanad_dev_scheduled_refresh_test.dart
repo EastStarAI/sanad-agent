@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
 import 'package:sanad_dev/src/infrastructure/scheduled_refresh.dart';
 import 'package:test/test.dart';
 
@@ -133,8 +136,21 @@ void main() {
         );
         expect(
           plan.scriptContents,
-          contains(r'''trap 'rm -f -- "$0"' EXIT HUP INT TERM'''),
+          contains(r'''trap 'rm -f -- "$0"' EXIT'''),
         );
+        for (final trap in const [
+          r'''trap 'cancel 129' HUP''',
+          r'''trap 'cancel 130' INT''',
+          r'''trap 'cancel 143' TERM''',
+        ]) {
+          expect(
+            plan.scriptContents,
+            contains(trap),
+            reason: 'a signal trap must exit, not delete the script and resume',
+          );
+        }
+        expect(plan.scriptContents, contains('sleep 300 &'));
+        expect(plan.scriptContents, contains(r'wait "$sleep_pid" || true'));
         expect(plan.scriptContents, isNot(contains('launchctl')));
         expect(plan.scriptContents, isNot(contains('launchd')));
       },
@@ -196,7 +212,7 @@ void main() {
       expect(plan.launchArguments, containsAll(plan.scriptArguments));
       expect(
         plan.scriptContents,
-        isNot(contains('sleep')),
+        isNot(contains('sleep 90')),
         reason: 'systemd owns the delay, not the script',
       );
     });
@@ -245,6 +261,22 @@ void main() {
         ),
         throwsA(isA<FormatException>()),
       );
+      // `cmd` expands `%NAME%` and splits on `&`, and neither can be escaped on
+      // an `/TR` command line, so the value is refused instead.
+      for (final value in const ['/tmp/50%.cmd', r'C:\a&b\run.cmd']) {
+        expect(
+          () => schtasksCommandLine(scriptPath: value, arguments: const []),
+          throwsA(isA<FormatException>()),
+          reason: '$value must not be handed to cmd.exe',
+        );
+      }
+      expect(
+        schtasksCommandLine(
+          scriptPath: r'C:\Users\dev\AppData\Local\run.cmd',
+          arguments: const [r'C:\repo', '/home/dev'],
+        ),
+        r'cmd /c ""C:\Users\dev\AppData\Local\run.cmd" "C:\repo" "/home/dev""',
+      );
     });
 
     test('the plan records the branch and commit it was scheduled on', () {
@@ -274,6 +306,97 @@ void main() {
         lines.any((line) => line.contains('git -C /repo rev-parse HEAD')),
         isTrue,
       );
+    });
+
+    test('a real signal cancels the wait and deletes the script', () async {
+      if (Platform.isWindows) return;
+      final temp = await Directory.systemTemp.createTemp('sanad-refresh-sig-');
+      addTearDown(() async {
+        if (temp.existsSync()) await temp.delete(recursive: true);
+      });
+      final plan = buildSanadDevRefreshPlan(
+        repositoryRoot: temp.path,
+        workspaceRoot: temp.path,
+        homePath: p.join(temp.path, 'home'),
+        branch: 'feat/runtime-reset',
+        headCommit: 'abc1234',
+        runtimeDirectory: p.join(temp.path, 'runtime'),
+        delay: const Duration(minutes: 10),
+        scheduler: SanadDevRefreshScheduler.detachedShell,
+        now: DateTime.utc(2026, 10, 22, 12),
+      );
+      Directory(p.dirname(plan.scriptPath)).createSync(recursive: true);
+      final script = File(plan.scriptPath);
+      await script.writeAsString(plan.scriptContents);
+      await Process.run('chmod', ['700', script.path]);
+
+      final process = await Process.start('/bin/sh', [
+        script.path,
+        ...plan.scriptArguments,
+      ]);
+      addTearDown(() {
+        process.kill(ProcessSignal.sigkill);
+      });
+      // Let the shell reach the interruptible `wait`.
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+
+      final signalledAt = DateTime.now();
+      process.kill(ProcessSignal.sigterm);
+      final code = await process.exitCode.timeout(const Duration(seconds: 10));
+
+      expect(
+        code,
+        143,
+        reason: 'TERM must exit 143 instead of resuming the refresh',
+      );
+      expect(
+        script.existsSync(),
+        isFalse,
+        reason: 'the signal path deletes the script like every other exit',
+      );
+      expect(
+        DateTime.now().difference(signalledAt),
+        lessThan(const Duration(seconds: 5)),
+        reason: 'the wait must be interruptible, not a blocking sleep',
+      );
+    });
+
+    test('SIGINT exits 130 after deleting the script', () async {
+      if (Platform.isWindows) return;
+      final temp = await Directory.systemTemp.createTemp('sanad-refresh-int-');
+      addTearDown(() async {
+        if (temp.existsSync()) await temp.delete(recursive: true);
+      });
+      final plan = buildSanadDevRefreshPlan(
+        repositoryRoot: temp.path,
+        workspaceRoot: temp.path,
+        homePath: p.join(temp.path, 'home'),
+        branch: 'feat/runtime-reset',
+        headCommit: 'abc1234',
+        runtimeDirectory: p.join(temp.path, 'runtime'),
+        delay: const Duration(minutes: 10),
+        scheduler: SanadDevRefreshScheduler.detachedShell,
+        now: DateTime.utc(2026, 10, 22, 12),
+      );
+      Directory(p.dirname(plan.scriptPath)).createSync(recursive: true);
+      final script = File(plan.scriptPath);
+      await script.writeAsString(plan.scriptContents);
+      await Process.run('chmod', ['700', script.path]);
+
+      final process = await Process.start('/bin/sh', [
+        script.path,
+        ...plan.scriptArguments,
+      ]);
+      addTearDown(() {
+        process.kill(ProcessSignal.sigkill);
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+
+      process.kill(ProcessSignal.sigint);
+      final code = await process.exitCode.timeout(const Duration(seconds: 10));
+
+      expect(code, 130);
+      expect(script.existsSync(), isFalse);
     });
   });
 }

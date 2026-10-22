@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'compiled_cli_cache.dart';
+import 'path_equivalence.dart';
 import 'secure_runtime_file.dart';
 
 export 'runtime_home_restore.dart';
@@ -19,12 +20,50 @@ const sanadDevFixtureSchemaVersion = 2;
 /// Fixture directory below the invoking worktree: `<worktree>/.sanad-dev/fixtures`.
 const sanadDevFixturesDirectoryName = 'fixtures';
 
-/// Sibling staging directory used while a restore is in flight.
+/// Prefix of the sibling staging directory used while a restore is in flight.
 ///
 /// It is deliberately beside the Home, never inside it, so the Home never shows
 /// a partially restored tree, and a crashed restore is detectable and
 /// recoverable on the next run.
 const fixtureRestoreStagingDirectoryName = '.sanad-dev-reset-staging';
+
+/// Sibling staging directory that belongs to exactly one Home.
+///
+/// Every worktree Test Home lives under `<user home>/.sanad/dev/homes/`, so a
+/// fixed staging name would be shared by all of them: crash recovery in one
+/// worktree could move another Home's backed-up `state.db` into its own Home,
+/// and two parallel resets would delete each other's in-flight backups. The name
+/// therefore carries a readable Home label plus a digest of the Home's canonical
+/// path, and is only ever used for that one Home.
+String sanadDevFixtureStagingPath(String homePath) {
+  final canonicalHome = canonicalComparablePath(homePath);
+  final digest = sha256.convert(utf8.encode(canonicalHome)).toString();
+  return p.join(
+    p.dirname(canonicalHome),
+    '$fixtureRestoreStagingDirectoryName-'
+    '${_stagingHomeLabel(p.basename(canonicalHome))}-${digest.substring(0, 8)}',
+  );
+}
+
+/// Filesystem-safe, bounded label for a Home directory name.
+String _stagingHomeLabel(String homeName) {
+  final sanitized = homeName
+      .toLowerCase()
+      .replaceAll(RegExp('[^a-z0-9._-]+'), '-')
+      .replaceAll(RegExp('^-+|-+\$'), '');
+  if (sanitized.isEmpty) return 'home';
+  return sanitized.length <= 40 ? sanitized : sanitized.substring(0, 40);
+}
+
+/// True when [relativePath] belongs to the SQLite database family.
+///
+/// The comparison ignores case so a Home restored on a case-insensitive disk
+/// keeps `state.db` and its `-wal`/`-shm` sidecars in one swap group instead of
+/// splitting them into two groups that both move the same file.
+bool isFixtureDatabaseFamilyPath(String relativePath) =>
+    fixtureDatabaseFamily.contains(
+      relativePath.replaceAll('\\', '/').toLowerCase(),
+    );
 
 /// Home-relative files a fixture captures.
 ///
@@ -219,6 +258,11 @@ class HomeFixtureRestoreReport {
 /// True when [relativePath] is captured by the include allowlist and is not
 /// excluded as secret-bearing.
 ///
+/// Every comparison is case-insensitive, so a Home captured or restored on a
+/// case-insensitive macOS or Windows disk classifies `.ENV`, `State.DB`, or
+/// `MEMORIES/notes.md` exactly like its lowercase spelling instead of letting a
+/// spelling variant slip past the denylist.
+///
 /// [includeMcpConfig] enables the `mcp_config.json` opt-in; every other rule is
 /// independent of it.
 bool isFixtureCapturedPath(
@@ -242,19 +286,27 @@ bool isFixtureCapturedPath(
     if (fixtureExcludedNameSuffixes.any(segment.endsWith)) return false;
   }
   final head = lowerSegments.first;
-  if (fixtureExcludedPaths.map((path) => path.toLowerCase()).contains(head)) {
-    return false;
-  }
+  if (_fixtureExcludedPathsLower.contains(head)) return false;
   if (segments.length == 1) {
     if (fixtureOptInFiles.contains(head)) return includeMcpConfig;
-    return fixtureIncludedFiles
-        .map((path) => path.toLowerCase())
-        .contains(head);
+    return _fixtureIncludedFilesLower.contains(head);
   }
-  return fixtureIncludedDirectories
-      .map((path) => path.toLowerCase())
-      .contains(head);
+  return _fixtureIncludedDirectoriesLower.contains(head);
 }
+
+/// Lowercase forms of the path allowlist and denylist.
+///
+/// Comparing against these sets is what makes a Home classification independent
+/// of the host's casing rules.
+final Set<String> _fixtureExcludedPathsLower = {
+  for (final path in fixtureExcludedPaths) path.toLowerCase(),
+};
+final Set<String> _fixtureIncludedFilesLower = {
+  for (final path in fixtureIncludedFiles) path.toLowerCase(),
+};
+final Set<String> _fixtureIncludedDirectoriesLower = {
+  for (final path in fixtureIncludedDirectories) path.toLowerCase(),
+};
 
 /// Lists every Home-relative path currently captured by a fixture.
 ///

@@ -238,9 +238,10 @@ Future<void> handleRuntimeReset({
       );
     } on Object catch (error) {
       logError(
-        'Could not restore fixture "$fixture": $error '
-        'The runtime was stopped and no Home file was changed; rerun '
-        '"sanad-dev reset --keep-data" to start it again.',
+        'Could not restore fixture "$fixture": $error\n'
+        'The runtime is stopped and nothing was restarted. Read the message '
+        'above for the Home state; rerun this command once the Home is as you '
+        'want it, or rerun "sanad-dev reset --keep-data" to start it again.',
       );
       fail(1);
       return;

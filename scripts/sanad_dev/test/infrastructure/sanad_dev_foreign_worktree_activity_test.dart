@@ -96,6 +96,28 @@ void main() {
       );
     });
 
+    test('redacts a secret-bearing header value', () {
+      for (final command in const [
+        r'curl -H "Authorization: Bearer sk-live-9" https://example.test',
+        r"curl --header 'Authorization: Bearer sk-live-9' https://example.test",
+        r'curl -H "X-Api-Key: sk-live-9" https://example.test',
+        r'curl -H "Cookie: session=sk-live-9" https://example.test',
+      ]) {
+        final redacted = redactCommandLine(command);
+        expect(
+          redacted,
+          isNot(contains('sk-live-9')),
+          reason: '$command must not print its header value',
+        );
+        expect(redacted, contains('<redacted>'));
+      }
+      // A header that carries no secret keeps its value.
+      expect(
+        redactCommandLine(r'curl -H "Accept: application/json" https://x.test'),
+        r'curl -H "Accept: application/json" https://x.test',
+      );
+    });
+
     test('the refusal message never echoes a secret', () {
       final message = foreignWorktreeActivityMessage(
         worktreeId: 'feat-x-12345678',

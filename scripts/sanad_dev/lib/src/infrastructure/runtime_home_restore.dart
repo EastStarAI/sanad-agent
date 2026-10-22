@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import 'path_equivalence.dart';
 import 'runtime_home_fixture.dart';
 
 /// Matches a Windows drive-qualified path, which is absolute even for `p.posix`.
@@ -24,6 +25,18 @@ class _SwapRecord {
   final List<String> placed = [];
 }
 
+/// Result of putting every displaced original back.
+class _RollbackOutcome {
+  _RollbackOutcome(this.failures);
+
+  final List<String> failures;
+
+  bool get succeeded => failures.isEmpty;
+}
+
+/// Name of the marker file that records which Home a staging directory serves.
+const _stagingHomeMarkerName = 'staging-home';
+
 /// Restores a saved fixture into [homePath].
 ///
 /// The restore is fail-closed and two-phase:
@@ -32,16 +45,25 @@ class _SwapRecord {
 ///    resolved inside the canonical Home. Absolute paths, `..` traversal, and
 ///    any symbolic link in an intermediate directory are refused before a
 ///    single Home path is touched.
-/// 2. The whole fixture is staged beside the Home, then swapped per top-level
-///    entry group with a rollback journal. The `state.db` family is one group,
-///    so a database is never published with mismatched `-wal`/`-shm` sidecars.
+/// 2. The whole fixture is staged beside the Home, in a directory keyed by that
+///    Home, then swapped per top-level entry group with a rollback journal. The
+///    `state.db` family is one group, so a database is never published with
+///    mismatched `-wal`/`-shm` sidecars. Because the staging directory belongs to
+///    exactly one Home, a crashed or parallel restore of another Home can never
+///    move this Home's originals or delete this Home's backups.
 ///
 /// Files outside the captured set (secrets, journals, logs, media, `dev/`) are
 /// preserved untouched: they are never read, moved, or deleted.
+///
+/// [abortSwapAfterDisplacing] is a test seam: when it returns true for a group,
+/// that group's swap is reported as failed after its Home files were displaced,
+/// so the rollback contract can be exercised against a real Home without waiting
+/// for a filesystem failure.
 Future<HomeFixtureRestoreReport> restoreHomeFixture({
   required String workspaceRoot,
   required String homePath,
   required String name,
+  bool Function(String group)? abortSwapAfterDisplacing,
 }) async {
   final manifest = await readHomeFixtureManifest(
     workspaceRoot: workspaceRoot,
@@ -112,14 +134,12 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
     entries.add(_ValidatedEntry(relativePath: relative, bytes: bytes));
   }
 
-  final stagingRoot = p.join(
-    p.dirname(canonicalHome),
-    fixtureRestoreStagingDirectoryName,
-  );
+  final stagingRoot = sanadDevFixtureStagingPath(canonicalHome);
   final stagedRoot = p.join(stagingRoot, 'new');
   final backupRoot = p.join(stagingRoot, 'backup');
-  // A crashed restore leaves displaced originals beside the Home; put them back
-  // before doing anything else so the Home is never left short an entry.
+  // A crashed restore leaves displaced originals in this Home's own staging
+  // directory; put them back before doing anything else so the Home is never
+  // left short an entry. Recovery never looks at another Home's staging.
   await _recoverLeftoverStaging(
     canonicalHome: canonicalHome,
     stagingRoot: stagingRoot,
@@ -132,8 +152,12 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
   final manifestPaths = entries.map((entry) => entry.relativePath).toSet();
   final removedFiles = before.where((path) => !manifestPaths.contains(path)).length;
 
+  // A failed rollback must keep the displaced originals, so the staging
+  // directory survives this call and its path is printed for the operator.
+  var keepStaging = false;
   try {
     await sanadDevCreateOwnerOnlyDirectory(stagingRoot);
+    await _writeStagingHomeMarker(stagingRoot, canonicalHome);
     await sanadDevCreateOwnerOnlyDirectory(stagedRoot);
     await sanadDevCreateOwnerOnlyDirectory(backupRoot);
     for (final entry in entries) {
@@ -156,7 +180,16 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
     }
 
     final groups = <String, Set<String>>{};
-    for (final path in {...before, ...manifestPaths}) {
+    // A case-insensitive disk reports one file under two spellings; keep the
+    // manifest's spelling so the group still swaps that file exactly once.
+    final byComparablePath = <String, String>{};
+    for (final path in before) {
+      byComparablePath.putIfAbsent(_comparableRestorePath(path), () => path);
+    }
+    for (final path in manifestPaths) {
+      byComparablePath[_comparableRestorePath(path)] = path;
+    }
+    for (final path in byComparablePath.values) {
       groups.putIfAbsent(_restoreGroupKey(path), () => <String>{}).add(path);
     }
     final orderedGroups = groups.keys.toList()
@@ -187,6 +220,11 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
           File(current).renameSync(backup);
           record.displaced.add(relative);
         }
+        if (abortSwapAfterDisplacing?.call(group) ?? false) {
+          throw StateError(
+            'the swap of "$group" was aborted after displacing its Home files',
+          );
+        }
         for (final relative in members) {
           if (!manifestPaths.contains(relative)) continue;
           final staged = p.join(stagedRoot, relative);
@@ -203,8 +241,10 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
         canonicalHome: canonicalHome,
         backupRoot: backupRoot,
       );
+      keepStaging = !rollback.succeeded;
       throw StateError(
-        'Sanad fixture "$name" could not be restored: $error. $rollback',
+        'Sanad fixture "$name" could not be restored: $error '
+        '${_rollbackMessage(rollback, canonicalHome: canonicalHome, stagingRoot: stagingRoot)}',
       );
     }
 
@@ -218,23 +258,32 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
       preservedPaths: fixtureExcludedPaths.toList(growable: false),
     );
   } finally {
-    _deleteTree(stagingRoot);
+    if (!keepStaging) _deleteTree(stagingRoot);
   }
+}
+
+/// Path form used to decide whether two fixture entries are the same file.
+///
+/// macOS and Windows disks are case-insensitive by default, so `STATE.DB` and
+/// `state.db` are one file there and must never be swapped as two entries.
+String _comparableRestorePath(String relativePath) {
+  final normalized = relativePath.replaceAll('\\', '/');
+  return Platform.isLinux ? normalized : normalized.toLowerCase();
 }
 
 /// Group key for the swap: the database family moves as one unit.
 String _restoreGroupKey(String relativePath) {
   final normalized = relativePath.replaceAll('\\', '/');
-  return fixtureDatabaseFamily.contains(normalized)
-      ? 'state.db'
-      : normalized;
+  return isFixtureDatabaseFamilyPath(normalized) ? 'state.db' : normalized;
 }
 
 /// Order groups so the database family is swapped first and files precede
 /// directories (a directory member must never be confused with a file member).
 int _restoreGroupRank(String group) {
   if (group == 'state.db') return 0;
-  return group.contains('/') || fixtureIncludedDirectories.contains(group)
+  final lower = group.toLowerCase();
+  return group.contains('/') ||
+          fixtureIncludedDirectories.any((name) => name.toLowerCase() == lower)
       ? 2
       : 1;
 }
@@ -316,11 +365,61 @@ String _canonicalDirectory(String path, {required String description}) {
   }
 }
 
+/// Records which Home a staging directory serves.
+///
+/// Recovery refuses a staging directory whose marker names another Home, so even
+/// a hand-made or renamed directory can never move one Home's originals into a
+/// different Home.
+Future<void> _writeStagingHomeMarker(
+  String stagingRoot,
+  String canonicalHome,
+) async {
+  final marker = File(p.join(stagingRoot, _stagingHomeMarkerName));
+  await marker.writeAsString(
+    '${canonicalComparablePath(canonicalHome)}\n',
+    flush: true,
+  );
+  await sanadDevRestrictOwnerOnly(marker.path);
+}
+
+/// Refuses a staging directory that records a different Home.
+Future<void> _assertStagingBelongsTo({
+  required String stagingRoot,
+  required String canonicalHome,
+}) async {
+  final marker = File(p.join(stagingRoot, _stagingHomeMarkerName));
+  if (!marker.existsSync()) return;
+  final recorded = (await marker.readAsString()).trim();
+  if (recorded.isEmpty) return;
+  if (equivalentPaths(recorded, canonicalComparablePath(canonicalHome))) return;
+  throw StateError(
+    'Refusing to recover the Sanad fixture staging directory $stagingRoot: it '
+    'belongs to the Home $recorded, not to $canonicalHome. Inspect that Home, '
+    'then delete $stagingRoot before retrying. No Home file was changed.',
+  );
+}
+
 /// Puts displaced originals back when a previous restore was interrupted.
+///
+/// It only ever reads and deletes [stagingRoot], which is keyed by
+/// [canonicalHome], so recovery for one Home cannot move or delete another
+/// Home's in-flight backups.
 Future<void> _recoverLeftoverStaging({
   required String canonicalHome,
   required String stagingRoot,
 }) async {
+  final type = FileSystemEntity.typeSync(stagingRoot, followLinks: false);
+  if (type == FileSystemEntityType.notFound) return;
+  if (type != FileSystemEntityType.directory) {
+    throw StateError(
+      'The Sanad fixture staging path $stagingRoot is not a directory. Remove '
+      'it and retry. No Home file was changed.',
+    );
+  }
+  await _assertStagingBelongsTo(
+    stagingRoot: stagingRoot,
+    canonicalHome: canonicalHome,
+  );
   final backupRoot = p.join(stagingRoot, 'backup');
   if (Directory(backupRoot).existsSync()) {
     for (final entity in Directory(
@@ -355,30 +454,59 @@ String? _firstUnexpectedStagingPath({
   return null;
 }
 
-String _rollback({
+/// Restores every displaced original, collecting failures instead of throwing.
+///
+/// A rollback that cannot finish must not be reported as a success and must not
+/// take the surviving backups with it, so every step is attempted and every
+/// failure is returned to the caller.
+_RollbackOutcome _rollback({
   required List<_SwapRecord> journal,
   required String canonicalHome,
   required String backupRoot,
 }) {
+  final failures = <String>[];
   for (final record in journal.reversed) {
     for (final relative in record.placed.reversed) {
-      final destination = p.join(canonicalHome, relative);
-      if (File(destination).existsSync()) {
-        File(destination).deleteSync();
+      try {
+        final destination = p.join(canonicalHome, relative);
+        if (File(destination).existsSync()) {
+          File(destination).deleteSync();
+        }
+      } on Object catch (error) {
+        failures.add('could not remove the restored $relative: $error');
       }
     }
     for (final relative in record.displaced.reversed) {
-      final backup = p.join(backupRoot, relative);
-      if (!File(backup).existsSync()) continue;
-      final destination = p.join(canonicalHome, relative);
-      Directory(p.dirname(destination)).createSync(recursive: true);
-      if (File(destination).existsSync()) {
-        File(destination).deleteSync();
+      try {
+        final backup = p.join(backupRoot, relative);
+        if (!File(backup).existsSync()) continue;
+        final destination = p.join(canonicalHome, relative);
+        Directory(p.dirname(destination)).createSync(recursive: true);
+        if (File(destination).existsSync()) {
+          File(destination).deleteSync();
+        }
+        File(backup).renameSync(destination);
+      } on Object catch (error) {
+        failures.add('could not put back $relative: $error');
       }
-      File(backup).renameSync(destination);
     }
   }
-  return 'The Home was rolled back to its previous state.';
+  return _RollbackOutcome(failures);
+}
+
+/// Operator-facing sentence for a rollback result.
+String _rollbackMessage(
+  _RollbackOutcome outcome, {
+  required String canonicalHome,
+  required String stagingRoot,
+}) {
+  if (outcome.succeeded) {
+    return 'The Home was rolled back to its previous state.';
+  }
+  return 'The Home could not be rolled back: ${outcome.failures.join('; ')}. '
+      'The displaced originals are preserved in $stagingRoot. Move them back '
+      'into $canonicalHome by hand before starting the runtime; the next '
+      '"sanad-dev reset --fixture" run tries the same recovery first.';
 }
 
 void _deleteTree(String path) {

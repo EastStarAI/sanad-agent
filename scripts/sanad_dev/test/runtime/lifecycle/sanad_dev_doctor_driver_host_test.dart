@@ -69,6 +69,10 @@ void main() {
       // The real defaults run here: on macOS they call AXIsProcessTrusted and
       // CGPreflightScreenCaptureAccess through dart:ffi. A prompting
       // alternative would raise a consent dialog during this test run.
+      //
+      // Tagged `tcc` because it is the only test in this suite that reaches the
+      // real OS privacy state: an agent session must be able to exclude it with
+      // `--exclude-tags=tcc` without skipping the passive classification tests.
       final accessibility = await sanad_dev.probeAccessibilityGrant();
       final screen = await sanad_dev.probeScreenRecordingGrant();
 
@@ -99,7 +103,7 @@ void main() {
           contains('System Settings > Privacy & Security'),
         ),
       );
-    });
+    }, tags: 'tcc');
 
     test('the grant path never asks the OS for permission', () async {
       final doctorSource = await File(

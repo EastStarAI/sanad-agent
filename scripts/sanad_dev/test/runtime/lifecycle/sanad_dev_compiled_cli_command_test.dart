@@ -134,4 +134,62 @@ void main() {
       expect(exitCodes, [64]);
     });
   });
+
+  group('cache read lock', () {
+    test('is released as soon as the binary has started', () async {
+      // A long `sanad-dev cli agent -- …` session must not block a rebuild for
+      // its whole lifetime, so the shared lock covers only the launch.
+      final cache = CompiledCliCache(
+        workspaceRoot: fixture.path,
+        repositoryRoot: runtime.repositoryRoot,
+      );
+      const component = CompiledCliComponent.agent;
+      final cacheKey = await cache.resolveCacheKey();
+      final lockFile = File(
+        p.join(
+          cache.cacheRoot,
+          cacheKey,
+          compiledCliLockFileName(component),
+        ),
+      )..createSync(recursive: true);
+      final releaseChild = p.join(fixture.path, 'release-child');
+      var childExited = false;
+
+      final run = sanad_dev
+          .runCompiledCliArtifactUnderCacheLock(
+            cache,
+            component,
+            '/bin/sh',
+            [
+              '-c',
+              'while [ ! -f "\$1" ]; do sleep 1; done',
+              'sh',
+              releaseChild,
+            ],
+          )
+          .whenComplete(() => childExited = true);
+
+      // Let the child start before a second caller tries the same lock.
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(childExited, isFalse, reason: 'the child is still running');
+
+      await cache
+          .withReadLock(component, () async {})
+          .timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => fail(
+              'the cache lock was still held by the running child',
+            ),
+          );
+
+      expect(
+        childExited,
+        isFalse,
+        reason: 'a rebuild must be able to run while the child is alive',
+      );
+      File(releaseChild).writeAsStringSync('go');
+      expect(await run, 0);
+      expect(lockFile.existsSync(), isTrue);
+    }, timeout: const Timeout(Duration(seconds: 30)));
+  });
 }

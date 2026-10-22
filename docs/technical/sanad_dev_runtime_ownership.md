@@ -312,8 +312,12 @@ Two callers can race, and an interrupted build must not leave a usable artifact:
   interrupted build leaves neither artifact nor stamp.
 - Every publish prunes older commit directories beyond the three most recent and
   never removes the directory it just published.
-- `cli path` and `cli <component>` take the shared half of the lock, so a reader
-  never observes a half-published bundle.
+- `cli path` and `cli <component>` take the shared half of the lock only while
+  the artifact is started, so a reader never observes a half-published bundle and
+  a long child run never blocks a rebuild. A rebuild publishes into a new
+  `<sha>/` directory and never rewrites the inode a running child already exec'd,
+  so holding the shared lock for the child's whole lifetime bought nothing and
+  blocked every rebuild for up to 15 minutes.
 
 | Command | Effect |
 | --- | --- |
@@ -384,18 +388,31 @@ the Home with no symbolic link in any intermediate segment. The Home target is
 validated before the fixture bytes are read, so a Home reached through a symlinked
 parent refuses with a symbolic-link error instead of a checksum error.
 
-Restore then stages every captured file into a sibling directory
-`<home parent>/.sanad-dev-reset-staging/` (never inside the Home, so it can be
-found again), removes captured files the fixture does not contain, and swaps each
-top-level group — the `state.db` family travels as one group so the database and
-its WAL/SHM sidecars never diverge — into place with same-filesystem renames. A
-group that fails mid-swap is restored from the retained original, and a crashed
-run is rolled back on the next attempt from the same staging directory, so the
-message `The Home was rolled back to its previous state.` is always true. No
-destination file is ever half-written, and no excluded path is read, replaced, or
-deleted — the gateway credential, `.env`, journals, logs, media, and runtime
-leases survive a restore untouched. A missing, partial, or corrupt fixture fails
-closed before the runtime is started.
+Restore then stages every captured file into a per-Home sibling directory,
+`<home parent>/.sanad-dev-reset-staging-<home label>-<home digest>/` (never inside
+the Home, so it can be found again). The staging directory is keyed by the Home's
+canonical path because every worktree Test Home shares the `homes/` parent: a
+fixed name let crash recovery in one worktree move another Home's backed-up
+`state.db` into its own Home and let two parallel resets delete each other's
+in-flight backups. Recovery reads and deletes only its own staging directory, and
+a `staging-home` marker inside it refuses recovery when the recorded Home differs
+from the Home being restored.
+
+The swap removes captured files the fixture does not contain and moves each
+top-level group — the `state.db` family travels as one group, matched
+case-insensitively so a case-insensitive disk keeps the database and its
+WAL/SHM sidecars together — into place with same-filesystem renames. A group that
+fails mid-swap is restored from the retained original, and a crashed run is
+rolled back on the next attempt from the same staging directory.
+
+When the rollback itself fails, the staging directory is kept rather than deleted,
+and the message names its path together with what to move back by hand, so a
+failure never silently discards the only copy of a Home file. The success message
+`The Home was rolled back to its previous state.` is therefore always true, and a
+failed rollback never prints it. No destination file is ever half-written, and no
+excluded path is read, replaced, or deleted — the gateway credential, `.env`,
+journals, logs, media, and runtime leases survive a restore untouched. A missing,
+partial, or corrupt fixture fails closed before the runtime is started.
 
 ### `sanad-dev apply`
 
@@ -410,6 +427,7 @@ prints the action, one reason per matched row, and up to three example paths.
 | `scripts/sanad_dev/**`, `scripts/sanad-dev*` | `stop` + `run` |
 | `agent/**` | `restart agent` |
 | `client/lib/main.dart`, `client/lib/driver_main.dart`, files containing `bootstrap`/`startup`, and files under a `di/` or `startup/` directory | `restart client` |
+| `client/lib/l10n/**`, `client/l10n.yaml`, any `client/**.arb` | `stop` + `run` (localizations must be regenerated) |
 | `client/pubspec.yaml`, `client/pubspec.lock`, `client/assets/**` (any extension), `client/{macos,windows,linux,web,ios,android}/**` | `stop` + `run` |
 | other `client/lib/**.dart` | `reload client` |
 | `shared/**`, `release/contract/**` | `restart agent` + `restart client` |
@@ -418,6 +436,10 @@ prints the action, one reason per matched row, and up to three example paths.
 `stop + run` subsumes every other action and `restart client` subsumes
 `reload client`. Pubspec, asset, plugin, and native changes are compiled into the
 desktop bundle, so a hot restart cannot apply them and they select `stop + run`.
+An `.arb` or `l10n.yaml` change is build input for the generated
+`app_localizations*.dart`, so a hot reload keeps showing the old strings and a hot
+restart cannot regenerate them: it selects `stop + run`, and the printed reason
+says the strings must be regenerated.
 The documentation row deliberately runs before the asset row and matches
 `client/assets/**` as an exception, so a `.md` or `.yaml` asset never falls into
 `none`. A requested driver-mode change (the running pair has no
@@ -425,12 +447,21 @@ The documentation row deliberately runs before the asset row and matches
 `source_commit` recorded in the launcher lease at launch; a lease that predates
 that field yields a note and inspects the working tree only.
 
-After a successful `apply`, the command records a worktree signature in
-`<runtime directory>/apply-baseline.json` and reports `up to date` on the next run
-while the tree is unchanged. The signature is content-sensitive — the porcelain
-status plus `git diff HEAD` plus each untracked file's size and mtime — because
-the status list alone cannot tell a second edit of the same file apart. Without
-that, editing an already-dirty file would be silently treated as already applied.
+After a successful `apply`, the command records a per-path content snapshot in
+`<runtime directory>/apply-baseline.json`: the repository-relative path of every
+changed file mapped to a SHA-256 of the bytes that were applied (or the marker
+`missing` for a deletion). The next run drops a candidate path only when its
+current content still hashes to the recorded value, so an already-applied
+working-tree edit is not reported twice and a second edit of the same file is. The
+earlier whole-worktree signature could not do this: `git diff --name-only <start
+commit>` reports a tracked working-tree edit on every call regardless of the
+signature, so a tracked file repeated forever while only an untracked file
+appeared idempotent.
+
+The snapshot advances only for the paths whose actions actually ran. An action
+skipped because its target — typically the Client — is not running stays
+unrecorded, keeps the older commit baseline, and is reported again by the next
+`apply`, which prints `Skipped …, start one, then rerun apply`.
 
 ### `status` is read-only
 
@@ -493,20 +524,30 @@ for.
 
 The scheduled script receives the repository, branch, expected commit, runtime CLI
 path, and Home as positional arguments (`$1`…`$6`) instead of interpolating them
-into shell text, and opens with a trap that deletes both the task and the script
-however the run ends. Before touching anything it refuses to continue when the
-branch is not the recorded one or `HEAD` is no longer the commit that was current
-when the schedule was created, so a schedule cannot land on unrelated new work.
+into shell text, and every exit path deletes the script. Signals cancel the run:
+`HUP`/`INT`/`TERM` delete the script and exit `129`/`130`/`143`, and the delay
+itself runs as a background `sleep` that the script `wait`s on, so the trap fires
+immediately instead of after the remaining delay. A trap that only deleted the
+script would let the shell resume the interrupted command and still pull and
+restart. Before touching anything the script refuses to continue when the branch
+is not the recorded one or `HEAD` is no longer the commit that was current when
+the schedule was created, so a schedule cannot land on unrelated new work.
 Every git call runs with `GIT_TERMINAL_PROMPT=0` (and a `BatchMode` SSH command),
 because a scheduled job has no terminal to answer a credential prompt.
 
 A successful run performs `git -C <repo> pull --ff-only`, then `sanad-dev setup`
 (the prepared runtime CLI must match the new source), then `sanad-dev restart
 agent` and `sanad-dev restart client`, appending everything to
-`<runtime directory>/refresh/<task>.log`, and finally deletes itself. After
-scheduling, `refresh` prints the task name, fire time, script path, log path, and
-the exact verification commands (`git -C <repo> rev-parse HEAD`, `sanad-dev
-status`, bounded Agent/Client logs).
+`<runtime directory>/refresh/<task>.log`, and finally deletes itself. When the
+scheduler itself fails (`systemd-run`/`schtasks` non-zero, or a value `cmd.exe`
+cannot represent), `refresh` prints the scheduler error, deletes the script it
+just wrote, returns non-zero, and prints none of the success lines; a leftover
+script with no schedule would look like a pending refresh. A Windows `/TR`
+command line refuses a value containing `%` or `&`, because `cmd.exe` expands
+`%NAME%` inside quotes and has no reliable escape for it. After scheduling,
+`refresh` prints the task name, fire time, script path, log path, and the exact
+verification commands (`git -C <repo> rev-parse HEAD`, `sanad-dev status`, bounded
+Agent/Client logs).
 
 ### Restart build guard
 
@@ -526,7 +567,11 @@ Command lines are redacted before they are printed or logged. A token that looks
 like a secret assignment (`--dart-define=SANAD_TOKEN=…`, `--api-key=…`,
 `*PASSWORD*=`…) keeps its name and loses its value, including when the value is
 nested inside a `--dart-define` payload, and a `--flag value` pair with a
-secret-like flag name loses the separate value too. The detector is a pure
+secret-like flag name loses the separate value too. A header flag (`-H`,
+`--header`, `-b`, `--cookie`) names no secret itself, so its value is redacted when
+the header name before the first `:` is secret-like — `-H "Authorization: Bearer
+…"`, `-H 'X-Api-Key: …'`, and a shell-split `-H Authorization: …` all lose the
+value while `-H "Accept: application/json"` keeps it. The detector is a pure
 function, so the printed list can be asserted in tests without spawning a build.
 
 ## Detached background launch

@@ -125,6 +125,24 @@ void main() {
       expect(decision.actionLabel, 'reload client, restart agent');
     });
 
+    test('client localization sources need a fresh build, not a hot restart', () {
+      for (final path in const [
+        'client/lib/l10n/app_en.arb',
+        'client/lib/l10n/app_ar.arb',
+        'client/l10n.yaml',
+        'client/lib/l10n/untranslated.txt',
+      ]) {
+        final decision = sanad_dev.decideSanadDevApply(changedPaths: [path]);
+        expect(
+          decision.actions,
+          [sanad_dev.SanadDevApplyAction.restartRuntime],
+          reason: '$path must regenerate localizations before the Client can '
+              'show the new strings',
+        );
+        expect(decision.reasons.single, contains('regenerated'));
+      }
+    });
+
     test('shared packages restart both components', () {
       expect(actionsFor(['shared/auth_lock/lib/auth_lock.dart']), [
         sanad_dev.SanadDevApplyAction.restartClient,
@@ -277,22 +295,32 @@ void main() {
       expect(changed.paths, ['new_name.dart']);
     });
 
-    test('an applied working-tree signature makes a repeat apply a no-op', () async {
+    test('a TRACKED edit that was applied is not reported again', () async {
+      // A tracked working-tree edit is what the reviewer reproduced:
+      // `git diff --name-only <start>` lists it on every call, so only the
+      // recorded content snapshot can make the repeat a no-op.
+      final tracked = File(p.join(repository.path, 'tracked.dart'));
+      await tracked.writeAsString('// committed\n');
+      await git(['add', 'tracked.dart']);
+      await git(['commit', '-q', '-m', 'add tracked']);
       final start = await head();
-      await File(
-        p.join(repository.path, 'client_change.dart'),
-      ).writeAsString('// uncommitted\n');
+      await tracked.writeAsString('// first edit\n');
+
       final first = await sanad_dev.inspectChangedPaths(
         repositoryRoot: repository.path,
         startCommit: start,
       );
-      expect(first.paths, ['client_change.dart']);
+      expect(first.paths, ['tracked.dart']);
 
-      // This is exactly what `apply` records after a successful run.
       final repeated = await sanad_dev.inspectChangedPaths(
         repositoryRoot: repository.path,
         startCommit: start,
-        appliedWorktreeSignature: first.worktreeSignature,
+        appliedFingerprints: {
+          'tracked.dart': sanad_dev.sanadDevApplyPathFingerprint(
+            repository.path,
+            'tracked.dart',
+          ),
+        },
       );
 
       expect(repeated.paths, isEmpty);
@@ -302,26 +330,79 @@ void main() {
       );
     });
 
-    test('a new edit after an applied baseline is reported again', () async {
+    test('an applied untracked edit is not reported again', () async {
       final start = await head();
-      await File(
-        p.join(repository.path, 'client_change.dart'),
-      ).writeAsString('// first\n');
+      final untracked = File(p.join(repository.path, 'client_change.dart'));
+      await untracked.writeAsString('// uncommitted\n');
       final first = await sanad_dev.inspectChangedPaths(
         repositoryRoot: repository.path,
         startCommit: start,
       );
-      await File(
-        p.join(repository.path, 'client_change.dart'),
-      ).writeAsString('// second\n');
+      expect(first.paths, ['client_change.dart']);
 
       final repeated = await sanad_dev.inspectChangedPaths(
         repositoryRoot: repository.path,
         startCommit: start,
-        appliedWorktreeSignature: first.worktreeSignature,
+        appliedFingerprints: {
+          'client_change.dart': sanad_dev.sanadDevApplyPathFingerprint(
+            repository.path,
+            'client_change.dart',
+          ),
+        },
       );
 
-      expect(repeated.paths, ['client_change.dart']);
+      expect(repeated.paths, isEmpty);
+    });
+
+    test('a second edit of a tracked file is reported again', () async {
+      final tracked = File(p.join(repository.path, 'tracked.dart'));
+      await tracked.writeAsString('// committed\n');
+      await git(['add', 'tracked.dart']);
+      await git(['commit', '-q', '-m', 'add tracked']);
+      final start = await head();
+      await tracked.writeAsString('// first edit\n');
+      final fingerprint = sanad_dev.sanadDevApplyPathFingerprint(
+        repository.path,
+        'tracked.dart',
+      );
+      await tracked.writeAsString('// second edit\n');
+
+      final repeated = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repository.path,
+        startCommit: start,
+        appliedFingerprints: {'tracked.dart': fingerprint},
+      );
+
+      expect(repeated.paths, ['tracked.dart']);
+    });
+
+    test('an applied deletion is not reported again', () async {
+      final deleted = File(p.join(repository.path, 'gone.dart'));
+      await deleted.writeAsString('// going away\n');
+      await git(['add', 'gone.dart']);
+      await git(['commit', '-q', '-m', 'add gone']);
+      final start = await head();
+      deleted.deleteSync();
+
+      final first = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repository.path,
+        startCommit: start,
+      );
+      expect(first.paths, ['gone.dart']);
+      expect(
+        sanad_dev.sanadDevApplyPathFingerprint(repository.path, 'gone.dart'),
+        sanad_dev.sanadDevApplyMissingPathFingerprint,
+      );
+
+      final repeated = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repository.path,
+        startCommit: start,
+        appliedFingerprints: {
+          'gone.dart': sanad_dev.sanadDevApplyMissingPathFingerprint,
+        },
+      );
+
+      expect(repeated.paths, isEmpty);
     });
   });
 
@@ -336,18 +417,73 @@ void main() {
         path,
         const sanad_dev.SanadDevApplyBaseline(
           commit: 'abc1234',
-          worktreeSignature: 'signature',
+          files: {'client/lib/a.dart': 'hash-a'},
         ),
       );
       final restored = await sanad_dev.readSanadDevApplyBaseline(path);
       expect(restored!.commit, 'abc1234');
-      expect(restored.worktreeSignature, 'signature');
+      expect(restored.files, {'client/lib/a.dart': 'hash-a'});
 
       await File(path).writeAsString('not json');
       expect(await sanad_dev.readSanadDevApplyBaseline(path), isNull);
 
-      await File(path).writeAsString(jsonEncode({'commit': '', 'worktree_signature': ''}));
+      await File(path).writeAsString(jsonEncode({'commit': '', 'files': {}}));
       expect(await sanad_dev.readSanadDevApplyBaseline(path), isNull);
+    });
+
+    test('a skipped action keeps the change pending', () async {
+      final directory = await Directory.systemTemp.createTemp('sanad-skip-');
+      addTearDown(() => directory.delete(recursive: true));
+      final repositoryRoot = directory.path;
+      Future<void> git(List<String> arguments) async {
+        final result = await Process.run('git', [
+          '-C',
+          repositoryRoot,
+          ...arguments,
+        ]);
+        if (result.exitCode != 0) {
+          throw StateError('git ${arguments.join(' ')} failed: ${result.stderr}');
+        }
+      }
+
+      await git(['init', '-q']);
+      Directory(p.join(repositoryRoot, 'client/lib')).createSync(recursive: true);
+      Directory(p.join(repositoryRoot, 'agent/lib')).createSync(recursive: true);
+      await File(
+        p.join(repositoryRoot, 'client/lib/view.dart'),
+      ).writeAsString('// client\n');
+      await File(
+        p.join(repositoryRoot, 'agent/lib/daemon.dart'),
+      ).writeAsString('// a\n');
+      final decision = sanad_dev.decideSanadDevApply(
+        changedPaths: const [
+          'client/lib/view.dart',
+          'agent/lib/daemon.dart',
+        ],
+      );
+      expect(decision.actionsByPath['client/lib/view.dart'], [
+        sanad_dev.SanadDevApplyAction.reloadClient,
+      ]);
+
+      // The Client is not running: only the Agent action ran.
+      final recorded = sanad_dev.sanadDevApplyRecordedFingerprints(
+        repositoryRoot: repositoryRoot,
+        decision: decision,
+        skippedActions: const {sanad_dev.SanadDevApplyAction.reloadClient},
+      );
+
+      expect(recorded.keys, ['agent/lib/daemon.dart']);
+      expect(
+        recorded.containsKey('client/lib/view.dart'),
+        isFalse,
+        reason: 'a skipped change must stay unrecorded so apply reports it again',
+      );
+      final repeated = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repositoryRoot,
+        startCommit: null,
+        appliedFingerprints: recorded,
+      );
+      expect(repeated.paths, ['client/lib/view.dart']);
     });
   });
 

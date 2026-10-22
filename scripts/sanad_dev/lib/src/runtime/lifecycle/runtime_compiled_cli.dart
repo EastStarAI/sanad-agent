@@ -68,15 +68,22 @@ Future<void> handleCompiledCliCommand(
   }
   final runner = runArtifact ?? _runCompiledCliArtifact;
   final stopwatch = Stopwatch()..start();
-  // Production runs hold the shared half of the build lock while the artifact is
-  // started, so a concurrent rebuild cannot swap the binary out from under this
-  // call. Injected runners are in-process seams and take no lock.
-  final childExitCode = ensureArtifact == null && runArtifact == null
-      ? await cache.withReadLock(
-          component,
-          () => runner(artifact.executablePath, forwarded),
-        )
-      : await runner(artifact.executablePath, forwarded);
+  final int childExitCode;
+  if (ensureArtifact == null && runArtifact == null) {
+    // The shared cache lock only has to cover launching the artifact: a rebuild
+    // publishes into a new `<sha>/` directory and never rewrites the binary this
+    // child already started, so holding the lock for the whole child run would
+    // block every rebuild for as long as the session lives.
+    childExitCode = await runCompiledCliArtifactUnderCacheLock(
+      cache,
+      component,
+      artifact.executablePath,
+      forwarded,
+    );
+  } else {
+    // Injected runners are in-process seams and take no lock.
+    childExitCode = await runner(artifact.executablePath, forwarded);
+  }
   stopwatch.stop();
   stderr.writeln(
     '[sanad-dev] cli ${component.name}: call '
@@ -86,16 +93,44 @@ Future<void> handleCompiledCliCommand(
   if (childExitCode != 0) assignExitCode(childExitCode);
 }
 
+/// Starts the cached artifact under the shared cache lock and reports its exit
+/// status.
+///
+/// The lock is released the moment the process has started, so a long
+/// `sanad-dev cli agent -- …` run does not block a rebuild for its whole
+/// lifetime. A rebuild publishes into a new commit directory and prunes older
+/// ones without touching the inode this child already exec'd.
+Future<int> runCompiledCliArtifactUnderCacheLock(
+  CompiledCliCache cache,
+  CompiledCliComponent component,
+  String executable,
+  List<String> arguments, {
+  Future<Process> Function(String executable, List<String> arguments)?
+  startProcess,
+}) async {
+  final start = startProcess ?? _startCompiledCliArtifact;
+  final started = await cache.withReadLock<Process>(
+    component,
+    () => start(executable, arguments),
+  );
+  return started.exitCode;
+}
+
 void _assignProcessExitCode(int code) => exitCode = code;
+
+Future<Process> _startCompiledCliArtifact(
+  String executable,
+  List<String> arguments,
+) => Process.start(
+  executable,
+  arguments,
+  mode: ProcessStartMode.inheritStdio,
+);
 
 Future<int> _runCompiledCliArtifact(
   String executable,
   List<String> arguments,
 ) async {
-  final process = await Process.start(
-    executable,
-    arguments,
-    mode: ProcessStartMode.inheritStdio,
-  );
+  final process = await _startCompiledCliArtifact(executable, arguments);
   return process.exitCode;
 }

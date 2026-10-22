@@ -38,22 +38,54 @@ final RegExp _flagValuePattern = RegExp(
   r'(--?[A-Za-z0-9_.-]+)(\s+)(?!-)(?:"[^"]*"|[^\s]+)',
 );
 
+/// Matches one header flag and its value.
+///
+/// The value may be double-quoted, single-quoted, or an unquoted `Name: value`
+/// pair; a bare `Name:` name is also matched so a shell-split header still loses
+/// its value.
+final RegExp _headerPattern = RegExp(
+  r'''(-{1,2}(?:header|Header|HEADER|[Hh]|cookie|COOKIE|[Bb]))(\s+)("[^"]*"|'[^']*'|[A-Za-z0-9_-]+:(?:\s+[^\s]+)?|\S+)''',
+);
+
 bool _isSecretLikeArgumentName(String name) {
   final lower = name.replaceFirst(RegExp(r'^--?'), '').toLowerCase();
   return secretLikeArgumentNameFragments.any(lower.contains);
 }
 
+/// The secret-bearing header name in [value], or null when it is not one.
+///
+/// `-H "Authorization: Bearer …"` names no secret-like flag, so the flag-value
+/// rule alone would print the token: the header name before the first `:` has to
+/// decide instead.
+String? _secretHeaderName(String value) {
+  final unquoted = value.replaceAll(RegExp(r'''^["']|["']$'''), '');
+  final separator = unquoted.indexOf(':');
+  if (separator <= 0) return null;
+  final name = unquoted.substring(0, separator).trim();
+  return _isSecretLikeArgumentName(name) ? name : null;
+}
+
+/// Redacts the value of every header flag that carries a secret-like name.
+String _redactHeaderValues(String command) => command.replaceAllMapped(
+  _headerPattern,
+  (match) => _secretHeaderName(match.group(3)!) == null
+      ? match.group(0)!
+      : '${match.group(1)}${match.group(2)}$redactedCommandLineValue',
+);
+
 /// Redacts secret-like values from a foreign command line before printing.
 ///
 /// Handles `NAME=value` (including nested forms such as
-/// `--dart-define=SANAD_TOKEN=abc`) and the separated `--flag value` form, and
-/// leaves every other token untouched.
+/// `--dart-define=SANAD_TOKEN=abc`), the separated `--flag value` form, and a
+/// header value such as `-H "Authorization: …"`, and leaves every other token
+/// untouched.
 String redactCommandLine(String command) {
   final assignments = command.replaceAllMapped(
     _tokenPattern,
     (match) => _redactAssignments(match.group(0)!),
   );
-  return assignments.replaceAllMapped(_flagValuePattern, (match) {
+  final headers = _redactHeaderValues(assignments);
+  return headers.replaceAllMapped(_flagValuePattern, (match) {
     final flag = match.group(1)!;
     if (!_isSecretLikeArgumentName(flag)) return match.group(0)!;
     return '$flag${match.group(2)}$redactedCommandLineValue';

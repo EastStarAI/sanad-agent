@@ -77,6 +77,24 @@ bool _matchesClientStartup(String path) {
   return segments.any((segment) => segment == 'di' || segment == 'startup');
 }
 
+/// Client localization sources: the authored `.arb` catalogs and their config.
+///
+/// The generated `app_localizations*.dart` files are build output, so editing a
+/// catalog is not a plain Dart edit: the strings must be regenerated before the
+/// running Client can see them, and only a fresh client build does that. A hot
+/// reload would keep showing the old strings and a hot restart cannot regenerate
+/// them, so the change maps to `stop + run` and the reason says why.
+bool _matchesClientLocalization(String path) {
+  // `client/l10n.yaml` points `arb-dir` at `lib/l10n`, so the catalogs live
+  // under `client/lib/l10n` and the config under `client/`.
+  if (_isUnder(path, 'client/l10n') ||
+      _isUnder(path, 'client/lib/l10n') ||
+      path == 'client/l10n.yaml') {
+    return true;
+  }
+  return _isUnder(path, 'client') && path.endsWith('.arb');
+}
+
 bool _matchesClientDart(String path) =>
     _isUnder(path, 'client/lib') && path.endsWith('.dart');
 
@@ -107,11 +125,11 @@ bool _matchesSharedSource(String path) =>
 /// | `scripts/sanad_dev/**`, `scripts/sanad-dev*` | `stop + run` |
 /// | `agent/**` | `restart agent` |
 /// | `client/lib/main.dart`, `driver_main.dart`, startup/DI Dart | `restart client` |
+/// | `client/l10n/**`, `client/l10n.yaml`, `client/**.arb` | `stop + run` (regenerate) |
 /// | `client/pubspec.*`, `client/assets/**` (any extension), native/Web directories | `stop + run` |
 /// | other `client/lib/**.dart` | `reload client` |
 /// | `shared/**`, `release/contract/**` | `restart agent` + `restart client` |
 /// | anything else | `restart agent` + `restart client` |
-///
 /// `stop + run` subsumes every other action and `restart client` subsumes
 /// `reload client`. Pubspec, asset, plugin, and native changes are compiled into
 /// the desktop bundle, so a hot restart cannot apply them; they need a full
@@ -140,6 +158,14 @@ const sanadDevApplyRules = <SanadDevApplyRule>[
     label: 'Client startup or dependency-injection Dart changed',
     actions: [SanadDevApplyAction.restartClient],
     matches: _matchesClientStartup,
+  ),
+  SanadDevApplyRule(
+    id: 'client-localization',
+    label:
+        'Client localization source changed; the strings must be regenerated, '
+        'which a hot reload or hot restart cannot do',
+    actions: [SanadDevApplyAction.restartRuntime],
+    matches: _matchesClientLocalization,
   ),
   SanadDevApplyRule(
     id: 'client-native-or-assets',
@@ -182,11 +208,17 @@ class SanadDevApplyDecision {
     required this.actions,
     required this.reasons,
     required this.changedPaths,
+    required this.actionsByPath,
   });
 
   final List<SanadDevApplyAction> actions;
   final List<String> reasons;
   final List<String> changedPaths;
+
+  /// Actions each changed path required, so `apply` can tell which paths were
+  /// actually applied and which were skipped because their target was not
+  /// running.
+  final Map<String, List<SanadDevApplyAction>> actionsByPath;
 
   String get actionLabel => actions.isEmpty
       ? 'none'
@@ -218,10 +250,18 @@ SanadDevApplyDecision decideSanadDevApply({
     );
   }
   final examplesByRule = <String, List<String>>{};
+  final actionsByPath = <String, List<SanadDevApplyAction>>{};
   for (final path in normalized) {
     for (final rule in sanadDevApplyRules) {
       if (!rule.matches(path)) continue;
       examplesByRule.putIfAbsent(rule.id, () => []).add(path);
+      final required = driverModeChange
+          ? <SanadDevApplyAction>{
+              ...rule.actions,
+              SanadDevApplyAction.restartRuntime,
+            }.toList(growable: false)
+          : rule.actions;
+      actionsByPath[path] = List.unmodifiable(required);
       for (final action in rule.actions) {
         if (!actions.contains(action)) actions.add(action);
       }
@@ -257,35 +297,92 @@ SanadDevApplyDecision decideSanadDevApply({
     actions: List.unmodifiable(ordered),
     reasons: List.unmodifiable(reasons),
     changedPaths: List.unmodifiable(normalized),
+    actionsByPath: Map.unmodifiable(actionsByPath),
   );
 }
 
 /// Recorded state of the last successful `sanad-dev apply`.
 ///
 /// Advancing it is what makes a repeated `apply` idempotent: the commit baseline
-/// moves to the applied `HEAD`, and the recorded working-tree signature means an
-/// uncommitted change that was already applied is not reported again.
+/// moves to the applied `HEAD`, and the per-path content fingerprints record
+/// exactly which bytes were applied. `git diff --name-only <start commit>`
+/// reports a tracked working-tree edit on every call, so a whole-tree signature
+/// (or the status list alone) cannot decide whether that edit was already
+/// applied. Only comparing the file's current content with the content that was
+/// applied can, and it does so for tracked and untracked files alike.
 class SanadDevApplyBaseline {
-  const SanadDevApplyBaseline({
-    required this.commit,
-    required this.worktreeSignature,
-  });
+  const SanadDevApplyBaseline({required this.commit, this.files = const {}});
 
   final String commit;
-  final String worktreeSignature;
+
+  /// Repository-relative path to the fingerprint applied for it.
+  final Map<String, String> files;
 
   Map<String, Object?> toJson() => {
     'commit': commit,
-    'worktree_signature': worktreeSignature,
+    'files': files,
     'applied_at': DateTime.now().toUtc().toIso8601String(),
   };
 
   static SanadDevApplyBaseline? fromJson(Map<String, dynamic> json) {
     final commit = json['commit']?.toString() ?? '';
-    final signature = json['worktree_signature']?.toString() ?? '';
-    if (commit.isEmpty && signature.isEmpty) return null;
-    return SanadDevApplyBaseline(commit: commit, worktreeSignature: signature);
+    final files = <String, String>{};
+    final recorded = json['files'];
+    if (recorded is Map) {
+      recorded.forEach((key, value) {
+        if (key is String && value is String) files[key] = value;
+      });
+    }
+    if (commit.isEmpty && files.isEmpty) return null;
+    return SanadDevApplyBaseline(
+      commit: commit,
+      files: Map.unmodifiable(files),
+    );
   }
+}
+
+/// Fingerprint recorded for a path that does not exist.
+const sanadDevApplyMissingPathFingerprint = 'missing';
+
+/// Content fingerprint of [relativePath] inside [repositoryRoot].
+///
+/// A missing, deleted, or non-regular path is recorded as
+/// [sanadDevApplyMissingPathFingerprint] so a deletion is applied exactly once.
+String sanadDevApplyPathFingerprint(
+  String repositoryRoot,
+  String relativePath,
+) {
+  final file = File(p.join(repositoryRoot, relativePath));
+  if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
+      FileSystemEntityType.file) {
+    return sanadDevApplyMissingPathFingerprint;
+  }
+  try {
+    return sha256.convert(file.readAsBytesSync()).toString();
+  } on FileSystemException {
+    return sanadDevApplyMissingPathFingerprint;
+  }
+}
+
+/// Fingerprints to record after an apply.
+///
+/// A path is recorded only when every action it required actually ran: an
+/// action skipped because its target — typically the Client — is not running
+/// must not advance that path's baseline, otherwise the change is silently
+/// considered applied and the next `apply` reports nothing to do.
+Map<String, String> sanadDevApplyRecordedFingerprints({
+  required String repositoryRoot,
+  required SanadDevApplyDecision decision,
+  required Set<SanadDevApplyAction> skippedActions,
+  Map<String, String> previous = const {},
+}) {
+  final recorded = <String, String>{...previous};
+  for (final path in decision.changedPaths) {
+    final required = decision.actionsByPath[path] ?? const [];
+    if (required.any(skippedActions.contains)) continue;
+    recorded[path] = sanadDevApplyPathFingerprint(repositoryRoot, path);
+  }
+  return recorded;
 }
 
 String sanadDevApplyBaselinePath(SanadDevRuntime runtime) =>
@@ -314,42 +411,34 @@ Future<void> writeSanadDevApplyBaseline(
   await restrictRuntimePath(file.path);
 }
 
-/// Changed paths plus the working-tree signature they were derived from.
+/// Changed paths plus the fingerprints they were derived from.
 class SanadDevChangedPaths {
-  const SanadDevChangedPaths({
-    required this.paths,
-    required this.worktreeSignature,
-  });
+  const SanadDevChangedPaths({required this.paths});
 
   final List<String> paths;
-  final String worktreeSignature;
 }
 
-/// Paths changed since [startCommit], plus the current working tree.
+/// Paths changed since [startCommit], minus the ones already applied.
 ///
-/// When [appliedWorktreeSignature] matches the current working tree, that part
-/// was already applied by a earlier `apply`, so only the commit range is
-/// reported.
+/// [appliedFingerprints] is the per-path content snapshot recorded by the last
+/// successful `apply`. A candidate is dropped only when its current content
+/// matches the fingerprint that was applied for it, so an already-applied tracked
+/// working-tree edit is not reported twice, a second edit of the same file is,
+/// and untracked files behave identically.
 Future<SanadDevChangedPaths> inspectChangedPaths({
   required String repositoryRoot,
   required String? startCommit,
-  String? appliedWorktreeSignature,
+  Map<String, String> appliedFingerprints = const {},
 }) async {
-  final paths = <String>{};
+  final candidates = <String>{};
   final statusOutput = await _gitOutput(repositoryRoot, [
     'status',
     '--porcelain',
     '--untracked-files=all',
   ]);
-  final signature = await _worktreeSignature(
-    repositoryRoot: repositoryRoot,
-    statusOutput: statusOutput,
-  );
-  if (appliedWorktreeSignature != signature) {
-    paths.addAll(_porcelainPaths(statusOutput));
-  }
+  candidates.addAll(_porcelainPaths(statusOutput));
   if (startCommit != null && startCommit.trim().isNotEmpty) {
-    paths.addAll(
+    candidates.addAll(
       await _gitChangedPaths(repositoryRoot, [
         'diff',
         '--name-only',
@@ -357,39 +446,17 @@ Future<SanadDevChangedPaths> inspectChangedPaths({
       ]),
     );
   }
-  final sorted = paths.toList()..sort();
-  return SanadDevChangedPaths(paths: sorted, worktreeSignature: signature);
-}
-
-/// Content-sensitive identity of the current working tree.
-///
-/// The porcelain status alone cannot tell two different edits of the same file
-/// apart, so the tracked patch and each untracked file's size and mtime are part
-/// of the signature. Without them an `apply` after a second edit would be
-/// silently treated as already applied.
-Future<String> _worktreeSignature({
-  required String repositoryRoot,
-  required String statusOutput,
-}) async {
-  final buffer = StringBuffer(statusOutput);
-  buffer.write(await _gitOutput(repositoryRoot, [
-    'diff',
-    'HEAD',
-    '--no-color',
-    '--no-ext-diff',
-  ]));
-  for (final path in _porcelainPaths(statusOutput)) {
-    final file = File(p.join(repositoryRoot, path));
-    if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
-        FileSystemEntityType.file) {
+  final paths = <String>[];
+  for (final path in candidates) {
+    final applied = appliedFingerprints[path];
+    if (applied != null &&
+        applied == sanadDevApplyPathFingerprint(repositoryRoot, path)) {
       continue;
     }
-    final stat = file.statSync();
-    buffer.write(
-      '$path:${stat.size}:${stat.modified.millisecondsSinceEpoch}',
-    );
+    paths.add(path);
   }
-  return sha256.convert(utf8.encode(buffer.toString())).toString();
+  paths.sort();
+  return SanadDevChangedPaths(paths: paths);
 }
 
 Future<String> _gitOutput(String repositoryRoot, List<String> arguments) async {
@@ -478,7 +545,7 @@ Future<void> handleRuntimeApply({
   final inspected = await inspectChangedPaths(
     repositoryRoot: runtime.repositoryRoot,
     startCommit: startCommit,
-    appliedWorktreeSignature: appliedBaseline?.worktreeSignature,
+    appliedFingerprints: appliedBaseline?.files ?? const {},
   );
   if (startCommit.isEmpty) {
     log(
@@ -522,6 +589,7 @@ Future<void> handleRuntimeApply({
   }
 
   final home = record.sanadHome;
+  final skippedActions = <SanadDevApplyAction>{};
   for (final action in decision.actions) {
     switch (action) {
       case SanadDevApplyAction.reloadClient:
@@ -530,9 +598,12 @@ Future<void> handleRuntimeApply({
             ? null
             : ownership.state.ownedClients.first;
         if (client == null) {
+          // The change is still pending: a skipped action must not advance the
+          // baseline, so the next apply reports it again.
+          skippedActions.add(action);
           log(
             'Skipped ${sanadDevApplyActionLabel(action)}: no managed Client is '
-            'running for ${runtime.worktreeId}.',
+            'running for ${runtime.worktreeId}. Start one, then rerun apply.',
           );
           continue;
         }
@@ -573,18 +644,49 @@ Future<void> handleRuntimeApply({
   }
   if (exitCode != 0) return;
 
-  // Advance the baseline only after every action succeeded, so a repeated
-  // `apply` on an unchanged tree reports no action instead of restarting again.
+  // Advance the baseline only after every action succeeded, and only for the
+  // paths whose actions actually ran, so a repeated `apply` on an unchanged tree
+  // reports no action instead of restarting again while a skipped change keeps
+  // waiting for its target.
   final appliedCommit = await readRuntimeSourceCommit(runtime.repositoryRoot);
+  final recordedFiles = sanadDevApplyRecordedFingerprints(
+    repositoryRoot: runtime.repositoryRoot,
+    decision: decision,
+    skippedActions: skippedActions,
+    previous: appliedBaseline?.files ?? const {},
+  );
+  final pendingPaths = _pendingPathCount(decision, skippedActions);
+  final previousCommit = appliedBaseline?.commit ?? '';
   await writeSanadDevApplyBaseline(
     baselinePath,
     SanadDevApplyBaseline(
-      commit: appliedCommit.isEmpty ? startCommit : appliedCommit,
-      worktreeSignature: inspected.worktreeSignature,
+      // A pending change keeps the older commit baseline so its commit range is
+      // still inspected until it is actually applied.
+      commit: pendingPaths > 0 && previousCommit.isNotEmpty
+          ? previousCommit
+          : (appliedCommit.isEmpty ? startCommit : appliedCommit),
+      files: recordedFiles,
     ),
   );
   log(
-    'Applied at ${appliedCommit.isEmpty ? '-' : appliedCommit}; the next '
+    'Applied at ${appliedCommit.isEmpty ? '-' : appliedCommit}; recorded '
+    '${decision.changedPaths.length - pendingPaths} of '
+    '${decision.changedPaths.length} changed file(s). The next '
     '"sanad-dev apply" starts from here.',
   );
+}
+
+/// How many changed paths still wait for a skipped action.
+int _pendingPathCount(
+  SanadDevApplyDecision decision,
+  Set<SanadDevApplyAction> skippedActions,
+) {
+  if (skippedActions.isEmpty) return 0;
+  return decision.changedPaths
+      .where(
+        (path) => (decision.actionsByPath[path] ?? const []).any(
+          skippedActions.contains,
+        ),
+      )
+      .length;
 }

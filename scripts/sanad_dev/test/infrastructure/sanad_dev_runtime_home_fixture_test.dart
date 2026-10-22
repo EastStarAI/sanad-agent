@@ -287,9 +287,7 @@ void main() {
         reason: 'runtime leases must survive a fixture restore',
       );
       expect(
-        Directory(
-          p.join(p.dirname(home.path), fixtureRestoreStagingDirectoryName),
-        ).existsSync(),
+        Directory(sanadDevFixtureStagingPath(home.path)).existsSync(),
         isFalse,
         reason: 'the staging directory is always cleaned up',
       );
@@ -355,9 +353,7 @@ void main() {
         name: 'clean',
       );
       // Simulate a crash after the original files were displaced.
-      final staging = Directory(
-        p.join(p.dirname(home.path), fixtureRestoreStagingDirectoryName),
-      );
+      final staging = Directory(sanadDevFixtureStagingPath(home.path));
       final backup = Directory(p.join(staging.path, 'backup'));
       backup.createSync(recursive: true);
       File(p.join(home.path, 'state.db')).renameSync(
@@ -511,9 +507,7 @@ void main() {
         reason: 'nothing may be written outside the Home',
       );
       expect(
-        Directory(
-          p.join(p.dirname(home.path), fixtureRestoreStagingDirectoryName),
-        ).existsSync(),
+        Directory(sanadDevFixtureStagingPath(home.path)).existsSync(),
         isFalse,
       );
     }

@@ -106,12 +106,18 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Restore a fixture that lacks a captured file present in the Home | The stale captured file is removed; excluded paths are untouched. |
 | Restore over a Home whose `state.db` has a live WAL and SHM | The database family is swapped as one group, so the restored database never sits beside a stale WAL or SHM. |
 | Interrupt a restore after the first group was swapped, then retry | The leftover staging directory is found, the previous state is rolled back, and the retry either completes or reports `The Home was rolled back to its previous state.` |
+| Reset two worktree Homes that share the `homes/` parent while one holds a crashed restore | Each Home uses its own `.sanad-dev-reset-staging-<home label>-<home digest>` directory: the second restore neither moves the first Home's backup nor deletes it, and the first Home recovers its own staging on its next run. |
+| Make the rollback itself fail (unwritable Home) during a restore | The error says the Home could not be rolled back, names the retained staging directory path and the Home, and leaves every displaced original inside it instead of deleting the backups. |
+| Compare a Home captured on a case-insensitive disk (`State.DB`, `.ENV`, `LOGS/`) | The allowlist and denylist classify the spelling variants identically, and `State.DB` stays in the same swap group as `state.db-wal`. |
 | Run `apply --dry-run` after a UI-only Client change | Prints `reload client` with the reason and example path; no component action is requested. |
 | Run `apply --dry-run` after a Client `main.dart`, startup, or DI change | Prints `restart client`. |
 | Run `apply --dry-run` after a Client pubspec, asset, plugin, or native change | Prints `stop + run`, because a hot restart cannot apply a compiled bundle change. |
+| Run `apply --dry-run` after an `app_en.arb` or `l10n.yaml` change | Prints `stop + run` with a reason that the strings must be regenerated, not `reload client`. |
 | Run `apply --dry-run` after an Agent change | Prints `restart agent`. |
 | Run `apply --dry-run` after a `scripts/sanad_dev/**` change or with a driver-mode change | Prints `stop + run` and no lighter action. |
 | Run `apply --dry-run` after docs, tests, or CI-only changes | Prints `none` and requests nothing. |
+| Run `apply` twice after editing one TRACKED file | The first run applies the change and records the file's content hash; the second run reports no changed paths and requests no component action. |
+| Run `apply` twice after a UI change while no Client is running | The Client action is reported as skipped, stays pending, and the next `apply` reports that path again instead of calling it applied. |
 | Run `apply` twice with no edit in between | The second run reports that the worktree is up to date and requests no component action. |
 | Edit an already-dirty file after a successful `apply` | The next `apply` reports the change instead of treating the worktree as already applied, because the recorded baseline covers content, not just the file list. |
 | Run `apply` while another build or test runs in the same worktree | Prints the refusal with every matching PID and redacted command line, returns nonzero, and requests no component action. A `--dart-define=SANAD_TOKEN=…` value never appears in that output. |
@@ -123,6 +129,9 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Run `refresh --at 2m`, `--at +0m`, or `--at +2d` | Usage error 64; nothing is scheduled. |
 | Run `refresh --at +30s` | Usage error 64: below the one-minute scheduler resolution. |
 | Run `refresh --at +10m` and then commit on the same branch before it fires | The scheduled script refuses to run, logs the branch/commit mismatch, and deletes itself without pulling or restarting. |
+| Signal the waiting refresh script (`kill -TERM`, `kill -INT`, `kill -HUP`) | The script deletes itself and exits `143`/`130`/`129` immediately; it never resumes the pull or the restarts after the interrupted wait. |
+| Force a scheduler failure (missing `systemd-run`, invalid `schtasks` time) | `refresh` prints the scheduler error and the removed script path, returns nonzero, and prints none of the `Scheduled …` success lines. |
+| Run `refresh` on Windows with a Home path containing `%` or `&` | The `/TR` command line refuses the value instead of handing it to `cmd.exe`, and nothing is scheduled. |
 | Run `refresh --at +1m` on Linux or Windows | Schedules `systemd-run --user --on-active` or a self-deleting `schtasks /SC ONCE` task; the script deletes its own task and file. |
 
 ## Bootstrap, journal, and terminal matrix
