@@ -521,6 +521,53 @@ void main() {
     );
 
     test(
+      '--no-stdin ignores piped input so a shell read loop keeps its input',
+      () async {
+        var stdinReads = 0;
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          client: client,
+          stdinReader: () async {
+            stdinReads++;
+            return 'model-a\nmodel-b';
+          },
+        );
+
+        final runFuture = _runTargeted(runner, [
+          'run',
+          '--no-stdin',
+          'Loop safe turn',
+        ]);
+
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final sentEnvelope =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final payload = sentEnvelope['payload'] as Map<String, dynamic>;
+
+        // The caller's stdin belongs to the loop, not to the prompt.
+        expect(stdinReads, 0);
+        expect(payload['message'], 'Loop safe turn');
+
+        final sessionId = payload['session_id'] as String;
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': sessionId,
+            'event': {
+              'type': 'turn_complete',
+              'session_id': sessionId,
+              'payload': {'text': 'Loop turn done.'},
+            },
+          }),
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, 0);
+      },
+    );
+
+    test(
       'uses piped input as prompt when no rest argument is provided',
       () async {
         final runner = SanadCommandRunner(
@@ -1171,6 +1218,61 @@ void main() {
           mockSocket.sentMessages.where((m) => m.contains('"stop"')),
           isEmpty,
         );
+      },
+    );
+
+    test(
+      'a blocked notice keeps the provider message in the reported error',
+      () async {
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          client: client,
+          stdinReader: () async => null,
+        );
+
+        final runFuture = _runTargeted(runner, [
+          'run',
+          '--json',
+          '--timeout',
+          '300',
+          'Rejected provider turn',
+        ]);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final sentEnvelope =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final sessionId = sentEnvelope['payload']['session_id'] as String;
+
+        // The provider text must survive into the final error instead of being
+        // replaced by a bare timeout string.
+        const providerMessage =
+            'Invalid request: The request format was rejected by OpenCode Go .\n\n'
+            'Provider response: {"error":{"type":"server_error","message":'
+            '"Upstream request failed: Endpoint is unavailable."}}';
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': sessionId,
+            'event': {
+              'type': 'session.runtime_notice',
+              'session_id': sessionId,
+              'payload': {
+                'status': 'blocked',
+                'reason': 'providerQuota',
+                'message': providerMessage,
+              },
+            },
+          }),
+        );
+
+        final exitCode = await runFuture.timeout(const Duration(seconds: 5));
+        expect(exitCode, 1);
+        final decoded =
+            jsonDecode(stdoutBuffer.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['exit_code'], 1);
+        expect(decoded['error'], contains('Endpoint is unavailable.'));
+        expect(decoded['error'], contains('blocked'));
       },
     );
 
