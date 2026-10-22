@@ -49,4 +49,30 @@ void main() {
     expect(resolved.createdAt, placeholderTime);
     expect(resolved.updatedAt, placeholderTime);
   });
+
+  // F1 (Task 125 round 2): a locally created session is selected before its
+  // device projection settles, so the selected session can still carry no
+  // device id. Presenting the identity placeholder instead pinned the header
+  // on "Loading..." forever.
+  test('a selected session with no device projection is still presented', () {
+    final selected = Session(
+      id: 'session-just-created',
+      title: 'Reply with exactly: G2-S1-MSG1',
+      createdAt: DateTime(2026, 1, 1),
+      updatedAt: DateTime(2026, 1, 1),
+    );
+    final destination = ConversationDestination.session(
+      deviceId: 'device-1',
+      sessionId: selected.id,
+    );
+
+    final resolved = HomeScreen.resolveRouteSession(
+      destination: destination,
+      selectedSession: selected,
+      placeholderTime: placeholderTime,
+    );
+
+    expect(resolved, same(selected));
+    expect(resolved.title, 'Reply with exactly: G2-S1-MSG1');
+  });
 }

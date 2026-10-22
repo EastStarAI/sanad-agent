@@ -126,6 +126,10 @@ class SessionTurnExecutor {
   static final Logger _logger = Logger('SessionTurnExecutor');
   static const _secretsRedactor = SecretsRedactor();
 
+  /// Typed `final_answer.error_code` for a fresh turn that failed outside the
+  /// engine's typed recovery and was terminalized to release the queue.
+  static const turnFailedErrorCode = 'turn_failed';
+
   final Map<String, ActiveRun> activeRuns = {};
   final Map<String, int> _sessionGenerations = {};
   final Set<String> _titleGenerationSessions = {};
@@ -702,6 +706,7 @@ class SessionTurnExecutor {
           isComplete: true,
           runId: activeRun.runId,
           turnId: activeRun.turnId,
+          requestId: turnRequest.requestId,
           modelStepId: agentRunner.currentModelStepId,
         ),
       );
@@ -710,15 +715,26 @@ class SessionTurnExecutor {
         return;
       }
       final repo = getPersistedState();
-      if (repo != null && activeRun.workItemId != null) {
-        repo.transitionOwnedWorkItem(
-          sessionId: event.sessionId,
-          workItemId: activeRun.workItemId!,
-          toState: SessionWorkState.blocked,
-        );
-      }
-      if (getIt.isRegistered<RuntimeRecoveryService>()) {
-        if (isResume) {
+      final redactedError = _secretsRedactor.redact(e.toString());
+      _logger.severe('Error handling event: $redactedError', e, stack);
+      if (isResume) {
+        // A failed resume keeps its durable checkpoint: it stays blocked and
+        // controllable, and the orchestrator records the suspended state so
+        // Retry, Change Provider and a new message can claim it (Task 125).
+        // The durable recovery notice is its terminal projection; an
+        // assistant response here would become a misleading `final_answer`.
+        if (repo != null && activeRun.workItemId != null) {
+          final blocked = repo.transitionOwnedWorkItem(
+            sessionId: event.sessionId,
+            workItemId: activeRun.workItemId!,
+            toState: SessionWorkState.blocked,
+          );
+          if (!blocked) {
+            activeRun.invalidated = true;
+            return;
+          }
+        }
+        if (getIt.isRegistered<RuntimeRecoveryService>()) {
           getIt<RuntimeRecoveryService>().reportFailure(
             sessionId: event.sessionId,
             reason: RuntimeFailureReason.unknown,
@@ -730,26 +746,39 @@ class SessionTurnExecutor {
             forceBlocked: true,
             runId: activeRun.runId,
           );
-        } else if (activeRun.workItemId != null) {
-          getIt<RuntimeRecoveryService>().reportFailure(
-            sessionId: event.sessionId,
-            reason: RuntimeFailureReason.unknown,
-            requestId: turnRequest.requestId,
-            providerInstanceId: turnRequest.effectiveProviderInstanceId,
-            title: 'Execution could not start',
-            message:
-                'The request could not be started safely. Execution was blocked so you can retry, edit, or stop.',
-            forceBlocked: true,
-            runId: activeRun.runId,
-          );
+        }
+        onRecoveryRequired(
+          event,
+          turnRequest,
+          agentRunner,
+          activeRun.workItemId,
+        );
+        return;
+      }
+      // A fresh turn that fails outside the engine's typed recovery (before
+      // dispatch: workspace, execution root, attachment or catalog admission)
+      // has no continuation checkpoint to resume, so a Retry would fail the
+      // same way while holding FIFO. Terminalize exactly the owned durable
+      // item as `cancelled` and answer once with a typed outcome; the
+      // completion callback then releases the queue (Task 125). A stale loser
+      // whose ownership already moved stays silent.
+      if (repo != null && activeRun.workItemId != null) {
+        final terminalized = repo.transitionOwnedWorkItem(
+          sessionId: event.sessionId,
+          workItemId: activeRun.workItemId!,
+          toState: SessionWorkState.cancelled,
+        );
+        if (!terminalized) {
+          activeRun.invalidated = true;
+          return;
         }
       }
-      final redactedError = _secretsRedactor.redact(e.toString());
-      _logger.severe('Error handling event: $redactedError', e, stack);
-      // The durable recovery notice is the terminal projection for a failed
-      // resume. Emitting an assistant response here is translated into a
-      // misleading `final_answer` even though no continuation succeeded.
-      if (isResume) return;
+      if (getIt.isRegistered<RuntimeRecoveryService>()) {
+        final recovery = getIt<RuntimeRecoveryService>();
+        if (recovery.activeNotice(event.sessionId)?.runId == activeRun.runId) {
+          recovery.clear(event.sessionId, runId: activeRun.runId);
+        }
+      }
       final contextUsageOnError = await _captureContextUsage(
         sessionId: event.sessionId,
         agentRunner: agentRunner,
@@ -776,10 +805,12 @@ class SessionTurnExecutor {
           message: Message(
             role: MessageRole.assistant,
             content: 'Error: $redactedError',
+            metadata: const {'error_code': turnFailedErrorCode},
           ),
           isComplete: true,
           runId: activeRun.runId,
           turnId: activeRun.turnId,
+          requestId: turnRequest.requestId,
           modelStepId: agentRunner.currentModelStepId,
           usage: agentRunner.lastUsage,
           contextUsage: contextUsageOnError,

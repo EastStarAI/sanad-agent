@@ -344,7 +344,7 @@ In headless non-interactive mode, sensitive tools requiring interactive permissi
 sanad run "Run test suite and fix failing tests" --allow-all-tools
 ```
 
-`--timeout <seconds>` is accepted before or after `run`, defaults to 300 seconds, and accepts values from 1 through 86400. Timeout returns exit code `124`, SIGINT returns `130`, and SIGTERM returns `143`; each path requests one bounded Stop before cleanup. `--json` writes one result object to stdout, while diagnostics stay on stderr. `--quiet` writes only the final assistant text.
+`--timeout <seconds>` is accepted before or after `run`, defaults to 300 seconds, and accepts values from 1 through 86400. Timeout returns exit code `124`, SIGINT returns `130`, and SIGTERM returns `143`; each path requests one bounded Stop before cleanup. When the daemon blocks or refuses the turn, `sanad run` exits `1` at once with one reason line instead of waiting for the timeout; blocked work is left for Retry, Change Provider or `sanad session stop <session-id>`. `--json` writes one result object to stdout, while diagnostics stay on stderr. `--quiet` writes only the final assistant text.
 
 #### GitHub Actions
 

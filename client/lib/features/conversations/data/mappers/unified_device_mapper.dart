@@ -735,6 +735,10 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       if (event['terminal_at'] != null) 'terminal_at': event['terminal_at'],
       if (event['runtime_ms'] != null) 'runtime_ms': event['runtime_ms'],
       if (event['cleanup_outcome'] != null) 'cleanup_outcome': event['cleanup_outcome'],
+      // A typed refusal (`turn_failed`, a thinking-selection rejection, ...) is
+      // the terminal outcome of a turn that never completed. It stays typed so
+      // the client can tell a failure apart from an answer.
+      if (event['error_code'] != null) 'error_code': event['error_code'],
       if (event['attachments'] is List) 'attachments': event['attachments'],
     };
     return normalized.isEmpty ? null : normalized;

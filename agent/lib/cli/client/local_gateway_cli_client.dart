@@ -8,6 +8,7 @@ export 'cli_turn_client.dart' show CliConnectionState;
 import 'package:logging/logging.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../core/config.dart' show ModelAwareCompactionPolicy;
 import '../../interfaces/models/agent_turn_request.dart';
 import 'cli_turn_client.dart';
 import '../discovery/local_gateway_discovery.dart';
@@ -701,7 +702,9 @@ class LocalGatewayCliClient implements CliTurnClient {
       final result = await query(
         command: 'session.compact',
         payload: {'session_id': sessionId},
-        timeout: timeout ?? const Duration(seconds: 5),
+        // The daemon replies when the compaction operation ends; without an
+        // explicit bound wait the central compaction pass timeout (Task 125).
+        timeout: timeout ?? ModelAwareCompactionPolicy.defaultPassTimeout,
       );
       _throwIfError(result);
       final payload =
