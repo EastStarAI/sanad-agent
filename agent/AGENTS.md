@@ -39,6 +39,7 @@ This contract applies to `agent/`.
 - Provider adapters remain stateless and own wire translation only. Provider-specific endpoint/codec behavior must not leak into the runner.
 - Context-pressure recovery after daemon restart may reuse persisted provider input usage only after the active adapter remeasures the exact historical request prefix; the next request must still prove a strict wire extension on the same route.
 - Visible reasoning, final content, opaque provider continuation state, finish reason, and tool calls remain distinct typed data across streaming and persistence.
+- On echo-required Chat routes targeting thinking mode, same-route assistant tool turns replay the destination's interleaved reasoning field (empty string when the producer gave none) to satisfy provider protocol, while foreign and unrecorded turns remain unpadded.
 
 ### Protocol and Platform Authority
 - `GatewayManager` routes typed delivery policy; it does not inspect event names to infer delivery or runtime meaning.

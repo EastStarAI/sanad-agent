@@ -13,7 +13,7 @@ This contract applies to `agent/lib/engine/adapters/`.
 - Visible reasoning deltas use the reasoning callback and never contaminate final-content chunks.
 - Opaque continuation state uses a typed namespace and issuer; replay only when both match the current instance/protocol/normalized endpoint owner and the recorded producing model equals the destination model. Missing model provenance is foreign.
 - Projection is per request and never rewrites canonical history. Provenance keys are additive inside adapter-owned state data; issuer strings stay stable.
-- Never copy, pad, relabel or synthesize reasoning for foreign or unrecorded turns. Echo semantics come only from the destination's exact models.dev `interleaved.field` and the data-driven `ChatReasoningReplayPolicy` table; probe outcomes change data, not logic.
+- Never copy, pad, relabel or synthesize reasoning for foreign or unrecorded turns. Echo semantics come only from the destination's exact models.dev `interleaved.field` and the data-driven `ChatReasoningReplayPolicy` table; same-route assistant tool turns on echo-required thinking routes replay the provider's zero-reasoning shape (`""`) for absent or null reasoning to satisfy thinking-mode protocol without fabricating reasoning text. Probe outcomes change data, not logic.
 - History with no truthful wire representation fails before HTTP with `ProviderHistoryProjectionException` carrying only route, closed reason code and count. Wire measurement never raises it; dispatch and the summarizer always enforce.
 - Anthropic signed or redacted thinking replays only to the same issuer and model; unpaired `tool_use` fails closed rather than being stripped.
 - State rejection may clear only matching keys and may trigger one bounded persisted fallback.
