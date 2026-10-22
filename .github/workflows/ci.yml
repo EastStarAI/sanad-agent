@@ -370,6 +370,12 @@ jobs:
           }
       - name: Scan committed content for credentials
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
         run: |
           archive="$RUNNER_TEMP/gitleaks.tar.gz"
           curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
@@ -377,7 +383,39 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$archive" | sha256sum --check
           tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" detect --source . --config .gitleaks.toml --redact --no-banner
+          # The checkout holds every ref, so an unbounded scan reports findings
+          # from unrelated branches and fails this change for someone else's
+          # commit. Bound the range to the code under review and keep the scan
+          # itself unchanged.
+          zero_sha="0000000000000000000000000000000000000000"
+          case "$EVENT_NAME" in
+            pull_request)
+              if [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+                log_opts="$BASE_SHA..$HEAD_SHA"
+              else
+                log_opts=""
+              fi
+              ;;
+            push)
+              if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$zero_sha" ]; then
+                log_opts="$PUSH_BEFORE..$PUSH_AFTER"
+              else
+                # A brand new branch has no previous commit: scan the ancestry of
+                # the pushed commit without the other refs the checkout fetched.
+                log_opts="$PUSH_AFTER"
+              fi
+              ;;
+            *)
+              log_opts=""
+              ;;
+          esac
+          if [ -n "$log_opts" ]; then
+            echo "Scanning $log_opts"
+            "$RUNNER_TEMP/gitleaks" detect --source . --config .gitleaks.toml --redact --no-banner --log-opts="$log_opts"
+          else
+            echo "Scanning every ref"
+            "$RUNNER_TEMP/gitleaks" detect --source . --config .gitleaks.toml --redact --no-banner
+          fi
 
   sensitive-review:
     name: Verify protected review labels

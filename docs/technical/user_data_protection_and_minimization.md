@@ -30,6 +30,50 @@ Every HTTP route and WebSocket upgrade requires the credential stored in
 `x-sanad-local-token` header. The credential never enters a URL, query string,
 compile-time define, process argument, preference store, response, or log.
 
+One Home, one credential: `.local_token.home` records the identity of the Home
+root that owns `.local_token`, and a daemon start rotates a credential whose
+binding is missing or names a different Home. Without that binding, a Home
+cloned from another Home (for example a test Home copied from a fixture) would
+present the source Home's credential, and token acceptance alone could not tell
+two Homes apart. `/health` therefore also reports the non-secret `home_id`
+(SHA-256 prefix of the canonical Home path), which a CLI caller uses to notice
+that the daemon answering on a port is not the one it asked for.
+
+`home_id` is **not** authentication. It is a path hash carried in a filesystem
+record and in a `/health` payload, and any process running as the same user can
+write either; it cannot prove *who* answers on a port. What the CLI adds is
+defence in depth against mis-routing, not cryptographic proof:
+
+- the runtime record must be owner-only (`0600`), name a loopback host, and carry
+  a process id that is still alive (a dead publisher makes the record stale), so
+  a leftover record cannot silently redirect a call to a port another process
+  now holds;
+- the answering `/health` must report the selected Home's identity, so two Homes
+  that ever shared a credential are not interchangeable;
+- the token itself remains the only thing the daemon verifies.
+
+A challenge/HMAC exchange (the daemon proves knowledge of the credential in the
+handshake instead of only comparing a bearer value) would authenticate the
+server, and is a tracked follow-up rather than part of this contract. Until it
+exists, treat `home_id` as a consistency check between cooperating local
+components, never as proof of server identity.
+
+The daemon also authenticates *before* it routes `/health`, so the first
+`/health` probe of an explicit target necessarily presents the credential to an
+endpoint that has not yet proven its identity. The CLI cannot avoid that single
+presentation under the current daemon contract; what it guarantees is that it
+stops there. With a selected Home, a target that answers `401`/`403` has
+provably refused that Home's credential, so the call fails closed as
+`home_identity_mismatch` (exit `78`) and never opens the WebSocket. An
+unauthenticated identity probe (a `/health/identity` response carrying only
+`home_id`) or the challenge/HMAC handshake above would remove even that one
+presentation, and is a tracked follow-up.
+
+Rotation is the daemon's alone: it happens at daemon start, after the Home's
+ownership lease is held and before the listener serves. A CLI, `sanad login`, or
+`sanad-dev` only ever reads `.local_token`, so it can never invalidate the
+credential a running daemon and its clients already hold.
+
 Every request also supplies a valid loopback `Host` for the configured port.
 If an `Origin` is present, it must match the explicit native/development
 allowlist. A missing `Origin` is acceptable only for an authenticated native

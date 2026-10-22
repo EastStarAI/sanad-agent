@@ -10,18 +10,21 @@ import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/auth/colocated_auth_coupling.dart';
 import 'package:sanad_agent/core/auth/device_authorization_client.dart';
+import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'package:sanad_agent/core/utils/logger.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
@@ -70,6 +73,9 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   final _clients = <WebSocket>{};
   final _sessionClients = <String, WebSocket>{};
   final _sessionDeviceIds = <String, String>{};
+
+  /// Home identity of this runtime, computed once when the listener starts.
+  String? _homeId;
   final _sessionHardwareIds = <String, String>{};
 
   /// Phase 27 — per-socket device_id registry. When a socket sends a
@@ -156,7 +162,9 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
     _security ??= LocalGatewaySecurity(
       config: LocalGatewaySecurityConfig(allowedPort: port),
-      expectedToken: await LocalGatewayCredentials.loadOrCreate(),
+      // Daemon process fallback: this runs inside the owning daemon before it
+      // binds, which is the only place rotation is allowed.
+      expectedToken: await LocalGatewayCredentials.loadOrCreateForDaemonStart(),
     );
 
     try {
@@ -172,6 +180,21 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     }
 
     _logger.info('Local daemon gateway listening');
+    _homeId ??= sanadHomeIdentity(getSanadHome());
+    // Publish the endpoint this Home's daemon owns. A Home-selected CLI call
+    // resolves this record instead of probing the default port or a port
+    // range, so it can never attach to another Home's runtime. A failure here
+    // is severe, not cosmetic: every Home-selected call would then report a
+    // missing record while the daemon is running, so the log must say why.
+    try {
+      await LocalGatewayEndpointRecord.write(host: host, port: _server!.port);
+    } catch (error) {
+      _logger.severe(
+        'Could not publish the local gateway runtime record: $error. A '
+        'Home-selected CLI call cannot discover this runtime until it is '
+        'published; check the Home permissions and restart the Agent.',
+      );
+    }
     unawaited(_listen());
   }
 
@@ -308,17 +331,25 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       final stateMode = (getSanadStateHome() != getSanadHome())
           ? 'isolated'
           : 'default';
+      final vault = SecretVaults.current;
       await _writeJsonResponse(request.response, {
         'status': 'ok',
         'platform_id': platformId,
         'url': _config.localGatewayUrl,
         'version': _config.version,
         'is_source': AppConfig.isSourceRun,
+        'home_id': _homeId ?? sanadHomeIdentity(getSanadHome()),
         'workspace_hash': _workspaceHash(),
         'dev_launcher_id': Platform.environment['SANAD_DEV_LAUNCHER_ID'],
         'dev_runtime_nonce': Platform.environment['SANAD_DEV_RUNTIME_NONCE'],
         'state_mode': stateMode,
         'gateway_enabled': _config.enableGateway,
+        // The Agent vault is the OS credential vault. A closed vault means
+        // provider keys, MCP secrets, user secrets and the Device Credential
+        // cannot be read, so this reports it as a non-secret status instead of
+        // leaving it inside one log line.
+        'secret_vault': vault?.statusLabel ?? 'unavailable',
+        'secret_vault_reason': vault?.unavailableReason,
         'cloud_registered':
             getIt.isRegistered<ServerSanadGatewayPlatform>() &&
             getIt<ServerSanadGatewayPlatform>().isCloudRegistered,
@@ -1294,7 +1325,11 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       await engine.close();
     }
     _voiceEngines.clear();
+    final boundPort = _server?.port;
     await _server?.close(force: true);
+    if (boundPort != null) {
+      await LocalGatewayEndpointRecord.removeIfOwned(port: boundPort);
+    }
   }
 
   Map<String, dynamic> _withCommandIdentity(

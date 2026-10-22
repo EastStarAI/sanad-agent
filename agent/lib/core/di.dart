@@ -46,6 +46,7 @@ import 'package:sanad_agent/plugins/plugin_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
@@ -303,6 +304,11 @@ void setupDI() {
       beforeControlledExit: () async {
         getIt<AgentStateMaintenanceService>().runPendingVacuum();
       },
+      // A managed pause or stop ends this process from the coordinator, not
+      // from `dispose()`: without this hook the Home kept an endpoint record
+      // naming a pid that was gone, and the next Home-selected call reported a
+      // Home that stopped cleanly as stale.
+      beforeDaemonExit: LocalGatewayEndpointRecord.removeOwnedOnExit,
     ),
   );
   getIt.registerLazySingleton<DeviceSettingsService>(

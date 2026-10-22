@@ -49,17 +49,34 @@ class DaemonRestartPreparation {
 
 /// Owns transport-neutral daemon exits so HTTP and Sanad protocol commands use
 /// the same supervised restart behavior.
+///
+/// Every exit it performs runs the same bounded pre-exit cleanup first, so a
+/// runtime that ends for any reason cannot leave its Home's endpoint record
+/// naming a pid that is gone.
 class DaemonRestartCoordinator {
   DaemonRestartCoordinator({
     SessionRunOrchestrator? sessionOrchestrator,
     Future<void> Function()? beforeControlledExit,
+    Future<void> Function()? beforeDaemonExit,
+    Duration beforeDaemonExitTimeout = defaultBeforeDaemonExitTimeout,
     DaemonExit? exitDaemon,
   }) : _sessionOrchestrator = sessionOrchestrator,
        _beforeControlledExit = beforeControlledExit,
+       _beforeDaemonExit = beforeDaemonExit,
+       _beforeDaemonExitTimeout = beforeDaemonExitTimeout,
        _exitDaemon = exitDaemon ?? exit;
+
+  /// Longest a `beforeDaemonExit` hook may run before the daemon exits anyway.
+  ///
+  /// The hook only touches local files, so the bound is far above its real
+  /// cost; it exists so a stuck cleanup can never turn a requested stop into a
+  /// runtime that refuses to exit.
+  static const Duration defaultBeforeDaemonExitTimeout = Duration(seconds: 2);
 
   final SessionRunOrchestrator? _sessionOrchestrator;
   final Future<void> Function()? _beforeControlledExit;
+  final Future<void> Function()? _beforeDaemonExit;
+  final Duration _beforeDaemonExitTimeout;
   final DaemonExit _exitDaemon;
   final Logger _logger = Logger('DaemonRestartCoordinator');
   bool _restartInProgress = false;
@@ -254,7 +271,7 @@ class DaemonRestartCoordinator {
             ? 'Exiting daemon for forced supervised restart...'
             : 'Exiting daemon for supervised restart...',
       );
-      _exitDaemon(0);
+      await _exitAfterCleanup(0);
       _activePreparation = null;
       _restartInProgress = false;
     } on Object catch (error, stackTrace) {
@@ -284,7 +301,7 @@ class DaemonRestartCoordinator {
       await Future<void>.delayed(acknowledgementDelay);
     }
     _logger.info('Exiting daemon with resumable work preserved...');
-    _exitDaemon(123);
+    await _exitAfterCleanup(123);
     _activePreparation = null;
     _restartInProgress = false;
   }
@@ -338,7 +355,31 @@ class DaemonRestartCoordinator {
     await _sessionOrchestrator?.requestStopAll(preserveInteractiveWaits: true);
     await Future<void>.delayed(acknowledgementDelay);
     _logger.info('Exiting daemon permanently...');
-    _exitDaemon(123);
+    await _exitAfterCleanup(123);
+  }
+
+  /// Ends the process after the one bounded pre-exit cleanup.
+  ///
+  /// The cleanup is the step that keeps this Home's runtime record from
+  /// outliving its daemon: `dispose()` is only reached on an orderly platform
+  /// shutdown, while a managed pause, stop, or restart ends the process here.
+  /// It is bounded twice — a throwing hook and a hook that never completes both
+  /// still end the process — because a runtime that refuses to exit is worse
+  /// than a leftover record, which already fails closed as stale.
+  Future<void> _exitAfterCleanup(int exitCode) async {
+    final cleanup = _beforeDaemonExit;
+    if (cleanup != null) {
+      try {
+        await cleanup().timeout(_beforeDaemonExitTimeout);
+      } on Object catch (error, stackTrace) {
+        _logger.warning(
+          'Pre-exit cleanup failed; the daemon still exits.',
+          error,
+          stackTrace,
+        );
+      }
+    }
+    _exitDaemon(exitCode);
   }
 
   void scheduleRestart({

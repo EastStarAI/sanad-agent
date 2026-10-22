@@ -1,6 +1,6 @@
 ---
 title: "Sanad CLI Architecture"
-description: "Attached and in-process transports, runtime ownership, automation output, cancellation, and test-isolation contracts."
+description: "Attached and in-process transports, startup vault order, prompt ownership and code-identity authorization failures, runtime ownership, automation output, cancellation, and test-isolation contracts."
 ---
 
 # Sanad CLI Architecture & Gateway Runtime Contract
@@ -58,13 +58,147 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
 
 2. **Secret Credential Lookup:**
    - The CLI reads the local gateway token from `SANAD_HOME/.local_token`.
-   - File permissions are validated to ensure owner-only access.
+   - File permissions are validated to ensure owner-only access: a token that is
+     not `0600` is refused with code `token_permissions` (never auto-repaired,
+     because a non-daemon caller must not write to the Home), and a missing,
+     empty, or unreadable file keeps its own `token_not_found` / `token_empty` /
+     `token_read_error` code. The desktop Client and `sanad-dev` apply the same
+     `0600` rule.
    - The token is never exposed in logs, CLI arguments, or printed output.
+   - Each Home owns a distinct token. `.local_token.home` binds `.local_token`
+     to the SHA-256 identity of that Home root, so a Home cloned or restored
+     from another Home (the Test-Home practice that once produced one shared
+     `.local_token` across `~/.sanad-test-*`) is detected and rotated instead of
+     inheriting the source credential.
+   - **Only the daemon rotates.** `LocalGatewayCredentials.loadOrCreateForDaemonStart`
+     is the single entry point that creates, migrates, or rotates the
+     credential, and only `bin/daemon.dart` (after `SanadRuntimeOwnership.acquire`
+     and before the listener serves) and the daemon's own platform fallback call
+     it. It rotates when the binding is missing (a pre-binding Home) or names a
+     different Home, and it writes the binding *before* the token so a concurrent
+     reader never sees a rotated token beside a stale binding.
+   - Every non-daemon caller is read-only: `sanad login`/logout notify through
+     `LocalAuthenticationExchangeNotifier`, whose default loader reads with
+     `LocalGatewayCredentials.readExisting()` and never creates or rotates.
+     Rotating from there would invalidate the credential a running daemon (and
+     every desktop Client re-reading `.local_token`) already holds, which is the
+     upgrade regression this contract rules out. `tryRead` treats a token bound
+     to another Home as absent, so a clone never lends its credential to the
+     Home it was copied into.
+   - A `.local_token` whose binding names another Home is refused by discovery
+     with `token_bound_to_other_home`; start the Agent for that Home to issue
+     its own credential.
 
 3. **Port Resolution & Probing:**
-   - Explicit override: `--url <url>` or `--port <port>` or `LOCAL_GATEWAY_PORT`.
-   - Default probe: `http://127.0.0.1:58085/health` with `x-sanad-local-token: <token>`.
-   - Worktree range scan: If 58085 does not answer, the discovery service scans ports `58086`–`58185` with bounded timeout to find the instance matching the active workspace.
+   - Explicit override: `--gateway-url <url>` or `--port <port>`.
+   - **Selected Home:** when `--home` or `SANAD_HOME` selects a Home, the CLI
+     resolves the endpoint from that Home's own runtime record
+     (`.local_gateway_endpoint.json`, written by the daemon after it binds and
+     removed on every exit path that ends the runtime) and probes only that
+     endpoint. Three paths end the runtime and all of them run one bounded
+     pre-exit cleanup: a termination signal (`SIGTERM`/`SIGINT`), the managed
+     pause or stop a coordinator performs after `/shutdown` or `/restart`
+     flushed its response (exit `123`, which is what `sanad-dev stop` produces),
+     and a controlled refresh (exit `0`) whose successor republishes the record
+     when it binds. Every path removes the record only while it still names its
+     own pid, and a cleanup that fails or never completes still lets the daemon
+     exit — a runtime that refuses to stop is worse than a record the next call
+     fails closed on. A record is
+     usable only when it is owner-only (`0600`), names a loopback host, carries
+     a process id that is still alive, and its `home_id` matches the selected
+     Home's identity; the answer is then accepted only when `/health` reports
+     the same `home_id`. Removal is ownership-checked and atomic: the record is
+     claimed with a rename before the identity is re-verified, so a draining
+     daemon can never delete a successor runtime's republished record. An
+     unclean death (`SIGKILL`) leaves the record to fail closed as
+     `home_runtime_stale`, which is the signal that the previous runtime did not
+     stop cleanly. A signal-driven exit keeps the signal's own status
+     (`128 + signal`: `143` for `SIGTERM`, `130` for `SIGINT`) instead of
+     exiting `0`, so a shell, `sanad-dev`, and a real supervisor still see a
+     signal termination rather than a requested clean stop.
+   - **Inherited values never override a selection.** `SANAD_GATEWAY_URL`,
+     `LOCAL_GATEWAY_URL`, and `LOCAL_GATEWAY_PORT` come from a parent process
+     (a launcher, a test harness, another runtime) and are ignored entirely when
+     a Home is selected, so a Home X token is never sent to an endpoint that was
+     not chosen for that Home. They are still honoured when no Home is selected.
+   - **Every healthy answer must prove the Home.** An explicit
+     `--gateway-url`/`--port` target, an inherited URL/port, the default port
+     probe, and every scanned port are all accepted only when `/health` reports
+     the resolved Home identity — token acceptance alone is not evidence.
+   - **A refusal is an answer, not silence.** With a selected Home, an explicit
+     `--gateway-url`/`--port` target that answers `401`/`403` has provably
+     refused *this Home's* credential, so it is not that Home's daemon: the call
+     fails closed with `home_identity_mismatch` and exit `78`, and no WebSocket
+     connect is attempted. A target that does not answer at all remains "not
+     running", which keeps `--standalone` and the oneshot standalone fallback
+     working. A recorded endpoint (`step 3`) that refuses the credential is
+     treated the same way; without a selected Home the historical behaviour is
+     kept, so the legacy default-Home flow is unchanged.
+   - **Backward compatibility (default Home only):** a daemon released before
+     `home_id` existed reports none. A *missing* `home_id` is tolerated only on
+     the default Home's port `58085`; a named Home, a scanned port, or a
+     *mismatching* `home_id` always fails closed.
+   - A selected Home with no live record, a stale record (its publisher process
+     is gone), an unreachable recorded endpoint, or a daemon that serves another
+     Home fails closed with exit code `78` and an actionable message. A
+     Home-selected call never probes `58085` and never scans the range, so an
+     unpinned mutating command can no longer attach to another Home's runtime.
+   - Default Home only: probe `http://127.0.0.1:58085/health`, then scan
+     `58086`–`58185` with a bounded timeout. Every candidate must prove the
+     resolved Home identity over `/health`.
+
+   **Endpoint-resolution failures (`session …` and any other attached command):**
+   - Exit code `78` (configuration), not `1`. Exit code `1` continues to mean the
+     command ran and failed; `78` means the environment could not name an
+     endpoint this Home owns, and the message names the fix.
+   - `--json` emits the same result envelope the CLI uses elsewhere
+     (`session_id`, `text`, `tool_executions`, `exit_code`, `error`), not the
+     removed `{"exit_code": 1, "error": …}` shape, and the message is duplicated
+     on `stderr` so a text consumer sees it too. The envelope also carries
+     `error_code`, the discovery code below, so a consumer branches on the code
+     instead of parsing English; it is absent when the failure has no code.
+     Commands that deliberately fall back instead of failing (`sanad run`,
+     workspace, doctor) keep their own contract and report no code because no
+     endpoint failure terminates them.
+   - Error codes: `home_runtime_missing`, `home_runtime_foreign`,
+     `home_runtime_stale`, `home_runtime_unhealthy`, `home_identity_mismatch`,
+     plus the token codes above. Token-read and permission problems stay
+     distinguishable (`token_permissions` vs `token_read_error` vs
+     `token_not_found`).
+
+### 3.1. Startup Order and the Agent Vault
+
+Startup order is a contract, because every step before dispatch touches the Home:
+
+```
+--version/help (pure, no Home)  →  --home selection  →  E2E isolation check
+  →  Home bootstrap  →  Agent vault (only when the command can touch a secret)
+  →  bundled-skill sync  →  `.env` seeding  →  command dispatch
+```
+
+- **The vault opens only for a command that can read or write a secret.** `SanadCommandRunner.requiresSecretVault` classifies the command line with the same parser the commands use, per subcommand: `session`, `workspace`/`ws`, `memory`, the pure queries, `schedule list`, and `skills list` never open it; every other command and subcommand — including an unrecognized or unparseable line, and a bare family name such as `schedule` — keeps opening it, so a new command can never silently lose its credentials. The in-process standalone runtime still opens the vault itself (`StandaloneCliTurnClient.start`) and the daemon opens it in `bin/daemon.dart`.
+- **A process that never opened the vault cannot write a secret to a file.** `SecretVaultPolicy.vaultSkipped` records the classification, and `SecureFileSecretStore` (the plaintext provider-secret store, including the `di.dart` fallback) refuses `write`, `remove`, and `pruneOrphans` in such a process with `plaintext_fallback_blocked`. A vault-free command that suddenly reaches a provider-secret write therefore fails loudly instead of leaving plaintext on disk.
+- **Why the vault is not free.** The vault is the OS credential vault (macOS Keychain, Windows DPAPI, Linux Secret Service). Opening it reads each namespace owner index, and macOS answers a read of a generic-password item whose ACL does not accept the calling binary with an interactive authorization dialog instead of data. In a desktop session that dialog *is* shown for a CLI binary, and the reading thread then blocks *inside* the security framework, before the event loop can serve anything: the process prints nothing (not even the bundled-skill line), opens no socket, spawns no child, and never exits. `sample(1)` shows the blocked thread in `SecItemCopyMatching → SecKeychainItemCopyContent → SecurityServer::ClientSession::decrypt → mach_msg` while the Dart main isolate idles in `Dart_RunLoop`, and `securityd` logs `displaying keychain prompt for <binary>; ACL: … <CodeSignatureAclSubject … identifier dartvm …>`. The reported defect was therefore not "the dialog never appears": it was a dialog nobody was looking at while an automation caller, the Client, or a scheduler waited for output that could never come. A gateway command that opens the vault for no reason turns any unattended caller into that wait.
+- **Why it presents as "AOT only".** The ACL is a *code-identity* check, not an interpreter check. A vault populated by `fvm dart run …` records the FVM `dartvm` signature, so the same command under JIT is already authorized while a `dart compile exe` build — a different ad-hoc signature with no matching requirement — is asked to authorize. Any other identity differs the same way: a newer release binary whose signature no longer matches an older item, or the packaged app versus a separately installed CLI.
+- **Who may start the dialog.** `SecretVaultPolicy` decides it from explicit evidence, once per process, before the vault opens:
+
+  | Evidence | Detected by | Interaction |
+  | --- | --- | --- |
+  | Daemon entry point (`daemon`, alias `start`, direct `bin/daemon.dart`) | `SanadCommandRunner.dispatchesToDaemon`, `bin/daemon.dart` | allowed |
+  | Interactive CLI (`run --standalone`, `models`, `providers`, `setup`, `login`, `doctor`) | stdin **and** stdout are terminals, no machine-output flag | allowed |
+  | `--json`, `--quiet`, `-q` | command line | forbidden (`machine_output`) |
+  | `--child-process` | command line | forbidden (`supervised_child`) |
+  | Client, scheduler, delegate relay, script, pipe | stdin or stdout is not a terminal | forbidden (`no_terminal`) |
+  | Spawner declaration | `SANAD_SECRET_VAULT_INTERACTION=forbid`/`allow` | honour the declaration |
+
+  There is no inference from a parent process name: a caller that allocates a terminal on purpose sets the environment variable, and everything else is decided by the command line and the stdio shape.
+- **The daemon keeps the prompt.** It is the process that migrates legacy secret files, an operator starts it from the desktop app or a launchd service, and its one-time authorization dialog is the intended way to grant access. It never inherits the CLI's stdio-shaped detection.
+- **Only a process with nobody present suppresses the dialog.** `MacOsKeychainAgentSecretStore` then attaches an `LAContext` with `interactionNotAllowed` through the non-deprecated `kSecUseAuthenticationContext` and switches the legacy file keychain with `SecKeychainSetUserInteractionAllowed(0)` (the file keychain ignores the per-query context; the switch is safe there precisely because the process already established that no human can answer anything). An authorization-demanding item returns `errSecInteractionNotAllowed` (`-25308`) or `errSecInteractionRequired` (`-25315`), `errSecAuthFailed` (`-25293`) means the item's access control rejected this binary, and `errSecUserCanceled` (`-128`) means somebody dismissed the dialog. Each maps to its own `AgentSecretStoreUnavailableReason` (`interaction_forbidden`, `interaction_required`, `authorization_denied`, `authorization_canceled`) and its own message, so a dismissed dialog never reads as a rejected binary.
+- **An interactive run announces the wait.** Before its first Keychain query the store prints one stderr line, `Waiting for macOS Keychain approval for ai.eaststar.sanad.agent…`, and never a secret. A process that forbids interaction never prints it, because it never starts the dialog.
+- **A closed vault is reported, not buried.** `SecretVaults` records the reason code, `sanad doctor` prints `[✗] Agent Vault: unavailable (<reason>)` with the recovery steps, the daemon logs an actionable warning naming what is unreadable and how to recover, and the local gateway `/health` payload carries `secret_vault: available|unavailable` plus `secret_vault_reason`. All three are non-secret.
+- **Recovery for an affected Home.** Authorization is per code identity, so the recovery is to give the item an identity that trusts the binary you run: Keychain Access → the `ai.eaststar.sanad.agent` item → Access Control → add the Agent binary you invoke. Nothing in Sanad rewrites, re-creates, or re-ACLs vault items, and a binary that cannot read the owner index cannot migrate them either, so a Home whose items belong to a foreign identity is recovered out of band or by running the build that created them. A release whose signature keeps a stable designation-based requirement does not re-ask on upgrade; a development AOT build changes identity on every compile and therefore always differs from a vault populated by `fvm dart run …`.
+- **Regression guard.** `agent/tool/cli_aot_smoke.dart` (the `cli-automation` CI job, all three OSes) compiles the CLI with `dart compile exe`, starts `agent/tool/fake_local_gateway.dart` on an ephemeral loopback port, and runs `session list`, `session show`, and `session stop` against a throwaway Home and token with a hard per-command deadline. It asserts that every gateway command succeeds *and* that the throwaway Home holds no `secret_vault*` artifact, and then that `models list` — which does read provider credentials — opens the vault, finishes, and prints no approval notice in a process with no terminal. `test/cli/cli_vault_open_policy_test.dart` pins the classifier, and `test/core/auth/secret_vault_interaction_policy_test.dart` pins the status mapping, the detection matrix, the plaintext guard, and the `LAContext` path.
+
 
 ---
 
@@ -411,4 +545,13 @@ content is joined as `"<prompt>\n\n<piped>"`, and piped content alone becomes th
   iteration.
 - The flag does not change dispatch, session, artifact, or exit-code behavior: it only removes the
   stdin splice.
+- **Endpoint failures fall back to standalone, deliberately.** `StandaloneFallbackStrategy.resolveMode`
+  catches every discovery failure, so the `home_runtime_*` codes (`home_runtime_missing`,
+  `home_runtime_foreign`, `home_runtime_stale`, `home_runtime_unhealthy`, `home_identity_mismatch`)
+  resolve to `CliRuntimeMode.standalone` for `sanad run` instead of exiting `78`. That is correct
+  for a one-shot command: no daemon proves it owns the Home, so the command runs in-process rather
+  than attaching to a runtime that may belong to another Home. The state-root ownership lease is the
+  backstop — if a runtime really does own that Home, the standalone start fails closed with exit `78`
+  and an explicit message instead of competing for SQLite. `session …` commands have no standalone
+  path, so they surface the same discovery failures directly with exit `78` (see §3).
 - Coverage: `agent/test/cli/run_command_test.dart`.

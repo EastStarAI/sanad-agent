@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sanad_agent/capabilities/mcp/mcp_secret_store.dart';
 import 'package:sanad_agent/core/auth/agent_secret_namespaces.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
@@ -212,5 +213,59 @@ void main() {
         );
       },
     );
+
+    test(
+      'an unavailable vault reports its reason code for doctor and /health',
+      () async {
+        await SecretVaults.closeAll();
+        final vaults = await SecretVaults.open(
+          store: _ReasonCodedUnavailableStore(),
+        );
+        expect(vaults.available, isFalse);
+        expect(
+          vaults.unavailableReason,
+          AgentSecretStoreUnavailableReason.interactionForbidden,
+        );
+        expect(vaults.statusLabel, 'unavailable');
+        expect(vaults.unavailableMessage, contains('no human'));
+        final logged = await drainLogged();
+        expect(
+          logged.where(
+            (line) => line.contains(
+              AgentSecretStoreUnavailableReason.interactionForbidden,
+            ),
+          ),
+          isNotEmpty,
+          reason: 'the daemon log must name the reason code',
+        );
+        // A closed vault still rejects writes instead of degrading to a file.
+        expect(
+          () => VaultSecretStore(vaults).write(
+            'inst-9',
+            SecureFileSecretStore.apiKeyRecord('inst-9', 'sk-blocked-0009'),
+          ),
+          throwsA(isA<AgentSecretStoreUnavailable>()),
+        );
+      },
+    );
   });
+}
+
+/// A store whose every read refuses the way macOS does when the item demands an
+/// interactive authorization in a process that has nobody to answer it.
+final class _ReasonCodedUnavailableStore implements AgentSecretStore {
+  static const _error = AgentSecretStoreUnavailable(
+    'The Agent vault item demands an interactive authorization and this '
+    'process has no human to answer it.',
+    reasonCode: AgentSecretStoreUnavailableReason.interactionForbidden,
+  );
+
+  @override
+  Future<String?> read(String key) async => throw _error;
+
+  @override
+  Future<void> write(String key, String value) async => throw _error;
+
+  @override
+  Future<void> delete(String key) async => throw _error;
 }
