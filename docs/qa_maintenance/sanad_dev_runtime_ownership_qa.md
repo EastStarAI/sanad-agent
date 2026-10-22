@@ -94,6 +94,9 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Client CLI build | Uses `dart build cli` and produces `client-bundle/bin/sanad_client` beside its dynamic libraries; `dart compile exe` is never attempted for the Client. |
 | `reset --dry-run` in a linked worktree | Prints worktree, Test Home, ports, data plan, and `interactive-driver`; no process, Home, or fixture is touched. |
 | `reset` from a worktree whose runtime is running | Stops only this worktree's Agent and Client, proves the ports are free, then starts a driver-enabled pair and prints one `reset:` line with ports, commit, state, Home, and fixture. |
+| Any accepted `reset` | Restarts `all --driver` — Agent plus driver-enabled Client — in one step; no reset path restarts a single component, and a Home that cannot start ends nonzero instead of leaving a partial pair. |
+| Inspect the Home's parent after a successful `reset` | No `.sanad-dev-reset-staging-*` directory remains. A leftover staging directory means a restore crashed or was rolled back, and its contents are the rollback material rather than the restored state. |
+| `reset --keep-data` against a Home whose `state.db` is not a database | Ends within about 20 seconds with exit 1 and names the Agent child's own error line (for example `SqliteException(26): … file is not a database`); it does not sit on the three-minute Agent startup window, and `status` shows the same stored reason. |
 | `reset` while the Home is `~/.sanad`, `~/.sanad-test*`, or another worktree's Test Home | Refuses with exit 64 before stopping anything and names the worktree-owned Home. |
 | `reset --fixture clean` with a corrupt or missing fixture | Fails closed after the stop, prints the reason plus the `--keep-data` recovery command, and does not start a runtime. |
 | `reset --save-fixture before --fixture missing` | Saves the fixture successfully, then reports the failed restore and returns nonzero. |
@@ -120,6 +123,9 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Run `apply` twice after a UI change while no Client is running | The Client action is reported as skipped, stays pending, and the next `apply` reports that path again instead of calling it applied. |
 | Run `apply` twice with no edit in between | The second run reports that the worktree is up to date and requests no component action. |
 | Edit an already-dirty file after a successful `apply` | The next `apply` reports the change instead of treating the worktree as already applied, because the recorded baseline covers content, not just the file list. |
+| `git checkout -- <path>` an applied tracked edit, then `apply --dry-run` | Reports the reverted path and `restart agent`: the file equals the start commit, so Git reports nothing, but it differs from the applied baseline the running Agent still holds. |
+| Delete an applied file, then `apply --dry-run` | Reports the deleted path and `restart agent`, including an applied untracked file that leaves no Git trace at all. |
+| Re-edit an applied file to new content, then `apply --dry-run` | Reports the path again; only content that still matches the recorded fingerprint counts as applied. |
 | Run `apply` while another build or test runs in the same worktree | Prints the refusal with every matching PID and redacted command line, returns nonzero, and requests no component action. A `--dart-define=SANAD_TOKEN=…` value never appears in that output. |
 | Run `sanad-dev restart agent` or `restart client` during the same condition | Same refusal; `--force` performs the restart anyway. |
 | Run `doctor` on a driver-enabled pair with both macOS grants | Reports the driver entry point, the driver-enabled Client count, port and Home ownership, and `Accessibility: granted` plus `Screen Recording: granted` after the next-action line; mutates nothing and opens no OS dialog. |

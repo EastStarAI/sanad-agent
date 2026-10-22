@@ -48,6 +48,7 @@ part 'src/runtime/lifecycle/runtime_run.dart';
 part 'src/runtime/lifecycle/runtime_status.dart';
 part 'src/runtime/lifecycle/runtime_reset.dart';
 part 'src/runtime/lifecycle/runtime_apply.dart';
+part 'src/runtime/lifecycle/runtime_apply_changes.dart';
 part 'src/runtime/lifecycle/runtime_refresh.dart';
 part 'src/runtime/lifecycle/runtime_compiled_cli.dart';
 part 'src/runtime/lifecycle/runtime_activity_guard.dart';

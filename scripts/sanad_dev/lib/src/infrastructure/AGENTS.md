@@ -13,7 +13,7 @@ This contract governs foundational models, storage, process execution, and confi
 * `runtime_context.dart`: Worktree path, branch, and port calculation models.
 * `path_equivalence.dart`: Host-aware canonical path identity and Windows device-prefix normalization.
 * `runtime_component_control.dart`: Component control IPC manifest structures.
-* `startup_attempt.dart`, `startup_probe.dart`: Startup attempt and probe primitives.
+* `startup_attempt.dart`, `startup_probe.dart`: Startup attempt, bounded readiness probe, and Agent crash-loop detection primitives.
 * `terminal_launcher.dart`: External OS terminal window launching.
 
 ---

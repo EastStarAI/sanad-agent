@@ -310,6 +310,10 @@ SanadDevApplyDecision decideSanadDevApply({
 /// (or the status list alone) cannot decide whether that edit was already
 /// applied. Only comparing the file's current content with the content that was
 /// applied can, and it does so for tracked and untracked files alike.
+///
+/// The recorded paths stay in the inspection set even when Git stops reporting
+/// them, so an edit that is reverted to `HEAD` or a file that is deleted after an
+/// apply is still a difference from the applied baseline and is applied again.
 class SanadDevApplyBaseline {
   const SanadDevApplyBaseline({required this.commit, this.files = const {}});
 
@@ -411,90 +415,6 @@ Future<void> writeSanadDevApplyBaseline(
   await restrictRuntimePath(file.path);
 }
 
-/// Changed paths plus the fingerprints they were derived from.
-class SanadDevChangedPaths {
-  const SanadDevChangedPaths({required this.paths});
-
-  final List<String> paths;
-}
-
-/// Paths changed since [startCommit], minus the ones already applied.
-///
-/// [appliedFingerprints] is the per-path content snapshot recorded by the last
-/// successful `apply`. A candidate is dropped only when its current content
-/// matches the fingerprint that was applied for it, so an already-applied tracked
-/// working-tree edit is not reported twice, a second edit of the same file is,
-/// and untracked files behave identically.
-Future<SanadDevChangedPaths> inspectChangedPaths({
-  required String repositoryRoot,
-  required String? startCommit,
-  Map<String, String> appliedFingerprints = const {},
-}) async {
-  final candidates = <String>{};
-  final statusOutput = await _gitOutput(repositoryRoot, [
-    'status',
-    '--porcelain',
-    '--untracked-files=all',
-  ]);
-  candidates.addAll(_porcelainPaths(statusOutput));
-  if (startCommit != null && startCommit.trim().isNotEmpty) {
-    candidates.addAll(
-      await _gitChangedPaths(repositoryRoot, [
-        'diff',
-        '--name-only',
-        startCommit.trim(),
-      ]),
-    );
-  }
-  final paths = <String>[];
-  for (final path in candidates) {
-    final applied = appliedFingerprints[path];
-    if (applied != null &&
-        applied == sanadDevApplyPathFingerprint(repositoryRoot, path)) {
-      continue;
-    }
-    paths.add(path);
-  }
-  paths.sort();
-  return SanadDevChangedPaths(paths: paths);
-}
-
-Future<String> _gitOutput(String repositoryRoot, List<String> arguments) async {
-  final result = await Process.run('git', [
-    '-C',
-    repositoryRoot,
-    ...arguments,
-  ]);
-  return result.exitCode == 0 ? result.stdout.toString() : '';
-}
-
-List<String> _porcelainPaths(String output) {
-  final paths = <String>[];
-  for (final raw in const LineSplitter().convert(output)) {
-    final line = raw.trimRight();
-    if (line.isEmpty) continue;
-    final path = line.length > 3 ? line.substring(3).trim() : '';
-    if (path.isEmpty) continue;
-    final renamed = path.contains(' -> ') ? path.split(' -> ').last.trim() : path;
-    paths.add(renamed.replaceAll('"', ''));
-  }
-  return paths;
-}
-
-Future<List<String>> _gitChangedPaths(
-  String repositoryRoot,
-  List<String> arguments,
-) async {
-  final output = await _gitOutput(repositoryRoot, arguments);
-  final paths = <String>[];
-  for (final raw in const LineSplitter().convert(output)) {
-    final line = raw.trimRight();
-    if (line.isEmpty) continue;
-    paths.add(line.replaceAll('"', ''));
-  }
-  return paths;
-}
-
 /// Inspects the runtime, decides the lightest correct action, and runs it.
 Future<void> handleRuntimeApply({
   required bool dryRun,
@@ -503,7 +423,8 @@ Future<void> handleRuntimeApply({
   String? sanadHomePath,
   bool? driverClientsPresent,
   ForeignActivityDetector? detectActivity,
-  Future<SanadDevRuntime> Function({String? sanadHomeOverride})? runtimeProvider,
+  Future<SanadDevRuntime> Function({String? sanadHomeOverride})?
+  runtimeProvider,
   void Function(String message)? printMessage,
   void Function(String message)? printError,
 }) async {

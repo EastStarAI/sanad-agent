@@ -346,9 +346,25 @@ is the single command that replaces the hand-written stop/restore/run sequences:
    `reset: worktree=… agent=… vm=… sha=… state=… home=… fixture=…`.
 
 `reset` always launches a driver-enabled runtime, because that is its purpose.
-`--fixture` and `--keep-data` are mutually exclusive; `--keep-data` is otherwise
-the explicit default, since a `reset` without a fixture restarts the pair and
-leaves the Home data alone. `--dry-run` prints the plan and touches nothing.
+It restarts `all --driver` — one Agent plus one driver-enabled Client — in every
+path, including `--keep-data`: there is no reset mode that restarts a single
+component. A reset therefore ends either with a managed driver pair or with a
+nonzero exit; a Home that cannot start is a failed reset, never a partial
+success. `--fixture` and `--keep-data` are mutually exclusive; `--keep-data` is
+otherwise the explicit default, since a `reset` without a fixture restarts the
+pair and leaves the Home data alone. `--dry-run` prints the plan and touches
+nothing.
+
+The per-Home staging directory exists only while a restore runs, or after a
+restore crashed. A restore that succeeds deletes its staging directory and its
+backup, so a finished `reset` leaves nothing named
+`.sanad-dev-reset-staging-*` beside the Home — finding one means a restore did
+not complete, and its contents are the rollback material, not the restored
+state. Staging is never inside the Home and never a place to read the state a
+successful reset produced. A Home that cannot start also fails fast: readiness
+stops within seconds once the Agent child keeps dying, and the reported line
+carries the child's own error instead of the CLI waiting out the three-minute
+startup window.
 
 Home scope is deliberately narrower than every other command. Only a Home equal
 to, or below, `<user home>/.sanad/dev/homes/<worktree id>` is accepted. The
@@ -450,13 +466,19 @@ that field yields a note and inspects the working tree only.
 After a successful `apply`, the command records a per-path content snapshot in
 `<runtime directory>/apply-baseline.json`: the repository-relative path of every
 changed file mapped to a SHA-256 of the bytes that were applied (or the marker
-`missing` for a deletion). The next run drops a candidate path only when its
-current content still hashes to the recorded value, so an already-applied
-working-tree edit is not reported twice and a second edit of the same file is. The
-earlier whole-worktree signature could not do this: `git diff --name-only <start
-commit>` reports a tracked working-tree edit on every call regardless of the
-signature, so a tracked file repeated forever while only an untracked file
-appeared idempotent.
+`missing` for a deletion). The next run inspects the union of the working tree,
+the commit range since the start commit, and every recorded path, and drops a
+candidate only when its current content still hashes to the recorded value. The
+union is what makes the baseline authoritative: `git checkout -- <path>` returns
+a tracked edit to the start commit's content, an applied untracked file can be
+deleted without leaving any Git trace, and in both cases Git reports nothing
+while the running Agent still holds the applied code. Comparing against the
+recorded fingerprint reports the revert and the deletion, so an already-applied
+working-tree edit is not reported twice while a revert, a deletion, or a second
+edit of the same file is. The earlier whole-worktree signature could not do this:
+`git diff --name-only <start commit>` reports a tracked working-tree edit on
+every call regardless of the signature, so a tracked file repeated forever while
+only an untracked file appeared idempotent.
 
 The snapshot advances only for the paths whose actions actually ran. An action
 skipped because its target — typically the Client — is not running stays
@@ -630,6 +652,22 @@ attempt projects its exact stage in `status` for at most the six-minute
 component-control window, suppressing premature manual/orphaned/unverifiable
 labels without granting mutation. Expired or terminal attempts defer entirely
 to current process and lease evidence.
+
+The Agent runs under the in-process `HotRestartManager` supervisor, so a Home it
+cannot open does not end the launch: the supervisor keeps the process alive and
+restarts the dying child. Readiness therefore watches two terminal signals —
+the Agent child exiting non-zero twice while the supervisor keeps restarting it,
+or the spawned Agent process itself exiting — and ends the wait instead of
+running out the three-minute Agent window. Twice is the threshold because one
+restart is a child failure the supervisor can absorb. The failure reason in the
+startup record carries that signal plus the Agent's last output line that
+explains it: the exception's first line (`SqliteException(26): … file is not a
+database`), taken after the supervisor chatter and stack frames are dropped and
+after secret-shaped text is redacted, bounded to 300 characters. The launch
+keeps exit 1, and the background launcher and `status` report that stored reason,
+so `sanad-dev reset` names the child's error instead of only
+`agent readiness failed`. The paired Client readiness ends with the same signal,
+because an Agent that cannot start makes that Client useless.
 
 ## Managed component journals
 

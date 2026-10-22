@@ -104,6 +104,7 @@ void main() {
       bool dryRun = false,
       bool stopFails = false,
       bool portsFree = true,
+      bool startFails = false,
     }) async {
       final lines = <String>[];
       await sanad_dev.handleRuntimeReset(
@@ -129,7 +130,7 @@ void main() {
               required device,
             }) async {
               events.add('start:${runtime.worktreeId}:$driverMode:$device');
-              return true;
+              return !startFails;
             },
         printMessage: lines.add,
         printError: (message) => lines.add(message),
@@ -280,6 +281,18 @@ void main() {
 
       expect(events, ['stop:${home.path}']);
       expect(output, contains('or a managed Client endpoint is still live'));
+      expect(exitCodes, [1]);
+    });
+
+    test('reports a failed restart and keeps exit 1', () async {
+      // An Agent that cannot start makes the restart fail; reset must report it
+      // and return nonzero instead of claiming a running runtime.
+      final output = await runReset(startFails: true);
+
+      expect(events, ['stop:${home.path}', 'start:feat-x-12345678:true:macos']);
+      expect(output, contains('Restarting this worktree runtime failed'));
+      expect(output, contains('Rerun "sanad-dev run"'));
+      expect(output, isNot(contains('reset: ')));
       expect(exitCodes, [1]);
     });
 

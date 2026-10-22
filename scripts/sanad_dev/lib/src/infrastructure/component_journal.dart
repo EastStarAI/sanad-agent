@@ -194,8 +194,12 @@ class ComponentProcessJournal {
   }
 }
 
-List<int> redactComponentOutput(List<int> bytes) {
-  var text = utf8.decode(bytes, allowMalformed: true);
+List<int> redactComponentOutput(List<int> bytes) => utf8.encode(
+  redactComponentOutputText(utf8.decode(bytes, allowMalformed: true)),
+);
+
+/// Removes bearer credentials and secret-shaped assignments from [text].
+String redactComponentOutputText(String text) {
   text = text.replaceAllMapped(
     RegExp(r'(authorization\s*[:=]\s*bearer\s+)[^\s]+', caseSensitive: false),
     (match) => '${match.group(1)}[REDACTED]',
@@ -207,7 +211,7 @@ List<int> redactComponentOutput(List<int> bytes) {
     ),
     (match) => '${match.group(1)}[REDACTED]',
   );
-  return utf8.encode(text);
+  return text;
 }
 
 Future<void> cleanupStaleComponentJournals(
