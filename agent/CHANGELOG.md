@@ -1,3 +1,21 @@
+## 1.0.18
+
+- Added remote `sanad-client` delegation through a canonical `device.cli.execute` relay with streamed output, cancel forwarding, one CLI owner per Sanad Home, and `default`/`full_access` approval (#188).
+- Hardened the relay: the window follows `--timeout`, background runs stop consuming stdin, pending approvals are announced, and a run without a terminal result exits 1 instead of reporting success (#256).
+- Ported execution trust, command authority, and secret isolation: daemon-private workspace policy, per-turn command authority, exact child environments, closed `.env` redaction, and localized Full Access confirmation (#245).
+- Added interactive secret acquisition with an owner-only value-free boundary, explicit `shell_execute` secret injection, and request/list/delete tools (#246).
+- Added `sanad skills list|add|remove|update` with provenance, collision protection, and content screening (#220), plus skill-declared `allowed_remote_exec` installer hosts (#222).
+- Added recurring schedules behind one `schedule_task` tool and made `sanad schedule list` a real read-only listing (#240).
+- Confined the remote workspace picker to `<SANAD_HOME>/workspaces` with Agent-enforced path validation (#239).
+- Supported multi-chunk atomic `file_edit` with pre-validation, overlap detection, and preserved line endings (#216), and added typed text/image tool results with `view_image` (#201).
+- Reworked compaction onto a whole-request target with a pre-send fit check (#247), bounded passes and hardened failed summaries (#236), reconciled stale startup locks and calibrated token estimation (#210), and reported truthful manual compaction feedback (#228).
+- Preserved pending user-input waits across managed stop and abrupt restart (#215), kept history identity on in-place rewrite with bounded recovery summarization (#233), and made terminal classification session-scoped with durable stamps (#238).
+- Kept fork markers and auto-failover notices at their causal position on every reload and history page (#241).
+- Projected each request into the destination provider's wire form (#232), dispatched OpenCode Go models on their per-model protocol (#234), and replayed an empty `reasoning_content` for same-route thinking tool turns (#251).
+- Reported update trust stages with installer guidance, added read-only `sanad service definition`, and made version/help queries pure (#242).
+- Applied `--home` before any Sanad Home access so an explicit Home can no longer be bypassed (#249).
+- Passed non-ASCII shell arguments intact on Windows via UTF-8 code page 65001 and reported `exit_code` from `shell_execute` (#255).
+
 ## 1.0.17
 
 - No Agent runtime changes; aligned the shared release version with the Client account-deletion patch (#204).

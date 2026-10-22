@@ -477,7 +477,7 @@ packages:
       path: "../release/contract"
       relative: true
     source: path
-    version: "1.0.17"
+    version: "1.0.18"
   sanad_windows_path:
     dependency: "direct main"
     description:
