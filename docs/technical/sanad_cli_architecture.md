@@ -141,7 +141,7 @@ The CLI supports both attached daemon operation and standalone fallback:
 3. **Automation and cancellation:**
    - `--timeout` defaults to 300 seconds and accepts 1–86400 seconds before or after `run`.
    - Timeout, SIGINT, and SIGTERM converge on one idempotent Stop request and then deterministic exit codes `124`, `130`, and `143`. A daemon block or refusal never reaches the timeout: it exits `1` immediately (Task 125).
-   - `--json` emits one result envelope on stdout; `--quiet` emits only final assistant text. Bootstrap notices and diagnostics use stderr in both modes.
+   - `--json` emits one result envelope on stdout; `--quiet` emits only final assistant text. Bootstrap notices and diagnostics use stderr in both modes. Every terminal reason is one line: the CLI owns the single leading `Error:` prefix and the sentence punctuation, so a refusal reads `Error: turn_failed: <cause>.` and a block reads `Error: blocked: <reason>. Intervene with sanad session stop <id> or retry from a client.` even when the daemon's own text already carries an `Error:` prefix or a trailing period (Task 125 round 2).
    - Gated tools are denied in non-interactive execution unless the caller supplies the invocation-scoped dangerous option `--allow-all-tools`; this option never mutates durable workspace policy.
 
 ---

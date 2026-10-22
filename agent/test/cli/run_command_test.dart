@@ -1174,6 +1174,92 @@ void main() {
       },
     );
 
+    test(
+      'reports one clean reason for a typed refusal and a blocked notice',
+      () async {
+        Future<({String line, String sessionId})> runAndCapture(
+          void Function(String sessionId) emit,
+        ) async {
+          stderrBuffer.clear();
+          final runner = SanadCommandRunner(
+            stdoutSink: stdoutBuffer,
+            stderrSink: stderrBuffer,
+            client: client,
+            stdinReader: () async => null,
+          );
+          final runFuture = _runTargeted(runner, [
+            'run',
+            '--timeout',
+            '300',
+            'Refused provider turn',
+          ]);
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          final sentEnvelope =
+              jsonDecode(mockSocket.sentMessages.last) as Map<String, dynamic>;
+          final sessionId = sentEnvelope['payload']['session_id'] as String;
+          emit(sessionId);
+          expect(await runFuture.timeout(const Duration(seconds: 5)), 1);
+          final line = const LineSplitter()
+              .convert(stderrBuffer.toString())
+              .where((value) => value.startsWith('Error:'))
+              .join('\n');
+          return (line: line, sessionId: sessionId);
+        }
+
+        // A refused turn: the daemon's answer already reads as an error line.
+        final refusal = await runAndCapture((sessionId) {
+          mockSocket.emitFromServer(
+            jsonEncode({
+              'type': 'device_event',
+              'session_id': sessionId,
+              'event': {
+                'type': 'final_answer',
+                'session_id': sessionId,
+                'payload': {
+                  'content': 'Error: Bad state: Workspace folder is unavailable.',
+                  'status': 'done',
+                  'error_code': 'turn_failed',
+                },
+              },
+            }),
+          );
+        });
+        expect(
+          refusal.line,
+          'Error: turn_failed: Bad state: Workspace folder is unavailable.',
+          reason: 'one reason line, one Error: prefix, one terminal period',
+        );
+
+        // A blocked notice whose own message is already a full sentence.
+        final blocked = await runAndCapture((sessionId) {
+          mockSocket.emitFromServer(
+            jsonEncode({
+              'type': 'device_event',
+              'session_id': sessionId,
+              'event': {
+                'type': 'session.runtime_notice',
+                'session_id': sessionId,
+                'payload': {
+                  'status': 'blocked',
+                  'reason': 'networkError',
+                  'title': 'Connection failed',
+                  'message':
+                      'The agent could not reach the runtime service.',
+                },
+              },
+            }),
+          );
+        });
+        expect(
+          blocked.line,
+          'Error: blocked: Connection failed: The agent could not reach the '
+          'runtime service. Intervene with sanad session stop '
+          '${blocked.sessionId} or retry from a client.',
+          reason: 'no doubled period between the reason and the intervention',
+        );
+      },
+    );
+
     test('returns exit code 1 for a terminal fatal runtime notice', () async {
       final runner = SanadCommandRunner(
         stdoutSink: stdoutBuffer,

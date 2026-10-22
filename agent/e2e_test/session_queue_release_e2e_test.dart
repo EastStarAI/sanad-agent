@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
@@ -196,6 +197,11 @@ class _Harness {
     final home = Directory('${root.path}/home')..createSync();
     final state = Directory('${root.path}/state')..createSync();
     final harness = _Harness._(root, home, state);
+    // The harness seeds provider and session rows from the test isolate before
+    // it starts the daemon. On-disk state owners refuse to open from a Dart
+    // test without explicit isolation, and both roots here are temporary.
+    setSanadHomeOverride(home.path);
+    setSanadStateHomeOverride(state.path);
     harness._seedProviderInstance();
     return harness;
   }
@@ -378,6 +384,8 @@ class _Harness {
         await root.delete(recursive: true);
       } catch (_) {}
     }
+    setSanadHomeOverride(null);
+    setSanadStateHomeOverride(null);
   }
 }
 

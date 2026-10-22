@@ -54,6 +54,8 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 | Gated tool encountered in headless run without flags | `sanad run "<prompt>"` | Emits notice to stderr (`Notice: Gated tool "..." requires permission for session ... Intervene via: sanad session permission ...`), leaves permission pending for external intervention, does NOT auto-deny. |
 | Gated tool encountered with `--allow-all-tools` | `sanad run "<prompt>" --allow-all-tools` | Auto-approves ordinary tool execution; model turn continues without intervention. |
 | Clarification question (`system_ask_user`) encountered with `--allow-all-tools` | `sanad run "<prompt>" --allow-all-tools` | Notice emitted to stderr; question remains pending and is NOT auto-approved; `--allow-all-tools` applies only to ordinary tool permissions. |
+| Turn refused before it starts | `sanad run "<prompt>" --workspace <gone-workspace>` | Exit `1` at once with one line, `Error: turn_failed: <cause>.` — no repeated `Error:` prefix and no doubled period. |
+| Turn blocked by the daemon | `sanad run "<prompt>" --timeout 120` against a route that blocks | Exit `1` at once with one line, `Error: blocked: <reason>. Intervene with sanad session stop <id> or retry from a client.` (a single period before `Intervene`), and no Stop is sent. |
 
 ---
 

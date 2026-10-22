@@ -650,9 +650,10 @@ class OneshotRunner {
             final rejectionCode = event.errorCode;
             if (rejectionCode != null && rejectionCode.isNotEmpty) {
               hasError = true;
-              errorMessage = event.finalMessage.isNotEmpty
-                  ? '$rejectionCode: ${event.finalMessage}'
-                  : rejectionCode;
+              final reason = _reasonSentence(event.finalMessage);
+              errorMessage = reason.isEmpty
+                  ? rejectionCode
+                  : '$rejectionCode: $reason';
               if (!json) {
                 err.writeln('Error: $errorMessage');
               }
@@ -723,10 +724,13 @@ class OneshotRunner {
                   if (completer.isCompleted) return;
                   hasError = true;
                   wasBlocked = true;
-                  errorMessage =
-                      'blocked: ${event.message}. Intervene with '
-                      'sanad session stop $effectiveSessionId or retry from a '
-                      'client.';
+                  final reason = _reasonSentence(event.message);
+                  errorMessage = reason.isEmpty
+                      ? 'blocked. Intervene with sanad session stop '
+                            '$effectiveSessionId or retry from a client.'
+                      : 'blocked: $reason Intervene with '
+                            'sanad session stop $effectiveSessionId or retry '
+                            'from a client.';
                   if (!json) {
                     err.writeln('Error: $errorMessage');
                   }
@@ -992,5 +996,22 @@ class OneshotRunner {
         } catch (_) {}
       }
     }
+  }
+
+  /// One clean reason for stderr and `--json` output.
+  ///
+  /// The CLI owns the single leading `Error:` prefix and the terminal
+  /// punctuation of a run's reason line. A daemon answer that already reads as
+  /// an error line (`'Error: <cause>'`) or a notice that already ends with a
+  /// period is not echoed twice, so a refusal reads
+  /// `turn_failed: <cause>.` and a blocked notice reads
+  /// `blocked: <reason>. Intervene with …` instead of
+  /// `turn_failed: Error: <cause>` or `<reason>.. Intervene with …`.
+  static String _reasonSentence(String value) {
+    final withoutPrefix = value
+        .trim()
+        .replaceFirst(RegExp(r'^(?:error\s*:\s*)+', caseSensitive: false), '')
+        .replaceFirst(RegExp(r'[\s.]+$'), '');
+    return withoutPrefix.isEmpty ? '' : '$withoutPrefix.';
   }
 }
