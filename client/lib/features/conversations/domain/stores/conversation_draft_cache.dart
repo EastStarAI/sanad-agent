@@ -88,29 +88,41 @@ class ConversationDraftCache {
   /// `user_message` that clears a draft, so the composer would wait forever and
   /// rewrite the user's text. Only the pending marker is dropped here: the text,
   /// workspace and route stay for an immediate retry.
+  ///
+  /// [requestId] is authoritative when the daemon reports it: a different
+  /// request's refusal never ends this wait. An older agent reports no identity
+  /// for a refused `final_answer`, and [sessionScoped] then releases the single
+  /// acceptance wait this session can have. That scope never reaches the New
+  /// Conversation draft, whose send the refusal does not name a session for.
   bool releasePendingRequest(
     String deviceId,
     String sessionId,
-    String? requestId,
-  ) {
-    if (requestId == null) return false;
+    String? requestId, {
+    bool sessionScoped = false,
+  }) {
     final draftKey = DeviceConversationCacheSnapshot.sessionDraftKey(deviceId, sessionId);
     final draft = _sessionDrafts[draftKey];
-    if (draft?.pendingRequestId == requestId) {
-      _sessionDrafts[draftKey] = draft!.copyWith(clearPendingRequest: true);
-      _notify();
-      return true;
+    if (requestId != null) {
+      if (draft?.pendingRequestId == requestId) {
+        _sessionDrafts[draftKey] = draft!.copyWith(clearPendingRequest: true);
+        _notify();
+        return true;
+      }
+      final ctx = _getContext(deviceId);
+      if (ctx.newConversationDraftPendingRequestId == requestId) {
+        _updateContext(
+          deviceId,
+          ctx.copyWith(clearNewConversationDraftPendingRequest: true),
+        );
+        _notify();
+        return true;
+      }
+      return false;
     }
-    final ctx = _getContext(deviceId);
-    if (ctx.newConversationDraftPendingRequestId == requestId) {
-      _updateContext(
-        deviceId,
-        ctx.copyWith(clearNewConversationDraftPendingRequest: true),
-      );
-      _notify();
-      return true;
-    }
-    return false;
+    if (!sessionScoped || draft?.pendingRequestId == null) return false;
+    _sessionDrafts[draftKey] = draft!.copyWith(clearPendingRequest: true);
+    _notify();
+    return true;
   }
 
   bool prependStopRecovery(

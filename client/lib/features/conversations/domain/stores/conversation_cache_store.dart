@@ -384,9 +384,15 @@ class ConversationCacheStore {
   bool releasePendingRequest(
     String deviceId,
     String sessionId,
-    String? requestId,
-  ) =>
-      _draftCache.releasePendingRequest(deviceId, sessionId, requestId);
+    String? requestId, {
+    bool sessionScoped = false,
+  }) =>
+      _draftCache.releasePendingRequest(
+        deviceId,
+        sessionId,
+        requestId,
+        sessionScoped: sessionScoped,
+      );
 
   void setNewConversationDraft(
     String deviceId, {

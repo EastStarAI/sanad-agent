@@ -13,12 +13,17 @@ import '../../helpers/fake_device_preferences_repository.dart';
 import '../../helpers/fake_device_repository.dart';
 import '../../helpers/fake_socket.dart';
 
-/// F1 (Task 125 round 2): the first message of a New Conversation can be
+/// F1 (Task 125 round 3): the first message of a New Conversation can be
 /// refused before it starts. The daemon then never accepts the message, so no
 /// canonical `user_message` ever matches the draft's `pendingRequestId`. The
-/// client must release that draft when the turn reaches a terminal refusal so
-/// the composer stays editable with the user's text, instead of waiting for an
-/// acceptance that will never arrive.
+/// client must release exactly that one wait when the turn reaches a terminal
+/// refusal, so the composer stays editable with the user's text instead of
+/// waiting for an acceptance that will never arrive.
+///
+/// Every case below feeds the envelope the daemon actually publishes (payload
+/// with `request_id` plus `error_code`) through the same event entry point the
+/// socket subscription uses, so the mapped canonical event is part of the path
+/// under test.
 void main() {
   late FakeSanadSocketService socket;
   late FakeDeviceRepository agentRepository;
@@ -128,20 +133,54 @@ void main() {
     return draft!.pendingRequestId!;
   }
 
-  test('a typed turn_failed refusal releases the awaiting draft and keeps the text', () async {
+  /// The refused-turn `final_answer` exactly as the daemon now publishes it:
+  /// the AgentToCanonical payload carries `request_id` and the typed
+  /// `error_code`, and the protocol envelope repeats `request_id` at the top.
+  Map<String, dynamic> refusalEnvelope({String? requestId}) => {
+    'device_id': agent.id,
+    'hardware_id': agent.id,
+    'type': 'event',
+    'event': 'final_answer',
+    'session_id': 'session-1',
+    'run_id': 'run-1',
+    if (requestId != null) 'request_id': requestId,
+    'event_id': 'evt-refusal-1',
+    'payload': {
+      'session_id': 'session-1',
+      'run_id': 'run-1',
+      if (requestId != null) 'request_id': requestId,
+      'content': 'Error: turn_failed: Bad state: Workspace folder is unavailable.',
+      'error_code': 'turn_failed',
+      'status': 'done',
+    },
+  };
+
+  Map<String, dynamic> blockedNoticeEnvelope({String? requestId}) => {
+    'device_id': agent.id,
+    'hardware_id': agent.id,
+    'type': 'event',
+    'event': 'session.runtime_notice',
+    'session_id': 'session-1',
+    if (requestId != null) 'request_id': requestId,
+    'event_id': 'evt-notice-1',
+    'payload': {
+      'session_id': 'session-1',
+      if (requestId != null) 'request_id': requestId,
+      'status': 'blocked',
+      'reason': 'network_error',
+      'severity': 'error',
+      'title': 'Connection failed',
+      'message': 'The agent could not reach the runtime service.',
+      'actions': const ['retry'],
+    },
+  };
+
+  test('a refusal the daemon attributes to this request releases the wait', () async {
     final pendingRequestId = await sendFirstMessage();
 
-    sessionCubit.handleGlobalSessionEventForTesting({
-      'device_id': agent.id,
-      'event': 'final_answer',
-      'request_id': pendingRequestId,
-      'payload': {
-        'session_id': 'session-1',
-        'request_id': pendingRequestId,
-        'content': 'Error: Bad state: Workspace folder is unavailable.',
-        'error_code': 'turn_failed',
-      },
-    });
+    sessionCubit.handleGlobalSessionEventForTesting(
+      refusalEnvelope(requestId: pendingRequestId),
+    );
     await settle();
 
     final released = conversationCacheRepository.sessionDraft(
@@ -160,21 +199,47 @@ void main() {
     );
   });
 
-  test('a blocked runtime notice releases the awaiting draft and keeps the text', () async {
+  test('a refusal from an older daemon releases the single session wait', () async {
+    await sendFirstMessage();
+
+    sessionCubit.handleGlobalSessionEventForTesting(refusalEnvelope());
+    await settle();
+
+    final released = conversationCacheRepository.sessionDraft(
+      agent.id,
+      'session-1',
+    );
+    expect(
+      released?.pendingRequestId,
+      isNull,
+      reason: 'a terminal refusal without an identity still ends the wait',
+    );
+    expect(released?.text, text);
+  });
+
+  test('a refusal for another request never releases this wait', () async {
+    await sendFirstMessage();
+
+    sessionCubit.handleGlobalSessionEventForTesting(
+      refusalEnvelope(requestId: 'req-someone-else'),
+    );
+    await settle();
+
+    expect(
+      conversationCacheRepository
+          .sessionDraft(agent.id, 'session-1')
+          ?.pendingRequestId,
+      'fake-request-1',
+      reason: 'only the refused request may end its own acceptance wait',
+    );
+  });
+
+  test('a blocked notice releases the wait when it names this request', () async {
     final pendingRequestId = await sendFirstMessage();
 
-    sessionCubit.handleGlobalSessionEventForTesting({
-      'device_id': agent.id,
-      'event': 'session.runtime_notice',
-      'payload': {
-        'session_id': 'session-1',
-        'request_id': pendingRequestId,
-        'status': 'blocked',
-        'reason': 'network_error',
-        'title': 'Connection failed',
-        'message': 'The agent could not reach the runtime service.',
-      },
-    });
+    sessionCubit.handleGlobalSessionEventForTesting(
+      blockedNoticeEnvelope(requestId: pendingRequestId),
+    );
     await settle();
 
     final released = conversationCacheRepository.sessionDraft(
@@ -183,6 +248,23 @@ void main() {
     );
     expect(released?.pendingRequestId, isNull);
     expect(released?.text, text);
+  });
+
+  test('a blocked notice without a request id never releases a wait', () async {
+    await sendFirstMessage();
+
+    sessionCubit.handleGlobalSessionEventForTesting(blockedNoticeEnvelope());
+    await settle();
+
+    expect(
+      conversationCacheRepository
+          .sessionDraft(agent.id, 'session-1')
+          ?.pendingRequestId,
+      'fake-request-1',
+      reason:
+          'a turn that was already accepted can block while a newer send '
+          'waits, so an unattributed notice proves nothing about this wait',
+    );
   });
 
   test('a canonical acceptance still clears the draft', () async {

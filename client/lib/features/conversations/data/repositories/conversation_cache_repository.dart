@@ -685,13 +685,21 @@ class ConversationCacheRepository {
   /// End an acceptance wait whose request the daemon refused before it started.
   ///
   /// The draft keeps its text so the composer stays editable; only the wait for
-  /// a canonical `user_message` that will never arrive is released.
+  /// a canonical `user_message` that will never arrive is released. A refusal
+  /// that names another request never releases this wait, and [sessionScoped]
+  /// covers an older agent that reports no identity for a refused turn.
   bool releaseRefusedDraft(
     String deviceId,
     String sessionId,
-    String? requestId,
-  ) {
-    return _cache.releasePendingRequest(deviceId, sessionId, requestId);
+    String? requestId, {
+    bool sessionScoped = false,
+  }) {
+    return _cache.releasePendingRequest(
+      deviceId,
+      sessionId,
+      requestId,
+      sessionScoped: sessionScoped,
+    );
   }
 
   // ---------------------------------------------------------------------------
