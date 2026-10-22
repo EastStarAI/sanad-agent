@@ -138,6 +138,10 @@ class AgentToCanonical {
         if (response.runtimeMs != null) 'runtime_ms': response.runtimeMs,
         if (response.contextTokens != null)
           'context_tokens': response.contextTokens,
+        // A terminal answer that no provider call completed keeps the identity
+        // of the request it answers, so a waiting client releases exactly that
+        // send instead of any other turn on the session.
+        if (response.requestId != null) 'request_id': response.requestId,
         // A typed pre-dispatch rejection (no provider call) keeps its code so
         // a consumer never reads the rejection text as a completed turn.
         if (response.message.metadata?['error_code'] is String)

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:sanad_agent/cli/client/local_gateway_cli_client.dart';
 import 'package:sanad_agent/cli/runner/commands/session_command.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:test/test.dart';
 
 import '../support/isolated_sanad_test_home.dart';
@@ -310,6 +311,48 @@ void main() {
           equals('req-100'),
         );
       });
+
+      test(
+        'surfaces the latest compaction lifecycle so a slow compact can be polled',
+        () async {
+          client.historyToReturn = {
+            'payload': {
+              'session_id': 'sess-poll',
+              'messages': [
+                {'type': 'user_message', 'content': 'hello'},
+                {
+                  'type': 'context_compaction.completed',
+                  'compaction_id': 'cmp-old',
+                  'trigger': 'auto',
+                  'status': 'completed',
+                },
+                {
+                  'type': 'context_compaction.started',
+                  'compaction_id': 'cmp-live',
+                  'trigger': 'manual',
+                  'status': 'started',
+                },
+              ],
+            },
+          };
+
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'show',
+            'sess-poll',
+            '--json',
+          ]);
+          expect(exitCode, equals(0));
+          final decoded =
+              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+          expect(decoded['compaction'], {
+            'compaction_id': 'cmp-live',
+            'status': 'started',
+            'trigger': 'manual',
+          });
+        },
+      );
 
       test(
         'is bounded by default and omits the full messages payload',
@@ -643,6 +686,72 @@ void main() {
         expect(client.lastCompactResendOnTimeout, isFalse);
       });
 
+      test(
+        'waits by default for the configured compaction pass timeout, not 5 s',
+        () async {
+          File('${getSanadHome()}/config.yaml').writeAsStringSync(
+            'compaction:\n  passTimeoutSeconds: 42\n',
+          );
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'compact',
+            'sess-default-bound',
+          ]);
+          expect(exitCode, equals(0));
+          expect(
+            client.lastCompactTimeout,
+            equals(const Duration(seconds: 42)),
+          );
+          expect(client.lastCompactResendOnTimeout, isFalse);
+        },
+      );
+
+      test('an invalid --timeout falls back to the configured bound', () async {
+        File('${getSanadHome()}/config.yaml').writeAsStringSync(
+          'compaction:\n  passTimeoutSeconds: 37\n',
+        );
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'compact',
+          'sess-bad-timeout',
+          '--timeout',
+          'soon',
+        ]);
+        expect(exitCode, equals(0));
+        expect(client.lastCompactTimeout, equals(const Duration(seconds: 37)));
+      });
+
+      test(
+        'an exhausted wait reports unconfirmed with exit 124, never failed',
+        () async {
+          client.errorToThrow = const CliClientException(
+            'Gateway query "session.compact" timed out after 42s',
+            code: 'query_timeout',
+          );
+
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'compact',
+            'sess-slow-1',
+            '--json',
+          ]);
+          expect(exitCode, equals(124));
+          expect(client.compactCallCount, equals(1));
+          expect(client.lastCompactResendOnTimeout, isFalse);
+          expect(stderrBuf.toString(), contains('may still be compacting'));
+          final decoded =
+              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+          expect(decoded['session_id'], equals('sess-slow-1'));
+          expect(decoded['outcome'], equals('unconfirmed'));
+          expect(decoded['exit_code'], equals(124));
+          expect(decoded.containsKey('failure_reason'), isFalse);
+          expect(decoded['poll'], equals('sanad session show sess-slow-1'));
+        },
+      );
+
       test('handles gateway error with exit code 1 and error JSON', () async {
         client.errorToThrow = const CliClientException(
           'Gateway connection failed',
@@ -728,30 +837,6 @@ void main() {
         expect(decoded['outcome'], equals('compaction_in_progress'));
         expect(decoded['failure_reason'], equals('compaction_in_progress'));
         expect(decoded['exit_code'], equals(1));
-      });
-
-      test('handles query timeout with exit code 1, single dispatch and error JSON', () async {
-        client.errorToThrow = const CliClientException(
-          'Query timed out waiting for response to session.compact (5s)',
-          code: 'query_timeout',
-        );
-
-        final runner = buildRunner();
-        final exitCode = await runner.run([
-          'session',
-          'compact',
-          'sess-timeout-err-1',
-          '--json',
-        ]);
-        expect(exitCode, equals(1));
-        expect(client.compactCallCount, equals(1));
-        expect(client.lastCompactResendOnTimeout, isFalse);
-        expect(stderrBuf.toString(), contains('Query timed out'));
-        final decoded =
-            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
-        expect(decoded['session_id'], equals('sess-timeout-err-1'));
-        expect(decoded['exit_code'], equals(1));
-        expect(decoded['error'], contains('Query timed out'));
       });
 
       test('propagates --home and --gateway-url overrides and disposes client', () async {

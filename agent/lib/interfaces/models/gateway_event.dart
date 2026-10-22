@@ -51,6 +51,13 @@ class GatewayResponse {
   final String? modelStepId;
   final String? toolCallId;
 
+  /// Client-minted identity of the request that produced this response.
+  ///
+  /// Terminal answers that no provider call completed (a pre-start refusal, a
+  /// thinking-selection rejection) carry it so a waiting client can attribute
+  /// the answer to its own send instead of to any other turn on the session.
+  final String? requestId;
+
   // New canonical fields
   final Map<String, dynamic>? usage;
   final Map<String, dynamic>? contextUsage;
@@ -91,6 +98,7 @@ class GatewayResponse {
     this.turnId,
     this.modelStepId,
     this.toolCallId,
+    this.requestId,
     this.usage,
     this.contextUsage,
     this.runtimeMs,
@@ -129,6 +137,7 @@ class GatewayResponse {
     turnId: turnId,
     modelStepId: modelStepId,
     toolCallId: toolCallId,
+    requestId: requestId,
     usage: usage,
     contextUsage: contextUsage,
     runtimeMs: runtimeMs,

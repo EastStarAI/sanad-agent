@@ -9,12 +9,14 @@ import 'package:sanad_client/core/navigation/conversation_destination.dart';
 import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/thinking_control.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/domain/stores/processing_store.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_route_snapshot.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
@@ -51,6 +53,7 @@ class SessionCubit extends Cubit<SessionState> {
       StreamController<DeletedSessionIdentity>.broadcast();
   String? _lastRefreshedDeviceId;
   final Map<String, bool> _lastOnlineByDeviceId = {};
+  final _mapper = UnifiedDeviceMapper();
 
   Stream<DeletedSessionIdentity> get deletedSessions => _deletedSessionsController.stream;
 
@@ -198,7 +201,61 @@ class SessionCubit extends Cubit<SessionState> {
           requestId: payload['request_id']?.toString(),
         );
       }
+    } else if (eventName == 'final_answer' || eventName == 'session.runtime_notice') {
+      _releaseRefusedAcceptanceWait(eventName, deviceId, payload, event);
     }
+  }
+
+  /// End an acceptance wait whose send the daemon refused before accepting it.
+  ///
+  /// A turn can reach a terminal state without the daemon ever accepting (and
+  /// persisting) the message: a typed refusal (`final_answer.error_code`) and a
+  /// `blocked` runtime notice are the only such outcomes. Neither publishes the
+  /// canonical `user_message` a draft waits for, so the wait ends here and the
+  /// user's text stays editable for a retry. Identity comes from the mapped
+  /// canonical event, the same wire→domain boundary the conversation store
+  /// uses, so a refusal that names another request never releases this wait.
+  void _releaseRefusedAcceptanceWait(
+    String? eventName,
+    String deviceId,
+    Map<String, dynamic> payload,
+    Map<String, dynamic> event,
+  ) {
+    final repository = conversationCacheRepository;
+    if (repository == null) return;
+    final canonical = _mapper.mapLiveEvent(event);
+    final sessionId =
+        canonical?.sessionId ??
+        payload['session_id'] as String? ??
+        event['session_id'] as String?;
+    if (sessionId == null) return;
+    final refusedAnswer =
+        canonical != null &&
+        canonical.kind == EventKind.finalAnswer &&
+        canonical.metadata?['error_code']?.toString().isNotEmpty == true;
+    if (refusedAnswer) {
+      final requestId = canonical.requestId;
+      repository.releaseRefusedDraft(
+        deviceId,
+        sessionId,
+        requestId,
+        // An older agent refuses the turn without naming the request it
+        // answers. The composer admits one acceptance wait per session, so a
+        // typed refusal without identity can only concern that wait.
+        sessionScoped: requestId == null,
+      );
+      return;
+    }
+    if (eventName != 'session.runtime_notice' ||
+        payload['status']?.toString() != 'blocked') {
+      return;
+    }
+    final requestId =
+        payload['request_id']?.toString() ?? event['request_id']?.toString();
+    // An accepted turn can block while a newer send waits, so an unattributed
+    // notice proves nothing about that wait and must leave it alone.
+    if (requestId == null || requestId.isEmpty) return;
+    repository.releaseRefusedDraft(deviceId, sessionId, requestId);
   }
 
   void _listenToClientSessionStreams(DeviceState agentState) {
@@ -350,7 +407,18 @@ class SessionCubit extends Cubit<SessionState> {
   /// `SessionCubit.state.selectedSession`) do not clear their own
   /// `activeSessionId` before the remote `session_created` event arrives.
   void markSessionSelectedSync(Session session) {
-    if (state.selectedSession?.id == session.id) return;
+    final current = state.selectedSession;
+    if (current?.id == session.id) {
+      // The route may have presented the identity placeholder for this exact
+      // session id before it was created locally. Adopting the authoritative
+      // projection keeps the header off "Loading..." without re-emitting a
+      // selection the presenter already committed.
+      if (_isIdentityPlaceholder(current) && !_isIdentityPlaceholder(session)) {
+        _clearNewConversationPresentation();
+        emit(state.copyWith(selectedSession: session));
+      }
+      return;
+    }
     _clearNewConversationPresentation();
     final deviceId = session.deviceId;
     if (deviceId != null) {
@@ -362,6 +430,11 @@ class SessionCubit extends Cubit<SessionState> {
       );
     }
     emit(state.copyWith(selectedSession: session));
+  }
+
+  static bool _isIdentityPlaceholder(Session? session) {
+    final title = session?.title.trim();
+    return title == 'Loading...' || title == 'Loading…';
   }
 
   void applyHistoryRevision(String sessionId, int historyRevision) {

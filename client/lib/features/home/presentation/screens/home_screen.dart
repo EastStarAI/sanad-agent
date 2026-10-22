@@ -64,7 +64,12 @@ class HomeScreen extends StatefulWidget {
     required Session? selectedSession,
     required DateTime placeholderTime,
   }) {
-    if (selectedSession?.id == destination.sessionId && selectedSession?.deviceId == destination.deviceId) {
+    // Session ids are the identity. A selected session that matches the route
+    // is presented even when its device projection has not settled yet (a
+    // session the Client just created is selected before its device id is
+    // known). Replacing it with the identity placeholder pinned the header on
+    // "Loading..." for the whole conversation.
+    if (selectedSession?.id == destination.sessionId) {
       return selectedSession!;
     }
     return Session(
