@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:logging/logging.dart';
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/capabilities/execution/direct_execution_backend.dart';
 import 'package:sanad_agent/capabilities/execution/execution_backend.dart';
 import 'package:sanad_agent/capabilities/execution/execution_backend_resolver.dart';
@@ -292,16 +293,14 @@ void main() {
           }),
           throwsA(isA<FileSystemException>()),
         );
-        final inside = Directory('${workspace.path}/pkg')..createSync();
+        final inside = Directory(p.join(workspace.path, 'pkg'))
+          ..createSync();
         final ok = await shell().executeResult({
           'command': Platform.isWindows ? 'cd' : 'pwd',
           'cwd': 'pkg',
           'description': 'inside',
         });
-        expect(
-          ok.displayText,
-          contains(inside.path.split(Platform.pathSeparator).last),
-        );
+        expect(ok.displayText, contains(p.basename(inside.path)));
       },
     );
 
