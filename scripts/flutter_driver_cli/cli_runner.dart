@@ -8,6 +8,14 @@ import 'tree_state.dart';
 /// Default hard deadline for one driver action, in seconds.
 const int defaultActionTimeoutSeconds = 30;
 
+/// Launcher-provided artifact build cost, in milliseconds.
+///
+/// `sanad-dev ui` sets this only on an invocation that had to compile the
+/// driver artifact; a cached artifact, a standalone CLI run, or the JIT path
+/// leaves it unset, so `build_ms` is reported exactly once per cold start
+/// instead of being charged to every call.
+const String driverBuildMsEnvVar = 'SANAD_DEV_UI_BUILD_MS';
+
 class CliRunner {
   final List<String> args;
 
@@ -17,7 +25,27 @@ class CliRunner {
   /// Root directory for the default generation store; tests inject a temp dir.
   final Directory? generationRoot;
 
-  CliRunner(this.args, {this.generationStore, this.generationRoot});
+  /// Artifact build cost to report, when this process was told about one.
+  final int? buildMs;
+
+  CliRunner(this.args, {this.generationStore, this.generationRoot, int? buildMs})
+    : buildMs =
+          buildMs ?? _parseBuildMs(Platform.environment[driverBuildMsEnvVar]);
+
+  static int? _parseBuildMs(String? raw) {
+    final value = int.tryParse(raw ?? '');
+    return value != null && value > 0 ? value : null;
+  }
+
+  /// Emits one JSON result, adding the cold artifact cost when it applies.
+  void _printJson(Map<String, dynamic> payload) {
+    final cost = buildMs;
+    print(
+      json.encode(
+        cost == null ? payload : {...payload, 'build_ms': cost},
+      ),
+    );
+  }
 
   Future<int> run() async {
     if (args.isEmpty ||
@@ -116,7 +144,7 @@ class CliRunner {
     try {
       final authUrl = await controller.authUrl();
       if (isJson) {
-        print(json.encode({'status': 'ok', 'auth_url': authUrl}));
+        _printJson({'status': 'ok', 'auth_url': authUrl});
       } else {
         print(authUrl);
       }
@@ -170,17 +198,17 @@ class CliRunner {
       final generation = controller.generationStore?.next();
 
       if (isJson) {
-        print(
-          json.encode({
-            'status': 'ok',
-            'count': elements.length,
-            'generation': generation,
-            'signature': capture.signature,
-            'fresh': fresh,
-            if (fresh) 'settled': capture.settled,
-            'elements': elements.map((e) => e.toJson()).toList(),
-          }),
-        );
+        _printJson({
+          'status': 'ok',
+          'count': elements.length,
+          'generation': generation,
+          'signature': capture.signature,
+          // `fresh` is true only on a `--fresh` capture; `settled` then reports
+          // whether two consecutive trees actually agreed.
+          'fresh': fresh,
+          if (fresh) 'settled': capture.settled,
+          'elements': elements.map((e) => e.toJson()).toList(),
+        });
       } else {
         _printElementsFormatted(elements, compact: compact);
         print(
@@ -236,15 +264,13 @@ class CliRunner {
       final generation = controller.generationStore?.next();
 
       if (isJson) {
-        print(
-          json.encode({
-            'status': 'ok',
-            'found': matches.isNotEmpty,
-            'count': matches.length,
-            'generation': generation,
-            'elements': matches.map((e) => e.toJson()).toList(),
-          }),
-        );
+        _printJson({
+          'status': 'ok',
+          'found': matches.isNotEmpty,
+          'count': matches.length,
+          'generation': generation,
+          'elements': matches.map((e) => e.toJson()).toList(),
+        });
       } else {
         if (matches.isEmpty) {
           print(
@@ -345,7 +371,7 @@ class CliRunner {
       );
 
       if (isJson) {
-        print(json.encode(res.toJson()));
+        _printJson(res.toJson());
       } else {
         print(res.toString());
       }
@@ -401,7 +427,7 @@ class CliRunner {
       );
 
       if (isJson) {
-        print(json.encode(res.toJson()));
+        _printJson(res.toJson());
       } else {
         print(res.toString());
       }
@@ -458,7 +484,7 @@ class CliRunner {
       );
 
       if (isJson) {
-        print(json.encode(res.toJson()));
+        _printJson(res.toJson());
       } else {
         print(res.toString());
       }
@@ -477,6 +503,7 @@ class CliRunner {
     final text = _getOption(cmdArgs, '--text') ?? _getOption(cmdArgs, '-t');
     final type = _getOption(cmdArgs, '--type');
     final absent = _hasFlag(cmdArgs, '--absent');
+    final noWait = _hasFlag(cmdArgs, '--no-wait');
     final timeoutSec = _getIntOption(
       cmdArgs,
       '--timeout',
@@ -499,10 +526,11 @@ class CliRunner {
         type: type,
         absent: absent,
         timeout: Duration(seconds: timeoutSec),
+        noWait: noWait,
       );
 
       if (isJson) {
-        print(json.encode(res.toJson()));
+        _printJson(res.toJson());
       } else {
         print(res.toString());
       }
@@ -533,14 +561,12 @@ class CliRunner {
       final file = await controller.screenshot(outputPath: out);
 
       if (isJson) {
-        print(
-          json.encode({
-            'status': 'ok',
-            'file_path': file.path,
-            'absolute_path': file.absolute.path,
-            'size_bytes': await file.length(),
-          }),
-        );
+        _printJson({
+          'status': 'ok',
+          'file_path': file.path,
+          'absolute_path': file.absolute.path,
+          'size_bytes': await file.length(),
+        });
       } else {
         print('📸 Screenshot successfully saved to: ${file.path}');
       }
@@ -652,16 +678,14 @@ class CliRunner {
       final allSuccess = results.every((r) => r.success);
 
       if (isJson) {
-        print(
-          json.encode({
-            'status': allSuccess ? 'ok' : 'failed',
-            'total': results.length,
-            'steps_total': steps.length,
-            'passed': results.where((r) => r.success).length,
-            'generation': controller.generationStore?.peek(),
-            'results': results.map((r) => r.toJson()).toList(),
-          }),
-        );
+        _printJson({
+          'status': allSuccess ? 'ok' : 'failed',
+          'total': results.length,
+          'steps_total': steps.length,
+          'passed': results.where((r) => r.success).length,
+          'generation': controller.generationStore?.peek(),
+          'results': results.map((r) => r.toJson()).toList(),
+        });
       } else {
         print('\n--- Batch Execution Summary ---');
         print(
@@ -727,7 +751,8 @@ Commands:
                           --timeout <sec>, --delay <ms>, --json
                  A plain tap exits 0 and reports `verified: false` with
                  `verification: no_observable_change` when nothing changed.
-                 --verify, --expect, or --expect-absent make that a failure.
+                 --verify, --expect, or --expect-absent make that a failure; the
+                 reported `verification` stays `no_observable_change`.
 
   enter-text     Enter text into an input field and verify the effect
                  Options: --key <k>, --text <t>, --no-tap-first, --no-verify, --verify-timeout <ms>, --timeout <sec>, --delay <ms>, --json
@@ -737,9 +762,15 @@ Commands:
                  Options: --key <k>, --direction <up|down>, --dx <x>, --dy <y>, --to <top|bottom>, --until-visible <target_key>, --timeout <sec>, --json
 
   wait-for       Wait for an element to appear or disappear, then report the elapsed time
-                 Options: --key <k>, --text <t>, --type <type>, --absent, --timeout <sec>, --json
+                 Options: --key <k>, --text <t>, --type <type>, --absent, --no-wait, --timeout <sec>, --json
                  --type --absent is proven by the rendered type census, because the
                  inspected tree omits unkeyed widgets with no text or interaction.
+                 While that census still contains the type it keeps polling, because
+                 absence can arrive later; at the deadline it fails with
+                 `is still rendered (proven by the rendered type census) after Nms;
+                 absence not observed`. --no-wait judges the first census instead of
+                 waiting out --timeout. A wait failure always names the target and
+                 what was observed, never a bare timeout.
 
   screenshot     Capture visual PNG screenshot
                  Options: --out <path>, --json
@@ -755,6 +786,38 @@ Global Options:
   --timeout <sec>    Hard per-action deadline, default $defaultActionTimeoutSeconds
   --json             Format output as JSON
   -h, --help         Show this help
+
+Launcher Options (sanad-dev ui only; stripped before the driver runs):
+  --wall-timeout <sec>  Hard wall-clock cap for the whole driver child process.
+                        Defaults to the action deadline (--timeout, 30 s) plus
+                        the post-delay, the verification window, and a 10 s
+                        grace; for a batch recipe it defaults to the sum of
+                        every step's deadline. The child is killed with its
+                        process tree when the cap elapses and the command
+                        exits 124. Use it to bound a command you expect to be
+                        slow (or to prove one hangs) without changing the
+                        driver's own deadline.
+  --home <path>         Sanad Home whose runtime is being driven.
+  --activate            Bring the owning Client window to the front (default
+                        for tap, enter-text, scroll, and batch).
+  --no-activate         Never take focus from the user.
+
+JSON Contract:
+  Action results (tap, enter-text, scroll, wait-for, and every batch step)
+  always carry `verified` as a boolean and `verification` as one of:
+    key, present, absent, text, tree     -> verified: true
+    no_observable_change, none, type_census -> verified: false
+  `no_observable_change` means the action was dispatched and nothing observable
+  changed in the window, with or without --verify; `none` means no evidence
+  channel produced a verdict (verification disabled, the action failed before
+  observation, or the step makes no post-condition claim); `type_census` means
+  the rendered type census proved the requested absence is unprovable right now.
+  Observation commands (snapshot, find, auth-url) report `status` and no
+  post-condition verdict. `snapshot --fresh` sets `fresh: true` and then reports
+  `settled`, which is false when the quiescence window expired first; a default
+  snapshot reports `fresh: false` with no `settled` field.
+  `build_ms` appears only on a call that had to compile the driver artifact
+  (first run after a source or dependency change).
 ''');
   }
 

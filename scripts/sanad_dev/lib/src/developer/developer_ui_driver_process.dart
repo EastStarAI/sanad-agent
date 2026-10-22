@@ -21,6 +21,32 @@ class UiDriverSpawnedProcess implements UiDriverChildProcess {
   void kill() => killUiDriverProcessTree(_process.pid);
 }
 
+/// Environment variable that carries the cold artifact build cost to the
+/// driver CLI, so the first JSON result can report `build_ms`.
+const String uiDriverBuildMsEnvVar = 'SANAD_DEV_UI_BUILD_MS';
+
+/// Environment for the driver child process.
+///
+/// The caller directory lets a batch `--file` resolve against the invoking
+/// worktree, and [artifactBuild] carries the compile cost of a cold artifact so
+/// the driver can report it as `build_ms` in that one JSON result. The value is
+/// always replaced or removed: a stale cost inherited from a parent process must
+/// never be reported for a cached artifact.
+Map<String, String> uiDriverChildEnvironment({
+  required String callerDir,
+  Duration? artifactBuild,
+  Map<String, String>? base,
+}) {
+  final environment = {...?base, 'SANAD_DEV_CALLER_DIR': callerDir};
+  final buildMs = artifactBuild?.inMilliseconds ?? 0;
+  if (buildMs > 0) {
+    environment[uiDriverBuildMsEnvVar] = '$buildMs';
+  } else {
+    environment.remove(uiDriverBuildMsEnvVar);
+  }
+  return environment;
+}
+
 /// Kills [rootPid] together with every descendant process.
 ///
 /// POSIX has no portable way to put a Dart child into its own process group, so

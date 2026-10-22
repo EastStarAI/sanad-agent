@@ -225,6 +225,25 @@ void main() {
       expect(plan.driverArguments, ['enter-text', 'abc', '--home']);
       expect(plan.activateWindow, isFalse);
     });
+
+    test('passes the cold artifact cost to the child environment', () {
+      // The driver reports `build_ms` from this value, so it must survive the
+      // spawn and must not be inherited from an unrelated parent process.
+      final fresh = sanad_dev.uiDriverChildEnvironment(
+        callerDir: '/worktree',
+        artifactBuild: const Duration(milliseconds: 2299),
+        base: const {'PATH': '/bin', sanad_dev.uiDriverBuildMsEnvVar: '999'},
+      );
+      expect(fresh[sanad_dev.uiDriverBuildMsEnvVar], '2299');
+      expect(fresh['PATH'], '/bin');
+      expect(fresh['SANAD_DEV_CALLER_DIR'], '/worktree');
+
+      final cached = sanad_dev.uiDriverChildEnvironment(
+        callerDir: '/worktree',
+        base: const {'PATH': '/bin', sanad_dev.uiDriverBuildMsEnvVar: '999'},
+      );
+      expect(cached.containsKey(sanad_dev.uiDriverBuildMsEnvVar), isFalse);
+    });
   });
 
   group('sanad-dev ui driver artifact cache', () {

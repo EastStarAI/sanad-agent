@@ -355,6 +355,32 @@ void main() {
       }
     });
 
+    test('only a cold artifact call reports the compile cost as build_ms',
+        () async {
+      final fake = await _FakeDriverVm.start();
+      try {
+        final warm = await _runCli([
+          'snapshot',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+        final cold = await _runCli([
+          'snapshot',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore, buildMs: 2299);
+
+        // A cached artifact has nothing to report, so the field stays absent
+        // rather than being charged to every call.
+        expect(json.decode(warm.lines.single).containsKey('build_ms'), isFalse);
+        expect(json.decode(cold.lines.single)['build_ms'], 2299);
+      } finally {
+        await fake.close();
+      }
+    });
+
     test('generation store follows the resolved endpoint', () async {
       final fake = await _FakeDriverVm.start();
       try {
@@ -408,7 +434,8 @@ void main() {
         expect(result.code, 0);
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isTrue);
-        expect(payload['verified'], 'present');
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'present');
         expect(payload['data']['waited_ms'], isA<int>());
         expect(payload['duration_ms'], isA<int>());
       } finally {
@@ -466,6 +493,11 @@ void main() {
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isFalse);
         expect(payload['data']['waited_ms'], greaterThanOrEqualTo(1000));
+        // The failure states what was observed instead of reporting a timeout.
+        expect(payload['message'], isNot(contains('Timed out')));
+        expect(payload['message'], contains('stuck_banner is still present'));
+        expect(payload['message'], contains('absence not observed'));
+        expect(payload['data']['probes'], greaterThan(1));
       } finally {
         await fake.close();
       }
@@ -494,7 +526,8 @@ void main() {
         expect(result.code, 0);
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isTrue);
-        expect(payload['verified'], 'absent');
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'absent');
         expect(payload['data']['evidence'], 'type_census');
       } finally {
         await fake.close();
@@ -527,7 +560,99 @@ void main() {
         expect(result.code, 1);
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isFalse);
-        expect(payload['message'], contains('Timed out'));
+        // The message must name the evidence, never report a bare timeout.
+        expect(payload['message'], isNot(contains('Timed out')));
+        expect(
+          payload['message'],
+          contains('is still rendered (proven by the rendered type census)'),
+        );
+        expect(payload['message'], contains('absence not observed'));
+        expect(payload['message'], contains('--no-wait'));
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'type_census');
+        expect(payload['data']['evidence'], 'type_census');
+        expect(payload['data']['still_rendered'], isTrue);
+        expect(payload['data']['waited_ms'], greaterThanOrEqualTo(1000));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('wait-for --type --absent keeps polling until the type disappears',
+        () async {
+      // A rendered spinner is not a verdict: it can finish. The poll must keep
+      // going and then report the absence it actually observed.
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label'},
+        ],
+        typeCensusSequence: const [
+          ['Column', 'CircularProgressIndicator', 'Text'],
+          ['Column', 'CircularProgressIndicator', 'Text'],
+          ['Column', 'Text'],
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'wait-for',
+          '--type',
+          'CircularProgressIndicator',
+          '--absent',
+          '--timeout',
+          '5',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'absent');
+        expect(payload['data']['evidence'], 'type_census');
+        expect(fake.typeCensusCalls, greaterThanOrEqualTo(3));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('wait-for --type --absent --no-wait judges the first census',
+        () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label'},
+        ],
+        typeCensusTypes: ['Column', 'CircularProgressIndicator', 'Text'],
+      );
+      try {
+        final started = DateTime.now();
+        final result = await _runCli([
+          'wait-for',
+          '--type',
+          'CircularProgressIndicator',
+          '--absent',
+          '--no-wait',
+          '--timeout',
+          '30',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'type_census');
+        expect(payload['data']['still_rendered'], isTrue);
+        expect(payload['data']['waited_ms'], lessThan(5000));
+        expect(
+          payload['message'],
+          contains('a single check'),
+        );
+        expect(payload['message'], contains('absence not observed'));
+        expect(DateTime.now().difference(started).inSeconds, lessThan(6));
+        expect(fake.typeCensusCalls, 1);
       } finally {
         await fake.close();
       }
@@ -556,7 +681,12 @@ void main() {
 
         expect(result.code, 1);
         final payload = json.decode(result.lines.single);
-        expect(payload['message'], contains('rendered but is not inspected'));
+        expect(payload['message'], contains('is not inspected'));
+        expect(payload['message'], isNot(contains('Timed out')));
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'type_census');
+        expect(payload['data']['evidence'], 'type_census');
+        expect(payload['data']['still_rendered'], isTrue);
         expect(DateTime.now().difference(started).inSeconds, lessThan(5));
       } finally {
         await fake.close();
@@ -739,7 +869,8 @@ void main() {
         expect(payload['key'], 'send_message_btn');
         expect(payload['x'], 12);
         expect(payload['y'], 34);
-        expect(payload['verified'], 'tree');
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'tree');
         expect(payload['generation'], isA<int>());
         expect(payload['duration_ms'], isA<int>());
       } finally {
@@ -803,7 +934,9 @@ void main() {
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isFalse);
         expect(payload['verified'], isFalse);
-        expect(payload['verification'], 'none');
+        // The same physical outcome as the plain tap: --verify changes the exit
+        // status, never the evidence channel.
+        expect(payload['verification'], 'no_observable_change');
         expect(
           payload['message'],
           contains('tap dispatched; no observable change'),
@@ -879,7 +1012,8 @@ void main() {
         expect(result.code, 0);
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isTrue);
-        expect(payload['verified'], 'key');
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'key');
         expect(payload['message'], contains('auto-scroll'));
         expect(fake.rpcOrder, isNot(contains('reveal')));
       } finally {
@@ -909,7 +1043,8 @@ void main() {
 
         expect(result.code, 0);
         final payload = json.decode(result.lines.single);
-        expect(payload['verified'], 'key');
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'key');
         expect(payload['message'], isNot(contains('auto-scroll')));
       } finally {
         await fake.close();
@@ -967,7 +1102,9 @@ void main() {
         ], store: generationStore);
 
         expect(result.code, 0);
-        expect(json.decode(result.lines.single)['verified'], 'key');
+        final payload = json.decode(result.lines.single);
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'key');
       } finally {
         await fake.close();
       }
@@ -991,7 +1128,10 @@ void main() {
         ], store: generationStore);
 
         expect(result.code, 0);
-        expect(json.decode(result.lines.single)['verified'], isNull);
+        final payload = json.decode(result.lines.single);
+        // Both fields stay present and typed even when observation was skipped.
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'none');
       } finally {
         await fake.close();
       }
@@ -1018,7 +1158,8 @@ void main() {
 
         expect(result.code, 0);
         final payload = json.decode(result.lines.single);
-        expect(payload['verified'], 'text');
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'text');
         expect(result.lines.single, isNot(contains('draft-message')));
         expect(fake.enteredTexts, ['draft-message']);
       } finally {
@@ -1085,7 +1226,8 @@ void main() {
         expect(result.code, 0);
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isTrue);
-        expect(payload['verified'], 'tree');
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'tree');
         expect(result.lines.single, isNot(contains('secret-value')));
       } finally {
         await fake.close();
@@ -1113,7 +1255,9 @@ void main() {
         ], store: generationStore);
 
         expect(result.code, 0);
-        expect(json.decode(result.lines.single)['verified'], isNull);
+        final payload = json.decode(result.lines.single);
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'none');
       } finally {
         await fake.close();
       }
@@ -1150,6 +1294,53 @@ void main() {
         expect(payload['passed'], 2);
         expect(payload['results'][1]['action'], 'wait_for');
         expect(payload['results'][1]['data']['waited_ms'], isA<int>());
+        // Every step result keeps the typed contract, so a recipe consumer can
+        // validate results without knowing which action produced them.
+        for (final step in payload['results']) {
+          expect(step['verified'], isA<bool>());
+          expect(UiVerification.wireValues, contains(step['verification']));
+        }
+        expect(payload['results'][1]['verified'], isTrue);
+        expect(payload['results'][1]['verification'], 'present');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('batch wait_for can judge the first census instead of waiting',
+        () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label'},
+        ],
+        typeCensusTypes: ['Column', 'CircularProgressIndicator', 'Text'],
+      );
+      try {
+        final started = DateTime.now();
+        final result = await _runCli([
+          'batch',
+          '--json-steps',
+          json.encode([
+            {
+              'action': 'wait_for',
+              'type': 'CircularProgressIndicator',
+              'absent': true,
+              'no_wait': true,
+              'timeout': 30,
+            },
+          ]),
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        final step = payload['results'][0];
+        expect(step['verified'], isFalse);
+        expect(step['verification'], 'type_census');
+        expect(step['data']['still_rendered'], isTrue);
+        expect(DateTime.now().difference(started).inSeconds, lessThan(6));
       } finally {
         await fake.close();
       }
@@ -1381,6 +1572,64 @@ void main() {
   });
 
   group('Flutter VM driver models', () {
+    test('verified is a boolean and verification is a documented channel', () {
+      // A strict consumer types both fields. `verified` is never the channel
+      // name, and `verification` is never outside the published set.
+      expect(UiVerification.wireValues, [
+        'key',
+        'present',
+        'absent',
+        'text',
+        'tree',
+        'no_observable_change',
+        'none',
+        'type_census',
+      ]);
+
+      for (final channel in UiVerification.values) {
+        final payload = DriverActionResult(
+          success: channel.verified,
+          action: 'wait_for',
+          message: 'probe',
+          duration: Duration.zero,
+          verification: channel,
+        ).toJson();
+
+        expect(payload['verified'], isA<bool>());
+        expect(payload['verified'], channel.verified);
+        expect(payload['verification'], isA<String>());
+        expect(UiVerification.wireValues, contains(payload['verification']));
+        expect(UiVerification.fromWire(payload['verification'] as String), channel);
+      }
+
+      expect(UiVerification.fromWire('verified'), isNull);
+      expect(
+        UiVerification.values.where((channel) => channel.verified).toSet(),
+        {
+          UiVerification.key,
+          UiVerification.present,
+          UiVerification.absent,
+          UiVerification.text,
+          UiVerification.tree,
+        },
+      );
+    });
+
+    test('an action result always carries both fields', () {
+      final payload = const DriverActionResult(
+        success: true,
+        action: 'snapshot',
+        message: 'Extracted 0 UI elements',
+        duration: Duration.zero,
+        verification: UiVerification.none,
+      ).toJson();
+
+      expect(payload.containsKey('verified'), isTrue);
+      expect(payload.containsKey('verification'), isTrue);
+      expect(payload['verified'], isFalse);
+      expect(payload['verification'], 'none');
+    });
+
     test('UI matching covers agent-facing labels', () {
       const element = UiElement(
         type: 'IconButton',
@@ -1476,6 +1725,7 @@ Future<({int code, List<String> lines})> _runCli(
   List<String> args, {
   UiTreeGenerationStore? store,
   Directory? generationRoot,
+  int? buildMs,
 }) async {
   final output = <String>[];
   final code = await runZoned(
@@ -1483,6 +1733,7 @@ Future<({int code, List<String> lines})> _runCli(
       args,
       generationStore: store,
       generationRoot: generationRoot,
+      buildMs: buildMs,
     ).run(),
     zoneSpecification: ZoneSpecification(
       print: (self, parent, zone, line) => output.add(line),
@@ -1524,9 +1775,14 @@ class _FakeDriverVm {
   /// batch default so the transport timeout is observable.
   int inspectDelayMs = 0;
   List<String> typeCensusTypes = const [];
+
+  /// Per-call census payloads, so a test can model a type that stops being
+  /// rendered. The last entry repeats once the sequence is exhausted.
+  List<List<String>>? typeCensusSequence;
   bool typeCensusTruncated = false;
   int? typeCensusVisitedElements;
   int inspectCalls = 0;
+  int typeCensusCalls = 0;
   int scrollCalls = 0;
 
   int get port => _server.port;
@@ -1543,6 +1799,7 @@ class _FakeDriverVm {
     Map<String, Map<String, dynamic>>? enterTextAdds,
     int? revealScrollsTo,
     List<String>? typeCensusTypes,
+    List<List<String>>? typeCensusSequence,
     bool typeCensusTruncated = false,
     int? typeCensusVisitedElements,
     bool revealAvailable = true,
@@ -1565,6 +1822,7 @@ class _FakeDriverVm {
     fake.appearElement = appearElement;
     fake.revealScrollsTo = revealScrollsTo;
     fake.typeCensusTypes = typeCensusTypes ?? const [];
+    fake.typeCensusSequence = typeCensusSequence;
     fake.typeCensusTruncated = typeCensusTruncated;
     fake.typeCensusVisitedElements = typeCensusVisitedElements;
     fake.revealAvailable = revealAvailable;
@@ -1615,13 +1873,19 @@ class _FakeDriverVm {
           rpcOrder.add('inspect');
           inspectCalls++;
           if (params['typeCensus'] == 'true') {
+            typeCensusCalls++;
+            final sequence = typeCensusSequence;
+            final types = sequence == null || sequence.isEmpty
+                ? typeCensusTypes
+                : sequence[typeCensusCalls - 1 < sequence.length
+                      ? typeCensusCalls - 1
+                      : sequence.length - 1];
             response['result'] = {
               'status': 'ok',
-              'types': typeCensusTypes,
-              'type_count': typeCensusTypes.length,
+              'types': types,
+              'type_count': types.length,
               'truncated': typeCensusTruncated,
-              'visited_elements':
-                  typeCensusVisitedElements ?? typeCensusTypes.length,
+              'visited_elements': typeCensusVisitedElements ?? types.length,
             };
             break;
           }

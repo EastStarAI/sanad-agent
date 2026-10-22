@@ -495,6 +495,7 @@ Future<void> handleUiDriverCommand(
     extraArgs.addAll(['--report-file', reportPath]);
   }
 
+  Duration? artifactBuild;
   final artifact = await ensureUiDriverArtifact(
     repositoryRoot: repoRoot,
     allowCompile: !plan.isHelpRequest,
@@ -517,8 +518,10 @@ Future<void> handleUiDriverCommand(
         );
         return false;
       }
+      artifactBuild = compileTimer.elapsed;
       stderr.writeln(
-        'Prepared driver CLI artifact in ${compileTimer.elapsed.inMilliseconds}ms.',
+        'Prepared driver CLI artifact in '
+        '${artifactBuild!.inMilliseconds}ms.',
       );
       return true;
     },
@@ -545,7 +548,11 @@ Future<void> handleUiDriverCommand(
       workingDirectory: clientDir.path,
       mode: ProcessStartMode.inheritStdio,
       runInShell: usedJit && Platform.isWindows,
-      environment: {...Platform.environment, 'SANAD_DEV_CALLER_DIR': callerDir},
+      environment: uiDriverChildEnvironment(
+        callerDir: callerDir,
+        artifactBuild: artifactBuild,
+        base: Platform.environment,
+      ),
     );
   } on ProcessException catch (error) {
     if (usedJit) rethrow;
@@ -569,7 +576,11 @@ Future<void> handleUiDriverCommand(
       workingDirectory: clientDir.path,
       mode: ProcessStartMode.inheritStdio,
       runInShell: Platform.isWindows,
-      environment: {...Platform.environment, 'SANAD_DEV_CALLER_DIR': callerDir},
+      environment: uiDriverChildEnvironment(
+        callerDir: callerDir,
+        artifactBuild: artifactBuild,
+        base: Platform.environment,
+      ),
     );
   }
 

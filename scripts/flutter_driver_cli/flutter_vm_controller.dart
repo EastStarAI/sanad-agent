@@ -527,6 +527,7 @@ class FlutterVmController {
             'Failed to tap $targetDesc$withinDesc: ${extensionError == null ? "extension returned no result" : _conciseError(extensionError)}',
         duration: stopwatch.elapsed,
         targetKey: key,
+        verification: UiVerification.none,
         generation: _nextGeneration(),
       );
     }
@@ -550,6 +551,8 @@ class FlutterVmController {
         targetKey: key,
         x: tappedX,
         y: tappedY,
+        // Verification was not requested, so no channel produced a verdict.
+        verification: UiVerification.none,
         generation: _nextGeneration(),
       );
     }
@@ -586,7 +589,7 @@ class FlutterVmController {
           targetKey: key,
           x: tappedX,
           y: tappedY,
-          verificationNote: 'no_observable_change',
+          verification: UiVerification.noObservableChange,
           generation: _nextGeneration(),
         );
       }
@@ -605,7 +608,9 @@ class FlutterVmController {
         targetKey: key,
         x: tappedX,
         y: tappedY,
-        verificationNote: 'none',
+        // The same physical outcome reports the same channel with or without
+        // --verify; only success and the exit status differ.
+        verification: UiVerification.noObservableChange,
         generation: _nextGeneration(),
       );
     }
@@ -620,7 +625,7 @@ class FlutterVmController {
       targetKey: key,
       x: tappedX,
       y: tappedY,
-      verification: outcome.verifiedBy,
+      verification: outcome.verification,
       generation: _nextGeneration(),
     );
   }
@@ -689,6 +694,7 @@ class FlutterVmController {
           message: 'Failed to focus $key: ${focusResult.message}',
           duration: stopwatch.elapsed,
           targetKey: key,
+          verification: UiVerification.none,
         );
       }
     }
@@ -732,6 +738,7 @@ class FlutterVmController {
             'Failed entering text${key == null ? '' : ' into $key'}: ${_conciseError(extensionError)}',
         duration: stopwatch.elapsed,
         targetKey: key,
+        verification: UiVerification.none,
         generation: _nextGeneration(),
       );
     }
@@ -752,13 +759,15 @@ class FlutterVmController {
         message: message,
         duration: stopwatch.elapsed,
         targetKey: key,
+        // --no-verify: the entry was dispatched without an observation.
+        verification: UiVerification.none,
         generation: _nextGeneration(),
       );
     }
 
     final deadline = Stopwatch()..start();
     UiTreeCapture latest = before;
-    String? verifiedBy;
+    UiVerification? verifiedBy;
     // A field whose rendered text is absent from the inspection is unobservable
     // (obscured, or an empty non-obscured field that emits no text). For those
     // the only available evidence is an observable tree change.
@@ -767,21 +776,21 @@ class FlutterVmController {
       latest = await captureTree();
       if (fieldValueUnobservable) {
         if (latest.signature != before.signature) {
-          verifiedBy = 'tree';
+          verifiedBy = UiVerification.tree;
           break;
         }
       } else if (key != null) {
         final observedAfter = uiElementByKey(latest.elements, key)?.text;
         if (observedAfter != null && observedAfter == text) {
-          verifiedBy = 'text';
+          verifiedBy = UiVerification.text;
           break;
         }
         if (observedAfter != observedBefore) {
-          verifiedBy = 'text';
+          verifiedBy = UiVerification.text;
           break;
         }
       } else if (latest.signature != before.signature) {
-        verifiedBy = 'tree';
+        verifiedBy = UiVerification.tree;
         break;
       }
       if (deadline.elapsed >= verifyTimeout) break;
@@ -801,7 +810,7 @@ class FlutterVmController {
             'pass --no-verify for intentionally unobservable fields.',
         duration: stopwatch.elapsed,
         targetKey: key,
-        verificationNote: 'none',
+        verification: UiVerification.none,
         generation: _nextGeneration(),
       );
     }
@@ -838,6 +847,7 @@ class FlutterVmController {
         action: 'scroll',
         message: 'Scroll target must be top or bottom',
         duration: stopwatch.elapsed,
+        verification: UiVerification.none,
       );
     }
     if (to != null && untilVisibleKey != null) {
@@ -847,6 +857,7 @@ class FlutterVmController {
         action: 'scroll',
         message: 'Scroll cannot combine to with until-visible',
         duration: stopwatch.elapsed,
+        verification: UiVerification.none,
       );
     }
 
@@ -881,6 +892,9 @@ class FlutterVmController {
           data: res,
           duration: stopwatch.elapsed,
           targetKey: key,
+          // A fixed-offset scroll makes no post-condition claim; the caller
+          // observes the result.
+          verification: UiVerification.none,
           generation: _nextGeneration(),
         );
       }
@@ -893,6 +907,7 @@ class FlutterVmController {
         message: 'Scroll failed: ${_conciseError(error)}',
         duration: stopwatch.elapsed,
         targetKey: key,
+        verification: UiVerification.none,
         generation: _nextGeneration(),
       );
     }
@@ -928,7 +943,7 @@ class FlutterVmController {
             },
             duration: stopwatch.elapsed,
             targetKey: targetKey,
-            verification: 'tree',
+            verification: UiVerification.tree,
             generation: _nextGeneration(),
           );
         }
@@ -942,7 +957,7 @@ class FlutterVmController {
                 'rendered bounds.',
             duration: stopwatch.elapsed,
             targetKey: targetKey,
-            verificationNote: 'none',
+            verification: UiVerification.none,
             generation: _nextGeneration(),
           );
         }
@@ -956,7 +971,7 @@ class FlutterVmController {
                 'and $targetKey never became visible.',
             duration: stopwatch.elapsed,
             targetKey: targetKey,
-            verificationNote: 'none',
+            verification: UiVerification.none,
             generation: _nextGeneration(),
           );
         }
@@ -970,7 +985,7 @@ class FlutterVmController {
                 '${timeout.inSeconds}s.',
             duration: stopwatch.elapsed,
             targetKey: targetKey,
-            verificationNote: 'none',
+            verification: UiVerification.none,
             generation: _nextGeneration(),
           );
         }
@@ -995,7 +1010,7 @@ class FlutterVmController {
             '(${_conciseError(error)}).',
         duration: stopwatch.elapsed,
         targetKey: targetKey,
-        verificationNote: 'none',
+        verification: UiVerification.none,
         generation: _nextGeneration(),
       );
     }
@@ -1011,18 +1026,36 @@ class FlutterVmController {
   /// the inspected tree omits unkeyed widgets that carry no text, tooltip, or
   /// interaction (for example `CircularProgressIndicator`); treating those as
   /// absent would be a false success.
+  ///
+  /// A complete census that still contains the type is not a verdict: a spinner
+  /// that is rendered now may legitimately finish later, so the poll continues
+  /// until the deadline and only then fails, naming the census as its evidence
+  /// instead of reporting a bare timeout. [noWait] judges the first probe
+  /// immediately for callers that need a fail-fast answer.
   Future<DriverActionResult> waitFor({
     String? key,
     String? text,
     String? type,
     bool absent = false,
     Duration timeout = const Duration(seconds: 30),
+    bool noWait = false,
   }) async {
     final stopwatch = Stopwatch()..start();
     final target = key ?? text ?? type ?? '';
+    final claim = absent ? 'absent' : 'present';
+    var probes = 0;
     var censusChecked = false;
+
+    // A `--no-wait` verdict is one probe, not a wait, and the diagnostic must
+    // not pretend otherwise.
+    String waitedLabel() => noWait
+        ? 'a single check (${stopwatch.elapsedMilliseconds}ms)'
+        : '${stopwatch.elapsedMilliseconds}ms';
+    bool deadlineReached() => noWait || stopwatch.elapsed >= timeout;
+
     try {
       while (true) {
+        probes++;
         if (type != null && absent) {
           final census = await typeCensus();
           if (census.truncated) {
@@ -1048,7 +1081,7 @@ class FlutterVmController {
               },
               duration: stopwatch.elapsed,
               targetKey: key,
-              verificationNote: 'none',
+              verification: UiVerification.none,
               generation: _nextGeneration(),
             );
           }
@@ -1067,7 +1100,35 @@ class FlutterVmController {
               },
               duration: stopwatch.elapsed,
               targetKey: key,
-              verification: 'absent',
+              verification: UiVerification.absent,
+              generation: _nextGeneration(),
+            );
+          }
+          // The type is still rendered. Absence can legitimately arrive later
+          // (a spinner finishes), so keep polling and let the deadline produce
+          // the evidence-bearing verdict rather than an early false failure.
+          if (deadlineReached()) {
+            stopwatch.stop();
+            final hint = noWait
+                ? ' `--no-wait` judged the first census only.'
+                : ' Pass --no-wait to judge the first census instead of '
+                      'waiting out --timeout.';
+            return DriverActionResult(
+              success: false,
+              action: 'wait_for',
+              message:
+                  '$type is still rendered (proven by the rendered type '
+                  'census) after ${waitedLabel()}; absence not observed.$hint',
+              data: {
+                'waited_ms': stopwatch.elapsedMilliseconds,
+                'absent': absent,
+                'evidence': 'type_census',
+                'still_rendered': true,
+                'probes': probes,
+              },
+              duration: stopwatch.elapsed,
+              targetKey: key,
+              verification: UiVerification.typeCensus,
               generation: _nextGeneration(),
             );
           }
@@ -1086,7 +1147,7 @@ class FlutterVmController {
               success: true,
               action: 'wait_for',
               message:
-                  '$target is ${absent ? "absent" : "present"} '
+                  '$target is $claim '
                   '(waited ${stopwatch.elapsedMilliseconds}ms)',
               data: {
                 'waited_ms': stopwatch.elapsedMilliseconds,
@@ -1094,13 +1155,14 @@ class FlutterVmController {
               },
               duration: stopwatch.elapsed,
               targetKey: key,
-              verification: absent ? 'absent' : 'present',
+              verification: absent ? UiVerification.absent : UiVerification.present,
               generation: _nextGeneration(),
             );
           }
           if (type != null && !absent && !censusChecked) {
             // A rendered type that the inspection omits would otherwise wait
-            // out the full timeout and report a misleading absence.
+            // out the full timeout and report a bare timeout for a widget that
+            // is visibly on screen.
             censusChecked = true;
             final census = await typeCensus();
             if (!census.truncated && census.contains(type)) {
@@ -1109,38 +1171,43 @@ class FlutterVmController {
                 success: false,
                 action: 'wait_for',
                 message:
-                    'Timed out after ${stopwatch.elapsedMilliseconds}ms: $type '
-                    'is rendered but is not inspected, because it carries no '
-                    'key, text, tooltip, or interaction. Wait on its keyed '
-                    'ancestor or on visible text instead.',
+                    '$type is still rendered (proven by the rendered type '
+                    'census) after ${waitedLabel()}, but it is not inspected '
+                    'because it carries no key, text, tooltip, or interaction. '
+                    'Wait on its keyed ancestor or on visible text instead.',
                 data: {
                   'waited_ms': stopwatch.elapsedMilliseconds,
                   'absent': absent,
+                  'evidence': 'type_census',
+                  'still_rendered': true,
                   'rendered_but_uninspected': true,
                 },
                 duration: stopwatch.elapsed,
                 targetKey: key,
-                verificationNote: 'none',
+                verification: UiVerification.typeCensus,
                 generation: _nextGeneration(),
               );
             }
           }
         }
-        if (stopwatch.elapsed >= timeout) {
+        if (deadlineReached()) {
           stopwatch.stop();
           return DriverActionResult(
             success: false,
             action: 'wait_for',
-            message:
-                'Timed out after ${stopwatch.elapsedMilliseconds}ms waiting for '
-                '$target to be ${absent ? "absent" : "present"}',
+            message: absent
+                ? '$target is still present after ${waitedLabel()}; absence '
+                      'not observed across $probes inspected-tree probe(s)'
+                : '$target was not found after ${waitedLabel()}; presence '
+                      'not observed across $probes inspected-tree probe(s)',
             data: {
               'waited_ms': stopwatch.elapsedMilliseconds,
               'absent': absent,
+              'probes': probes,
             },
             duration: stopwatch.elapsed,
             targetKey: key,
-            verificationNote: 'none',
+            verification: UiVerification.none,
             generation: _nextGeneration(),
           );
         }
@@ -1157,7 +1224,7 @@ class FlutterVmController {
         data: {'waited_ms': stopwatch.elapsedMilliseconds},
         duration: stopwatch.elapsed,
         targetKey: key,
-        verificationNote: 'none',
+        verification: UiVerification.none,
         generation: _nextGeneration(),
       );
     }
@@ -1265,6 +1332,7 @@ class FlutterVmController {
             type: step.type,
             absent: step.absent,
             timeout: stepTimeout,
+            noWait: step.noWait,
           );
           results.add(res);
           break;
@@ -1279,6 +1347,7 @@ class FlutterVmController {
               action: 'sleep',
               message: 'Slept for ${ms}ms',
               duration: Duration(milliseconds: ms),
+              verification: UiVerification.none,
             ),
           );
           break;
@@ -1292,6 +1361,7 @@ class FlutterVmController {
               message: 'Screenshot saved to ${file.path}',
               data: {'file_path': file.path},
               duration: Duration.zero,
+              verification: UiVerification.none,
             ),
           );
           break;
@@ -1310,6 +1380,8 @@ class FlutterVmController {
                 'signature': capture.signature,
               },
               duration: Duration.zero,
+              // A snapshot step observes the tree but asserts no post-condition.
+              verification: UiVerification.none,
               generation: _nextGeneration(),
             ),
           );
@@ -1339,6 +1411,7 @@ class FlutterVmController {
                 'truncated': messageBodies.length > bounded.length,
               },
               duration: Duration.zero,
+              verification: UiVerification.none,
               generation: _nextGeneration(),
             ),
           );
@@ -1351,6 +1424,7 @@ class FlutterVmController {
               action: step.action,
               message: 'Unknown batch action: ${step.action}',
               duration: Duration.zero,
+              verification: UiVerification.none,
             ),
           );
       }
@@ -1385,13 +1459,22 @@ class FlutterVmController {
           uiElementByKey(probe.elements, expectAbsent) == null;
       if (hasExplicitExpectation) {
         if (expectPresent && expectAbsentSatisfied) {
-          return const _PostConditionOutcome(passed: true, verifiedBy: 'key');
+          return const _PostConditionOutcome(
+            passed: true,
+            verification: UiVerification.key,
+          );
         }
       } else if (probe.signature != before.signature) {
-        return const _PostConditionOutcome(passed: true, verifiedBy: 'tree');
+        return const _PostConditionOutcome(
+          passed: true,
+          verification: UiVerification.tree,
+        );
       }
       if (stopwatch.elapsed >= window) {
-        return const _PostConditionOutcome(passed: false, verifiedBy: 'none');
+        return const _PostConditionOutcome(
+          passed: false,
+          verification: UiVerification.none,
+        );
       }
       await Future<void>.delayed(const Duration(milliseconds: 120));
     }
@@ -1441,9 +1524,9 @@ class FlutterVmController {
 class _PostConditionOutcome {
   const _PostConditionOutcome({
     required this.passed,
-    required this.verifiedBy,
+    required this.verification,
   });
 
   final bool passed;
-  final String verifiedBy;
+  final UiVerification verification;
 }
