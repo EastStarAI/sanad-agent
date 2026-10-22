@@ -12,6 +12,8 @@ import '../sanad_home/test_runtime_isolation.dart';
 import 'agent_secret_namespaces.dart';
 import 'agent_secret_store.dart';
 
+export 'secret_vault_policy.dart';
+
 /// One owner's entries inside the Agent vault, cached for synchronous reads.
 class SecretVaultNamespace {
   SecretVaultNamespace._(this.prefix, this.indexKey, this.legacyFile);
@@ -130,11 +132,23 @@ class SecretVaults {
   final SecretVaultNamespace custom;
 
   bool _available = true;
+  String? _unavailableReason;
+  String? _unavailableMessage;
   String? _seenGeneration;
   Timer? _watch;
 
   /// Whether the platform vault answered when this instance opened.
   bool get available => _available;
+
+  /// Non-secret reason code when [available] is false, one of
+  /// [AgentSecretStoreUnavailableReason].
+  String? get unavailableReason => _unavailableReason;
+
+  /// The diagnostic that explained the closed vault; it never carries a value.
+  String? get unavailableMessage => _unavailableMessage;
+
+  /// The non-secret label the local gateway `/health` payload reports.
+  String get statusLabel => _available ? 'available' : 'unavailable';
 
   List<SecretVaultNamespace> get _namespaces => [providers, mcp, custom];
 
@@ -164,10 +178,12 @@ class SecretVaults {
     _rejectUnisolatedTestOpen();
     final home = SanadHomeBootstrap.identity();
     AgentSecretStore? backend = store;
+    AgentSecretStoreUnavailable? creationFailure;
     if (backend == null) {
       try {
         backend = createAgentSecretStore();
-      } on AgentSecretStoreUnavailable {
+      } on AgentSecretStoreUnavailable catch (error) {
+        creationFailure = error;
         backend = null;
       }
     }
@@ -176,6 +192,10 @@ class SecretVaults {
       home,
     );
     vaults._available = backend != null;
+    if (creationFailure != null) {
+      vaults._unavailableReason = creationFailure.reasonCode;
+      vaults._unavailableMessage = creationFailure.message;
+    }
     await vaults._initialize();
     return vaults;
   }
@@ -215,7 +235,12 @@ class SecretVaults {
       await _reload();
     } on AgentSecretStoreUnavailable catch (error) {
       _available = false;
-      _event(Level.WARNING, 'Agent vault unavailable: ${error.message}');
+      _unavailableReason = error.reasonCode;
+      _unavailableMessage = error.message;
+      _event(
+        Level.WARNING,
+        'Agent vault unavailable (${error.reasonCode}): ${error.message}',
+      );
       for (final namespace in _namespaces) {
         namespace._legacy = _readLegacy(namespace) ?? const {};
       }
@@ -283,8 +308,12 @@ class SecretVaults {
 
   void _requireAvailable() {
     if (!_available) {
-      throw const AgentSecretStoreUnavailable(
-        'The Agent credential vault is unavailable; the secret was not saved.',
+      throw AgentSecretStoreUnavailable(
+        'The Agent credential vault is unavailable'
+        '${_unavailableReason == null ? '' : ' ($_unavailableReason)'}; '
+        'the secret was not saved.',
+        reasonCode:
+            _unavailableReason ?? AgentSecretStoreUnavailableReason.unavailable,
       );
     }
   }
@@ -452,6 +481,7 @@ class _UnavailableSecretStore implements AgentSecretStore {
 
   static const _error = AgentSecretStoreUnavailable(
     'This operating system has no supported Sanad credential vault.',
+    reasonCode: AgentSecretStoreUnavailableReason.noStore,
   );
 
   @override

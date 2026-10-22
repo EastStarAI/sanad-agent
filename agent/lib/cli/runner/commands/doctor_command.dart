@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import '../../../core/auth/secret_vault.dart';
 import '../../../core/constants.dart';
 import '../../../core/sanad_home/sanad_home_bootstrap.dart';
 import '../../discovery/local_gateway_discovery.dart';
@@ -51,7 +52,41 @@ class DoctorCommand extends SanadCommand {
       );
     }
 
-    // 4. Local Gateway Daemon Status
+    // 4. Agent vault. A closed vault silently costs every provider key, MCP
+    // secret, user secret and the Device Credential, so doctor reports it with
+    // the reason code, the recovery steps, and whether this process was even
+    // allowed to show the macOS authorization dialog.
+    final vault = SecretVaults.current;
+    final interaction = SecretVaultPolicy.interactionAllowed
+        ? 'this process may show the macOS approval dialog'
+        : 'this process cannot show a prompt (${SecretVaultPolicy.interactionCode})';
+    if (vault == null) {
+      stdoutSink.writeln(
+        '[!] Agent Vault: not opened by this command ($interaction)',
+      );
+    } else if (vault.available) {
+      stdoutSink.writeln('[✓] Agent Vault: available ($interaction)');
+    } else {
+      stdoutSink.writeln(
+        '[✗] Agent Vault: unavailable '
+        '(${vault.unavailableReason ?? 'unavailable'}; $interaction)',
+      );
+      stdoutSink.writeln(
+        '    Provider keys, MCP secrets, user secrets and the Device Credential '
+        'cannot be read until it reopens; no secret was deleted.',
+      );
+      final diagnostic = vault.unavailableMessage;
+      if (diagnostic != null && diagnostic.isNotEmpty) {
+        stdoutSink.writeln('    $diagnostic');
+      }
+      stdoutSink.writeln(
+        '    Recovery: rerun this command in an interactive terminal so macOS '
+        'can ask once, then approve it; if no dialog appears, open Keychain '
+        'Access > Access Control and add the Agent binary you run.',
+      );
+    }
+
+    // 5. Local Gateway Daemon Status
     try {
       final discoveryResult = await discovery.discover(
         probeTimeout: const Duration(milliseconds: 500),

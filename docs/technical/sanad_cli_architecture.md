@@ -1,6 +1,6 @@
 ---
 title: "Sanad CLI Architecture"
-description: "Attached and in-process transports, runtime ownership, automation output, cancellation, and test-isolation contracts."
+description: "Attached and in-process transports, startup vault order, prompt ownership and code-identity authorization failures, runtime ownership, automation output, cancellation, and test-isolation contracts."
 ---
 
 # Sanad CLI Architecture & Gateway Runtime Contract
@@ -165,6 +165,40 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
      plus the token codes above. Token-read and permission problems stay
      distinguishable (`token_permissions` vs `token_read_error` vs
      `token_not_found`).
+
+### 3.1. Startup Order and the Agent Vault
+
+Startup order is a contract, because every step before dispatch touches the Home:
+
+```
+--version/help (pure, no Home)  →  --home selection  →  E2E isolation check
+  →  Home bootstrap  →  Agent vault (only when the command can touch a secret)
+  →  bundled-skill sync  →  `.env` seeding  →  command dispatch
+```
+
+- **The vault opens only for a command that can read or write a secret.** `SanadCommandRunner.requiresSecretVault` classifies the command line with the same parser the commands use, per subcommand: `session`, `workspace`/`ws`, `memory`, the pure queries, `schedule list`, and `skills list` never open it; every other command and subcommand — including an unrecognized or unparseable line, and a bare family name such as `schedule` — keeps opening it, so a new command can never silently lose its credentials. The in-process standalone runtime still opens the vault itself (`StandaloneCliTurnClient.start`) and the daemon opens it in `bin/daemon.dart`.
+- **A process that never opened the vault cannot write a secret to a file.** `SecretVaultPolicy.vaultSkipped` records the classification, and `SecureFileSecretStore` (the plaintext provider-secret store, including the `di.dart` fallback) refuses `write`, `remove`, and `pruneOrphans` in such a process with `plaintext_fallback_blocked`. A vault-free command that suddenly reaches a provider-secret write therefore fails loudly instead of leaving plaintext on disk.
+- **Why the vault is not free.** The vault is the OS credential vault (macOS Keychain, Windows DPAPI, Linux Secret Service). Opening it reads each namespace owner index, and macOS answers a read of a generic-password item whose ACL does not accept the calling binary with an interactive authorization dialog instead of data. In a desktop session that dialog *is* shown for a CLI binary, and the reading thread then blocks *inside* the security framework, before the event loop can serve anything: the process prints nothing (not even the bundled-skill line), opens no socket, spawns no child, and never exits. `sample(1)` shows the blocked thread in `SecItemCopyMatching → SecKeychainItemCopyContent → SecurityServer::ClientSession::decrypt → mach_msg` while the Dart main isolate idles in `Dart_RunLoop`, and `securityd` logs `displaying keychain prompt for <binary>; ACL: … <CodeSignatureAclSubject … identifier dartvm …>`. The reported defect was therefore not "the dialog never appears": it was a dialog nobody was looking at while an automation caller, the Client, or a scheduler waited for output that could never come. A gateway command that opens the vault for no reason turns any unattended caller into that wait.
+- **Why it presents as "AOT only".** The ACL is a *code-identity* check, not an interpreter check. A vault populated by `fvm dart run …` records the FVM `dartvm` signature, so the same command under JIT is already authorized while a `dart compile exe` build — a different ad-hoc signature with no matching requirement — is asked to authorize. Any other identity differs the same way: a newer release binary whose signature no longer matches an older item, or the packaged app versus a separately installed CLI.
+- **Who may start the dialog.** `SecretVaultPolicy` decides it from explicit evidence, once per process, before the vault opens:
+
+  | Evidence | Detected by | Interaction |
+  | --- | --- | --- |
+  | Daemon entry point (`daemon`, alias `start`, direct `bin/daemon.dart`) | `SanadCommandRunner.dispatchesToDaemon`, `bin/daemon.dart` | allowed |
+  | Interactive CLI (`run --standalone`, `models`, `providers`, `setup`, `login`, `doctor`) | stdin **and** stdout are terminals, no machine-output flag | allowed |
+  | `--json`, `--quiet`, `-q` | command line | forbidden (`machine_output`) |
+  | `--child-process` | command line | forbidden (`supervised_child`) |
+  | Client, scheduler, delegate relay, script, pipe | stdin or stdout is not a terminal | forbidden (`no_terminal`) |
+  | Spawner declaration | `SANAD_SECRET_VAULT_INTERACTION=forbid`/`allow` | honour the declaration |
+
+  There is no inference from a parent process name: a caller that allocates a terminal on purpose sets the environment variable, and everything else is decided by the command line and the stdio shape.
+- **The daemon keeps the prompt.** It is the process that migrates legacy secret files, an operator starts it from the desktop app or a launchd service, and its one-time authorization dialog is the intended way to grant access. It never inherits the CLI's stdio-shaped detection.
+- **Only a process with nobody present suppresses the dialog.** `MacOsKeychainAgentSecretStore` then attaches an `LAContext` with `interactionNotAllowed` through the non-deprecated `kSecUseAuthenticationContext` and switches the legacy file keychain with `SecKeychainSetUserInteractionAllowed(0)` (the file keychain ignores the per-query context; the switch is safe there precisely because the process already established that no human can answer anything). An authorization-demanding item returns `errSecInteractionNotAllowed` (`-25308`) or `errSecInteractionRequired` (`-25315`), `errSecAuthFailed` (`-25293`) means the item's access control rejected this binary, and `errSecUserCanceled` (`-128`) means somebody dismissed the dialog. Each maps to its own `AgentSecretStoreUnavailableReason` (`interaction_forbidden`, `interaction_required`, `authorization_denied`, `authorization_canceled`) and its own message, so a dismissed dialog never reads as a rejected binary.
+- **An interactive run announces the wait.** Before its first Keychain query the store prints one stderr line, `Waiting for macOS Keychain approval for ai.eaststar.sanad.agent…`, and never a secret. A process that forbids interaction never prints it, because it never starts the dialog.
+- **A closed vault is reported, not buried.** `SecretVaults` records the reason code, `sanad doctor` prints `[✗] Agent Vault: unavailable (<reason>)` with the recovery steps, the daemon logs an actionable warning naming what is unreadable and how to recover, and the local gateway `/health` payload carries `secret_vault: available|unavailable` plus `secret_vault_reason`. All three are non-secret.
+- **Recovery for an affected Home.** Authorization is per code identity, so the recovery is to give the item an identity that trusts the binary you run: Keychain Access → the `ai.eaststar.sanad.agent` item → Access Control → add the Agent binary you invoke. Nothing in Sanad rewrites, re-creates, or re-ACLs vault items, and a binary that cannot read the owner index cannot migrate them either, so a Home whose items belong to a foreign identity is recovered out of band or by running the build that created them. A release whose signature keeps a stable designation-based requirement does not re-ask on upgrade; a development AOT build changes identity on every compile and therefore always differs from a vault populated by `fvm dart run …`.
+- **Regression guard.** `agent/tool/cli_aot_smoke.dart` (the `cli-automation` CI job, all three OSes) compiles the CLI with `dart compile exe`, starts `agent/tool/fake_local_gateway.dart` on an ephemeral loopback port, and runs `session list`, `session show`, and `session stop` against a throwaway Home and token with a hard per-command deadline. It asserts that every gateway command succeeds *and* that the throwaway Home holds no `secret_vault*` artifact, and then that `models list` — which does read provider credentials — opens the vault, finishes, and prints no approval notice in a process with no terminal. `test/cli/cli_vault_open_policy_test.dart` pins the classifier, and `test/core/auth/secret_vault_interaction_policy_test.dart` pins the status mapping, the detection matrix, the plaintext guard, and the `LAContext` path.
+
 
 ---
 
