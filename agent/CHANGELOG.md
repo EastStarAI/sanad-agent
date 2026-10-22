@@ -1,5 +1,7 @@
 ## 1.0.18
 
+- Released the session queue after a pre-start turn refusal, reported one clean reason line, ended `sanad run` at once when the daemon blocks a turn, and waited for the real outcome in `sanad session compact` (#253).
+- Made `sanad session stop` confirm authoritative idle state before reporting success, release the owner's in-flight projection and suspended checkpoints, name the addressed run, and stop `sanad session show` reporting stale `running` (#259).
 - Added remote `sanad-client` delegation through a canonical `device.cli.execute` relay with streamed output, cancel forwarding, one CLI owner per Sanad Home, and `default`/`full_access` approval (#188).
 - Hardened the relay: the window follows `--timeout`, background runs stop consuming stdin, pending approvals are announced, and a run without a terminal result exits 1 instead of reporting success (#256).
 - Ported execution trust, command authority, and secret isolation: daemon-private workspace policy, per-turn command authority, exact child environments, closed `.env` redaction, and localized Full Access confirmation (#245).
