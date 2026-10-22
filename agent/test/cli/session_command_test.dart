@@ -36,6 +36,8 @@ class FakeSessionGatewayClient extends LocalGatewayCliClient {
   int compactCallCount = 0;
   String? lastSteerSessionId;
   String? lastSteerMessage;
+  String? lastSteerRequestId;
+  bool? lastSteerOnly;
   Duration? lastSteerAckTimeout;
   int steerCallCount = 0;
   Map<String, dynamic>? steerAckToReturn;
@@ -106,17 +108,20 @@ class FakeSessionGatewayClient extends LocalGatewayCliClient {
     String? workspaceId,
     String? model,
     String? requestId,
+    bool steerOnly = false,
     Duration? timeout,
   }) async {
     steerCallCount++;
     lastSteerSessionId = sessionId;
     lastSteerMessage = message;
+    lastSteerRequestId = requestId;
+    lastSteerOnly = steerOnly;
     lastSteerAckTimeout = timeout;
     if (steerErrorToThrow != null) throw steerErrorToThrow!;
     return steerAckToReturn ??
         {
           'session_id': sessionId,
-          'request_id': 'req-steer-fake-1',
+          'request_id': requestId ?? 'req-steer-fake-1',
           'event': 'session.message_classified',
           'classification': 'steer',
         };
@@ -1225,8 +1230,19 @@ void main() {
           reason: 'the delivered text is the trimmed message payload',
         );
         expect(
+          client.lastSteerOnly,
+          isTrue,
+          reason:
+              'every CLI steer is `steer_only`, so the daemon can never turn '
+              'the text into a turn or a queued turn',
+        );
+        expect(client.lastSteerRequestId, isNotNull);
+        expect(
           stdoutBuf.toString().trim(),
-          equals('Steer sent to session sess-live (request req-steer-fake-1).'),
+          equals(
+            'Steer sent to session sess-live '
+            '(request ${client.lastSteerRequestId}).',
+          ),
         );
       });
 
@@ -1247,7 +1263,7 @@ void main() {
             jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
         expect(decoded, {
           'session_id': 'sess-live',
-          'request_id': 'req-steer-fake-1',
+          'request_id': client.lastSteerRequestId,
           'status': 'steer_sent',
         });
       });
@@ -1428,37 +1444,39 @@ void main() {
         },
       );
 
-      test(
-        'maps a gateway that queued the text to steer_not_applied',
-        () async {
-          useRunningSession();
-          client.steerAckToReturn = {
-            'session_id': 'sess-live',
-            'request_id': 'req-steer-queued',
-            'event': 'session.message_classified',
-            'classification': 'queue',
-          };
+      test('maps a gateway that queued the text to queued_as_turn', () async {
+        useRunningSession();
+        client.steerAckToReturn = {
+          'session_id': 'sess-live',
+          'request_id': 'req-steer-queued',
+          'event': 'session.message_classified',
+          'classification': 'queue',
+        };
 
-          final runner = buildRunner();
-          final exitCode = await runner.run([
-            'session',
-            'steer',
-            'sess-live',
-            '--message',
-            'Add scope',
-            '--json',
-          ]);
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-live',
+          '--message',
+          'Add scope',
+          '--json',
+        ]);
 
-          expect(exitCode, equals(SessionSteerCommand.exitNotSteerable));
-          final decoded =
-              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
-          expect(decoded['error_code'], equals('steer_not_applied'));
-          expect(decoded['request_id'], equals('req-steer-queued'));
-          expect(stdoutBuf.toString(), isNot(contains('Add scope')));
-        },
-      );
+        expect(exitCode, equals(SessionSteerCommand.exitQueuedAsTurn));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['error_code'], equals('queued_as_turn'));
+        expect(decoded['request_id'], equals('req-steer-queued'));
+        expect(
+          decoded['error'],
+          contains('a turn is now queued'),
+          reason: 'the message must say a turn is queued, not that it steered',
+        );
+        expect(stdoutBuf.toString(), isNot(contains('Add scope')));
+      });
 
-      test('maps a steer admitted as a new turn to no_active_turn', () async {
+      test('maps a steer admitted as a new turn to admitted_as_turn', () async {
         useRunningSession();
         client.steerAckToReturn = {
           'session_id': 'sess-live',
@@ -1477,10 +1495,53 @@ void main() {
           '--json',
         ]);
 
+        expect(exitCode, equals(SessionSteerCommand.exitAdmittedAsTurn));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(
+          decoded['error_code'],
+          equals('admitted_as_turn'),
+          reason:
+              'an older daemon that admitted the text as a turn is not the '
+              'same condition as having no active turn',
+        );
+        expect(
+          decoded['error'],
+          contains('a turn is now running'),
+          reason: 'the message must say a turn is running, not that it steered',
+        );
+        expect(
+          decoded['request_id'],
+          equals('req-steer-turned-into-turn'),
+        );
+      });
+
+      test('reports the daemon steer_only rejection as no_active_turn', () async {
+        useRunningSession();
+        client.steerErrorToThrow = const CliClientException(
+          'No run currently owns session sess-live, so the steer was rejected.',
+          code: 'no_active_turn',
+        );
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-live',
+          '--message',
+          'Add scope',
+          '--json',
+        ]);
+
         expect(exitCode, equals(SessionSteerCommand.exitNoActiveTurn));
         final decoded =
             jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
         expect(decoded['error_code'], equals('no_active_turn'));
+        expect(
+          decoded['error'],
+          contains('no turn was started'),
+          reason: 'the daemon guarantees nothing was queued or admitted',
+        );
       });
 
       test('maps an unacknowledged steer to its own exit code', () async {
@@ -1553,6 +1614,43 @@ void main() {
         expect(exitCode, equals(SessionSteerCommand.exitFailed));
       });
 
+      test(
+        'maps an unreachable daemon to exit 1, never to "Gateway rejected"',
+        () async {
+          useRunningSession();
+          // The two connect-time codes an unreachable daemon actually raises.
+          for (final code in ['connection_failed', 'disposed']) {
+            stdoutBuf.clear();
+            stderrBuf.clear();
+            client.steerCallCount = 0;
+            client.steerErrorToThrow = CliClientException(
+              'Failed to connect to gateway at ws://127.0.0.1:1/gateway',
+              code: code,
+            );
+
+            final runner = buildRunner();
+            final exitCode = await runner.run([
+              'session',
+              'steer',
+              'sess-live',
+              '--message',
+              'Add scope',
+              '--json',
+            ]);
+
+            expect(
+              exitCode,
+              equals(SessionSteerCommand.exitFailed),
+              reason: '$code is a transport failure, not a gateway verdict',
+            );
+            final decoded =
+                jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+            expect(decoded['error_code'], equals(code));
+            expect(stderrBuf.toString(), isNot(contains('Gateway rejected')));
+          }
+        },
+      );
+
       test('fails closed when the session projection cannot be read', () async {
         client.historyErrorToThrow = const CliClientException(
           'state unavailable',
@@ -1574,6 +1672,305 @@ void main() {
           isZero,
           reason: 'a steer is never dispatched without the ownership read',
         );
+      });
+
+      test(
+        'reports a typed session-state read failure as its own condition',
+        () async {
+          client.historyErrorToThrow = const CliClientException(
+            'cursor is stale',
+            code: 'stale_cursor',
+          );
+
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'steer',
+            'sess-live',
+            '--message',
+            'Add scope',
+            '--json',
+          ]);
+
+          expect(
+            exitCode,
+            equals(SessionSteerCommand.exitStateUnreadable),
+            reason: 'no steer was sent, so this is not a steer rejection',
+          );
+          expect(
+            client.steerCallCount,
+            isZero,
+            reason: 'the pre-check never dispatches after a failed read',
+          );
+          final decoded =
+              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+          expect(decoded['error_code'], equals('session_state_unreadable'));
+          expect(decoded['error'], contains('no steer was sent'));
+          expect(
+            decoded['request_id'],
+            isA<String>(),
+            reason: 'the request identity is allocated before the read',
+          );
+          expect(decoded['request_id'], isNotEmpty);
+        },
+      );
+
+      test('treats a stop request as not steerable', () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-stopping',
+            'execution_snapshot': {
+              'state': 'running',
+              'stop_requested': true,
+            },
+            'messages': [],
+          },
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-stopping',
+          '--message',
+          'Add scope',
+        ]);
+
+        expect(exitCode, equals(SessionSteerCommand.exitNoActiveTurn));
+        expect(client.steerCallCount, isZero);
+      });
+
+      test('treats the durable stopping state as not steerable', () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-stopping',
+            'execution_snapshot': {'state': 'stopping'},
+            'messages': [],
+          },
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-stopping',
+          '--message',
+          'Add scope',
+        ]);
+
+        expect(exitCode, equals(SessionSteerCommand.exitNoActiveTurn));
+        expect(client.steerCallCount, isZero);
+      });
+
+      test('treats a waiting runtime recovery notice as not steerable', () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-waiting',
+            'execution_snapshot': {'state': 'running'},
+            'runtime_notice': {
+              'status': 'waiting',
+              'reason': 'rate_limited',
+              'title': 'Rate limited',
+            },
+            'messages': [],
+          },
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-waiting',
+          '--message',
+          'Add scope',
+        ]);
+
+        expect(exitCode, equals(SessionSteerCommand.exitNoActiveTurn));
+        expect(client.steerCallCount, isZero);
+      });
+
+      test('steers a running session whose notice is resuming', () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-resuming',
+            'execution_snapshot': {'state': 'running'},
+            'runtime_notice': {'status': 'resuming', 'reason': 'recovered'},
+            'messages': [],
+          },
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-resuming',
+          '--message',
+          'Add scope',
+        ]);
+
+        expect(exitCode, equals(0));
+        expect(client.lastSteerSessionId, equals('sess-resuming'));
+      });
+
+      test('names the request id in every outcome, including a timeout', () async {
+        useRunningSession();
+        client.steerErrorToThrow = const CliClientException(
+          'Gateway did not acknowledge the steer within 15s; it may still be '
+          'dispatched.',
+          code: 'steer_unacknowledged',
+        );
+
+        final plainRunner = buildRunner();
+        final plainExit = await plainRunner.run([
+          'session',
+          'steer',
+          'sess-live',
+          '--message',
+          'Add scope',
+        ]);
+        expect(plainExit, equals(SessionSteerCommand.exitUnacknowledged));
+        expect(
+          stderrBuf.toString(),
+          contains('(request ${client.lastSteerRequestId})'),
+        );
+
+        stdoutBuf.clear();
+        stderrBuf.clear();
+        final jsonRunner = buildRunner();
+        final jsonExit = await jsonRunner.run([
+          'session',
+          'steer',
+          'sess-live',
+          '--message',
+          'Add scope',
+          '--json',
+        ]);
+        expect(jsonExit, equals(SessionSteerCommand.exitUnacknowledged));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['request_id'], equals(client.lastSteerRequestId));
+        expect(decoded['error_code'], equals('steer_unacknowledged'));
+      });
+
+      test('rejects an unusable --timeout as a usage error', () async {
+        useRunningSession();
+        for (final value in ['0', '-5', 'abc', '86401']) {
+          stdoutBuf.clear();
+          stderrBuf.clear();
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'steer',
+            'sess-live',
+            '--message',
+            'Add scope',
+            '--timeout',
+            value,
+          ]);
+
+          expect(
+            exitCode,
+            equals(SessionSteerCommand.exitUsage),
+            reason: '--timeout $value must not silently fall back',
+          );
+          expect(stderrBuf.toString(), contains('--timeout must be'));
+        }
+        expect(client.steerCallCount, isZero);
+      });
+
+      test('rejects a directory passed to --message-file', () async {
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-live',
+          '--message-file',
+          tempDir.path,
+        ]);
+
+        expect(exitCode, equals(SessionSteerCommand.exitUsage));
+        expect(stderrBuf.toString(), contains('is a directory'));
+        expect(client.steerCallCount, isZero);
+      });
+
+      test('uses the --message-file path verbatim, without trimming', () async {
+        useRunningSession();
+        final file = File('${tempDir.path}/ steer body .txt')
+          ..writeAsStringSync('Prefer the repository helper.');
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-live',
+          '--message-file',
+          // A quoted path keeps exactly the bytes the caller passed.
+          ' ${file.path} ',
+        ]);
+
+        expect(
+          exitCode,
+          equals(SessionSteerCommand.exitUsage),
+          reason: 'the untrimmed path does not name the file on disk',
+        );
+        expect(stderrBuf.toString(), contains('does not exist'));
+
+        stdoutBuf.clear();
+        stderrBuf.clear();
+        final exactRunner = buildRunner();
+        final exactExit = await exactRunner.run([
+          'session',
+          'steer',
+          'sess-live',
+          '--message-file',
+          file.path,
+        ]);
+        expect(exactExit, equals(0));
+        expect(client.lastSteerMessage, equals('Prefer the repository helper.'));
+      });
+
+      test('rejects --message together with --message-file even when one is '
+          'blank', () async {
+        final file = File('${tempDir.path}/steer.txt')
+          ..writeAsStringSync('body');
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-live',
+          '--message',
+          '',
+          '--message-file',
+          file.path,
+        ]);
+
+        expect(exitCode, equals(SessionSteerCommand.exitUsage));
+        expect(
+          stderrBuf.toString(),
+          contains('cannot be combined with --message-file'),
+        );
+        expect(client.steerCallCount, isZero);
+      });
+
+      test('resolves the target from the positional id when --message consumes '
+          'a leading -s', () async {
+        useRunningSession(sessionId: 'sess-B');
+        final runner = buildRunner();
+        // `args` consumes `-s` as the value of `--message`, so the Agent target
+        // is the positional `sess-B`, never `sess-A`.
+        final exitCode = await runner.run([
+          'session',
+          'steer',
+          'sess-B',
+          '--message',
+          '-s',
+          'sess-A',
+        ]);
+
+        expect(exitCode, equals(0));
+        expect(client.lastSteerSessionId, equals('sess-B'));
+        expect(client.lastSteerMessage, equals('-s'));
       });
 
       test('never prints the steer body on a rejected steer', () async {

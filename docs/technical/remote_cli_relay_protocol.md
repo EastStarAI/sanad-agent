@@ -432,10 +432,18 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
   and before the approval overlay is requested, so a headless caller can explain
   the wait. A session that is already approved emits no notice. The caller writes
   the message once to standard error and never to standard output, keeping
-  `--json` output parseable. Approval is keyed on the session id the caller passes
-  as `--session`/`-s`, so a supervisor that steers or stops one worker repeatedly
-  should pass `--session <id>` (accepted by every `session` subcommand, including
-  `session steer`) to reuse one approved session instead of prompting per call.
+  `--json` output parseable. Approval is keyed on **the session the forwarded
+  command will act on**, resolved with the Agent's own argv grammar: the
+  positional session id of a `session` subcommand, and/or an explicit
+  `--session`/`-s`, while every value-taking option keeps its value — so
+  `session steer B --message -s A` is approved against `B` (the parser consumes
+  `-s` as the message text) and never against `A`. A supervisor that steers or
+  stops one worker repeatedly should pass `--session <id>` (accepted by every
+  `session` subcommand, including `session steer`) to reuse one approved session
+  instead of prompting per call. When the argv names two different sessions
+  (`session steer B --session A ...`) the host refuses before approval with
+  `code: ambiguous_session_target` and relays nothing, instead of approving one
+  session while the Agent acts on the other.
 - **Terminal Execution Result (`type: result`):**
   ```json
   {

@@ -92,26 +92,37 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 Contract owner: Section 9.5 of `docs/technical/sanad_cli_architecture.md`. A successful
 `session steer` proves the gateway acknowledged the text as a **pending steer** for the
 active turn; it never proves the instruction was applied, which happens at the next
-execution boundary.
+execution boundary. Every dispatch carries `steer_only: true`, so the daemon itself
+refuses a steer that has no live owner instead of turning it into a turn.
 
 | Scenario | CLI Command | Expected Runtime Behavior | Exit Code |
 |---|---|---|---|
 | Steer the active turn | `sanad session steer <session-id> --message "Add an audit trail"` | One `steer` dispatch; the daemon registers a pending steer for the owning run and publishes `session.pending_steer_changed` / `session.message_classified` with `classification: steer`. Plain output is `Steer sent to session <id> (request <reqId>).` | 0 |
 | Steer in JSON mode | `sanad session steer <session-id> --message "Add an audit trail" --json` | Outputs `{"session_id": "<id>", "request_id": "<req-id>", "status": "steer_sent"}` only after the gateway acknowledgement. | 0 |
-| Steer text from a file | `sanad session steer <session-id> --message-file steer.txt` | Reads the file as plain text, trims it, and dispatches the trimmed body. | 0 |
-| No active turn | `sanad session steer <idle-session-id> --message "Add scope"` | Refused **before** dispatch with `error_code: no_active_turn`: the daemon would otherwise admit the steer through the ordinary turn path and start a new turn (or queue it when the session is busy). Nothing is created. | 3 |
+| Steer text from a file | `sanad session steer <session-id> --message-file steer.txt` | Reads the file as plain text, trims it, and dispatches the trimmed body. The path itself is used verbatim, never trimmed. | 0 |
+| No active turn (pre-check) | `sanad session steer <idle-session-id> --message "Add scope"` | Refused **before** dispatch with `error_code: no_active_turn`; nothing is dispatched, queued, or created. The daemon would also reject the same steer through `steer_only`, so the outcome does not depend on this read. | 3 |
+| No active turn (daemon guard) | a steer that races the turn's completion, so the pre-check passed and the run ended before admission | The daemon rejects it with one correlated `error` frame, `code: no_active_turn`; the text is **not** queued and **no** turn is started (the run's own turn is the only turn). | 3 |
 | Stale `in_flight` projection | `sanad session steer <stopped-session-id> --message "Add scope"` | A leftover in-memory partial-stream snapshot whose durable execution snapshot is not `running`/`resuming` is not read as an active turn; the command reports `no_active_turn` and dispatches nothing. | 3 |
-| Gateway admitted a new turn instead | `sanad session steer <id> --message "..."` racing the turn's completion | The daemon classifies the message `think`; the CLI reports `no_active_turn` instead of claiming a steer. | 3 |
-| Gateway queued the text | `sanad session steer <id> --message "..."` while the session is busy with older work | The daemon classifies the message `queue`; the CLI reports `steer_not_applied` and never claims the steer reached the active turn. | 4 |
+| Stop requested or draining | `sanad session steer <stopping-session-id> --message "Add scope"` | A `stop_requested` snapshot, the durable `stopping` state, or an active runtime notice outside `resuming` is not steerable; nothing is dispatched. | 3 |
+| Older daemon admitted a new turn | `sanad session steer <id> --message "..."` against a daemon that ignores `steer_only` | The daemon classifies the message `think`; the CLI reports `admitted_as_turn` and states that **a turn is now running**, never that the steer was applied. | 6 |
+| Older daemon queued the text | the same, while the session is busy with older work | The daemon classifies the message `queue`; the CLI reports `queued_as_turn` and states that **a turn is now queued**. | 7 |
 | Typed gateway rejection | `sanad session steer <id> --message "..." --json` | A matching `error` frame is reported with the gateway's own `error_code` and exit `4`. | 4 |
-| Dispatched but unacknowledged | `sanad session steer <id> --message "..." --timeout 5` | No acknowledgement within the bound (default 15 s) reports `steer_unacknowledged` and advises `sanad session show <id>`; it is never reported as sent. | 5 |
-| Invalid invocation | `sanad session steer <id>` with neither or both message sources, an empty message, or an unreadable/empty `--message-file` | `Error:` line plus usage on stderr, `error_code: invalid_arguments` in `--json` mode, and no dispatch. | 2 |
-| Session projection unavailable | `sanad session steer <id> --message "..."` with the daemon unreachable | Fails closed without dispatching the steer. | 1 |
+| Dispatched but unacknowledged | `sanad session steer <id> --message "..." --timeout 5` | No acknowledgement within the bound (default 15 s) reports `steer_unacknowledged`, prints the request id, and advises `sanad session show <id>`; it is never reported as sent. | 5 |
+| Invalid invocation | `sanad session steer <id>` with neither message source, both sources (even when one is blank), an empty message, an unusable `--timeout` (0, negative, non-numeric, above 86400), or a missing/directory/unreadable/empty `--message-file` | `Error:` line plus usage on stderr, `error_code: invalid_arguments` in `--json` mode, and no dispatch. | 2 |
+| Session state unreadable | `sanad session steer <id> --message "..."` where the projection read returns a typed error | `session_state_unreadable` (exit `8`): the reason is reported as "could not read session state", distinct from any steer verdict, because no steer was sent. | 8 |
+| Daemon unreachable | `sanad session steer <id> --message "..."` with no daemon listening | Fails closed without dispatching the steer and reports the transport code (`connection_failed`/`disposed`/`not_connected`), never "Gateway rejected". | 1 |
 | Message body confidentiality | any failed steer | The steer body never appears on stdout, stderr, or in logs; only identities, codes, and lifecycle metadata are reported. | — |
 
-Automated coverage: `agent/test/cli/session_command_test.dart` (group `session steer`)
-and `agent/test/cli/local_gateway_cli_client_test.dart` (group
-`steer acknowledgement`), both daemon-free.
+Automated coverage: `agent/test/cli/session_command_test.dart` (group `session steer`),
+`agent/test/cli/steer_acknowledgement_test.dart` (the real acknowledgement
+classification over a scripted socket), and
+`agent/test/interfaces/runtime/steer_only_admission_test.dart` (the daemon's
+`steer_only` rejection and the unchanged legacy admit-or-queue path), all daemon-free.
+
+For the two race rows ("No active turn (daemon guard)" and "Older daemon admitted a new
+turn") the observable outcome is not "nothing happens": the text is refused in the first
+case and becomes a turn in the second. Only the first is guaranteed to create nothing,
+because the daemon honours `steer_only`.
 
 ---
 

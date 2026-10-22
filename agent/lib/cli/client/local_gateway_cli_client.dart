@@ -283,12 +283,18 @@ class LocalGatewayCliClient implements CliTurnClient {
   }
 
   /// Dispatches a `steer` command to guide active agent execution mid-turn.
+  ///
+  /// With [steerOnly] the payload carries `steer_only: true`, which binds the
+  /// daemon to reject the message with a typed `no_active_turn` error when no
+  /// run owns the session instead of admitting it as a turn or queuing it. A
+  /// caller that omits the flag keeps the legacy admit-or-queue behaviour.
   Future<String> steer({
     required String sessionId,
     required String message,
     String? workspaceId,
     String? model,
     String? requestId,
+    bool steerOnly = false,
   }) async {
     final reqId = requestId ?? _uuid.v4();
     final payload = <String, dynamic>{
@@ -297,6 +303,7 @@ class LocalGatewayCliClient implements CliTurnClient {
       'workspace_id': ?workspaceId,
       'model': ?model,
       'request_id': reqId,
+      if (steerOnly) 'steer_only': true,
     };
 
     await sendCommand(command: 'steer', payload: payload, requestId: reqId);
@@ -320,12 +327,17 @@ class LocalGatewayCliClient implements CliTurnClient {
   /// caller's [timeout]) raises [CliClientException] with code
   /// `steer_unacknowledged` so a caller never reports an unconfirmed steer as
   /// sent.
+  ///
+  /// [steerOnly] is forwarded to [steer], so a daemon that honours it answers
+  /// with a typed `no_active_turn` rejection rather than a `think`/`queue`
+  /// classification when no run owns the session.
   Future<Map<String, dynamic>> steerAndAwaitAck({
     required String sessionId,
     required String message,
     String? workspaceId,
     String? model,
     String? requestId,
+    bool steerOnly = false,
     Duration? timeout,
   }) async {
     final reqId = requestId ?? _uuid.v4();
@@ -347,6 +359,7 @@ class LocalGatewayCliClient implements CliTurnClient {
         workspaceId: workspaceId,
         model: model,
         requestId: reqId,
+        steerOnly: steerOnly,
       );
       return await completer.future.timeout(
         effectiveTimeout,
@@ -396,8 +409,16 @@ class LocalGatewayCliClient implements CliTurnClient {
       case 'session.message_classified':
         ack['classification'] = payload['classification']?.toString();
       case 'session.pending_steer_changed':
-        ack['classification'] = 'steer';
-        ack['state'] = payload['state']?.toString();
+        // Only a record that is still pending (or already delivering/delivered)
+        // proves the text was registered as a steer. A cancelled or recovered
+        // record names the same request id but never became a steer, so it must
+        // not be reported as one.
+        final state = payload['state']?.toString();
+        ack['state'] = state;
+        ack['classification'] = switch (state) {
+          'pending' || 'delivering' || 'delivered' => 'steer',
+          _ => null,
+        };
       case 'session.queued_message_steer_result':
         ack['outcome'] = payload['outcome']?.toString();
       default:
@@ -658,15 +679,21 @@ class LocalGatewayCliClient implements CliTurnClient {
   }
 
   /// Queries message history for a specific session.
+  ///
+  /// A typed `error` envelope is thrown as [CliClientException] carrying the
+  /// gateway's own code: an unreadable session projection is never returned as
+  /// if it were session state.
   Future<Map<String, dynamic>> getSessionHistory({
     required String sessionId,
     Duration? timeout,
   }) async {
-    return query(
+    final result = await query(
       command: 'get_session_history',
       payload: {'session_id': sessionId},
       timeout: timeout,
     );
+    _throwIfError(result);
+    return result;
   }
 
   /// Queries registered workspaces.
@@ -875,11 +902,23 @@ class LocalGatewayCliClient implements CliTurnClient {
     return const [];
   }
 
+  /// Throws the gateway's typed error when [result] is an `error` frame.
+  ///
+  /// The daemon's bridge publishes canonical frames as
+  /// `{type: 'event', event: '<canonical type>', payload: {...}}`, while a
+  /// query handler may answer with a bare `{type: 'error', payload: {...}}`.
+  /// Both shapes are recognized, so a typed rejection is never returned to a
+  /// caller as if it were a successful payload.
   static void _throwIfError(Map<String, dynamic> result) {
-    final type =
-        result['message_type'] ?? result['type'] ?? result['event']?['type'];
+    final eventField = result['event'];
+    final type = eventField is String
+        ? eventField
+        : result['message_type'] ??
+              result['type'] ??
+              (eventField is Map ? eventField['type'] : null);
     if (type == 'error') {
-      final payload = result['payload'] ?? result['event']?['payload'];
+      final payload =
+          result['payload'] ?? (eventField is Map ? eventField['payload'] : null);
       final message = payload is Map ? payload['message']?.toString() : null;
       throw CliClientException(
         message ?? 'Gateway request failed with error.',

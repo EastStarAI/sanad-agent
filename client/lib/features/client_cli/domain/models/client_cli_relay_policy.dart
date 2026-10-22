@@ -65,7 +65,123 @@ const Set<String> _clientCliValueOptions = {
   '--execution-root',
   '--out-dir',
   '-o',
+  // `session` subcommand options. A value that looks like an option (for
+  // example `--message -s`) is the *value* of the preceding option in the
+  // Agent's own grammar, so it must never be re-read as a session flag here.
+  '--message',
+  '--message-file',
+  '-f',
+  '--request-id',
+  '-r',
+  '--answer',
+  '-a',
+  '--file',
+  '--decision',
+  '-d',
+  '--scope',
+  '--comment',
+  '-c',
 };
+
+/// `session` subcommands that carry no positional session id.
+const Set<String> _clientCliSessionlessSubcommands = {'list', 'new'};
+
+/// Session target named by a relayed argv, resolved with the Agent's grammar.
+class ClientCliSessionTarget {
+  const ClientCliSessionTarget({this.sessionId, this.conflict = false});
+
+  /// The argv names no session at all.
+  static const none = ClientCliSessionTarget();
+
+  /// The session the command will act on, when exactly one is provable.
+  final String? sessionId;
+
+  /// The argv names two different sessions (`--session A <sub> B`).
+  ///
+  /// A caller must refuse to relay rather than approve one of them: the
+  /// forwarded command would act on the other one.
+  final bool conflict;
+}
+
+/// Resolves the session a relayed argv targets, for approval scoping.
+///
+/// The Agent's own parser consumes the token after every value option, so
+/// `session steer B --message -s A` carries the literal text `-s` as its
+/// message and targets `B`: `-s` is never a session flag there. Scanning argv
+/// for the first `-s`/`--session` token — the previous caller-side behaviour —
+/// approved such a command against `A` while the Agent acted on `B`, so this
+/// grammar skips value positions exactly like the Agent parser and reads the
+/// positional session id of `session` subcommands instead.
+///
+/// Two different ids are reported as [ClientCliSessionTarget.conflict] rather
+/// than silently preferring one of them.
+ClientCliSessionTarget clientCliSessionTargetFor(List<String> argv) {
+  if (argv.isEmpty) return ClientCliSessionTarget.none;
+
+  final isSessionCommand = argv.first == 'session';
+  final subcommand = isSessionCommand && argv.length > 1 ? argv[1] : null;
+  final takesPositionalSessionId =
+      isSessionCommand &&
+      (subcommand == null ||
+          !_clientCliSessionlessSubcommands.contains(subcommand));
+
+  String? explicitId;
+  String? positionalId;
+  var optionsEnded = false;
+
+  for (var i = 1; i < argv.length; i++) {
+    final token = argv[i];
+    if (optionsEnded) {
+      positionalId ??= takesPositionalSessionId ? _nonEmpty(token) : null;
+      continue;
+    }
+    if (token == '--') {
+      optionsEnded = true;
+      continue;
+    }
+    if (token.startsWith('-') && token.length > 1) {
+      final equalsAt = token.indexOf('=');
+      final name = equalsAt == -1 ? token : token.substring(0, equalsAt);
+      final inlineValue = equalsAt == -1
+          ? null
+          : token.substring(equalsAt + 1);
+      if (name == '--session' || name == '-s') {
+        if (inlineValue != null) {
+          explicitId ??= _nonEmpty(inlineValue);
+        } else if (i + 1 < argv.length) {
+          i++;
+          explicitId ??= _nonEmpty(argv[i]);
+        }
+        continue;
+      }
+      if (inlineValue == null && _clientCliValueOptions.contains(name)) {
+        i++; // Skip this option's value, exactly like the Agent parser.
+      }
+      continue;
+    }
+    if (takesPositionalSessionId) {
+      // The subcommand token itself is not a positional session id.
+      if (isSessionCommand && i == 1) continue;
+      positionalId ??= _nonEmpty(token);
+    }
+  }
+
+  if (explicitId != null && positionalId != null) {
+    if (explicitId != positionalId) {
+      return const ClientCliSessionTarget(conflict: true);
+    }
+    return ClientCliSessionTarget(sessionId: explicitId);
+  }
+  final resolved = explicitId ?? positionalId;
+  return resolved == null
+      ? ClientCliSessionTarget.none
+      : ClientCliSessionTarget(sessionId: resolved);
+}
+
+String? _nonEmpty(String value) {
+  final trimmed = value.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
 
 /// Relay execution window in seconds for [argv].
 ///

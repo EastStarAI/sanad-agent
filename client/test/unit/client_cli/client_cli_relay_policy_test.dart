@@ -123,4 +123,128 @@ void main() {
       expect(clientCliHasForwardStdinFlag(['run']), isFalse);
     });
   });
+
+  group('clientCliSessionTargetFor', () {
+    test('reads the positional session id of a session subcommand', () {
+      expect(
+        clientCliSessionTargetFor(['session', 'steer', 'sess-B', '--message', 'x'])
+            .sessionId,
+        'sess-B',
+      );
+      expect(
+        clientCliSessionTargetFor(['session', 'show', 'sess-A']).sessionId,
+        'sess-A',
+      );
+      expect(
+        clientCliSessionTargetFor(['session', 'answer', 'sess-A', 'req-1'])
+            .sessionId,
+        'sess-A',
+      );
+    });
+
+    test('never reads an option value as a session flag', () {
+      // `--message -s A` is the literal message `-s` plus a positional `A`;
+      // the Agent targets `sess-B`, so the approval must too.
+      final target = clientCliSessionTargetFor([
+        'session',
+        'steer',
+        'sess-B',
+        '--message',
+        '-s',
+        'sess-A',
+      ]);
+      expect(target.sessionId, 'sess-B');
+      expect(target.conflict, isFalse);
+
+      // The same rule for every value-taking option.
+      expect(
+        clientCliSessionTargetFor([
+          'session',
+          'steer',
+          'sess-B',
+          '--message-file',
+          '--session',
+          'sess-A',
+        ]).sessionId,
+        'sess-B',
+      );
+      expect(
+        clientCliSessionTargetFor([
+          'session',
+          'permission',
+          'sess-B',
+          '--request-id',
+          '--session',
+          '--allow',
+        ]).sessionId,
+        'sess-B',
+      );
+    });
+
+    test('reads an explicit --session option', () {
+      expect(
+        clientCliSessionTargetFor([
+          'session',
+          'steer',
+          '--session',
+          'sess-A',
+          '--message',
+          'x',
+        ]).sessionId,
+        'sess-A',
+      );
+      expect(
+        clientCliSessionTargetFor(['session', 'stop', '--session=sess-A'])
+            .sessionId,
+        'sess-A',
+      );
+      expect(
+        clientCliSessionTargetFor(['run', 'do the thing', '-s', 'sess-A'])
+            .sessionId,
+        'sess-A',
+      );
+    });
+
+    test('fails closed when two different sessions are named', () {
+      final conflict = clientCliSessionTargetFor([
+        'session',
+        'steer',
+        'sess-B',
+        '--session',
+        'sess-A',
+        '--message',
+        'x',
+      ]);
+      expect(conflict.conflict, isTrue);
+      expect(conflict.sessionId, isNull);
+    });
+
+    test('accepts an agreeing positional id and --session', () {
+      final target = clientCliSessionTargetFor([
+        'session',
+        'steer',
+        'sess-A',
+        '--session',
+        'sess-A',
+        '--message',
+        'x',
+      ]);
+      expect(target.conflict, isFalse);
+      expect(target.sessionId, 'sess-A');
+    });
+
+    test('a non-session command has no positional session id', () {
+      expect(
+        clientCliSessionTargetFor(['run', 'do the thing']).sessionId,
+        isNull,
+      );
+      expect(clientCliSessionTargetFor(['ws', 'list']).sessionId, isNull);
+      expect(clientCliSessionTargetFor(const []).sessionId, isNull);
+    });
+
+    test('session subcommands without a session id name none', () {
+      expect(clientCliSessionTargetFor(['session', 'list']).sessionId, isNull);
+      expect(clientCliSessionTargetFor(['session', 'new']).sessionId, isNull);
+    });
+  });
 }

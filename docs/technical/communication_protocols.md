@@ -580,6 +580,15 @@ actual classification from the live execution owner at admission time.
 - `delivery_intent = queue` is an explicit FIFO preference sent by Control+Enter or
   Command+Enter. It queues behind older non-terminal work, but starts a normal
   turn when no older work remains at admission time.
+- `steer_only = true` is an opt-in on the `steer` command for a caller that must
+  never turn an instruction into a turn. When no live owner exists (`canSteer`
+  false: no owned, non-stopping run, durable work outside `running`/`resuming`,
+  an active recovery notice outside `resuming`, or a controlled-restart drain)
+  the daemon answers with one correlated `error` event whose `code` is
+  `no_active_turn`: the text is neither queued nor admitted, and an unknown
+  session id is never created. Clients that omit the field — Sanad Client and the
+  interactive REPL `/steer` — keep the admit-or-queue classification unchanged.
+  Only `sanad session steer` opts in.
 - The daemon returns a classification confirmation correlated by the original
   raw `request_id`. The client does not infer `think`, `queued`, or
   `pending_steer` from local processing flags and does not insert an optimistic
