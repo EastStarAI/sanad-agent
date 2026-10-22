@@ -9,6 +9,7 @@ import 'dart:isolate';
 import 'package:sanad_agent/core/provider_thinking/generated_model_capability_defaults.dart';
 import 'package:test/test.dart';
 
+import '../../tool/canonical_source.dart';
 import '../../tool/generate_model_capability_defaults.dart';
 
 /// The agent package root, resolved independently of the process working
@@ -87,6 +88,39 @@ model_capabilities:
 '''),
       throwsA(isA<FormatException>()),
       reason: 'an alias may not collide with another exact id',
+    );
+  });
+
+  test('a CRLF checkout is not reported as stale output', () {
+    final root = _agentRoot();
+    final generated = File.fromUri(
+      root.resolve(modelCapabilityDefaultsOutputPath),
+    ).readAsStringSync();
+    expect(
+      generatedSourceMatches(
+        onDisk: generated.replaceAll('\n', '\r\n'),
+        rendered: generated,
+      ),
+      isTrue,
+      reason:
+          'Git for Windows checks text files out with CRLF, so a line-ending '
+          'difference is not staleness.',
+    );
+    expect(
+      generatedSourceMatches(onDisk: '$generated//', rendered: generated),
+      isFalse,
+      reason: 'real content drift must still fail the check',
+    );
+  });
+
+  test('the rendered output does not depend on source line endings', () {
+    final source = File.fromUri(
+      _agentRoot().resolve(modelCapabilityDefaultsSourcePath),
+    ).readAsStringSync();
+    final lf = canonicalLineEndings(source);
+    expect(
+      renderModelCapabilityDefaults(lf.replaceAll('\n', '\r\n')),
+      renderModelCapabilityDefaults(lf),
     );
   });
 }

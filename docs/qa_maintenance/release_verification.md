@@ -20,6 +20,22 @@ Dart. This keeps bootstrap portable when Windows exposes `PUB_CACHE` as a
 Git-Bash-incompatible drive path and avoids the implicit package entrypoint
 that is absent from current FVM releases.
 
+Hosted evidence is valid only from a step that cannot continue past a failure.
+Every `pwsh` release step that runs native commands stops on the first non-zero
+exit, and the Agent embedded-skill smoke asserts that `version` — a pure query —
+creates no `SANAD_HOME`, then runs the read-only non-pure `skills list --json` in
+a throwaway Home. Release run `39728735131` failed the Linux and Windows Agent
+jobs because the smoke used `version`, which answers before Home preparation and
+therefore extracts no bundled skill; its Windows surface step then reported the
+job from its final command instead of the two failing generator checks
+(`Unsafe skill source` from Windows path normalization and a `CRLF` checkout
+reported as stale generated output). The resulting platform-stability and
+fail-fast requirements are owned by
+[Release, Signing, and Deployment Architecture](../operations/release_and_signing.md#platform-stable-release-surface-gates)
+and the
+[Bundled Product Skills QA](bundled_product_skills_qa.md#standalone-release-matrix)
+matrix.
+
 The credential scan runs the pinned open-source Gitleaks CLI directly rather
 than the organization-licensed GitHub Action. CI downloads the official Linux
 archive over HTTPS, verifies its pinned SHA-256 before extraction, scans the

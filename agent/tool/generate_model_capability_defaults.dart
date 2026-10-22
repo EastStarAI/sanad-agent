@@ -6,6 +6,8 @@ import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
 import 'package:yaml/yaml.dart';
 
+import 'canonical_source.dart';
+
 const modelCapabilityDefaultsSourcePath = 'model_capability_defaults.yaml';
 const modelCapabilityDefaultsOutputPath =
     'lib/core/provider_thinking/generated_model_capability_defaults.dart';
@@ -22,11 +24,17 @@ void main(List<String> arguments) {
     exitCode = 1;
     return;
   }
-  final generated = renderModelCapabilityDefaults(source.readAsStringSync());
+  final generated = renderModelCapabilityDefaults(
+    canonicalLineEndings(source.readAsStringSync()),
+  );
   final output = File(p.join(agentRoot.path, modelCapabilityDefaultsOutputPath));
 
   if (check) {
-    if (!output.existsSync() || output.readAsStringSync() != generated) {
+    if (!output.existsSync() ||
+        !generatedSourceMatches(
+          onDisk: output.readAsStringSync(),
+          rendered: generated,
+        )) {
       stderr.writeln(
         'Model capability defaults output is stale. Run: '
         'fvm dart run tool/generate_model_capability_defaults.dart',

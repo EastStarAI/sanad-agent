@@ -50,6 +50,44 @@ one final human decision is requested only when the complete signed candidate,
 metadata, attestations, and private Draft have succeeded and the sole pending
 protected deployment is `release-publication`.
 
+## Platform-stable release surface gates
+
+The Agent job validates the same release surface on macOS, Linux, and Windows,
+so every gate has to mean the same thing on all three.
+
+Generated sources are compared and hashed as canonical LF text.
+`agent/tool/generate_bundled_skills.dart` and
+`agent/tool/generate_model_capability_defaults.dart` compare the rendered output
+with the on-disk file after collapsing `CRLF` to `LF`, hash and embed bundled
+skill content in that canonical form, and validate every manifest path in the
+POSIX context before joining it with the platform separator. `.gitattributes`
+pins `eol=lf` for `agent/bundled_skills.json`,
+`agent/model_capability_defaults.yaml`, the two generated Dart outputs, and
+`.agents/skills/**`, because Git for Windows checks text files out with `CRLF`
+by default. Without that pin a clean Windows checkout was reported as stale
+output, a clean LF-only manifest entry was rejected as `Unsafe skill source`
+once the platform path context rewrote its separators, and a Windows build would
+have embedded `CRLF` skill bytes that the committed hashes never described.
+
+The embedded-skill smoke proves that the compiled artifact extracts its bundled
+skills into a throwaway `SANAD_HOME` without a daemon, network, or sidecar
+assets. `version` and the other `SanadCommandRunner.isPureQuery` queries answer
+before Home preparation, so they cannot provide that evidence. The smoke first
+asserts that the pure query creates no Home, then runs the read-only non-pure
+`skills list --json`, which performs Home bootstrap and the bundled-skill
+reconcile, and finally requires the main file from every skill, one nested
+reference, and each license.
+
+Every `pwsh` step that runs native commands sets
+`$ErrorActionPreference = 'Stop'` together with
+`$PSNativeCommandUseErrorActionPreference = $true`, or checks `$LASTEXITCODE`
+explicitly. PowerShell does not stop on a non-zero native exit by default, so
+the Windows release surface step previously continued past both failing
+generator checks and was reported only by its final command. The Windows
+running-client upgrade guard remains the deliberate exception: that script
+asserts specific native calls are rejected and throws on every unexpected
+result, so it keeps its own exit-code handling.
+
 ## Artifact channels
 
 | Component | Target | Public channel | Authenticity boundary |
