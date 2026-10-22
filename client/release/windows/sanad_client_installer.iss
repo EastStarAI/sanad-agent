@@ -1,6 +1,6 @@
 [Setup]
 AppName=Sanad
-AppVersion=1.0.17
+AppVersion=1.0.18
 AppPublisher=EastStar AI
 AppPublisherURL=https://eaststarai.com
 AppSupportURL=https://eaststarai.com/support
