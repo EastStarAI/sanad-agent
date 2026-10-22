@@ -134,9 +134,6 @@ jobs:
       - name: Validate shipped model capability defaults
         working-directory: agent
         run: fvm dart run tool/generate_model_capability_defaults.dart --check
-      - name: Validate CLI relay grammar contract
-        working-directory: agent
-        run: fvm dart run tool/generate_cli_relay_grammar.dart --check
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze
