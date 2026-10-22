@@ -133,7 +133,29 @@ Round 2 gate results on the merged tree:
   - `docs/technical/communication_protocols.md` §4.6
   - `docs/technical/sanad_cli_architecture.md` §5
   - `docs/qa_maintenance/cli_session_observability_intervention_qa.md` §4
-- [ ] Coordinator review and live acceptance on one Test Home (scenarios below). Live r2 on `41ac93cb` is recorded in Round 3: scenario 1 fails on (b), scenarios 2 and 3 pass.
+
+Round 4 gate results on the same tree:
+
+- [x] `fvm dart analyze` (agent) and `fvm flutter analyze` (client) are clean.
+- [x] Full agent suite: 3447 passed, 15 skipped.
+- [x] Full client suite: 2041 passed.
+- [x] `fvm dart test test/cli/` 348 passed; `fvm dart test test/interfaces/` 662 passed.
+- [x] Daemon wire proof, red first then green: `agent/test/interfaces/refusal_request_identity_test.dart`.
+  - A refused `final_answer` publishes `request_id` in the canonical payload and in the protocol envelope.
+  - A `blocked` runtime notice keeps its originating `request_id` on the wire.
+  - An answer with no request identity advertises none.
+- [x] Real-daemon wire proof: `agent/e2e_test/session_queue_release_e2e_test.dart` G2.1 now asserts the refused payload carries `request_id: req-fails`.
+- [x] Client release proof, red first then green:
+  - `client/test/unit/bloc/refused_first_turn_release_test.dart`: the daemon-shaped envelope releases the wait; an older agent's unidentified refusal releases the session's single wait; another request's refusal never releases it; a named `blocked` notice releases it; an unnamed one releases nothing; a canonical acceptance still clears the draft.
+  - `client/test/unit/mappers/refusal_event_mapping_test.dart`: the mapped canonical event keeps `request_id` and `error_code`, so the release decision is made on the same wire→domain boundary as the conversation store.
+- [x] Round 4 docs and contracts:
+  - `agent/lib/interfaces/models/AGENTS.md` (terminal-answer request identity)
+  - `agent/lib/interfaces/runtime/AGENTS.md` (typed refusal names its request)
+  - `client/AGENTS.md` (acceptance release identity rules)
+  - `docs/technical/communication_protocols.md` §4.6 and §4.6.1
+  - `docs/technical/client_conversation_cache_schema.md` §5
+- [x] `lint_wiki` passes.
+- [ ] Coordinator review and live acceptance on one Test Home (scenarios below). Live r2 on `41ac93cb` is recorded in Round 3: scenario 1 fails on (b), scenarios 2 and 3 pass. Round 4 closes that root cause; the live scenario still needs a fresh run.
 
 ## Proposed Live Scenarios (one Test Home)
 
@@ -210,3 +232,22 @@ Round 2 gate results on the merged tree:
   - **Environment observation (not this contract):** without `--gateway-url`, `sanad run` from the TH1 worktree exits `78` ("Could not confirm a healthy Sanad daemon for this Sanad Home") even though `GET /health` answers `200` with the Home's `.local_token`. Reproduced twice; the N1 run passed the discovered endpoint explicitly.
   - **Test Home note:** the Client disables `sidebar_new_conversation_btn:<workspace>` once the folder is missing, so the refused first turn is produced by creating the conversation while the folder exists and deleting it before the first send.
   - **Teardown:** temp workspace registration removed through Client Settings, CLI active workspace restored, TH1 reset to `6b364147` on `test/test-home`, agent-only runtime restored, worktree unlocked. No code was edited in the slot.
+
+- **Round 4 (writer, 2026-10-22):** closed the F1(b) root cause the live round 3 run isolated: the daemon's pre-start refusal answer carried no `request_id`, so a client waiting for its own send could not attribute the answer and kept its acceptance indicator forever.
+  - **F1(b) root cause:**
+    - `SessionTurnExecutor` emitted the typed `turn_failed` `final_answer` with `run_id`/`turn_id` only. `GatewayResponse` had no request identity, so `AgentToCanonical` published no `request_id` and `SanadProtocolBridge.buildAgentEventEnvelope` forwarded none.
+    - `ConversationDraftCache.releasePendingRequest` returned early when the daemon reported no request id, so the composer waited for an acceptance that could never arrive.
+    - The round 2 unit contract injected `request_id` by hand in envelope and payload, so it stayed green while the live path could never match.
+  - **F1(b) fix (daemon):**
+    - `GatewayResponse.requestId` is a typed optional field, preserved by `copyWithDelivery`.
+    - The fresh-turn refusal and the thinking-selection rejection set it from `turnRequest.requestId`, and the `final_answer` canonical payload publishes it beside `error_code`.
+    - The protocol envelope repeats `request_id` at the top, and `RuntimeNotice.requestId` already carried it for `blocked` notices.
+    - An ordinary completed answer publishes no `request_id`: its identity stays message identity.
+  - **F1(b) fix (client):** the release is decided on the mapped canonical event (`UnifiedDeviceMapper`), so the same wire→domain boundary as the conversation store decides identity.
+    - A `request_id` that names another request never releases the wait.
+    - A `blocked` notice releases only when it names the waiting request. An already accepted turn can block while a newer send waits, so an unattributed notice releases nothing.
+    - An older agent's unidentified typed refusal releases the single acceptance wait its own session can hold, never the per-device New Conversation draft.
+  - **Red evidence:** `agent/test/interfaces/refusal_request_identity_test.dart` failed to compile against the old model (`No named parameter with the name 'requestId'`), the rewritten `refused_first_turn_release_test.dart` failed only on the unidentified-refusal release (the pending marker stayed `fake-request-1`), and the E2E's new `request_id` assertion failed on the old wire.
+  - **Green evidence:** the daemon wire test, the E2E G2.1 case, the mapper contract and all six client release cases pass; both analyzers, the full agent and client suites, `test/cli/`, `test/interfaces/` and `lint_wiki` are clean (see Gates).
+  - **Test-home note:** the fast suites run without a run-wide `SANAD_HOME`/`SANAD_STATE_HOME` override. A run-wide override fails the CLI home-selection contracts that assert default root resolution; the merged isolation guard already refuses real-Home access from a test, so no live runtime root is touched.
+  - **Still out of scope:** the daemon persists neither the refused user root nor its answer, so another client or a restart still cannot see the refusal. The round 2 retained-refusal projection remains client-local.
