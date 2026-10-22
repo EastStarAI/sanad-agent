@@ -354,7 +354,7 @@ void main() {
             ((m['tool_calls'] as List?)?.any((c) => c['id'] == id) ?? false),
       );
       expect(turnFor('d1')['reasoning_content'], 'deep plan');
-      expect(turnFor('d2').containsKey('reasoning_content'), isFalse);
+      expect(turnFor('d2')['reasoning_content'], '');
       expect(turnFor('x1').containsKey('reasoning_content'), isFalse);
       expect(jsonEncode(wire), isNot(contains('codex-sealed')));
       expect(

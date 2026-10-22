@@ -59,22 +59,27 @@ void main() {
         port: port,
         sanadHomePath: sanadHome.path,
       );
-      addTearDown(() async {
-        await socket.close();
-      });
+      final probe = _FrameProbe(socket);
+      addTearDown(probe.close);
+      addTearDown(socket.close);
 
-      final frames = StreamIterator(socket);
-      expect(await frames.moveNext(), isTrue);
-      final registerSuccess =
-          jsonDecode(frames.current as String) as Map<String, dynamic>;
+      final registerSuccess = await probe.waitForFrameType(
+        'register_success',
+        timeout: const Duration(seconds: 10),
+      );
       expect(registerSuccess['type'], equals('register_success'));
-      final deviceId = registerSuccess['device_id'] as String;
+      // The local welcome frame is `type` + `platform_id` + `url` only
+      // (docs/technical/sanad_cli_architecture.md §4.1); the device identity is
+      // supplied by the client on each canonical envelope.
+      expect(registerSuccess.containsKey('device_id'), isFalse);
+      const deviceId = 'tool-permission-e2e-device';
 
       final sessionId =
           'tool-permission-e2e-${DateTime.now().millisecondsSinceEpoch}';
       socket.add(
         jsonEncode({
           'type': 'execute_command',
+          'device_id': deviceId,
           'command': 'think',
           'payload': {
             'request_id':
@@ -113,15 +118,23 @@ void main() {
         }),
       );
 
-      final permissionRequest = await _awaitEvent(
-        frames: frames,
+      final permissionRequest = await probe.waitForDeviceEvent(
         sessionId: sessionId,
         eventType: 'tool_permission_request',
+        occurrence: 1,
         timeout: const Duration(seconds: 90),
       );
       expect(
         permissionRequest['payload']['tool_name'],
         equals('system_screenshot'),
+      );
+      // Security invariant: a sensitive platform tool is never dispatched
+      // before the user decides, so no platform call may precede the request.
+      expect(
+        probe.deviceEventCount(sessionId, 'platform_tool_call'),
+        0,
+        reason:
+            'A sensitive platform tool must not run before the permission decision.',
       );
 
       final requestId = permissionRequest['payload']['request_id'] as String;
@@ -140,10 +153,10 @@ void main() {
         }),
       );
 
-      final platformToolCall = await _awaitEvent(
-        frames: frames,
+      final platformToolCall = await probe.waitForDeviceEvent(
         sessionId: sessionId,
         eventType: 'platform_tool_call',
+        occurrence: 1,
         timeout: const Duration(seconds: 45),
       );
       expect(
@@ -170,15 +183,13 @@ void main() {
         }),
       );
 
-      final finalAnswer = await _awaitEvent(
-        frames: frames,
+      final finalAnswer = await probe.waitForDeviceEvent(
         sessionId: sessionId,
         eventType: 'final_answer',
+        occurrence: 1,
         timeout: const Duration(seconds: 45),
       );
       expect(finalAnswer['payload']['content'], equals('SCREEN_OK'));
-
-      await frames.cancel();
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
@@ -247,12 +258,16 @@ void main() {
         'register_success',
         timeout: const Duration(seconds: 10),
       );
-      final deviceId = registerSuccess['device_id'] as String;
+      // The local welcome frame never carries a device identity; the client
+      // supplies one on each canonical envelope.
+      expect(registerSuccess.containsKey('device_id'), isFalse);
+      const deviceId = 'parallel-permission-e2e-device';
       final sessionId =
           'parallel-permission-e2e-${DateTime.now().millisecondsSinceEpoch}';
       socket.add(
         jsonEncode({
           'type': 'execute_command',
+          'device_id': deviceId,
           'command': 'think',
           'payload': {
             'request_id':
@@ -419,49 +434,6 @@ class _FrameProbe {
     await _subscription.cancel();
     await _changes.close();
   }
-}
-
-Future<Map<String, dynamic>> _awaitEvent({
-  required StreamIterator<dynamic> frames,
-  required String sessionId,
-  required String eventType,
-  required Duration timeout,
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  while (DateTime.now().isBefore(deadline)) {
-    final remaining = deadline.difference(DateTime.now());
-    late final bool hasFrame;
-    try {
-      hasFrame = await frames.moveNext().timeout(remaining);
-    } on TimeoutException {
-      break;
-    }
-    if (!hasFrame) {
-      break;
-    }
-
-    final frame = jsonDecode(frames.current as String) as Map<String, dynamic>;
-    if (frame['type'] != 'device_event') {
-      continue;
-    }
-
-    final payload = frame['payload'] is Map
-        ? Map<String, dynamic>.from(frame['payload'] as Map)
-        : <String, dynamic>{};
-    final eventSessionId =
-        frame['session_id'] as String? ?? payload['session_id'] as String?;
-    if (eventSessionId != sessionId) {
-      continue;
-    }
-
-    if (frame['event'] == eventType) {
-      return frame;
-    }
-  }
-
-  throw StateError(
-    'Timed out waiting for event $eventType on session $sessionId',
-  );
 }
 
 int _pickPort() {

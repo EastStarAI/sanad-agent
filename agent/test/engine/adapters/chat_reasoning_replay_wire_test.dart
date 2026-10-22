@@ -302,7 +302,7 @@ void main() {
           );
       final echoed = assistantToolWire(echo.lastMessages).single;
       expect(echoed.containsKey('reasoning_content'), isTrue);
-      expect(echoed['reasoning_content'], isNull);
+      expect(echoed['reasoning_content'], '');
 
       // Without models.dev evidence the route is strict: no key is sent.
       final strict = WireRecorder();
@@ -345,10 +345,13 @@ void main() {
             options: _options,
           );
       final wire = jsonEncode(recorder.lastMessages);
-      for (final turn in assistantToolWire(recorder.lastMessages)) {
-        expect(turn.containsKey('reasoning_content'), isFalse);
-        expect(turn.containsKey('reasoning_details'), isFalse);
-      }
+      final turns = assistantToolWire(recorder.lastMessages);
+      expect(turns, hasLength(3));
+      expect(turns[0].containsKey('reasoning_content'), isFalse);
+      expect(turns[1].containsKey('reasoning_content'), isFalse);
+      expect(turns[0].containsKey('reasoning_details'), isFalse);
+      expect(turns[1].containsKey('reasoning_details'), isFalse);
+      expect(turns[2]['reasoning_content'], '');
       expect(wire, isNot(contains('sealed-codex')));
       expect(wire, isNot(contains('visible codex summary')));
     });
@@ -406,10 +409,8 @@ void main() {
             options: _options,
           );
       expect(
-        assistantToolWire(recorder.lastMessages).single.containsKey(
-          'reasoning_content',
-        ),
-        isFalse,
+        assistantToolWire(recorder.lastMessages).single['reasoning_content'],
+        '',
       );
     });
 
@@ -459,12 +460,12 @@ void main() {
       final turns = assistantToolWire(recorder.lastMessages);
       expect(turns, hasLength(136));
       final withField = turns.where((t) => t.containsKey('reasoning_content'));
-      expect(withField, hasLength(42));
+      expect(withField, hasLength(56));
       expect(
         withField.where((t) => t['reasoning_content'] == ''),
-        hasLength(3),
+        hasLength(17),
       );
-      expect(turns.length - withField.length, 94);
+      expect(turns.length - withField.length, 80);
     });
   });
 }

@@ -389,15 +389,18 @@ restarts and compacted tails need no reset.
   DeepSeek on OpenCode Go).
 - **Route echo policy (D3).** The destination's exact models.dev entry
   `interleaved.field` selects the policy. Same route sends exactly what was
-  recorded, including `""`; a recorded explicit `null` is echoed only to a
-  route declaring `reasoning_content`, so strict routes never receive a key
-  they did not send. Foreign or unrecorded origin is never copied, padded or
-  relabelled. On an echo-required route the five probe cells (same-route
-  empty, absent and null; foreign earlier-turn and current-turn) default to
-  `asRecorded` until live probes decide them; a probe outcome is a one-line
-  data change to `ChatReasoningReplayPolicy.defaultDecisions` or an exact
-  `<models.dev vendor>/<model>` entry in `routeOverrides`. Thinking explicitly
-  off never rejects.
+  recorded when reasoning text was produced (including `""`). On an
+  echo-required route declaring `reasoning_content` in thinking mode, same-route
+  assistant tool turns whose producer delivered no reasoning string or an
+  explicit null replay the provider's zero-reasoning shape `""`
+  (`ReplayDecision.emptyString` for `sameRouteAbsent` and `sameRouteNull`, Task
+  131), satisfying the provider's thinking-mode protocol without fabricating
+  reasoning text. Plain assistant text turns, requests with thinking explicitly
+  disabled, strict routes without an echo declaration, and foreign or unrecorded
+  tool turns are never padded or relabelled (`asRecorded`). Probe outcome cells
+  default in `ChatReasoningReplayPolicy.defaultDecisions` or exact
+  `<models.dev vendor>/<model>` entries in `routeOverrides`. Thinking explicitly
+  off never rejects and sends only recorded content.
 - **Safe rejection (D4).** A history with no truthful representation raises
   `ProviderHistoryProjectionException` before any HTTP call, carrying only the
   route, a closed reason code (`foreign_tool_turn_requires_reasoning`,
