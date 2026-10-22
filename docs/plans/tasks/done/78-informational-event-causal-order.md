@@ -1,12 +1,12 @@
 ---
 id: 78
 title: Causal order and live/history parity for informational events
-status: implemented-awaiting-live-acceptance
-gate: E (automated verification complete; live acceptance not run)
+status: completed
+gate: complete (automated verification and live acceptance passed)
 created: 2026-10-15
 ported: 2026-10-21
 depends_on: "Task 31 route transitions, Task 52 session fork, Task 87 conversation identity and ordering, Task 111 terminal classification, Task 117 history integrity"
-delivery: "branch fix/78-port (local commits only; supersedes draft PR #207)"
+delivery: "branch fix/78-port, squash-merged by pull request (supersedes draft PR #207)"
 ---
 
 # Task 78 — Causal Order and Live/History Parity for Informational Events
@@ -129,9 +129,10 @@ Neither covers this task's behaviour; nothing was dropped as a duplicate of them
 - [x] E — Analyzers, focused tests, full suites and local E2E (see Evidence).
 - [x] Coordinator review r1: approved (additive migration; agent 12/12,
   client 37/37, analyze clean).
-- [ ] Live acceptance r1 on TH1 (coordinator records `runs/78/live-r1/`):
-  L1–L6 PASS, **L7 FAIL** (F1 below). Fixed in round 2; live re-run of L7
-  pending.
+- [x] Live acceptance r1 on TH1: L1–L6 PASS, **L7 FAIL** (F1 below),
+  fixed in round 2 (`da31fd25`).
+- [x] Live acceptance r2 on TH1 at `b4ed015a`: L7, L4 and L1 PASS (see
+  Live acceptance).
 
 ### Round 2 (2026-10-21)
 
@@ -170,6 +171,22 @@ Neither covers this task's behaviour; nothing was dropped as a duplicate of them
 | L5 | L4 session grown past one page, scroll up | Notice appears once, on the page holding that turn |
 | L6 | Manual model switch, and recovery "continue with provider" | No timeline notice live or after reload; model chip updates |
 | L7 | Pre-port session with an older failover notice (no anchor) | Notice is placed after the turn's finished tool results, and appears once across pages |
+
+## Live acceptance
+
+Run by the coordinator on Test Home 1 (`--no-cloud`) with a local
+OpenAI-compatible stub that returns scripted tool calls and then HTTP 429
+before any stream, so auto-failover moves to a same-model backup. Evidence
+stays outside the repository, in the coordinator's run directory
+(`~/.sanad-delegate/runs/78/live-r1/` and `~/.sanad-delegate/runs/78/live-r2/`).
+
+| Round | Candidate | Result |
+|---|---|---|
+| r1 | `fix/78-port` before round 2 | L1–L6 PASS. **L7 FAIL** (F1): at page sizes 1 and 2 the legacy notice sat after the user row and before the turn's finished tool results once pages were merged. Fixed in `da31fd25`. |
+| r2 | `b4ed015a` (on `86a783d9`) | **L7 PASS**: legacy notice produced on main, read on the candidate; at page sizes 1, 2, 3 and 100 it appears once, right after the last finished tool result, and merged pages equal the single-page order; the Client shows it once after restart. **L4 PASS**: new notice anchored to the tool-result row, identical live and after Client restart, once at page sizes 1, 2 and 100. **L1 PASS**: fork marker after the last copied row, once, merged equals single-page. |
+
+After each run the Test Home was restored from its verified backup. O2 and O3
+(above) stay open as follow-ups; neither blocks this task.
 
 ## Evidence
 
