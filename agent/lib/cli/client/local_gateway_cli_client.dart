@@ -303,6 +303,109 @@ class LocalGatewayCliClient implements CliTurnClient {
     return reqId;
   }
 
+  /// Dispatches a `steer` command and waits for the gateway's own delivery
+  /// classification of that message id.
+  ///
+  /// The acknowledgement is the daemon's authoritative classification of the
+  /// dispatched message, never proof that the instruction was applied: a steer
+  /// takes effect at the next execution boundary. The normalized result is
+  /// either a `session.message_classified` frame (`classification` is `steer`
+  /// when the text was registered as a pending steer for the owning run,
+  /// `queue`/`think` when it was admitted some other way), a
+  /// `session.pending_steer_changed` record for the same request id, or a
+  /// `session.queued_message_steer_result`.
+  ///
+  /// A typed gateway rejection is thrown as [CliClientException] carrying the
+  /// gateway's own `code`. No acknowledgement within [requestTimeout] (or the
+  /// caller's [timeout]) raises [CliClientException] with code
+  /// `steer_unacknowledged` so a caller never reports an unconfirmed steer as
+  /// sent.
+  Future<Map<String, dynamic>> steerAndAwaitAck({
+    required String sessionId,
+    required String message,
+    String? workspaceId,
+    String? model,
+    String? requestId,
+    Duration? timeout,
+  }) async {
+    final reqId = requestId ?? _uuid.v4();
+    final completer = Completer<Map<String, dynamic>>();
+    final subscription = eventStream.listen((event) {
+      if (completer.isCompleted) return;
+      try {
+        final ack = _steerAckFor(event, reqId, sessionId);
+        if (ack != null) completer.complete(ack);
+      } on CliClientException catch (error) {
+        if (!completer.isCompleted) completer.completeError(error);
+      }
+    });
+    final effectiveTimeout = timeout ?? requestTimeout;
+    try {
+      await steer(
+        sessionId: sessionId,
+        message: message,
+        workspaceId: workspaceId,
+        model: model,
+        requestId: reqId,
+      );
+      return await completer.future.timeout(
+        effectiveTimeout,
+        onTimeout: () => throw CliClientException(
+          'Gateway did not acknowledge the steer within '
+          '${effectiveTimeout.inSeconds}s; it may still be dispatched.',
+          code: 'steer_unacknowledged',
+        ),
+      );
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
+  /// Normalizes one inbound event into a steer acknowledgement for [requestId].
+  ///
+  /// Only frames the daemon publishes for exactly this message id qualify, so
+  /// a classification belonging to another turn can never be mistaken for this
+  /// steer's outcome.
+  Map<String, dynamic>? _steerAckFor(
+    CliEvent event,
+    String requestId,
+    String sessionId,
+  ) {
+    final rawPayload = event.raw['payload'];
+    final payload = rawPayload is Map
+        ? Map<String, dynamic>.from(rawPayload)
+        : const <String, dynamic>{};
+    final eventRequestId =
+        payload['request_id']?.toString() ??
+        payload['target_request_id']?.toString();
+    if (eventRequestId != requestId) return null;
+
+    if (event is CliErrorEvent) {
+      throw CliClientException(
+        event.message,
+        code: event.code.isEmpty ? 'gateway_error' : event.code,
+      );
+    }
+
+    final ack = <String, dynamic>{
+      'session_id': sessionId,
+      'request_id': requestId,
+      'event': event.type,
+    };
+    switch (event.type) {
+      case 'session.message_classified':
+        ack['classification'] = payload['classification']?.toString();
+      case 'session.pending_steer_changed':
+        ack['classification'] = 'steer';
+        ack['state'] = payload['state']?.toString();
+      case 'session.queued_message_steer_result':
+        ack['outcome'] = payload['outcome']?.toString();
+      default:
+        ack['classification'] = null;
+    }
+    return ack;
+  }
+
   /// Dispatches a `stop` command and waits for authoritative session state.
   ///
   /// The command mirrors the Sanad Client stop path: it is sent immediately,

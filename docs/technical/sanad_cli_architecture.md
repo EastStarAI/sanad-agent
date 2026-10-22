@@ -1,6 +1,6 @@
 ---
 title: "Sanad CLI Architecture"
-description: "Attached and in-process transports, runtime ownership, automation output, cancellation, and test-isolation contracts."
+description: "Attached and in-process transports, runtime ownership, automation output, non-interactive session steering, cancellation, and test-isolation contracts."
 ---
 
 # Sanad CLI Architecture & Gateway Runtime Contract
@@ -235,6 +235,7 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
 | `compact` | `sanad session compact <session-id> [--json] [--timeout <seconds>]` | Requests manual context compaction for the specified session through one correlated `session.compact` query (`LocalGatewayCliClient.compactSession` with `resendOnTimeout: false`, `agent/lib/cli/runner/commands/session_command.dart`). The daemon replies only after compaction finishes (`SessionRunOrchestrator.handleCompactCommand` awaits `runCompaction`), so the CLI waits for that terminal outcome (`accepted` = completed, `no_op`, or a failure/rejection). The wait is operation-scoped and bounded by the target Home's compaction pass timeout (`ModelAwareRuntimePolicy.compactionPassTimeoutForHome`, `config.yaml` `compaction.passTimeoutSeconds`, default 600 s); a valid `--timeout` overrides it and an invalid one falls back to it (Task 125). Dispatches exactly once. If the bound passes without a result the outcome is `unconfirmed` (exit `124`, JSON `poll: sanad session show <id>`), never failed: the daemon may still be compacting. `dispatched` occurs only on the resend-on-timeout path, which this subcommand disables. |
 | `answer` | `sanad session answer <session-id> -r <req-id> --answer <text> [--file <path>] [--json]` | Explicit resolution path for pending `system_ask_user` questions. Accepts direct text or JSON/text file payload. |
 | `permission` | `sanad session permission <session-id> -r <req-id> (--allow \| --deny) [--decision allow\|deny] [--scope once\|session\|workspace] [--comment <text>] [--file <path>] [--json]` | Explicit decision path for gated tool approvals. Accepts boolean flags or a structured JSON file payload. Aliases: `permit`, `decide`. |
+| `steer` | `sanad session steer <session-id> (--message <text> \| --message-file <path>) [--timeout <seconds>] [--json]` | Non-interactive live steering for an orchestrator that supervises a running turn. Dispatches one `steer` command and reports the daemon's own delivery classification for that message id; see §9.5 for the exit codes and what "sent" proves. |
 | `new` | `sanad session new` | Generates and outputs a fresh UUID session identifier. |
 | `delete` | `sanad session delete <session-id> [--json]` | Deletes a session and its cached turns from the daemon. |
 
@@ -298,6 +299,61 @@ confirms the same authoritative outcome:
 
 The complete conversation/history is **never** embedded by default. It is exposed only through the explicit `--include-messages` opt-in flag, which adds the full `messages` payload. The plain-text (non-`--json`) branch already renders a bounded human summary and, when history exists, reminds the operator that full history requires `--include-messages`.
 
+### 9.5 Non-Interactive Steering Contract (`sanad session steer`)
+
+`/steer` is the interactive REPL form; `sanad session steer` is the non-interactive
+equivalent an orchestrator uses to add scope or corrections to a turn that is already
+running, without waiting for it to finish and re-dispatching.
+
+1. **Argument contract.** `sanad session steer <session-id> (--message <text> |
+   --message-file <path>)`, plus the shared `--home` and `--gateway-url` pins every
+   session subcommand honours. Exactly one of the two message sources is required; an
+   empty or whitespace-only message is refused, and a `--message-file` is read as plain
+   text and trimmed. No CLI-side length cap exists for user input in this command, so a
+   message is bounded only by the transport itself. `--timeout` bounds the
+   acknowledgement wait (default: the client request timeout, 15 s).
+2. **What "sent" proves.** Success means the message was dispatched **and acknowledged
+   by the gateway as a pending steer for the run that owns the session** — not that it
+   was applied. The daemon delivers a pending steer at the next execution boundary, so
+   an orchestrator must read the session history or event stream to confirm application.
+   The plain success line is `Steer sent to session <id> (request <reqId>).`; `--json`
+   emits `{"session_id":..., "request_id":..., "status":"steer_sent"}`.
+3. **Ownership pre-check.** The command reads the session projection first and refuses to
+   dispatch when no run owns the session, because the daemon does not reject such a
+   steer: it admits it through the ordinary turn path (see 5). The pre-check uses the
+   durable execution snapshot (`running`/`resuming`), so a stale in-memory `in_flight`
+   projection left behind by a stopped or blocked run is not read as an active turn
+   (Task 134). A session id that does not exist is indistinguishable from an idle
+   session in that projection and is reported the same way.
+4. **Acknowledgement mapping.** The acknowledgement is the daemon's own classification
+   of the dispatched message id: `session.pending_steer_changed` or
+   `session.message_classified` with `classification: steer` proves the pending steer was
+   registered; `queue` means the gateway queued the text as a later turn instead;
+   `think` means it was admitted as a new turn. A typed gateway `error` frame with a
+   matching request id is reported with the gateway's own `error_code`.
+5. **Gateway behaviour with no active turn.** The daemon's `SessionRunOrchestrator`
+   steers only when a live owner exists (`canSteer`: not draining, `auto` delivery intent,
+   an owned and not-stopping run, durable work `running`/`resuming`, and no recovery
+   notice outside `resuming`). With no such owner the message falls through to the
+   ordinary admission path: an idle session starts a **new turn** from the steer text, and
+   a busy session **queues** it. Nothing is rejected and nothing is applied to the
+   previous turn. `sanad session steer` never changes that daemon behaviour; it refuses
+   before dispatch instead of silently starting a turn.
+6. **Exit codes.** Every non-zero code carries a distinct JSON `error_code` in `--json`
+   mode (`{"session_id":..., "status":"error", "error_code":..., "error":..., "exit_code":...}`).
+
+| Exit | `error_code` | Meaning |
+|---|---|---|
+| `0` | — | Acknowledged as a pending steer for the active turn (not applied yet). |
+| `1` | transport code (`not_connected`, `disconnected`, `send_error`, `query_timeout`, `steer_failed`) | The steer could not be dispatched or the session projection could not be read. |
+| `2` | `invalid_arguments` | Invalid invocation: missing session id, neither or both message sources, an empty message, or an unreadable/empty message file. |
+| `3` | `no_active_turn` | No run owns the session (idle, unknown, stopped, or blocked), or the gateway admitted the text as a new turn instead of a steer. |
+| `4` | `steer_not_applied`, or the gateway's own code | The gateway acknowledged the message without registering it as a steer (for example queued as a later turn), or rejected it with a typed error. |
+| `5` | `steer_unacknowledged` | Dispatched, but no acknowledgement arrived within the bound; the steer may still be applied. Confirm with `sanad session show <id>`. |
+
+7. **Logging.** The steer body never enters stdout, stderr, or logs; failures report only
+   identities, codes, and lifecycle metadata.
+
 ---
 
 ## 10. Remote CLI Relay Architecture & Execution Seam (Plan 102)
@@ -313,9 +369,12 @@ The Sanad CLI architecture provides a remote execution seam so that `sanad-clien
 
 ### 10.2. Relay Boundaries per Command Family
 
-- Read and control commands (`devices`, `ws list`, `session show|answer|stop`,
+- Read and control commands (`devices`, `ws list`, `session show|steer|answer|stop`,
   `run`) execute through the remote runner and return ordered output plus one
-  terminal result.
+  terminal result. The relay forwards the argument vector to the target Agent's own
+  `SanadCommandRunner`, so a new session subcommand is relayable without a separate
+  allow-list entry; `sanad-client -d <device-id> session steer ...` therefore works as
+  soon as the Agent exposes it.
 - `login` stays host-local by design: the remote runner has no interactive login
   handler, so a forwarded `login` returns exit code 0 with no relayed output.
   Hosts that need device authorization run `sanad login` locally in the target

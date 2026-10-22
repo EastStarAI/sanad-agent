@@ -853,6 +853,198 @@ void main() {
 
       await client.dispose();
     });
+    group('steer acknowledgement', () {
+      /// Dispatching is fire-and-forget, so wait for the outbound envelope
+      /// instead of sleeping before the fake server answers it.
+      Future<String> awaitSentSteer() async {
+        while (sentCommands().isEmpty) {
+          await Future<void>.delayed(Duration.zero);
+        }
+        final command = sentCommands().single;
+        expect(command['type'], 'execute_command');
+        expect(command['command'], 'steer');
+        final payload = command['payload'] as Map<String, dynamic>;
+        expect(payload['session_id'], 'session-77');
+        expect(payload['message'], 'Add the audit trail');
+        expect(payload['request_id'], isNotEmpty);
+        expect(command['request_id'], payload['request_id']);
+        return payload['request_id'] as String;
+      }
+
+      test('dispatches the canonical steer envelope', () async {
+        final client = createClient();
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id':
+                  (sentCommands().single['payload'] as Map)['request_id'],
+              'classification': 'steer',
+            },
+          }),
+        );
+
+        final ack = await ackFuture;
+        expect(ack['session_id'], 'session-77');
+        expect(ack['classification'], 'steer');
+        expect(ack['event'], 'session.message_classified');
+        await client.dispose();
+      });
+
+      test('treats a pending-steer record as the acknowledgement', () async {
+        final client = createClient();
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        final requestId = await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.pending_steer_changed',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': requestId,
+              'state': 'pending',
+            },
+          }),
+        );
+
+        final ack = await ackFuture;
+        expect(ack['classification'], 'steer');
+        expect(ack['state'], 'pending');
+        expect(ack['request_id'], requestId);
+        await client.dispose();
+      });
+
+      test('ignores acks published for another request id', () async {
+        final client = createClient(requestTimeout: const Duration(seconds: 5));
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        final requestId = await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': 'req-another-turn',
+              'classification': 'queue',
+            },
+          }),
+        );
+        await settle();
+
+        var resolved = false;
+        unawaited(ackFuture.then((_) => resolved = true));
+        await settle();
+        expect(
+          resolved,
+          isFalse,
+          reason: 'another turn classification must not answer this steer',
+        );
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': requestId,
+              'classification': 'steer',
+            },
+          }),
+        );
+        final ack = await ackFuture;
+        expect(ack['classification'], 'steer');
+        await client.dispose();
+      });
+
+      test(
+        'surfaces a typed gateway rejection as a client exception',
+        () async {
+          final client = createClient();
+          await client.connect();
+
+          final ackFuture = client.steerAndAwaitAck(
+            sessionId: 'session-77',
+            message: 'Add the audit trail',
+          );
+          final requestId = await awaitSentSteer();
+
+          mockSocket.emitFromServer(
+            jsonEncode({
+              'type': 'error',
+              'request_id': requestId,
+              'payload': {
+                'request_id': requestId,
+                'code': 'invalid_request',
+                'message': 'steer target is not steerable',
+              },
+            }),
+          );
+
+          await expectLater(
+            ackFuture,
+            throwsA(
+              isA<CliClientException>()
+                  .having((e) => e.code, 'code', 'invalid_request')
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('not steerable'),
+                  ),
+            ),
+          );
+          await client.dispose();
+        },
+      );
+
+      test('raises steer_unacknowledged instead of reporting an unconfirmed '
+          'steer as sent', () async {
+        final client = createClient(
+          requestTimeout: const Duration(milliseconds: 20),
+        );
+        await client.connect();
+
+        await expectLater(
+          client.steerAndAwaitAck(
+            sessionId: 'session-77',
+            message: 'Add the audit trail',
+          ),
+          throwsA(
+            isA<CliClientException>().having(
+              (e) => e.code,
+              'code',
+              'steer_unacknowledged',
+            ),
+          ),
+        );
+        await client.dispose();
+      });
+    });
   });
 
   group('LocalGatewayDiscovery', () {

@@ -9,6 +9,15 @@ import '../../client/local_gateway_cli_client.dart';
 import '../../oneshot/oneshot_runner.dart';
 import '../sanad_command.dart';
 
+/// Unwraps a correlated gateway response into its canonical payload map.
+///
+/// Query responses wrap the canonical payload under `payload`; an envelope that
+/// is already canonical is returned unchanged.
+Map<String, dynamic> _unwrapPayload(Map<String, dynamic> result) =>
+    result['payload'] is Map
+    ? Map<String, dynamic>.from(result['payload'] as Map)
+    : result;
+
 /// Command to manage and inspect conversation sessions.
 class SessionCommand extends SanadCommand {
   final ClientFactory? clientFactory;
@@ -57,6 +66,13 @@ class SessionCommand extends SanadCommand {
     );
     addSubcommand(
       SessionPermissionCommand(
+        clientFactory: clientFactory,
+        clientOverride: clientOverride,
+        customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
+      ),
+    );
+    addSubcommand(
+      SessionSteerCommand(
         clientFactory: clientFactory,
         clientOverride: clientOverride,
         customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
@@ -320,9 +336,7 @@ class SessionShowCommand extends _BaseSessionSubcommand {
     try {
       return await withClient((client) async {
         final rawResult = await client.getSessionHistory(sessionId: id);
-        final payload = rawResult['payload'] is Map
-            ? Map<String, dynamic>.from(rawResult['payload'] as Map)
-            : rawResult;
+        final payload = _unwrapPayload(rawResult);
 
         final inFlight = payload['in_flight'] is Map
             ? Map<String, dynamic>.from(payload['in_flight'] as Map)
@@ -647,9 +661,7 @@ class SessionStopCommand extends _BaseSessionSubcommand {
   ) async {
     try {
       final history = await client.getSessionHistory(sessionId: sessionId);
-      final payload = history['payload'] is Map
-          ? Map<String, dynamic>.from(history['payload'] as Map)
-          : history;
+      final payload = _unwrapPayload(history);
       final inFlight = payload['in_flight'];
       if (inFlight is Map) {
         final runId = inFlight['run_id']?.toString();
@@ -878,9 +890,7 @@ class SessionAnswerCommand extends _BaseSessionSubcommand {
           answer: answerText!.trim(),
         );
 
-        final payload = result['payload'] is Map
-            ? Map<String, dynamic>.from(result['payload'] as Map)
-            : result;
+        final payload = _unwrapPayload(result);
         final outcome = payload['outcome']?.toString() ?? 'resolved';
 
         if (json) {
@@ -1089,6 +1099,310 @@ class SessionPermissionCommand extends _BaseSessionSubcommand {
       }
       return 1;
     }
+  }
+}
+
+/// Non-interactive live steering (`sanad session steer`).
+///
+/// A steer never discards progress: the daemon registers the text as a pending
+/// steer for the run that currently owns the session and delivers it at the
+/// next execution boundary. The command therefore reports only what it can
+/// prove — that the gateway acknowledged the message as a pending steer for the
+/// active turn — and never that the instruction has already been applied.
+class SessionSteerCommand extends _BaseSessionSubcommand {
+  /// Accepted as a pending steer for the active turn.
+  static const int exitAccepted = 0;
+
+  /// Transport, connection, or unexpected gateway failure.
+  static const int exitFailed = 1;
+
+  /// Invalid invocation (missing session id, message shape, or a bad file).
+  static const int exitUsage = 2;
+
+  /// No run owns the session, so there is nothing to steer.
+  static const int exitNoActiveTurn = 3;
+
+  /// The gateway acknowledged the message without registering it as a steer.
+  static const int exitNotSteerable = 4;
+
+  /// Dispatched but not acknowledged within the bounded wait.
+  static const int exitUnacknowledged = 5;
+
+  /// Client-side failures that are transport problems, never gateway verdicts.
+  static const Set<String> _transportErrorCodes = {
+    'client_error',
+    'not_connected',
+    'disconnected',
+    'send_error',
+    'query_timeout',
+  };
+
+  SessionSteerCommand({
+    super.clientFactory,
+    super.clientOverride,
+    super.customAction,
+  }) {
+    argParser
+      ..addOption(
+        'message',
+        help:
+            'Steer text delivered to the active turn at the next execution boundary',
+      )
+      ..addOption(
+        'message-file',
+        abbr: 'f',
+        help: 'Path to a file whose trimmed content is the steer text',
+      );
+  }
+
+  @override
+  String get name => 'steer';
+
+  @override
+  String get description =>
+      'Steer an active turn mid-flight at its next execution boundary';
+
+  @override
+  String get invocation =>
+      'sanad session steer <session-id> (--message <text> | --message-file <path>)';
+
+  @override
+  Future<int> execute() async {
+    final id = resolveSessionId();
+    if (id == null) {
+      return _reportUsage(id: null, message: 'Session ID is required.');
+    }
+
+    final rawMessage = getOption('message');
+    final rawMessageFile = getOption('message-file');
+    final hasMessage = rawMessage != null;
+    final hasMessageFile =
+        rawMessageFile != null && rawMessageFile.trim().isNotEmpty;
+
+    if (hasMessage && hasMessageFile) {
+      return _reportUsage(
+        id: id,
+        message: '--message cannot be combined with --message-file.',
+      );
+    }
+    if (!hasMessage && !hasMessageFile) {
+      return _reportUsage(
+        id: id,
+        message: 'One of --message or --message-file is required.',
+      );
+    }
+
+    final String text;
+    if (hasMessageFile) {
+      final path = rawMessageFile.trim();
+      final file = File(path);
+      if (!file.existsSync()) {
+        return _reportUsage(
+          id: id,
+          message: 'Message file does not exist: $path',
+        );
+      }
+      final String content;
+      try {
+        content = file.readAsStringSync().trim();
+      } on FileSystemException catch (e) {
+        return _reportUsage(
+          id: id,
+          message: 'Failed to read message file "$path": ${e.message}',
+        );
+      }
+      if (content.isEmpty) {
+        return _reportUsage(id: id, message: 'Message file "$path" is empty.');
+      }
+      text = content;
+    } else {
+      final content = (rawMessage ?? '').trim();
+      if (content.isEmpty) {
+        return _reportUsage(id: id, message: 'Message cannot be empty.');
+      }
+      text = content;
+    }
+
+    final parsedTimeout = timeoutSeconds == null
+        ? null
+        : int.tryParse(timeoutSeconds!.trim());
+    final ackTimeout = parsedTimeout != null && parsedTimeout > 0
+        ? Duration(seconds: parsedTimeout)
+        : null;
+
+    try {
+      return await withClient((client) async {
+        // A steer only steers. The daemon admits a `steer` that arrives without
+        // an owning run as an ordinary new turn, so dispatching blind could
+        // start a whole turn from a steering instruction (and create the
+        // session when the id is unknown). Refuse instead of guessing.
+        final projection = _unwrapPayload(
+          await client.getSessionHistory(sessionId: id),
+        );
+        if (!_hasActiveTurn(projection)) {
+          return _reportFailure(
+            sessionId: id,
+            errorCode: 'no_active_turn',
+            message:
+                'No run currently owns session $id, so there is nothing to '
+                'steer. A steer sent now would be admitted as a new turn '
+                'instead; retry while the turn is running, or inspect it with: '
+                'sanad session show $id',
+            exitCode: exitNoActiveTurn,
+          );
+        }
+
+        final ack = await client.steerAndAwaitAck(
+          sessionId: id,
+          message: text,
+          timeout: ackTimeout,
+        );
+        final requestId = ack['request_id']?.toString();
+        final classification = ack['classification']?.toString();
+        final ackEvent = ack['event']?.toString() ?? 'gateway response';
+
+        if (classification == 'steer') {
+          if (json) {
+            stdoutSink.writeln(
+              jsonEncode({
+                'session_id': id,
+                'request_id': ?requestId,
+                'status': 'steer_sent',
+              }),
+            );
+          } else {
+            stdoutSink.writeln(
+              'Steer sent to session $id (request ${requestId ?? 'unknown'}).',
+            );
+          }
+          return exitAccepted;
+        }
+
+        if (classification == 'think') {
+          return _reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'no_active_turn',
+            message:
+                'No run was steering session $id, so the gateway admitted the '
+                'text as a new turn instead. A steer is only delivered to an '
+                'active turn.',
+            exitCode: exitNoActiveTurn,
+          );
+        }
+
+        if (classification == 'queue') {
+          return _reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'steer_not_applied',
+            message:
+                'The gateway queued the message for session $id as a later '
+                'turn instead of applying it to the active turn.',
+            exitCode: exitNotSteerable,
+          );
+        }
+
+        return _reportFailure(
+          sessionId: id,
+          requestId: requestId,
+          errorCode: 'steer_not_applied',
+          message:
+              'The gateway acknowledged the message for session $id as '
+              '"$ackEvent" without registering it as a pending steer.',
+          exitCode: exitNotSteerable,
+        );
+      });
+    } on CliClientException catch (e) {
+      if (e.code == 'steer_unacknowledged') {
+        return _reportFailure(
+          sessionId: id,
+          errorCode: e.code,
+          message:
+              'Steer dispatched to session $id but not acknowledged in time; '
+              'it may still be applied. Confirm with: sanad session show $id',
+          exitCode: exitUnacknowledged,
+        );
+      }
+      if (_transportErrorCodes.contains(e.code)) {
+        return _reportFailure(
+          sessionId: id,
+          errorCode: e.code,
+          message: 'Failed to steer session: $e',
+          exitCode: exitFailed,
+        );
+      }
+      // A typed gateway verdict (for example a rejected or invalid request).
+      return _reportFailure(
+        sessionId: id,
+        errorCode: e.code,
+        message: 'Gateway rejected the steer: ${e.message}',
+        exitCode: exitNotSteerable,
+      );
+    } catch (e) {
+      return _reportFailure(
+        sessionId: id,
+        errorCode: 'steer_failed',
+        message: 'Failed to steer session: $e',
+        exitCode: exitFailed,
+      );
+    }
+  }
+
+  /// Whether the session projection proves a run currently owns the session.
+  ///
+  /// The durable execution snapshot is authoritative: only `running`/`resuming`
+  /// work can hold pending steers, and an in-memory partial-stream (`in_flight`)
+  /// left behind by a stopped, blocked, or waiting run must not be read as an
+  /// active turn (Task 134). A projection without a snapshot falls back to
+  /// `in_flight`.
+  static bool _hasActiveTurn(Map<String, dynamic> projection) {
+    final snapshot = projection['execution_snapshot'];
+    final state = snapshot is Map ? snapshot['state']?.toString() : null;
+    if (state == null) return projection['in_flight'] is Map;
+    return state == 'running' || state == 'resuming';
+  }
+
+  int _reportUsage({required String? id, String? message}) {
+    if (message != null) {
+      stderrSink.writeln('Error: $message');
+      stderrSink.writeln('Usage: $invocation');
+    }
+    if (json) {
+      stdoutSink.writeln(
+        jsonEncode({
+          'session_id': ?id,
+          'status': 'error',
+          'error_code': 'invalid_arguments',
+          'error': message ?? 'Invalid invocation.',
+          'exit_code': exitUsage,
+        }),
+      );
+    }
+    return exitUsage;
+  }
+
+  int _reportFailure({
+    required String sessionId,
+    required String errorCode,
+    required String message,
+    required int exitCode,
+    String? requestId,
+  }) {
+    stderrSink.writeln('Error: $message');
+    if (json) {
+      stdoutSink.writeln(
+        jsonEncode({
+          'session_id': sessionId,
+          'request_id': ?requestId,
+          'status': 'error',
+          'error_code': errorCode,
+          'error': message,
+          'exit_code': exitCode,
+        }),
+      );
+    }
+    return exitCode;
   }
 }
 

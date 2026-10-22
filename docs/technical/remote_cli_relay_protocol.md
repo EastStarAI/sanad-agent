@@ -71,7 +71,7 @@ The remote relay executes against `SanadCommandRunner`, which registers the foll
 |---|---|---|
 | `run` | None | One-shot execution with prompt or stdin, tool execution, and artifact generation. |
 | `workspace` (`ws`) | `list`, `current`, `switch`, `select`, `add`, `create`, `tree`, `policy` | Workspace discovery, registration, directory structure, and permission mode. |
-| `session` | `list`, `show`, `stop`, `answer`, `permission` (`permit`, `decide`), `new`, `delete` | Session inspection, interruption, clarification answering, and tool approvals. |
+| `session` | `list`, `show`, `steer`, `stop`, `answer`, `permission` (`permit`, `decide`), `new`, `delete` | Session inspection, live steering, interruption, clarification answering, and tool approvals. |
 | `models` | None | Listing available LLM models on the target Agent. |
 | `providers` | None | Listing and inspecting configured LLM providers. |
 | `skills` | None | Listing installed and bundled capabilities. |
@@ -432,7 +432,10 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
   and before the approval overlay is requested, so a headless caller can explain
   the wait. A session that is already approved emits no notice. The caller writes
   the message once to standard error and never to standard output, keeping
-  `--json` output parseable.
+  `--json` output parseable. Approval is keyed on the session id the caller passes
+  as `--session`/`-s`, so a supervisor that steers or stops one worker repeatedly
+  should pass `--session <id>` (accepted by every `session` subcommand, including
+  `session steer`) to reuse one approved session instead of prompting per call.
 - **Terminal Execution Result (`type: result`):**
   ```json
   {

@@ -1,6 +1,6 @@
 ---
 title: "CLI Session Observability & Safe Intervention QA Matrix"
-description: "QA validation matrix for daemon-backed CLI session observability, authoritative inspection, explicit question answering, ordinary tool permission decisions, cross-session safety, and scoped session termination."
+description: "QA validation matrix for daemon-backed CLI session observability, authoritative inspection, non-interactive live steering, explicit question answering, ordinary tool permission decisions, cross-session safety, and scoped session termination."
 ---
 
 # CLI Session Observability & Safe Intervention QA Matrix
@@ -87,7 +87,35 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 ---
 
-## 7. Concurrency & Idempotency (First-Writer-Wins)
+## 7. Non-Interactive Live Steering (`session steer`)
+
+Contract owner: Section 9.5 of `docs/technical/sanad_cli_architecture.md`. A successful
+`session steer` proves the gateway acknowledged the text as a **pending steer** for the
+active turn; it never proves the instruction was applied, which happens at the next
+execution boundary.
+
+| Scenario | CLI Command | Expected Runtime Behavior | Exit Code |
+|---|---|---|---|
+| Steer the active turn | `sanad session steer <session-id> --message "Add an audit trail"` | One `steer` dispatch; the daemon registers a pending steer for the owning run and publishes `session.pending_steer_changed` / `session.message_classified` with `classification: steer`. Plain output is `Steer sent to session <id> (request <reqId>).` | 0 |
+| Steer in JSON mode | `sanad session steer <session-id> --message "Add an audit trail" --json` | Outputs `{"session_id": "<id>", "request_id": "<req-id>", "status": "steer_sent"}` only after the gateway acknowledgement. | 0 |
+| Steer text from a file | `sanad session steer <session-id> --message-file steer.txt` | Reads the file as plain text, trims it, and dispatches the trimmed body. | 0 |
+| No active turn | `sanad session steer <idle-session-id> --message "Add scope"` | Refused **before** dispatch with `error_code: no_active_turn`: the daemon would otherwise admit the steer through the ordinary turn path and start a new turn (or queue it when the session is busy). Nothing is created. | 3 |
+| Stale `in_flight` projection | `sanad session steer <stopped-session-id> --message "Add scope"` | A leftover in-memory partial-stream snapshot whose durable execution snapshot is not `running`/`resuming` is not read as an active turn; the command reports `no_active_turn` and dispatches nothing. | 3 |
+| Gateway admitted a new turn instead | `sanad session steer <id> --message "..."` racing the turn's completion | The daemon classifies the message `think`; the CLI reports `no_active_turn` instead of claiming a steer. | 3 |
+| Gateway queued the text | `sanad session steer <id> --message "..."` while the session is busy with older work | The daemon classifies the message `queue`; the CLI reports `steer_not_applied` and never claims the steer reached the active turn. | 4 |
+| Typed gateway rejection | `sanad session steer <id> --message "..." --json` | A matching `error` frame is reported with the gateway's own `error_code` and exit `4`. | 4 |
+| Dispatched but unacknowledged | `sanad session steer <id> --message "..." --timeout 5` | No acknowledgement within the bound (default 15 s) reports `steer_unacknowledged` and advises `sanad session show <id>`; it is never reported as sent. | 5 |
+| Invalid invocation | `sanad session steer <id>` with neither or both message sources, an empty message, or an unreadable/empty `--message-file` | `Error:` line plus usage on stderr, `error_code: invalid_arguments` in `--json` mode, and no dispatch. | 2 |
+| Session projection unavailable | `sanad session steer <id> --message "..."` with the daemon unreachable | Fails closed without dispatching the steer. | 1 |
+| Message body confidentiality | any failed steer | The steer body never appears on stdout, stderr, or in logs; only identities, codes, and lifecycle metadata are reported. | — |
+
+Automated coverage: `agent/test/cli/session_command_test.dart` (group `session steer`)
+and `agent/test/cli/local_gateway_cli_client_test.dart` (group
+`steer acknowledgement`), both daemon-free.
+
+---
+
+## 8. Concurrency & Idempotency (First-Writer-Wins)
 
 | Scenario | Initial State | Concurrency Trigger | Expected Result |
 |---|---|---|---|
@@ -97,7 +125,7 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 ---
 
-## 8. Automated One-Shot Intervention Readiness (In-Process Coverage)
+## 9. Automated One-Shot Intervention Readiness (In-Process Coverage)
 
 `agent/test/cli/run_delegation_test.dart` locks the Section 4 policy without a daemon. Turn events are emitted only after the run dispatched the turn (`await client.turnDispatched.future`), because the initial `running` artifact is recorded before the runner subscribes to the client's event streams. The readiness contract is owned by Section 8.1 of `docs/technical/sanad_cli_architecture.md`.
 
