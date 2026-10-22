@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -10,6 +11,98 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = resolve(HERE, '..');
 const SUPERVISOR = join(SKILL, 'scripts', 'supervisor.mjs');
 const WATCH_ONCE = join(SKILL, 'scripts', 'watch-once.mjs');
+// The shared journal vocabulary is the same module the scripts use, so a test can
+// assert what a coordinator would consider actionable.
+const { isActionableEvent } = await import(join(SKILL, 'scripts', 'supervisor-events.mjs'));
+
+// ---------------------------------------------------------------------------
+// Bounded teardown (W10).
+//
+// A supervisor worker is detached on purpose: it must outlive the CLI call that
+// started it. That also means a test that fails before `close` leaves the worker
+// (and its children) behind forever. The teardown below finds every supervisor
+// manifest under the test temp root, confirms the pid still belongs to *this* run
+// (never kill a reused pid), and terminates it with a bounded grace period.
+// ---------------------------------------------------------------------------
+function processCommand(pid) {
+  if (process.platform === 'win32') return '';
+  const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+  return result.status === 0 ? (result.stdout || '').trim() : '';
+}
+
+function terminateIfOwned(pid, needle) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  const command = processCommand(pid);
+  if (!command || !command.includes(needle)) return false;
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + 1_500;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // Already gone.
+  }
+  return true;
+}
+
+function collectManifests(directory, depth = 0) {
+  const found = [];
+  let entries;
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return found;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const child = join(directory, entry.name);
+    const manifestPath = join(child, 'manifest.json');
+    if (existsSync(manifestPath)) found.push(manifestPath);
+    if (depth < 2) found.push(...collectManifests(child, depth + 1));
+  }
+  return found;
+}
+
+test.after(() => {
+  const root = tmpdir();
+  let candidates = [];
+  try {
+    candidates = readdirSync(root).filter((entry) => entry.startsWith('delegate-'));
+  } catch {
+    return;
+  }
+  let reaped = 0;
+  for (const entry of candidates) {
+    const directory = join(root, entry);
+    for (const manifestPath of collectManifests(directory)) {
+      let manifest;
+      try {
+        manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      } catch {
+        continue;
+      }
+      // Ownership is proven by the command line naming this temp tree: a
+      // supervisor worker names its `--run <dir>` and a task names its fixture
+      // paths. A reused pid that happens to match is never killed blindly.
+      if (terminateIfOwned(manifest.supervisorPid, directory)) reaped += 1;
+      for (const task of Object.values(manifest.tasks || {})) {
+        if (terminateIfOwned(task?.pid, directory)) reaped += 1;
+      }
+    }
+  }
+  if (reaped > 0) process.stderr.write(`[teardown] reaped ${reaped} leftover supervisor process(es)\n`);
+});
 
 function waitForFileChange(directory, predicate, timeoutMs = 8_000) {
   return new Promise((resolvePromise, reject) => {
@@ -564,7 +657,7 @@ test('Sanad fixture writing G2 events: intervention and resuming states wake def
 });
 
 test('isolated workspaces do not collide across concurrent Sanad tasks', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'delegate-collision-test-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-collision-test-')));
   const worktreeA = join(root, 'worktree-a');
   const worktreeB = join(root, 'worktree-b');
   const outA = join(root, 'out-a');
@@ -721,7 +814,7 @@ test('validation rejects malformed Sanad specs without confusing workspace IDs f
 });
 
 test('sanad sourceRoot separates the source checkout from the delegated execution root', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'delegate-sourceroot-test-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-sourceroot-test-')));
   const sourceCheckout = join(root, 'source-checkout');
   const worktree = join(root, 'target-worktree');
   const outDir = join(root, 'task-out');
@@ -803,7 +896,7 @@ test('sanad sourceRoot separates the source checkout from the delegated executio
 });
 
 test('sanad root-only targeting with a separate sourceRoot validates the execution root', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'delegate-rootonly-test-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-rootonly-test-')));
   const sourceCheckout = join(root, 'source-checkout');
   const worktree = join(root, 'target-worktree');
   const outDir = join(root, 'task-out');
@@ -2276,4 +2369,696 @@ test('a task queued past the stall threshold journals one queued_stall visible i
   assert.equal(finalManifest.tasks['wait-1'].queueStall, null);
   // One notice per queue episode, never a stream of duplicates.
   assert.equal(readJournal(runDir).filter((event) => event.to === 'queued_stall').length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Coordinator-facing supervisor gaps (W1-W8).
+//
+// Every test here uses fake processes (a scripted `sanad` mock) and compressed
+// time (millisecond thresholds, so a 15-minute silence or a 15-second launch
+// verification is exercised in milliseconds) instead of sleeping for real.
+// ---------------------------------------------------------------------------
+
+// A scripted `sanad` CLI: it answers `run`, `session stop`, and
+// `session steer`, and records every invocation so a test can assert the exact
+// argv the supervisor produced. Behaviour is driven by MOCK_* environment
+// variables that the supervisor passes through to the task process.
+function writeSanadMock(root) {
+  const scriptPath = join(root, 'mock_sanad.mjs');
+  writeFileSync(scriptPath, `
+    import {appendFileSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+    const args = process.argv.slice(2);
+    const log = process.env.MOCK_LOG;
+    const record = (entry) => { if (log) appendFileSync(log, JSON.stringify(entry) + '\\n'); };
+    const readFlag = (flag) => { const i = args.indexOf(flag); return i === -1 ? null : args[i + 1]; };
+
+    if (args[0] === 'session' && args[1] === 'steer') {
+      const messageFile = readFlag('--message-file');
+      record({
+        kind: 'steer',
+        argv: args,
+        session: readFlag('--session'),
+        gateway: readFlag('--gateway-url'),
+        home: readFlag('--home'),
+        body: messageFile ? readFileSync(messageFile, 'utf8') : null,
+      });
+      if (args.includes('--json')) process.stdout.write(JSON.stringify({request_id: 'req_cli_steer_1'}) + '\\n');
+      process.exit(Number(process.env.MOCK_STEER_EXIT || 0));
+    }
+    if (args[0] === 'session' && args[1] === 'stop') {
+      record({kind: 'stop', argv: args});
+      process.exit(0);
+    }
+
+    const outDir = readFlag('--out-dir');
+    const brief = readFlag('--brief-file');
+    record({
+      kind: 'run',
+      argv: args,
+      brief,
+      briefBody: brief ? readFileSync(brief, 'utf8') : null,
+    });
+    mkdirSync(outDir, {recursive: true});
+    const timeline = outDir + '/events.jsonl';
+    const emit = (entry) => appendFileSync(timeline, JSON.stringify({timestamp: new Date().toISOString(), ...entry}) + '\\n');
+
+    const sessionId = process.env.MOCK_SESSION === '' ? null : (process.env.MOCK_SESSION || 'ses_mock_1');
+    emit({type: 'running', session_id: sessionId});
+    emit({type: 'tool_use', part: {type: 'tool', tool: 'read', state: {status: 'completed', input: {filePath: 'a'}}}});
+
+    const progressAt = Number(process.env.MOCK_PROGRESS_AT || 0);
+    if (progressAt > 0) {
+      setTimeout(() => emit({type: 'tool_use', part: {type: 'tool', tool: 'edit', state: {status: 'completed', input: {filePath: 'b'}}}}), progressAt);
+    }
+    const progressAgain = Number(process.env.MOCK_PROGRESS_AGAIN_AT || 0);
+    if (progressAgain > 0) {
+      setTimeout(() => emit({type: 'tool_use', part: {type: 'tool', tool: 'edit', state: {status: 'completed', input: {filePath: 'c'}}}}), progressAgain);
+    }
+
+    // A brief whose whole content is a number is a compressed-time duration for
+    // this task, so one run can hold tasks with different lengths.
+    const briefText = brief ? readFileSync(brief, 'utf8').trim() : '';
+    const runMs = /^\\d+$/.test(briefText) ? Number(briefText) : Number(process.env.MOCK_RUN_MS || 400);
+    setTimeout(() => {
+      writeFileSync(outDir + '/result.json', JSON.stringify({
+        status: process.env.MOCK_STATUS || 'completed',
+        exit_code: 0,
+        branch: process.env.MOCK_BRANCH || null,
+        head_sha: process.env.MOCK_SHA || null,
+        pr_url: process.env.MOCK_PR || null,
+        text: process.env.MOCK_TEXT || 'Mock summary line.',
+      }));
+      emit({type: 'completed'});
+      process.exit(0);
+    }, runMs);
+  `, 'utf8');
+  return createSanadWrapper(root, scriptPath);
+}
+
+function sanadTask(root, id, overrides = {}) {
+  const outDir = join(root, `out-${id}`);
+  return {
+    id,
+    implementer: 'sanad',
+    workspace: root,
+    command: overrides.command || writeSanadMock(root),
+    args: [
+      'run',
+      '--brief-file', overrides.briefFile || join(root, 'brief.md'),
+      '--workspace', 'ws-brief',
+      '--execution-root', root,
+      '--out-dir', outDir,
+      '--events',
+    ],
+    ...(overrides.task || {}),
+  };
+}
+
+function writeSpec(root, tasks, name = 'tasks.json') {
+  const specPath = join(root, name);
+  writeFileSync(specPath, JSON.stringify({ tasks }), 'utf8');
+  return specPath;
+}
+
+function writeBrief(root, name, content) {
+  const path = join(root, name);
+  writeFileSync(path, content, 'utf8');
+  return path;
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readJsonFile(path) {
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function waitForCondition(predicate, timeoutMs = 10_000, intervalMs = 50) {
+  return new Promise((resolvePromise, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      try {
+        const value = predicate();
+        if (value) {
+          resolvePromise(value);
+          return;
+        }
+      } catch {
+        // Keep polling until the deadline; a partially written file is transient.
+      }
+      if (Date.now() >= deadline) {
+        reject(new Error(`condition not met within ${timeoutMs}ms`));
+        return;
+      }
+      setTimeout(check, intervalMs);
+    };
+    check();
+  });
+}
+
+test('watch replays actionable events across a restart without loss or duplication', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-watch-replay-test-')));
+  const runDir = join(root, 'run');
+  const cursorPath = join(root, 'cursor.json');
+  const logPath = join(root, 'mock.log');
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_RUN_MS: '400',
+  };
+  // Staggered durations: the first task settles long before the second, so each
+  // watcher batch is deterministic.
+  const tasks = [
+    sanadTask(root, 'first', { briefFile: writeBrief(root, 'brief.md', '600') }),
+    sanadTask(root, 'second', { briefFile: writeBrief(root, 'brief2.md', '3000') }),
+  ];
+  const specPath = writeSpec(root, tasks);
+
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '2'], env);
+
+  // One completion is handled, then the watcher disappears (the coordinator is
+  // re-invoked per batch, so a restart is the normal case).
+  const firstEvent = JSON.parse(runNode(SUPERVISOR, [
+    'watch', '--run', runDir, '--cursor', cursorPath, '--once', '--json', '--timeout-sec', '10',
+  ], env));
+  assert.equal(firstEvent.taskId, 'first');
+  assert.equal(firstEvent.to, 'completed');
+  assert.equal(firstEvent.actionable, true);
+  assert.equal(firstEvent.result.status, 'completed');
+  assert.equal(firstEvent.result.path, join(root, 'out-first', 'result.json'));
+  assert.ok(firstEvent.elapsedMs >= 0);
+
+  // The cursor is durable state, not a process-local counter.
+  const cursorAfterFirst = readJsonFile(cursorPath);
+  assert.equal(cursorAfterFirst.version, 'delegate-watch-cursor.v1');
+  assert.ok(cursorAfterFirst.runs[runDir].seq >= firstEvent.seq);
+
+  const secondEvent = JSON.parse(runNode(SUPERVISOR, [
+    'watch', '--run', runDir, '--cursor', cursorPath, '--once', '--json', '--timeout-sec', '10',
+  ], env));
+  assert.equal(secondEvent.taskId, 'second');
+  assert.equal(secondEvent.to, 'completed');
+  assert.notEqual(secondEvent.seq, firstEvent.seq);
+
+  // Nothing is replayed twice: the same cursor, now that both tasks are done.
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+  const replay = execFileSync(process.execPath, [
+    SUPERVISOR, 'watch', '--run', runDir, '--cursor', cursorPath, '--once', '--timeout-sec', '2',
+  ], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(replay.trim(), '');
+
+  // Nothing is lost either: a fresh cursor (a watcher that never ran before)
+  // replays every actionable event of the whole run.
+  const freshCursor = join(root, 'cursor-fresh.json');
+  const batch = runNode(SUPERVISOR, [
+    'watch', '--run', runDir, '--cursor', freshCursor, '--once', '--json', '--timeout-sec', '5',
+  ], env).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.deepEqual(batch.map((entry) => entry.taskId).sort(), ['first', 'second']);
+  assert.ok(batch.every((entry) => entry.to === 'completed'));
+});
+
+test('the watch cursor is written atomically and never observed half-written', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-watch-cursor-test-')));
+  const runDir = join(root, 'run');
+  const cursorPath = join(root, 'cursor.json');
+  const env = {
+    ...process.env,
+    MOCK_LOG: join(root, 'mock.log'),
+    MOCK_RUN_MS: '1200',
+  };
+  const specPath = writeSpec(root, [sanadTask(root, 'one'), sanadTask(root, 'two')]);
+  writeBrief(root, 'brief.md', 'brief');
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '2'], env);
+
+  const watcher = spawn(process.execPath, [
+    SUPERVISOR, 'watch', '--run', runDir, '--cursor', cursorPath, '--timeout-sec', '6',
+  ], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let observed = '';
+  watcher.stdout.setEncoding('utf8');
+  watcher.stdout.on('data', (chunk) => { observed += chunk; });
+
+  // Read the cursor repeatedly while the watcher advances it: a temp-file +
+  // rename write can never expose a partial document.
+  const reads = [];
+  const deadline = Date.now() + 2_500;
+  while (Date.now() < deadline) {
+    if (existsSync(cursorPath)) reads.push(readJsonFile(cursorPath));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  assert.ok(reads.length > 5, 'expected the cursor to be readable while watching');
+  for (const cursor of reads) {
+    assert.equal(cursor.version, 'delegate-watch-cursor.v1');
+    assert.ok(Number.isInteger(cursor.runs[runDir].seq));
+  }
+  watcher.kill('SIGTERM');
+  await collectProcess(watcher);
+  assert.match(observed, /one/);
+
+  // The atomic write leaves no temporary sibling behind.
+  const leftovers = readdirSync(root).filter((entry) => entry.startsWith('cursor.json.') && entry.endsWith('.tmp'));
+  assert.deepEqual(leftovers, []);
+  const finalCursor = readJsonFile(cursorPath);
+  assert.ok(finalCursor.runs[runDir].seq >= 1);
+});
+
+test('progress_stall is journaled once per stall and progress_resumed clears it', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-progress-stall-test-')));
+  const runDir = join(root, 'run');
+  const env = {
+    ...process.env,
+    MOCK_LOG: join(root, 'mock.log'),
+    // Compressed time: silence past 400ms, one progress burst at 900ms, then a
+    // second silent stretch before the task finishes.
+    MOCK_PROGRESS_AT: '900',
+    MOCK_RUN_MS: '1800',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [
+    sanadTask(root, 'silent', { task: { progressStallMs: 400 } }),
+  ]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  await waitForCondition(
+    () => readJournal(runDir).some((event) => event.kind === 'progress_stall'),
+    8_000,
+  );
+  const midStatus = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  assert.equal(midStatus.tasks.silent.progress.stalled, true);
+  assert.equal(midStatus.tasks.silent.progress.thresholdMs, 400);
+  assert.ok(midStatus.tasks.silent.progressStall !== null);
+
+  await waitForCondition(
+    () => readJournal(runDir).some((event) => event.to === 'completed'),
+    10_000,
+  );
+
+  const journal = readJournal(runDir);
+  const stalls = journal.filter((event) => event.kind === 'progress_stall');
+  const resumes = journal.filter((event) => event.kind === 'progress_resumed');
+  // One stall before the progress burst, one after: never a stream of repeats.
+  assert.equal(stalls.length, 2);
+  assert.ok(resumes.length >= 1);
+  assert.equal(stalls[0].thresholdMs, 400);
+  assert.ok(stalls[0].silentForMs >= 400);
+  assert.equal(stalls[1].taskId, 'silent');
+
+  // A stall notice is actionable for a coordinator; the resume is not.
+  const watchBatch = runNode(SUPERVISOR, [
+    'watch', '--run', runDir, '--cursor', join(root, 'cursor.json'), '--once', '--json', '--timeout-sec', '5',
+  ], env).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const watched = watchBatch[0];
+  assert.equal(watched.to, 'progress_stall');
+  assert.equal(watched.actionable, true);
+  const stalledKinds = journal.filter((event) => ['progress_stall', 'progress_resumed'].includes(event.kind))
+    .map((event) => event.kind);
+  assert.equal(stalledKinds[0], 'progress_stall');
+  assert.equal(stalledKinds[1], 'progress_resumed');
+});
+
+test('a task left running by a dead supervisor is repaired to failed/worker_lost', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-worker-lost-test-')));
+  const runDir = join(root, 'run');
+  const env = {
+    ...process.env,
+    MOCK_LOG: join(root, 'mock.log'),
+    MOCK_RUN_MS: '60000',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'stuck')]);
+  const started = JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1',
+  ], env));
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const running = await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.tasks.stuck.status === 'running' ? manifest : null;
+  });
+  const taskPid = running.tasks.stuck.pid;
+  assert.ok(Number.isInteger(taskPid));
+
+  // The supervisor dies while its task process keeps running. A live orphan is
+  // still running, so it is reported as orphaned rather than failed - and the
+  // coordinator is woken once to decide what to do with it.
+  process.kill(started.supervisorPid, 'SIGKILL');
+  try {
+    const orphaned = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+    assert.equal(orphaned.status, 'stale');
+    assert.equal(orphaned.tasks.stuck.status, 'running');
+    assert.equal(orphaned.tasks.stuck.orphaned, true);
+    assert.equal(orphaned.tasks.stuck.orphanPid, taskPid);
+    const orphanNotice = readJournal(runDir).find((event) => event.kind === 'worker_orphaned');
+    assert.ok(orphanNotice, 'the orphan must be journaled once');
+    assert.equal(orphanNotice.orphanPid, taskPid);
+    const orphanWatch = JSON.parse(runNode(SUPERVISOR, [
+      'watch', '--run', runDir, '--cursor', join(root, 'cursor-orphan.json'), '--once', '--json', '--timeout-sec', '5',
+    ], env).trim().split('\n').filter(Boolean)[0]);
+    assert.equal(orphanWatch.kind, 'worker_orphaned');
+    assert.equal(orphanWatch.actionable, true);
+    // A second read must not repeat the notice.
+    runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env);
+    assert.equal(readJournal(runDir).filter((event) => event.kind === 'worker_orphaned').length, 1);
+
+    // Once the process is gone with no terminal artifact, the task is a lost
+    // worker: it is never left running forever.
+    process.kill(taskPid, 'SIGKILL');
+    await waitForCondition(() => !processIsAlive(taskPid), 5_000);
+    const status = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+    assert.equal(status.status, 'stale');
+    assert.equal(status.tasks.stuck.status, 'failed');
+    assert.equal(status.tasks.stuck.cause, 'worker_lost');
+    assert.equal(status.tasks.stuck.recovered, true);
+    assert.equal(status.active, 0);
+    const repair = readJournal(runDir).find((event) => event.kind === 'worker_lost');
+    assert.ok(repair, 'worker_lost must be journaled');
+    assert.equal(repair.to, 'failed');
+    assert.equal(repair.from, 'running');
+
+    // A fresh cursor replays the whole story of the run: the orphan notice and
+    // then the lost-worker failure, in order.
+    const repairBatch = runNode(SUPERVISOR, [
+      'watch', '--run', runDir, '--cursor', join(root, 'cursor.json'), '--once', '--json', '--timeout-sec', '5',
+    ], env).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.deepEqual(repairBatch.map((entry) => entry.kind), ['worker_orphaned', 'worker_lost']);
+    assert.ok(repairBatch.every((entry) => entry.actionable === true && entry.taskId === 'stuck'));
+    const watched = repairBatch[1];
+    assert.equal(watched.to, 'failed');
+
+    // A completion that lands after the supervisor died is still adopted: a
+    // missed completion must never stay missed.
+    writeFileSync(join(root, 'out-stuck', 'result.json'), JSON.stringify({
+      status: 'completed',
+      text: 'finished after the supervisor died',
+    }), 'utf8');
+    const repaired = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+    assert.equal(repaired.tasks.stuck.status, 'completed');
+    assert.equal(repaired.tasks.stuck.cause, 'result_recorded_after_exit');
+    assert.equal(readJournal(runDir).filter((event) => event.kind === 'recovered').length, 1);
+  } finally {
+    try { process.kill(taskPid, 'SIGKILL'); } catch {}
+  }
+});
+
+test('status --brief summarises several runs with queue, progress, and result facts', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-brief-test-')));
+  const runA = join(root, 'run-a');
+  const runB = join(root, 'run-b');
+  const env = {
+    ...process.env,
+    MOCK_LOG: join(root, 'mock.log'),
+    MOCK_RUN_MS: '400',
+    MOCK_BRANCH: 'fix/supervisor-queue-controls',
+    MOCK_SHA: '0e0c7fb0deadbeef',
+    MOCK_PR: 'https://example.test/pr/267',
+    MOCK_TEXT: 'W7 rich completion line\nsecond line',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+
+  // Run A: one slot, so the second task is honestly queued behind it.
+  const slowEnv = { ...env, MOCK_RUN_MS: '1500' };
+  const specA = writeSpec(root, [
+    sanadTask(root, 'active'),
+    sanadTask(root, 'waiting', { briefFile: writeBrief(root, 'brief-waiting.md', 'waiting brief') }),
+  ], 'tasks-a.json');
+  runNode(SUPERVISOR, ['start', '--spec', specA, '--run-dir', runA, '--max-concurrency', '1'], slowEnv);
+
+  // Run B: finished, with result facts.
+  const specB = writeSpec(root, [sanadTask(root, 'done')], 'tasks-b.json');
+  runNode(SUPERVISOR, ['start', '--spec', specB, '--run-dir', runB, '--max-concurrency', '1'], env);
+  runNode(SUPERVISOR, ['close', '--run', runB, '--wait'], env);
+
+  const brief = runNode(SUPERVISOR, ['status', '--run', runA, '--run', runB, '--brief'], env);
+  assert.match(brief, new RegExp(`RUN ${runA.replace(/[/\\]/g, '.')}`));
+  assert.match(brief, new RegExp(`RUN ${runB.replace(/[/\\]/g, '.')}`));
+  assert.match(brief, /active {2}running {2}elapsed /);
+  assert.match(brief, /waiting {2}queued {2}elapsed .*queue #1\/1 awaiting_slot/);
+  assert.match(brief, /done {2}completed .*result completed {2}pr https:\/\/example\.test\/pr\/267/);
+  assert.match(brief, /sha 0e0c7fb0deadbeef/);
+  assert.match(brief, /branch fix\/supervisor-queue-controls/);
+  // Only the first line of the final summary is carried: the completion line
+  // stays one line per task.
+  assert.match(brief, /summary W7 rich completion line( {2}|$)/);
+
+  const json = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runA, '--run', runB, '--brief', '--json'], env));
+  assert.equal(json.version, 'delegate-status-brief.v1');
+  assert.equal(json.runs.length, 2);
+  const runAView = json.runs.find((entry) => entry.runDir === runA);
+  assert.equal(runAView.tasks.find((task) => task.id === 'waiting').queue.reason, 'awaiting_slot');
+  const runBView = json.runs.find((entry) => entry.runDir === runB);
+  assert.equal(runBView.tasks[0].resultStatus, 'completed');
+  assert.equal(runBView.tasks[0].prUrl, 'https://example.test/pr/267');
+  assert.equal(runBView.tasks[0].headSha, '0e0c7fb0deadbeef');
+
+  // The default output is unchanged (verbose), so existing callers keep working.
+  const verbose = runNode(SUPERVISOR, ['status', '--run', runB], env);
+  assert.match(verbose, /TASK\tIMPLEMENTER\tSTATUS\tPID\tWORKSPACE/);
+  runNode(SUPERVISOR, ['close', '--run', runA, '--abort-queued', '--wait'], slowEnv);
+});
+
+test('start and enqueue verify the observed launch and fail on a spawn error', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-verify-test-')));
+  const runDir = join(root, 'run');
+  const env = { ...process.env, MOCK_LOG: join(root, 'mock.log'), MOCK_RUN_MS: '400' };
+  writeBrief(root, 'brief.md', 'brief');
+
+  const ghost = {
+    id: 'ghost',
+    implementer: 'opencode',
+    workspace: root,
+    command: join(root, 'missing-binary'),
+    args: ['--noop'],
+    resultPath: join(root, 'out-ghost', 'result.json'),
+    timelinePath: join(root, 'out-ghost', 'events.jsonl'),
+    timelineFormat: 'jsonl',
+  };
+  const specPath = writeSpec(root, [ghost, sanadTask(root, 'real')]);
+  const failure = runNodeThrows(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--verify-sec', '5',
+  ], env);
+  assert.match(failure, /failed to spawn/);
+  assert.match(failure, /ENOENT/);
+
+  const verification = JSON.parse(runNode(SUPERVISOR, [
+    'status', '--run', runDir, '--json',
+  ], env));
+  assert.equal(verification.tasks.ghost.status, 'failed');
+  assert.equal(verification.tasks.ghost.cause, 'spawn_failed');
+  assert.equal(verification.tasks.real.status, 'running');
+
+  // A queued task is reported as queued with its reason, and that is a success:
+  // the launch is not silently claimed.
+  const queuedRun = join(root, 'run-queued');
+  const queuedEnv = { ...env, MOCK_RUN_MS: '1500' };
+  const queuedSpec = writeSpec(root, [
+    sanadTask(root, 'slot'),
+    sanadTask(root, 'behind', { briefFile: writeBrief(root, 'brief-behind.md', 'behind') }),
+  ], 'tasks-queued.json');
+  const started = JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', queuedSpec, '--run-dir', queuedRun, '--max-concurrency', '1', '--verify-sec', '5',
+  ], queuedEnv));
+  const summary = started.verification.summary.join('\n');
+  assert.match(summary, /slot: running/);
+  assert.match(summary, /behind: queued at position 1 of 1 — waiting for a concurrency slot/);
+  assert.deepEqual(started.verification.spawnFailed, []);
+  assert.equal(started.verification.timedOut, false);
+
+  // `enqueue` verifies too: the observation follows the acknowledgement.
+  const heldSpec = writeSpec(root, [
+    sanadTask(root, 'later', { briefFile: writeBrief(root, 'brief-later.md', 'later') }),
+  ], 'tasks-later.json');
+  runNode(SUPERVISOR, ['add', '--run', queuedRun, '--spec', heldSpec], queuedEnv);
+  const enqueued = JSON.parse(runNode(SUPERVISOR, [
+    'enqueue', '--run', queuedRun, '--task', 'later', '--json', '--verify-sec', '5',
+  ], queuedEnv));
+  assert.equal(enqueued.verification.verified, true);
+  assert.ok(enqueued.verification.summary.some((line) => line.startsWith('later: queued at position')));
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--abort-queued', '--wait'], env);
+  runNode(SUPERVISOR, ['close', '--run', queuedRun, '--abort-queued', '--wait'], queuedEnv);
+});
+
+test('continue re-dispatches a finished task as a numbered attempt and refuses a live worker', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300' };
+  writeBrief(root, 'brief.md', 'original brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'scope')]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.tasks.scope.status === 'completed' ? manifest : null;
+  });
+
+  const deltaBrief = writeBrief(root, 'delta.md', 'Delta: also cover the queue reason.');
+  const continued = JSON.parse(runNode(SUPERVISOR, [
+    'continue', '--run', runDir, '--task', 'scope', '--brief-file', deltaBrief, '--json', '--verify-sec', '5',
+  ], env));
+  assert.equal(continued.attempt, 2);
+  assert.equal(continued.previousStatus, 'completed');
+  assert.ok(continued.archived.some((path) => path.endsWith('result.json')));
+
+  const manifest = await waitForCondition(() => {
+    const current = readJsonFile(manifestPath);
+    return current.tasks.scope.status === 'completed' && current.tasks.scope.attempt === 2 ? current : null;
+  });
+  // History is kept and numbered; the artifact of attempt 1 is archived.
+  assert.equal(manifest.tasks.scope.attempts.length, 2);
+  assert.deepEqual(manifest.tasks.scope.attempts.map((entry) => entry.attempt), [1, 2]);
+  assert.ok(existsSync(join(runDir, 'attempts', 'scope', 'attempt-1', 'result.json')));
+  assert.equal(manifest.tasks.scope.briefFile, deltaBrief);
+
+  // The new attempt really ran with the delta brief, in the same workspace.
+  const runs = readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'run');
+  assert.equal(runs.length, 2);
+  assert.equal(runs[1].briefBody, 'Delta: also cover the queue reason.');
+  assert.equal(runs[1].argv[runs[1].argv.indexOf('--execution-root') + 1], root);
+
+  // A live worker blocks a re-dispatch: one session per task.
+  const liveEnv = { ...env, MOCK_RUN_MS: '30000' };
+  const liveRun = join(root, 'run-live');
+  const liveSpec = writeSpec(root, [sanadTask(root, 'busy')], 'tasks-live.json');
+  runNode(SUPERVISOR, ['start', '--spec', liveSpec, '--run-dir', liveRun, '--max-concurrency', '1'], liveEnv);
+  const liveRefusal = runNodeThrows(SUPERVISOR, [
+    'continue', '--run', liveRun, '--task', 'busy', '--brief-file', deltaBrief,
+  ], liveEnv);
+  assert.match(liveRefusal, /is running; continue needs a finished task/);
+
+  runNode(SUPERVISOR, ['cancel', '--run', liveRun, '--task', 'busy'], liveEnv);
+  runNode(SUPERVISOR, ['close', '--run', liveRun, '--abort-queued', '--wait'], liveEnv);
+
+  // Even a terminal task is refused while its worker process is still alive.
+  // The run is stopped first so nothing else can rewrite the manifest while the
+  // guard is under test.
+  const pidRun = join(root, 'run-pid');
+  const pidSpec = writeSpec(root, [sanadTask(root, 'orphan')], 'tasks-pid.json');
+  const pidStarted = JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', pidSpec, '--run-dir', pidRun, '--max-concurrency', '1',
+  ], liveEnv));
+  const pidManifestPath = join(pidRun, 'manifest.json');
+  const pidManifest = await waitForCondition(() => {
+    const current = readJsonFile(pidManifestPath);
+    return current.tasks.orphan.status === 'running' ? current : null;
+  });
+  process.kill(pidStarted.supervisorPid, 'SIGKILL');
+  await waitForCondition(() => !processIsAlive(pidStarted.supervisorPid), 5_000);
+  const taskPid = pidManifest.tasks.orphan.pid;
+  try {
+    pidManifest.tasks.orphan.status = 'completed';
+    pidManifest.tasks.orphan.pid = process.pid;
+    writeFileSync(pidManifestPath, JSON.stringify(pidManifest, null, 2), 'utf8');
+    const pidRefusal = runNodeThrows(SUPERVISOR, [
+      'continue', '--run', pidRun, '--task', 'orphan', '--brief-file', deltaBrief,
+    ], liveEnv);
+    assert.match(pidRefusal, /still has a live worker process/);
+  } finally {
+    try { process.kill(taskPid, 'SIGKILL'); } catch {}
+  }
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('steer relays a mid-turn message through the CLI contract and journals only its digest', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-steer-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '60000' };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'running')]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.tasks.running.sessionId ? manifest : null;
+  });
+
+  const message = 'Also update the docs page for the new command.';
+  const steered = JSON.parse(runNode(SUPERVISOR, [
+    'steer', '--run', runDir, '--task', 'running', '--message', message, '--json',
+  ], env));
+  assert.equal(steered.steered, true);
+  assert.equal(steered.sessionId, 'ses_mock_1');
+  assert.equal(steered.cliRequestId, 'req_cli_steer_1');
+  assert.equal(steered.messageLength, message.length);
+  assert.equal(
+    steered.messageSha256,
+    createHash('sha256').update(message).digest('hex'),
+  );
+
+  const journalEvent = readJournal(runDir).find((event) => event.kind === 'steer_sent');
+  assert.ok(journalEvent, 'steer_sent must be journaled');
+  // A steer notice never wakes a coordinator by itself.
+  assert.equal(isActionableEvent(journalEvent), false);
+  assert.equal(journalEvent.sessionId, 'ses_mock_1');
+  assert.equal(journalEvent.messageLength, message.length);
+  assert.equal(journalEvent.messageSha256, steered.messageSha256);
+  assert.equal(journalEvent.result, 'completed');
+  // The body itself is never persisted anywhere in the run.
+  assert.doesNotMatch(readFileSync(join(runDir, 'events.jsonl'), 'utf8'), /update the docs page/);
+
+  // The CLI contract: the same invocation form and pins as the task spawn.
+  const steerCall = readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line)).find((entry) => entry.kind === 'steer');
+  assert.deepEqual(steerCall.argv.slice(0, 4), ['session', 'steer', '--session', 'ses_mock_1']);
+  assert.equal(steerCall.body, message);
+  assert.equal(steerCall.session, 'ses_mock_1');
+
+  // Refusals: no recorded session id, and not running.
+  const noSessionRun = join(root, 'run-nosession');
+  const noSessionEnv = { ...env, MOCK_SESSION: '', MOCK_RUN_MS: '20000' };
+  const noSessionSpec = writeSpec(root, [sanadTask(root, 'anonymous')], 'tasks-nosession.json');
+  runNode(SUPERVISOR, ['start', '--spec', noSessionSpec, '--run-dir', noSessionRun, '--max-concurrency', '1'], noSessionEnv);
+  const noSession = runNodeThrows(SUPERVISOR, [
+    'steer', '--run', noSessionRun, '--task', 'anonymous', '--message', 'hello',
+  ], noSessionEnv);
+  assert.match(noSession, /no recorded session id yet/);
+  runNode(SUPERVISOR, ['cancel', '--run', noSessionRun, '--task', 'anonymous'], noSessionEnv);
+
+  runNode(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'running'], env);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+  const finished = runNodeThrows(SUPERVISOR, [
+    'steer', '--run', runDir, '--task', 'running', '--message', 'too late',
+  ], env);
+  assert.match(finished, /steer needs a running task/);
+  runNode(SUPERVISOR, ['close', '--run', noSessionRun, '--abort-queued', '--wait'], noSessionEnv);
+});
+
+test('a run with no live tasks reports idle and can close itself when idle', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-idle-test-')));
+  const runDir = join(root, 'run');
+  const env = { ...process.env, MOCK_LOG: join(root, 'mock.log'), MOCK_RUN_MS: '200' };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'quick')]);
+  runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1', '--close-when-idle',
+  ], env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const completed = await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.status === 'completed' ? manifest : null;
+  });
+  assert.equal(completed.closed, true);
+  assert.equal(completed.tasks.quick.status, 'completed');
+
+  // An open run with nothing left to do is idle, not running.
+  const openRun = join(root, 'run-open');
+  const openSpec = writeSpec(root, [sanadTask(root, 'idle')], 'tasks-open.json');
+  runNode(SUPERVISOR, ['start', '--spec', openSpec, '--run-dir', openRun, '--max-concurrency', '1'], env);
+  await waitForCondition(() => readJsonFile(join(openRun, 'manifest.json')).tasks.idle.status === 'completed');
+  const brief = runNode(SUPERVISOR, ['status', '--run', openRun, '--brief'], env);
+  assert.match(brief, /running \(idle\)/);
+  const json = JSON.parse(runNode(SUPERVISOR, ['status', '--run', openRun, '--brief', '--json'], env));
+  assert.equal(json.runs[0].idle, true);
+  runNode(SUPERVISOR, ['close', '--run', openRun, '--wait'], env);
 });

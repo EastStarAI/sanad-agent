@@ -1,6 +1,6 @@
 ---
 title: "Sanad Delegate CLI Relay Specification"
-description: "Machine contract for the native `sanad run` relay: argument/workspace security boundaries, versioned result and event artifacts, exit codes, and supervisor lifecycle with event-first intervention, queue control, cancellation, and stall detection."
+description: "Machine contract for the native `sanad run` relay: argument/workspace security boundaries, versioned result and event artifacts, exit codes, and supervisor lifecycle with event-first intervention, queue control, cancellation, multi-run cursor watching, launch verification, mid-turn steering, task continuation, and silence/dead-worker detection."
 ---
 
 # Sanad Delegate CLI Relay Specification
@@ -185,19 +185,22 @@ For source development, `delegate-task-supervisor` spawns `fvm dart run <entry>/
 For temporary execution without logical continuity, use `--execution-root <target-worktree-path>` alone. For delegated work tied to an existing logical workspace, supply both `--workspace <logical-workspace-id>` and `--execution-root <target-worktree-path>`; the latter must match the supervisor task's filesystem `workspace` and remains the tool/context boundary.
 
 ### 5.2. Long-Lived Dynamic Run Lifecycle
-1. **`start --spec <tasks.json> --run-dir <dir> [--max-concurrency <n>] [--queued-stall-ms <n>]`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open. Concurrency is never a hidden default: the handshake prints the effective `maxConcurrency`, `queuedStallMs`, and `tasks` count, and omitting `--max-concurrency` means one slot per spec task (no artificial queueing).
+1. **`start --spec <tasks.json> --run-dir <dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--close-when-idle]`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open. Concurrency is never a hidden default: the handshake prints the effective `maxConcurrency`, `queuedStallMs`, `progressStallMs`, `closeWhenIdle`, and `tasks` count, and omitting `--max-concurrency` means one slot per spec task (no artificial queueing). `--verify-sec` (default `15`) makes the launch observed rather than assumed (§5.6).
 2. **`add --run <dir> --spec <tasks.json>`:** Registers additional tasks in `held` state without immediate execution, and reports each added task as `held` with the live active/max counts.
-3. **`enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>)`:** Transitions held tasks to `queued` or appends and queues a new spec in one operation, launching available tasks up to `--max-concurrency`. Every enqueued task is reported individually as `started` or `queued at position N of M`, with the reason it is waiting and the active/max counts (text and `--json`).
+3. **`enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--verify-sec <n>]`:** Transitions held tasks to `queued` or appends and queues a new spec in one operation, launching available tasks up to `--max-concurrency`. Every enqueued task is reported individually as `started` or `queued at position N of M`, with the reason it is waiting and the active/max counts (text and `--json`), and the observation is re-verified like `start`.
 4. **`cancel --run <dir> --task <id>`:** Cancels one task without closing the run. A `queued` or `held` task becomes `aborted` and never starts; an in-flight task is signalled and recorded as `cancelled` (see §5.4).
 5. **`set-concurrency --run <dir> --max <n>`:** Changes the slot ceiling of a live run, reports `previous -> maxConcurrency`, and starts queued tasks when the ceiling rises.
 6. **`close --run <dir> [--abort-queued]`:** Explicitly closes the run, disallowing further task registrations and draining in-flight/queued tasks before the supervisor process terminates. `--abort-queued` additionally aborts every `queued` task (held tasks are always aborted on close) so a run can finish without waiting for work that has not started.
+7. **`continue --run <dir> --task <id> --brief-file <path> [--new-session] [--verify-sec <n>]`:** Re-dispatches a task that already finished as a numbered new attempt of the same task id, in the same workspace, with a delta brief (§5.7).
+8. **`steer --run <dir> --task <id> (--message <text> | --message-file <path>)`:** Sends a mid-turn message to a running task's live daemon session without stopping it (§5.8).
+9. **`watch --run <dir> [--run <dir> ...] --cursor <file> [--once] [--timeout-sec <n>] [--all] [--json]`:** The multi-run coordinator interface with a durable cursor (§5.5).
 
 ### 5.3. Event-First Intervention & Timeline Observation
 - The supervisor monitors child `events.jsonl` files event-first via directory watchers with race-closing rescans.
 - Intervention events (`needs_input`, `needs_permission`) are immediately promoted into the supervisor's `manifest.json` and monotonic `events.jsonl` journal.
 - Resumed turns (`resumed`) transition tasks back to `running`.
 - Terminal child process exit is authoritative and locks the final state (`completed`, `failed`, `timeout`, `interrupted`, `cancelled`). An operator cancellation is the one exception: once `cancel` is recorded, the terminal state is `cancelled` even if the signalled child publishes `interrupted` or exits non-zero.
-- `watch-once` wakes by default on `needs_input`, `needs_permission`, `blocked`, `waiting`, `resuming`, `queued_stall`, or terminal states. Routine `running` transitions still require `--all`.
+- `watch-once` wakes by default on `needs_input`, `needs_permission`, `blocked`, `waiting`, `resuming`, `queued_stall`, `progress_stall`, or terminal states. Routine `running` transitions still require `--all`.
 - **Quiet watch continuity:** a caller tool timeout on `watch-once` ends only the caller's wait; the worker and supervised tasks keep running. Re-enter from the cursor (`--since <last returned seq>`, or read `seq` from a bounded `status --json`) and keep using bounded status/inspect reads. Never schedule polling or stop the worker because a watcher call timed out.
 
 ### 5.4. Queue Visibility, Stall Detection, and Cancellation
@@ -209,3 +212,64 @@ For temporary execution without logical continuity, use `--execution-root <targe
 **Cancellation path.** `cancel` records the request in the journal (`cancel_requested`), then follows the relay's own timeout semantics: the child receives `SIGTERM` (force-killed with `SIGKILL` after a bounded grace period if it ignores the signal), and its daemon session is stopped explicitly by session id when one is already known (`sanad session stop <id>` built from the task's own invocation form, including its declared `--home`). Remote `sanad-client` tasks and non-Sanad implementers have no local daemon session, so only the signal path applies. The session id is captured from any timeline event that carries one, not just from launch, so the stop can target a turn that was already running before the cancel.
 
 **Lowering concurrency never kills.** `set-concurrency` down to a lower ceiling applies to future fills only: running tasks are not signalled or aborted, `active` stays honest (it can exceed the new ceiling until tasks settle), and the queue drains from the new limit onward.
+
+### 5.5. Multi-Run Watch with a Durable Cursor (W1, W7)
+
+`watch` is the interface a coordinator uses for several runs at once. `watch-once` remains the single-run, single-event, read-only primitive; `watch` adds a persisted cursor and a per-event line stream.
+
+- **Cursor:** `--cursor <file>` stores the last *handled* sequence per run (`{"version": "delegate-watch-cursor.v1", "runs": {"<run-dir>": {"seq": N}}}`). It is written atomically (temp file + rename) and **advanced only after the line it belongs to has been flushed**, so a watcher that dies mid-print replays that event instead of losing it.
+- **Replay:** on start, every journal record after the cursor is evaluated. Anything that happened while no watcher ran is therefore reported, and anything already handled is never printed twice.
+- **Modes:** `--once` prints the batch of new actionable events and exits (for an orchestrator that is re-invoked when the watcher exits); without `--once` the process streams exactly one line per actionable event. `--timeout-sec <n>` bounds a wait (exit code `4` with a stderr note, no partial line); `--all` also prints non-actionable records for debugging; `--json` emits one JSON object per line (`version: delegate-watch-event.v1`).
+- **Actionable** means: every terminal state, `blocked`, `needs_input`/`needs_permission`, `queued_stall` (§5.4), `progress_stall` (§5.6), and `worker_lost` (§5.6). Routine `running` transitions, tool progress, `progress_resumed`, `steer_sent`, and `continue_requested` are never wake-ups. The vocabulary is shared with `watch-once` through `scripts/supervisor-events.mjs` so both readers cannot drift apart.
+- **Rich completion line (W7):** a terminal event carries the result status, the `result.json` path, and — when present in that file — `branch`, `head_sha`, `pr_url`, and the first line of the final summary, plus the elapsed time. The coordinator triages a completion from the line itself.
+- **Idle/ended runs:** a run whose manifest is `completed`, `stale`, or closed with every task terminal ends the watch instead of blocking forever. An open run with no pending actionable events blocks until one arrives — use `--timeout-sec` for a bounded wait, or `close` the run.
+
+### 5.6. Silence and Dead-Worker Detection (W2, W3)
+
+**Progress silence.** A running task that publishes no progress for its threshold is silent, not busy. The threshold is a run default (`start --progress-stall-sec`, default `900`) that a spec may override per task (`"progressStallSec"`; `progressStallMs` is accepted for compressed-time diagnosis). The worker journals exactly one `progress_stall` notice per stall episode — carrying `silentForMs`, `thresholdMs`, `lastProgressAt`, and the task status — and clears it with a non-actionable `progress_resumed` notice when progress returns, so a later stall is reported again. `status` recomputes the same condition on read (`PROGRESS_STALL` in text, `tasks[<id>].progress.stalled` in JSON), so a caller that never watched still sees a silent turn.
+
+**Worker loss.** A task is never left `running` forever:
+
+- While the supervisor is alive, a task whose process is gone, whose handle is lost, and whose `result.json` is not terminal transitions to `failed` with `cause: "worker_lost"` and a journaled `worker_lost` record.
+- When the supervisor itself is gone, the run is marked `stale` and `status`/`watch` repair it — they are the only writers left. Each non-terminal, non-queued task with no terminal artifact becomes `failed`/`worker_lost` (the journaled record is what wakes a coordinator), while a task whose `result.json` *is* terminal is adopted with `cause: "result_recorded_after_exit"` instead, so a completion that landed after the supervisor died is never reported as a failure. A repair also recomputes `active` and keeps the orphan pid (`orphanPid`) for the operator when the task process outlived its supervisor.
+- A late terminal artifact for a task already repaired to `failed`/`worker_lost` upgrades the task on the next read and journals a `recovered` record.
+
+**Launch verification (W5).** `start`, `enqueue`, and `continue` wait up to `--verify-sec` (default `15`) and print the observed state of every submitted task: `running`, `queued` with its position and reason, or `failed to spawn` with the spawn diagnostic. A task that is merely `launch_pending` is not accepted as resolved — that state is exactly what produced a launch report that never ran. The command exits non-zero when a task failed to spawn (`cause: "spawn_failed"`).
+
+**Idle runs (W8).** `status` reports a live run with no active or queued tasks as `idle` (text and `run.idle` in JSON), and `start --close-when-idle` closes the run automatically once every task is terminal and nothing is queued.
+
+### 5.7. Continuing a Finished Task (W6)
+
+`continue --run <dir> --task <id> --brief-file <path> [--new-session]` re-dispatches a task that already finished, in the same workspace, as a numbered new attempt of the same task id:
+
+- The delta brief replaces the task's declared brief input (`--brief-file`, `-b`, or `--prompt-file`, including the `--flag=value` form). A task without a brief argument is refused rather than guessed at.
+- The previous attempt's artifacts (`result.json`, `events.jsonl`, stdout/stderr) are archived under `<run>/attempts/<task>/attempt-<n>/`, and `tasks[<id>].attempts` keeps every attempt's status, exit code, cause, session id, and result digest. `attempt` increments.
+- **One session per task:** the re-dispatch is refused while the task's worker process is still alive, while the supervisor still holds a child handle, or while a daemon-session stop for that task is still in flight. The refusal is checked both client-side (fail fast, before the control request) and authoritatively in the worker.
+- `--new-session` drops `--session`/`-s`/`--continue` pins so the new attempt starts a fresh daemon session. Local `sanad run` always starts a new session, so the flag matters for relayed `sanad-client` tasks.
+- The re-dispatch is verified like a launch (§5.6), and the journal records `continue_requested` with the attempt number, brief path, and brief digest.
+
+### 5.8. Steering a Running Task (W6b)
+
+`steer --run <dir> --task <id> (--message <text> | --message-file <path>)` delivers a mid-turn message to a task that is already running, without cancelling or re-dispatching it:
+
+- The supervisor resolves the task's recorded session id and refuses with a clear error when none is known yet (the id is captured from any relayed lifecycle event, so it may not exist in the first moments of a turn).
+- The CLI invocation is built by one helper (`sessionSteerInvocation`) that mirrors the task's own invocation form and pins: `sanad session steer --session <id> --message-file <path> --json`, the same `--home` the task spawned with, the same `--gateway-url` when the spec pinned one, or `sanad-client -d <device> session steer …` for a relayed task. Steering a non-Sanad implementer is refused.
+- The message body is transient: the journal records `steer_sent` with the supervisor's control-request id, the CLI's request id when it reports one, the message's `sha256` and length, the session id, and the command result — never the text. A temporary message file is written inside the run and removed afterwards.
+- `steer_sent` is not actionable: a coordinator is not woken by its own instruction. The command refuses a task that is not `running`; a finished task is the `continue` path (§5.7).
+- Steering depends on the `sanad session steer` CLI contract (added by the B5 work) and the `sanad-client` device relay for remote tasks. The supervisor binds to that contract in one place, so a change there is a one-line fix.
+
+### 5.9. Reading Status Across Runs (W4)
+
+`status` accepts several `--run` flags and a `--brief` mode:
+
+- `status --run <dir> [--run <dir> ...]` reads each run in one call; `--json` keeps the single-run manifest shape for one run and returns `{version: "delegate-status.v1", runs: [...]}` for several.
+- `status --brief` prints one line per task: id, status, elapsed, progress age, queue position/reason, attempt number, and — when terminal — the result status plus PR URL, head SHA, branch, and the first summary line. `status --brief --json` returns the same facts as `delegate-status-brief.v1`.
+- The verbose output remains the default, so existing callers are unaffected.
+- `status` is read-only for a live run and repairs a run whose supervisor is gone (§5.6): that repair is the only write it performs, and it is journaled like any worker transition.
+
+### 5.10. Supervisor Tooling Notes
+
+- `scripts/supervisor-events.mjs` owns the shared journal vocabulary (terminal states, actionable notices, the `watch-once` wake set). Both readers import it; no script keeps a private copy.
+- `watch-once.mjs` stays the single-run primitive. A run already marked `stale` is reported by `watch-once` instead of blocking, exactly like a run whose supervisor just died.
+- Compressed-time switches (`--queued-stall-ms`, `--progress-stall-ms`, `--verify-ms`, plus fractional `--*-sec` values) exist so the same code paths can be exercised in milliseconds by tests; production callers use the documented second-based flags.
+- The supervisor test suite reaps leftover detached workers in a bounded teardown: it walks the test temp root, verifies by command line that a pid still belongs to that run, and terminates it. A failing test can therefore no longer leak a worker.

@@ -23,20 +23,16 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Journal vocabulary is shared with `watch-once.mjs` so both readers agree on
+// which records deserve an orchestrator wake-up.
+import {
+  ACTIONABLE_STATUSES,
+  TERMINAL_STATUSES,
+  isActionableEvent,
+} from './supervisor-events.mjs';
+
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SUPPORTED_IMPLEMENTERS = new Set(['opencode', 'agy', 'antigravity', 'sanad']);
-const TERMINAL_STATUSES = new Set([
-  'completed',
-  'failed',
-  'timeout',
-  'aborted',
-  'interrupted',
-  'cancelled',
-  'incomplete',
-  'needs_review',
-  'agy_unavailable',
-  'opencode_unavailable',
-]);
 // Remote delegation through `sanad-client` reports the relayed CLI exit code
 // instead of a locally produced `result.json` status, so the supervisor owns
 // this mapping. 69 (no live Client for the Home) and 77 (Client CLI disabled)
@@ -60,6 +56,19 @@ const WINDOWS_BATCH_META = /[|;&<>$`%^!]/;
 const DEFAULT_QUEUED_STALL_MS = 120_000;
 const STALL_CHECK_MIN_MS = 200;
 const STALL_CHECK_MAX_MS = 15_000;
+// A running task that publishes no progress for this long is silent, not busy.
+// The worker journals one `progress_stall` notice per stall episode and a
+// `progress_resumed` notice when progress returns.
+const DEFAULT_PROGRESS_STALL_MS = 900_000;
+// `start`/`enqueue`/`continue` verify that every submitted task actually left
+// the queue instead of reporting an optimistic launch.
+const DEFAULT_VERIFY_MS = 15_000;
+const VERIFY_MIN_INTERVAL_MS = 50;
+// A steering message is relayed to a live daemon session; a hung CLI must not
+// hold the supervisor's control-request path open indefinitely.
+const STEER_TIMEOUT_MS = 30_000;
+const WATCH_EVENT_VERSION = 'delegate-watch-event.v1';
+const CURSOR_VERSION = 'delegate-watch-cursor.v1';
 // Cancellation is cooperative first: SIGTERM follows the relay's own timeout
 // path. A child that ignores it is force-killed after this grace period so a
 // cancelled task can never block run completion.
@@ -67,13 +76,16 @@ const CANCEL_FORCE_KILL_MS = 10_000;
 const HELP = `delegate-task-supervisor
 
 Usage:
-  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>]
+  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--close-when-idle]
   supervisor.mjs add --run <dir> --spec <tasks.json> [--json]
-  supervisor.mjs enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--json]
+  supervisor.mjs enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--verify-sec <n>] [--json]
   supervisor.mjs cancel --run <dir> --task <id> [--json]
+  supervisor.mjs continue --run <dir> --task <id> --brief-file <path> [--new-session] [--verify-sec <n>] [--json]
+  supervisor.mjs steer --run <dir> --task <id> (--message <text> | --message-file <path>) [--json]
   supervisor.mjs set-concurrency --run <dir> --max <n> [--json]
   supervisor.mjs close --run <dir> [--abort-queued] [--wait] [--json]
-  supervisor.mjs status --run <dir> [--json]
+  supervisor.mjs status (--run <dir> [--run <dir> ...]) [--brief] [--json] [--task <id>]
+  supervisor.mjs watch --run <dir> [--run <dir> ...] --cursor <file> [--once] [--timeout-sec <n>] [--all] [--json]
   supervisor.mjs inspect --run <dir> --task <id>
   supervisor.mjs timeline --run <dir> --task <id> [--follow]
   supervisor.mjs logs --run <dir> --task <id> [--stream stdout|stderr|both] [--tail <n>] [--follow]
@@ -86,6 +98,18 @@ one slot per spec task (no artificial queueing) and prints the effective value a
 the active/max counts, and the reason they are waiting; \`status\` repeats that
 for every queued task and flags a task that stalled past --queued-stall-ms
 (default ${DEFAULT_QUEUED_STALL_MS}ms).
+
+\`watch\` is the coordinator interface for several runs at once: it persists the
+last handled sequence per run in --cursor, replays everything an orchestrator
+missed, and prints exactly one line per actionable event (terminal states,
+blocked/intervention, and stall notices). Plain progress is never a wake-up.
+--once prints the current batch and exits, which suits an orchestrator that is
+re-invoked when the watcher exits.
+
+\`steer\` relays a mid-turn message to a running task's daemon session without
+stopping it; \`continue\` re-dispatches a finished task as a numbered new attempt
+with a delta brief. Both are journaled, and steering never records the message
+body.
 `;
 
 function fail(message, code = 2) {
@@ -93,8 +117,20 @@ function fail(message, code = 2) {
   process.exit(code);
 }
 
+const BOOLEAN_FLAGS = new Set([
+  'follow',
+  'json',
+  'wait',
+  'abort-queued',
+  'brief',
+  'once',
+  'all',
+  'close-when-idle',
+  'new-session',
+]);
+
 function parseOptions(argv) {
-  const options = { _: [] };
+  const options = { _: [], runs: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token.startsWith('--')) {
@@ -102,16 +138,39 @@ function parseOptions(argv) {
       continue;
     }
     const key = token.slice(2);
-    if (['follow', 'json', 'wait', 'abort-queued'].includes(key)) {
+    if (BOOLEAN_FLAGS.has(key)) {
       options[key] = true;
       continue;
     }
     const value = argv[index + 1];
     if (value == null || value.startsWith('--')) fail(`missing value for ${token}`);
-    options[key] = value;
+    if (key === 'run') {
+      // `--run` repeats for the read-only commands (`status`, `watch`). The
+      // single-run commands read `options.run` and fail closed when a caller
+      // passes more than one.
+      options.runs.push(value);
+      if (options.run == null) options.run = value;
+    } else {
+      options[key] = value;
+    }
     index += 1;
   }
   return options;
+}
+
+function singleRun(options, command) {
+  if (options.runs.length > 1) fail(`${command} accepts a single --run`);
+  if (!options.run) fail(`${command} requires --run`);
+  return resolve(options.run);
+}
+
+// Fractional seconds are only useful for compressed-time tests; a run that
+// wants the documented default simply omits the flag.
+function secondsOption(options, key, defaultMs, label) {
+  if (options[key] == null) return defaultMs;
+  const seconds = Number(options[key]);
+  if (!Number.isFinite(seconds) || seconds < 0) fail(`${label} must be a non-negative number`);
+  return Math.round(seconds * 1000);
 }
 
 function readJson(path, label = path) {
@@ -296,6 +355,16 @@ function validateTask(item, existingIds = new Set()) {
   let resultPath = normalizeOptionalPath(item.resultPath, 'resultPath');
   let timelinePath = normalizeOptionalPath(item.timelinePath, 'timelinePath');
   let timelineFormat = item.timelineFormat ?? (item.implementer === 'sanad' ? 'jsonl' : 'text');
+  // Per-task silence threshold. The run default comes from
+  // `start --progress-stall-sec`; a spec may override it for one task.
+  let progressStallMs = null;
+  if (item.progressStallSec != null || item.progressStallMs != null) {
+    const requested = Number(item.progressStallMs ?? Number(item.progressStallSec) * 1000);
+    if (!Number.isFinite(requested) || requested <= 0) {
+      fail(`task ${item.id} progressStallSec must be a positive number`);
+    }
+    progressStallMs = Math.round(requested);
+  }
   // Remote `sanad-client` tasks record the validated target device so the run
   // manifest shows which device a task was dispatched to.
   let remoteDevice = null;
@@ -511,6 +580,10 @@ function validateTask(item, existingIds = new Set()) {
     resultPath,
     timelinePath,
     timelineFormat,
+    // A per-task silence threshold overrides the run default. `progressStallMs`
+    // is accepted directly so compressed-time tests do not need fractional
+    // seconds.
+    progressStallMs,
     // Remote `sanad-client` tasks capture their result envelope from the relayed
     // stdout and derive both artifact paths inside the run directory.
     remote: remoteDevice != null,
@@ -626,6 +699,123 @@ function lastDiagnosticLine(path) {
   return line.length > 400 ? `${line.slice(0, 397)}...` : line;
 }
 
+function firstNonEmptyLine(value) {
+  if (typeof value !== 'string') return null;
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+/**
+ * The coordinator's triage view of one task's `result.json`.
+ *
+ * `sanad run` writes the versioned artifact (status, exit_code, text, ...);
+ * wrapper tasks may additionally publish `branch`, `head_sha`, and `pr_url`.
+ * Reading them here means a completion line already carries everything needed
+ * to decide the next step, without a second call.
+ */
+function readResultDigest(resultPath) {
+  if (!resultPath || !existsSync(resultPath)) return null;
+  let result;
+  try {
+    result = JSON.parse(readFileSync(resultPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!result || typeof result !== 'object') return null;
+  const pick = (...keys) => {
+    for (const key of keys) {
+      const value = result[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return null;
+  };
+  const summarySource = pick('summary', 'final_summary', 'finalSummary') ?? firstNonEmptyLine(result.text);
+  const summary = summarySource
+    ? (summarySource.replace(/\s+/g, ' ').trim().slice(0, 200) || null)
+    : null;
+  return {
+    path: resultPath,
+    status: typeof result.status === 'string' ? result.status : null,
+    branch: pick('branch', 'git_branch'),
+    headSha: pick('head_sha', 'headSha', 'sha'),
+    prUrl: pick('pr_url', 'prUrl', 'pull_request_url'),
+    summary,
+  };
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+// The delta brief replaces the task's declared brief input. Only documented
+// brief flags are rewritten so an arbitrary argument list is never guessed at.
+function replaceBriefArgument(args, briefPath) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--brief-file' || arg === '-b' || arg === '--prompt-file') {
+      if (index + 1 >= args.length) return null;
+      return {
+        flag: arg,
+        args: [...args.slice(0, index + 1), briefPath, ...args.slice(index + 2)],
+      };
+    }
+    for (const flag of ['--brief-file=', '--prompt-file=']) {
+      if (arg.startsWith(flag)) {
+        return {
+          flag,
+          args: [...args.slice(0, index), `${flag}${briefPath}`, ...args.slice(index + 1)],
+        };
+      }
+    }
+  }
+  return null;
+}
+
+// `--new-session` drops the session pins so the next attempt starts a fresh
+// daemon session instead of resuming the finished one.
+function stripSessionArguments(args) {
+  const stripped = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--session' || arg === '-s') {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--session=') || arg === '--continue') continue;
+    stripped.push(arg);
+  }
+  return stripped;
+}
+
+// Reading the whole journal is deliberate: run journals are small (one record
+// per state change), and a single read gives the watcher a consistent snapshot
+// instead of a race between separate seeks.
+function readJournalEvents(journalPath) {
+  if (!existsSync(journalPath)) return [];
+  let content;
+  try {
+    content = readFileSync(journalPath, 'utf8');
+  } catch {
+    return [];
+  }
+  const events = [];
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      // A partially flushed trailing line is re-read on the next scan.
+      continue;
+    }
+    if (event && Number.isInteger(event.seq)) events.push(event);
+  }
+  return events;
+}
+
 function publicTask(task, runDir, initialStatus = 'queued') {
   const derived = taskRunPaths(task, runDir);
   return {
@@ -650,6 +840,14 @@ function publicTask(task, runDir, initialStatus = 'queued') {
     stderrPath: derived.stderrPath,
     knownIdentity: task.knownIdentity,
     identity: null,
+    // A task is one identity with numbered attempts: every `continue` adds an
+    // entry here and archives the previous attempt's artifacts.
+    attempt: 1,
+    attempts: [],
+    sessionId: null,
+    lastProgressAt: null,
+    progressStall: null,
+    progressStallMs: task.progressStallMs ?? null,
   };
 }
 
@@ -681,7 +879,7 @@ function launchThroughWindowsExplorer(scriptPath) {
   // The caller verifies the requested effect instead of trusting that status.
 }
 
-function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs) {
+function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, closeWhenIdle = false) {
   const workerPath = join(runDir, 'start-supervisor.cmd');
   const brokerPath = join(runDir, 'start-supervisor.vbs');
   const command = [
@@ -691,6 +889,8 @@ function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs) 
     '--run', runDir,
     '--max-concurrency', String(maxConcurrency),
     '--queued-stall-ms', String(queuedStallMs),
+    '--progress-stall-ms', String(progressStallMs),
+    ...(closeWhenIdle ? ['--close-when-idle'] : []),
   ].map(windowsBatchQuote).join(' ');
   writeFileSync(
     workerPath,
@@ -727,7 +927,7 @@ function waitForWindowsWorkerHandshake(paths, timeoutMs = 10_000) {
   throw new Error(manifest.error);
 }
 
-function startCommand(options) {
+async function startCommand(options) {
   if (!options.spec || !options['run-dir']) fail('start requires --spec and --run-dir');
   if (!isAbsolute(options['run-dir'])) fail('--run-dir must be absolute');
   const runDir = resolve(options['run-dir']);
@@ -753,6 +953,16 @@ function startCommand(options) {
   if (!Number.isInteger(queuedStallMs) || queuedStallMs < 1) {
     fail('--queued-stall-ms must be a positive integer');
   }
+  // The silence threshold is a run-level default that a spec may override per
+  // task. `--progress-stall-ms` exists for compressed-time diagnosis and tests.
+  const progressStallMs = options['progress-stall-ms'] == null
+    ? secondsOption(options, 'progress-stall-sec', DEFAULT_PROGRESS_STALL_MS, '--progress-stall-sec')
+    : Number(options['progress-stall-ms']);
+  if (!Number.isInteger(progressStallMs) || progressStallMs < 1) {
+    fail('--progress-stall-ms must be a positive integer');
+  }
+  const verifyMs = verifyOption(options);
+  const closeWhenIdle = options['close-when-idle'] === true;
   const startedAt = new Date().toISOString();
   writeJsonAtomic(paths.tasks, { version: 'delegate-task-spec.v1', tasks });
   writeJsonAtomic(paths.manifest, {
@@ -767,6 +977,8 @@ function startCommand(options) {
     maxConcurrency,
     active: 0,
     queuedStallMs,
+    progressStallMs,
+    closeWhenIdle,
     queueSeq: tasks.length,
     tasks: Object.fromEntries(tasks.map((task, index) => [task.id, {
       ...publicTask(task, runDir, 'queued'),
@@ -777,17 +989,22 @@ function startCommand(options) {
 
   if (process.platform === 'win32') {
     try {
-      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs);
+      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, closeWhenIdle);
       launchThroughWindowsExplorer(brokerPath);
       const running = waitForWindowsWorkerHandshake(paths);
+      const verification = await observeLaunch(runDir, tasks.map((task) => task.id), { verifyMs });
       process.stdout.write(`${JSON.stringify({
         runDir,
         supervisorPid: running.supervisorPid,
         cursor: 0,
         maxConcurrency,
         queuedStallMs,
+        progressStallMs,
+        closeWhenIdle,
         tasks: tasks.length,
+        verification,
       })}\n`);
+      if (verification.spawnFailed.length) process.exit(1);
     } catch (error) {
       fail(error.message, 1);
     }
@@ -801,6 +1018,8 @@ function startCommand(options) {
     '--run', runDir,
     '--max-concurrency', String(maxConcurrency),
     '--queued-stall-ms', String(queuedStallMs),
+    '--progress-stall-ms', String(progressStallMs),
+    ...(closeWhenIdle ? ['--close-when-idle'] : []),
   ], {
     detached: true,
     windowsHide: true,
@@ -808,14 +1027,21 @@ function startCommand(options) {
   });
   closeSync(logFd);
   child.unref();
+  // A launch is only reported after it is observed: every submitted task must
+  // be running, honestly queued behind busy slots, or visibly failed.
+  const verification = await observeLaunch(runDir, tasks.map((task) => task.id), { verifyMs });
   process.stdout.write(`${JSON.stringify({
     runDir,
     supervisorPid: child.pid,
     cursor: 0,
     maxConcurrency,
     queuedStallMs,
+    progressStallMs,
+    closeWhenIdle,
     tasks: tasks.length,
+    verification,
   })}\n`);
+  if (verification.spawnFailed.length) process.exit(1);
 }
 
 // Commands are spawned directly except Windows `.cmd`/`.bat` wrappers, which
@@ -838,11 +1064,16 @@ function workerCommand(options) {
   const queuedStallMs = options['queued-stall-ms'] == null
     ? DEFAULT_QUEUED_STALL_MS
     : Number(options['queued-stall-ms']);
+  let progressStallMs = options['progress-stall-ms'] == null
+    ? DEFAULT_PROGRESS_STALL_MS
+    : Number(options['progress-stall-ms']);
   if (!runDir
     || !Number.isInteger(maxConcurrency) || maxConcurrency < 1
+    || !Number.isInteger(progressStallMs) || progressStallMs < 1
     || !Number.isInteger(queuedStallMs) || queuedStallMs < 1) {
     fail('invalid internal worker invocation');
   }
+  const closeWhenIdle = options['close-when-idle'] === true;
   const paths = runPaths(runDir);
   mkdirSync(paths.requests, { recursive: true });
   const initialTasks = readJson(paths.tasks, 'normalized tasks').tasks
@@ -857,6 +1088,9 @@ function workerCommand(options) {
   const timelineWatchers = new Map();
   const children = new Map();
   const forceKillTimers = new Map();
+  // Session stops in flight: `continue` must not re-dispatch a task while its
+  // previous daemon session is still being torn down (one session per task).
+  const pendingSessionStops = new Map();
 
   const workerStartedAt = new Date().toISOString();
   const manifest = {
@@ -871,6 +1105,8 @@ function workerCommand(options) {
     maxConcurrency,
     active,
     queuedStallMs,
+    progressStallMs,
+    closeWhenIdle,
     queueSeq,
     tasks: Object.fromEntries(initialTasks.map((task, index) => [task.id, {
       ...publicTask(task, runDir, 'queued'),
@@ -885,6 +1121,19 @@ function workerCommand(options) {
     manifest.active = active;
     manifest.queueSeq = queueSeq;
     writeJsonAtomic(paths.manifest, manifest);
+  };
+
+  // The normalized task list is the worker's own input, but a real launch change
+  // (a continued task with a new brief) must survive a later read of the run.
+  const persistTasks = () => {
+    writeJsonAtomic(paths.tasks, {
+      version: 'delegate-task-spec.v1',
+      tasks: taskList.map((task) => {
+        const { stdoutPath, stderrPath, ...rest } = task;
+        if (task.remote) rest.timelinePath = null;
+        return rest;
+      }),
+    });
   };
 
   const transition = (task, to, extra = {}) => {
@@ -957,15 +1206,117 @@ function workerCommand(options) {
     notice(task, 'queued_stall', { ...state.queueStall });
   };
 
-  const stallCheckMs = Math.max(
-    STALL_CHECK_MIN_MS,
-    Math.min(STALL_CHECK_MAX_MS, Math.floor(queuedStallMs / 4)),
-  );
-  const stallTimer = setInterval(() => {
+  // A running task that publishes no progress for its threshold is silent:
+  // journal it once per stall episode, and clear the flag (with a
+  // non-actionable `progress_resumed` notice) as soon as progress returns, so a
+  // later stall is reported again.
+  const flagProgressStall = (id) => {
+    const task = taskMap.get(id);
+    const state = manifest.tasks[id];
+    if (!task || !state) return;
+    if (!['running', 'resuming'].includes(state.status)) return;
+    const reference = state.lastProgressAt ?? state.startedAt ?? state.stateSince ?? null;
+    const referenceMs = reference ? parseIsoMillis(reference) : null;
+    if (referenceMs == null) return;
+    const thresholdMs = progressThresholdMs(manifest, state);
+    const silentForMs = Math.max(0, Date.now() - referenceMs);
+    if (silentForMs < thresholdMs) {
+      if (state.progressStall) {
+        state.progressStall = null;
+        notice(task, 'progress_resumed', { silentForMs, lastProgressAt: reference });
+      }
+      return;
+    }
+    if (state.progressStall) return;
+    state.progressStall = {
+      at: new Date().toISOString(),
+      silentForMs,
+      thresholdMs,
+      lastProgressAt: reference,
+      status: state.status,
+    };
+    notice(task, 'progress_stall', { ...state.progressStall });
+  };
+
+  // The worker owns every child handle, so a task that is still `running` after
+  // its process is gone and its handle was lost can never settle on its own.
+  // This net guarantees no task is left running forever.
+  const reapLostWorkers = () => {
+    for (const [id, state] of Object.entries(manifest.tasks)) {
+      if (settled.has(id)) continue;
+      if (!state || ['queued', 'held'].includes(state.status)) continue;
+      if (children.has(id)) continue;
+      if (!processIsAlive(state.pid)) markWorkerLost(id);
+    }
+  };
+
+  const markWorkerLost = (id) => {
+    const task = taskMap.get(id);
+    const state = manifest.tasks[id];
+    if (!task || !state || settled.has(id)) return;
+    const digest = readResultDigest(state.resultPath);
+    // A published terminal artifact is the task's own last word; the process
+    // disappearing afterwards is not a lost worker.
+    if (digest?.status && TERMINAL_STATUSES.has(digest.status)) {
+      settled.add(id);
+      transition(task, digest.status, {
+        finishedAt: new Date().toISOString(),
+        stateSince: new Date().toISOString(),
+        cause: 'result_recorded_after_exit',
+        recovered: true,
+        result: digest,
+      });
+      checkRunCompletion();
+      return;
+    }
+    settled.add(id);
+    active = Math.max(0, active - 1);
+    const finishedAt = new Date().toISOString();
+    transition(task, 'failed', {
+      finishedAt,
+      stateSince: finishedAt,
+      cause: 'worker_lost',
+      kind: 'worker_lost',
+      error: 'task process is no longer running and no terminal result was recorded',
+    });
+    checkRunCompletion();
+    launchAvailable();
+  };
+
+  // The monitor tick follows the smallest threshold actually in play, so a task
+  // that overrides the run default with a short silence window is noticed as
+  // promptly as its own setting promises. The interval is re-evaluated on every
+  // tick because a later `enqueue` can add an even shorter override.
+  const monitorTickMs = () => {
+    const thresholds = [queuedStallMs, progressStallMs];
+    for (const state of Object.values(manifest.tasks)) {
+      const own = Number(state?.progressStallMs);
+      if (Number.isInteger(own) && own > 0) thresholds.push(own);
+    }
+    return Math.max(
+      STALL_CHECK_MIN_MS,
+      Math.min(STALL_CHECK_MAX_MS, Math.floor(Math.min(...thresholds) / 4)),
+    );
+  };
+
+  let monitorIntervalMs = 0;
+  let monitorTimer = null;
+  const monitorTick = () => {
     for (const [id, state] of Object.entries(manifest.tasks)) {
       if (state.status === 'queued' && !state.queueStall) flagQueueStall(id);
     }
-  }, stallCheckMs);
+    for (const id of Object.keys(manifest.tasks)) flagProgressStall(id);
+    reapLostWorkers();
+    armMonitor();
+  };
+  const armMonitor = () => {
+    const next = monitorTickMs();
+    if (monitorTimer && next === monitorIntervalMs) return;
+    if (monitorTimer) clearInterval(monitorTimer);
+    monitorIntervalMs = next;
+    monitorTimer = setInterval(monitorTick, next);
+  };
+  armMonitor();
 
   const finishTask = (task, code, signal, launchError = null) => {
     if (settled.has(task.id)) return;
@@ -1040,8 +1391,31 @@ function workerCommand(options) {
       ...(remoteExit && !cancellationRequested ? { cause: remoteExit.cause } : {}),
       ...(remoteCaptureMissing && !cancellationRequested ? { cause: 'missing_result_envelope' } : {}),
       ...(remoteDiagnostic ? { error: remoteDiagnostic } : {}),
-      ...(launchError ? { error: launchError.message } : {}),
+      ...(launchError ? { error: launchError.message, cause: 'spawn_failed' } : {}),
     });
+
+    // Attempt history: a continued task keeps the outcome of every attempt, so
+    // one task identity can be re-scoped without losing what happened before.
+    const finishedState = manifest.tasks[task.id];
+    if (finishedState) {
+      const attemptNumber = finishedState.attempt ?? 1;
+      const digest = readResultDigest(finishedState.resultPath);
+      finishedState.attempts = [
+        ...(finishedState.attempts || []).filter((entry) => entry.attempt !== attemptNumber),
+        {
+          attempt: attemptNumber,
+          startedAt: finishedState.startedAt ?? null,
+          finishedAt,
+          status,
+          exitCode: code,
+          signal,
+          cause: finishedState.cause ?? null,
+          sessionId: finishedState.sessionId ?? null,
+          result: digest,
+        },
+      ];
+      persist();
+    }
 
     checkRunCompletion();
     launchAvailable();
@@ -1285,19 +1659,114 @@ function workerCommand(options) {
     } catch (error) {
       return { requested: false, sessionId, reason: error.message };
     }
-    child.once('error', (error) => notice(task, 'session_stop', {
-      sessionId,
-      result: 'error',
-      error: error.message,
-    }));
-    child.once('exit', (code, signal) => notice(task, 'session_stop', {
-      sessionId,
-      result: code === 0 ? 'completed' : 'failed',
-      exitCode: code,
-      signal,
-    }));
+    if (sessionId) pendingSessionStops.set(task.id, sessionId);
+    child.once('error', (error) => {
+      pendingSessionStops.delete(task.id);
+      notice(task, 'session_stop', {
+        sessionId,
+        result: 'error',
+        error: error.message,
+      });
+    });
+    child.once('exit', (code, signal) => {
+      pendingSessionStops.delete(task.id);
+      notice(task, 'session_stop', {
+        sessionId,
+        result: code === 0 ? 'completed' : 'failed',
+        exitCode: code,
+        signal,
+      });
+    });
     return { requested: true, sessionId };
   };
+
+  // Steering is the mid-turn channel into a live daemon session: the gateway
+  // applies the message at the next execution boundary, so the task keeps its
+  // session and its progress instead of being cancelled and re-dispatched.
+  // `sessionSteerInvocation` is the single binding to the CLI contract
+  // (`sanad session steer --session <id> --message-file <path> [--json]`),
+  // mirroring the task's own invocation form and Home pin.
+  const sessionSteerInvocation = (task, sessionId, messageFile) => {
+    if (!sessionId) return { reason: 'no_session_id' };
+    const steerArgs = ['session', 'steer', '--session', sessionId, '--message-file', messageFile, '--json'];
+    const withPins = (args, extra = []) => {
+      const pinned = [...args];
+      // Mirror the endpoint pin the task spawned with, if any, so steering
+      // reaches the same gateway instead of the default one.
+      const gateway = getArgValue(task.args, task.id, '--gateway-url');
+      if (gateway) pinned.push('--gateway-url', gateway);
+      pinned.push(...extra);
+      return pinned;
+    };
+    const base = basename(task.command).toLowerCase();
+    if (task.remote) {
+      if (!SANAD_CLIENT_COMMAND.test(base)) return { reason: 'unsupported_remote_invocation' };
+      if (!task.remoteDevice) return { reason: 'no_remote_device' };
+      return {
+        command: task.command,
+        args: withPins(['-d', task.remoteDevice, ...steerArgs]),
+        cwd: task.spawnCwd || task.workspace,
+      };
+    }
+    if (task.implementer !== 'sanad') return { reason: 'not_a_sanad_task' };
+    if (/^sanad(\.(exe|cmd|bat))?$/.test(base)) {
+      return { command: task.command, args: withPins(steerArgs, task.home ? ['--home', task.home] : []), cwd: task.spawnCwd || task.workspace };
+    }
+    if (/^fvm(\.(exe|cmd|bat))?$/.test(base)
+      && task.args[0] === 'dart' && task.args[1] === 'run') {
+      return {
+        command: task.command,
+        args: withPins(['dart', 'run', task.args[2], ...steerArgs], task.home ? ['--home', task.home] : []),
+        cwd: task.spawnCwd || task.workspace,
+      };
+    }
+    return { reason: 'unsupported_invocation' };
+  };
+
+  // Bounded capture of one auxiliary CLI call (steer). The supervisor never
+  // waits forever on an auxiliary command.
+  const runAuxiliaryCommand = (invocation, task, timeoutMs = STEER_TIMEOUT_MS) => new Promise((resolvePromise) => {
+    let child;
+    try {
+      child = spawnCommand(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
+        env: taskEnvironment(task, process.env),
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      resolvePromise({ ok: false, error: error.message, exitCode: null, signal: null, stdout: '', stderr: '' });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => { stdout += chunk; });
+    child.stderr?.on('data', (chunk) => { stderr += chunk; });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGTERM'); } catch {}
+    }, timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    const complete = (code, signal) => {
+      clearTimeout(timer);
+      resolvePromise({
+        ok: !timedOut && code === 0,
+        error: timedOut ? `command timed out after ${timeoutMs}ms` : null,
+        exitCode: code,
+        signal,
+        stdout,
+        stderr,
+      });
+    };
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      resolvePromise({ ok: false, error: error.message, exitCode: null, signal: null, stdout, stderr });
+    });
+    child.once('exit', complete);
+  });
 
   const cancelTask = (id) => {
     const state = manifest.tasks[id];
@@ -1369,6 +1838,243 @@ function workerCommand(options) {
     };
   };
 
+  // `continue` re-dispatches a finished task as a numbered new attempt with a
+  // delta brief, in the same workspace and with the same task id. One session
+  // per task: a live worker process or an in-flight session stop blocks the
+  // re-dispatch, so two turns can never share one task identity.
+  const continueTask = (req) => {
+    const id = req.taskId;
+    const state = manifest.tasks[id];
+    const task = taskMap.get(id);
+    if (!state || !task) return { ok: false, error: `task not found: ${id}` };
+    if (manifest.closed) return { ok: false, error: 'cannot continue a task in a closed run' };
+    if (!TERMINAL_STATUSES.has(state.status)) {
+      return {
+        ok: false,
+        error: `task ${id} is ${state.status}; continue needs a finished task (cancel it first)`,
+      };
+    }
+    if (processIsAlive(state.pid) || children.has(id)) {
+      return {
+        ok: false,
+        error: `task ${id} still has a live worker process (pid ${state.pid}); stop it before continuing`,
+      };
+    }
+    if (pendingSessionStops.has(id)) {
+      return {
+        ok: false,
+        error: `task ${id} daemon session ${pendingSessionStops.get(id)} is still stopping; verify it is gone before continuing`,
+      };
+    }
+
+    const briefPath = resolve(req.briefPath || '');
+    if (!req.briefPath || !isAbsolute(req.briefPath) || !existsSync(briefPath) || !statSync(briefPath).isFile()) {
+      return { ok: false, error: `--brief-file must be an existing absolute file path: ${req.briefPath}` };
+    }
+    const briefContent = readFileSync(briefPath, 'utf8');
+    if (!briefContent.trim()) return { ok: false, error: '--brief-file is empty' };
+
+    const replaced = replaceBriefArgument(task.args, briefPath);
+    if (!replaced) {
+      return {
+        ok: false,
+        error: `task ${id} has no --brief-file argument to replace; enqueue a new task instead of continuing`,
+      };
+    }
+    let nextArgs = replaced.args;
+    if (req.newSession) nextArgs = stripSessionArguments(nextArgs);
+
+    const previousAttempt = state.attempt ?? 1;
+    const attemptNumber = previousAttempt + 1;
+    const archive = archiveAttemptArtifacts(state, previousAttempt);
+    task.args = nextArgs;
+    task.effectiveArgs = task.home ? [...nextArgs, '--home', task.home] : nextArgs;
+    persistTasks();
+
+    const previousStatus = state.status;
+    state.attempt = attemptNumber;
+    notice(task, 'continue_requested', {
+      attempt: attemptNumber,
+      previousAttempt,
+      previousStatus,
+      briefPath,
+      briefSha256: sha256(briefContent),
+      briefLength: briefContent.length,
+      newSession: req.newSession === true,
+      archived: archive.files,
+    });
+    settled.delete(id);
+    transition(task, 'queued', {
+      pid: null,
+      startedAt: null,
+      finishedAt: null,
+      exitCode: null,
+      signal: null,
+      error: null,
+      cause: null,
+      identity: null,
+      reportedStatus: null,
+      lastProgressAt: null,
+      progressStall: null,
+      cancellationRequested: false,
+      sessionId: null,
+      attempt: attemptNumber,
+      briefFile: briefPath,
+      previousStatus,
+      continuedAt: new Date().toISOString(),
+    });
+    launchAvailable();
+    return {
+      ok: true,
+      taskId: id,
+      attempt: attemptNumber,
+      previousAttempt,
+      previousStatus,
+      status: manifest.tasks[id]?.status ?? 'queued',
+      briefPath,
+      newSession: req.newSession === true,
+      archived: archive.files,
+      archiveDir: archive.dir,
+      active,
+      maxConcurrency,
+    };
+  };
+
+  // `steer` delivers a mid-turn message to a task that is already running. The
+  // message body is transient: the journal keeps only its sha256 and length.
+  const steerTask = async (req) => {
+    const id = req.taskId;
+    const state = manifest.tasks[id];
+    const task = taskMap.get(id);
+    if (!state || !task) return { ok: false, error: `task not found: ${id}` };
+    if (state.status !== 'running') {
+      return {
+        ok: false,
+        error: `task ${id} is ${state.status}; steer needs a running task (use continue for a finished one)`,
+      };
+    }
+    const sessionId = state.sessionId ?? null;
+    if (!sessionId) {
+      return {
+        ok: false,
+        error: `task ${id} has no recorded session id yet; wait until the session is observable, then steer`,
+      };
+    }
+
+    let messageFile = req.messageFile ? resolve(req.messageFile) : null;
+    let temporaryFile = null;
+    if (messageFile) {
+      if (!isAbsolute(messageFile) || !existsSync(messageFile) || !statSync(messageFile).isFile()) {
+        return { ok: false, error: `--message-file must be an existing absolute file path: ${req.messageFile}` };
+      }
+    } else if (typeof req.message === 'string' && req.message.trim().length > 0) {
+      const directory = join(runDir, 'steer');
+      mkdirSync(directory, { recursive: true });
+      temporaryFile = join(directory, `steer-${id}-${Date.now()}.md`);
+      writeFileSync(temporaryFile, req.message, 'utf8');
+      messageFile = temporaryFile;
+    } else {
+      return { ok: false, error: 'steer requires --message or --message-file' };
+    }
+
+    try {
+      const content = readFileSync(messageFile, 'utf8');
+      const messageSha256 = sha256(content);
+      const messageLength = content.length;
+      const invocation = sessionSteerInvocation(task, sessionId, messageFile);
+      if (!invocation.command) {
+        return {
+          ok: false,
+          error: `cannot steer task ${id}: ${invocation.reason}`,
+          reason: invocation.reason,
+        };
+      }
+      const result = await runAuxiliaryCommand(invocation, task);
+      const cliRequestId = (() => {
+        const last = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
+        if (!last || !last.startsWith('{')) return null;
+        try {
+          const parsed = JSON.parse(last);
+          return parsed.request_id ?? parsed.requestId ?? null;
+        } catch {
+          return null;
+        }
+      })();
+      const diagnostic = result.ok
+        ? null
+        : (result.stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1)
+          ?? result.error
+          ?? 'steer command failed');
+      const event = notice(task, 'steer_sent', {
+        sessionId,
+        // The supervisor's own control-request id, plus the CLI's request id
+        // when the command reports one. The message body is never journaled.
+        requestId: req.id ?? null,
+        ...(cliRequestId ? { cliRequestId } : {}),
+        messageSha256,
+        messageLength,
+        transport: 'message-file',
+        result: result.ok ? 'completed' : 'failed',
+        exitCode: result.exitCode,
+        signal: result.signal,
+        ...(diagnostic ? { error: String(diagnostic).slice(0, 400) } : {}),
+      });
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: `steer rejected for task ${id}: ${diagnostic ?? 'command failed'}`,
+          taskId: id,
+          sessionId,
+          requestId: req.id ?? null,
+          messageSha256,
+          messageLength,
+          journalSeq: event.seq,
+        };
+      }
+      return {
+        ok: true,
+        taskId: id,
+        sessionId,
+        requestId: req.id ?? null,
+        cliRequestId,
+        messageSha256,
+        messageLength,
+        journalSeq: event.seq,
+        exitCode: result.exitCode,
+      };
+    } finally {
+      if (temporaryFile) {
+        try { unlinkSync(temporaryFile); } catch {}
+      }
+    }
+  };
+
+  // Attempt artifacts are archived, not deleted: the previous attempt's result
+  // stays available for triage after the task is re-scoped.
+  const archiveAttemptArtifacts = (state, attemptNumber) => {
+    const dir = join(runDir, 'attempts', state.id, `attempt-${attemptNumber}`);
+    const sources = new Set([
+      state.resultPath,
+      state.timelinePath,
+      state.stdoutPath,
+      state.stderrPath,
+    ].filter(Boolean));
+    mkdirSync(dir, { recursive: true });
+    const files = [];
+    for (const source of sources) {
+      if (!existsSync(source)) continue;
+      const target = join(dir, basename(source));
+      try {
+        renameSync(source, target);
+        files.push(target);
+      } catch {
+        // A file another process still holds open stays where it is; the attempt
+        // record keeps pointing at the original path.
+      }
+    }
+    return { dir, files };
+  };
+
   const launchTask = (task) => {
     active += 1;
     const stdoutFd = openSync(manifest.tasks[task.id].stdoutPath, 'a');
@@ -1407,6 +2113,8 @@ function workerCommand(options) {
       startedAt,
       stateSince: startedAt,
       queueStall: null,
+      progressStall: null,
+      lastProgressAt: startedAt,
       cancellationRequested: false,
     });
 
@@ -1443,8 +2151,15 @@ function workerCommand(options) {
   }
 
   function checkRunCompletion() {
-    if (!manifest.closed) return;
     const totalTasks = Object.keys(manifest.tasks).length;
+    // `--close-when-idle` makes an otherwise open run terminate as soon as every
+    // task is terminal and nothing is queued, so a coordinator is never left
+    // waiting on a supervisor that has no work left.
+    if (!manifest.closed && closeWhenIdle && totalTasks > 0 && settled.size >= totalTasks) {
+      const nothingQueued = !Object.values(manifest.tasks).some((task) => task.status === 'queued');
+      if (nothingQueued) manifest.closed = true;
+    }
+    if (!manifest.closed) return;
     if (settled.size >= totalTasks) {
       manifest.status = 'completed';
       manifest.finishedAt = new Date().toISOString();
@@ -1462,7 +2177,7 @@ function workerCommand(options) {
       appendFileSync(paths.journal, `${JSON.stringify(event)}\n`, 'utf8');
       persist();
       clearInterval(keepAliveTimer);
-      clearInterval(stallTimer);
+      clearInterval(monitorTimer);
       try { reqWatcher.close(); } catch {}
       process.exit(0);
     }
@@ -1558,6 +2273,16 @@ function workerCommand(options) {
       return cancelTask(ids[0]);
     }
 
+    if (req.type === 'continue') {
+      return continueTask(req);
+    }
+
+    if (req.type === 'steer') {
+      // Async by nature (it waits for one bounded CLI call); the request
+      // processor awaits a returned promise before writing the acknowledgement.
+      return steerTask(req);
+    }
+
     if (req.type === 'set-concurrency') {
       const requested = Number(req.maxConcurrency);
       if (!Number.isInteger(requested) || requested < 1) {
@@ -1611,6 +2336,10 @@ function workerCommand(options) {
     return { ok: false, error: `unknown request type: ${req.type}` };
   }
 
+  // Requests are processed once: `steer` is asynchronous, so a second watcher
+  // event must not run the same request twice.
+  const inFlightRequests = new Set();
+
   function processPendingRequests() {
     if (!existsSync(paths.requests)) return;
     let entries;
@@ -1621,6 +2350,7 @@ function workerCommand(options) {
     }
     for (const entry of entries) {
       if (!entry.endsWith('.req.json')) continue;
+      if (inFlightRequests.has(entry)) continue;
       const reqFile = join(paths.requests, entry);
       const ackFile = join(paths.requests, entry.replace(/\.req\.json$/, '.ack.json'));
       if (existsSync(ackFile)) continue;
@@ -1630,11 +2360,26 @@ function workerCommand(options) {
       } catch {
         continue;
       }
-      const ack = handleRequest(req);
-      writeJsonAtomic(ackFile, ack);
-      try { unlinkSync(reqFile); } catch {}
-      if (req.type === 'close') {
-        checkRunCompletion();
+      inFlightRequests.add(entry);
+      const complete = (ack) => {
+        inFlightRequests.delete(entry);
+        writeJsonAtomic(ackFile, ack);
+        try { unlinkSync(reqFile); } catch {}
+        if (req.type === 'close') {
+          checkRunCompletion();
+        }
+      };
+      let result;
+      try {
+        result = handleRequest(req);
+      } catch (error) {
+        complete({ ok: false, error: error.message });
+        continue;
+      }
+      if (result && typeof result.then === 'function') {
+        result.then(complete, (error) => complete({ ok: false, error: error.message }));
+      } else {
+        complete(result);
       }
     }
   }
@@ -1748,8 +2493,8 @@ function sendControlRequest(runDir, requestData, timeoutMs = 15_000) {
 }
 
 async function addCommand(options) {
-  if (!options.run || !options.spec) fail('add requires --run and --spec');
-  const runDir = resolve(options.run);
+  const runDir = singleRun(options, 'add');
+  if (!options.spec) fail('add requires --spec');
   const manifest = loadManifest(runDir);
   const existingIds = new Set(Object.keys(manifest.tasks || {}));
   const tasks = validateSpec(readJson(resolve(options.spec), 'task spec'), existingIds);
@@ -1779,8 +2524,8 @@ async function addCommand(options) {
 }
 
 async function enqueueCommand(options) {
-  if (!options.run) fail('enqueue requires --run');
-  const runDir = resolve(options.run);
+  const runDir = singleRun(options, 'enqueue');
+  const verifyMs = verifyOption(options);
   let request;
   if (options.spec) {
     const manifest = loadManifest(runDir);
@@ -1801,6 +2546,10 @@ async function enqueueCommand(options) {
 
   try {
     const ack = await sendControlRequest(runDir, request);
+    // The acknowledgement says what the worker decided; verification says what
+    // is actually observable afterwards (started, honestly queued, or failed to
+    // spawn), so a reported launch is never merely assumed.
+    const verification = await observeLaunch(runDir, ack.taskIds || [], { verifyMs });
     if (options.json) {
       process.stdout.write(`${JSON.stringify({
         runDir,
@@ -1810,22 +2559,149 @@ async function enqueueCommand(options) {
         maxConcurrency: ack.maxConcurrency,
         queued: ack.queued,
         tasks: ack.tasks,
+        verification,
       }, null, 2)}\n`);
     } else {
       process.stdout.write(`Enqueued ${ack.taskIds.length} task(s): ${ack.taskIds.join(', ')}\n`);
-      for (const outcome of ack.tasks || []) {
-        process.stdout.write(`  ${formatQueueOutcome(outcome)}\n`);
+      for (const line of verification.summary) {
+        process.stdout.write(`  ${line}\n`);
+      }
+      if (verification.timedOut) {
+        process.stdout.write(`  (verification timed out after ${verification.timeoutMs}ms)\n`);
       }
     }
+    if (verification.spawnFailed.length) process.exit(1);
+  } catch (error) {
+    fail(error.message, 1);
+  }
+}
+
+async function continueCommand(options) {
+  const runDir = singleRun(options, 'continue');
+  if (!options.task) fail('continue requires --task <id>');
+  if (!options['brief-file']) fail('continue requires --brief-file <path>');
+  const briefPath = options['brief-file'];
+  if (!isAbsolute(briefPath)) fail('--brief-file must be an absolute path');
+  if (!existsSync(briefPath) || !statSync(briefPath).isFile()) {
+    fail(`--brief-file does not exist: ${briefPath}`);
+  }
+  const verifyMs = verifyOption(options);
+  const manifest = loadManifest(runDir);
+  const state = requireTask(manifest, options.task);
+
+  // Pre-flight so an obviously unsafe re-dispatch never reaches the worker; the
+  // worker repeats every check authoritatively.
+  if (!TERMINAL_STATUSES.has(state.status)) {
+    fail(`task ${options.task} is ${state.status}; continue needs a finished task (cancel it first)`);
+  }
+  if (processIsAlive(state.pid)) {
+    fail(`task ${options.task} still has a live worker process (pid ${state.pid}); stop it and verify it is gone before continuing`);
+  }
+
+  try {
+    const ack = await sendControlRequest(runDir, {
+      type: 'continue',
+      taskId: options.task,
+      briefPath: resolve(briefPath),
+      newSession: options['new-session'] === true,
+    });
+    const verification = await observeLaunch(runDir, [options.task], { verifyMs });
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        continued: true,
+        taskId: ack.taskId,
+        attempt: ack.attempt,
+        previousAttempt: ack.previousAttempt,
+        previousStatus: ack.previousStatus,
+        status: ack.status,
+        briefPath: ack.briefPath,
+        newSession: ack.newSession,
+        archived: ack.archived,
+        archiveDir: ack.archiveDir,
+        active: ack.active,
+        maxConcurrency: ack.maxConcurrency,
+        verification,
+      }, null, 2)}\n`);
+    } else {
+      process.stdout.write(
+        `Continued task ${ack.taskId} as attempt ${ack.attempt} (previous: ${ack.previousStatus}).`
+        + ` Brief: ${ack.briefPath}${ack.newSession ? ' (new session)' : ''}\n`,
+      );
+      if (ack.archived?.length) {
+        process.stdout.write(`  archived attempt ${ack.previousAttempt}: ${ack.archiveDir}\n`);
+      }
+      for (const line of verification.summary) process.stdout.write(`  ${line}\n`);
+    }
+    if (verification.spawnFailed.length) process.exit(1);
+  } catch (error) {
+    fail(error.message, 1);
+  }
+}
+
+async function steerCommand(options) {
+  const runDir = singleRun(options, 'steer');
+  if (!options.task) fail('steer requires --task <id>');
+  const hasMessage = typeof options.message === 'string';
+  const hasMessageFile = typeof options['message-file'] === 'string';
+  if (hasMessage === hasMessageFile) {
+    fail('steer requires exactly one of --message or --message-file');
+  }
+  if (hasMessageFile) {
+    const messageFile = options['message-file'];
+    if (!isAbsolute(messageFile)) fail('--message-file must be an absolute path');
+    if (!existsSync(messageFile) || !statSync(messageFile).isFile()) {
+      fail(`--message-file does not exist: ${messageFile}`);
+    }
+    if (!readFileSync(messageFile, 'utf8').trim()) fail('--message-file is empty');
+  } else if (!String(options.message).trim()) {
+    fail('--message must not be empty');
+  }
+
+  const manifest = loadManifest(runDir);
+  const state = requireTask(manifest, options.task);
+  if (state.status !== 'running') {
+    fail(`task ${options.task} is ${state.status}; steer needs a running task (use continue for a finished one)`);
+  }
+  if (!state.sessionId) {
+    fail(`task ${options.task} has no recorded session id yet; wait until the session is observable, then steer`);
+  }
+
+  try {
+    const ack = await sendControlRequest(runDir, {
+      type: 'steer',
+      taskId: options.task,
+      message: hasMessage ? options.message : null,
+      messageFile: hasMessageFile ? resolve(options['message-file']) : null,
+    }, STEER_TIMEOUT_MS + 15_000);
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        steered: true,
+        taskId: ack.taskId,
+        sessionId: ack.sessionId,
+        requestId: ack.requestId,
+        cliRequestId: ack.cliRequestId ?? null,
+        messageSha256: ack.messageSha256,
+        messageLength: ack.messageLength,
+        journalSeq: ack.journalSeq,
+        exitCode: ack.exitCode,
+      }, null, 2)}\n`);
+      return;
+    }
+    process.stdout.write(
+      `Steered task ${ack.taskId} (session ${ack.sessionId}): request ${ack.requestId}`
+      + ` journaled at seq ${ack.journalSeq}; message sha256 ${String(ack.messageSha256).slice(0, 12)}…`
+      + ` (${ack.messageLength} bytes, body not journaled).\n`,
+    );
   } catch (error) {
     fail(error.message, 1);
   }
 }
 
 async function cancelCommand(options) {
-  if (!options.run) fail('cancel requires --run');
+  const runDir = singleRun(options, 'cancel');
   if (!options.task) fail('cancel requires --task <id>');
-  const runDir = resolve(options.run);
   try {
     const ack = await sendControlRequest(runDir, { type: 'cancel', taskIds: [options.task] });
     if (options.json) {
@@ -1864,9 +2740,8 @@ async function cancelCommand(options) {
 }
 
 async function setConcurrencyCommand(options) {
-  if (!options.run) fail('set-concurrency requires --run');
+  const runDir = singleRun(options, 'set-concurrency');
   if (options.max == null) fail('set-concurrency requires --max <n>');
-  const runDir = resolve(options.run);
   const requested = Number(options.max);
   if (!Number.isInteger(requested) || requested < 1) {
     fail('--max must be a positive integer');
@@ -1897,6 +2772,164 @@ async function setConcurrencyCommand(options) {
   } catch (error) {
     fail(error.message, 1);
   }
+}
+
+function verifyOption(options) {
+  if (options['verify-ms'] != null) {
+    const requested = Number(options['verify-ms']);
+    if (!Number.isInteger(requested) || requested < 0) fail('--verify-ms must be a non-negative integer');
+    return requested;
+  }
+  return secondsOption(options, 'verify-sec', DEFAULT_VERIFY_MS, '--verify-sec');
+}
+
+// One task's launch state as a caller can observe it. A queued task counts as
+// resolved only when the queue is the honest reason (every slot is busy); a
+// task that is merely "launch pending" is still unresolved, because that is
+// exactly the state that produced a reported launch that never ran.
+function observeTaskState(runDir, id) {
+  const manifestPath = runPaths(runDir).manifest;
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  const state = manifest?.tasks?.[id];
+  if (!state) return { id, status: 'unknown', settled: false, spawnFailed: false, runStatus: manifest?.status ?? null };
+  const snapshot = queueSnapshot(manifest);
+  const queued = state.status === 'queued';
+  const queue = queued ? describeQueuedTask(manifest, id) : null;
+  const settled = state.status === 'running'
+    || TERMINAL_STATUSES.has(state.status)
+    || (queued && queue?.reason === 'awaiting_slot')
+    || ['blocked', 'needs_input', 'needs_permission', 'waiting', 'resuming'].includes(state.status);
+  const observation = {
+    id,
+    status: state.status,
+    pid: state.pid ?? null,
+    attempt: state.attempt ?? 1,
+    cause: state.cause ?? null,
+    error: state.error ?? null,
+    sessionId: state.sessionId ?? null,
+    spawnFailed: state.status === 'failed' && state.cause === 'spawn_failed',
+    settled,
+    queue: queue ? {
+      position: queue.position,
+      queuedTotal: queue.queuedTotal,
+      reason: queue.reason,
+      reasonText: queue.reasonText,
+    } : null,
+    active: snapshot.active,
+    maxConcurrency: snapshot.maxConcurrency,
+    runStatus: manifest?.status ?? null,
+  };
+  observation.line = formatObservationLine(observation);
+  return observation;
+}
+
+function formatObservationLine(observation) {
+  const counts = `${observation.active ?? '?'}/${observation.maxConcurrency ?? '?'} active`;
+  if (observation.status === 'running') {
+    return `${observation.id}: running (pid ${observation.pid ?? '?'}, ${counts})`;
+  }
+  if (observation.status === 'queued') {
+    const reason = observation.queue?.reasonText ?? 'queued';
+    return `${observation.id}: queued at position ${observation.queue?.position ?? '?'} of ${observation.queue?.queuedTotal ?? '?'} — ${reason}`;
+  }
+  if (observation.spawnFailed) {
+    return `${observation.id}: failed to spawn — ${observation.error ?? 'no diagnostic'}`;
+  }
+  if (TERMINAL_STATUSES.has(observation.status)) {
+    const cause = observation.cause ? ` (${observation.cause})` : '';
+    const error = observation.error ? ` — ${observation.error}` : '';
+    return `${observation.id}: ${observation.status}${cause}${error}`;
+  }
+  if (observation.status === 'unknown') {
+    return `${observation.id}: not present in the run manifest`;
+  }
+  return `${observation.id}: ${observation.status}${observation.error ? ` — ${observation.error}` : ''}`;
+}
+
+/**
+ * Waits until every submitted task is observably resolved, then reports what
+ * was seen. Resolution is event-first (a directory watcher on the run) with a
+ * bounded rescan, never a scheduled poll loop.
+ */
+function observeLaunch(runDir, taskIds, { verifyMs = DEFAULT_VERIFY_MS } = {}) {
+  const ids = [...new Set((taskIds || []).filter(Boolean))];
+  const startedAt = Date.now();
+  if (verifyMs <= 0 || ids.length === 0) {
+    const observed = ids.map((id) => observeTaskState(runDir, id)
+      ?? { id, status: 'unknown', settled: false, spawnFailed: false });
+    return Promise.resolve({
+      verified: false,
+      waitedMs: 0,
+      timeoutMs: verifyMs,
+      timedOut: false,
+      observed,
+      spawnFailed: observed.filter((entry) => entry.spawnFailed).map((entry) => entry.id),
+      summary: observed.map((entry) => entry.line ?? formatObservationLine(entry)),
+    });
+  }
+
+  const manifestPath = runPaths(runDir).manifest;
+  const observations = new Map();
+  return new Promise((resolvePromise) => {
+    let watcher = null;
+    let rescan = null;
+    let deadline = null;
+    let done = false;
+    const finish = (timedOut) => {
+      if (done) return;
+      done = true;
+      clearInterval(rescan);
+      clearTimeout(deadline);
+      try { watcher?.close(); } catch {}
+      const observed = ids.map((id) => observations.get(id) ?? {
+        id,
+        status: 'unknown',
+        settled: false,
+        spawnFailed: false,
+        line: `${id}: not present in the run manifest`,
+      });
+      resolvePromise({
+        verified: true,
+        waitedMs: Date.now() - startedAt,
+        timeoutMs: verifyMs,
+        timedOut,
+        observed,
+        spawnFailed: observed.filter((entry) => entry.spawnFailed).map((entry) => entry.id),
+        summary: observed.map((entry) => entry.line ?? formatObservationLine(entry)),
+      });
+    };
+    const check = () => {
+      let allSettled = true;
+      let runStale = false;
+      for (const id of ids) {
+        const observation = observeTaskState(runDir, id);
+        if (observation) {
+          observations.set(id, observation);
+          if (observation.runStatus === 'stale') runStale = true;
+        }
+        if (!observations.get(id)?.settled) allSettled = false;
+      }
+      if (allSettled) finish(false);
+      else if (runStale) finish(false);
+    };
+    try {
+      watcher = watch(dirname(manifestPath), (_eventType, filename) => {
+        if (!filename || String(filename) === basename(manifestPath)) check();
+      });
+      watcher.once('error', () => {});
+    } catch {
+      // The bounded rescan below keeps verification working without a watcher.
+    }
+    rescan = setInterval(check, Math.max(VERIFY_MIN_INTERVAL_MS, Math.min(250, Math.floor(verifyMs / 8) || 50)));
+    deadline = setTimeout(() => finish(true), verifyMs);
+    // Register first and rescan second so a state that already changed is seen.
+    check();
+  });
 }
 
 function waitForRunCompletion(runDir, timeoutMs = 60_000) {
@@ -1946,8 +2979,7 @@ function waitForRunCompletion(runDir, timeoutMs = 60_000) {
 }
 
 async function closeCommand(options) {
-  if (!options.run) fail('close requires --run');
-  const runDir = resolve(options.run);
+  const runDir = singleRun(options, 'close');
   const abortQueued = options['abort-queued'] === true;
   try {
     const ack = await sendControlRequest(runDir, { type: 'close', abortQueued });
@@ -2002,6 +3034,36 @@ function formatShortDuration(ms) {
 function queuedStallThreshold(manifest) {
   const configured = Number(manifest?.queuedStallMs);
   return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_QUEUED_STALL_MS;
+}
+
+function progressThresholdMs(manifest, taskState = null) {
+  const perTask = Number(taskState?.progressStallMs);
+  if (Number.isFinite(perTask) && perTask > 0) return perTask;
+  const configured = Number(manifest?.progressStallMs);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_PROGRESS_STALL_MS;
+}
+
+/**
+ * Progress age for one task: how long since the last observable progress.
+ *
+ * `status` recomputes this on read (a caller that never watched must still see
+ * a silent turn), and the same computation drives the worker's stall notices.
+ */
+function describeProgress(manifest, task, now = Date.now()) {
+  const thresholdMs = progressThresholdMs(manifest, task);
+  const reference = task.lastProgressAt ?? task.startedAt ?? task.stateSince ?? null;
+  const referenceMs = reference ? parseIsoMillis(reference) : null;
+  const silentForMs = referenceMs == null ? null : Math.max(0, now - referenceMs);
+  const live = ['running', 'resuming'].includes(task.status);
+  return {
+    lastProgressAt: task.lastProgressAt ?? null,
+    silentForMs,
+    thresholdMs,
+    // `blocked`, `waiting`, and intervention states are already actionable
+    // transitions; only a live turn can be silent.
+    stalled: live && silentForMs != null && silentForMs >= thresholdMs,
+    noticed: task.progressStall ?? null,
+  };
 }
 
 // Queue order is FIFO by the moment a task entered `queued`: the worker stamps
@@ -2189,41 +3251,594 @@ function formatSessionFooter(details) {
   ].join('\n');
 }
 
-function statusCommand(options) {
-  if (!options.run) fail('status requires --run');
-  const manifest = loadManifest(options.run);
+function readManifestQuiet(runDir) {
+  const path = runPaths(runDir).manifest;
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function loadCursor(cursorPath) {
+  if (!existsSync(cursorPath)) return { version: CURSOR_VERSION, updatedAt: null, runs: {} };
+  let value;
+  try {
+    value = JSON.parse(readFileSync(cursorPath, 'utf8'));
+  } catch (error) {
+    fail(`cannot read watch cursor ${cursorPath}: ${error.message}`);
+  }
+  if (value?.version !== CURSOR_VERSION || value.runs === null || typeof value.runs !== 'object') {
+    fail(`unsupported watch cursor at ${cursorPath}`);
+  }
+  return value;
+}
+
+function cursorSeq(cursor, runDir) {
+  const seq = Number(cursor.runs?.[runDir]?.seq);
+  return Number.isInteger(seq) && seq >= 0 ? seq : 0;
+}
+
+// Cursor writes are atomic (temp file + rename), so a watcher that is killed
+// mid-write can never leave a truncated cursor that replays or skips events.
+function saveCursor(cursorPath, cursor) {
+  cursor.updatedAt = new Date().toISOString();
+  writeJsonAtomic(cursorPath, cursor);
+}
+
+function runIsFinished(runDir) {
+  const manifest = readManifestQuiet(runDir);
+  if (!manifest) return true;
+  if (['completed', 'stale', 'failed'].includes(manifest.status)) return true;
+  if (manifest.closed) {
+    const tasks = Object.values(manifest.tasks || {});
+    if (tasks.every((task) => TERMINAL_STATUSES.has(task?.status))) return true;
+  }
+  return false;
+}
+
+/**
+ * Repairs a run whose supervisor is gone.
+ *
+ * A dead supervisor leaves tasks parked in a live-looking state forever, which
+ * is how a coordinator ends up believing five sessions are running when only
+ * four are. Nothing else can write this run, so the repair is performed here
+ * (and journaled exactly like a worker transition). A live run is never
+ * touched: its worker owns task state.
+ */
+function reconcileRun(runDir) {
+  const paths = runPaths(runDir);
+  const manifest = readManifestQuiet(runDir);
+  if (!manifest) return { runDir, manifest: null, changed: false, lost: [], recovered: [], orphaned: [] };
+  let changed = false;
+  if (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid)) {
+    manifest.status = 'stale';
+    manifest.staleReason = 'Supervisor process is not running.';
+    changed = true;
+  }
+  const outcome = { runDir, manifest, changed, lost: [], recovered: [], orphaned: [] };
+  if (manifest.status !== 'stale') return outcome;
+
+  let seq = Number.isInteger(manifest.seq) ? manifest.seq : 0;
+  const records = [];
+  for (const [id, task] of Object.entries(manifest.tasks || {})) {
+    if (!task) continue;
+    if (TERMINAL_STATUSES.has(task.status)) {
+      // A completion that landed after the supervisor died must still be
+      // reported: an already-repaired `failed/worker_lost` task upgrades to the
+      // task's own terminal artifact instead of staying wrong forever.
+      if (task.cause === 'worker_lost') {
+        const late = readResultDigest(task.resultPath);
+        if (late?.status && TERMINAL_STATUSES.has(late.status)) {
+          seq += 1;
+          task.status = late.status;
+          task.cause = 'result_recorded_after_exit';
+          task.error = null;
+          task.result = late;
+          records.push({
+            seq,
+            taskId: id,
+            implementer: task.implementer ?? null,
+            workspace: task.workspace ?? null,
+            from: 'failed',
+            to: late.status,
+            at: new Date().toISOString(),
+            kind: 'recovered',
+            cause: 'result_recorded_after_exit',
+            recovered: true,
+          });
+          outcome.recovered.push(id);
+          changed = true;
+        }
+      }
+      continue;
+    }
+    if (['queued', 'held'].includes(task.status)) continue;
+    const from = task.status;
+    // A process that is still alive is still running, even though its
+    // supervisor is gone. Failing it would be as wrong as claiming it is
+    // healthy, so the run reports it as orphaned and journals that once; the
+    // next read after the process exits records the real `worker_lost` outcome.
+    if (processIsAlive(task.pid)) {
+      const orphanFields = {
+        orphaned: true,
+        orphanPid: task.pid,
+        orphanNote: 'process outlived its supervisor and is unmanaged',
+        orphanSince: task.orphanSince ?? new Date().toISOString(),
+      };
+      const needsNotice = task.orphanNoticed !== true;
+      Object.assign(task, orphanFields, needsNotice ? { orphanNoticed: true } : {});
+      if (needsNotice) {
+        seq += 1;
+        records.push({
+          seq,
+          taskId: id,
+          implementer: task.implementer ?? null,
+          workspace: task.workspace ?? null,
+          from,
+          to: from,
+          at: new Date().toISOString(),
+          kind: 'worker_orphaned',
+          cause: 'supervisor_stale',
+          orphanPid: task.pid,
+        });
+      }
+      outcome.orphaned.push(id);
+      changed = true;
+      continue;
+    }
+    const digest = readResultDigest(task.resultPath);
+    const terminalFromResult = digest?.status && TERMINAL_STATUSES.has(digest.status);
+    const status = terminalFromResult ? digest.status : 'failed';
+    const cause = terminalFromResult ? 'result_recorded_after_exit' : 'worker_lost';
+    const finishedAt = new Date().toISOString();
+    Object.assign(task, {
+      status,
+      finishedAt,
+      stateSince: finishedAt,
+      cause,
+      recovered: true,
+      orphaned: false,
+      ...(digest ? { result: digest } : {}),
+    });
+    if (!terminalFromResult) {
+      task.error = 'task process is no longer running and no terminal result was recorded';
+    }
+    seq += 1;
+    records.push({
+      seq,
+      taskId: id,
+      implementer: task.implementer ?? null,
+      workspace: task.workspace ?? null,
+      from,
+      to: status,
+      at: finishedAt,
+      kind: terminalFromResult ? 'recovered' : 'worker_lost',
+      cause,
+      recovered: true,
+    });
+    if (terminalFromResult) outcome.recovered.push(id);
+    else outcome.lost.push(id);
+    changed = true;
+  }
+  if (records.length) {
+    appendFileSync(paths.journal, records.map((record) => `${JSON.stringify(record)}\n`).join(''), 'utf8');
+  }
+  if (changed) {
+    // Live counters belong to the dead worker, so they are recomputed here
+    // instead of being carried over into a repaired manifest.
+    manifest.active = Object.values(manifest.tasks || {})
+      .filter((task) => task && !TERMINAL_STATUSES.has(task.status) && !['queued', 'held'].includes(task.status))
+      .length;
+    manifest.seq = seq;
+    writeJsonAtomic(paths.manifest, manifest);
+  }
+  outcome.changed = changed;
+  return outcome;
+}
+
+function readResultForTask(task) {
+  return readResultDigest(task?.resultPath);
+}
+
+/**
+ * Renders one journal record for a coordinator: the transition, its elapsed
+ * time, and — for a terminal outcome — the result status, artifact path, and
+ * any branch/SHA/PR the task published. No second call is needed to triage.
+ */
+function enrichWatchEvent(runDir, event) {
+  const actionable = isActionableEvent(event);
+  const manifest = readManifestQuiet(runDir);
+  const task = event.taskId ? manifest?.tasks?.[event.taskId] ?? null : null;
+  const at = event.at ?? event.timestamp ?? null;
+  const enriched = {
+    version: WATCH_EVENT_VERSION,
+    run: runDir,
+    ...event,
+    actionable,
+  };
+  if (!event.taskId) {
+    enriched.line = `${at ?? '[unknown time]'}  RUN ${event.to}${event.cause ? ` (${event.cause})` : ''}`;
+    return enriched;
+  }
+  const terminal = TERMINAL_STATUSES.has(event.to);
+  const startedAt = task?.startedAt ?? null;
+  const finishedAt = task?.finishedAt ?? at;
+  const elapsedMs = startedAt
+    ? Math.max(0, (parseIsoMillis(finishedAt) ?? Date.now()) - (parseIsoMillis(startedAt) ?? 0))
+    : null;
+  const result = terminal ? readResultForTask(task) : null;
+  enriched.elapsedMs = elapsedMs;
+  enriched.elapsed = elapsedMs == null ? null : formatDuration(elapsedMs);
+  enriched.attempt = task?.attempt ?? 1;
+  if (result) enriched.result = result;
+
+  const parts = [
+    `${at ?? '[unknown time]'}`,
+    event.taskId,
+    `${event.from ?? '?'} -> ${event.to}${event.cause ? ` (${event.cause})` : ''}`,
+  ];
+  if (enriched.elapsed) parts.push(`elapsed ${enriched.elapsed}`);
+  if (enriched.attempt > 1) parts.push(`attempt ${enriched.attempt}`);
+  if (result) {
+    if (result.status) parts.push(`result ${result.status}`);
+    if (result.prUrl) parts.push(`pr ${result.prUrl}`);
+    if (result.headSha) parts.push(`sha ${result.headSha}`);
+    if (result.branch) parts.push(`branch ${result.branch}`);
+    if (result.summary) parts.push(`summary ${result.summary}`);
+    parts.push(`result-file ${result.path}`);
+  }
+  enriched.line = parts.join('  ');
+  return enriched;
+}
+
+/**
+ * `watch` is the coordinator interface: several runs, a durable cursor, and one
+ * line per actionable event. Nothing that happened while no watcher ran is
+ * lost, and nothing already handled is printed twice.
+ */
+async function watchCommand(options) {
+  const runDirs = [...new Set(options.runs.map((entry) => resolve(entry)))];
+  if (!runDirs.length) fail('watch requires at least one --run');
+  for (const runDir of runDirs) {
+    if (!existsSync(runDir)) fail(`run directory does not exist: ${runDir}`);
+  }
+  if (!options.cursor) fail('watch requires --cursor <file>');
+  const cursorPath = resolve(options.cursor);
+  const once = options.once === true;
+  const includeAll = options.all === true;
+  const timeoutMs = secondsOption(options, 'timeout-sec', 0, '--timeout-sec');
+
+  const cursor = loadCursor(cursorPath);
+  const runs = runDirs.map((runDir) => ({
+    runDir,
+    journal: runPaths(runDir).journal,
+    manifest: runPaths(runDir).manifest,
+    handled: cursorSeq(cursor, runDir),
+  }));
+
+  const pendingCursor = new Map();
+  let inFlight = 0;
+  let drained = null;
+  let wake = null;
+  let stopped = false;
+  const watchers = [];
+
+  const flushCursor = () => {
+    let changed = false;
+    for (const [runDir, seq] of pendingCursor) {
+      if (seq > cursorSeq(cursor, runDir)) {
+        cursor.runs[runDir] = { seq, updatedAt: new Date().toISOString() };
+        changed = true;
+      }
+    }
+    pendingCursor.clear();
+    if (changed) saveCursor(cursorPath, cursor);
+  };
+
+  const whenDrained = () => {
+    if (inFlight === 0) return Promise.resolve();
+    return new Promise((resolvePromise) => { drained = resolvePromise; });
+  };
+
+  const emit = (entry) => {
+    const line = options.json
+      ? `${JSON.stringify(entry)}\n`
+      : `${entry.line}\n`;
+    inFlight += 1;
+    // The cursor advances only after this line is flushed, so a watcher that
+    // dies mid-print replays the event instead of losing it.
+    process.stdout.write(line, () => {
+      inFlight -= 1;
+      if (inFlight === 0) {
+        flushCursor();
+        const resolver = drained;
+        drained = null;
+        resolver?.();
+      }
+    });
+  };
+
+  const scan = () => {
+    const batch = [];
+    for (const run of runs) {
+      const events = readJournalEvents(run.journal);
+      let boundary = run.handled;
+      for (const event of events) {
+        if (event.seq > boundary) boundary = event.seq;
+        if (event.seq <= run.handled) continue;
+        const enriched = enrichWatchEvent(run.runDir, event);
+        if (includeAll || enriched.actionable) batch.push(enriched);
+      }
+      if (boundary > (pendingCursor.get(run.runDir) ?? 0)) pendingCursor.set(run.runDir, boundary);
+    }
+    batch.sort((left, right) => {
+      const leftAt = parseIsoMillis(left.at ?? left.timestamp) ?? 0;
+      const rightAt = parseIsoMillis(right.at ?? right.timestamp) ?? 0;
+      if (leftAt !== rightAt) return leftAt - rightAt;
+      return left.seq - right.seq;
+    });
+    return batch;
+  };
+
+  const cycle = async () => {
+    for (const runDir of runDirs) reconcileRun(runDir);
+    const batch = scan();
+    for (const entry of batch) emit(entry);
+    for (const run of runs) {
+      run.handled = Math.max(run.handled, pendingCursor.get(run.runDir) ?? 0);
+    }
+    await whenDrained();
+    flushCursor();
+    return batch.length;
+  };
+
+  const announce = () => {
+    const resolver = wake;
+    wake = null;
+    resolver?.();
+  };
+  const waitForWake = () => new Promise((resolvePromise) => { wake = resolvePromise; });
+
+  for (const dir of new Set(runs.map((run) => dirname(run.journal)))) {
+    try {
+      const watcher = watch(dir, (_eventType, filename) => {
+        if (!filename) {
+          announce();
+          return;
+        }
+        const name = String(filename);
+        if (runs.some((run) => name === basename(run.journal) || name === basename(run.manifest))) {
+          announce();
+        }
+      });
+      watcher.once('error', () => {});
+      watchers.push(watcher);
+    } catch {
+      // The bounded liveness rescan below keeps the watcher working.
+    }
+  }
+  // Filesystem events are the primary wake-up path; this bounded rescan also
+  // repairs a run whose supervisor died while no watcher was listening.
+  const liveness = setInterval(announce, 500);
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(liveness);
+    for (const watcher of watchers) {
+      try { watcher.close(); } catch {}
+    }
+  };
+
+  const deadline = timeoutMs > 0
+    ? setTimeout(() => {
+      stop();
+      process.stderr.write(`supervisor: watch timed out after ${timeoutMs}ms with no new actionable event\n`);
+      process.exit(4);
+    }, timeoutMs)
+    : null;
+  if (deadline && typeof deadline.unref === 'function') deadline.unref();
+
+  const finishIfAllRunsEnded = () => {
+    if (!runDirs.every((runDir) => runIsFinished(runDir))) return false;
+    stop();
+    return true;
+  };
+
+  try {
+    while (!stopped) {
+      const printed = await cycle();
+      if (once && printed > 0) {
+        stop();
+        return;
+      }
+      if (finishIfAllRunsEnded()) return;
+      if (once && printed === 0) {
+        // Nothing actionable yet: wait for the next wake-up instead of
+        // re-invoking the caller with an empty batch.
+        await waitForWake();
+        continue;
+      }
+      await waitForWake();
+    }
+  } finally {
+    stop();
+  }
+}
+
+// One run's read view. `status` repairs a run whose supervisor is gone (that is
+// the only writer left) and never mutates a live run.
+function statusSnapshot(runDir) {
+  const manifest = loadManifest(runDir);
   if (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid)) {
     manifest.status = 'stale';
     manifest.staleReason = 'Supervisor process is not running.';
   }
-  if (options.json) {
-    const snapshot = queueSnapshot(manifest);
-    for (const task of Object.values(manifest.tasks || {})) {
+  const snapshot = queueSnapshot(manifest);
+  for (const task of Object.values(manifest.tasks || {})) {
+    const details = resolveSessionDetails(task, manifest);
+    task.sessionState = details.sessionState;
+    task.sessionCause = details.cause;
+    task.lastProgressAt = details.lastProgressAt !== '-' ? details.lastProgressAt : null;
+    task.stateSince = details.stateSince !== '[unknown time]' ? details.stateSince : null;
+    // A queued task always carries its position, the live counts, the reason
+    // it is waiting, and whether it already exceeded the stall threshold.
+    const queue = task.status === 'queued' ? describeQueuedTask(manifest, task.id) : null;
+    if (queue) task.queue = queue;
+    // Progress age is recomputed on read: a caller that never watched still
+    // sees a silent turn instead of an apparently busy one.
+    task.progress = describeProgress(manifest, task);
+    const result = readResultDigest(task.resultPath);
+    if (result && (TERMINAL_STATUSES.has(task.status) || task.recovered)) task.result = result;
+  }
+  manifest.active = snapshot.active;
+  manifest.queuedStallMs = queuedStallThreshold(manifest);
+  manifest.progressStallMs = progressThresholdMs(manifest);
+  manifest.queue = {
+    active: snapshot.active,
+    maxConcurrency: snapshot.maxConcurrency,
+    queued: snapshot.queued.map((entry) => ({
+      id: entry.id,
+      ...describeQueuedTask(manifest, entry.id),
+    })),
+  };
+  // A run whose supervisor is alive but has nothing left to run is idle, not
+  // running: the distinction is what tells a coordinator no progress is coming.
+  manifest.idle = manifest.status === 'running'
+    && snapshot.active === 0
+    && snapshot.queued.length === 0
+    && !manifest.closed;
+  return manifest;
+}
+
+function briefTaskLine(manifest, task) {
+  const details = resolveSessionDetails(task, manifest);
+  const progress = task.progress ?? describeProgress(manifest, task);
+  const parts = [task.id, task.status, `elapsed ${details.elapsed}`];
+  // Progress age is only meaningful while a turn is live; a terminal task
+  // showing "progress 3s ago" reads like activity that is not happening.
+  const liveTask = ['running', 'resuming'].includes(task.status);
+  parts.push(`progress ${!liveTask || progress.silentForMs == null
+    ? '-'
+    : `${formatShortDuration(progress.silentForMs)} ago`}`);
+  if (task.status === 'queued' && task.queue) {
+    parts.push(`queue #${task.queue.position}/${task.queue.queuedTotal} ${task.queue.reason}`);
+  }
+  if (progress.stalled) parts.push('PROGRESS_STALL');
+  if (task.queueStall) parts.push('QUEUED_STALL');
+  if ((task.attempt ?? 1) > 1) parts.push(`attempt ${task.attempt}`);
+  const result = task.result ?? readResultDigest(task.resultPath);
+  if (TERMINAL_STATUSES.has(task.status) || result) {
+    parts.push(`result ${result?.status ?? task.status}`);
+    if (result?.prUrl) parts.push(`pr ${result.prUrl}`);
+    if (result?.headSha) parts.push(`sha ${result.headSha}`);
+    if (result?.branch) parts.push(`branch ${result.branch}`);
+    if (result?.summary) parts.push(`summary ${result.summary}`);
+  }
+  if (task.error) parts.push(`error ${String(task.error).slice(0, 160)}`);
+  return `  ${parts.join('  ')}`;
+}
+
+function briefRunHeader(runDir, manifest) {
+  const snapshot = queueSnapshot(manifest);
+  const closedIndicator = manifest.closed ? ' (closed)' : '';
+  const idleIndicator = manifest.idle ? ' (idle)' : '';
+  return `RUN ${runDir}  ${manifest.status}${closedIndicator}${idleIndicator}`
+    + `  active=${snapshot.active}/${snapshot.maxConcurrency ?? '?'}`
+    + `  queued=${snapshot.queued.length}`
+    + `  tasks=${Object.keys(manifest.tasks || {}).length}`
+    + `  seq=${manifest.seq}`
+    + `  supervisor=${manifest.supervisorPid}`;
+}
+
+function briefView(runDir, manifest) {
+  return {
+    runDir,
+    status: manifest.status,
+    closed: manifest.closed === true,
+    idle: manifest.idle === true,
+    active: manifest.active,
+    maxConcurrency: manifest.maxConcurrency ?? null,
+    seq: manifest.seq,
+    supervisorPid: manifest.supervisorPid ?? null,
+    tasks: Object.values(manifest.tasks || {}).map((task) => {
       const details = resolveSessionDetails(task, manifest);
-      task.sessionState = details.sessionState;
-      task.sessionCause = details.cause;
-      task.lastProgressAt = details.lastProgressAt !== '-' ? details.lastProgressAt : null;
-      task.stateSince = details.stateSince !== '[unknown time]' ? details.stateSince : null;
-      // A queued task always carries its position, the live counts, the reason
-      // it is waiting, and whether it already exceeded the stall threshold.
-      const queue = task.status === 'queued' ? describeQueuedTask(manifest, task.id) : null;
-      if (queue) task.queue = queue;
+      const progress = task.progress ?? describeProgress(manifest, task);
+      const result = task.result ?? readResultDigest(task.resultPath);
+      return {
+        id: task.id,
+        status: task.status,
+        attempt: task.attempt ?? 1,
+        elapsed: details.elapsed,
+        progressAgeMs: progress.silentForMs,
+        progressStalled: progress.stalled,
+        queue: task.queue
+          ? { position: task.queue.position, queuedTotal: task.queue.queuedTotal, reason: task.queue.reason }
+          : null,
+        resultStatus: result?.status ?? (TERMINAL_STATUSES.has(task.status) ? task.status : null),
+        resultPath: result?.path ?? task.resultPath ?? null,
+        branch: result?.branch ?? null,
+        headSha: result?.headSha ?? null,
+        prUrl: result?.prUrl ?? null,
+        summary: result?.summary ?? null,
+        error: task.error ?? null,
+      };
+    }),
+  };
+}
+
+function statusCommand(options) {
+  const runDirs = [...new Set(options.runs.map((entry) => resolve(entry)))];
+  if (!runDirs.length) fail('status requires --run');
+  const brief = options.brief === true;
+  const snapshots = runDirs.map((runDir) => {
+    reconcileRun(runDir);
+    return { runDir, manifest: statusSnapshot(runDir) };
+  });
+
+  if (brief) {
+    if (options.json) {
+      const payload = {
+        version: 'delegate-status-brief.v1',
+        runs: snapshots.map(({ runDir, manifest }) => briefView(runDir, manifest)),
+      };
+      process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      return;
     }
-    manifest.active = snapshot.active;
-    manifest.queuedStallMs = queuedStallThreshold(manifest);
-    manifest.queue = {
-      active: snapshot.active,
-      maxConcurrency: snapshot.maxConcurrency,
-      queued: snapshot.queued.map((entry) => ({
-        id: entry.id,
-        ...describeQueuedTask(manifest, entry.id),
-      })),
-    };
-    process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
+    for (const { runDir, manifest } of snapshots) {
+      process.stdout.write(`${briefRunHeader(runDir, manifest)}\n`);
+      for (const task of Object.values(manifest.tasks || {})) {
+        process.stdout.write(`${briefTaskLine(manifest, task)}\n`);
+      }
+    }
     return;
   }
+
+  if (options.json) {
+    if (snapshots.length === 1) {
+      // A single run keeps its manifest shape, which existing callers parse.
+      process.stdout.write(`${JSON.stringify(snapshots[0].manifest, null, 2)}\n`);
+      return;
+    }
+    process.stdout.write(`${JSON.stringify({
+      version: 'delegate-status.v1',
+      runs: snapshots.map(({ runDir, manifest }) => ({ runDir, ...manifest })),
+    }, null, 2)}\n`);
+    return;
+  }
+
+  snapshots.forEach(({ runDir, manifest }, index) => {
+    if (index > 0) process.stdout.write('\n');
+    if (snapshots.length > 1) process.stdout.write(`${runDir}\n`);
+    printVerboseStatus(manifest, options, snapshots.length);
+  });
+}
+
+function printVerboseStatus(manifest, options, runCount = 1) {
   const closedIndicator = manifest.closed ? ' (closed)' : '';
-  process.stdout.write(`RUN ${manifest.status}${closedIndicator}  seq=${manifest.seq}  supervisor=${manifest.supervisorPid}\n`);
+  const idleIndicator = manifest.idle ? ' (idle)' : '';
+  process.stdout.write(`RUN ${manifest.status}${closedIndicator}${idleIndicator}  seq=${manifest.seq}  supervisor=${manifest.supervisorPid}\n`);
   process.stdout.write('TASK\tIMPLEMENTER\tSTATUS\tPID\tWORKSPACE\n');
   for (const task of Object.values(manifest.tasks)) {
     process.stdout.write(`${task.id}\t${task.implementer}\t${task.status}\t${task.pid ?? '-'}\t${task.workspace}\n`);
@@ -2246,11 +3861,24 @@ function statusCommand(options) {
     }
   }
 
-  if (options.task) {
-    const task = requireTask(manifest, options.task);
-    const details = resolveSessionDetails(task, manifest);
+  const stalled = Object.values(manifest.tasks).filter((task) => task.progress?.stalled);
+  if (stalled.length > 0) {
+    process.stdout.write(
+      `\nPROGRESS silent past ${formatShortDuration(progressThresholdMs(manifest))}:\n`,
+    );
+    for (const task of stalled) {
+      process.stdout.write(
+        `  ${task.id}\tno progress for ${formatShortDuration(task.progress.silentForMs)}`
+        + `\t(last: ${task.progress.lastProgressAt ?? 'unknown'})\n`,
+      );
+    }
+  }
+
+  const target = options.task && runCount === 1 ? requireTask(manifest, options.task) : null;
+  if (target) {
+    const details = resolveSessionDetails(target, manifest);
     process.stdout.write(`\n${formatSessionFooter(details)}\n`);
-  } else {
+  } else if (runCount === 1 && !options.task) {
     for (const task of Object.values(manifest.tasks)) {
       const details = resolveSessionDetails(task, manifest);
       process.stdout.write(`\n${formatSessionFooter(details)}\n`);
@@ -2259,8 +3887,9 @@ function statusCommand(options) {
 }
 
 function inspectCommand(options) {
-  if (!options.run || !options.task) fail('inspect requires --run and --task');
-  const manifest = loadManifest(options.run);
+  const runDir = singleRun(options, 'inspect');
+  if (!options.task) fail('inspect requires --task <id>');
+  const manifest = loadManifest(runDir);
   const task = requireTask(manifest, options.task);
   let result = null;
   if (task.resultPath && existsSync(task.resultPath)) {
@@ -2450,8 +4079,8 @@ function formatTimelineLine(line, receiptTime = null) {
 }
 
 function timelineCommand(options) {
-  if (!options.run || !options.task) fail('timeline requires --run and --task');
-  const runDir = resolve(options.run);
+  const runDir = singleRun(options, 'timeline');
+  if (!options.task) fail('timeline requires --task <id>');
   const manifest = loadManifest(runDir);
   const task = requireTask(manifest, options.task);
   const journalPath = runPaths(runDir).journal;
@@ -2490,8 +4119,8 @@ function timelineCommand(options) {
 }
 
 function logsCommand(options) {
-  if (!options.run || !options.task) fail('logs requires --run and --task');
-  const runDir = resolve(options.run);
+  const runDir = singleRun(options, 'logs');
+  if (!options.task) fail('logs requires --task <id>');
   const manifest = loadManifest(runDir);
   const task = requireTask(manifest, options.task);
   const stream = options.stream || 'both';
@@ -2522,15 +4151,15 @@ function posixQuote(value) {
 }
 
 function viewCommand(options) {
-  if (!options.run || !options.task) fail('view requires --run and --task');
-  const args = [SCRIPT_PATH, 'timeline', '--run', resolve(options.run), '--task', options.task, '--follow'];
+  const runDir = singleRun(options, 'view');
+  if (!options.task) fail('view requires --task <id>');
+  const args = [SCRIPT_PATH, 'timeline', '--run', runDir, '--task', options.task, '--follow'];
   if (process.platform === 'darwin') {
     const command = [process.execPath, ...args].map(posixQuote).join(' ');
     const script = `tell application "Terminal"\nactivate\ndo script ${JSON.stringify(command)}\nend tell`;
     const child = spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' });
     child.unref();
   } else if (process.platform === 'win32') {
-    const runDir = resolve(options.run);
     const viewerPath = join(runDir, `view-${options.task}.cmd`);
     const command = [process.execPath, ...args].map(windowsBatchQuote).join(' ');
     writeFileSync(
@@ -2569,7 +4198,7 @@ function viewCommand(options) {
     }
     if (!launched) fail('no supported terminal launcher found');
   }
-  process.stdout.write(`${JSON.stringify({ opened: true, taskId: options.task, runDir: resolve(options.run) })}\n`);
+  process.stdout.write(`${JSON.stringify({ opened: true, taskId: options.task, runDir })}\n`);
 }
 
 function identityCommand(options) {
@@ -2585,11 +4214,14 @@ async function main() {
   }
   const options = parseOptions(rest);
   switch (command) {
-    case 'start': startCommand(options); break;
+    case 'start': await startCommand(options); break;
     case '__worker': workerCommand(options); break;
     case 'add': await addCommand(options); break;
     case 'enqueue': await enqueueCommand(options); break;
     case 'cancel': await cancelCommand(options); break;
+    case 'continue': await continueCommand(options); break;
+    case 'steer': await steerCommand(options); break;
+    case 'watch': await watchCommand(options); break;
     case 'set-concurrency': await setConcurrencyCommand(options); break;
     case 'close': await closeCommand(options); break;
     case 'status': statusCommand(options); break;

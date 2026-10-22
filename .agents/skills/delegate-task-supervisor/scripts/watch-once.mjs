@@ -3,34 +3,21 @@
 import { existsSync, readFileSync, watch } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 
-const WATCH_STATUSES = new Set([
-  'completed',
-  'failed',
-  'blocked',
-  'waiting',
-  'resuming',
-  'timeout',
-  'aborted',
-  'interrupted',
-  'cancelled',
-  'incomplete',
-  'needs_review',
-  'agy_unavailable',
-  'opencode_unavailable',
-  'needs_input',
-  'needs_permission',
-  // `queued_stall` is a notice, not a state change, but it is exactly the
-  // "nothing is happening" signal an orchestrator waits for.
-  'queued_stall',
-]);
+// The wake set is shared with `supervisor.mjs watch` so both readers agree on
+// which journal records matter. Note that `queued_stall` and `progress_stall`
+// are notices, not state changes, but they are exactly the "nothing is
+// happening" signal an orchestrator waits for.
+import { WATCH_STATUSES } from './supervisor-events.mjs';
+
 const HELP = `watch-once
 
 Usage:
   watch-once.mjs --run <absolute-run-directory> [--since <sequence>] [--all]
 
 Waits without polling and prints exactly one event as JSON. By default terminal,
-intervention, blocked, waiting, and resuming transitions are returned; --all returns
-any next transition.
+intervention, blocked, waiting, resuming, and stall notices are returned; --all
+returns any next transition. This is the single-run, read-only primitive; use
+\`supervisor.mjs watch\` for several runs with a durable, persisted cursor.
 `;
 
 function fail(message) {
@@ -101,21 +88,27 @@ function staleSupervisorEvent() {
   } catch {
     return null;
   }
-  if (manifest.status !== 'running' || !Number.isInteger(manifest.supervisorPid)) return null;
-  try {
-    process.kill(manifest.supervisorPid, 0);
-    return null;
-  } catch {
-    return {
-      seq: manifest.seq,
-      timestamp: new Date().toISOString(),
-      taskId: null,
-      from: 'running',
-      to: 'stale',
-      kind: 'supervisor_stale',
-      supervisorPid: manifest.supervisorPid,
-    };
+  // A run already marked stale (for example by a repairing `status` read) is
+  // just as final as one this watcher is the first to notice: never block.
+  const alreadyStale = manifest.status === 'stale';
+  if (!alreadyStale) {
+    if (manifest.status !== 'running' || !Number.isInteger(manifest.supervisorPid)) return null;
+    try {
+      process.kill(manifest.supervisorPid, 0);
+      return null;
+    } catch {
+      // fall through to the synthesized event
+    }
   }
+  return {
+    seq: manifest.seq,
+    timestamp: new Date().toISOString(),
+    taskId: null,
+    from: alreadyStale ? 'stale' : 'running',
+    to: 'stale',
+    kind: 'supervisor_stale',
+    supervisorPid: manifest.supervisorPid,
+  };
 }
 
 function completeIfReady() {
