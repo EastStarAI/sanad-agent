@@ -22,7 +22,7 @@ This contract applies to `agent/lib/capabilities/`.
 - Carry tool-call identity through execution context, permission checkpoints, resumed results, persistence, and canonical history.
 - Never infer replay safety from tool name or successful partial output.
 - `ToolContext` may carry `runId`, `generation`, and `RunCancellationScope`; cooperative cancellation is opt-in via `isCooperativelyCancellable`.
-- `shell_execute` owns its process tree through `ProcessTreeController` and must distinguish user cancellation from timeout in terminal output.
+- `shell_execute` owns its process tree through `ProcessTreeController` and must distinguish user cancellation from timeout in terminal output. On Windows, execution uses an ASCII start-gate wrapper with UTF-8 command payload to preserve non-ASCII arguments, and reports `exit_code` on natural completion. The wrapper invokes its helpers (`chcp.com`, `ping.exe`) by absolute path from `%SystemRoot%\System32\` so it does not depend on the child `PATH`, and resets `%errorlevel%` to 0 via `(call )` immediately before delegating to the payload so wrapper mechanics never leak into command exit status.
 
 ## Image Processing Boundary
 - `capabilities/image/image_policy.dart` is the sole owner of image byte, pixel, edge, base64, detail, timeout, concurrency, and encoder limits.

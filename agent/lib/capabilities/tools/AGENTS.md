@@ -27,6 +27,7 @@ This contract applies to `agent/lib/capabilities/tools/`.
 - `ShellExecuteTool` owns schema, workspace boundary, and permission checks, then delegates to the `ExecutionBackend` chosen from daemon policy at each execution. A backend never grants approval. The backend is resolved before approval and a refusing backend (`runsCommands: false`) answers without a prompt or durable grant. Protected execution and an unreadable policy fail closed and never fall back to the host.
 - The working directory must equal the canonical workspace root or lie within it; prefix matching is not containment.
 - Stored user secrets reach a command only when its `secrets` argument names them on an `owner` turn; unknown names fail before approval and the command never runs. The backend redacts every injected value from all reported output.
+- Direct shell execution on Windows generates a pure-ASCII start-gate wrapper (`command.cmd` switching console code page to 65001 via `%SystemRoot%\System32\chcp.com` and resetting `%errorlevel%` via `(call )` before payload execution) that calls a UTF-8 command payload (`payload.cmd`) so non-ASCII arguments are preserved under `cmd.exe` without helper `PATH` dependence; natural process exit additively includes the numeric `exit_code` in the result payload.
 
 ## Host Capability Discovery
 - `host_capability_discovery` never executes a binary, starts a shell, lists directories, or returns `PATH` or other environment values.
