@@ -94,11 +94,17 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
    - **Selected Home:** when `--home` or `SANAD_HOME` selects a Home, the CLI
      resolves the endpoint from that Home's own runtime record
      (`.local_gateway_endpoint.json`, written by the daemon after it binds and
-     removed on shutdown) and probes only that endpoint. A record is usable only
-     when it is owner-only (`0600`), names a loopback host, carries a process id
-     that is still alive, and its `home_id` matches the selected Home's
-     identity; the answer is then accepted only when `/health` reports the same
-     `home_id`.
+     removed on that daemon's clean shutdown — `SIGTERM`/`SIGINT` — while the
+     record still names its own pid) and probes only that endpoint. A record is
+     usable only when it is owner-only (`0600`), names a loopback host, carries
+     a process id that is still alive, and its `home_id` matches the selected
+     Home's identity; the answer is then accepted only when `/health` reports
+     the same `home_id`. Removal is ownership-checked and atomic: the record is
+     claimed with a rename before the identity is re-verified, so a draining
+     daemon can never delete a successor runtime's republished record. An
+     unclean death (`SIGKILL`) leaves the record to fail closed as
+     `home_runtime_stale`, which is the signal that the previous runtime did not
+     stop cleanly.
    - **Inherited values never override a selection.** `SANAD_GATEWAY_URL`,
      `LOCAL_GATEWAY_URL`, and `LOCAL_GATEWAY_PORT` come from a parent process
      (a launcher, a test harness, another runtime) and are ignored entirely when
@@ -108,6 +114,15 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
      `--gateway-url`/`--port` target, an inherited URL/port, the default port
      probe, and every scanned port are all accepted only when `/health` reports
      the resolved Home identity — token acceptance alone is not evidence.
+   - **A refusal is an answer, not silence.** With a selected Home, an explicit
+     `--gateway-url`/`--port` target that answers `401`/`403` has provably
+     refused *this Home's* credential, so it is not that Home's daemon: the call
+     fails closed with `home_identity_mismatch` and exit `78`, and no WebSocket
+     connect is attempted. A target that does not answer at all remains "not
+     running", which keeps `--standalone` and the oneshot standalone fallback
+     working. A recorded endpoint (`step 3`) that refuses the credential is
+     treated the same way; without a selected Home the historical behaviour is
+     kept, so the legacy default-Home flow is unchanged.
    - **Backward compatibility (default Home only):** a daemon released before
      `home_id` existed reports none. A *missing* `home_id` is tolerated only on
      the default Home's port `58085`; a named Home, a scanned port, or a
@@ -128,7 +143,12 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
    - `--json` emits the same result envelope the CLI uses elsewhere
      (`session_id`, `text`, `tool_executions`, `exit_code`, `error`), not the
      removed `{"exit_code": 1, "error": …}` shape, and the message is duplicated
-     on `stderr` so a text consumer sees it too.
+     on `stderr` so a text consumer sees it too. The envelope also carries
+     `error_code`, the discovery code below, so a consumer branches on the code
+     instead of parsing English; it is absent when the failure has no code.
+     Commands that deliberately fall back instead of failing (`sanad run`,
+     workspace, doctor) keep their own contract and report no code because no
+     endpoint failure terminates them.
    - Error codes: `home_runtime_missing`, `home_runtime_foreign`,
      `home_runtime_stale`, `home_runtime_unhealthy`, `home_identity_mismatch`,
      plus the token codes above. Token-read and permission problems stay

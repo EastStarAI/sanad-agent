@@ -17,11 +17,13 @@ import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
+import 'package:sanad_agent/core/termination_cleanup.dart';
 
 import 'package:sanad_agent/core/utils/logger.dart';
 
@@ -113,6 +115,7 @@ Future<void> main(List<String> args) async {
 
   print('Starting Gateway Manager...');
   await gatewayManager.start();
+  _installEndpointRecordCleanup();
   unawaited(_recoverPendingTitlesSafely(getIt<TitleService>()));
 
   print(
@@ -130,6 +133,30 @@ Future<void> main(List<String> args) async {
   //   await gatewayManager.stop();
   //   exit(0);
   // });
+}
+
+/// Removes this Home's published endpoint record when the daemon stops.
+///
+/// The daemon had no termination hook, so `sanad-dev stop` (SIGTERM) or Ctrl+C
+/// left `.local_gateway_endpoint.json` naming a pid that no longer existed.
+/// The next Home-selected call then reported a stale record for a Home that was
+/// stopped cleanly, which made a stopped Home indistinguishable from one whose
+/// daemon crashed. Removal is ownership-checked, so a successor runtime that
+/// already republished the record keeps it.
+void _installEndpointRecordCleanup() {
+  TerminationCleanup(
+    cleanup: () async {
+      try {
+        await LocalGatewayEndpointRecord.removeIfOwned();
+      } catch (error) {
+        // The process is ending either way; a leftover record still fails
+        // closed as stale on the next call.
+        Logger('DaemonStartup').warning(
+          'Could not remove the local gateway endpoint record on shutdown: $error',
+        );
+      }
+    },
+  ).install();
 }
 
 /// Resolves and runs deferred database maintenance without allowing any

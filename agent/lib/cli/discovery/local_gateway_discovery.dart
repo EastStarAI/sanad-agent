@@ -23,6 +23,48 @@ class GatewayDiscoveryException implements Exception {
   String toString() => 'GatewayDiscoveryException($code): $message';
 }
 
+/// What one `/health` probe learned about an endpoint.
+///
+/// The difference between "did not answer" and "answered and refused this
+/// Home's credential" is security-relevant: an endpoint that never answered is
+/// not running (so `--standalone` may proceed), while an endpoint that refused
+/// the credential is running and has just proven it is *not* this Home's
+/// daemon. Collapsing both into `null` is what let an explicit target fail
+/// later with an opaque WebSocket `401` instead of a Home-aware refusal.
+class HealthProbe {
+  const HealthProbe({this.body, this.statusCode});
+
+  /// The endpoint did not answer at all: refused connection, timeout, or an
+  /// unparseable transport answer. Historical "no daemon here".
+  static const HealthProbe noAnswer = HealthProbe();
+
+  /// The decoded payload of a healthy answer, or null when the endpoint
+  /// answered something else.
+  final Map<String, dynamic>? body;
+
+  /// The HTTP status the endpoint answered with, or null when it never
+  /// answered.
+  final int? statusCode;
+
+  /// Whether the endpoint answered over HTTP at all.
+  bool get answered => statusCode != null;
+
+  /// Whether the endpoint returned the healthy daemon payload.
+  bool get isHealthy => body != null;
+
+  /// Whether the endpoint refused the presented credential.
+  ///
+  /// A local Sanad daemon authenticates before it routes `/health`, so this is
+  /// the answer a *foreign* runtime gives to this Home's token.
+  bool get rejectedAuthentication =>
+      statusCode == HttpStatus.unauthorized ||
+      statusCode == HttpStatus.forbidden;
+
+  @override
+  String toString() =>
+      'HealthProbe(statusCode: $statusCode, healthy: $isHealthy)';
+}
+
 /// Information discovered about the active local gateway.
 class GatewayDiscoveryResult {
   final Uri gatewayWsUri;
@@ -241,7 +283,10 @@ class LocalGatewayDiscovery {
   }
 
   /// Probes a single HTTP `/health` endpoint to check if the daemon is active.
-  Future<Map<String, dynamic>?> probeHealth({
+  ///
+  /// Returns what the endpoint *answered*, not only whether it is healthy, so a
+  /// caller can tell an absent daemon from one that refused this credential.
+  Future<HealthProbe> probeHealth({
     required String host,
     required int port,
     required String token,
@@ -266,15 +311,16 @@ class LocalGatewayDiscovery {
           )
           .timeout(timeout);
 
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        if (decoded is Map<String, dynamic> && decoded['status'] == 'ok') {
-          return decoded;
-        }
+      if (response.statusCode != HttpStatus.ok) {
+        return HealthProbe(statusCode: response.statusCode);
       }
-      return null;
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic> && decoded['status'] == 'ok') {
+        return HealthProbe(body: decoded, statusCode: response.statusCode);
+      }
+      return HealthProbe(statusCode: response.statusCode);
     } catch (_) {
-      return null;
+      return HealthProbe.noAnswer;
     } finally {
       if (closeClient) {
         httpClient.close();
@@ -302,6 +348,12 @@ class LocalGatewayDiscovery {
   /// contract reports no `home_id`, a *missing* identity is tolerated only on
   /// the default Home's default port `58085`; a reported identity that differs
   /// is rejected everywhere.
+  ///
+  /// With a selected Home, an explicit target that answers with an
+  /// authentication rejection (`401`/`403`) is also a mismatch and fails closed
+  /// before any WebSocket connect: the credential is that Home's, so a runtime
+  /// that refuses it cannot be that Home's daemon. An explicit target that does
+  /// not answer at all stays "not running", which keeps `--standalone` working.
   ///
   /// [probeTimeout] overrides the deadline of every probe. When omitted,
   /// probes of an explicitly targeted endpoint (an explicit URL or port
@@ -382,16 +434,20 @@ class LocalGatewayDiscovery {
         expectedHomeId,
         allowLegacyDefaultHome: allowsLegacyDefaultDaemon(port),
         target: '$host:$port',
+        // A selected Home's credential must never reach a runtime that has not
+        // proven it serves that Home: an explicit target that answers with an
+        // authentication rejection is a mismatch, not an absent daemon.
+        refuseCredentialRejection: selectedHome != null,
       );
 
       return GatewayDiscoveryResult(
         gatewayWsUri: wsUri,
         gatewayHttpUri: httpUri,
         token: token,
-        isDaemonRunning: health != null,
+        isDaemonRunning: health.isHealthy,
         port: port,
         host: host,
-        healthData: health,
+        healthData: health.body,
       );
     }
 
@@ -410,16 +466,17 @@ class LocalGatewayDiscovery {
         expectedHomeId,
         allowLegacyDefaultHome: allowsLegacyDefaultDaemon(portOverride),
         target: '$defaultHost:$portOverride',
+        refuseCredentialRejection: selectedHome != null,
       );
 
       return GatewayDiscoveryResult(
         gatewayWsUri: Uri.parse('ws://$defaultHost:$portOverride/gateway'),
         gatewayHttpUri: Uri.parse('http://$defaultHost:$portOverride'),
         token: token,
-        isDaemonRunning: health != null,
+        isDaemonRunning: health.isHealthy,
         port: portOverride,
         host: defaultHost,
-        healthData: health,
+        healthData: health.body,
       );
     }
 
@@ -466,7 +523,19 @@ class LocalGatewayDiscovery {
         token: token,
         timeout: targetedProbe,
       );
-      if (health == null) {
+      if (health.rejectedAuthentication) {
+        // The record's endpoint answered and refused this Home's credential, so
+        // something else now holds the port the record names. Connecting would
+        // hand this Home's token to that runtime for nothing.
+        throw GatewayDiscoveryException(
+          'The endpoint recorded for Sanad Home $selectedHome '
+          '(${record.host}:${record.port}) refused this Home\'s credential '
+          '(HTTP ${health.statusCode}), so it is not this Home\'s daemon. Start '
+          'or restart the Agent for this Home.',
+          code: 'home_identity_mismatch',
+        );
+      }
+      if (!health.isHealthy) {
         throw GatewayDiscoveryException(
           'The runtime record for Sanad Home $selectedHome points at '
           '${record.host}:${record.port}, but no healthy daemon answered. '
@@ -490,7 +559,7 @@ class LocalGatewayDiscovery {
         isDaemonRunning: true,
         port: record.port,
         host: record.host,
-        healthData: health,
+        healthData: health.body,
       );
     }
 
@@ -518,10 +587,10 @@ class LocalGatewayDiscovery {
         gatewayWsUri: Uri.parse('ws://$defaultHost:$envPort/gateway'),
         gatewayHttpUri: Uri.parse('http://$defaultHost:$envPort'),
         token: token,
-        isDaemonRunning: health != null,
+        isDaemonRunning: health.isHealthy,
         port: envPort,
         host: defaultHost,
-        healthData: health,
+        healthData: health.body,
       );
     }
 
@@ -547,7 +616,7 @@ class LocalGatewayDiscovery {
         isDaemonRunning: true,
         port: defaultPort,
         host: defaultHost,
-        healthData: defaultHealth,
+        healthData: defaultHealth.body,
       );
     }
 
@@ -563,7 +632,7 @@ class LocalGatewayDiscovery {
         final end = (start + batchSize - 1) < maxScanPort
             ? (start + batchSize - 1)
             : maxScanPort;
-        final futures = <Future<({int port, Map<String, dynamic>? data})>>[];
+        final futures = <Future<({int port, HealthProbe data})>>[];
 
         for (var p = start; p <= end; p++) {
           final currentPort = p;
@@ -589,7 +658,7 @@ class LocalGatewayDiscovery {
               isDaemonRunning: true,
               port: res.port,
               host: defaultHost,
-              healthData: res.data,
+              healthData: res.data.body,
             );
           }
         }
@@ -610,7 +679,7 @@ class LocalGatewayDiscovery {
     );
   }
 
-  /// Whether [health] is a healthy answer from the daemon that serves
+  /// Whether [probe] is a healthy answer from the daemon that serves
   /// [expectedHomeId].
   ///
   /// Token acceptance alone is not evidence: two Homes that ever shared a
@@ -621,35 +690,53 @@ class LocalGatewayDiscovery {
   /// offer that tolerance only for the default Home on the default port; a
   /// reported identity that differs is always rejected.
   static bool _servesHome(
-    Map<String, dynamic>? health,
+    HealthProbe? probe,
     String expectedHomeId, {
     bool allowLegacyDefaultHome = false,
   }) {
-    if (health == null || health['status'] != 'ok') return false;
+    if (probe == null || !probe.isHealthy) return false;
+    final health = probe.body!;
+    if (health['status'] != 'ok') return false;
     final servedHomeId = health[healthHomeIdKey];
     if (servedHomeId == expectedHomeId) return true;
     return allowLegacyDefaultHome && servedHomeId == null;
   }
 
-  /// Rejects a healthy answer from an endpoint that does not serve
-  /// [expectedHomeId].
+  /// Rejects an explicit endpoint that does not serve [expectedHomeId].
   ///
   /// An endpoint that did not answer at all is not a mismatch: callers keep
   /// the historical "no daemon here" answer so an explicit target that is
   /// simply down still lets `--standalone` proceed.
+  ///
+  /// [refuseCredentialRejection] turns an authentication rejection into the
+  /// same fail-closed answer. A caller sets it only when a Home is selected,
+  /// because then the presented credential belongs to that Home and a runtime
+  /// that refuses it is provably not that Home's daemon. Without a selected
+  /// Home the historical answer is kept: the legacy default-Home flow lets the
+  /// WebSocket handshake report a wrong token.
   static void _requireServesHome(
-    Map<String, dynamic>? health,
+    HealthProbe probe,
     String expectedHomeId, {
     required bool allowLegacyDefaultHome,
     required String target,
+    bool refuseCredentialRejection = false,
   }) {
-    if (health == null) return;
+    if (!probe.answered) return;
     if (_servesHome(
-      health,
+      probe,
       expectedHomeId,
       allowLegacyDefaultHome: allowLegacyDefaultHome,
     )) {
       return;
+    }
+    if (refuseCredentialRejection && probe.rejectedAuthentication) {
+      throw GatewayDiscoveryException(
+        'The daemon answering on $target refused this Sanad Home\'s credential '
+        '(HTTP ${probe.statusCode}), so it is not this Home\'s runtime. '
+        'Refusing to connect. Start the Agent for this Home, or target the '
+        'endpoint this Home published.',
+        code: 'home_identity_mismatch',
+      );
     }
     throw GatewayDiscoveryException(
       'The daemon answering on $target does not serve this Sanad Home. '

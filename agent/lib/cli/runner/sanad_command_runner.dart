@@ -323,6 +323,8 @@ class SanadCommandRunner extends CommandRunner<int> {
       // Endpoint resolution is an environment/configuration answer, not an
       // internal failure: report the actionable message and the
       // configuration exit code instead of a stack-trace-shaped exception.
+      // The envelope carries the discovery code so a machine consumer can tell
+      // a stale record from a foreign one without parsing English.
       stderrSink.writeln('Error: ${error.message}');
       if (jsonOutput) {
         stdoutSink.writeln(
@@ -332,6 +334,7 @@ class SanadCommandRunner extends CommandRunner<int> {
               text: '',
               sessionId: '',
               error: error.message,
+              errorCode: error.code,
             ).toJson(),
           ),
         );

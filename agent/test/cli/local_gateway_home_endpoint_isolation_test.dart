@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'package:http/http.dart' as http;
+import 'package:sanad_agent/cli/client/local_gateway_cli_client.dart';
 import 'package:sanad_agent/cli/discovery/local_gateway_discovery.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
@@ -23,12 +24,27 @@ class _RecordingHttpClient extends http.BaseClient {
 
   /// `host:port` to `/health` body. An absent endpoint refuses the connection.
   final Map<String, String> endpoints;
+
+  /// `host:port` to the HTTP status that refuses the presented credential.
+  ///
+  /// A runtime that answers `401`/`403` is running but has just proven it is not
+  /// the Home whose token was presented.
+  final Map<String, int> rejections = {};
+
   final List<Uri> requests = [];
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     requests.add(request.url);
     final key = '${request.url.host}:${request.url.port}';
+    final rejection = rejections[key];
+    if (rejection != null) {
+      return http.StreamedResponse(
+        Stream<List<int>>.value(utf8.encode('{"status":"unauthorized"}')),
+        rejection,
+        headers: const {'content-type': 'application/json'},
+      );
+    }
     final body = endpoints[key];
     if (body == null) {
       throw const SocketException('connection refused');
@@ -397,6 +413,91 @@ void main() {
     });
 
     test(
+      'an explicit --gateway-url that refuses the credential is a mismatch',
+      () async {
+        // The foreign runtime answers 401: it is running, and its refusal is
+        // proof that it is not this Home's daemon. Reporting "not running"
+        // here let the caller connect and fail later with an opaque
+        // WebSocket 401 and exit 1.
+        client.rejections['127.0.0.1:58312'] = HttpStatus.unauthorized;
+
+        await expectLater(
+          discoveryFor(home).discover(
+            urlOverride: 'ws://127.0.0.1:58312/gateway',
+            probeTimeout: const Duration(milliseconds: 200),
+          ),
+          throwsA(
+            isA<GatewayDiscoveryException>()
+                .having((error) => error.code, 'code', 'home_identity_mismatch')
+                .having(
+                  (error) => error.message,
+                  'message',
+                  contains('401'),
+                ),
+          ),
+        );
+        expect(client.requests.map((uri) => uri.port), [58312]);
+      },
+    );
+
+    test('an explicit --port that forbids the credential is a mismatch', () async {
+      client.rejections['127.0.0.1:58313'] = HttpStatus.forbidden;
+
+      await expectLater(
+        discoveryFor(home).discover(
+          portOverride: 58313,
+          probeTimeout: const Duration(milliseconds: 200),
+        ),
+        throwsA(
+          isA<GatewayDiscoveryException>().having(
+            (error) => error.code,
+            'code',
+            'home_identity_mismatch',
+          ),
+        ),
+      );
+    });
+
+    test(
+      'an explicit target that never answers still means "not running"',
+      () async {
+        // `--standalone` depends on this: an absent endpoint is not a mismatch.
+        final result = await discoveryFor(home).discover(
+          urlOverride: 'ws://127.0.0.1:58314/gateway',
+          probeTimeout: const Duration(milliseconds: 50),
+        );
+
+        expect(result.isDaemonRunning, isFalse);
+        expect(result.port, 58314);
+      },
+    );
+
+    test(
+      'a recorded endpoint that refuses the credential is not this Home',
+      () async {
+        // The record's pid is alive, but another runtime now holds the port it
+        // names and rejects this Home's token.
+        writeRecord(home, port: 58311);
+        client.rejections['127.0.0.1:58311'] = HttpStatus.unauthorized;
+
+        await expectLater(
+          discoveryFor(
+            home,
+          ).discover(probeTimeout: const Duration(milliseconds: 200)),
+          throwsA(
+            isA<GatewayDiscoveryException>()
+                .having((error) => error.code, 'code', 'home_identity_mismatch')
+                .having(
+                  (error) => error.message,
+                  'message',
+                  contains('refused this Home'),
+                ),
+          ),
+        );
+      },
+    );
+
+    test(
       'a selected Home never accepts a daemon that omits its identity',
       () async {
         // A daemon released before `home_id` existed answers on this Home's
@@ -565,6 +666,64 @@ void main() {
           ),
         ),
       );
+    });
+
+    test(
+      'a rejected credential keeps the historical answer without a selection',
+      () async {
+        // The fail-closed credential rule belongs to a selected Home, whose
+        // token is on the line. No selection keeps the pre-PR answer so the
+        // legacy default-Home flow is unchanged.
+        client.rejections['127.0.0.1:58085'] = HttpStatus.unauthorized;
+
+        final result = await discoveryFor(
+          home,
+          selectedFlag: false,
+        ).discover(probeTimeout: const Duration(milliseconds: 25));
+
+        expect(result.isDaemonRunning, isFalse);
+        expect(client.requests.first.port, 58085);
+      },
+    );
+  });
+
+  group('Explicit target with a selected Home', () {
+    test('refuses to connect when the target rejects the credential', () async {
+      // A real loopback endpoint is the only way to observe the *absence* of a
+      // WebSocket connect: it answers `/health` with 401 and records any upgrade
+      // attempt, so an upgrade would appear here instead of as an opaque
+      // `CliClientException(connection_failed)` in production.
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final healthPaths = <String>[];
+      final upgradePaths = <String>[];
+      server.listen((request) async {
+        if (WebSocketTransformer.isUpgradeRequest(request)) {
+          upgradePaths.add(request.uri.path);
+          request.response.statusCode = HttpStatus.unauthorized;
+        } else {
+          healthPaths.add(request.uri.path);
+          request.response.statusCode = HttpStatus.unauthorized;
+        }
+        await request.response.close();
+      });
+
+      await expectLater(
+        LocalGatewayCliClient.discoverAndConnect(
+          sanadHomeOverride: home.path,
+          urlOverride: 'ws://127.0.0.1:${server.port}/gateway',
+        ),
+        throwsA(
+          isA<GatewayDiscoveryException>().having(
+            (error) => error.code,
+            'code',
+            'home_identity_mismatch',
+          ),
+        ),
+      );
+
+      expect(healthPaths, ['/health']);
+      expect(upgradePaths, isEmpty);
     });
   });
 

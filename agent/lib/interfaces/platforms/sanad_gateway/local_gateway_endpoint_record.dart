@@ -99,11 +99,18 @@ class LocalGatewayEndpointRecord {
       return null;
     }
 
-    if (FileSystemEntity.typeSync(path, followLinks: false) !=
+    return readFile(File(path));
+  }
+
+  /// Parses one record file, returning null for anything this build must not
+  /// treat as an endpoint: a missing file, a file that is not owner-only, an
+  /// unreadable or malformed payload, a non-loopback host, an unverifiable
+  /// owner process id, or a schema this build does not own.
+  static LocalGatewayEndpointRecord? readFile(File file) {
+    if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
         FileSystemEntityType.file) {
       return null;
     }
-    final file = File(path);
     if (!SanadHomeBootstrap.isOwnerOnlyFile(file)) return null;
 
     try {
@@ -139,27 +146,83 @@ class LocalGatewayEndpointRecord {
 
   /// Removes the record when it still describes this process's endpoint.
   ///
-  /// A record another (newer) runtime owns is left untouched, so a draining
-  /// daemon can never delete its successor's published endpoint.
-  static Future<void> removeIfOwned({required int port, int? processId}) async {
+  /// [port] is optional: a daemon shutting down knows which pid must still be
+  /// named, while a caller that only owns the process id can pass none.
+  /// [processId] defaults to this process.
+  ///
+  /// The removal is atomic in the two senses that matter here. The record is
+  /// first *claimed* with a rename to a sibling path, so the identity check and
+  /// the delete cannot interleave with a concurrent publish at [relativePath],
+  /// and the claimed copy is re-read before it is deleted. A record that names
+  /// another publisher is therefore never deleted: if the rename raced a newer
+  /// runtime's publish, the claimed copy names that runtime and is restored
+  /// instead of removed. A `SIGKILL` in the microseconds between the claim and
+  /// the delete can leave a `<record>.removing-<pid>` sibling behind; it is not
+  /// a record and no caller reads it.
+  ///
+  /// Returns whether a record was removed.
+  static Future<bool> removeIfOwned({int? port, int? processId}) async {
     try {
       rejectUnisolatedTestHomeAccess(
         'remove the local gateway runtime record',
         path: getSanadHome(),
       );
     } on StateError {
-      return;
+      return false;
     }
     final owner = processId ?? pid;
-    final record = tryRead();
-    if (record == null) return;
-    if (record.port != port || record.ownerProcessId != owner) return;
+    bool isOurs(LocalGatewayEndpointRecord? candidate) =>
+        candidate != null &&
+        candidate.ownerProcessId == owner &&
+        (port == null || candidate.port == port);
+
+    final String path;
     try {
-      final file = File(SanadHomeBootstrap.resolveChild(relativePath));
-      if (file.existsSync()) file.deleteSync();
+      path = SanadHomeBootstrap.resolveChild(relativePath);
     } catch (_) {
-      // A stale record only costs the next caller one clear failure message.
+      return false;
     }
+    final record = File(path);
+    // Cheap pre-check: an absent or foreign record is never touched, so this
+    // path cannot disturb another runtime on the common case.
+    if (!isOurs(readFile(record))) return false;
+
+    final claim = File('$path.removing-$owner');
+    try {
+      await record.rename(claim.path);
+    } catch (_) {
+      return false;
+    }
+
+    // Put a claimed record back without overwriting a fresher publish: if the
+    // successor already wrote a new record, the claimed copy is an older
+    // generation and is dropped instead.
+    Future<void> restoreClaim() async {
+      try {
+        if (record.existsSync()) {
+          await claim.delete();
+        } else {
+          await claim.rename(path);
+        }
+      } catch (_) {}
+    }
+
+    if (isOurs(readFile(claim))) {
+      try {
+        await claim.delete();
+        return true;
+      } catch (_) {
+        // A record that could not be removed only costs the next caller one
+        // clear failure message; restore it so the Home keeps describing the
+        // endpoint that actually answered.
+        await restoreClaim();
+        return false;
+      }
+    }
+
+    // The claim captured a newer runtime's record: leave it in place.
+    await restoreClaim();
+    return false;
   }
 }
 

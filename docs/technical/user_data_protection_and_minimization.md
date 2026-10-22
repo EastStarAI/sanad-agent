@@ -58,6 +58,17 @@ server, and is a tracked follow-up rather than part of this contract. Until it
 exists, treat `home_id` as a consistency check between cooperating local
 components, never as proof of server identity.
 
+The daemon also authenticates *before* it routes `/health`, so the first
+`/health` probe of an explicit target necessarily presents the credential to an
+endpoint that has not yet proven its identity. The CLI cannot avoid that single
+presentation under the current daemon contract; what it guarantees is that it
+stops there. With a selected Home, a target that answers `401`/`403` has
+provably refused that Home's credential, so the call fails closed as
+`home_identity_mismatch` (exit `78`) and never opens the WebSocket. An
+unauthenticated identity probe (a `/health/identity` response carrying only
+`home_id`) or the challenge/HMAC handshake above would remove even that one
+presentation, and is a tracked follow-up.
+
 Rotation is the daemon's alone: it happens at daemon start, after the Home's
 ownership lease is held and before the listener serves. A CLI, `sanad login`, or
 `sanad-dev` only ever reads `.local_token`, so it can never invalidate the

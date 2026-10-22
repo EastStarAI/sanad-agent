@@ -1270,9 +1270,39 @@ void main() {
           expect(decoded['text'], isEmpty);
           expect(decoded['tool_executions'], isEmpty);
           expect(decoded['error'], contains('No live runtime record'));
+          // A machine consumer branches on the code, not on English prose.
+          expect(decoded['error_code'], equals('home_runtime_missing'));
           expect(stderrBuf.toString(), contains('Error: '));
         },
       );
+
+      test('--json names the credential failure code', () async {
+        // No `.local_token` in the selected Home: the envelope must carry
+        // `token_not_found` rather than only the sentence that explains it.
+        final home = Directory.systemTemp.createTempSync('sanad-home-cli-');
+        addTearDown(() {
+          if (home.existsSync()) home.deleteSync(recursive: true);
+        });
+
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+        final exitCode = await runner.run([
+          'session',
+          'list',
+          '--json',
+          '--home',
+          home.path,
+        ]);
+
+        expect(exitCode, equals(78));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['exit_code'], 78);
+        expect(decoded['error_code'], equals('token_not_found'));
+        expect(decoded['error'], contains('token file not found'));
+      });
     });
   });
 }

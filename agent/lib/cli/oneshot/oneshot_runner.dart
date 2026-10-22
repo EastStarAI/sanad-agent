@@ -82,6 +82,15 @@ class OneshotResult {
   final String sessionId;
   final String? error;
 
+  /// Stable machine-readable reason for [error], when the failure has one.
+  ///
+  /// Endpoint resolution reports its own codes (`home_runtime_missing`,
+  /// `home_runtime_foreign`, `home_runtime_stale`, `home_runtime_unhealthy`,
+  /// `home_identity_mismatch`, `token_not_found`, `token_permissions`,
+  /// `token_bound_to_other_home`, …), so a consumer can branch on the code
+  /// instead of parsing English prose. Absent when no code applies.
+  final String? errorCode;
+
   const OneshotResult({
     required this.exitCode,
     required this.text,
@@ -91,6 +100,7 @@ class OneshotResult {
     this.provider,
     required this.sessionId,
     this.error,
+    this.errorCode,
   });
 
   bool get isSuccess => exitCode == 0;
@@ -104,6 +114,7 @@ class OneshotResult {
     if (model != null) 'model': model,
     if (provider != null) 'provider': provider,
     if (error != null) 'error': error,
+    if (errorCode != null) 'error_code': errorCode,
   };
 }
 

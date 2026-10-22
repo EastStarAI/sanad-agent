@@ -102,6 +102,63 @@ void main() {
     expect(recordFile().existsSync(), isFalse);
   });
 
+  test('a clean shutdown removes the record this process published', () async {
+    // The daemon shutdown hook knows only its own pid: it must remove the
+    // record without being told the port, and it must leave no claim file.
+    await LocalGatewayEndpointRecord.write(
+      host: '127.0.0.1',
+      port: 58130,
+      processId: 4711,
+    );
+
+    expect(await LocalGatewayEndpointRecord.removeIfOwned(processId: 4711),
+        isTrue);
+
+    expect(recordFile().existsSync(), isFalse);
+    expect(
+      recordFile().parent
+          .listSync()
+          .whereType<File>()
+          .map((file) => p.basename(file.path)),
+      isNot(contains('${p.basename(recordFile().path)}.removing-4711')),
+    );
+  });
+
+  test('a shutdown never removes a successor runtime record', () async {
+    // A newer runtime already republished the endpoint under a different pid;
+    // the draining daemon must not delete it even without a port to compare.
+    await LocalGatewayEndpointRecord.write(
+      host: '127.0.0.1',
+      port: 58131,
+      processId: 4712,
+    );
+
+    expect(await LocalGatewayEndpointRecord.removeIfOwned(processId: 4711),
+        isFalse);
+
+    expect(LocalGatewayEndpointRecord.tryRead()?.ownerProcessId, 4712);
+  });
+
+  test('a shutdown with a known port keeps a different endpoint', () async {
+    await LocalGatewayEndpointRecord.write(
+      host: '127.0.0.1',
+      port: 58132,
+      processId: 4711,
+    );
+
+    expect(
+      await LocalGatewayEndpointRecord.removeIfOwned(port: 58133, processId: 4711),
+      isFalse,
+    );
+    expect(recordFile().existsSync(), isTrue);
+  });
+
+  test('removing an absent record is a no-op', () async {
+    expect(await LocalGatewayEndpointRecord.removeIfOwned(processId: 4711),
+        isFalse);
+    expect(recordFile().existsSync(), isFalse);
+  });
+
   test('the record lives inside the Home it describes', () async {
     await LocalGatewayEndpointRecord.write(host: '127.0.0.1', port: 58126);
 
