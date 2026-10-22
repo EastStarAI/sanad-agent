@@ -10,6 +10,7 @@ import 'commands.dart';
 import '../artifacts/run_artifacts.dart';
 import '../client/cli_turn_client.dart';
 import '../client/local_gateway_cli_client.dart';
+import '../discovery/local_gateway_discovery.dart';
 import '../oneshot/oneshot_runner.dart';
 import '../repl/repl_line_reader.dart';
 import '../workspace/workspace_cli_service.dart';
@@ -318,6 +319,27 @@ class SanadCommandRunner extends CommandRunner<int> {
         );
       }
       return 64;
+    } on GatewayDiscoveryException catch (error) {
+      // Endpoint resolution is an environment/configuration answer, not an
+      // internal failure: report the actionable message and the
+      // configuration exit code instead of a stack-trace-shaped exception.
+      // The envelope carries the discovery code so a machine consumer can tell
+      // a stale record from a foreign one without parsing English.
+      stderrSink.writeln('Error: ${error.message}');
+      if (jsonOutput) {
+        stdoutSink.writeln(
+          jsonEncode(
+            OneshotResult(
+              exitCode: 78,
+              text: '',
+              sessionId: '',
+              error: error.message,
+              errorCode: error.code,
+            ).toJson(),
+          ),
+        );
+      }
+      return 78;
     } catch (error) {
       stderrSink.writeln('Error: $error');
       if (jsonOutput) {

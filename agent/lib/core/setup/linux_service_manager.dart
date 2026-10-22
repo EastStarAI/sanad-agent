@@ -936,6 +936,14 @@ class LinuxServiceManager {
   String _concise(Object error) =>
       error.toString().replaceFirst(RegExp(r'^[^:]+: '), '').split('\n').first;
 
+  /// The systemd unit this Agent registers for a Home.
+  ///
+  /// `Restart=on-failure` keeps a crashed daemon supervised, and
+  /// `SuccessExitStatus=130 143` records the daemon's signal exit statuses
+  /// (`SIGINT` 130, `SIGTERM` 143) as successful termination. The daemon
+  /// catches both signals and exits with a code instead of dying from them, so
+  /// without that line a requested `systemctl stop` would leave the unit in the
+  /// `failed` state that `sanad service status` reports as `Failed`.
   static String buildSystemdUnit({
     required String executable,
     required List<String> arguments,
@@ -961,6 +969,7 @@ Environment="HOME=${_systemdEscape(home)}"
 Environment="SANAD_HOME=${_systemdEscape(sanadHome)}"
 Restart=on-failure
 RestartSec=10
+SuccessExitStatus=130 143
 KillMode=control-group
 TimeoutStopSec=90
 UMask=0077
