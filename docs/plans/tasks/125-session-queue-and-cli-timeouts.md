@@ -133,7 +133,7 @@ Round 2 gate results on the merged tree:
   - `docs/technical/communication_protocols.md` §4.6
   - `docs/technical/sanad_cli_architecture.md` §5
   - `docs/qa_maintenance/cli_session_observability_intervention_qa.md` §4
-- [ ] Coordinator review and live acceptance on one Test Home (scenarios below).
+- [ ] Coordinator review and live acceptance on one Test Home (scenarios below). Live r2 on `41ac93cb` is recorded in Round 3: scenario 1 fails on (b), scenarios 2 and 3 pass.
 
 ## Proposed Live Scenarios (one Test Home)
 
@@ -197,3 +197,16 @@ Round 2 gate results on the merged tree:
   - **Green evidence:** the focused tests, the affected client unit/widget suites and both analyzers passed. Suite results are recorded under Gates.
   - **Merge integration:** the merge brought the new on-disk state isolation guard, which rejected the r1 E2E harness' in-isolate database seed. The harness now declares its own temporary roots with `setSanadHomeOverride`/`setSanadStateHomeOverride` and clears them on teardown.
   - **Not fixed, now out of scope by design:** the daemon still persists neither the refused user root nor its answer. The client keeps that refusal visible for the session, but a Client restart or another Client will not see it. Persisting the refused turn durably is a daemon contract change and is left for triage.
+
+- **Round 3 (live executor, 2026-10-22):** live check on TH1 (`.agent/worktrees/test-home`, Home `~/.sanad-test`, port 58107, `--no-cloud`), full runtime built from `41ac93cb` (`sanad-dev run --background --driver`). Evidence: `~/.sanad-delegate/runs/release-gate/live-g2/RESULT.md` and `.../live-g2/r2/`.
+  - **Scenario 2 (accepted send) PASS:** `suggestion-box` send cleared the composer (`chat_input` empty, no acceptance indicator) and the turn answered.
+  - **Scenario 3 (N1) PASS:** a fresh `sanad run` against the missing-folder workspace exited `1` in 184 ms with exactly one stderr line — `Error: turn_failed: Bad state: Workspace folder is unavailable. Reconnect it before continuing.` No doubled prefix, no double period; `result.json` status `failed`.
+  - **Scenario 1 (F1) FAIL on (b).** (a), (c) and (d) pass: the typed refusal renders as the one assistant row, the app bar shows the workspace, and switch-away-and-back keeps the refusal. The composer keeps the text but stays in the acceptance wait: `send_message_acceptance_indicator` ("Waiting for message acceptance") replaces Send at +10 s, +15 s and after a full session re-open.
+  - **F1(b) cause (live, source-confirmed at this head):** the client can release only a matching request id.
+    - `ConversationDraftCache.releasePendingRequest` returns `false` when `requestId == null`.
+    - The daemon's `final_answer` payload carries `error_code` but no `request_id`, and `buildAgentEventEnvelope` forwards a request id only when the payload has one.
+    - `refused_first_turn_release_test.dart` injects `request_id` into envelope and payload, so the unit contract stays green while the live path can never match.
+    - The blocked-notice branch is untested live in this round.
+  - **Environment observation (not this contract):** without `--gateway-url`, `sanad run` from the TH1 worktree exits `78` ("Could not confirm a healthy Sanad daemon for this Sanad Home") even though `GET /health` answers `200` with the Home's `.local_token`. Reproduced twice; the N1 run passed the discovered endpoint explicitly.
+  - **Test Home note:** the Client disables `sidebar_new_conversation_btn:<workspace>` once the folder is missing, so the refused first turn is produced by creating the conversation while the folder exists and deleting it before the first send.
+  - **Teardown:** temp workspace registration removed through Client Settings, CLI active workspace restored, TH1 reset to `6b364147` on `test/test-home`, agent-only runtime restored, worktree unlocked. No code was edited in the slot.
