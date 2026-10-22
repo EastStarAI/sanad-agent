@@ -111,7 +111,7 @@ A turn that fails before or outside the engine's typed recovery never holds the 
 Round 2 gate results on the merged tree:
 
 - [x] `fvm dart analyze` (agent) and `fvm flutter analyze` (client) are clean.
-- [x] Full agent suite: 3419 passed, 15 skipped.
+- [x] Full agent suite: 3420 passed, 15 skipped (after the follow-up merge).
 - [x] Full client suite: 2016 passed.
 - [x] Agent E2E with `--concurrency=1`: `session_queue_release_e2e_test.dart` 3 passed; `context_compaction_daemon_e2e_test.dart` plus `durable_recovery_restart_e2e_test.dart` 23 passed.
 - [x] Client E2E with `--concurrency=1`: 14 passed.
@@ -167,7 +167,7 @@ Round 2 gate results on the merged tree:
   - **Not verified live:** the Test Home scenarios above are proposed only.
   - **Out of scope, noted:** `runTurn` returns before creating an `ActiveRun` when `turnRequest.message` is empty, which would leave admitted durable work `running`. Whether any admitted turn, such as an attachment-only one, can reach it was not confirmed, so this was not changed and is left for triage.
 
-- **Round 2 (writer, 2026-10-22):** Merged `origin/main` (`182d6a40`, merge `1e29c8fc`, no conflicts) and closed F1 and N1 from the live r1 findings.
+- **Round 2 (writer, 2026-10-22):** Merged `origin/main` (`182d6a40`, merge `1e29c8fc`, no conflicts) and closed F1 and N1 from the live r1 findings. A follow-up upstream commit (`3c561edc`, Task 127) arrived during the round and was merged the same way; it touched only E2E tests and docs, so the results below were rerun on that tree.
   - **F1 on main: yes.** The client defects reproduce on `182d6a40`'s own code paths.
     - The r1 branch carried no client changes, so before this round its client tree was byte-identical to `origin/main` (`git diff origin/main 1e29c8fc -- client/` is empty).
     - Reverting only `client/lib` to that tree and rerunning the four new tests failed all of them:
