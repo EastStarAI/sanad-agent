@@ -380,6 +380,14 @@ class ConversationCacheStore {
   ) =>
       _draftCache.transferNewConversationDraftToSession(deviceId, sessionId);
 
+  /// End an acceptance wait that no canonical acceptance will ever satisfy.
+  bool releasePendingRequest(
+    String deviceId,
+    String sessionId,
+    String? requestId,
+  ) =>
+      _draftCache.releasePendingRequest(deviceId, sessionId, requestId);
+
   void setNewConversationDraft(
     String deviceId, {
     String? text,

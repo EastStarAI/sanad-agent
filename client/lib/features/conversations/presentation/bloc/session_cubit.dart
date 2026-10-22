@@ -198,6 +198,24 @@ class SessionCubit extends Cubit<SessionState> {
           requestId: payload['request_id']?.toString(),
         );
       }
+    } else if (eventName == 'final_answer' || eventName == 'session.runtime_notice') {
+      // A turn can reach a terminal state before the daemon accepts (and
+      // persists) the message: a typed refusal carries `error_code`, and a
+      // `blocked` runtime notice waits for an intervention. Neither publishes
+      // the canonical `user_message` a draft waits for, so the send's
+      // acceptance wait ends here and the text stays editable for a retry.
+      final sessionId = payload['session_id'] as String? ?? event['session_id'] as String?;
+      final requestId = payload['request_id']?.toString() ?? event['request_id']?.toString();
+      final refused =
+          (eventName == 'final_answer' && payload['error_code']?.toString().isNotEmpty == true) ||
+          (eventName == 'session.runtime_notice' && payload['status']?.toString() == 'blocked');
+      if (sessionId != null && refused) {
+        conversationCacheRepository?.releaseRefusedDraft(
+          deviceId,
+          sessionId,
+          requestId,
+        );
+      }
     }
   }
 
@@ -350,7 +368,18 @@ class SessionCubit extends Cubit<SessionState> {
   /// `SessionCubit.state.selectedSession`) do not clear their own
   /// `activeSessionId` before the remote `session_created` event arrives.
   void markSessionSelectedSync(Session session) {
-    if (state.selectedSession?.id == session.id) return;
+    final current = state.selectedSession;
+    if (current?.id == session.id) {
+      // The route may have presented the identity placeholder for this exact
+      // session id before it was created locally. Adopting the authoritative
+      // projection keeps the header off "Loading..." without re-emitting a
+      // selection the presenter already committed.
+      if (_isIdentityPlaceholder(current) && !_isIdentityPlaceholder(session)) {
+        _clearNewConversationPresentation();
+        emit(state.copyWith(selectedSession: session));
+      }
+      return;
+    }
     _clearNewConversationPresentation();
     final deviceId = session.deviceId;
     if (deviceId != null) {
@@ -362,6 +391,11 @@ class SessionCubit extends Cubit<SessionState> {
       );
     }
     emit(state.copyWith(selectedSession: session));
+  }
+
+  static bool _isIdentityPlaceholder(Session? session) {
+    final title = session?.title.trim();
+    return title == 'Loading...' || title == 'Loading…';
   }
 
   void applyHistoryRevision(String sessionId, int historyRevision) {

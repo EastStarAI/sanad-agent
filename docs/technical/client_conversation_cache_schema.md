@@ -129,6 +129,7 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
 - Existing session draft key: `deviceId + sessionId`.
 - New Conversation draft: standalone per-device fields on `DeviceConversationContext`.
 - Draft text is preserved through a failed send and cleared only after the daemon emits authoritative acceptance whose `request_id` matches the draft's persisted pending request id. A normal turn is accepted by canonical `user_message`; an auto-delivered steer is accepted by `session.pending_steer_changed` in `pending`, `delivering`, or `delivered` state. Cancelled/recovered steer lifecycles and unrelated request ids never clear the draft.
+- A send whose turn is refused before it starts never reaches that acceptance: the daemon answers with a typed `final_answer.error_code` (`turn_failed`, a thinking-selection rejection) or holds the session with a `blocked` runtime notice. Both release the pending request marker of the matching draft and keep its text, workspace and route, so the composer stays editable for an immediate retry instead of waiting for an acceptance that will never arrive.
 - A Stop draft-recovery outcome is applied only to the matching
   `deviceId + sessionId` draft and only once for its `stop_request_id`. Recovered inputs are
   prepended in daemon order before any text already present, joined by one
@@ -175,6 +176,15 @@ remain grouping boundaries. Each direction coalesces its matching in-flight
 cursor and advances only when the returned cursor differs from the requested
 one. Session/device switches and newer hydration generations reject late
 results. Failure leaves the visible timeline and runtime projections unchanged.
+
+The one timeline row that no history swap can own is a typed refusal: a turn
+that fails before it starts persists neither the user root nor an answer, so the
+authoritative history of the session cannot contain it. The live
+`final_answer.error_code` is therefore retained per session and re-appended to
+every replacement of the current session's tail until the conversation moves on
+with an accepted `user_message` for that session. Without that retention the
+refusal disappeared on the next hydration, leaving the user with an empty
+conversation and no record that the send was refused.
 
 At most two recently visited timelines that are exhausted in both directions
 may remain in memory. Reopening one reconciles the authoritative tail by event

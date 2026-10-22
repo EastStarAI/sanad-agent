@@ -716,6 +716,31 @@ restart claim succeeds it therefore exposes only the claim-required marker;
 even after a claim, history never returns the protected text or claimant id.
 Only the direct response to the winning connection contains them.
 
+### 4.6. Refused and blocked sends
+
+A turn can reach a terminal state without ever accepting the message it was
+sent. Two authoritative shapes carry that outcome:
+
+- a `final_answer` whose payload carries `error_code` (for example
+  `turn_failed`, emitted when a fresh turn fails before dispatch), and
+- a `session.runtime_notice` in `blocked` status, which waits for a Retry,
+  Change Provider or Stop intervention.
+
+Neither publishes the canonical `user_message` that accepts a send, and neither
+writes durable history for the refused turn. The originating client therefore:
+
+1. releases the acceptance wait of the draft whose `pendingRequestId` matches
+   that request — keeping its text, workspace and route for an immediate retry
+   instead of clearing the composer;
+2. keeps the typed refusal visible as its own answer for the session and
+   re-appends it after any authoritative history replacement, until an accepted
+   `user_message` for the same session supersedes it; and
+3. never treats the refusal as a completion: the answer text stays an error,
+   not assistant content.
+
+A successful turn is unaffected: its canonical acceptance already removes the
+draft, so the release is a no-op.
+
 ---
 
 ## 5. Runtime-Owned Suspension Flow (Permissions & Ask User)

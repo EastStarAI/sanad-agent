@@ -81,6 +81,38 @@ class ConversationDraftCache {
     return false;
   }
 
+  /// End an acceptance wait whose request the daemon will never accept.
+  ///
+  /// A turn refused before it starts (a typed `final_answer.error_code` such as
+  /// `turn_failed`, or a `blocked` runtime notice) never publishes the canonical
+  /// `user_message` that clears a draft, so the composer would wait forever and
+  /// rewrite the user's text. Only the pending marker is dropped here: the text,
+  /// workspace and route stay for an immediate retry.
+  bool releasePendingRequest(
+    String deviceId,
+    String sessionId,
+    String? requestId,
+  ) {
+    if (requestId == null) return false;
+    final draftKey = DeviceConversationCacheSnapshot.sessionDraftKey(deviceId, sessionId);
+    final draft = _sessionDrafts[draftKey];
+    if (draft?.pendingRequestId == requestId) {
+      _sessionDrafts[draftKey] = draft!.copyWith(clearPendingRequest: true);
+      _notify();
+      return true;
+    }
+    final ctx = _getContext(deviceId);
+    if (ctx.newConversationDraftPendingRequestId == requestId) {
+      _updateContext(
+        deviceId,
+        ctx.copyWith(clearNewConversationDraftPendingRequest: true),
+      );
+      _notify();
+      return true;
+    }
+    return false;
+  }
+
   bool prependStopRecovery(
     String deviceId,
     String sessionId, {

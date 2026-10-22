@@ -682,6 +682,18 @@ class ConversationCacheRepository {
     _cache.transferNewConversationDraftToSession(deviceId, sessionId);
   }
 
+  /// End an acceptance wait whose request the daemon refused before it started.
+  ///
+  /// The draft keeps its text so the composer stays editable; only the wait for
+  /// a canonical `user_message` that will never arrive is released.
+  bool releaseRefusedDraft(
+    String deviceId,
+    String sessionId,
+    String? requestId,
+  ) {
+    return _cache.releasePendingRequest(deviceId, sessionId, requestId);
+  }
+
   // ---------------------------------------------------------------------------
   // Canonical session events (applied to cache only; transport owns authority)
   // ---------------------------------------------------------------------------
