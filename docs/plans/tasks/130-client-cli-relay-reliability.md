@@ -285,6 +285,7 @@ no graph to update for these paths.
 | r1 | `182d6a40` + this branch | Five defects fixed red-first. 8 failing behavior tests before the fixes; Client CLI unit/widget suites, the full Client suite, and the Agent relay tests green after them. |
 | r1 review | same branch | Full-diff review kept every hunk: they are the Task 130 design. Three corrections applied — the host keeps the original `protocolError` close codes for rejected targets, the unused `clientCliExecutionStartedStatus`/`clientCliStripHostFlags` helpers were dropped, and the QA exit-code row for `124` was reworded. Live re-verification on macOS → Windows was still pending at that point; r2 covers the caller half. |
 | r2 | `4c7abab1` (caller built once) | Live caller-side check macOS → Windows: RD7 PASS (410 s, one 404 s command, exit 0, `RD7-OK`), RD2 PASS (`running` at +0 s, `RD2-OK`, exit 0, 3 s), RD4 PASS (1 s exit 0; 1 s exit 64 for a rejected argv), RD3 caller half PASS by controlled reproduction (exit 1 plus diagnostic). RD1 and the RD3 host guarantee NOT RUN — the live Client's host code is main. |
+| r3 | `96fa4074` (host: TH2, Client CLI enabled in Default mode) | Live host-side check macOS Client → Windows device. RD1 PASS: exactly one `Waiting for approval in Sanad Client...` on stderr while pending (+4 s), clean `--json` stdout, exit 0 (+8 s) after hotkey 1. RD1 deny PASS: exit 1, 0 bytes on stdout, `Command rejected by user in Sanad Client.`, and no remote execution (device `session list` 10 → 10, no new id, no probe text). RD3 host guarantee NOT RUN (no lever ends the device stream without touching another runtime). Duplicate `--events --json` lines REPRODUCE with the branch host; narrowed to missing `event_id` on run lifecycle events, upstream of the relay pair. |
 
 ### Live re-verification — caller side (2026-10-22)
 
@@ -312,6 +313,35 @@ Hygiene: nothing was written to `~/.sanad`, no Client, daemon, runtime, or proce
 a concurrent session's caller relaying to the same Windows device was left untouched. One observation for
 triage, unrelated to the five defects: under `--events --json` each event line is printed twice (identical in
 RD2 and RD7) while the final JSON envelope appears once, so an NDJSON consumer sees duplicates.
+
+### Live re-verification — host side (r3, 2026-10-22)
+
+The branch client was loaded into Test Home TH2 (`.agent/worktrees/test-home-2`, branch `test/test-home-2`,
+Home `~/.sanad-test-2`, port 58124, cloud) with `git reset --hard 96fa4074` on the branch, its Client was
+restarted, Settings > Client CLI was enabled in **Default** mode (previous state: disabled), and the caller was
+built once from the same commit. Artifacts: `/Users/ahmedattia/.sanad-delegate/runs/release-gate/live-130h/`.
+
+- **RD1 PASS.** `ws list --json` against the Windows device announced `Waiting for approval in Sanad Client...`
+  on stderr **exactly once** (+4 s, while the overlay was still pending), then after hotkey 1 returned clean
+  `--json` stdout and exit `0` (+8 s). Nothing from the notice reached standard output.
+- **RD1 deny PASS.** A relayed `run` denied with hotkey 3 exited `1` with **no stdout bytes** and
+  `Command rejected by user in Sanad Client.` No remote execution was proved on the device: `session list`
+  returned 10 sessions before and after with no new id, and no session contains the probe text.
+- **RD3 host guarantee NOT RUN.** Nothing in the product can end the device event stream while the host stays
+  alive: the Client has no cloud on/off control (only sign-out, which testers must not use), restarting or
+  killing the Client removes the host that must emit the terminal frame, and taking the Windows device offline
+  would disrupt a shared device that was in active use during the round. A network-level drop would affect
+  `main`, TH1, TH3, and the running session. The guarantee therefore keeps only its
+  `client_cli_host_test.dart` coverage; a product "disconnect cloud" action or a QA-only stream-drop extension
+  would make it live-testable.
+- **Duplicate `--events --json` lines REPRODUCE with the branch host** (`running` ×2, `completed` ×2, envelope
+  ×1) and are **not** a Task 130 regression: the caller prints one line per frame, the host forwards each
+  matching device event once, and the socket deduplicator keys on `event_id` while run lifecycle events carry
+  none — so the duplicate arrives over two delivery paths upstream of the relay pair. Left as an unrelated Low
+  for its own triage entry.
+
+Teardown: Client CLI restored to disabled, TH2 reset to `dc7ee42f` on `test/test-home-2`, Client restarted and
+verified healthy, worktree unlocked. `~/.sanad`, port 58085, and every other runtime were untouched.
 
 ### Worktree overlap (2026-10-22 00:54–00:59 UTC)
 
