@@ -49,6 +49,29 @@ void main() {
     );
   });
 
+  test('credential-writing E2E daemons declare isolated E2E mode', () {
+    final violations = <String>[];
+
+    for (final file in _dartFiles(Directory('e2e_test'))) {
+      final source = file.readAsStringSync();
+      final writesCredential =
+          source.contains("'secrets':") || source.contains('save_mcp_server');
+      if (writesCredential && !source.contains('SANAD_E2E_TEST_MODE')) {
+        violations.add(p.relative(file.path));
+      }
+    }
+
+    expect(
+      violations,
+      isEmpty,
+      reason:
+          'An E2E daemon that stores a credential must run with '
+          'SANAD_E2E_TEST_MODE=true so the Agent secret store stays on the '
+          'owner-only file store inside the temporary Home instead of the OS '
+          'credential vault.',
+    );
+  });
+
   test('Dart child-process tests pass isolated home and state roots', () {
     final violations = <String>[];
 
