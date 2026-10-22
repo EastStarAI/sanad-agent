@@ -65,6 +65,12 @@ class RunCommand extends SanadCommand {
         'allow-all-tools',
         help: 'DANGER: automatically approve every gated tool for this one run',
         negatable: false,
+      )
+      ..addFlag(
+        'no-stdin',
+        help:
+            'Ignore piped stdin instead of appending it to the prompt; use it inside shell read loops so the loop input is not consumed',
+        negatable: false,
       );
   }
 
@@ -188,6 +194,7 @@ class RunCommand extends SanadCommand {
       streamEvents: streamEvents,
       executionRoot: normalizedExecutionRoot,
       eventSink: eventSink,
+      readStdin: !getFlag('no-stdin'),
     );
   }
 

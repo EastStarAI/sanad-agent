@@ -358,3 +358,56 @@ owned by the daemon's `CronScheduler` (single writer), so the CLI has no mutatio
   `next_run_at` (in the zone), `next_run_at_utc`, `session_id` (full), `enabled`, `last_status`,
   `last_run_at` (in the zone) and `last_run_at_utc`.
 - Coverage: `agent/test/cli/schedule_list_command_test.dart`.
+
+---
+
+## 12. Model Catalog Filtering (`sanad models`, Task 136)
+
+`sanad models` answers "which provider and which models can this Home actually route to". It reads
+the cached catalog rows (`provider_model_cache`, keys `models`/`all`/`default`) from the selected
+Home's `state.db` without contacting any provider.
+
+- **Selection contract:** an unfiltered call reports every configured instance in
+  `ProviderInstanceRepository.findAll()` order (`created_at DESC`). `--provider <selector>` narrows
+  the report to exactly one instance using `ProviderSelector.resolve`, which matches at the first
+  tier that produces a hit: instance UUID, then template id (`opencode-go`), then display name
+  compared case-insensitively with internal whitespace collapsed. `--model <id>` then narrows to one
+  cached model inside that selection (exact id, case-insensitive).
+- **Fail-closed rules:** an unknown selector, an ambiguous selector (several instances matching at
+  the same tier), or a `--model` that is absent from the selected catalog exits `2`, writes nothing
+  to `stdout`, and prints one actionable `stderr` line naming the accepted selectors. The command
+  never falls back to "all providers" for a selector it did not understand.
+- **Text output:** the human block format is unchanged — `• Provider: <display> (<template>)`
+  with `[DEFAULT]`, `Default Model:`, and one `- <value> (<label>) [reasoning] (active default)`
+  row per cached model. `--quiet` suppresses only the leading `Configured Providers & Available
+  Models:` header.
+- **JSON output (`--json`), stable shape:** one object
+  `{"schema": "sanad.models.v1", "providers": [...]}` where each provider carries `id`,
+  `template_id`, `display_name`, `default_model`, `is_default`, `status`, `catalog_source`,
+  `catalog_fetched_at`, and `models` (each with `value`, `label`, `supports_reasoning`,
+  `is_default`). The cached catalog is reported as stored; this command never refreshes it, so a
+  provider that advertises a model it later rejects still appears here until the cache is refetched.
+- **Why filtering is mandatory:** model ids are advertised per provider and overlap in name shape
+  (for example several providers ship `glm-*`). Reporting the whole catalog for a filtered request
+  made a single provider's catalog indistinguishable from another provider's, which is how a
+  `tail`n unfiltered report was mistaken for an OpenCode Go inventory.
+- Coverage: `agent/test/cli/models_command_test.dart`.
+
+---
+
+## 13. One-Shot Stdin Contract (`sanad run`, Task 136)
+
+`sanad run` resolves its prompt from the argument or `--brief-file`, and additionally from piped
+stdin whenever stdin is not a terminal. Both sources are kept: an inline prompt followed by piped
+content is joined as `"<prompt>\n\n<piped>"`, and piped content alone becomes the prompt.
+
+- **Default splice:** this preserves the documented `cat file | sanad run "analyze"` workflow,
+  including when the prompt arrives as a positional argument.
+- **`--no-stdin` (additive, default off):** skips the stdin read entirely, so the caller's stdin
+  stream is left untouched. Any driver loop of the form
+  `while read -r item; do sanad run --no-stdin ... "$PROMPT"; done < list.txt` must pass this flag;
+  without it the first `sanad run` consumes the rest of the loop's input and the loop ends after one
+  iteration.
+- The flag does not change dispatch, session, artifact, or exit-code behavior: it only removes the
+  stdin splice.
+- Coverage: `agent/test/cli/run_command_test.dart`.

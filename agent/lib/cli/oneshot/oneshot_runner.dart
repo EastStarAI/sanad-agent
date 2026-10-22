@@ -153,6 +153,7 @@ class OneshotRunner {
     bool streamEvents = false,
     String? executionRoot,
     void Function(RunLifecycleEvent event)? eventSink,
+    bool readStdin = true,
   }) async {
     final out = stdoutSink ?? stdout;
     final err = stderrSink ?? stderr;
@@ -204,10 +205,12 @@ class OneshotRunner {
 
     // 1. Resolve prompt and piped input from stdin
     String? pipedContent;
-    try {
-      pipedContent = await stdinReader();
-    } catch (e) {
-      _logger.warning('Failed to read piped stdin: $e');
+    if (readStdin) {
+      try {
+        pipedContent = await stdinReader();
+      } catch (e) {
+        _logger.warning('Failed to read piped stdin: $e');
+      }
     }
 
     final trimmedPrompt = prompt?.trim() ?? '';
