@@ -114,6 +114,16 @@ Sent inside the standard `execute_command` envelope:
 - `brief_content` (String, optional): Task brief markdown content to materialize on the remote Agent when executing commands with `--brief-file` (`-b`).
 - `timeout_seconds` (int, optional): Execution timeout in seconds (1 to 86400, default 300).
 
+The caller derives `timeout_seconds` from the forwarded command itself: the
+command's own `--timeout` (1 to 86400, last occurrence wins) plus a 30-second
+grace so the command's scoped stop, artifact write, and terminal result finish
+before the relay window closes. Without a usable `--timeout` the 300-second
+default applies, and the derived value is always clamped to the protocol bounds.
+A value the command itself rejects (`--timeout 0`, non-numeric) still leaves the
+default or the bounded grace window, so the command's own usage error is relayed
+instead of being replaced by a relay timeout. The Agent keeps its own validation
+of the received value.
+
 ### 4.2. Cancellation Command: `device.cli.cancel`
 
 Sent to abort an in-flight remote CLI execution:
@@ -259,6 +269,9 @@ If request validation or admission fails prior to execution, or if an unexpected
    - Minimum timeout: 1 second.
    - Default timeout: 300 seconds (5 minutes).
    - Maximum timeout: 86,400 seconds (24 hours).
+   - The caller's relay window is the forwarded command's own `--timeout` plus a
+     30-second grace, clamped to 1..86400, so `run --timeout 5400` relays for
+     5430 seconds instead of being killed at the 300-second default.
    - When a timeout fires, execution is interrupted, and `device.cli.result` is emitted with `exit_code: 124` and `timed_out: true`.
 
 3. **Cancellation Boundaries:**
@@ -343,6 +356,12 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
     "timeout_seconds": 300
   }
   ```
+  `stdin` is forwarded only when the forwarded command can consume it: a
+  `run`/`chat` command that carries no `--brief-file`, `--prompt`, or positional
+  prompt. Every other command forwards `null`, so a background caller whose
+  standard input never reaches EOF cannot block before its request is sent. The
+  caller-side `--stdin` flag forces the read; it stays host-local and is never
+  part of `argv`.
 - **Cancel Command (`type: cancel`):**
   ```json
   {
@@ -366,6 +385,20 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
   ```json
   { "type": "event", "data": { "type": "tool_start", "tool": "file_write" } }
   ```
+- **Status Notice (`type: status`):**
+  ```json
+  {
+    "type": "status",
+    "request_id": "req-uuid-1",
+    "code": "approval_pending",
+    "message": "Waiting for approval in Sanad Client..."
+  }
+  ```
+  Emitted in `default` permission mode immediately after an execution is admitted
+  and before the approval overlay is requested, so a headless caller can explain
+  the wait. A session that is already approved emits no notice. The caller writes
+  the message once to standard error and never to standard output, keeping
+  `--json` output parseable.
 - **Terminal Execution Result (`type: result`):**
   ```json
   {
@@ -377,6 +410,11 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
     "error": null
   }
   ```
+  Exactly one terminal frame is delivered per request. If the device event stream
+  ends or fails before the Agent reports an outcome, the host emits a terminal
+  `result` with `exit_code: 1` and an `error` explaining that the remote execution
+  stream ended before a terminal result. A caller that loses its connection
+  without a terminal frame exits non-zero instead of reporting success.
 - **Fatal Error (`type: error`):**
   ```json
   {
@@ -386,6 +424,10 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
     "message": "Target device \"Linux Build Node\" is currently unreachable."
   }
   ```
+
+An `argv` the target CLI rejects still produces one terminal result carrying the
+CLI's own exit code (for example `64` for a usage error) plus the usage text on
+the stderr stream.
 
 ---
 
@@ -415,10 +457,15 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
 - The `login` command is host-local by design: forwarding it through the relay
   returns a zero exit code with no relayed output rather than an explicit
   unsupported-command result.
-- Every `sanad-client` execution request currently carries a fixed
-  `timeout_seconds` of 300, so a relayed `run` longer than five minutes ends with
-  `exit_code: 124` and `timed_out: true`. Orchestrators must report that as a
-  timeout boundary rather than as a failed task.
+- A token after a command that declares no subcommands (for example
+  `providers list`) is accepted by the local CLI parser: the command runs
+  normally and returns exit `0`. Only an unknown command name returns the usage
+  error with exit `64`.
+- A relayed `run` that outlives its relay window (`--timeout` + 30 s, or 300 s
+  when no `--timeout` is given) ends with `exit_code: 124` and
+  `timed_out: true`. Orchestrators must report that as a timeout boundary
+  rather than as a failed task.
 - A control socket that closes before the terminal `device.cli.result` frame
-  completes the caller with exit code `0` and no relayed `--json` envelope, so a
-  zero exit alone never proves a completed remote turn.
+  completes the caller with exit code `1` and a diagnostic, never a silent
+  `0`. A relayed `--json` envelope is still the only proof of a completed
+  remote turn.

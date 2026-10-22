@@ -10,6 +10,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:uuid/uuid.dart';
 
 import '../domain/models/client_cli_record.dart';
+import '../domain/models/client_cli_relay_policy.dart';
 import '../domain/models/client_cli_settings.dart';
 import 'client_cli_approval_coordinator.dart';
 import 'client_cli_ownership.dart';
@@ -302,6 +303,38 @@ class ClientCliHost {
   void _handleWebSocket(WebSocket socket) {
     StreamSubscription<Map<String, dynamic>>? eventSubscription;
     ResolvedAgentEndpoint? currentEndpoint;
+    var terminalFrameSent = false;
+    var activeRequestId = '';
+
+    void sendTerminalFrame(
+      Map<String, dynamic> frame, {
+      int closeCode = WebSocketStatus.normalClosure,
+    }) {
+      if (terminalFrameSent) return;
+      terminalFrameSent = true;
+      unawaited(eventSubscription?.cancel());
+      try {
+        socket.add(jsonEncode(frame));
+      } catch (_) {
+        // The caller already closed its side; the relay has nothing to deliver.
+      }
+      unawaited(socket.close(closeCode));
+    }
+
+    // A relayed caller must always receive exactly one terminal result. If the
+    // device transport ends first the run outcome can no longer be reported, so
+    // the relay fails closed instead of leaving the caller waiting forever.
+    void failClosedOnStreamEnd(String message) {
+      if (terminalFrameSent) return;
+      sendTerminalFrame({
+        'type': 'result',
+        'request_id': activeRequestId,
+        'exit_code': 1,
+        'cancelled': false,
+        'timed_out': false,
+        'error': message,
+      });
+    }
 
     socket.listen(
       (data) async {
@@ -318,55 +351,63 @@ class ClientCliHost {
             final timeoutSeconds = decoded['timeout_seconds'] as int? ?? 300;
 
             if (targetDeviceId.isEmpty) {
-              socket.add(
-                jsonEncode({
-                  'type': 'error',
-                  'request_id': requestId,
-                  'code': 'missing_device',
-                  'message': 'Target device_id is required.',
-                }),
-              );
-              await socket.close(WebSocketStatus.protocolError, 'missing_device');
+              sendTerminalFrame({
+                'type': 'error',
+                'request_id': requestId,
+                'code': 'missing_device',
+                'message': 'Target device_id is required.',
+              }, closeCode: WebSocketStatus.protocolError);
               return;
             }
+
+            activeRequestId = requestId;
 
             // Find device in inventory
             final device = _findRemoteDevice(targetDeviceId);
             if (device == null) {
-              socket.add(
-                jsonEncode({
-                  'type': 'error',
-                  'request_id': requestId,
-                  'code': 'wrong_device',
-                  'message': 'Remote device "$targetDeviceId" was not found in inventory.',
-                }),
-              );
-              await socket.close(WebSocketStatus.protocolError, 'wrong_device');
+              sendTerminalFrame({
+                'type': 'error',
+                'request_id': requestId,
+                'code': 'wrong_device',
+                'message': 'Remote device "$targetDeviceId" was not found in inventory.',
+              }, closeCode: WebSocketStatus.protocolError);
               return;
             }
 
             // Permission checking
             if (_permissionMode == ClientCliSettings.defaultMode) {
+              final sessionId = _extractSessionId(argv);
+              // Announce the wait before prompting, so a headless caller can
+              // explain why nothing has been relayed yet.
+              if (sessionId == null ||
+                  !approvalCoordinator.isSessionApproved(sessionId)) {
+                socket.add(
+                  jsonEncode({
+                    'type': 'status',
+                    'request_id': requestId,
+                    'code': clientCliApprovalPendingStatus,
+                    'message': clientCliApprovalPendingMessage,
+                  }),
+                );
+              }
+
               final approved = await approvalCoordinator.requestApproval(
                 id: requestId,
                 deviceId: device.id,
                 deviceName: device.name,
                 argv: argv,
-                sessionId: _extractSessionId(argv),
+                sessionId: sessionId,
               );
 
               if (!approved) {
-                socket.add(
-                  jsonEncode({
-                    'type': 'result',
-                    'request_id': requestId,
-                    'exit_code': 1,
-                    'cancelled': false,
-                    'timed_out': false,
-                    'error': 'Command rejected by user in Sanad Client.',
-                  }),
-                );
-                await socket.close(WebSocketStatus.normalClosure);
+                sendTerminalFrame({
+                  'type': 'result',
+                  'request_id': requestId,
+                  'exit_code': 1,
+                  'cancelled': false,
+                  'timed_out': false,
+                  'error': 'Command rejected by user in Sanad Client.',
+                });
                 return;
               }
             }
@@ -376,20 +417,20 @@ class ClientCliHost {
             currentEndpoint = endpoint;
 
             if (!endpoint.socketService.isConnected) {
-              socket.add(
-                jsonEncode({
-                  'type': 'error',
-                  'request_id': requestId,
-                  'code': 'device_offline',
-                  'message': 'Target device "${device.name}" is currently unreachable.',
-                }),
-              );
-              await socket.close(WebSocketStatus.protocolError, 'device_offline');
+              sendTerminalFrame({
+                'type': 'error',
+                'request_id': requestId,
+                'code': 'device_offline',
+                'message': 'Target device "${device.name}" is currently unreachable.',
+              }, closeCode: WebSocketStatus.protocolError);
               return;
             }
 
             // Listen to remote agent events for this requestId
             eventSubscription = endpoint.socketService.events.listen((event) {
+              // A terminal frame closes the relay: nothing may follow it.
+              if (terminalFrameSent) return;
+
               final payload = Map<String, dynamic>.from(event['payload'] as Map? ?? const {});
               final eventRequestId =
                   event['request_id']?.toString() ??
@@ -424,32 +465,28 @@ class ClientCliHost {
                   }),
                 );
               } else if (eventName == 'device.cli.result') {
-                unawaited(eventSubscription?.cancel());
-                socket.add(
-                  jsonEncode({
-                    'type': 'result',
-                    'request_id': requestId,
-                    'exit_code': payload['exit_code'] ?? 0,
-                    'duration_ms': payload['duration_ms'],
-                    'cancelled': payload['cancelled'] == true,
-                    'timed_out': payload['timed_out'] == true,
-                    'error': payload['error'],
-                  }),
-                );
-                unawaited(socket.close(WebSocketStatus.normalClosure));
+                sendTerminalFrame({
+                  'type': 'result',
+                  'request_id': requestId,
+                  'exit_code': payload['exit_code'] ?? 0,
+                  'duration_ms': payload['duration_ms'],
+                  'cancelled': payload['cancelled'] == true,
+                  'timed_out': payload['timed_out'] == true,
+                  'error': payload['error'],
+                });
               } else if (eventName == 'error') {
-                unawaited(eventSubscription?.cancel());
-                socket.add(
-                  jsonEncode({
-                    'type': 'error',
-                    'request_id': requestId,
-                    'code': payload['code'] ?? 'relay_error',
-                    'message': payload['message'] ?? 'Device command failed.',
-                  }),
-                );
-                unawaited(socket.close(WebSocketStatus.normalClosure));
+                sendTerminalFrame({
+                  'type': 'error',
+                  'request_id': requestId,
+                  'code': payload['code'] ?? 'relay_error',
+                  'message': payload['message'] ?? 'Device command failed.',
+                });
               }
-            });
+            }, onDone: () => failClosedOnStreamEnd(
+              'The remote execution stream ended before a terminal result.',
+            ), onError: (Object _) => failClosedOnStreamEnd(
+              'The remote execution stream failed before a terminal result.',
+            ));
 
             // Dispatch command to remote agent
             endpoint.socketService.sendDeviceCommand(
