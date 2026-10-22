@@ -39,6 +39,10 @@ Do not introduce convenience code that weakens these boundaries.
 - Settings navigation controls used by interactive acceptance expose stable semantic widget keys across wide and compact layouts; `settings_back_to_conversations_btn` returns directly to `AppRoutes.home` instead of unwinding accumulated Settings history.
 - A Gateway `auth_revoked` event is terminal for the authenticated Client family: clear local credentials and let the auth router show login immediately. Ordinary socket disconnects remain recoverable and never imply logout.
 
+### Platform Boundaries
+- `AppPlatform` (`client/lib/utils/app_platform.dart`) is the canonical platform discriminator. Shared startup (bootstrap, dependency registration, provider mounting) must never execute a native `dart:io` platform API; native implementations stay behind desktop-only registration and consumption boundaries.
+- Client CLI is desktop-only: Web and mobile never register, construct, or read its host, settings cubit, ownership record, or Sanad Home.
+
 ### Conversation Ownership
 - `ConversationCacheStore` is the single client-side owner of conversation cache, device destinations, drafts, pagination resources, and workspace expansion.
 - Conversation delivery, execution, attention, suspension, queue, steer, stop, replay, and recovery change only from matching authoritative outcomes.

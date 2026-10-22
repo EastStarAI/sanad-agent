@@ -12,6 +12,7 @@ import 'package:sanad_client/features/devices/data/device_connection_coordinator
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
+import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 class AppAuthListener extends StatefulWidget {
@@ -139,9 +140,12 @@ class _AppAuthListenerState extends State<AppAuthListener> {
           widget.mediaByteCache.bindAccount(state.userId);
           unawaited(widget.authService.syncExternalSession(state.accessToken));
           unawaited(widget.syncAuthContext());
-          // A login cycle may have released Client CLI endpoint ownership while
-          // the feature stayed enabled; re-apply the persisted setting.
-          unawaited(context.read<ClientCliCubit>().reconcile());
+          // A login cycle may have released Client CLI endpoint ownership
+          // while the feature stayed enabled; re-apply the persisted setting.
+          // Client CLI is desktop-only, so remote-only platforms never hold it.
+          if (ClientCliPlatform.isSupported) {
+            unawaited(context.read<ClientCliCubit>().reconcile());
+          }
           widget.socketService.setAccessToken(state.accessToken);
           unawaited(
             widget.socketService
@@ -163,7 +167,9 @@ class _AppAuthListenerState extends State<AppAuthListener> {
           unawaited(widget.conversationCachePersistor.flush());
           context.read<DeviceConnectionCoordinator>().clearEventDeduplicationState();
           unawaited(context.read<DeviceCubit>().resetForLogout());
-          unawaited(context.read<ClientCliCubit>().onLogout());
+          if (ClientCliPlatform.isSupported) {
+            unawaited(context.read<ClientCliCubit>().onLogout());
+          }
           widget.socketService.disconnect();
           widget.socketService.setAccessToken(null);
           unawaited(widget.syncAuthContext());

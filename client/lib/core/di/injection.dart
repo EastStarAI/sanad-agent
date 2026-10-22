@@ -53,10 +53,10 @@ import 'package:sanad_client/features/devices/presentation/state/device_command_
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/data/device_command_client.dart';
 import 'package:sanad_client/features/client_cli/data/client_cli_approval_coordinator.dart';
-import 'package:sanad_client/features/client_cli/data/client_cli_home_resolver.dart';
 import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
-import 'package:sanad_client/features/client_cli/data/client_cli_ownership.dart';
+import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart';
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
+import 'package:sanad_client/core/di/modules/client_cli_module.dart';
 import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
 import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
@@ -446,6 +446,8 @@ Future<void> configureDependencies({
     );
   }
 
+  // Platform-neutral: the approval coordinator carries no native dependency and
+  // backs the overlay that is mounted on every platform.
   if (!getIt.isRegistered<ClientCliApprovalCoordinator>()) {
     getIt.registerLazySingleton<ClientCliApprovalCoordinator>(
       () => ClientCliApprovalCoordinator(),
@@ -453,37 +455,13 @@ Future<void> configureDependencies({
     );
   }
 
-  if (!getIt.isRegistered<ClientCliOwnership>()) {
-    getIt.registerLazySingleton<ClientCliOwnership>(
-      () => const ClientCliOwnership(),
-    );
-  }
-
-  if (!getIt.isRegistered<ClientCliHost>()) {
-    final home = const ClientCliHomeResolver().resolveSanadHome(
-      explicitHome: AppConfig.sanadHome.isNotEmpty ? AppConfig.sanadHome : null,
-    );
-    getIt.registerLazySingleton<ClientCliHost>(
-      () => ClientCliHost(
-        connectionCoordinator: getIt<DeviceConnectionCoordinator>(),
-        deviceRepository: getIt<IDeviceRepository>(),
-        ownership: getIt<ClientCliOwnership>(),
-        approvalCoordinator: getIt<ClientCliApprovalCoordinator>(),
-        sanadHome: home,
-        clientVersion: getIt<String>(instanceName: 'appVersion'),
-      ),
-      dispose: (host) => host.stop(),
-    );
-  }
-
-  if (!getIt.isRegistered<ClientCliCubit>()) {
-    getIt.registerLazySingleton<ClientCliCubit>(
-      () => ClientCliCubit(
-        host: getIt<ClientCliHost>(),
-        prefs: getIt<SharedPreferences>(),
-      ),
-      dispose: (cubit) => cubit.close(),
-    );
+  // Client CLI is a desktop-only, same-machine relay endpoint: its host binds a
+  // loopback server and resolves the Sanad Home from native process state.
+  // Remote-only platforms (Web and mobile) must never register or resolve it;
+  // resolving that Home eagerly during shared composition is what broke Web
+  // startup in v1.0.18.
+  if (ClientCliPlatform.isSupported) {
+    const ClientCliModule().register(getIt);
   }
 
   if (!getIt.isRegistered<DesktopWindowManagerAdapter>()) {

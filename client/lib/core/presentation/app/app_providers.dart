@@ -27,6 +27,7 @@ import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_servi
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
+import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart';
 import 'package:sanad_client/features/client_cli/data/client_cli_approval_coordinator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -118,13 +119,16 @@ class AppProviders extends StatelessWidget {
         BlocProvider(
           create: (_) => getIt<ProviderUsageCubit>(),
         ),
-        BlocProvider(
-          create: (_) {
-            final cubit = getIt<ClientCliCubit>();
-            unawaited(cubit.load());
-            return cubit;
-          },
-        ),
+        // Client CLI is desktop-only; remote-only platforms never resolve its
+        // host, so they must not mount its settings cubit either.
+        if (ClientCliPlatform.isSupported)
+          BlocProvider(
+            create: (_) {
+              final cubit = getIt<ClientCliCubit>();
+              unawaited(cubit.load());
+              return cubit;
+            },
+          ),
       ],
       child: MultiProvider(
         providers: [

@@ -128,7 +128,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
 | Client Android | signed APK/AAB, package identity, keystore fingerprint, and increasing `versionCode` | signed hosted build, Google Play internal-track install, production-track promotion, and in-place store update |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
-| Client Web | analyzer, startup contract test, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
+| Client Web | analyzer, startup contract test, real-browser startup composition guard, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
 
 Linux candidate installer testing may override manifest and artifact URLs only
 with `SANAD_INSTALL_ALLOW_TEST_URL=1`. This explicit harness switch is forbidden
@@ -286,6 +286,17 @@ view, and expose the expected application shell. Any uncaught `dart:io`
 platform operation, CSP refusal, CanvasKit/WebAssembly bootstrap failure, or
 blank view rejects the candidate even when the build, version marker, health
 endpoint, and root document all succeed.
+
+`client/test/web/web_startup_platform_guard_test.dart` is the deterministic
+guard for the `dart:io` clause. It composes the real dependency graph inside
+Chrome, so `cd client && fvm flutter test --platform chrome
+test/web/web_startup_platform_guard_test.dart` fails on the v1.0.18 eager Home
+resolution (`Unsupported operation: Platform._environment`). The public `client`
+CI job runs it directly after the fast suite, and the `client-linux-web` release
+job runs it before the release build, so a candidate cannot be produced from
+source that reintroduces the regression. The default `fvm flutter test` run
+reports that suite as skipped because it has no browser target; it proves
+nothing there, which is why the dedicated browser step exists.
 
 ## Task 67A Desktop lifecycle regression matrix
 

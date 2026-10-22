@@ -5,9 +5,13 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('device inventory DI contract', () {
     late String injectionSource;
+    late String clientCliModuleSource;
 
     setUpAll(() {
       injectionSource = File('lib/core/di/injection.dart').readAsStringSync();
+      clientCliModuleSource = File(
+        'lib/core/di/modules/client_cli_module.dart',
+      ).readAsStringSync();
     });
 
     test('IDeviceRepository is one shared, lazily initialized inventory owner', () {
@@ -27,13 +31,13 @@ void main() {
 
     test('ClientCliHost reads the shared device repository', () {
       final hostBlock = RegExp(
-        r'registerLazySingleton<ClientCliHost>\(([\s\S]*?)\n  \}',
-      ).firstMatch(injectionSource)?.group(1);
+        r'registerLazySingleton<ClientCliHost>\(([\s\S]*?)\n\s*\}',
+      ).firstMatch(clientCliModuleSource)?.group(1);
 
       expect(hostBlock, isNotNull, reason: 'ClientCliHost registration is missing');
       expect(
         hostBlock,
-        contains('deviceRepository: getIt<IDeviceRepository>()'),
+        contains('deviceRepository: registry<IDeviceRepository>()'),
         reason: 'Client CLI device discovery must use the shared inventory owner',
       );
     });

@@ -27,6 +27,40 @@ sanad-client command
   -> streamed stdout/stderr/events + terminal result
 ```
 
+### Platform Boundary (Desktop Only)
+
+The relay is a same-machine surface, so its host owns capabilities that only
+native desktop runtimes provide:
+
+| Component | Native dependency |
+|---|---|
+| `ClientCliHost` | Loopback `HttpServer`/`WebSocket` listener and process id |
+| `ClientCliOwnership` | Runtime record under `<Sanad Home>/runtime` with owner-only permissions |
+| `ClientCliHomeResolver` | Process environment (`SANAD_HOME`, `HOME`, `USERPROFILE`) |
+
+That boundary has one owner: `ClientCliPlatform.isSupported`
+(`client/lib/features/client_cli/domain/client_cli_platform.dart`), which defers
+to `AppPlatform.isDesktop` (`client/lib/utils/app_platform.dart`). Registration
+lives in `client/lib/core/di/modules/client_cli_module.dart`, is reached from
+`configureDependencies()` only behind that guard, and fails closed when the
+module is invoked off desktop.
+
+- Home resolution runs inside the host's lazy factory, so dependency setup
+  performs no native read. On desktop the Home is resolved when a consumer
+  (settings cubit, tray, or auth lifecycle) first constructs the host,
+  regardless of whether the feature is enabled.
+- `AppProviders` mounts the Client CLI settings cubit only inside the boundary,
+  and `AppAuthListener` reconciles or stops the host on login/logout only there.
+  Settings already renders the Client CLI card inside its desktop block.
+- `ClientCliApprovalCoordinator` is platform-neutral: it carries no native
+  dependency and stays available to the approval overlay on every platform.
+- Web and mobile are remote-only. They register no host, cubit, or ownership
+  record, and the resolved default socket stays the cloud service.
+
+Regression origin: release v1.0.18 (`ecbb442577d7a35a284f654ba3601be323590e41`)
+resolved this Home eagerly during `configureDependencies()`, so Web builds threw
+`Unsupported operation: Platform._environment` before `runApp`.
+
 ---
 
 ## 2. Command Runner Surface Inventory

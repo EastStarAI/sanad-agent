@@ -212,6 +212,11 @@ jobs:
       - name: Test client
         working-directory: client
         run: fvm flutter test
+      - name: Web startup composition
+        working-directory: client
+        run: |
+          set -o pipefail
+          fvm flutter test --platform chrome test/web/web_startup_platform_guard_test.dart 2>&1 | tail -5
 
   sanad-dev-platforms:
     name: sanad-dev bootstrap (${{ matrix.os }})
@@ -298,6 +303,8 @@ jobs:
           grep -F 'name: Create immutable Draft candidate' .github/workflows/release.yml
           grep -F 'name: Build and verify signed private IPA' .github/workflows/release.yml
           grep -F 'fvm flutter test test/tool/app_web_startup_contract_test.dart' .github/workflows/release.yml
+          grep -F 'fvm flutter test --platform chrome test/web/web_startup_platform_guard_test.dart' .github/workflows/ci.yml
+          grep -F 'fvm flutter test --platform chrome test/web/web_startup_platform_guard_test.dart' .github/workflows/release.yml
           grep -F 'build/web/sanad-public-sha.txt' .github/workflows/release.yml
           grep -F 'xcrun notarytool log "$submission_id"' .github/workflows/release.yml
           grep -F '.status == "Accepted"' .github/workflows/release.yml
