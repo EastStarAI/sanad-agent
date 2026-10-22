@@ -22,20 +22,57 @@ String sanadHomeIdentity(String homePath) {
 /// Canonical form of [homePath] that every process uses for identity
 /// derivation.
 ///
-/// A root that already exists is resolved through its symbolic links so that
+/// A path that exists is resolved through its symbolic links, so
 /// `/var/...` and `/private/var/...` (or any other aliased spelling) produce
-/// one identity. Before the first creation the normalized absolute path is
-/// still a stable input.
+/// one identity; this is the same resolution `SanadHomeBootstrap.canonicalRoot`
+/// applies after it expands the configured root. Before the first creation the
+/// normalized absolute path is still a stable input.
+///
+/// A leading `~` is expanded first, through the same [expandLeadingTilde]
+/// helper as `SanadHomeBootstrap`, so a literal `~/...` `SANAD_HOME` (or
+/// `--home`) names the same Home as the expanded spelling. An unexpandable `~`
+/// keeps its literal spelling, which fails closed: the caller then sees an
+/// identity that no daemon reports.
 String canonicalSanadHomePath(String homePath) {
-  final absolute = p.normalize(p.absolute(homePath));
+  final expanded = expandLeadingTilde(homePath) ?? homePath;
+  final absolute = p.normalize(p.absolute(expanded));
   try {
-    if (FileSystemEntity.typeSync(absolute, followLinks: false) ==
-        FileSystemEntityType.directory) {
-      return p.normalize(Directory(absolute).resolveSymbolicLinksSync());
+    final type = FileSystemEntity.typeSync(absolute, followLinks: false);
+    if (type != FileSystemEntityType.notFound) {
+      return p.normalize(
+        type == FileSystemEntityType.directory
+            ? Directory(absolute).resolveSymbolicLinksSync()
+            : File(absolute).resolveSymbolicLinksSync(),
+      );
     }
   } on FileSystemException {
     // An unresolvable path keeps its normalized spelling; identity remains
     // deterministic for every caller that sees the same path.
   }
   return absolute;
+}
+
+/// Expands a leading `~` or `~/` to the current user's home directory.
+///
+/// Returns [value] unchanged when it has no leading `~`, and null when it has
+/// one but the user home cannot be resolved. `SanadHomeBootstrap` turns null
+/// into its `home_environment_missing` violation; identity derivation does not
+/// throw, so a health payload can never fail to report because of it.
+///
+/// [environment] lets a caller that carries an injected environment (CLI
+/// discovery) expand against that environment; it defaults to the process
+/// environment.
+///
+/// The `~/` prefix is removed before joining: `path.join` treats a later
+/// absolute segment as authoritative, so joining `~/.x` without dropping the
+/// separator would silently produce `/.x`.
+String? expandLeadingTilde(String value, {Map<String, String>? environment}) {
+  if (!value.startsWith('~')) return value;
+  // `~name/...` is another user's home and is not expanded here.
+  if (value != '~' && !value.startsWith('~/')) return value;
+  final env = environment ?? Platform.environment;
+  final userHome = env['HOME'] ?? env['USERPROFILE'];
+  if (userHome == null || userHome.isEmpty) return null;
+  if (value == '~') return userHome;
+  return p.join(userHome, value.substring(2));
 }

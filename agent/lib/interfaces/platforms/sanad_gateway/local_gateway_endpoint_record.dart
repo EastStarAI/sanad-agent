@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/core/sanad_home/test_runtime_isolation.dart';
@@ -16,6 +17,12 @@ import 'package:sanad_agent/core/sanad_home/test_runtime_isolation.dart';
 /// port or scanning a port range. Because the record carries
 /// [sanadHomeIdentity], a caller detects a record that belongs to a different
 /// (for example copied) Home and fails closed instead of probing it.
+///
+/// A record is *evidence*, not authentication: the fields are filesystem
+/// state that any process running as this user can write. Discovery therefore
+/// also requires that the record is owner-only, points at a loopback host, and
+/// names a live owner process. That reduces mis-routing; it does not prove
+/// which server answers on the port.
 class LocalGatewayEndpointRecord {
   const LocalGatewayEndpointRecord({
     required this.homeId,
@@ -35,12 +42,19 @@ class LocalGatewayEndpointRecord {
   final String host;
   final int port;
 
-  /// Process that bound [port]; `0` when the writer did not persist one.
+  /// Process that published (and is bound to) [port].
   final int ownerProcessId;
 
   @override
   String toString() =>
       'LocalGatewayEndpointRecord(host: $host, port: $port, homeId: $homeId)';
+
+  /// Whether the process that published this record still exists.
+  ///
+  /// A record left behind by a crashed or stopped daemon keeps pointing at a
+  /// port that another process may since have taken, so callers must treat a
+  /// dead owner as a stale record rather than as an endpoint.
+  bool get ownerProcessIsAlive => isProcessAlive(ownerProcessId);
 
   /// Publishes the endpoint this process bound for the active Home.
   ///
@@ -71,8 +85,10 @@ class LocalGatewayEndpointRecord {
 
   /// Reads the record of [homePath], or of the active Home when omitted.
   ///
-  /// Returns null when there is no usable record: missing file, a symlink, an
-  /// unreadable or malformed payload, or a schema this build does not own.
+  /// Returns null when there is no usable record: missing file, a symlink, a
+  /// file that is not owner-only, an unreadable or malformed payload, a
+  /// non-loopback host, an unverifiable owner process id, or a schema this
+  /// build does not own.
   static LocalGatewayEndpointRecord? tryRead({String? homePath}) {
     final String path;
     try {
@@ -87,9 +103,11 @@ class LocalGatewayEndpointRecord {
         FileSystemEntityType.file) {
       return null;
     }
+    final file = File(path);
+    if (!SanadHomeBootstrap.isOwnerOnlyFile(file)) return null;
 
     try {
-      final decoded = jsonDecode(File(path).readAsStringSync());
+      final decoded = jsonDecode(file.readAsStringSync());
       if (decoded is! Map<String, dynamic>) return null;
       if (decoded['schema'] != schemaVersion) return null;
 
@@ -99,13 +117,20 @@ class LocalGatewayEndpointRecord {
       final processId = decoded['pid'];
       if (homeId is! String || homeId.isEmpty) return null;
       if (host is! String || host.isEmpty) return null;
+      // The daemon binds loopback only (SEC-02 / INV-1), so a record naming
+      // any other host cannot describe a Sanad gateway and must not receive
+      // the credential.
+      if (!LoopbackPolicy.isLoopbackHost(host)) return null;
       if (port is! int || port <= 0 || port > 65535) return null;
+      // `write` always persists a pid, so a record without one is corrupt or
+      // hand-written and its liveness cannot be checked.
+      if (processId is! int || processId <= 0) return null;
 
       return LocalGatewayEndpointRecord(
         homeId: homeId,
         host: host,
         port: port,
-        ownerProcessId: processId is int ? processId : 0,
+        ownerProcessId: processId,
       );
     } catch (_) {
       return null;
@@ -135,5 +160,43 @@ class LocalGatewayEndpointRecord {
     } catch (_) {
       // A stale record only costs the next caller one clear failure message.
     }
+  }
+}
+
+/// Whether [processId] names a live process.
+///
+/// Liveness only: it answers "is something there", never "is that something
+/// the daemon of this Home". A pid can also be reused by an unrelated process,
+/// so this is one more signal for detecting a stale record, not proof of
+/// identity. A check that cannot run at all (a missing `kill`/`tasklist`)
+/// reports "not alive", so an unverifiable record fails closed. See the
+/// challenge/HMAC follow-up in
+/// `docs/technical/user_data_protection_and_minimization.md`.
+bool isProcessAlive(int processId) {
+  if (processId <= 0) return false;
+  if (processId == pid) return true;
+  try {
+    if (Platform.isWindows) {
+      final result = Process.runSync('tasklist', [
+        '/FI',
+        'PID eq $processId',
+        '/FO',
+        'CSV',
+        '/NH',
+      ]);
+      final fields = result.stdout.toString().split(',');
+      return result.exitCode == 0 &&
+          fields.length > 1 &&
+          fields[1].replaceAll('"', '').trim() == '$processId';
+    }
+    // POSIX: signal 0 performs the existence and permission checks without
+    // delivering a signal. Dart exposes no signal-0 constant, so the `kill`
+    // utility is used: exit 0 means the process exists for this user. A
+    // non-zero exit also covers "exists but owned by another user", which a
+    // daemon serving this Home cannot be.
+    final result = Process.runSync('kill', ['-0', '$processId']);
+    return result.exitCode == 0;
+  } catch (_) {
+    return false;
   }
 }

@@ -31,13 +31,20 @@ class LocalGatewayCredentials {
   static const String headerName = 'x-sanad-local-token';
 
   /// Returns the persisted credential, generating a fresh one and
-  /// writing it through [SanadHomeBootstrap.writeSecret] on first use.
+  /// writing it through [SanadHomeBootstrap.writeSecretBytes] on first use.
   /// Idempotent and serialized across concurrent processes sharing one Home.
   ///
-  /// A missing, foreign, or unreadable Home binding rotates the credential,
-  /// which is the documented migration for Homes cloned or restored from
-  /// another Home.
-  static Future<LocalGatewayCredential> loadOrCreate() async {
+  /// **Daemon start only.** Rotation is what makes a Home's credential its
+  /// own: a missing, foreign, or unreadable Home binding rotates the
+  /// credential, which is the documented migration for Homes cloned or
+  /// restored from another Home. Rotating while an older daemon still serves
+  /// the same Home would invalidate the credential that daemon (and every
+  /// desktop Client re-reading `.local_token`) is holding, so no other caller
+  /// may reach this method: login, logout notification, the CLI and
+  /// `sanad-dev` read through [readExisting], [tryRead] or the discovery
+  /// token read instead. Renaming this method is deliberate — the compiler
+  /// now enforces the boundary.
+  static Future<LocalGatewayCredential> loadOrCreateForDaemonStart() async {
     final boundary = SanadHomeBootstrap.identity();
     await boundary.prepare();
     const lockRelativePath = '.local_token.lock';
@@ -80,13 +87,16 @@ class LocalGatewayCredentials {
       }
 
       final generated = _generate();
-      await boundary.writeSecretBytes(
-        relativePath,
-        utf8.encode(generated.value),
-      );
+      // The binding is written first so a concurrent reader never observes a
+      // rotated token beside a stale (foreign) binding, which would report
+      // `token_bound_to_other_home` for a Home that is in fact this one's.
       await boundary.writeSecretBytes(
         bindingRelativePath,
         utf8.encode(expected),
+      );
+      await boundary.writeSecretBytes(
+        relativePath,
+        utf8.encode(generated.value),
       );
       if (persisted != null) {
         // Never log a credential value; only that a rotation happened.
@@ -110,6 +120,27 @@ class LocalGatewayCredentials {
   /// so a clone never lends its credential to the Home it was cloned into.
   static LocalGatewayCredential? tryRead() {
     return _readFrom(SanadHomeBootstrap.identity());
+  }
+
+  /// The persisted credential, read without rotation, for callers that are not
+  /// the daemon.
+  ///
+  /// This is the path login/logout, the CLI and `sanad-dev` use. It never
+  /// creates, migrates or rotates anything: a caller must not be able to
+  /// invalidate the credential a running daemon is currently serving.
+  ///
+  /// Throws [LocalGatewayCredentialUnavailable] when the Home has no usable
+  /// credential, which login surfaces as "the running service did not accept
+  /// the exchange" rather than silently rotating under it.
+  static LocalGatewayCredential readExisting() {
+    final credential = tryRead();
+    if (credential == null) {
+      throw const LocalGatewayCredentialUnavailable(
+        'No local gateway credential exists for this Sanad Home. Start the '
+        'Agent for this Home to issue one.',
+      );
+    }
+    return credential;
   }
 
   static LocalGatewayCredential? _readFrom(SanadHomeBootstrap boundary) {
@@ -221,4 +252,16 @@ class LocalGatewayCredential {
 
   @override
   int get hashCode => value.hashCode;
+}
+
+/// Raised when a read-only caller finds no usable credential for a Home.
+///
+/// Deliberately distinct from a permission failure: this is "nothing issued
+/// yet", not "the file exists but must not be trusted".
+class LocalGatewayCredentialUnavailable implements Exception {
+  final String message;
+  const LocalGatewayCredentialUnavailable(this.message);
+
+  @override
+  String toString() => 'LocalGatewayCredentialUnavailable: $message';
 }

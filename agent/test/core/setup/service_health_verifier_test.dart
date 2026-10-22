@@ -17,7 +17,7 @@ void main() {
     home = await Directory.systemTemp.createTemp('sanad-health-verifier-');
     setSanadHomeOverride(home.path);
     await SanadHomeBootstrap.identity().prepare();
-    credential = await LocalGatewayCredentials.loadOrCreate();
+    credential = await LocalGatewayCredentials.loadOrCreateForDaemonStart();
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   });
 

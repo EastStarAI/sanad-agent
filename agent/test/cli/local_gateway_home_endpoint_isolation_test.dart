@@ -46,6 +46,9 @@ class _RecordingHttpClient extends http.BaseClient {
   }
 }
 
+/// A process id that cannot be live: the kernel never issues one this high.
+const int deadProcessId = 4194304;
+
 void main() {
   useIsolatedSanadTestHome();
 
@@ -54,24 +57,40 @@ void main() {
   late Directory otherHome;
   late _RecordingHttpClient client;
 
-  setUp(() {
-    root = Directory(
-      Directory.systemTemp
-          .createTempSync('sanad-home-endpoint-isolation-')
-          .resolveSymbolicLinksSync(),
+  /// Writes [contents], then restricts the file to 0600 on POSIX so the readers
+  /// that now require owner-only files accept it.
+  ///
+  /// The mode is part of the contract under test, so tests that need a *wide*
+  /// mode write first and widen afterwards.
+  void writeOwnerOnly(String path, String contents) {
+    File(path).writeAsStringSync(contents);
+    if (!Platform.isWindows) Process.runSync('chmod', ['600', path]);
+  }
+
+  void writeRecord(
+    Directory selected, {
+    required int port,
+    String? homeId,
+    int? ownerProcessId,
+    String host = '127.0.0.1',
+  }) {
+    writeOwnerOnly(
+      p.join(selected.path, LocalGatewayEndpointRecord.relativePath),
+      jsonEncode({
+        'schema': LocalGatewayEndpointRecord.schemaVersion,
+        'home_id': homeId ?? sanadHomeIdentity(selected.path),
+        'host': host,
+        'port': port,
+        'pid': ownerProcessId ?? pid,
+      }),
     );
-    home = Directory(p.join(root.path, 'home'))..createSync();
-    otherHome = Directory(p.join(root.path, 'other-home'))..createSync();
-    File(
-      p.join(home.path, LocalGatewayCredentials.relativePath),
-    ).writeAsStringSync('home-token');
-    client = _RecordingHttpClient(endpoints: {});
-  });
+  }
 
-  tearDown(() {
-    if (root.existsSync()) root.deleteSync(recursive: true);
-  });
+  String healthBody(Directory owner) =>
+      jsonEncode({'status': 'ok', 'home_id': sanadHomeIdentity(owner.path)});
 
+  /// Forces the Home-selection decision (production decides from the
+  /// environment; see the detection group below).
   LocalGatewayDiscovery discoveryFor(Directory selected, {bool? selectedFlag}) {
     return LocalGatewayDiscovery(
       sanadHomeOverride: selected.path,
@@ -94,27 +113,27 @@ void main() {
     );
   }
 
-  void writeRecord(
-    Directory selected, {
-    required int port,
-    String? homeId,
-    int ownerProcessId = 4242,
-  }) {
-    File(
-      p.join(selected.path, LocalGatewayEndpointRecord.relativePath),
-    ).writeAsStringSync(
-      jsonEncode({
-        'schema': LocalGatewayEndpointRecord.schemaVersion,
-        'home_id': homeId ?? sanadHomeIdentity(selected.path),
-        'host': '127.0.0.1',
-        'port': port,
-        'pid': ownerProcessId,
-      }),
+  setUp(() {
+    root = Directory(
+      Directory.systemTemp
+          .createTempSync('sanad-home-endpoint-isolation-')
+          .resolveSymbolicLinksSync(),
     );
-  }
+    home = Directory(p.join(root.path, 'home'))..createSync();
+    otherHome = Directory(p.join(root.path, 'other-home'))..createSync();
+    writeOwnerOnly(
+      p.join(home.path, LocalGatewayCredentials.relativePath),
+      'home-token',
+    );
+    client = _RecordingHttpClient(endpoints: {});
+  });
 
-  String healthBody(Directory owner) =>
-      jsonEncode({'status': 'ok', 'home_id': sanadHomeIdentity(owner.path)});
+  tearDown(() {
+    if (root.existsSync()) root.deleteSync(recursive: true);
+  });
+
+  /// A daemon released before this contract reports no `home_id` at all.
+  const String legacyHealthBody = '{"status":"ok","version":"1.0.18"}';
 
   group('Home-selected discovery', () {
     test('never probes the default port without a runtime record', () async {
@@ -209,18 +228,196 @@ void main() {
       expect(client.requests, isEmpty);
     });
 
-    test('an explicit --gateway-url still wins over the Home record', () async {
+    test(
+      'a record whose owner process is gone is stale, not an endpoint',
+      () async {
+        writeRecord(home, port: 58311, ownerProcessId: deadProcessId);
+        client.endpoints['127.0.0.1:58311'] = healthBody(home);
+
+        await expectLater(
+          discoveryFor(
+            home,
+          ).discover(probeTimeout: const Duration(milliseconds: 200)),
+          throwsA(
+            isA<GatewayDiscoveryException>()
+                .having((error) => error.code, 'code', 'home_runtime_stale')
+                .having(
+                  (error) => error.message,
+                  'message',
+                  contains('$deadProcessId'),
+                ),
+          ),
+        );
+        // No credential is sent to a port a dead record still names.
+        expect(client.requests, isEmpty);
+      },
+    );
+
+    test('a record naming a non-loopback host is unusable', () async {
+      writeRecord(home, port: 58311, host: '10.0.0.5');
+      client.endpoints['10.0.0.5:58311'] = healthBody(home);
+
+      await expectLater(
+        discoveryFor(
+          home,
+        ).discover(probeTimeout: const Duration(milliseconds: 200)),
+        throwsA(
+          isA<GatewayDiscoveryException>().having(
+            (error) => error.code,
+            'code',
+            'home_runtime_missing',
+          ),
+        ),
+      );
+      expect(client.requests, isEmpty);
+    });
+
+    test('a record that is not owner-only is unusable', () async {
+      if (Platform.isWindows) return;
+      writeRecord(home, port: 58311);
+      final recordFile = File(
+        p.join(home.path, LocalGatewayEndpointRecord.relativePath),
+      );
+      Process.runSync('chmod', ['644', recordFile.path]);
+      client.endpoints['127.0.0.1:58311'] = healthBody(home);
+
+      await expectLater(
+        discoveryFor(
+          home,
+        ).discover(probeTimeout: const Duration(milliseconds: 200)),
+        throwsA(
+          isA<GatewayDiscoveryException>().having(
+            (error) => error.code,
+            'code',
+            'home_runtime_missing',
+          ),
+        ),
+      );
+      expect(client.requests, isEmpty);
+    });
+
+    test(
+      'an inherited SANAD_GATEWAY_URL never receives a Home token',
+      () async {
+        writeRecord(home, port: 58311);
+        client.endpoints['127.0.0.1:58311'] = healthBody(home);
+        client.endpoints['127.0.0.1:58320'] = healthBody(otherHome);
+
+        final result = await discoveryWithEnvironment(
+          home,
+          environment: const {
+            'SANAD_GATEWAY_URL': 'ws://127.0.0.1:58320/gateway',
+          },
+          selectedFlag: true,
+        ).discover(probeTimeout: const Duration(milliseconds: 200));
+
+        expect(result.port, 58311);
+        expect(client.requests.map((uri) => uri.port), [58311]);
+      },
+    );
+
+    test(
+      'an inherited URL cannot mask a selected Home without a runtime',
+      () async {
+        client.endpoints['127.0.0.1:58320'] = healthBody(home);
+
+        await expectLater(
+          discoveryWithEnvironment(
+            home,
+            environment: const {
+              'LOCAL_GATEWAY_URL': 'ws://127.0.0.1:58320/gateway',
+            },
+            selectedFlag: true,
+          ).discover(probeTimeout: const Duration(milliseconds: 200)),
+          throwsA(
+            isA<GatewayDiscoveryException>().having(
+              (error) => error.code,
+              'code',
+              'home_runtime_missing',
+            ),
+          ),
+        );
+        // Not even the Home's own runtime: the record is the only evidence a
+        // selected Home accepts, and nothing was sent to the inherited URL.
+        expect(client.requests, isEmpty);
+      },
+    );
+
+    test('an explicit --gateway-url must prove it serves the Home', () async {
       writeRecord(home, port: 58311);
       client.endpoints['127.0.0.1:58312'] = healthBody(otherHome);
+
+      await expectLater(
+        discoveryFor(home).discover(
+          urlOverride: 'ws://127.0.0.1:58312/gateway',
+          probeTimeout: const Duration(milliseconds: 200),
+        ),
+        throwsA(
+          isA<GatewayDiscoveryException>().having(
+            (error) => error.code,
+            'code',
+            'home_identity_mismatch',
+          ),
+        ),
+      );
+      expect(client.requests.map((uri) => uri.port), [58312]);
+    });
+
+    test('an explicit --gateway-url to this Home is accepted', () async {
+      writeRecord(home, port: 58311);
+      client.endpoints['127.0.0.1:58312'] = healthBody(home);
 
       final result = await discoveryFor(home).discover(
         urlOverride: 'ws://127.0.0.1:58312/gateway',
         probeTimeout: const Duration(milliseconds: 200),
       );
 
+      expect(result.isDaemonRunning, isTrue);
       expect(result.port, 58312);
       expect(client.requests.map((uri) => uri.port), [58312]);
     });
+
+    test('an explicit --port must prove it serves the Home', () async {
+      client.endpoints['127.0.0.1:58312'] = healthBody(otherHome);
+
+      await expectLater(
+        discoveryFor(home).discover(
+          portOverride: 58312,
+          probeTimeout: const Duration(milliseconds: 200),
+        ),
+        throwsA(
+          isA<GatewayDiscoveryException>().having(
+            (error) => error.code,
+            'code',
+            'home_identity_mismatch',
+          ),
+        ),
+      );
+      expect(client.requests.map((uri) => uri.port), [58312]);
+    });
+
+    test(
+      'a selected Home never accepts a daemon that omits its identity',
+      () async {
+        // A daemon released before `home_id` existed answers on this Home's
+        // record; the default-Home legacy tolerance must not reach a named Home.
+        writeRecord(home, port: 58311);
+        client.endpoints['127.0.0.1:58311'] = legacyHealthBody;
+
+        await expectLater(
+          discoveryFor(
+            home,
+          ).discover(probeTimeout: const Duration(milliseconds: 200)),
+          throwsA(
+            isA<GatewayDiscoveryException>().having(
+              (error) => error.code,
+              'code',
+              'home_identity_mismatch',
+            ),
+          ),
+        );
+      },
+    );
 
     test(
       'an inherited LOCAL_GATEWAY_PORT never redirects a Home call',
@@ -254,6 +451,65 @@ void main() {
       expect(result.isDaemonRunning, isTrue);
       expect(result.port, LocalGatewayDiscovery.defaultPort);
       expect(client.requests.first.port, LocalGatewayDiscovery.defaultPort);
+    });
+
+    test(
+      'a pre-PR daemon on 58085 is still reachable from the default Home',
+      () async {
+        // Backward compatibility: the daemon bundled with an older desktop app
+        // reports no `home_id`, and the default Home must keep working while
+        // that daemon runs.
+        client.endpoints['127.0.0.1:${LocalGatewayDiscovery.defaultPort}'] =
+            legacyHealthBody;
+
+        final result = await discoveryFor(
+          home,
+          selectedFlag: false,
+        ).discover(probeTimeout: const Duration(milliseconds: 200));
+
+        expect(result.isDaemonRunning, isTrue);
+        expect(result.port, LocalGatewayDiscovery.defaultPort);
+        expect(result.healthData?['version'], '1.0.18');
+      },
+    );
+
+    test('a mismatching identity on 58085 is never accepted', () async {
+      client.endpoints['127.0.0.1:${LocalGatewayDiscovery.defaultPort}'] =
+          healthBody(otherHome);
+
+      final result = await discoveryFor(
+        home,
+        selectedFlag: false,
+      ).discover(probeTimeout: const Duration(milliseconds: 200));
+
+      expect(result.isDaemonRunning, isFalse);
+      expect(result.port, LocalGatewayDiscovery.defaultPort);
+    });
+
+    test('the legacy tolerance never reaches a scanned port', () async {
+      client.endpoints['127.0.0.1:${LocalGatewayDiscovery.defaultPort}'] =
+          legacyHealthBody;
+      client.endpoints['127.0.0.1:58086'] = legacyHealthBody;
+
+      final result = await discoveryFor(
+        home,
+        selectedFlag: false,
+      ).discover(probeTimeout: const Duration(milliseconds: 25));
+
+      // 58085 answered with an acceptable (legacy) identity, so the scan never
+      // runs; a scanned answer without `home_id` is not evidence of anything.
+      expect(result.port, LocalGatewayDiscovery.defaultPort);
+
+      client.requests.clear();
+      client.endpoints.remove('127.0.0.1:${LocalGatewayDiscovery.defaultPort}');
+
+      final scanned = await discoveryFor(
+        home,
+        selectedFlag: false,
+      ).discover(probeTimeout: const Duration(milliseconds: 25));
+
+      expect(scanned.isDaemonRunning, isFalse);
+      expect(client.requests.map((uri) => uri.port), contains(58086));
     });
 
     test('the scan rejects a daemon that serves another Home', () async {
@@ -291,6 +547,25 @@ void main() {
         expect(result.port, LocalGatewayDiscovery.defaultPort);
       },
     );
+
+    test('an inherited URL that serves another Home fails closed', () async {
+      client.endpoints['127.0.0.1:58320'] = healthBody(otherHome);
+
+      await expectLater(
+        discoveryWithEnvironment(
+          home,
+          environment: const {'SANAD_GATEWAY_URL': 'ws://127.0.0.1:58320/w'},
+          selectedFlag: false,
+        ).discover(probeTimeout: const Duration(milliseconds: 200)),
+        throwsA(
+          isA<GatewayDiscoveryException>().having(
+            (error) => error.code,
+            'code',
+            'home_identity_mismatch',
+          ),
+        ),
+      );
+    });
   });
 
   group('Home selection detection', () {
@@ -317,16 +592,83 @@ void main() {
       );
       expect(discovery.homeIsSelected, isTrue);
     });
+
+    test('a literal ~/ SANAD_HOME resolves to the user Home', () {
+      final discovery = LocalGatewayDiscovery(
+        environment: {'HOME': p.join('/tmp', 'user'), 'SANAD_HOME': '~/lab'},
+      );
+
+      expect(discovery.resolveSanadHome(), p.join('/tmp', 'user', 'lab'));
+      expect(discovery.homeIsSelected, isTrue);
+    });
+
+    test('a --home equal to the default Home is not a selection', () async {
+      // No forced flag: discovery classifies this from the environment, exactly
+      // as production does, and then keeps the default-port probe.
+      final userHome = Directory(p.join(root.path, 'user'))..createSync();
+      final defaultHome = Directory(p.join(userHome.path, '.sanad'))
+        ..createSync();
+      writeOwnerOnly(
+        p.join(defaultHome.path, LocalGatewayCredentials.relativePath),
+        'default-token',
+      );
+      client.endpoints['127.0.0.1:${LocalGatewayDiscovery.defaultPort}'] =
+          healthBody(defaultHome);
+
+      final discovery = LocalGatewayDiscovery(
+        sanadHomeOverride: defaultHome.path,
+        environment: {'HOME': userHome.path},
+        clientFactory: () => client,
+      );
+
+      expect(discovery.homeIsSelected, isFalse);
+      final result = await discovery.discover(
+        probeTimeout: const Duration(milliseconds: 200),
+      );
+      expect(result.port, LocalGatewayDiscovery.defaultPort);
+      expect(result.isDaemonRunning, isTrue);
+    });
+
+    test(
+      'SANAD_HOME alone drives the Home-selected path in discovery',
+      () async {
+        // No `homeSelected` and no `sanadHomeOverride`: the selection comes from
+        // the environment, which is the production path for `SANAD_HOME`.
+        final env = <String, String>{
+          'HOME': p.join(root.path, 'user'),
+          'SANAD_HOME': home.path,
+          // An inherited URL must be ignored for a selected Home.
+          'SANAD_GATEWAY_URL': 'ws://127.0.0.1:58320/gateway',
+        };
+        writeRecord(home, port: 58311);
+        client.endpoints['127.0.0.1:58311'] = healthBody(home);
+        client.endpoints['127.0.0.1:58320'] = healthBody(otherHome);
+
+        final discovery = LocalGatewayDiscovery(
+          environment: env,
+          clientFactory: () => client,
+        );
+
+        expect(discovery.homeIsSelected, isTrue);
+        final result = await discovery.discover(
+          probeTimeout: const Duration(milliseconds: 200),
+        );
+        expect(result.port, 58311);
+        expect(client.requests.map((uri) => uri.port), [58311]);
+      },
+    );
   });
 
   group('Credential binding', () {
     test('readToken refuses a token bound to another Home', () async {
-      File(
+      writeOwnerOnly(
         p.join(home.path, LocalGatewayCredentials.relativePath),
-      ).writeAsStringSync('shared-token');
-      File(
+        'shared-token',
+      );
+      writeOwnerOnly(
         p.join(home.path, LocalGatewayCredentials.bindingRelativePath),
-      ).writeAsStringSync(sanadHomeIdentity(otherHome.path));
+        sanadHomeIdentity(otherHome.path),
+      );
 
       await expectLater(
         discoveryFor(home).readToken(),
@@ -338,6 +680,66 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('readToken rejects a token any other user can read', () async {
+      if (Platform.isWindows) return;
+      final tokenFile = File(
+        p.join(home.path, LocalGatewayCredentials.relativePath),
+      );
+      Process.runSync('chmod', ['644', tokenFile.path]);
+
+      await expectLater(
+        discoveryFor(home).readToken(),
+        throwsA(
+          isA<GatewayDiscoveryException>()
+              .having((error) => error.code, 'code', 'token_permissions')
+              .having(
+                (error) => error.message,
+                'message',
+                contains('chmod 600'),
+              ),
+        ),
+      );
+    });
+
+    test(
+      'a permission failure stays distinct from an unreadable token',
+      () async {
+        final missing = Directory(p.join(root.path, 'missing-home'))
+          ..createSync();
+
+        await expectLater(
+          discoveryFor(missing).readToken(),
+          throwsA(
+            isA<GatewayDiscoveryException>().having(
+              (error) => error.code,
+              'code',
+              'token_not_found',
+            ),
+          ),
+        );
+      },
+    );
+  });
+
+  group('Home identity canonicalisation', () {
+    test('a literal ~/ SANAD_HOME has the identity of the expanded path', () {
+      final userHome = Platform.environment['HOME'];
+      expect(userHome, isNotNull, reason: 'POSIX test hosts define HOME');
+
+      expect(
+        sanadHomeIdentity('~/sanad-identity-does-not-exist'),
+        sanadHomeIdentity(p.join(userHome!, 'sanad-identity-does-not-exist')),
+      );
+    });
+
+    test('a symlinked Home has the identity of its target', () {
+      final real = Directory(p.join(root.path, 'real-home'))..createSync();
+      final link = Link(p.join(root.path, 'linked-home'))
+        ..createSync(real.path);
+
+      expect(sanadHomeIdentity(link.path), sanadHomeIdentity(real.path));
     });
   });
 }

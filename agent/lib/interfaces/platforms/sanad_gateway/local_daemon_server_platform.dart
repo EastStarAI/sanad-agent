@@ -161,7 +161,9 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
     _security ??= LocalGatewaySecurity(
       config: LocalGatewaySecurityConfig(allowedPort: port),
-      expectedToken: await LocalGatewayCredentials.loadOrCreate(),
+      // Daemon process fallback: this runs inside the owning daemon before it
+      // binds, which is the only place rotation is allowed.
+      expectedToken: await LocalGatewayCredentials.loadOrCreateForDaemonStart(),
     );
 
     try {
@@ -180,11 +182,17 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     _homeId ??= sanadHomeIdentity(getSanadHome());
     // Publish the endpoint this Home's daemon owns. A Home-selected CLI call
     // resolves this record instead of probing the default port or a port
-    // range, so it can never attach to another Home's runtime.
+    // range, so it can never attach to another Home's runtime. A failure here
+    // is severe, not cosmetic: every Home-selected call would then report a
+    // missing record while the daemon is running, so the log must say why.
     try {
       await LocalGatewayEndpointRecord.write(host: host, port: _server!.port);
     } catch (error) {
-      _logger.warning('Could not publish the local gateway runtime record.');
+      _logger.severe(
+        'Could not publish the local gateway runtime record: $error. A '
+        'Home-selected CLI call cannot discover this runtime until it is '
+        'published; check the Home permissions and restart the Agent.',
+      );
     }
     unawaited(_listen());
   }

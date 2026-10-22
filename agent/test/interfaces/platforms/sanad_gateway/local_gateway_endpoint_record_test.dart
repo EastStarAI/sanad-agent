@@ -116,4 +116,61 @@ void main() {
       isTrue,
     );
   });
+
+  test('a record naming a non-loopback host is ignored', () {
+    recordFile().writeAsStringSync(
+      jsonEncode({
+        'schema': LocalGatewayEndpointRecord.schemaVersion,
+        'home_id': sanadHomeIdentity(getSanadHome()),
+        'host': '10.0.0.5',
+        'port': 58127,
+        'pid': pid,
+      }),
+    );
+
+    expect(LocalGatewayEndpointRecord.tryRead(), isNull);
+  });
+
+  test('a record that is not owner-only is ignored', () {
+    if (Platform.isWindows) return;
+    recordFile().writeAsStringSync(
+      jsonEncode({
+        'schema': LocalGatewayEndpointRecord.schemaVersion,
+        'home_id': sanadHomeIdentity(getSanadHome()),
+        'host': '127.0.0.1',
+        'port': 58128,
+        'pid': pid,
+      }),
+    );
+    Process.runSync('chmod', ['644', recordFile().path]);
+
+    expect(LocalGatewayEndpointRecord.tryRead(), isNull);
+  });
+
+  test('a record without an owner process id is ignored', () {
+    // `write` always persists one, so a record without it is corrupt and its
+    // liveness cannot be checked.
+    for (final owner in <Object?>[null, 0, '4711']) {
+      final payload = <String, Object?>{
+        'schema': LocalGatewayEndpointRecord.schemaVersion,
+        'home_id': sanadHomeIdentity(getSanadHome()),
+        'host': '127.0.0.1',
+        'port': 58129,
+      };
+      if (owner != null) payload['pid'] = owner;
+      recordFile().writeAsStringSync(jsonEncode(payload));
+
+      expect(
+        LocalGatewayEndpointRecord.tryRead(),
+        isNull,
+        reason: 'pid $owner',
+      );
+    }
+  });
+
+  test('owner liveness separates a live publisher from a dead one', () {
+    expect(isProcessAlive(pid), isTrue);
+    expect(isProcessAlive(0), isFalse);
+    expect(isProcessAlive(4194304), isFalse);
+  });
 }
