@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/core/auth/secret_vault_policy.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 
 import 'fake_local_gateway.dart';
 
@@ -120,9 +121,13 @@ Future<void> _verifyGatewayCommands({
   final stateHome = Directory('${root.path}/gateway-state');
   await home.create(recursive: true);
   await stateHome.create(recursive: true);
-  // A throwaway token, never the developer's or a client's credential.
+  // A throwaway token, never the developer's or a client's credential. The CLI
+  // requires the token file to be owner-only, exactly as the desktop Client and
+  // sanad-dev do.
   const token = 'fake-gateway-token';
-  await File('${home.path}/.local_token').writeAsString(token, flush: true);
+  final tokenFile = File('${home.path}/.local_token');
+  await tokenFile.writeAsString(token, flush: true);
+  await _restrictToOwnerOnly(tokenFile);
 
   final baseEnvironment =
       <String, String>{
@@ -135,7 +140,9 @@ Future<void> _verifyGatewayCommands({
         ..remove('LOCAL_GATEWAY_URL')
         ..remove('LOCAL_GATEWAY_PORT');
 
-  final gateway = await FakeLocalGateway.start();
+  final gateway = await FakeLocalGateway.start(
+    homeId: sanadHomeIdentity(home.path),
+  );
   try {
     final common = <String>[
       '--home',
@@ -296,6 +303,21 @@ Future<_AotProcessResult> _runAotProcess(
     stdout: await stdoutFuture,
     stderr: await stderrFuture,
   );
+}
+
+/// Restricts a throwaway credential file to its owner, or fails.
+///
+/// The CLI refuses a `.local_token` that any other user can read, so the guard
+/// must present the same shape a real Home's daemon would.
+Future<void> _restrictToOwnerOnly(File file) async {
+  if (Platform.isWindows) return;
+  final chmod = await Process.run('chmod', ['600', file.path]);
+  if (chmod.exitCode != 0) {
+    throw StateError(
+      'Could not restrict the throwaway token at ${file.path} to its owner: '
+      '${chmod.stderr}',
+    );
+  }
 }
 
 Future<void> deleteDirectoryWithRetry(

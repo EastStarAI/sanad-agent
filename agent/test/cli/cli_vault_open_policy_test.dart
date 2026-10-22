@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:test/test.dart';
 
 import '../../tool/fake_local_gateway.dart';
@@ -131,15 +132,21 @@ void main() {
     test(
       'session list reaches a fake gateway without opening the Agent vault',
       () async {
-        final gateway = await FakeLocalGateway.start();
         final home = await Directory.systemTemp.createTemp('sanad-aot-home-');
         final stateHome = await Directory.systemTemp.createTemp(
           'sanad-aot-state-',
         );
+        final gateway = await FakeLocalGateway.start(
+          homeId: sanadHomeIdentity(home.path),
+        );
         const token = 'aot-regression-token';
-        await File(
-          '${home.path}/.local_token',
-        ).writeAsString(token, flush: true);
+        final tokenFile = File('${home.path}/.local_token');
+        await tokenFile.writeAsString(token, flush: true);
+        if (!Platform.isWindows) {
+          // The CLI refuses a token any other user can read.
+          final chmod = await Process.run('chmod', ['600', tokenFile.path]);
+          expect(chmod.exitCode, 0, reason: 'chmod 600 ${tokenFile.path}');
+        }
         final environment =
             <String, String>{
                 ...Platform.environment,

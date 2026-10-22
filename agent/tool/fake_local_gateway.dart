@@ -20,10 +20,14 @@ const String fakeFinalAnswer = 'fake gateway reply';
 const String fakeRunId = 'fake-gateway-run';
 
 class FakeLocalGateway {
-  FakeLocalGateway._(this._server);
+  FakeLocalGateway._(this._server, this.homeId);
 
   final HttpServer _server;
   final List<WebSocket> _sockets = [];
+
+  /// The Home identity this fake proves in `/health`, so a CLI that selected a
+  /// `--home` accepts it. Null when the caller wants a legacy payload.
+  final String? homeId;
 
   /// Every decoded frame the CLI sent, in arrival order.
   final List<Map<String, dynamic>> receivedFrames = [];
@@ -31,9 +35,9 @@ class FakeLocalGateway {
   /// The `x-sanad-local-token` header of every `/health` probe.
   final List<String> healthTokens = [];
 
-  static Future<FakeLocalGateway> start() async {
+  static Future<FakeLocalGateway> start({String? homeId}) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final gateway = FakeLocalGateway._(server);
+    final gateway = FakeLocalGateway._(server, homeId);
     server.listen(gateway._handle);
     return gateway;
   }
@@ -65,7 +69,9 @@ class FakeLocalGateway {
       request.response
         ..statusCode = HttpStatus.ok
         ..headers.contentType = ContentType.json
-        ..write(jsonEncode({'status': 'ok'}));
+        ..write(
+          jsonEncode({'status': 'ok', if (homeId != null) 'home_id': homeId}),
+        );
       await request.response.close();
       return;
     }
