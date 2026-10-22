@@ -283,7 +283,35 @@ no graph to update for these paths.
 | Round | Candidate | Result |
 |---|---|---|
 | r1 | `182d6a40` + this branch | Five defects fixed red-first. 8 failing behavior tests before the fixes; Client CLI unit/widget suites, the full Client suite, and the Agent relay tests green after them. |
-| r1 review | same branch | Full-diff review kept every hunk: they are the Task 130 design. Three corrections applied — the host keeps the original `protocolError` close codes for rejected targets, the unused `clientCliExecutionStartedStatus`/`clientCliStripHostFlags` helpers were dropped, and the QA exit-code row for `124` was reworded. Live re-verification on macOS → Windows is still pending. |
+| r1 review | same branch | Full-diff review kept every hunk: they are the Task 130 design. Three corrections applied — the host keeps the original `protocolError` close codes for rejected targets, the unused `clientCliExecutionStartedStatus`/`clientCliStripHostFlags` helpers were dropped, and the QA exit-code row for `124` was reworded. Live re-verification on macOS → Windows was still pending at that point; r2 covers the caller half. |
+| r2 | `4c7abab1` (caller built once) | Live caller-side check macOS → Windows: RD7 PASS (410 s, one 404 s command, exit 0, `RD7-OK`), RD2 PASS (`running` at +0 s, `RD2-OK`, exit 0, 3 s), RD4 PASS (1 s exit 0; 1 s exit 64 for a rejected argv), RD3 caller half PASS by controlled reproduction (exit 1 plus diagnostic). RD1 and the RD3 host guarantee NOT RUN — the live Client's host code is main. |
+
+### Live re-verification — caller side (2026-10-22)
+
+Ran the branch's `sanad-client` (built once from `4c7abab1`) against the user's running main Client (default
+Home, Settings > Client CLI = Full Access) and the Windows device `22dbc6cd-f1cb-4849-b9f8-83c732be0fcd`,
+workspace `5e01ed0a-8af0-4fa5-b3cd-3753d9cf4aca`, with `--thinking-mode max` on every run. Artifacts live in
+`/Users/ahmedattia/.sanad-delegate/runs/release-gate/live-130/` and `RESULT.md` there holds the per-scenario
+evidence.
+
+- **RD7 PASS** — `--timeout 900` with a brief that made the Agent run one `ping -n 400 127.0.0.1 >nul`. The
+tool's own result reports `duration_ms: 404120`; the run completed at caller +410 s with exit `0` and text
+`RD7-OK`. It outlived the old 300 s window by 110 s instead of being cut with `124`.
+- **RD2 PASS** — with the caller's standard input a FIFO that never reaches EOF, the device started the run at
++0 s and returned `RD2-OK` with exit `0` at +3 s; no stdin wait.
+- **RD4 PASS** — `providers list` returned exit `0` in 1 s (the remote command itself prints nothing; `ws list`
+returns real output through the same path), and a rejected trailing flag returned exit `64` in 1 s with the
+remote usage text relayed.
+- **RD3 caller half PASS** — against an isolated stub endpoint under an isolated Home, a relay that closed
+after the `execute` frame made the caller print `Error: The relay ended without a terminal result …` on
+standard error and exit `1`. This is a controlled reproduction, not a real device relay.
+- **RD1 and the RD3 host-side terminal-frame guarantee: NOT RUN.** Both live in host code and the running
+Client is main (and in Full Access, so no approval wait exists). They need a Client built from this branch.
+
+Hygiene: nothing was written to `~/.sanad`, no Client, daemon, runtime, or process was started or stopped, and
+a concurrent session's caller relaying to the same Windows device was left untouched. One observation for
+triage, unrelated to the five defects: under `--events --json` each event line is printed twice (identical in
+RD2 and RD7) while the final JSON envelope appears once, so an NDJSON consumer sees duplicates.
 
 ### Worktree overlap (2026-10-22 00:54–00:59 UTC)
 
