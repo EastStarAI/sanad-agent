@@ -202,6 +202,28 @@ jobs:
           test -f "$home/skills/skill-creator/references/schemas.md"
           test -f "$home/skills/find-skills/LICENSE.txt"
           test -f "$home/skills/agent-browser/LICENSE.txt"
+          # A gateway command must reach the gateway without opening the Agent
+          # vault: opening the OS credential vault can block the shipped binary
+          # in an authorization prompt no CLI can answer, with no output and no
+          # socket. With no daemon present `session list` reports a connection
+          # error, which is fine; not finishing, or leaving a vault artifact in
+          # a Home that owns no secrets, is not.
+          gateway_home="$RUNNER_TEMP/sanad-gateway-smoke-home"
+          rm -rf "$gateway_home"
+          mkdir -p "$gateway_home"
+          printf 'release-smoke-token' > "$gateway_home/.local_token"
+          set +e
+          perl -e 'alarm 60; exec @ARGV' env SANAD_HOME="$gateway_home" "$agent" session list --json >/dev/null 2>&1
+          gateway_status=$?
+          set -e
+          if [ "$gateway_status" -ge 128 ]; then
+            echo "session list did not finish (status $gateway_status); a gateway command must never block." >&2
+            exit 1
+          fi
+          if ls "$gateway_home"/secret_vault* >/dev/null 2>&1; then
+            echo "session list opened the Agent vault; a gateway command must never require an OS credential prompt." >&2
+            exit 1
+          fi
       - name: Smoke-test embedded skills on Windows
         if: matrix.platform == 'windows'
         shell: pwsh

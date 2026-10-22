@@ -399,6 +399,52 @@ class SanadCommandRunner extends CommandRunner<int> {
     return false;
   }
 
+  /// Commands whose whole code path is served by the Local Gateway or by local
+  /// files, and that therefore never read or write an Agent secret.
+  ///
+  /// `session` is the gateway-only surface the Client and automation poll;
+  /// `workspace`, `memory` and `skills` are gateway or file operations, and
+  /// `schedule list` reads the agent-state database read-only.
+  static const Set<String> secretFreeCommands = {
+    'session',
+    'workspace',
+    // `workspace` also answers to `ws`, and the parsed command name keeps the
+    // alias the caller typed.
+    'ws',
+    'memory',
+    'schedule',
+    'skills',
+  };
+
+  /// Whether [arguments] must open the Agent vault before the command runs.
+  ///
+  /// The Agent vault is the OS credential vault (macOS Keychain, Windows DPAPI,
+  /// Linux Secret Service). Opening it reads each namespace owner index, and an
+  /// item that was created by a *different* code identity (an earlier Agent
+  /// build, or the JIT `dartvm` a source checkout ran) makes macOS answer with
+  /// an interactive authorization prompt instead of data. A CLI has no way to
+  /// answer that prompt, and the read blocks *inside* the security framework
+  /// before the event loop can serve anything: the process then produces no
+  /// output, opens no socket, and never exits. Only a command that can read or
+  /// write a secret may therefore open the vault at all.
+  ///
+  /// Everything that is not recognized keeps the conservative answer and opens
+  /// the vault, so a new command can never silently lose its credentials.
+  static bool requiresSecretVault(List<String> arguments) {
+    if (arguments.isEmpty || arguments.contains('--child-process')) return true;
+    final ArgResults results;
+    try {
+      results = SanadCommandRunner().parse(arguments);
+    } catch (_) {
+      return true;
+    }
+    if (results['version'] == true || results['help'] == true) return false;
+    final name = results.command?.name;
+    if (name == null) return true;
+    if (name == 'version' || name == 'help') return false;
+    return !secretFreeCommands.contains(name);
+  }
+
   /// The Sanad Home that [arguments] select, resolved exactly as
   /// [SanadCommand.sanadHome] resolves it: the innermost command's `--home`
   /// (`--home <path>` or `--home=<path>`) wins over the top-level option, and

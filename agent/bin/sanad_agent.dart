@@ -57,8 +57,15 @@ void main(List<String> arguments) async {
   // are secured individually by their read/write owners; startup never walks
   // the complete Home tree.
   await SanadHomeBootstrap.prepareAll();
-  // Plan 83: CLI commands read and write secrets through the Agent vault.
-  await SecretVaults.open();
+  // Plan 83: CLI commands read and write secrets through the Agent vault, and
+  // a command that can touch a secret must open it before dispatch. The vault
+  // is the OS credential vault, so opening it on behalf of a command that has
+  // no secrets (a gateway command such as `session list`) would make the CLI
+  // wait on an OS authorization prompt it can never answer, with no output and
+  // no socket. Those commands therefore never open it.
+  if (SanadCommandRunner.requiresSecretVault(arguments)) {
+    await SecretVaults.open();
+  }
   final machineOutput =
       arguments.contains('--json') ||
       arguments.contains('--quiet') ||

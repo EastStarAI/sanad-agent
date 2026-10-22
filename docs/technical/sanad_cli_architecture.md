@@ -1,6 +1,6 @@
 ---
 title: "Sanad CLI Architecture"
-description: "Attached and in-process transports, runtime ownership, automation output, cancellation, and test-isolation contracts."
+description: "Attached and in-process transports, startup vault order and code-identity authorization failures, runtime ownership, automation output, cancellation, and test-isolation contracts."
 ---
 
 # Sanad CLI Architecture & Gateway Runtime Contract
@@ -165,6 +165,23 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
      plus the token codes above. Token-read and permission problems stay
      distinguishable (`token_permissions` vs `token_read_error` vs
      `token_not_found`).
+
+### 3.1. Startup Order and the Agent Vault
+
+Startup order is a contract, because every step before dispatch touches the Home:
+
+```
+--version/help (pure, no Home)  →  --home selection  →  E2E isolation check
+  →  Home bootstrap  →  Agent vault (only when the command can touch a secret)
+  →  bundled-skill sync  →  `.env` seeding  →  command dispatch
+```
+
+- **The vault opens only for a command that can read or write a secret.** `SanadCommandRunner.requiresSecretVault` classifies the command line with the same parser the commands use; `session`, `workspace`/`ws`, `memory`, `schedule`, `skills`, and the pure queries never open it, and every other command — including an unrecognized or unparseable line — keeps opening it, so a new command can never silently lose its credentials. The in-process standalone runtime still opens the vault itself (`StandaloneCliTurnClient.start`) and the daemon opens it in `bin/daemon.dart`.
+- **Why the vault is not free.** The vault is the OS credential vault (macOS Keychain, Windows DPAPI, Linux Secret Service). Opening it reads each namespace owner index, and macOS answers a read of a generic-password item whose ACL does not authorize the calling binary with an interactive authorization prompt (`SecurityAgent`) instead of data. The read then blocks *inside* the security framework, before the event loop can serve anything: the process prints nothing (not even the bundled-skill line), opens no socket, spawns no child, and never exits. `sample(1)` shows the blocked thread in `SecItemCopyMatching → SecKeychainItemCopyContent → SecurityServer::ClientSession::decrypt → mach_msg` while the Dart main isolate idles in `Dart_RunLoop`, and `securityd` logs `displaying keychain prompt for <binary>; ACL: … <CodeSignatureAclSubject … identifier dartvm …>`. A gateway command that opens the vault for no reason therefore hangs a Client probe, an automation step, or a scheduler call.
+- **Why it presents as "AOT only".** The ACL is a *code-identity* check, not an interpreter check. A vault populated by `fvm dart run …` records the FVM `dartvm` signature, so the same command under JIT is authorized while a `dart compile exe` build — a different ad-hoc signature with no matching requirement — is asked to authorize. Any other identity differs the same way: a newer release binary whose signature no longer matches an older item, or the packaged app versus a separately installed CLI.
+- **The vault never prompts.** `MacOsKeychainAgentSecretStore` forbids user interaction for the process (`SecKeychainSetUserInteractionAllowed(false)`) and adds `kSecUseAuthenticationUI: kSecUseAuthenticationUIFail` to every query for the data-protection keychain. An authorization-demanding item therefore returns `errSecInteractionNotAllowed` (`-25308`), `errSecInteractionRequired` (`-25315`), `errSecAuthFailed` (`-25293`) or `errSecUserCanceled` (`-128`), which the store reports as `AgentSecretStoreUnavailable`; `SecretVaults` then closes the vault, keeps legacy values readable, rejects writes, and records one `secret_vault_events.jsonl` line. Commands fail closed with a diagnostic instead of waiting for a prompt no CLI can answer.
+- **Recovery for an affected Home.** Authorization is per code identity, so the recovery is to give the item an identity that trusts the binary you run: Keychain Access → the `ai.eaststar.sanad.agent` item → Access Control → add the Agent binary you invoke. Nothing in Sanad rewrites, re-creates, or re-ACLs vault items, and a binary that cannot read the owner index cannot migrate them either, so a Home whose items belong to a foreign identity is recovered out of band or by running the build that created them. A properly signed release keeps a designation-based requirement, which is why upgrades of that build do not re-ask; development AOT builds change identity on every compile and therefore always differ from a vault populated by `fvm dart run …`.
+- **Regression guard.** `agent/tool/cli_aot_smoke.dart` (the `cli-automation` CI job, all three OSes) compiles the CLI with `dart compile exe`, starts `agent/tool/fake_local_gateway.dart` on an ephemeral loopback port, and runs `session list`, `session show`, and `session stop` against a throwaway Home and token with a hard per-command deadline. Every step asserts success *and* that the throwaway Home holds no `secret_vault*` artifact, so a gateway command that opens the vault fails the job instead of hanging a user. `test/cli/cli_vault_open_policy_test.dart` pins the classifier and repeats the compiled-binary check when `SANAD_AOT_CLI_BINARY` names a build.
 
 ---
 

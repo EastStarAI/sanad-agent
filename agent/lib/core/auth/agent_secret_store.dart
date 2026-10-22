@@ -63,6 +63,13 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
   static const _service = 'ai.eaststar.sanad.agent';
   static const _itemNotFound = -25300;
 
+  /// Security-framework statuses that mean "the item exists, but reading it
+  /// needs an interactive authorization prompt".
+  static const _interactionNotAllowed = -25308;
+  static const _interactionRequired = -25315;
+  static const _authFailed = -25293;
+  static const _userCanceled = -128;
+
   final String scope;
   final DynamicLibrary _security;
   final DynamicLibrary _cf;
@@ -116,6 +123,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
 
   @override
   Future<String?> read(String key) async {
+    _forbidUserInteraction();
     final cfService = _createString(_service);
     final cfAccount = _createString(_account(key));
     final query = _createDictionary({
@@ -124,6 +132,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
       _kSecAttrAccount: cfAccount,
       _kSecReturnData: _kCFBooleanTrue,
       _kSecMatchLimit: _kSecMatchLimitOne,
+      ..._nonInteractiveAttributes,
     });
     final result = calloc<Pointer<Void>>();
     try {
@@ -149,6 +158,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
 
   @override
   Future<void> write(String key, String value) async {
+    _forbidUserInteraction();
     final cfService = _createString(_service);
     final cfAccount = _createString(_account(key));
     final secretBytes = Uint8List.fromList(utf8.encode(value));
@@ -157,6 +167,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
       _kSecClass: _kSecClassGenericPassword,
       _kSecAttrService: cfService,
       _kSecAttrAccount: cfAccount,
+      ..._nonInteractiveAttributes,
     });
     try {
       final updateAttrs = _createDictionary({_kSecValueData: cfData});
@@ -193,12 +204,14 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
 
   @override
   Future<void> delete(String key) async {
+    _forbidUserInteraction();
     final cfService = _createString(_service);
     final cfAccount = _createString(_account(key));
     final query = _createDictionary({
       _kSecClass: _kSecClassGenericPassword,
       _kSecAttrService: cfService,
       _kSecAttrAccount: cfAccount,
+      ..._nonInteractiveAttributes,
     });
     try {
       final status = _secItemDelete(query);
@@ -211,10 +224,63 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
     }
   }
 
-  AgentSecretStoreUnavailable _failure(String operation, int status) =>
-      AgentSecretStoreUnavailable(
-        'macOS Keychain $operation failed ($status).',
+  AgentSecretStoreUnavailable _failure(String operation, int status) {
+    if (status == _interactionNotAllowed ||
+        status == _interactionRequired ||
+        status == _authFailed ||
+        status == _userCanceled) {
+      return const AgentSecretStoreUnavailable(
+        'The macOS Keychain wants an interactive authorization for the Agent '
+        'vault, and a Sanad runtime never prompts. Authorize the running Agent '
+        'binary for the vault item in Keychain Access > Access Control, or use '
+        'the Agent build that created it.',
       );
+    }
+    return AgentSecretStoreUnavailable(
+      'macOS Keychain $operation failed ($status).',
+    );
+  }
+
+  /// Whether this process already forbade Keychain user interaction.
+  bool _interactionForbidden = false;
+
+  /// Forbids every interactive authorization path for this process, once.
+  ///
+  /// macOS answers a read of a generic-password item that was created by a
+  /// *different* code identity with an authorization prompt (`SecurityAgent`)
+  /// and blocks the calling thread until somebody answers it. A Sanad runtime
+  /// never has somebody to answer — the CLI runs under a Client, a scheduler,
+  /// or a terminal that owns no Security prompt — so the read blocked inside
+  /// the security framework: no output, no socket, no exit. Forbidding
+  /// interaction turns that prompt into `errSecInteractionNotAllowed`, which
+  /// [read] reports as a closed vault instead of a hung process.
+  void _forbidUserInteraction() {
+    if (_interactionForbidden) return;
+    _interactionForbidden = true;
+    try {
+      _setUserInteractionAllowed(0);
+    } catch (_) {
+      // A future macOS that drops the legacy switch is still covered by the
+      // per-query attribute below.
+    }
+  }
+
+  /// Per-query suppression for items that honour `kSecUseAuthenticationUI`
+  /// (the data-protection keychain), where the legacy switch has no effect.
+  Map<Pointer<Void>, Pointer<Void>> get _nonInteractiveAttributes {
+    final ui = _kSecUseAuthenticationUI;
+    final fail = _kSecUseAuthenticationUIFail;
+    if (ui == null || fail == null) return const {};
+    return {ui: fail};
+  }
+
+  Pointer<Void>? _optionalConstant(String name) {
+    try {
+      return _security.lookup<Pointer<Void>>(name).value;
+    } catch (_) {
+      return null;
+    }
+  }
 
   late final _kSecClass = _security.lookup<Pointer<Void>>('kSecClass').value;
   late final _kSecClassGenericPassword = _security
@@ -316,10 +382,23 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
         int Function(Pointer<Void>, Pointer<Void>)
       >('SecItemUpdate');
   late final _secItemDelete = _security
-      .lookupFunction<
-        Int32 Function(Pointer<Void>),
-        int Function(Pointer<Void>)
-      >('SecItemDelete');
+      .lookupFunction<Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>(
+        'SecItemDelete',
+      );
+
+  /// `SecKeychainSetUserInteractionAllowed`, or a throwing lookup on a system
+  /// that no longer exports the legacy switch.
+  late final _setUserInteractionAllowed = _security
+      .lookupFunction<Int32 Function(Uint8), int Function(int)>(
+        'SecKeychainSetUserInteractionAllowed',
+      );
+
+  late final Pointer<Void>? _kSecUseAuthenticationUI = _optionalConstant(
+    'kSecUseAuthenticationUI',
+  );
+  late final Pointer<Void>? _kSecUseAuthenticationUIFail = _optionalConstant(
+    'kSecUseAuthenticationUIFail',
+  );
 }
 
 final class _DataBlob extends Struct {
