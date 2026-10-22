@@ -14,7 +14,10 @@ class CliRunner {
   /// Overrides the snapshot generation store; tests inject a temp location.
   final UiTreeGenerationStore? generationStore;
 
-  CliRunner(this.args, {this.generationStore});
+  /// Root directory for the default generation store; tests inject a temp dir.
+  final Directory? generationRoot;
+
+  CliRunner(this.args, {this.generationStore, this.generationRoot});
 
   Future<int> run() async {
     if (args.isEmpty ||
@@ -94,10 +97,13 @@ class CliRunner {
       connectDriver: connectDriver,
     );
     controller.rpcTimeout = rpcTimeout;
+    // Key the counter by the *resolved* endpoint so an invocation without an
+    // explicit --vm-url still uses its own Client's counter.
     controller.generationStore =
         generationStore ??
         UiTreeGenerationStore.forVmServiceUrl(
-          explicitUrl ?? Platform.environment['VM_SERVICE_URL'],
+          controller.serviceUrl,
+          root: generationRoot,
         );
     return controller;
   }
@@ -171,12 +177,16 @@ class CliRunner {
             'generation': generation,
             'signature': capture.signature,
             'fresh': fresh,
+            if (fresh) 'settled': capture.settled,
             'elements': elements.map((e) => e.toJson()).toList(),
           }),
         );
       } else {
         _printElementsFormatted(elements, compact: compact);
-        print('generation: $generation${fresh ? ' (fresh)' : ''}');
+        print(
+          'generation: $generation'
+          '${fresh ? (capture.settled ? ' (fresh)' : ' (fresh, unsettled)') : ''}',
+        );
       }
       return 0;
     } finally {
@@ -294,7 +304,13 @@ class CliRunner {
     final expectAbsent =
         _getOption(cmdArgs, '--expect-absent') ??
         _getOption(cmdArgs, '--expect-gone');
-    final verify = !_hasFlag(cmdArgs, '--no-verify');
+    final noVerify = _hasFlag(cmdArgs, '--no-verify');
+    // `--verify` opts into strict verification: the same unchanged tree that a
+    // plain tap reports becomes a failure.
+    final strictVerify =
+        !noVerify &&
+        (_hasFlag(cmdArgs, '--verify') ||
+            _hasFlag(cmdArgs, '--strict-verify'));
 
     if (key == null &&
         text == null &&
@@ -323,7 +339,8 @@ class CliRunner {
         postDelay: Duration(milliseconds: delayMs),
         expect: expect,
         expectAbsent: expectAbsent,
-        verify: verify,
+        verify: !noVerify,
+        strictVerify: strictVerify,
         verifyTimeout: Duration(milliseconds: verifyMs),
       );
 
@@ -588,12 +605,45 @@ class CliRunner {
     if (!isJson) {
       print('🚀 Running batch with ${steps.length} steps...');
     }
+    final reportFile = _getOption(cmdArgs, '--report-file');
     final controller = await _connect(
       explicitUrl: explicitUrl,
       rpcTimeout: Duration(seconds: timeoutSec),
     );
     try {
-      final results = await controller.runBatch(steps);
+      // Every completed step is persisted before the next one starts, so a
+      // wall-clock kill still leaves the completed evidence on disk for the
+      // launcher to report.
+      void persist(List<DriverActionResult> soFar) {
+        if (reportFile == null) return;
+        try {
+          final file = File(reportFile);
+          if (!file.parent.existsSync()) {
+            file.parent.createSync(recursive: true);
+          }
+          final staging = File('${file.path}.$pid.tmp');
+          staging.writeAsStringSync(
+            json.encode({
+              'steps_total': steps.length,
+              'completed': soFar.length,
+              'results': soFar.map((r) => r.toJson()).toList(),
+            }),
+            flush: true,
+          );
+          staging.renameSync(file.path);
+        } catch (_) {
+          // Partial evidence is best effort; it never fails the batch.
+        }
+      }
+
+      final results = await controller.runBatch(
+        steps,
+        onProgress: (soFar) {
+          persist(soFar);
+          if (!isJson) print('${soFar.length}. ${soFar.last}');
+        },
+      );
+      persist(results);
       final allSuccess = results.every((r) => r.success);
 
       if (isJson) {
@@ -601,6 +651,7 @@ class CliRunner {
           json.encode({
             'status': allSuccess ? 'ok' : 'failed',
             'total': results.length,
+            'steps_total': steps.length,
             'passed': results.where((r) => r.success).length,
             'generation': controller.generationStore?.peek(),
             'results': results.map((r) => r.toJson()).toList(),
@@ -608,14 +659,14 @@ class CliRunner {
         );
       } else {
         print('\n--- Batch Execution Summary ---');
-        for (int i = 0; i < results.length; i++) {
-          print('${i + 1}. ${results[i]}');
-        }
-        print('------------------------------');
         print(
-          allSuccess
+          '${results.where((r) => r.success).length}/${results.length} '
+          'completed steps succeeded out of ${steps.length} requested.',
+        );
+        print(
+          allSuccess && results.length == steps.length
               ? '✅ All batch steps succeeded!'
-              : '❌ Some batch steps failed.',
+              : '❌ Some batch steps did not run or failed.',
         );
       }
       return allSuccess ? 0 : 1;
@@ -665,26 +716,33 @@ Commands:
   auth-url       Print the active browser authentication URL for the selected Client
                  Options: --json
 
-  tap            Tap an element (with auto-scroll into view) and verify the outcome
+  tap            Tap an element (auto-scroll, then tap) and report the evidence
                  Options: --key <k>, --text <t>, --type <type>, --within <scope>, --index <i>, --coords x,y,
-                          --expect <key>, --expect-absent <key>, --no-verify, --verify-timeout <ms>,
+                          --verify, --expect <key>, --expect-absent <key>, --no-verify, --verify-timeout <ms>,
                           --timeout <sec>, --delay <ms>, --json
+                 A plain tap exits 0 and reports `verified: false` with
+                 `verification: no_observable_change` when nothing changed.
+                 --verify, --expect, or --expect-absent make that a failure.
 
   enter-text     Enter text into an input field and verify the effect
                  Options: --key <k>, --text <t>, --no-tap-first, --no-verify, --verify-timeout <ms>, --timeout <sec>, --delay <ms>, --json
+                 A field whose value is not exposed is verified by an observable tree change.
 
   scroll         Scroll inside a scrollable widget or scroll until item visible
                  Options: --key <k>, --direction <up|down>, --dx <x>, --dy <y>, --to <top|bottom>, --until-visible <target_key>, --timeout <sec>, --json
 
   wait-for       Wait for an element to appear or disappear, then report the elapsed time
                  Options: --key <k>, --text <t>, --type <type>, --absent, --timeout <sec>, --json
+                 --type --absent is proven by the rendered type census, because the
+                 inspected tree omits unkeyed widgets with no text or interaction.
 
   screenshot     Capture visual PNG screenshot
                  Options: --out <path>, --json
 
   batch          Execute a sequence of actions from a JSON recipe file
-                 Options: --file <path>, --json-steps '<json>', --json
+                 Options: --file <path>, --json-steps '<json>', --report-file <path>, --json, --timeout <sec> (per step)
                  Steps: tap, enter_text, scroll, wait_for, snapshot, screenshot, message_bodies, sleep.
+                 --report-file receives each completed step before the next starts.
 
 Global Options:
   --vm-url <url>     VM service endpoint (injected automatically by sanad-dev ui)

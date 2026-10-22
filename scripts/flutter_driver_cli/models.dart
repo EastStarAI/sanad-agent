@@ -144,8 +144,14 @@ class DriverActionResult {
   /// Snapshot generation observed after the action completed.
   final int? generation;
 
-  /// Post-condition evidence for verified actions: `text`, `tree`, or `none`.
+  /// Post-condition evidence for verified actions: `text`, `tree`, `present`,
+  /// or `absent`.
   final String? verification;
+
+  /// Explicit note when no evidence was established. `none` means verification
+  /// was requested and failed; `no_observable_change` means the action was
+  /// dispatched, nothing changed, and the caller did not ask for a failure.
+  final String? verificationNote;
 
   const DriverActionResult({
     required this.success,
@@ -158,20 +164,30 @@ class DriverActionResult {
     this.y,
     this.generation,
     this.verification,
+    this.verificationNote,
   });
 
-  Map<String, dynamic> toJson() => {
-    'success': success,
-    'action': action,
-    'message': message,
-    'duration_ms': duration.inMilliseconds,
-    if (data != null) 'data': data,
-    if (targetKey != null) 'key': targetKey,
-    if (x != null) 'x': x,
-    if (y != null) 'y': y,
-    if (generation != null) 'generation': generation,
-    if (verification != null) 'verified': verification,
-  };
+  Map<String, dynamic> toJson() {
+    final payload = <String, dynamic>{
+      'success': success,
+      'action': action,
+      'message': message,
+      'duration_ms': duration.inMilliseconds,
+      if (data != null) 'data': data,
+      if (targetKey != null) 'key': targetKey,
+      if (x != null) 'x': x,
+      if (y != null) 'y': y,
+    };
+    if (generation != null) payload['generation'] = generation;
+    if (verification != null) {
+      payload['verified'] = verification;
+      payload['verification'] = verification;
+    } else if (verificationNote != null) {
+      payload['verified'] = false;
+      payload['verification'] = verificationNote;
+    }
+    return payload;
+  }
 
   @override
   String toString() =>
@@ -206,6 +222,9 @@ class BatchStep {
   /// Skips post-condition verification for a single step.
   final bool noVerify;
 
+  /// Turns an unchanged tree from "reported" into a step failure.
+  final bool strictVerify;
+
   /// Requests a quiesced re-capture for a `snapshot` step.
   final bool fresh;
 
@@ -231,6 +250,7 @@ class BatchStep {
     this.expect,
     this.expectAbsent,
     this.noVerify = false,
+    this.strictVerify = false,
     this.fresh = false,
   });
 
@@ -264,6 +284,7 @@ class BatchStep {
       expectAbsent:
           json['expect_absent'] as String? ?? json['expect_gone'] as String?,
       noVerify: json['no_verify'] as bool? ?? false,
+      strictVerify: json['verify'] as bool? ?? false,
       fresh: json['fresh'] as bool? ?? false,
     );
   }
@@ -290,6 +311,7 @@ class BatchStep {
     if (expect != null) 'expect': expect,
     if (expectAbsent != null) 'expect_absent': expectAbsent,
     if (noVerify) 'no_verify': noVerify,
+    if (strictVerify) 'verify': strictVerify,
     if (fresh) 'fresh': fresh,
   };
 }

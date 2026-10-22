@@ -29,15 +29,28 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Workspace security driver keys | Composer permission menu items expose `composer_permission_mode_default` and `composer_permission_mode_full_access`; the Workspace Settings security card segments expose `workspace_security_mode_direct`, `workspace_security_mode_protected`, `workspace_security_discovery_owner_only`, and `workspace_security_discovery_disabled`, each reporting `selected` through `Semantics(selected:)`. The sidebar `workspace_settings_btn` stays hover-only (an invisible tappable target would invite accidental taps); drivers open Workspace Settings from the Settings navigation instead |
 | Analyzer and formatter | All changed Client and script sources pass |
 | Snapshot generation | Two consecutive `snapshot --json` invocations report a strictly increasing `generation` and a stable `signature` for an unchanged tree |
-| Fresh snapshot | `snapshot --fresh` re-captures until two consecutive trees agree and reports `fresh: true` |
+| Generation concurrency | The counter is incremented under an advisory lock keyed by the resolved endpoint, so concurrent invocations never return the same value and no endpoint token reaches the filesystem |
+| Fresh snapshot | `snapshot --fresh` re-captures until two consecutive trees agree and reports `fresh: true` with `settled: true` |
+| Fresh snapshot that never settles | `snapshot --fresh` still returns the last tree but reports `settled: false` instead of claiming quiescence |
 | Wait with elapsed time | `wait-for --key` returns `duration_ms` and `data.waited_ms`, and succeeds after a late element appears |
 | Wait for absence | `wait-for --absent` fails closed when the element persists past `--timeout` |
+| Type absence proof | `wait-for --absent --type` succeeds only when the rendered type census shows the type is not rendered; a type that is rendered but uninspected fails instead of passing, and a truncated census fails closed |
+| Rendered but uninspected type | `wait-for --type CircularProgressIndicator` fails immediately with `rendered but is not inspected` instead of waiting out the timeout |
 | Offstage scroll target | `scroll --until-visible` fails fast with `target offstage/not found; navigate first` instead of hanging, and succeeds without scrolling when the target is already rendered |
-| Tap post-condition | A tap whose tree does not change fails with `verified: none` and names `--expect` and `--no-verify`; `--expect`/`--expect-absent` are asserted against the settled tree; `--no-verify` accepts a deliberate no-op |
+| Plain tap on an inert widget | Exits `0` with `verified: false` and `verification: no_observable_change`; the message contains `tap dispatched; no observable change` and warns against a blind retry |
+| Strict tap post-condition | `tap --verify`, `--expect`, or `--expect-absent` make an unchanged tree a failure with `verified: false`, `verification: none`, and the same dispatched-once wording; `--no-verify` accepts a deliberate no-op and omits the verification fields |
+| Tap baseline placement | The controller reveals the selector (`ext.sanad_client.reveal`) before capturing the baseline, so an auto-scroll that moves bounds is not credited to the tap as `verified: tree` |
 | Tap result shape | JSON reports `key`, `x`, `y`, `generation`, and `duration_ms` in addition to the existing fields |
-| Enter-text post-condition | A changed rendered value verifies as `text` without echoing the value; an obscured field without an observable tree change fails and offers `--no-verify` |
+| Enter-text post-condition | A changed rendered value verifies as `text` without echoing the value; an obscured field verifies as `tree` when the widget tree changes and fails with `--no-verify` offered when it does not |
 | Wall-clock kill | A driver child that overruns the computed cap is killed and the command exits `124` with a bounded diagnostic |
-| Artifact cache | A source-matched native artifact is compiled once per fingerprint, reused afterwards, replaced after a source change, and pruned when stale |
+| Wall-clock budget | The cap includes each action's post-delay and verify window, and a batch recipe adds every step's own timeout, delay, verify window, and sleep |
+| Process-tree kill | A killed driver child leaves no live descendant, so the `dart` grandchild behind an `fvm` wrapper cannot keep acting |
+| Compile deadline | A driver CLI compilation that exceeds its deadline is killed with its process tree and falls back to the JIT path |
+| Partial batch evidence | A batch killed at the wall clock reports the steps that completed, both as persisted per-step evidence and as a partial result (`timed_out`, `partial`, `steps_total`, `completed`) |
+| Artifact cache | A source-matched native artifact is compiled once per fingerprint, reused afterwards, replaced after a source change, and pruned when stale while a fresh staging file of another invocation survives |
+| Artifact dependency invalidation | Changing `client/pubspec.lock`, `client/.dart_tool/package_config.json`, `.fvmrc`, or the Dart SDK version produces a new artifact and a rebuild |
+| Artifact disappearance | An artifact that disappears after the cache check falls back to the JIT path instead of failing the action |
+| Launcher argument fidelity | A driver value that equals a launcher flag (for example `enter-text --text --home`) is forwarded verbatim, while launcher flags before the sub-command or after `--` are stripped |
 | Batch action plus wait | One `batch` recipe chains a tap with a `wait_for` step and returns both results from a single connection |
 
 ## Managed Runtime Coverage
@@ -51,7 +64,9 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Windows host | FVM child execution uses shell resolution for the platform wrapper |
 | Help request with no runtime | Help remains available |
 | Transient missing Client | Discovery is retried once before the missing-Client failure is reported |
-| Owning window not frontmost | The owner bundle is activated before dispatch; activation failure never blocks the action and never raises a system prompt |
+| Owning window not frontmost | The owner bundle is activated before a UI-changing command (tap, enter-text, scroll, batch) and never before snapshot, find, wait-for, or screenshot; activation failure never blocks the action and never raises a system prompt |
+| Owning window liveness | Activation is skipped when the discovered pid has exited, no longer belongs to that bundle, or shares the bundle with a second live instance; `open` is never called and no new Client instance is launched |
+| Activation opt-out | `--no-activate` disables activation for the invocation without changing the forwarded action |
 | Missing Client package configuration | Fails closed with the setup recovery command instead of a compile error |
 
 ## Live Interaction Coverage
@@ -79,6 +94,9 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Older instrumented Client without the Sanad text extension | Fails closed with a bounded extension error; text entry never degrades to an unscoped legacy path. |
 | Action during animation/streaming | Tree probes replace Flutter Driver frame synchronization, so a busy Client still answers inspection, waits, and verification inside the deadline. |
 | Wait for presence/absence | Returns success only for the requested terminal condition |
+| Inert widget tap | A `ui tap --key <inert_control>` exits `0` with `verified: false` and `verification: no_observable_change`; the same command with `--verify` exits nonzero with `tap dispatched; no observable change` |
+| Obscured field entry | `ui enter-text --key <password_field> --text <dummy>` verifies through a tree change when the Client updates the field's visible state, and otherwise fails with the tree-check explanation and no echoed value |
+| Unsupported type wait | `ui wait-for --type CircularProgressIndicator --timeout 5` fails within seconds with `rendered but is not inspected`, and `--absent` on the same type fails instead of passing |
 | Screenshot | Produces a non-empty PNG outside tracked source artifacts |
 | Batch JSON mode | Emits exactly one parseable JSON result and a nonzero status when any step fails |
 | Same-connection response evidence | A send/wait/`message_bodies` batch captures the target conversation before closing its shared Driver connection, avoiding a follow-up navigation race |

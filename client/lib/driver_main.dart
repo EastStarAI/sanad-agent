@@ -169,6 +169,53 @@ void main() {
     return matched;
   }
 
+  /// Collects tap targets for a selector in render order.
+  ///
+  /// Shared by `ext.sanad_client.tap` and `ext.sanad_client.reveal` so the
+  /// inspected target and the tapped target can never disagree.
+  List<Element> locateTapTargets(
+    Element scopeRoot, {
+    required String? targetKey,
+    required String? targetText,
+    required String? targetType,
+  }) {
+    final matchingElements = <Element>[];
+
+    void walk(Element element) {
+      final widget = element.widget;
+      final key = widget.key;
+      final keyStr = key is ValueKey ? key.value.toString() : key?.toString();
+
+      String? textValue;
+      if (widget is Text) {
+        textValue = widget.data;
+      } else if (widget is RichText) {
+        textValue = widget.text.toPlainText();
+      }
+
+      bool isMatch = false;
+      if (targetKey != null && keyStr == targetKey) {
+        isMatch = true;
+      } else if (targetText != null && textValue == targetText) {
+        isMatch = true;
+      } else if (targetType != null && widget.runtimeType.toString() == targetType) {
+        isMatch = true;
+      }
+
+      if (isMatch) {
+        final renderObject = element.renderObject;
+        if (renderObject is RenderBox && renderObject.attached) {
+          matchingElements.add(element);
+        }
+      }
+
+      element.visitChildren(walk);
+    }
+
+    walk(scopeRoot);
+    return matchingElements;
+  }
+
   // Register our custom interactive UI inspection extension
   developer.registerExtension('ext.sanad_client.inspect_ui', (
     method,
@@ -180,6 +227,66 @@ void main() {
     final interactiveOnly = parameters['interactive'] == 'true' || parameters['interactiveOnly'] == 'true';
     final filterQuery = parameters['filter']?.trim().toLowerCase();
     final withinTarget = parameters['within']?.trim();
+    final typeCensus = parameters['typeCensus'] == 'true';
+
+    // A type census enumerates rendered widget runtime types instead of the
+    // inspected element subset, so a caller can prove that a type is genuinely
+    // absent rather than merely uninspected. It is bounded and reports
+    // truncation explicitly.
+    const int maxCensusTypes = 400;
+    const int maxCensusElements = 20000;
+
+    if (typeCensus) {
+      try {
+        final root = WidgetsBinding.instance.rootElement;
+        if (root == null) {
+          return developer.ServiceExtensionResponse.error(
+            developer.ServiceExtensionResponse.extensionError,
+            json.encode({'error': 'Root element not found'}),
+          );
+        }
+        final startElement = findScopeRoot(root, withinTarget);
+        if (startElement == null) {
+          return developer.ServiceExtensionResponse.error(
+            developer.ServiceExtensionResponse.extensionError,
+            json.encode({'error': 'UI scope not found: $withinTarget'}),
+          );
+        }
+        final types = <String>{};
+        var visited = 0;
+        var truncated = false;
+        void census(Element element) {
+          if (truncated) return;
+          visited++;
+          if (visited > maxCensusElements) {
+            truncated = true;
+            return;
+          }
+          types.add(element.widget.runtimeType.toString());
+          if (types.length > maxCensusTypes) {
+            truncated = true;
+            return;
+          }
+          element.visitChildren(census);
+        }
+
+        census(startElement);
+        final sorted = types.toList()..sort();
+        return developer.ServiceExtensionResponse.result(
+          json.encode({
+            'status': 'ok',
+            'types': sorted,
+            'type_count': sorted.length,
+            'truncated': truncated,
+          }),
+        );
+      } catch (e) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': e.toString()}),
+        );
+      }
+    }
 
     void walk(
       Element element, {
@@ -750,44 +857,15 @@ void main() {
           );
         }
 
-        final matchingElements = <Element>[];
-
-        void walk(Element element) {
-          final widget = element.widget;
-          final key = widget.key;
-          final keyStr = key is ValueKey ? key.value.toString() : key?.toString();
-
-          String? textValue;
-          if (widget is Text) {
-            textValue = widget.data;
-          } else if (widget is RichText) {
-            textValue = widget.text.toPlainText();
-          }
-
-          // Check if this is a SidebarConversationRow that contains the targetText
-          bool isMatch = false;
-          if (targetKey != null && keyStr == targetKey) {
-            isMatch = true;
-          } else if (targetText != null && textValue == targetText) {
-            isMatch = true;
-          } else if (targetType != null && widget.runtimeType.toString() == targetType) {
-            isMatch = true;
-          }
-
-          if (isMatch) {
-            final renderObject = element.renderObject;
-            if (renderObject is RenderBox && renderObject.attached) {
-              matchingElements.add(element);
-            }
-          }
-
-          element.visitChildren(walk);
-        }
-
         final startElement = findScopeRoot(root, withinTarget);
-        if (startElement != null) {
-          walk(startElement);
-        }
+        final matchingElements = startElement == null
+            ? <Element>[]
+            : locateTapTargets(
+                startElement,
+                targetKey: targetKey,
+                targetText: targetText,
+                targetType: targetType,
+              );
 
         if (matchingElements.isEmpty) {
           return developer.ServiceExtensionResponse.error(
@@ -861,10 +939,99 @@ void main() {
         ),
       );
 
+        return developer.ServiceExtensionResponse.result(
+          json.encode({
+            'status': 'ok',
+            'tapped_at': {'x': targetX.round(), 'y': targetY.round()},
+          }),
+        );
+    } catch (e) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': e.toString()}),
+      );
+    }
+  });
+
+  // Reveals a selector without dispatching any pointer event.
+  //
+  // `ext.sanad_client.tap` scrolls its target into view before tapping, which
+  // moves bounds and would otherwise be indistinguishable from the tap's own
+  // effect. A caller reveals first, captures the post-scroll tree, and only
+  // then taps, so verification observes the tap alone. The extension is
+  // separate from `tap` on purpose: a Client that does not register it fails
+  // at isolate discovery instead of silently performing an unexpected tap.
+  developer.registerExtension('ext.sanad_client.reveal', (
+    method,
+    parameters,
+  ) async {
+    try {
+      final targetKey = parameters['key'];
+      final targetText = parameters['text']?.trim();
+      final targetType = parameters['type']?.trim();
+      final withinTarget = parameters['within']?.trim();
+      final targetIndex = int.tryParse(parameters['index'] ?? '0') ?? 0;
+      final root = WidgetsBinding.instance.rootElement;
+      if (root == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'Root element not found'}),
+        );
+      }
+
+      final startElement = findScopeRoot(root, withinTarget);
+      final matchingElements = startElement == null
+          ? <Element>[]
+          : locateTapTargets(
+              startElement,
+              targetKey: targetKey,
+              targetText: targetText,
+              targetType: targetType,
+            );
+
+      if (matchingElements.isEmpty) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'No matching element found to reveal'}),
+        );
+      }
+      if (targetIndex < 0 || targetIndex >= matchingElements.length) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({
+            'error': 'Reveal index $targetIndex is out of range',
+            'match_count': matchingElements.length,
+          }),
+        );
+      }
+
+      final targetElement = matchingElements[targetIndex];
+      try {
+        await Scrollable.ensureVisible(
+          targetElement,
+          alignment: 0.5,
+          duration: Duration.zero,
+        );
+      } catch (_) {}
+
+      final renderBox = targetElement.renderObject;
+      Map<String, dynamic>? bounds;
+      if (renderBox is RenderBox && renderBox.attached) {
+        final translation = renderBox.getTransformTo(null).getTranslation();
+        final size = renderBox.size;
+        bounds = {
+          'x': translation.x.round(),
+          'y': translation.y.round(),
+          'width': size.width.round(),
+          'height': size.height.round(),
+        };
+      }
       return developer.ServiceExtensionResponse.result(
         json.encode({
           'status': 'ok',
-          'tapped_at': {'x': targetX.round(), 'y': targetY.round()},
+          'revealed': true,
+          'match_count': matchingElements.length,
+          if (bounds != null) 'bounds': bounds,
         }),
       );
     } catch (e) {
@@ -877,3 +1044,4 @@ void main() {
 
   app.main();
 }
+

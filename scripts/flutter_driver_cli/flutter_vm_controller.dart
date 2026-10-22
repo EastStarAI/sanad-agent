@@ -42,10 +42,36 @@ String _rpcErrorMessage(Object? error) {
 
 /// One inspected widget tree plus its change-detection signature.
 class UiTreeCapture {
-  const UiTreeCapture(this.elements, this.signature);
+  const UiTreeCapture(this.elements, this.signature, {this.settled = true});
 
   final List<UiElement> elements;
   final String signature;
+
+  /// False when a settle wait expired before two consecutive captures agreed.
+  final bool settled;
+}
+
+/// Bounded census of the runtime widget types that are actually rendered.
+///
+/// The inspected tree intentionally emits only keyed, textual, tooltip-bearing,
+/// or interactive widgets, so an uninspected type is indistinguishable from an
+/// absent one. The census answers "is this type rendered at all", which is what
+/// an absence claim requires.
+class UiTypeCensus {
+  const UiTypeCensus(this.types, {required this.truncated});
+
+  final Set<String> types;
+
+  /// True when the client stopped enumerating; absence is then unprovable.
+  final bool truncated;
+
+  bool contains(String typeFilter) {
+    final needle = typeFilter.toLowerCase();
+    return types.any((type) {
+      final candidate = type.toLowerCase();
+      return candidate == needle || candidate.endsWith(needle);
+    });
+  }
 }
 
 /// Guidance returned when a scrolled-for target cannot be reached.
@@ -256,6 +282,9 @@ class FlutterVmController {
 
   /// Re-captures until two consecutive trees agree, then returns the settled
   /// tree. Bounded by [timeout] so an animating Client cannot stall a caller.
+  ///
+  /// When the tree never settles, the last capture is returned with
+  /// `settled: false` so a caller can tell quiescence from a truncated wait.
   Future<UiTreeCapture> captureSettledTree({
     String? filter,
     String? within,
@@ -281,10 +310,39 @@ class FlutterVmController {
         onlyWithKeys: onlyWithKeys,
         interactiveOnly: interactiveOnly,
       );
-      if (next.signature == previous.signature) return next;
+      if (next.signature == previous.signature) {
+        return UiTreeCapture(next.elements, next.signature, settled: true);
+      }
       previous = next;
     }
-    return previous;
+    return UiTreeCapture(
+      previous.elements,
+      previous.signature,
+      settled: false,
+    );
+  }
+
+  /// Enumerates the runtime types that are rendered in the Client tree.
+  ///
+  /// Fails closed when the Client cannot answer: an absence claim without a
+  /// census would be a false success.
+  Future<UiTypeCensus> typeCensus({String? within}) async {
+    final isolateId = await _discoverIsolateId('ext.sanad_client.inspect_ui');
+    final result =
+        await _callRpc('ext.sanad_client.inspect_ui', {
+          'isolateId': isolateId,
+          'typeCensus': 'true',
+          if (within != null) 'within': within,
+        }) as Map<String, dynamic>?;
+    final types = (result?['types'] as List?)?.whereType<String>().toSet();
+    if (types == null) {
+      throw const _DriverException(
+        'This Client cannot enumerate rendered widget types, so an absence '
+        'claim cannot be verified. Rebuild the driver entry point or wait on a '
+        'widget key instead.',
+      );
+    }
+    return UiTypeCensus(types, truncated: result?['truncated'] == true);
   }
 
   /// Returns the active browser authentication URL from this exact driver VM.
@@ -339,10 +397,15 @@ class FlutterVmController {
 
   /// Taps an element resolved by key, text, type, or coordinates.
   ///
-  /// [verify] enforces a post-condition: the explicit [expect] /
-  /// [expectAbsent] key assertion, or an observable widget-tree change inside
-  /// [verifyTimeout]. A silent no-op becomes an error instead of a false
-  /// success.
+  /// [verify] observes the widget tree around the tap. Observation alone is not
+  /// an assertion: unless [strictVerify], [expect], or [expectAbsent] is
+  /// supplied, an unchanged tree still reports success so an inert control can
+  /// be tapped without turning the command into a failure. Strict mode turns
+  /// that same condition into an error.
+  ///
+  /// The baseline tree is captured after [revealTarget] has scrolled the target
+  /// into view, so scroll-induced bound changes are never mistaken for the
+  /// tap's effect.
   Future<DriverActionResult> tap({
     String? key,
     String? text,
@@ -356,11 +419,27 @@ class FlutterVmController {
     String? expect,
     String? expectAbsent,
     bool verify = true,
-    Duration verifyTimeout = const Duration(milliseconds: 2000),
+    bool strictVerify = false,
+    Duration verifyTimeout = defaultVerifyTimeout,
   }) async {
     final stopwatch = Stopwatch()..start();
     final targetDesc = key ?? text ?? type ?? '($x, $y)';
     final withinDesc = within != null ? ' (within $within)' : '';
+    final strict = strictVerify || expect != null || expectAbsent != null;
+    final selectorTarget = key != null || text != null || type != null;
+
+    // Scrolling is part of resolving the target, not part of the tap: reveal
+    // first so the captured baseline already reflects the new scroll offset.
+    var revealed = false;
+    if (verify && selectorTarget) {
+      revealed = await revealTarget(
+        key: key,
+        text: text,
+        type: type,
+        within: within,
+        index: index,
+      );
+    }
 
     // Verification observes the whole tree: a scoped tap may legitimately
     // change widgets outside its selector scope.
@@ -432,22 +511,50 @@ class FlutterVmController {
 
     stopwatch.stop();
     if (!outcome.passed) {
+      final expectation = expect != null
+          ? 'expected $expect to be present'
+          : expectAbsent != null
+          ? 'expected $expectAbsent to be gone'
+          : 'the widget tree did not change';
+      final revealedNote = revealed
+          ? ''
+          : ' Reveal was unavailable, so a scroll may be missing from the '
+                'baseline.';
+      if (!strict) {
+        return DriverActionResult(
+          success: true,
+          action: 'tap',
+          message:
+              'Tapped $targetDesc$withinDesc at ($tappedX, $tappedY); '
+              'tap dispatched; no observable change within '
+              '${verifyTimeout.inMilliseconds}ms. The tap is not idempotent: '
+              'do not retry blindly. Pass --verify or --expect <key> to make '
+              'this a failure.$revealedNote',
+          data: res,
+          duration: stopwatch.elapsed,
+          targetKey: key,
+          x: tappedX,
+          y: tappedY,
+          verificationNote: 'no_observable_change',
+          generation: _nextGeneration(),
+        );
+      }
       return DriverActionResult(
         success: false,
         action: 'tap',
         message:
-            'Tap on $targetDesc$withinDesc produced no observable change '
-            'within ${verifyTimeout.inMilliseconds}ms: '
-            '${expect != null ? 'expected $expect to be present' : expectAbsent != null ? 'expected $expectAbsent to be gone' : 'the widget tree did not change'}. '
-            'The target may be offstage, obscured, or animated away; '
-            'pass --expect <key> to assert the intended outcome, --no-verify to '
-            'skip the post-condition, or navigate first.',
+            'tap dispatched; no observable change within '
+            '${verifyTimeout.inMilliseconds}ms: $expectation. '
+            'The target may be offstage, obscured, or inert; the tap was '
+            'dispatched exactly once, so do not retry blindly. Pass '
+            '--expect <key> to assert the intended outcome, --no-verify to '
+            'accept a deliberate no-op, or navigate first.$revealedNote',
         data: res,
         duration: stopwatch.elapsed,
         targetKey: key,
         x: tappedX,
         y: tappedY,
-        verification: 'none',
+        verificationNote: 'none',
         generation: _nextGeneration(),
       );
     }
@@ -466,11 +573,44 @@ class FlutterVmController {
     );
   }
 
+  /// Scrolls a selector into view without dispatching a pointer event.
+  ///
+  /// Returns false when the Client does not register
+  /// `ext.sanad_client.reveal`; callers then observe the tree without a reveal
+  /// guarantee instead of failing the action.
+  Future<bool> revealTarget({
+    String? key,
+    String? text,
+    String? type,
+    String? within,
+    int index = 0,
+  }) async {
+    try {
+      final isolateId = await _discoverIsolateId('ext.sanad_client.reveal');
+      final result =
+          await _callRpc('ext.sanad_client.reveal', {
+            'isolateId': isolateId,
+            if (key != null) 'key': key,
+            if (text != null) 'text': text,
+            if (type != null) 'type': type,
+            if (within != null) 'within': within,
+            if (index > 0) 'index': index.toString(),
+          }) as Map<String, dynamic>?;
+      return result?['revealed'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Enters text into an input field and verifies the observable effect.
   ///
   /// Verification prefers the field's rendered text (which is compared, never
   /// echoed). When the Client hides the value (obscured field), an observable
-  /// widget-tree change is required instead.
+  /// widget-tree change is required instead, even when the field was selected by
+  /// key.
+  ///
+  /// The baseline tree is captured after the focus tap, so focus-induced
+  /// scrolling is never mistaken for the entered text's effect.
   Future<DriverActionResult> enterText(
     String text, {
     String? key,
@@ -478,22 +618,9 @@ class FlutterVmController {
     Duration timeout = const Duration(seconds: 30),
     Duration postDelay = const Duration(milliseconds: 300),
     bool verify = true,
-    Duration verifyTimeout = const Duration(milliseconds: 2000),
+    Duration verifyTimeout = defaultVerifyTimeout,
   }) async {
     final stopwatch = Stopwatch()..start();
-
-    UiTreeCapture? before;
-    String? observedBefore;
-    if (verify) {
-      try {
-        before = await captureTree();
-        if (key != null) {
-          observedBefore = uiElementByKey(before.elements, key)?.text;
-        }
-      } catch (_) {
-        before = null;
-      }
-    }
 
     if (key != null && tapFirst) {
       final focusResult = await tap(
@@ -511,6 +638,19 @@ class FlutterVmController {
           duration: stopwatch.elapsed,
           targetKey: key,
         );
+      }
+    }
+
+    UiTreeCapture? before;
+    String? observedBefore;
+    if (verify) {
+      try {
+        before = await captureTree();
+        if (key != null) {
+          observedBefore = uiElementByKey(before.elements, key)?.text;
+        }
+      } catch (_) {
+        before = null;
       }
     }
 
@@ -567,19 +707,26 @@ class FlutterVmController {
     final deadline = Stopwatch()..start();
     UiTreeCapture latest = before;
     String? verifiedBy;
+    // A field whose rendered text is absent from the inspection is unobservable
+    // (obscured, or an empty non-obscured field that emits no text). For those
+    // the only available evidence is an observable tree change.
+    final fieldValueUnobservable = key != null && observedBefore == null;
     while (true) {
       latest = await captureTree();
-      if (key != null) {
+      if (fieldValueUnobservable) {
+        if (latest.signature != before.signature) {
+          verifiedBy = 'tree';
+          break;
+        }
+      } else if (key != null) {
         final observedAfter = uiElementByKey(latest.elements, key)?.text;
-        if (observedAfter != null || observedBefore != null) {
-          if (observedAfter != null && observedAfter == text) {
-            verifiedBy = 'text';
-            break;
-          }
-          if (observedAfter != observedBefore) {
-            verifiedBy = 'text';
-            break;
-          }
+        if (observedAfter != null && observedAfter == text) {
+          verifiedBy = 'text';
+          break;
+        }
+        if (observedAfter != observedBefore) {
+          verifiedBy = 'text';
+          break;
         }
       } else if (latest.signature != before.signature) {
         verifiedBy = 'tree';
@@ -591,19 +738,18 @@ class FlutterVmController {
 
     stopwatch.stop();
     if (verifiedBy == null) {
-      final obscured = key != null && observedBefore == null;
       return DriverActionResult(
         success: false,
         action: 'enter_text',
         message:
             'enter-text reported success but had no observable effect on '
             '${key ?? 'the focused field'} within ${verifyTimeout.inMilliseconds}ms'
-            '${obscured ? ' (the field value is not exposed, so no text change can be observed)' : ''}: '
+            '${fieldValueUnobservable ? ' (the field value is not exposed, so the widget tree was checked instead and it did not change)' : ''}: '
             'the field may not be editable or focus was lost; '
-            'pass --no-verify for intentionally obscured fields.',
+            'pass --no-verify for intentionally unobservable fields.',
         duration: stopwatch.elapsed,
         targetKey: key,
-        verification: 'none',
+        verificationNote: 'none',
         generation: _nextGeneration(),
       );
     }
@@ -744,7 +890,7 @@ class FlutterVmController {
                 'rendered bounds.',
             duration: stopwatch.elapsed,
             targetKey: targetKey,
-            verification: 'none',
+            verificationNote: 'none',
             generation: _nextGeneration(),
           );
         }
@@ -758,7 +904,7 @@ class FlutterVmController {
                 'and $targetKey never became visible.',
             duration: stopwatch.elapsed,
             targetKey: targetKey,
-            verification: 'none',
+            verificationNote: 'none',
             generation: _nextGeneration(),
           );
         }
@@ -772,7 +918,7 @@ class FlutterVmController {
                 '${timeout.inSeconds}s.',
             duration: stopwatch.elapsed,
             targetKey: targetKey,
-            verification: 'none',
+            verificationNote: 'none',
             generation: _nextGeneration(),
           );
         }
@@ -797,7 +943,7 @@ class FlutterVmController {
             '(${_conciseError(error)}).',
         duration: stopwatch.elapsed,
         targetKey: targetKey,
-        verification: 'none',
+        verificationNote: 'none',
         generation: _nextGeneration(),
       );
     }
@@ -807,6 +953,12 @@ class FlutterVmController {
   ///
   /// Driven by bounded tree probes rather than the Flutter Driver extension, so
   /// waiting does not depend on animation-free frame synchronization.
+  ///
+  /// A `--type` query is checked against the inspected tree for presence. An
+  /// absence claim is checked against the rendered type census instead, because
+  /// the inspected tree omits unkeyed widgets that carry no text, tooltip, or
+  /// interaction (for example `CircularProgressIndicator`); treating those as
+  /// absent would be a false success.
   Future<DriverActionResult> waitFor({
     String? key,
     String? text,
@@ -816,33 +968,104 @@ class FlutterVmController {
   }) async {
     final stopwatch = Stopwatch()..start();
     final target = key ?? text ?? type ?? '';
+    var censusChecked = false;
     try {
       while (true) {
-        final elements = await snapshot(includeBounds: false);
-        final present = elements.any(
-          (element) => element.matches(
-            keyFilter: key,
-            textFilter: text,
-            typeFilter: type,
-          ),
-        );
-        if (absent ? !present : present) {
-          stopwatch.stop();
-          return DriverActionResult(
-            success: true,
-            action: 'wait_for',
-            message:
-                '$target is ${absent ? "absent" : "present"} '
-                '(waited ${stopwatch.elapsedMilliseconds}ms)',
-            data: {
-              'waited_ms': stopwatch.elapsedMilliseconds,
-              'absent': absent,
-            },
-            duration: stopwatch.elapsed,
-            targetKey: key,
-            verification: absent ? 'absent' : 'present',
-            generation: _nextGeneration(),
+        if (type != null && absent) {
+          final census = await typeCensus();
+          if (census.truncated) {
+            stopwatch.stop();
+            return DriverActionResult(
+              success: false,
+              action: 'wait_for',
+              message:
+                  'Timed out after ${stopwatch.elapsedMilliseconds}ms: cannot '
+                  'prove that $type is absent because the rendered type census '
+                  'was truncated. Wait on a widget key or text instead.',
+              data: {
+                'waited_ms': stopwatch.elapsedMilliseconds,
+                'absent': absent,
+                'census_truncated': true,
+              },
+              duration: stopwatch.elapsed,
+              targetKey: key,
+              verificationNote: 'none',
+              generation: _nextGeneration(),
+            );
+          }
+          if (!census.contains(type)) {
+            stopwatch.stop();
+            return DriverActionResult(
+              success: true,
+              action: 'wait_for',
+              message:
+                  '$target is absent (waited ${stopwatch.elapsedMilliseconds}ms, '
+                  'proven by the rendered type census)',
+              data: {
+                'waited_ms': stopwatch.elapsedMilliseconds,
+                'absent': absent,
+                'evidence': 'type_census',
+              },
+              duration: stopwatch.elapsed,
+              targetKey: key,
+              verification: 'absent',
+              generation: _nextGeneration(),
+            );
+          }
+        } else {
+          final elements = await snapshot(includeBounds: false);
+          final present = elements.any(
+            (element) => element.matches(
+              keyFilter: key,
+              textFilter: text,
+              typeFilter: type,
+            ),
           );
+          if (absent ? !present : present) {
+            stopwatch.stop();
+            return DriverActionResult(
+              success: true,
+              action: 'wait_for',
+              message:
+                  '$target is ${absent ? "absent" : "present"} '
+                  '(waited ${stopwatch.elapsedMilliseconds}ms)',
+              data: {
+                'waited_ms': stopwatch.elapsedMilliseconds,
+                'absent': absent,
+              },
+              duration: stopwatch.elapsed,
+              targetKey: key,
+              verification: absent ? 'absent' : 'present',
+              generation: _nextGeneration(),
+            );
+          }
+          if (type != null && !absent && !censusChecked) {
+            // A rendered type that the inspection omits would otherwise wait
+            // out the full timeout and report a misleading absence.
+            censusChecked = true;
+            final census = await typeCensus();
+            if (!census.truncated && census.contains(type)) {
+              stopwatch.stop();
+              return DriverActionResult(
+                success: false,
+                action: 'wait_for',
+                message:
+                    'Timed out after ${stopwatch.elapsedMilliseconds}ms: $type '
+                    'is rendered but is not inspected, because it carries no '
+                    'key, text, tooltip, or interaction. Wait on its keyed '
+                    'ancestor or on visible text instead.',
+                data: {
+                  'waited_ms': stopwatch.elapsedMilliseconds,
+                  'absent': absent,
+                  'rendered_but_uninspected': true,
+                },
+                duration: stopwatch.elapsed,
+                targetKey: key,
+                verificationNote: 'none',
+                generation: _nextGeneration(),
+              );
+            }
+          }
         }
         if (stopwatch.elapsed >= timeout) {
           stopwatch.stop();
@@ -858,7 +1081,7 @@ class FlutterVmController {
             },
             duration: stopwatch.elapsed,
             targetKey: key,
-            verification: 'none',
+            verificationNote: 'none',
             generation: _nextGeneration(),
           );
         }
@@ -875,7 +1098,7 @@ class FlutterVmController {
         data: {'waited_ms': stopwatch.elapsedMilliseconds},
         duration: stopwatch.elapsed,
         targetKey: key,
-        verification: 'none',
+        verificationNote: 'none',
         generation: _nextGeneration(),
       );
     }
@@ -904,7 +1127,14 @@ class FlutterVmController {
   }
 
   /// Executes a sequence of declarative steps in a single connection session.
-  Future<List<DriverActionResult>> runBatch(List<BatchStep> steps) async {
+  ///
+  /// [onProgress] is invoked after every step with the results so far so a
+  /// caller can persist partial evidence; a wall-clock kill can then still
+  /// report which steps completed.
+  Future<List<DriverActionResult>> runBatch(
+    List<BatchStep> steps, {
+    void Function(List<DriverActionResult> results)? onProgress,
+  }) async {
     final results = <DriverActionResult>[];
 
     for (int i = 0; i < steps.length; i++) {
@@ -934,6 +1164,7 @@ class FlutterVmController {
             expect: step.expect,
             expectAbsent: step.expectAbsent,
             verify: !step.noVerify,
+            strictVerify: step.strictVerify,
             verifyTimeout: stepVerifyTimeout,
           );
           results.add(res);
@@ -1061,6 +1292,8 @@ class FlutterVmController {
             ),
           );
       }
+
+      onProgress?.call(List.unmodifiable(results));
 
       if (results.isNotEmpty &&
           !results.last.success &&

@@ -5,27 +5,6 @@ import 'package:sanad_dev/sanad_dev_cli.dart' as sanad_dev;
 import 'package:test/test.dart';
 
 /// Minimal child-process stand-in for the wall-clock guard.
-class _FakeChild implements sanad_dev.UiDriverChildProcess {
-  _FakeChild({required this.completesImmediately, this.exitStatus = 0});
-
-  final bool completesImmediately;
-  final int exitStatus;
-  final Completer<int> _exit = Completer<int>();
-  int killCount = 0;
-
-  @override
-  Future<int> get exitCode => _exit.future;
-
-  @override
-  void kill() {
-    killCount++;
-    if (!_exit.isCompleted) _exit.complete(-9);
-  }
-
-  void complete(int code) {
-    if (!_exit.isCompleted) _exit.complete(code);
-  }
-}
 
 void main() {
   group('sanad-dev ui run plan', () {
@@ -58,6 +37,8 @@ void main() {
       final plan = sanad_dev.planUiDriverRun(['snapshot', '--json']);
       expect(plan.wallTimeout, const Duration(seconds: 40));
       expect(plan.activateWindow, isTrue);
+      // Read-only commands never take focus from the user.
+      expect(plan.activatesUi, isFalse);
     });
 
     test('honours an explicit per-action timeout', () {
@@ -71,18 +52,52 @@ void main() {
       expect(plan.wallTimeout, const Duration(seconds: 100));
     });
 
-    test('scales the wall clock with the batch step count', () {
+    test('adds the verification window and post-delay to a tap deadline', () {
+      final plan = sanad_dev.planUiDriverRun(['tap', '--key', 'send_button']);
+      // 30 s action + 10 s grace + 300 ms post-delay + 2000 ms verification.
+      expect(plan.wallTimeout, const Duration(milliseconds: 42300));
+      expect(plan.activatesUi, isTrue);
+    });
+
+    test('honours explicit verification options in the tap deadline', () {
+      final plan = sanad_dev.planUiDriverRun([
+        'tap',
+        '--key',
+        'send_button',
+        '--delay',
+        '50',
+        '--verify-timeout',
+        '500',
+        '--timeout',
+        '5',
+      ]);
+      expect(plan.wallTimeout, const Duration(milliseconds: 15550));
+    });
+
+    test('scales the wall clock with each step timeout and wait', () {
       final plan = sanad_dev.planUiDriverRun(
         ['batch', '--file', 'recipe.json'],
-        batchStepCount: 3,
+        batchSteps: const [
+          sanad_dev.UiDriverBatchStepBudget(
+            action: 'tap',
+            timeoutSeconds: 60,
+          ),
+          sanad_dev.UiDriverBatchStepBudget(action: 'sleep', sleepMs: 5000),
+          sanad_dev.UiDriverBatchStepBudget(action: 'wait_for'),
+        ],
       );
-      expect(plan.wallTimeout, const Duration(seconds: 100));
+      // 60 + delay/verify 3 s + 5 s sleep + 30 s wait + 10 s grace.
+      expect(plan.wallTimeout, const Duration(seconds: 108));
+      expect(plan.isBatch, isTrue);
     });
 
     test('uses the explicit step budget for batch recipes', () {
       final plan = sanad_dev.planUiDriverRun(
         ['batch', '--json-steps', '[]', '--timeout', '5'],
-        batchStepCount: 2,
+        batchSteps: const [
+          sanad_dev.UiDriverBatchStepBudget(action: 'scroll'),
+          sanad_dev.UiDriverBatchStepBudget(action: 'wait_for'),
+        ],
       );
       expect(plan.wallTimeout, const Duration(seconds: 20));
     });
@@ -92,6 +107,27 @@ void main() {
       expect(
         plan.wallTimeout,
         const Duration(seconds: sanad_dev.uiDriverBatchDefaultWallSeconds),
+      );
+    });
+
+    test('parses batch budgets from the recipe without a live client', () {
+      final steps = sanad_dev.readUiDriverBatchSteps([
+        'batch',
+        '--json-steps',
+        '[{"action":"tap","timeout_seconds":45,"delay_ms":100},'
+            '{"action":"sleep","sleep_ms":2500},'
+            '{"action":"wait_for","timeout":12}]',
+      ]);
+      expect(steps, isNotNull);
+      expect(steps!.length, 3);
+      expect(steps.first.timeoutSeconds, 45);
+      expect(steps.first.delayMs, 100);
+      expect(steps[1].sleepMs, 2500);
+      expect(steps[2].timeoutSeconds, 12);
+      expect(
+        sanad_dev.uiDriverBatchBudgetSeconds(steps),
+        // 45 s tap + 1 s delay + 2 s verify, 3 s sleep, 12 s wait.
+        63,
       );
     });
 
@@ -124,6 +160,49 @@ void main() {
         sanad_dev.uiDriverBatchStepCount(['batch', '--json-steps', 'not-json']),
         isNull,
       );
+    });
+
+    test('never swallows a driver value that equals a launcher flag', () {
+      final plan = sanad_dev.planUiDriverRun([
+        'enter-text',
+        '--key',
+        'chat_input',
+        '--text',
+        '--home',
+      ]);
+      expect(plan.driverArguments, [
+        'enter-text',
+        '--key',
+        'chat_input',
+        '--text',
+        '--home',
+      ]);
+
+      // A leading launcher flag block is still stripped, and a launcher flag
+      // after the sub-command is honored because it is not a driver value.
+      final leading = sanad_dev.planUiDriverRun([
+        '--home',
+        '/tmp/home',
+        '--no-activate',
+        'tap',
+        '--key',
+        'send_button',
+        '--no-activate',
+      ]);
+      expect(leading.driverArguments, ['tap', '--key', 'send_button']);
+      expect(leading.activateWindow, isFalse);
+    });
+
+    test('supports an explicit end of launcher flags', () {
+      final plan = sanad_dev.planUiDriverRun([
+        '--no-activate',
+        '--',
+        'enter-text',
+        'abc',
+        '--home',
+      ]);
+      expect(plan.driverArguments, ['enter-text', 'abc', '--home']);
+      expect(plan.activateWindow, isFalse);
     });
   });
 
@@ -255,6 +334,148 @@ void main() {
       expect(leftovers, isEmpty);
     });
 
+    test('a dependency change rebuilds the artifact', () async {
+      Directory('${root.path}/client/.dart_tool').createSync(recursive: true);
+      File('${root.path}/client/.dart_tool/package_config.json')
+          .writeAsStringSync('{"packages":[]}');
+      File(
+        '${root.path}/client/pubspec.lock',
+      ).writeAsStringSync('flutter_driver: 0.1.0');
+      File('${root.path}/.fvmrc').writeAsStringSync('{"flutter":"3.35.0"}');
+      var compileCount = 0;
+      Future<bool> compile(String outputPath) async {
+        compileCount++;
+        File(outputPath).writeAsStringSync('artifact');
+        return true;
+      }
+
+      final first = await sanad_dev.ensureUiDriverArtifact(
+        repositoryRoot: root.path,
+        compile: compile,
+        isWindows: false,
+        sdkVersion: '3.9.0',
+      );
+      // An unchanged dependency set reuses the artifact.
+      final second = await sanad_dev.ensureUiDriverArtifact(
+        repositoryRoot: root.path,
+        compile: compile,
+        isWindows: false,
+        sdkVersion: '3.9.0',
+      );
+      expect(second, first);
+      expect(compileCount, 1);
+
+      File('${root.path}/client/pubspec.lock')
+          .writeAsStringSync('flutter_driver: 0.2.0');
+      final afterDependency = await sanad_dev.ensureUiDriverArtifact(
+        repositoryRoot: root.path,
+        compile: compile,
+        isWindows: false,
+        sdkVersion: '3.9.0',
+      );
+      expect(afterDependency, isNot(first));
+      expect(compileCount, 2);
+
+      final afterSdk = await sanad_dev.ensureUiDriverArtifact(
+        repositoryRoot: root.path,
+        compile: compile,
+        isWindows: false,
+        sdkVersion: '3.10.0',
+      );
+      expect(afterSdk, isNot(afterDependency));
+      expect(compileCount, 3);
+
+      File(
+        '${root.path}/client/.dart_tool/package_config.json',
+      ).writeAsStringSync('{"packages":[{"name":"changed"}]}');
+      final afterConfig = await sanad_dev.ensureUiDriverArtifact(
+        repositoryRoot: root.path,
+        compile: compile,
+        isWindows: false,
+        sdkVersion: '3.10.0',
+      );
+      expect(afterConfig, isNot(afterSdk));
+      expect(compileCount, 4);
+    });
+
+    test('fingerprint covers the SDK and the resolved package configuration',
+        () {
+      final sources = sanad_dev.readUiDriverSources(root.path);
+      expect(sources.keys, contains('dart-sdk'));
+
+      Directory('${root.path}/client').createSync(recursive: true);
+      File('${root.path}/client/.dart_tool/package_config.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('{"packages":[]}');
+      final withConfig = sanad_dev.readUiDriverSources(root.path);
+      expect(
+        withConfig.keys,
+        contains('client/.dart_tool/package_config.json'),
+      );
+      expect(
+        sanad_dev.uiDriverSourceFingerprint(withConfig),
+        isNot(sanad_dev.uiDriverSourceFingerprint(sources)),
+      );
+    });
+
+    test('prune keeps another live invocation staging file', () async {
+      final artifact = await sanad_dev.ensureUiDriverArtifact(
+        repositoryRoot: root.path,
+        compile: (outputPath) async {
+          File(outputPath).writeAsStringSync('artifact');
+          return true;
+        },
+        isWindows: false,
+      );
+      final staging = File(
+        '${File(artifact!).parent.path}/flutter-driver-cli-other.$pid.tmp',
+      )..writeAsStringSync('in-flight');
+
+      File('${root.path}/scripts/flutter_driver_cli/cli_runner.dart')
+          .writeAsStringSync('// runner changed again');
+      await sanad_dev.ensureUiDriverArtifact(
+        repositoryRoot: root.path,
+        compile: (outputPath) async {
+          File(outputPath).writeAsStringSync('artifact');
+          return true;
+        },
+        isWindows: false,
+      );
+
+      expect(staging.existsSync(), isTrue);
+    });
+
+    test('uses the JIT path when the artifact vanished before the spawn', () {
+      const artifact = '/repo/.dart_tool/sanad-dev/flutter-driver-cli-abc';
+      final missing = sanad_dev.planUiDriverInvocation(
+        artifactPath: artifact,
+        artifactExists: false,
+        packageConfig: '/repo/client/.dart_tool/package_config.json',
+        toolScript: '/repo/scripts/flutter_driver_cli.dart',
+        driverArguments: const ['tap', '--key', 'send_button'],
+        extraArguments: const ['--vm-url', 'http://127.0.0.1:51000/t/'],
+      );
+      expect(missing.usesJit, isTrue);
+      expect(missing.executable, 'fvm');
+      expect(missing.arguments.take(3), [
+        'dart',
+        '--packages=/repo/client/.dart_tool/package_config.json',
+        '/repo/scripts/flutter_driver_cli.dart',
+      ]);
+
+      final present = sanad_dev.planUiDriverInvocation(
+        artifactPath: artifact,
+        artifactExists: true,
+        packageConfig: '/repo/client/.dart_tool/package_config.json',
+        toolScript: '/repo/scripts/flutter_driver_cli.dart',
+        driverArguments: const ['tap', '--key', 'send_button'],
+        extraArguments: const [],
+      );
+      expect(present.usesJit, isFalse);
+      expect(present.executable, artifact);
+      expect(present.arguments, ['tap', '--key', 'send_button']);
+    });
+
     test('help requests never compile an artifact', () async {
       var compiled = false;
       final artifact = await sanad_dev.ensureUiDriverArtifact(
@@ -269,59 +490,6 @@ void main() {
 
       expect(artifact, isNull);
       expect(compiled, isFalse);
-    });
-  });
-
-  group('sanad-dev ui child wall clock', () {
-    test('returns the child exit status when it finishes in time', () async {
-      final child = _FakeChild(completesImmediately: true, exitStatus: 3);
-      scheduleMicrotask(() => child.complete(3));
-
-      expect(
-        await sanad_dev.awaitUiDriverChild(
-          child,
-          wallTimeout: const Duration(seconds: 5),
-        ),
-        3,
-      );
-      expect(child.killCount, 0);
-    });
-
-    test('kills the child and reports the timeout status', () async {
-      final child = _FakeChild(completesImmediately: false);
-
-      final code = await sanad_dev.awaitUiDriverChild(
-        child,
-        wallTimeout: const Duration(milliseconds: 30),
-      );
-
-      expect(code, sanad_dev.uiDriverTimeoutExitCode);
-      expect(child.killCount, 1);
-    });
-  });
-
-  group('sanad-dev ui owner window activation', () {
-    test('derives the bundle root from the running executable', () {
-      expect(
-        sanad_dev.uiDriverBundlePath(
-          '/repo/client/build/macos/Build/Products/Debug/sanad_client.app'
-          '/Contents/MacOS/sanad_client',
-        ),
-        '/repo/client/build/macos/Build/Products/Debug/sanad_client.app',
-      );
-      expect(sanad_dev.uiDriverBundlePath('/usr/local/bin/tool'), isNull);
-      expect(sanad_dev.uiDriverBundlePath(null), isNull);
-    });
-
-    test('does nothing without a macOS pid', () async {
-      expect(
-        await sanad_dev.activateUiDriverOwnerWindow(pid: null, isMacOS: true),
-        isFalse,
-      );
-      expect(
-        await sanad_dev.activateUiDriverOwnerWindow(pid: 42, isMacOS: false),
-        isFalse,
-      );
     });
   });
 }

@@ -332,6 +332,62 @@ void main() {
       }
     });
 
+    test('snapshot --fresh reports an unsettled tree', () async {
+      final fake = await _FakeDriverVm.start(mutateOnInspect: true);
+      try {
+        final result = await _runCli([
+          'snapshot',
+          '--json',
+          '--fresh',
+          '--timeout',
+          '1',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['fresh'], isTrue);
+        expect(payload['settled'], isFalse);
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('generation store follows the resolved endpoint', () async {
+      final fake = await _FakeDriverVm.start();
+      try {
+        final first = await _runCli([
+          'snapshot',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], generationRoot: tempDir);
+        final second = await _runCli([
+          'snapshot',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], generationRoot: tempDir);
+
+        expect(first.code, 0);
+        expect(second.code, 0);
+        final files = tempDir
+            .listSync()
+            .whereType<File>()
+            .map((file) => file.uri.pathSegments.last)
+            .where((name) => name.endsWith('.generation'))
+            .toList();
+        expect(files, ['127.0.0.1-${fake.port}.generation']);
+        expect(
+          json.decode(second.lines.single)['generation'],
+          greaterThan(json.decode(first.lines.single)['generation']),
+        );
+      } finally {
+        await fake.close();
+      }
+    });
+
     test('wait-for --key returns ok with the elapsed wait time', () async {
       final fake = await _FakeDriverVm.start(
         elements: [
@@ -409,6 +465,130 @@ void main() {
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isFalse);
         expect(payload['data']['waited_ms'], greaterThanOrEqualTo(1000));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('wait-for --type --absent uses the rendered type census', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label'},
+        ],
+        typeCensusTypes: ['Column', 'Text', 'InkWell'],
+      );
+      try {
+        final result = await _runCli([
+          'wait-for',
+          '--type',
+          'CircularProgressIndicator',
+          '--absent',
+          '--timeout',
+          '2',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['verified'], 'absent');
+        expect(payload['data']['evidence'], 'type_census');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('wait-for --type --absent fails when only the census sees the type',
+        () async {
+      // CircularProgressIndicator carries no key, text, or interaction, so the
+      // inspected tree omits it; treating it as absent would be a false pass.
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label'},
+        ],
+        typeCensusTypes: ['Column', 'CircularProgressIndicator', 'Text'],
+      );
+      try {
+        final result = await _runCli([
+          'wait-for',
+          '--type',
+          'CircularProgressIndicator',
+          '--absent',
+          '--timeout',
+          '1',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isFalse);
+        expect(payload['message'], contains('Timed out'));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('wait-for --type fails fast for a rendered but uninspected type',
+        () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label'},
+        ],
+        typeCensusTypes: ['CircularProgressIndicator', 'Text'],
+      );
+      try {
+        final started = DateTime.now();
+        final result = await _runCli([
+          'wait-for',
+          '--type',
+          'CircularProgressIndicator',
+          '--timeout',
+          '30',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['message'], contains('rendered but is not inspected'));
+        expect(DateTime.now().difference(started).inSeconds, lessThan(5));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('wait-for --type --absent never passes on a truncated census',
+        () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label'},
+        ],
+        typeCensusTypes: ['Column', 'Text'],
+        typeCensusTruncated: true,
+      );
+      try {
+        final result = await _runCli([
+          'wait-for',
+          '--type',
+          'CircularProgressIndicator',
+          '--absent',
+          '--timeout',
+          '2',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        expect(
+          json.decode(result.lines.single)['message'],
+          contains('census was truncated'),
+        );
       } finally {
         await fake.close();
       }
@@ -507,8 +687,7 @@ void main() {
       }
     });
 
-    test('tap fails when the tree does not change and no expectation is given',
-        () async {
+    test('plain tap reports no observable change without failing', () async {
       final fake = await _FakeDriverVm.start(
         elements: [
           {'type': 'InkWell', 'key': 'noop_btn', 'text': 'Noop'},
@@ -526,12 +705,87 @@ void main() {
           fake.httpUrl,
         ], store: generationStore);
 
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'no_observable_change');
+        expect(
+          payload['message'],
+          contains('tap dispatched; no observable change'),
+        );
+        expect(payload['message'], contains('do not retry blindly'));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('tap --verify fails when the tree does not change', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'noop_btn', 'text': 'Noop'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'tap',
+          '--key',
+          'noop_btn',
+          '--verify',
+          '--verify-timeout',
+          '150',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
         expect(result.code, 1);
         final payload = json.decode(result.lines.single);
         expect(payload['success'], isFalse);
-        expect(payload['verified'], 'none');
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'none');
+        expect(
+          payload['message'],
+          contains('tap dispatched; no observable change'),
+        );
         expect(payload['message'], contains('--expect'));
-        expect(payload['message'], contains('--no-verify'));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('tap captures its baseline after the reveal scroll', () async {
+      // The reveal step simulates the extension's auto-scroll: it moves the
+      // target bounds. The tap itself changes nothing, so verification must
+      // report no change instead of crediting the scroll to the tap.
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {
+            'type': 'InkWell',
+            'key': 'scroll_row',
+            'bounds': {'x': 0, 'y': 900, 'width': 100, 'height': 40},
+          },
+        ],
+        revealScrollsTo: 0,
+      );
+      try {
+        final result = await _runCli([
+          'tap',
+          '--key',
+          'scroll_row',
+          '--verify-timeout',
+          '150',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'no_observable_change');
+        // Reveal must run before the baseline capture, which must precede tap.
+        expect(fake.rpcOrder.take(3), ['reveal', 'inspect', 'tap']);
       } finally {
         await fake.close();
       }
@@ -679,6 +933,40 @@ void main() {
       }
     });
 
+    test('enter-text verifies an obscured field by its tree change', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'TextField', 'key': 'password_input'},
+        ],
+        obscuredKeys: {'password_input'},
+        enterTextAdds: {
+          'password_input': {'type': 'Text', 'key': 'caps_lock_warning'},
+        },
+      );
+      try {
+        final result = await _runCli([
+          'enter-text',
+          '--key',
+          'password_input',
+          '--text',
+          'secret-value',
+          '--verify-timeout',
+          '400',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['verified'], 'tree');
+        expect(result.lines.single, isNot(contains('secret-value')));
+      } finally {
+        await fake.close();
+      }
+    });
+
     test('enter-text --no-verify accepts an obscured field', () async {
       final fake = await _FakeDriverVm.start(
         elements: [
@@ -737,6 +1025,85 @@ void main() {
         expect(payload['passed'], 2);
         expect(payload['results'][1]['action'], 'wait_for');
         expect(payload['results'][1]['data']['waited_ms'], isA<int>());
+      } finally {
+        await fake.close();
+      }
+    });
+    test('batch persists each completed step to the report file', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'send_message_btn'},
+        ],
+        mutateOnTapKey: 'send_message_btn',
+        tapAdds: {'type': 'Text', 'key': 'assistant_message_body:e1'},
+      );
+      final report = '${tempDir.path}/batch-report.json';
+      try {
+        final result = await _runCli([
+          'batch',
+          '--json-steps',
+          json.encode([
+            {'action': 'tap', 'key': 'send_message_btn'},
+            {
+              'action': 'wait_for',
+              'key': 'assistant_message_body:e1',
+              'timeout': 5,
+            },
+          ]),
+          '--report-file',
+          report,
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(File(report).readAsStringSync());
+        expect(payload['steps_total'], 2);
+        expect(payload['completed'], 2);
+        expect(payload['results'], hasLength(2));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('batch stops at a failed step and keeps the completed evidence',
+        () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label', 'text': 'Idle'},
+        ],
+      );
+      final report = '${tempDir.path}/batch-report-failed.json';
+      try {
+        final result = await _runCli([
+          'batch',
+          '--json-steps',
+          json.encode([
+            {
+              'action': 'wait_for',
+              'text': 'Idle',
+              'timeout': 2,
+            },
+            {
+              'action': 'wait_for',
+              'key': 'never_present',
+              'timeout': 1,
+            },
+          ]),
+          '--report-file',
+          report,
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        final payload = json.decode(File(report).readAsStringSync());
+        expect(payload['steps_total'], 2);
+        expect(payload['completed'], 2);
+        expect(payload['results'][0]['success'], isTrue);
+        expect(payload['results'][1]['success'], isFalse);
       } finally {
         await fake.close();
       }
@@ -846,6 +1213,16 @@ void main() {
       expect(inspect, contains("data['enabled']"));
     });
 
+    test('driver exposes reveal and the rendered type census', () {
+      final driverSource = File('lib/driver_main.dart').readAsStringSync();
+      expect(
+        driverSource,
+        contains("registerExtension('ext.sanad_client.reveal'"),
+      );
+      expect(driverSource, contains("parameters['typeCensus'] == 'true'"));
+      expect(driverSource, contains("'truncated': truncated"));
+    });
+
     test('batch step accepts documented aliases', () {
       final step = BatchStep.fromJson(const {
         'action': 'scroll',
@@ -871,10 +1248,15 @@ void main() {
 Future<({int code, List<String> lines})> _runCli(
   List<String> args, {
   UiTreeGenerationStore? store,
+  Directory? generationRoot,
 }) async {
   final output = <String>[];
   final code = await runZoned(
-    () => CliRunner(args, generationStore: store).run(),
+    () => CliRunner(
+      args,
+      generationStore: store,
+      generationRoot: generationRoot,
+    ).run(),
     zoneSpecification: ZoneSpecification(
       print: (self, parent, zone, line) => output.add(line),
     ),
@@ -892,12 +1274,26 @@ class _FakeDriverVm {
 
   final List<String> enteredTexts = [];
   final Set<String> obscuredKeys = {};
+  final Map<String, Map<String, dynamic>> enterTextAdds = {};
+
+  /// Ordered record of driver RPCs, used to prove reveal-before-capture.
+  final List<String> rpcOrder = [];
+
   String? mutateOnTapKey;
   Map<String, dynamic>? tapAdds;
   int? appearAfterInspectCalls;
   Map<String, dynamic>? appearElement;
+  bool mutateOnInspect = false;
+
+  /// When set, a reveal step moves the element at this index to this y value,
+  /// simulating the auto-scroll that must not count as the tap's effect.
+  int? revealScrollsTo;
+  List<String> typeCensusTypes = const [];
+  bool typeCensusTruncated = false;
   int inspectCalls = 0;
   int scrollCalls = 0;
+
+  int get port => _server.port;
 
   String get httpUrl => 'http://127.0.0.1:${_server.port}/tok/';
 
@@ -908,6 +1304,11 @@ class _FakeDriverVm {
     int? appearAfterInspectCalls,
     Map<String, dynamic>? appearElement,
     Set<String>? obscuredKeys,
+    Map<String, Map<String, dynamic>>? enterTextAdds,
+    int? revealScrollsTo,
+    List<String>? typeCensusTypes,
+    bool typeCensusTruncated = false,
+    bool mutateOnInspect = false,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final fake = _FakeDriverVm._(
@@ -923,7 +1324,12 @@ class _FakeDriverVm {
     fake.tapAdds = tapAdds;
     fake.appearAfterInspectCalls = appearAfterInspectCalls;
     fake.appearElement = appearElement;
+    fake.revealScrollsTo = revealScrollsTo;
+    fake.typeCensusTypes = typeCensusTypes ?? const [];
+    fake.typeCensusTruncated = typeCensusTruncated;
+    fake.mutateOnInspect = mutateOnInspect;
     if (obscuredKeys != null) fake.obscuredKeys.addAll(obscuredKeys);
+    if (enterTextAdds != null) fake.enterTextAdds.addAll(enterTextAdds);
     server.listen(fake._handleRequest);
     return fake;
   }
@@ -956,6 +1362,7 @@ class _FakeDriverVm {
                 ? const [
                     'ext.sanad_client.inspect_ui',
                     'ext.sanad_client.tap',
+                    'ext.sanad_client.reveal',
                     'ext.sanad_client.enter_text',
                     'ext.sanad_client.scroll',
                     'ext.sanad_client.auth_url',
@@ -963,7 +1370,17 @@ class _FakeDriverVm {
                 : const ['ext.unrelated'],
           };
         case 'ext.sanad_client.inspect_ui':
+          rpcOrder.add('inspect');
           inspectCalls++;
+          if (params['typeCensus'] == 'true') {
+            response['result'] = {
+              'status': 'ok',
+              'types': typeCensusTypes,
+              'type_count': typeCensusTypes.length,
+              'truncated': typeCensusTruncated,
+            };
+            break;
+          }
           final appearAt = appearAfterInspectCalls;
           final appeared = appearElement;
           if (appearAt != null &&
@@ -972,12 +1389,43 @@ class _FakeDriverVm {
               !_elements.any((element) => element['key'] == appeared['key'])) {
             _elements.add(Map<String, dynamic>.from(appeared));
           }
+          if (mutateOnInspect) {
+            for (final element in _elements) {
+              if (element['key'] == 'idle_label' ||
+                  element['text'] != null) {
+                element['text'] =
+                    'tick-${DateTime.now().microsecondsSinceEpoch}-${_elements.length}';
+                break;
+              }
+            }
+          }
           response['result'] = {
             'elements': _elements
                 .map((element) => Map<String, dynamic>.from(element))
                 .toList(),
           };
+        case 'ext.sanad_client.reveal':
+          rpcOrder.add('reveal');
+          final revealIndex = revealScrollsTo;
+          if (revealIndex != null && revealIndex < _elements.length) {
+            final element = _elements[revealIndex];
+            final bounds = element['bounds'];
+            if (bounds is Map) {
+              element['bounds'] = {
+                'x': bounds['x'],
+                'y': revealIndex == 0 ? 12 : 0,
+                'width': bounds['width'],
+                'height': bounds['height'],
+              };
+            }
+          }
+          response['result'] = {
+            'status': 'ok',
+            'revealed': true,
+            'match_count': _elements.length,
+          };
         case 'ext.sanad_client.tap':
+          rpcOrder.add('tap');
           final key = params['key'] as String?;
           if (key != null && key == mutateOnTapKey) {
             final adds = tapAdds;
@@ -1000,6 +1448,11 @@ class _FakeDriverVm {
                 element['text'] = text;
               }
             }
+          }
+          final adds = key == null ? null : enterTextAdds[key];
+          if (adds != null &&
+              !_elements.any((element) => element['key'] == adds['key'])) {
+            _elements.add(Map<String, dynamic>.from(adds));
           }
           response['result'] = {'status': 'ok'};
         case 'ext.sanad_client.scroll':

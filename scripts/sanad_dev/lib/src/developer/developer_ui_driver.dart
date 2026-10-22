@@ -7,11 +7,77 @@ const int uiDriverChildGraceSeconds = 10;
 /// Default per-action deadline forwarded to the driver CLI, in seconds.
 const int uiDriverDefaultActionTimeoutSeconds = 30;
 
-/// Default wall-clock cap for a batch recipe without explicit step timeouts.
+/// Default post-action delay the driver applies before verifying, in ms.
+const int uiDriverDefaultDelayMs = 300;
+
+/// Default post-condition window the driver observes, in ms.
+const int uiDriverDefaultVerifyMs = 2000;
+
+/// Default sleep applied by a batch `sleep` step without an explicit value.
+const int uiDriverDefaultSleepMs = 1000;
+
+/// Default wall-clock cap for a batch recipe that cannot be read.
 const int uiDriverBatchDefaultWallSeconds = 300;
 
 /// Exit status reported when the driver child had to be killed.
 const int uiDriverTimeoutExitCode = 124;
+
+/// Upper bound for one driver CLI compilation.
+const Duration uiDriverCompileTimeout = Duration(minutes: 3);
+
+/// Driver commands that change the Client UI and may therefore bring the
+/// owning window to the front. Read-only commands never take focus.
+const Set<String> uiDriverActivatingCommands = {
+  'tap',
+  'enter-text',
+  'entertext',
+  'type',
+  'scroll',
+  'batch',
+  'run',
+};
+
+/// Driver options that consume the following argument as their value.
+///
+/// The launcher only strips its own flags from value positions that cannot be a
+/// driver value, so `enter-text --text --home` keeps `--home` as input text.
+const Set<String> _uiDriverValueFlags = {
+  '--key',
+  '-k',
+  '--text',
+  '-t',
+  '--type',
+  '--within',
+  '-w',
+  '--index',
+  '-i',
+  '-x',
+  '-y',
+  '--coords',
+  '--timeout',
+  '--delay',
+  '--verify-timeout',
+  '--expect',
+  '--expect-key',
+  '--expect-absent',
+  '--expect-gone',
+  '--vm-url',
+  '-u',
+  '--file',
+  '-f',
+  '--json-steps',
+  '--report-file',
+  '--out',
+  '-o',
+  '--filter',
+  '--query',
+  '-q',
+  '--direction',
+  '--dx',
+  '--dy',
+  '--to',
+  '--until-visible',
+};
 
 List<ClientInstance> selectManagedUiDriverClients(
   RuntimeOwnershipAssessment ownership,
@@ -45,6 +111,20 @@ class UiDriverRunPlan {
   /// Whether the owning Client window is brought to the front first.
   final bool activateWindow;
 
+  /// The driver sub-command, lower-cased, or an empty string for help.
+  String get command {
+    if (driverArguments.isEmpty || driverArguments.first.startsWith('-')) {
+      return '';
+    }
+    return driverArguments.first.toLowerCase();
+  }
+
+  bool get isBatch => command == 'batch' || command == 'run';
+
+  /// Only UI-changing actions may take focus from the user.
+  bool get activatesUi =>
+      activateWindow && uiDriverActivatingCommands.contains(command);
+
   bool get isHelpRequest =>
       driverArguments.isEmpty ||
       driverArguments.first == 'help' ||
@@ -59,42 +139,99 @@ class UiDriverRunPlan {
   );
 }
 
+/// One declarative batch step, reduced to the fields that bound its duration.
+class UiDriverBatchStepBudget {
+  const UiDriverBatchStepBudget({
+    required this.action,
+    this.timeoutSeconds,
+    this.delayMs,
+    this.sleepMs,
+  });
+
+  final String action;
+  final int? timeoutSeconds;
+  final int? delayMs;
+  final int? sleepMs;
+
+  bool get _verifies => action == 'tap' || action == 'enter_text' ||
+      action == 'entertext' || action == 'type';
+  bool get _sleeps => action == 'sleep' || action == 'delay';
+}
+
 /// Splits `sanad-dev ui` arguments into forwarded driver arguments and the
 /// launcher-owned flags that never reach the driver.
+///
+/// Launcher flags are stripped wherever they cannot be a driver value: outside a
+/// value-taking driver option, and never after a `--` terminator. A positional
+/// or option value that happens to equal `--home` or `--activate` therefore
+/// reaches the driver unchanged.
 UiDriverRunPlan planUiDriverRun(
   List<String> args, {
-  int? batchStepCount,
+  List<UiDriverBatchStepBudget>? batchSteps,
 }) {
   final driverArgs = <String>[];
   var activate = true;
   int? wallTimeoutSeconds;
-  for (var index = 0; index < args.length; index++) {
+  var index = 0;
+  var endOfLauncherFlags = false;
+
+  while (index < args.length) {
     final arg = args[index];
-    if (arg == '--home') {
+    if (endOfLauncherFlags) {
+      driverArgs.add(arg);
       index++;
       continue;
     }
-    if (arg.startsWith('--home=')) continue;
-    if (arg == '--activate') continue;
-    if (arg == '--no-activate') {
-      activate = false;
+    if (arg == '--') {
+      endOfLauncherFlags = true;
+      index++;
       continue;
     }
-    if (arg == '--wall-timeout') {
-      if (index + 1 < args.length) {
-        wallTimeoutSeconds = int.tryParse(args[index + 1]);
-        index++;
+    final valueFollows = index + 1 < args.length ? args[index + 1] : null;
+    // A driver option value is preserved even when it matches a launcher flag.
+    final isDriverValue =
+        driverArgs.isNotEmpty &&
+        driverArgs.last.startsWith('-') &&
+        _uiDriverValueFlags.contains(driverArgs.last);
+    if (!isDriverValue) {
+      if (arg == '--home') {
+        index += 2;
+        continue;
       }
-      continue;
-    }
-    if (arg.startsWith('--wall-timeout=')) {
-      wallTimeoutSeconds = int.tryParse(arg.substring('--wall-timeout='.length));
-      continue;
+      if (arg.startsWith('--home=')) {
+        index++;
+        continue;
+      }
+      if (arg == '--activate') {
+        activate = true;
+        index++;
+        continue;
+      }
+      if (arg == '--no-activate') {
+        activate = false;
+        index++;
+        continue;
+      }
+      if (arg == '--wall-timeout' && valueFollows != null) {
+        wallTimeoutSeconds = int.tryParse(valueFollows);
+        index += 2;
+        continue;
+      }
+      if (arg.startsWith('--wall-timeout=')) {
+        wallTimeoutSeconds = int.tryParse(
+          arg.substring('--wall-timeout='.length),
+        );
+        index++;
+        continue;
+      }
     }
     driverArgs.add(arg);
+    index++;
   }
 
-  final command = driverArgs.isEmpty ? '' : driverArgs.first.toLowerCase();
+  final command = driverArgs.isEmpty || driverArgs.first.startsWith('-')
+      ? ''
+      : driverArgs.first.toLowerCase();
   final explicitSeconds = int.tryParse(
     _uiDriverOptionValue(driverArgs, '--timeout') ?? '',
   );
@@ -102,16 +239,34 @@ UiDriverRunPlan planUiDriverRun(
   if (wallTimeoutSeconds != null && wallTimeoutSeconds > 0) {
     wallTimeout = Duration(seconds: wallTimeoutSeconds);
   } else if (command == 'batch' || command == 'run') {
-    final stepBudget = explicitSeconds ?? uiDriverDefaultActionTimeoutSeconds;
-    final steps = batchStepCount ?? uiDriverBatchStepCount(driverArgs);
-    wallTimeout = steps == null
+    final stepBudget = batchSteps ?? readUiDriverBatchSteps(driverArgs);
+    final budget = stepBudget == null
+        ? null
+        : uiDriverBatchBudgetSeconds(
+            stepBudget,
+            fallbackStepTimeout: explicitSeconds,
+          );
+    wallTimeout = budget == null
         ? const Duration(seconds: uiDriverBatchDefaultWallSeconds)
-        : Duration(seconds: stepBudget * steps + uiDriverChildGraceSeconds);
+        : Duration(seconds: budget + uiDriverChildGraceSeconds);
   } else {
+    final actionSeconds = explicitSeconds ?? uiDriverDefaultActionTimeoutSeconds;
+    final delayMs = int.tryParse(
+      _uiDriverOptionValue(driverArgs, '--delay') ?? '',
+    );
+    final verifyMs = int.tryParse(
+      _uiDriverOptionValue(driverArgs, '--verify-timeout') ?? '',
+    );
     wallTimeout = Duration(
-      seconds:
-          (explicitSeconds ?? uiDriverDefaultActionTimeoutSeconds) +
-          uiDriverChildGraceSeconds,
+      seconds: actionSeconds + uiDriverChildGraceSeconds,
+      milliseconds:
+          (delayMs ?? (uiDriverActivatingCommands.contains(command)
+                  ? uiDriverDefaultDelayMs
+                  : 0)) +
+          (verifyMs ??
+              (uiDriverActivatingCommands.contains(command)
+                  ? uiDriverDefaultVerifyMs
+                  : 0)),
     );
   }
 
@@ -134,9 +289,43 @@ String? _uiDriverOptionValue(List<String> args, String flag) {
   return null;
 }
 
-/// Counts declarative batch steps so the wall-clock cap covers the whole
-/// recipe. Returns null when the recipe cannot be read cheaply.
-int? uiDriverBatchStepCount(List<String> driverArgs) {
+/// Total seconds a batch recipe may consume.
+///
+/// Every step contributes its own `timeout_seconds`, `delay_ms`, `sleep_ms`, and
+/// verify window, so a recipe of slow steps is not capped by a single action
+/// deadline times the step count.
+int uiDriverBatchBudgetSeconds(
+  List<UiDriverBatchStepBudget> steps, {
+  int? fallbackStepTimeout,
+}) {
+  var total = 0;
+  for (final step in steps) {
+    final stepTimeout =
+        step.timeoutSeconds ?? fallbackStepTimeout ?? uiDriverDefaultActionTimeoutSeconds;
+    if (step._sleeps) {
+      total += ((step.sleepMs ?? uiDriverDefaultSleepMs) / 1000).ceil();
+      continue;
+    }
+    total += stepTimeout;
+    if (step._verifies) {
+      total +=
+          ((step.delayMs ?? uiDriverDefaultDelayMs) / 1000).ceil();
+      total +=
+          ((stepVerifyWindowMs(stepTimeout)) / 1000).ceil();
+    }
+  }
+  return total == 0 ? 0 : total;
+}
+
+/// Verify window the driver applies to a step with [stepTimeoutSeconds].
+int stepVerifyWindowMs(int stepTimeoutSeconds) {
+  final stepMs = stepTimeoutSeconds * 1000;
+  return stepMs < uiDriverDefaultVerifyMs ? stepMs : uiDriverDefaultVerifyMs;
+}
+
+/// Parses the declarative batch steps of a recipe so the wall clock can cover
+/// them. Returns null when the recipe cannot be read cheaply.
+List<UiDriverBatchStepBudget>? readUiDriverBatchSteps(List<String> driverArgs) {
   String? content;
   final rawSteps = _uiDriverOptionValue(driverArgs, '--json-steps');
   final filePath =
@@ -168,157 +357,30 @@ int? uiDriverBatchStepCount(List<String> driverArgs) {
   try {
     final decoded = json.decode(content);
     final steps = decoded is List ? decoded : decoded['steps'] as List?;
-    final count = steps?.length ?? 0;
-    return count == 0 ? null : count;
+    if (steps == null || steps.isEmpty) return null;
+    return steps
+        .map((step) {
+          final map = Map<String, dynamic>.from(step as Map);
+          return UiDriverBatchStepBudget(
+            action: (map['action'] as String? ?? '').toLowerCase(),
+            timeoutSeconds:
+                map['timeout_seconds'] as int? ?? map['timeout'] as int?,
+            delayMs: map['delay_ms'] as int? ?? map['delay'] as int?,
+            sleepMs:
+                map['sleep_ms'] as int? ??
+                map['sleep'] as int? ??
+                map['ms'] as int?,
+          );
+        })
+        .toList(growable: false);
   } catch (_) {
     return null;
   }
 }
 
-/// Change-detection fingerprint of the driver CLI sources.
-///
-/// This is cache invalidation, not a security boundary: it only needs to change
-/// whenever a compiled artifact could behave differently.
-String uiDriverSourceFingerprint(Map<String, String> sources) {
-  final entries = sources.keys.toList()..sort();
-  final buffer = StringBuffer();
-  for (final path in entries) {
-    final content = sources[path] ?? '';
-    buffer
-      ..write(path)
-      ..write(':')
-      ..write(_uiDriverStableHash(content))
-      ..write('\n');
-  }
-  return _uiDriverStableHash(buffer.toString());
-}
-
-String _uiDriverStableHash(String value) {
-  var hash = 0x00000100000001b3;
-  for (final unit in value.codeUnits) {
-    hash ^= unit;
-    hash = (hash * 0x100000001b3) & 0x7FFFFFFFFFFFFFFF;
-  }
-  return hash.toRadixString(16).padLeft(16, '0');
-}
-
-/// Path of the compiled driver CLI artifact for [fingerprint].
-String uiDriverArtifactPath({
-  required String repositoryRoot,
-  required String fingerprint,
-  bool? isWindows,
-}) {
-  final suffix = (isWindows ?? Platform.isWindows) ? '.exe' : '';
-  return '$repositoryRoot/.dart_tool/sanad-dev/flutter-driver-cli-$fingerprint$suffix';
-}
-
-/// Reads the driver CLI sources that participate in the artifact fingerprint.
-Map<String, String> readUiDriverSources(String repositoryRoot) {
-  final entry = File('$repositoryRoot/scripts/flutter_driver_cli.dart');
-  if (!entry.existsSync()) return const {};
-  final sources = <String, String>{
-    'scripts/flutter_driver_cli.dart': entry.readAsStringSync(),
-  };
-  final directory = Directory('$repositoryRoot/scripts/flutter_driver_cli');
-  if (!directory.existsSync()) return sources;
-  for (final entity in directory.listSync(recursive: true, followLinks: false)) {
-    if (entity is! File || !entity.path.endsWith('.dart')) continue;
-    final relative = entity.path
-        .substring(repositoryRoot.length)
-        .replaceAll('\\', '/')
-        .replaceFirst(RegExp(r'^/+'), '');
-    sources[relative] = entity.readAsStringSync();
-  }
-  return sources;
-}
-
-/// Ensures a source-matched native driver CLI artifact exists.
-///
-/// Returns the artifact path, or null when compilation is unavailable so the
-/// caller can fall back to the JIT invocation path.
-Future<String?> ensureUiDriverArtifact({
-  required String repositoryRoot,
-  required Future<bool> Function(String outputPath) compile,
-  bool? isWindows,
-  bool allowCompile = true,
-}) async {
-  final sources = readUiDriverSources(repositoryRoot);
-  if (sources.isEmpty) return null;
-  final fingerprint = uiDriverSourceFingerprint(sources);
-  final artifact = uiDriverArtifactPath(
-    repositoryRoot: repositoryRoot,
-    fingerprint: fingerprint,
-    isWindows: isWindows,
-  );
-  final artifactFile = File(artifact);
-  if (artifactFile.existsSync()) return artifact;
-  if (!allowCompile) return null;
-
-  try {
-    artifactFile.parent.createSync(recursive: true);
-  } catch (_) {
-    return null;
-  }
-  final staging = '$artifact.${pid}.tmp';
-  final compiled = await compile(staging);
-  if (!compiled) {
-    try {
-      final stagingFile = File(staging);
-      if (stagingFile.existsSync()) stagingFile.deleteSync();
-    } catch (_) {}
-    return null;
-  }
-  try {
-    final stagingFile = File(staging);
-    if (!stagingFile.existsSync()) return null;
-    await stagingFile.rename(artifact);
-  } catch (_) {
-    return null;
-  }
-  _pruneUiDriverArtifacts(
-    artifactDirectory: File(artifact).parent,
-    keep: artifact,
-  );
-  return artifact;
-}
-
-void _pruneUiDriverArtifacts({
-  required Directory artifactDirectory,
-  required String keep,
-}) {
-  try {
-    for (final entity in artifactDirectory.listSync()) {
-      if (entity is! File) continue;
-      final name = entity.path.split(Platform.pathSeparator).last;
-      if (!name.startsWith('flutter-driver-cli-')) continue;
-      if (entity.path == keep) continue;
-      try {
-        entity.deleteSync();
-      } catch (_) {}
-    }
-  } catch (_) {}
-}
-
-/// Minimal child-process boundary so the wall-clock guard stays testable.
-abstract class UiDriverChildProcess {
-  Future<int> get exitCode;
-
-  void kill();
-}
-
-class UiDriverSpawnedProcess implements UiDriverChildProcess {
-  UiDriverSpawnedProcess(this._process);
-
-  final Process _process;
-
-  @override
-  Future<int> get exitCode => _process.exitCode;
-
-  @override
-  void kill() {
-    _process.kill(ProcessSignal.sigkill);
-  }
-}
+/// Counts declarative batch steps. Kept for callers that only need the count.
+int? uiDriverBatchStepCount(List<String> driverArgs) =>
+    readUiDriverBatchSteps(driverArgs)?.length;
 
 /// Waits for [child] and kills it once [wallTimeout] elapses.
 Future<int> awaitUiDriverChild(
@@ -336,6 +398,42 @@ Future<int> awaitUiDriverChild(
   );
   if (killed) return uiDriverTimeoutExitCode;
   return code;
+}
+
+/// Temporary report path that carries per-step batch evidence.
+String uiDriverBatchReportPath() {
+  final stamp = DateTime.now().microsecondsSinceEpoch;
+  return '${Directory.systemTemp.path}/sanad-dev-ui/batch-$pid-$stamp.json';
+}
+
+/// Reproduces the completed steps of a killed batch from its report file.
+///
+/// Returns null when no step completed, so the caller can fall back to the
+/// generic timeout diagnostic.
+String? uiDriverPartialBatchReport(String reportPath) {
+  try {
+    final file = File(reportPath);
+    if (!file.existsSync()) return null;
+    final decoded = json.decode(file.readAsStringSync());
+    if (decoded is! Map) return null;
+    final results = decoded['results'];
+    if (results is! List || results.isEmpty) return null;
+    final passed = results.where((result) {
+      return result is Map && result['success'] == true;
+    }).length;
+    return json.encode({
+      'status': 'failed',
+      'timed_out': true,
+      'partial': true,
+      'steps_total': decoded['steps_total'],
+      'total': results.length,
+      'completed': decoded['completed'] ?? results.length,
+      'passed': passed,
+      'results': results,
+    });
+  } catch (_) {
+    return null;
+  }
 }
 
 Future<void> handleUiDriverCommand(
@@ -363,7 +461,7 @@ Future<void> handleUiDriverCommand(
       return;
     }
     final selectedClient = managed.client!;
-    if (plan.activateWindow) {
+    if (plan.activatesUi) {
       await activateUiDriverOwnerWindow(pid: selectedClient.pid);
     }
     final tokenPath = selectedClient.token.isEmpty
@@ -386,29 +484,31 @@ Future<void> handleUiDriverCommand(
     return;
   }
 
+  String? reportPath;
+  if (plan.isBatch) {
+    reportPath = uiDriverBatchReportPath();
+    extraArgs.addAll(['--report-file', reportPath]);
+  }
+
   final artifact = await ensureUiDriverArtifact(
     repositoryRoot: repoRoot,
     allowCompile: !plan.isHelpRequest,
     compile: (outputPath) async {
       final compileTimer = Stopwatch()..start();
-      final result = await Process.run(
-        'fvm',
-        [
-          'dart',
-          'compile',
-          'exe',
-          '--packages=$packageConfig',
-          toolScript,
-          '-o',
-          outputPath,
-        ],
+      final result = await compileUiDriverArtifact(
+        packageConfig: packageConfig,
+        toolScript: toolScript,
         workingDirectory: clientDir.path,
-        runInShell: Platform.isWindows,
+        outputPath: outputPath,
       );
-      if (result.exitCode != 0) {
+      if (!result.compiled) {
         stderr.writeln(
-          'Driver CLI precompilation failed; falling back to the slower '
-          'JIT path.',
+          result.timedOut
+              ? 'Driver CLI precompilation exceeded '
+                    '${uiDriverCompileTimeout.inMinutes} minutes; falling back '
+                    'to the slower JIT path.'
+              : 'Driver CLI precompilation failed; falling back to the slower '
+                    'JIT path.',
         );
         return false;
       }
@@ -419,37 +519,109 @@ Future<void> handleUiDriverCommand(
     },
   );
 
-  final executable = artifact ?? 'fvm';
-  final executableArgs = artifact != null
-      ? <String>[...driverArgs, ...extraArgs]
-      : <String>[
-          'dart',
-          '--packages=$packageConfig',
-          toolScript,
-          ...driverArgs,
-          ...extraArgs,
-        ];
-
-  final process = await Process.start(
-    executable,
-    executableArgs,
-    workingDirectory: clientDir.path,
-    mode: ProcessStartMode.inheritStdio,
-    runInShell: artifact == null && Platform.isWindows,
-    environment: {...Platform.environment, 'SANAD_DEV_CALLER_DIR': callerDir},
+  // The artifact can vanish between the existence check and the spawn (a
+  // concurrent prune, a cleaned checkout); fall back to the JIT path instead of
+  // failing the action.
+  final invocation = planUiDriverInvocation(
+    artifactPath: artifact,
+    artifactExists: artifact != null && File(artifact).existsSync(),
+    packageConfig: packageConfig,
+    toolScript: toolScript,
+    driverArguments: driverArgs,
+    extraArguments: extraArgs,
   );
+  var usedJit = invocation.usesJit;
+
+  Process? process;
+  try {
+    process = await Process.start(
+      invocation.executable,
+      invocation.arguments,
+      workingDirectory: clientDir.path,
+      mode: ProcessStartMode.inheritStdio,
+      runInShell: usedJit && Platform.isWindows,
+      environment: {...Platform.environment, 'SANAD_DEV_CALLER_DIR': callerDir},
+    );
+  } on ProcessException catch (error) {
+    if (usedJit) rethrow;
+    // A missing or non-executable artifact retries through the JIT path.
+    stderr.writeln(
+      'Driver CLI artifact was not executable '
+      '(${error.message}); retrying through the JIT path.',
+    );
+    usedJit = true;
+    final fallback = planUiDriverInvocation(
+      artifactPath: null,
+      artifactExists: false,
+      packageConfig: packageConfig,
+      toolScript: toolScript,
+      driverArguments: driverArgs,
+      extraArguments: extraArgs,
+    );
+    process = await Process.start(
+      fallback.executable,
+      fallback.arguments,
+      workingDirectory: clientDir.path,
+      mode: ProcessStartMode.inheritStdio,
+      runInShell: Platform.isWindows,
+      environment: {...Platform.environment, 'SANAD_DEV_CALLER_DIR': callerDir},
+    );
+  }
 
   final code = await awaitUiDriverChild(
     UiDriverSpawnedProcess(process),
     wallTimeout: plan.wallTimeout,
   );
   if (code == uiDriverTimeoutExitCode) {
-    stderr.writeln(
-      'Driver action exceeded ${plan.wallTimeout.inSeconds}s and was killed. '
-      'Retry with a longer --timeout, or navigate to the target first.',
-    );
+    final partial = reportPath == null
+        ? null
+        : uiDriverPartialBatchReport(reportPath);
+    if (partial != null) {
+      if (plan.driverArguments.contains('--json')) {
+        stdout.writeln(partial);
+      } else {
+        _printUiDriverPartialBatch(partial);
+      }
+      stderr.writeln(
+        'Batch recipe was killed after ${plan.wallTimeout.inSeconds}s; the '
+        'report above contains only the steps that completed.',
+      );
+    } else {
+      stderr.writeln(
+        'Driver action exceeded ${plan.wallTimeout.inSeconds}s and was killed'
+        '${usedJit ? ' (JIT fallback)' : ''}. '
+        'Retry with a longer --timeout, or navigate to the target first.',
+      );
+    }
+  }
+  if (reportPath != null) {
+    try {
+      final report = File(reportPath);
+      if (report.existsSync()) report.deleteSync();
+    } catch (_) {}
   }
   exit(code);
+}
+
+/// Prints the completed steps of a killed batch in human-readable form.
+void _printUiDriverPartialBatch(String partialJson) {
+  try {
+    final payload = json.decode(partialJson);
+    final results = payload['results'];
+    if (results is List) {
+      for (var index = 0; index < results.length; index++) {
+        final result = results[index];
+        final message = result is Map ? result['message'] : result;
+        stdout.writeln('${index + 1}. $message');
+      }
+    }
+    stdout.writeln(
+      'Completed ${payload['total']} of ${payload['steps_total']} steps before '
+      'the kill.',
+    );
+  } catch (_) {
+    stdout.writeln(partialJson);
+  }
 }
 
 class _ManagedUiDriverClient {
@@ -505,48 +677,3 @@ Future<_ManagedUiDriverClient> _resolveManagedUiDriverClient(
   );
 }
 
-/// Bundle root of a running Client executable, or null when the executable is
-/// not inside an application bundle.
-String? uiDriverBundlePath(String? executable) {
-  if (executable == null) return null;
-  final marker = executable.indexOf('.app/Contents/MacOS/');
-  if (marker < 0) return null;
-  return executable.substring(0, marker + '.app'.length);
-}
-
-/// Brings the owning Client window to the front before an action is dispatched.
-///
-/// macOS activates only the bundle of the already-running Client whose process
-/// id was discovered, so no Accessibility, Automation, or Keychain prompt is
-/// ever triggered. Every failure is a silent no-op: the action still runs.
-Future<bool> activateUiDriverOwnerWindow({
-  required int? pid,
-  bool? isMacOS,
-  Future<ProcessResult> Function(String, List<String>)? openApplication,
-}) async {
-  if (!(isMacOS ?? Platform.isMacOS) || pid == null || pid <= 0) return false;
-  String? bundlePath;
-  try {
-    final arguments = readMacOsProcessArguments(pid);
-    bundlePath = uiDriverBundlePath(
-      arguments.isEmpty ? null : arguments.first,
-    );
-  } catch (_) {
-    return false;
-  }
-  if (bundlePath == null) return false;
-  try {
-    final run =
-        openApplication ??
-        (String executable, List<String> arguments) => Process.run(
-          executable,
-          arguments,
-          stdoutEncoding: null,
-          stderrEncoding: null,
-        );
-    await run('open', ['-a', bundlePath]).timeout(const Duration(seconds: 3));
-    return true;
-  } catch (_) {
-    return false;
-  }
-}

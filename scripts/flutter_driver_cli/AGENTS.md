@@ -23,8 +23,9 @@ Provide a deterministic, low-noise, development-only control surface through whi
 - The controller selects an isolate by the required advertised extension rather than assuming that the first isolate is the Flutter UI isolate.
 - An action result describes only the action completed by the tool. Callers must verify the expected UI state separately; action responses must not claim an application outcome that was not observed.
 - Every action carries a hard deadline (default 30 s, `--timeout`) that also bounds the VM Service RPC transport. No scroll, wait, or verification path may loop without a deadline, and `scroll --until-visible` must fail fast with `target offstage/not found; navigate first` rather than hang.
-- `tap` and `enter-text` must prove a post-condition before reporting success: an explicit `--expect`/`--expect-absent` key assertion or an observable widget-tree change for taps, and observed field text (or an observable tree change for obscured fields) for text entry. A silent no-op is a failed action.
-- Batch execution stops on the first failed step unless the recipe explicitly opts into continuation.
+- Verification distinguishes evidence from assertion. `tap` always reports what it observed, and an unobserved change is only a failure when the caller asked for one (`--verify`, `--expect`, `--expect-absent`); both the no-change and the failure message must state that the tap was already dispatched so a non-idempotent action is never retried blindly. `enter-text` requires observed field text, or an observable tree change when the field value is not exposed. `--no-verify` is the only way to skip observation. No path may report `verified` without evidence.
+- An absence claim is only sound when the inspecting projection can represent the target. A type-based wait must consult the rendered type census rather than the inspected element subset, must fail when the type is rendered but uninspected, and must fail closed when the census is truncated.
+- Batch execution stops on the first failed step unless the recipe explicitly opts into continuation, and completed steps are persisted as they finish so a wall-clock kill still reports them.
 - Authentication URL retrieval uses only the dedicated extension advertised by the explicitly selected Client isolate. It fails when no active challenge exists and never searches another isolate, Client, browser tab, heap object, or persisted runtime surface for a fallback.
 
 ## Execution Model
@@ -45,7 +46,8 @@ Provide a deterministic, low-noise, development-only control surface through whi
 - The active authentication URL is an ephemeral handoff value: human mode prints only that URL to standard output, failures use standard error, and neither the Client extension nor either CLI layer may log, journal, cache, or add it to general UI snapshots.
 - Changes that can increase snapshot volume must add or preserve an explicit bounded-output strategy and truncation metadata; silent truncation is forbidden.
 - Snapshot generations must be monotonic per Client endpoint and must be derived without persisting selectors, text values, or endpoints' authentication tokens; tree change detection may emit aggregate signatures only.
-- JSON output is additive: existing keys keep their meaning, and new evidence (`generation`, `verified`, `key`, `x`, `y`) is optional rather than required.
+- `tap` always reports what it observed, and an unobserved change is only a failure when the caller asked for one.
+- JSON output is additive: existing keys keep their meaning, and new evidence (`generation`, `verified`, `verification`, `key`, `x`, `y`) is optional rather than required. `verified` carries the evidence channel when one exists and `false` when none does, so no caller can read an unverified action as a verified one.
 
 ## Portability
 
