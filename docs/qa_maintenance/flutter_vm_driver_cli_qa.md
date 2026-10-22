@@ -28,6 +28,17 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Secret request driver keys | The composer secret card exposes `secret_request_card`, `secret_request_reason`, one `secret_input_<NAME>` per field, `secret_toggle_visibility_<NAME>` for masked fields, `secret_replaces_<NAME>` when a stored value is replaced, `secret_request_error`, `secret_request_save_btn`, and `secret_request_skip_btn`. `sanad-dev ui enter-text` must use dummy values only; inspection never echoes a field value |
 | Workspace security driver keys | Composer permission menu items expose `composer_permission_mode_default` and `composer_permission_mode_full_access`; the Workspace Settings security card segments expose `workspace_security_mode_direct`, `workspace_security_mode_protected`, `workspace_security_discovery_owner_only`, and `workspace_security_discovery_disabled`, each reporting `selected` through `Semantics(selected:)`. The sidebar `workspace_settings_btn` stays hover-only (an invisible tappable target would invite accidental taps); drivers open Workspace Settings from the Settings navigation instead |
 | Analyzer and formatter | All changed Client and script sources pass |
+| Snapshot generation | Two consecutive `snapshot --json` invocations report a strictly increasing `generation` and a stable `signature` for an unchanged tree |
+| Fresh snapshot | `snapshot --fresh` re-captures until two consecutive trees agree and reports `fresh: true` |
+| Wait with elapsed time | `wait-for --key` returns `duration_ms` and `data.waited_ms`, and succeeds after a late element appears |
+| Wait for absence | `wait-for --absent` fails closed when the element persists past `--timeout` |
+| Offstage scroll target | `scroll --until-visible` fails fast with `target offstage/not found; navigate first` instead of hanging, and succeeds without scrolling when the target is already rendered |
+| Tap post-condition | A tap whose tree does not change fails with `verified: none` and names `--expect` and `--no-verify`; `--expect`/`--expect-absent` are asserted against the settled tree; `--no-verify` accepts a deliberate no-op |
+| Tap result shape | JSON reports `key`, `x`, `y`, `generation`, and `duration_ms` in addition to the existing fields |
+| Enter-text post-condition | A changed rendered value verifies as `text` without echoing the value; an obscured field without an observable tree change fails and offers `--no-verify` |
+| Wall-clock kill | A driver child that overruns the computed cap is killed and the command exits `124` with a bounded diagnostic |
+| Artifact cache | A source-matched native artifact is compiled once per fingerprint, reused afterwards, replaced after a source change, and pruned when stale |
+| Batch action plus wait | One `batch` recipe chains a tap with a `wait_for` step and returns both results from a single connection |
 
 ## Managed Runtime Coverage
 
@@ -39,6 +50,9 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Explicit VM endpoint is supplied | The caller endpoint is preserved, including equals-style options |
 | Windows host | FVM child execution uses shell resolution for the platform wrapper |
 | Help request with no runtime | Help remains available |
+| Transient missing Client | Discovery is retried once before the missing-Client failure is reported |
+| Owning window not frontmost | The owner bundle is activated before dispatch; activation failure never blocks the action and never raises a system prompt |
+| Missing Client package configuration | Fails closed with the setup recovery command instead of a compile error |
 
 ## Live Interaction Coverage
 
@@ -55,15 +69,15 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Exact keyed tap | Scrolls into view, taps the requested element, and returns coordinates |
 | Invalid tap index | Fails with match count; it never clamps to another element |
 | Keyed offset scroll | Targets the exact Scrollable, emits forward/reverse user intent, returns post-motion offset plus min/max extents, and activates the same pagination/follow rules as mouse or trackpad input. |
-| Scroll until visible | Repeats through Flutter Driver until the target is visible or times out |
+| Scroll until visible | Repeats bounded offset scrolling plus tree probes until the target is visible, or fails with `target offstage/not found; navigate first` inside the deadline |
 | Driver starts before any automation command | Flutter Driver text emulation is disabled; clicking an editable field accepts normal physical-keyboard characters and system IME input. |
 | Keyed automated text entry | `sanad-dev ui enter-text` focuses the exact field and updates its `EditableTextState` through the Sanad extension; follow-up inspection shows the new value without echoing it in the action result. |
 | User message inspection | After one send, exact-key `find` returns one `user_message_body:<eventId>` element whose `text` contains the rendered message without clipboard access. |
 | Assistant Markdown inspection | After response completion, exact-key `find` returns one `assistant_message_body:<eventId>` element whose `text` contains every displayed Markdown block once and omits footer metadata. |
 | Message key disambiguation | Two mounted user or assistant messages remain independently addressable by event id; a lookup never resolves a generic kind-only key. |
 | Automated entry followed by physical typing | The system text channel was never mocked, so physical typing remains functional after the automated command. |
-| Older instrumented Client without the Sanad text extension | Controller falls back to legacy Flutter Driver `enterText` and reports both bounded errors if neither path succeeds. |
-| Text entry during animation/streaming | Runs unsynchronized where legacy fallback is required and remains responsive. |
+| Older instrumented Client without the Sanad text extension | Fails closed with a bounded extension error; text entry never degrades to an unscoped legacy path. |
+| Action during animation/streaming | Tree probes replace Flutter Driver frame synchronization, so a busy Client still answers inspection, waits, and verification inside the deadline. |
 | Wait for presence/absence | Returns success only for the requested terminal condition |
 | Screenshot | Produces a non-empty PNG outside tracked source artifacts |
 | Batch JSON mode | Emits exactly one parseable JSON result and a nonzero status when any step fails |

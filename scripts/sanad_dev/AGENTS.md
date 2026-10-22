@@ -58,12 +58,18 @@ Production code has closer domain contracts under `scripts/sanad_dev/lib/`. This
 * **Independent Components:** The managed launcher may own an Agent, one or more device-identified Clients, or both. Starting or exiting one component must not stop a sibling component. Device-targeted Client mutation considers only exact lease-owned matches, ignores additional unmanaged Clients, and fails closed on missing or duplicate managed matches. An explicit Agent `-p/--port` selector must select that exact discovered Agent before ownership assessment; it must never fall through to another managed Agent on a different port.
 * **Resumable Agent Stop:** Normal Agent stop must use the daemon checkpoint drain and preserve non-terminal durable work for startup recovery. `--force` is valid only for Agent-owning stop targets and requests bounded terminal cancellation; Client-only stop never accepts force.
 
-## 8. Test Performance Policy
+## 8. UI Driver Adapter Policy
+* **Source-Matched Native Artifact:** `ui` never pays a per-action front-end compile. The driver CLI is compiled through FVM into a checkout-local native artifact fingerprinted over its own sources, executed directly after the build, and replaced or pruned when the fingerprint changes. A missing Client package configuration, a failed build, or a help request must fall back to the JIT path or fail with the setup recovery command; a partial artifact must never be executed.
+* **Bounded Child:** Every dispatched action has a wall-clock cap derived from the action deadline (default 30 s) plus bounded grace, overridable with `--wall-timeout` and scaled for batch step budgets. An overrunning child is killed and the command exits `124`; no UI action may outlive its deadline.
+* **Single Re-Discovery:** A missing managed driver Client is re-discovered once before the failure is reported, because a Client that is still finishing startup is transiently discoverable as absent; ambiguity between multiple managed Clients still fails closed.
+* **Owner Window Activation:** On macOS the adapter may bring the already-discovered Client's own bundle to the front before dispatch, using only the discovered process id. It must never request Accessibility, Automation, or Keychain permission, never launch a second Client instance, and must treat every activation failure as a non-fatal no-op.
+
+## 9. Test Performance Policy
 * Unit tests must use `package:test` and deterministic injected seams for clocks, retries, and readiness. They must not sleep through production backoff or request timeouts.
 * Tests that intentionally execute wrappers, subprocesses, permission changes, or real loopback ports are integration coverage and must remain narrowly scoped. Only tests contending for exclusive ports or resources may force sequential execution.
 * The standalone package analyzer and test suite plus a worktree-local wrapper smoke are required whenever package layout, bootstrap, or CLI entry paths change. Cross-platform CI must resolve and execute these tests from `scripts/sanad_dev/`; it must never retain Client test paths after package extraction.
 
-## 9. Agent Restart & Supervision Policy
+## 10. Agent Restart & Supervision Policy
 * **Supervised Daemon Restart**: When triggering agent restarts during development or debugging, always use the canonical `sanad-dev restart agent` command (which sends a `/restart` request) instead of manual OS-level process kills. The daemon is wrapped in a self-forking supervisor (`HotRestartManager`) that automatically handles child process exits, recompiles the source code from disk, and spawns a fresh process instantly.
 * **Restart Safety**: Agent restart waits for the daemon-owned all-session safety boundary. Timeout must leave the process running unless the caller explicitly selects force, and a failed safe restart must never fall back to process termination.
 * **Takeover Shutdown**: Manual-runtime takeover must cross the same safe checkpoint, then request a permanent supervised shutdown so the old source supervisor cannot respawn and race the new managed launcher.

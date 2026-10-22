@@ -133,12 +133,31 @@ class DriverActionResult {
   final Map<String, dynamic>? data;
   final Duration duration;
 
+  /// Exact widget key of the resolved target, when the action resolved one.
+  final String? targetKey;
+
+  /// Rendered target position in global coordinates, when the action reports
+  /// one (tap).
+  final int? x;
+  final int? y;
+
+  /// Snapshot generation observed after the action completed.
+  final int? generation;
+
+  /// Post-condition evidence for verified actions: `text`, `tree`, or `none`.
+  final String? verification;
+
   const DriverActionResult({
     required this.success,
     required this.action,
     required this.message,
     this.data,
     required this.duration,
+    this.targetKey,
+    this.x,
+    this.y,
+    this.generation,
+    this.verification,
   });
 
   Map<String, dynamic> toJson() => {
@@ -147,6 +166,11 @@ class DriverActionResult {
     'message': message,
     'duration_ms': duration.inMilliseconds,
     if (data != null) 'data': data,
+    if (targetKey != null) 'key': targetKey,
+    if (x != null) 'x': x,
+    if (y != null) 'y': y,
+    if (generation != null) 'generation': generation,
+    if (verification != null) 'verified': verification,
   };
 
   @override
@@ -175,6 +199,16 @@ class BatchStep {
   final int? delayMs;
   final int? sleepMs;
 
+  /// Post-condition keys for a `tap` step.
+  final String? expect;
+  final String? expectAbsent;
+
+  /// Skips post-condition verification for a single step.
+  final bool noVerify;
+
+  /// Requests a quiesced re-capture for a `snapshot` step.
+  final bool fresh;
+
   const BatchStep({
     required this.action,
     this.key,
@@ -194,6 +228,10 @@ class BatchStep {
     this.timeoutSeconds,
     this.delayMs,
     this.sleepMs,
+    this.expect,
+    this.expectAbsent,
+    this.noVerify = false,
+    this.fresh = false,
   });
 
   factory BatchStep.fromJson(Map<String, dynamic> json) {
@@ -222,6 +260,11 @@ class BatchStep {
           json['sleep_ms'] as int? ??
           json['sleep'] as int? ??
           json['ms'] as int?,
+      expect: json['expect'] as String?,
+      expectAbsent:
+          json['expect_absent'] as String? ?? json['expect_gone'] as String?,
+      noVerify: json['no_verify'] as bool? ?? false,
+      fresh: json['fresh'] as bool? ?? false,
     );
   }
 
@@ -244,5 +287,9 @@ class BatchStep {
     if (timeoutSeconds != null) 'timeout_seconds': timeoutSeconds,
     if (delayMs != null) 'delay_ms': delayMs,
     if (sleepMs != null) 'sleep_ms': sleepMs,
+    if (expect != null) 'expect': expect,
+    if (expectAbsent != null) 'expect_absent': expectAbsent,
+    if (noVerify) 'no_verify': noVerify,
+    if (fresh) 'fresh': fresh,
   };
 }

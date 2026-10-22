@@ -3,11 +3,18 @@ import 'dart:io';
 
 import 'flutter_vm_controller.dart';
 import 'models.dart';
+import 'tree_state.dart';
+
+/// Default hard deadline for one driver action, in seconds.
+const int defaultActionTimeoutSeconds = 30;
 
 class CliRunner {
   final List<String> args;
 
-  CliRunner(this.args);
+  /// Overrides the snapshot generation store; tests inject a temp location.
+  final UiTreeGenerationStore? generationStore;
+
+  CliRunner(this.args, {this.generationStore});
 
   Future<int> run() async {
     if (args.isEmpty ||
@@ -77,10 +84,28 @@ class CliRunner {
     }
   }
 
-  Future<int> _handleAuthUrl(String? explicitUrl, bool isJson) async {
+  Future<FlutterVmController> _connect({
+    required String? explicitUrl,
+    required Duration rpcTimeout,
+    bool connectDriver = false,
+  }) async {
     final controller = await FlutterVmController.connect(
       explicitUrl: explicitUrl,
-      connectDriver: false,
+      connectDriver: connectDriver,
+    );
+    controller.rpcTimeout = rpcTimeout;
+    controller.generationStore =
+        generationStore ??
+        UiTreeGenerationStore.forVmServiceUrl(
+          explicitUrl ?? Platform.environment['VM_SERVICE_URL'],
+        );
+    return controller;
+  }
+
+  Future<int> _handleAuthUrl(String? explicitUrl, bool isJson) async {
+    final controller = await _connect(
+      explicitUrl: explicitUrl,
+      rpcTimeout: const Duration(seconds: defaultActionTimeoutSeconds),
     );
     try {
       final authUrl = await controller.authUrl();
@@ -107,30 +132,51 @@ class CliRunner {
         _hasFlag(cmdArgs, '--interactive') || _hasFlag(cmdArgs, '-i');
     final compact = _hasFlag(cmdArgs, '--compact') || _hasFlag(cmdArgs, '-c');
     final noBounds = _hasFlag(cmdArgs, '--no-bounds') || compact;
+    final fresh = _hasFlag(cmdArgs, '--fresh');
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
 
-    final controller = await FlutterVmController.connect(
+    final controller = await _connect(
       explicitUrl: explicitUrl,
-      connectDriver: false,
+      rpcTimeout: Duration(seconds: timeoutSec),
     );
     try {
-      final elements = await controller.snapshot(
-        filter: filter,
-        within: within,
-        includeBounds: !noBounds,
-        onlyWithKeys: onlyWithKeys,
-        interactiveOnly: interactive,
-      );
+      final capture = fresh
+          ? await controller.captureSettledTree(
+              filter: filter,
+              within: within,
+              includeBounds: !noBounds,
+              onlyWithKeys: onlyWithKeys,
+              interactiveOnly: interactive,
+              timeout: Duration(seconds: timeoutSec),
+            )
+          : await controller.captureTree(
+              filter: filter,
+              within: within,
+              includeBounds: !noBounds,
+              onlyWithKeys: onlyWithKeys,
+              interactiveOnly: interactive,
+            );
+      final elements = capture.elements;
+      final generation = controller.generationStore?.next();
 
       if (isJson) {
         print(
           json.encode({
             'status': 'ok',
             'count': elements.length,
+            'generation': generation,
+            'signature': capture.signature,
+            'fresh': fresh,
             'elements': elements.map((e) => e.toJson()).toList(),
           }),
         );
       } else {
         _printElementsFormatted(elements, compact: compact);
+        print('generation: $generation${fresh ? ' (fresh)' : ''}');
       }
       return 0;
     } finally {
@@ -151,6 +197,11 @@ class CliRunner {
     final interactive =
         _hasFlag(cmdArgs, '--interactive') || _hasFlag(cmdArgs, '-i');
     final compact = _hasFlag(cmdArgs, '--compact') || _hasFlag(cmdArgs, '-c');
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
 
     if (key == null && text == null && type == null && query == null) {
       print(
@@ -159,9 +210,9 @@ class CliRunner {
       return 1;
     }
 
-    final controller = await FlutterVmController.connect(
+    final controller = await _connect(
       explicitUrl: explicitUrl,
-      connectDriver: false,
+      rpcTimeout: Duration(seconds: timeoutSec),
     );
     try {
       final matches = await controller.findElements(
@@ -172,6 +223,7 @@ class CliRunner {
         within: within,
         interactiveOnly: interactive,
       );
+      final generation = controller.generationStore?.next();
 
       if (isJson) {
         print(
@@ -179,6 +231,7 @@ class CliRunner {
             'status': 'ok',
             'found': matches.isNotEmpty,
             'count': matches.length,
+            'generation': generation,
             'elements': matches.map((e) => e.toJson()).toList(),
           }),
         );
@@ -225,8 +278,23 @@ class CliRunner {
       targetY = double.tryParse(parts[1].trim());
     }
 
-    final timeoutSec = _getIntOption(cmdArgs, '--timeout', defaultVal: 10);
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
     final delayMs = _getIntOption(cmdArgs, '--delay', defaultVal: 300);
+    final verifyMs = _getIntOption(
+      cmdArgs,
+      '--verify-timeout',
+      defaultVal: 2000,
+    );
+    final expect =
+        _getOption(cmdArgs, '--expect') ?? _getOption(cmdArgs, '--expect-key');
+    final expectAbsent =
+        _getOption(cmdArgs, '--expect-absent') ??
+        _getOption(cmdArgs, '--expect-gone');
+    final verify = !_hasFlag(cmdArgs, '--no-verify');
 
     if (key == null &&
         text == null &&
@@ -238,9 +306,9 @@ class CliRunner {
       return 1;
     }
 
-    final controller = await FlutterVmController.connect(
+    final controller = await _connect(
       explicitUrl: explicitUrl,
-      connectDriver: false,
+      rpcTimeout: Duration(seconds: timeoutSec),
     );
     try {
       final res = await controller.tap(
@@ -253,6 +321,10 @@ class CliRunner {
         y: targetY,
         timeout: Duration(seconds: timeoutSec),
         postDelay: Duration(milliseconds: delayMs),
+        expect: expect,
+        expectAbsent: expectAbsent,
+        verify: verify,
+        verifyTimeout: Duration(milliseconds: verifyMs),
       );
 
       if (isJson) {
@@ -283,11 +355,22 @@ class CliRunner {
     }
     final text = textOption ?? positionalText!;
     final noTapFirst = _hasFlag(cmdArgs, '--no-tap-first');
-    final timeoutSec = _getIntOption(cmdArgs, '--timeout', defaultVal: 10);
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
     final delayMs = _getIntOption(cmdArgs, '--delay', defaultVal: 300);
+    final verifyMs = _getIntOption(
+      cmdArgs,
+      '--verify-timeout',
+      defaultVal: 2000,
+    );
+    final verify = !_hasFlag(cmdArgs, '--no-verify');
 
-    final controller = await FlutterVmController.connect(
+    final controller = await _connect(
       explicitUrl: explicitUrl,
+      rpcTimeout: Duration(seconds: timeoutSec),
     );
     try {
       final res = await controller.enterText(
@@ -296,6 +379,8 @@ class CliRunner {
         tapFirst: !noTapFirst,
         timeout: Duration(seconds: timeoutSec),
         postDelay: Duration(milliseconds: delayMs),
+        verify: verify,
+        verifyTimeout: Duration(milliseconds: verifyMs),
       );
 
       if (isJson) {
@@ -320,7 +405,11 @@ class CliRunner {
     final direction = _getOption(cmdArgs, '--direction')?.toLowerCase();
     final to = _getOption(cmdArgs, '--to')?.toLowerCase();
     final untilVisible = _getOption(cmdArgs, '--until-visible');
-    final timeoutSec = _getIntOption(cmdArgs, '--timeout', defaultVal: 15);
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
 
     if (direction != null && direction != 'down' && direction != 'up') {
       print('❌ --direction must be up or down.');
@@ -337,9 +426,9 @@ class CliRunner {
     if (direction == 'down') dy = -300.0;
     if (direction == 'up') dy = 300.0;
 
-    final controller = await FlutterVmController.connect(
+    final controller = await _connect(
       explicitUrl: explicitUrl,
-      connectDriver: false,
+      rpcTimeout: Duration(seconds: timeoutSec),
     );
     try {
       final res = await controller.scroll(
@@ -371,15 +460,20 @@ class CliRunner {
     final text = _getOption(cmdArgs, '--text') ?? _getOption(cmdArgs, '-t');
     final type = _getOption(cmdArgs, '--type');
     final absent = _hasFlag(cmdArgs, '--absent');
-    final timeoutSec = _getIntOption(cmdArgs, '--timeout', defaultVal: 15);
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
 
     if (key == null && text == null && type == null) {
       print('❌ Must provide target identifier: --key, --text, or --type');
       return 1;
     }
 
-    final controller = await FlutterVmController.connect(
+    final controller = await _connect(
       explicitUrl: explicitUrl,
+      rpcTimeout: Duration(seconds: timeoutSec),
     );
     try {
       final res = await controller.waitFor(
@@ -407,9 +501,16 @@ class CliRunner {
     bool isJson,
   ) async {
     final out = _getOption(cmdArgs, '--out') ?? _getOption(cmdArgs, '-o');
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
 
-    final controller = await FlutterVmController.connect(
+    final controller = await _connect(
       explicitUrl: explicitUrl,
+      rpcTimeout: Duration(seconds: timeoutSec),
+      connectDriver: true,
     );
     try {
       final file = await controller.screenshot(outputPath: out);
@@ -439,6 +540,11 @@ class CliRunner {
   ) async {
     final filePath = _getOption(cmdArgs, '--file') ?? _getOption(cmdArgs, '-f');
     final rawJson = _getOption(cmdArgs, '--json-steps');
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
 
     String content = '';
     if (filePath != null) {
@@ -482,8 +588,9 @@ class CliRunner {
     if (!isJson) {
       print('🚀 Running batch with ${steps.length} steps...');
     }
-    final controller = await FlutterVmController.connect(
+    final controller = await _connect(
       explicitUrl: explicitUrl,
+      rpcTimeout: Duration(seconds: timeoutSec),
     );
     try {
       final results = await controller.runBatch(steps);
@@ -495,6 +602,7 @@ class CliRunner {
             'status': allSuccess ? 'ok' : 'failed',
             'total': results.length,
             'passed': results.where((r) => r.success).length,
+            'generation': controller.generationStore?.peek(),
             'results': results.map((r) => r.toJson()).toList(),
           }),
         );
@@ -543,12 +651,13 @@ class CliRunner {
 Flutter VM Driver CLI — Unified Interactive UI Control & Automation
 
 Usage:
+  sanad-dev ui <command> [arguments]
   fvm dart --packages=client/.dart_tool/package_config.json scripts/flutter_driver_cli.dart <command> [arguments]
-  OR: sanad-dev ui <command> [arguments]
 
 Commands:
   snapshot       Inspect and dump visible UI widget tree
-                 Options: --filter <query>, --within <scope>, --interactive, --compact, --only-keys, --no-bounds, --json
+                 Options: --filter <query>, --within <scope>, --interactive, --compact, --only-keys, --no-bounds, --fresh, --timeout <sec>, --json
+                 JSON includes a monotonic `generation`; --fresh waits for a quiesced tree.
 
   find           Find element by key, text, type, or query
                  Options: --key <k>, --text <t>, --type <type>, --query <q>, --within <scope>, --interactive, --compact, --json
@@ -556,16 +665,18 @@ Commands:
   auth-url       Print the active browser authentication URL for the selected Client
                  Options: --json
 
-  tap            Tap an element (with auto-scroll into view)
-                 Options: --key <k>, --text <t>, --type <type>, --within <scope>, --index <i>, --coords x,y, --timeout <sec>, --delay <ms>, --json
+  tap            Tap an element (with auto-scroll into view) and verify the outcome
+                 Options: --key <k>, --text <t>, --type <type>, --within <scope>, --index <i>, --coords x,y,
+                          --expect <key>, --expect-absent <key>, --no-verify, --verify-timeout <ms>,
+                          --timeout <sec>, --delay <ms>, --json
 
-  enter-text     Enter text into an input field
-                 Options: --key <k>, --text <t>, --no-tap-first, --timeout <sec>, --delay <ms>, --json
+  enter-text     Enter text into an input field and verify the effect
+                 Options: --key <k>, --text <t>, --no-tap-first, --no-verify, --verify-timeout <ms>, --timeout <sec>, --delay <ms>, --json
 
   scroll         Scroll inside a scrollable widget or scroll until item visible
-                 Options: --key <k>, --direction <up|down>, --dx <x>, --dy <y>, --to <top|bottom>, --until-visible <target_key>, --json
+                 Options: --key <k>, --direction <up|down>, --dx <x>, --dy <y>, --to <top|bottom>, --until-visible <target_key>, --timeout <sec>, --json
 
-  wait-for       Wait for an element to appear or disappear
+  wait-for       Wait for an element to appear or disappear, then report the elapsed time
                  Options: --key <k>, --text <t>, --type <type>, --absent, --timeout <sec>, --json
 
   screenshot     Capture visual PNG screenshot
@@ -573,11 +684,13 @@ Commands:
 
   batch          Execute a sequence of actions from a JSON recipe file
                  Options: --file <path>, --json-steps '<json>', --json
+                 Steps: tap, enter_text, scroll, wait_for, snapshot, screenshot, message_bodies, sleep.
 
 Global Options:
-  --vm-url <url> VM service endpoint (injected automatically by sanad-dev ui)
-  --json         Format output as JSON
-  -h, --help     Show this help
+  --vm-url <url>     VM service endpoint (injected automatically by sanad-dev ui)
+  --timeout <sec>    Hard per-action deadline, default $defaultActionTimeoutSeconds
+  --json             Format output as JSON
+  -h, --help         Show this help
 ''');
   }
 

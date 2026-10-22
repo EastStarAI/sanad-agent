@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:flutter_driver/flutter_driver.dart';
 
 import 'models.dart';
+import 'tree_state.dart';
 
 class _DriverException implements Exception {
   const _DriverException(this.message);
@@ -39,7 +40,27 @@ String _rpcErrorMessage(Object? error) {
   return error?.toString() ?? 'Unknown VM service error';
 }
 
-/// Controller that coordinates FlutterDriver actions and custom VM service extensions.
+/// One inspected widget tree plus its change-detection signature.
+class UiTreeCapture {
+  const UiTreeCapture(this.elements, this.signature);
+
+  final List<UiElement> elements;
+  final String signature;
+}
+
+/// Guidance returned when a scrolled-for target cannot be reached.
+const String offstageTargetGuidance =
+    'target offstage/not found; navigate first';
+
+/// Default window used to observe an action's post-condition.
+const Duration defaultVerifyTimeout = Duration(milliseconds: 2000);
+
+/// Controller that coordinates Sanad VM service extensions and optional
+/// Flutter Driver screenshot capture.
+///
+/// Every action is bounded: the RPC transport ([rpcTimeout]), the action
+/// itself, and any post-condition verification window all terminate on a
+/// deadline so a hung Client can never block a caller indefinitely.
 class FlutterVmController {
   final String serviceUrl;
   final String wsUrl;
@@ -47,7 +68,14 @@ class FlutterVmController {
   WebSocket? _socket;
   StreamSubscription? _socketSub;
   final Map<int, Completer<dynamic>> _pendingRpc = {};
+  final Map<String, String> _isolateByExtension = {};
   int _requestId = 100;
+
+  /// Hard deadline for one VM Service RPC.
+  Duration rpcTimeout = const Duration(seconds: 30);
+
+  /// Snapshot counter used to stamp action results; unset means no stamping.
+  UiTreeGenerationStore? generationStore;
 
   FlutterVmController._({required this.serviceUrl, required this.wsUrl});
 
@@ -164,7 +192,14 @@ class FlutterVmController {
     );
 
     try {
-      return await completer.future.timeout(const Duration(seconds: 10));
+      return await completer.future.timeout(rpcTimeout);
+    } catch (error) {
+      // A Client hot restart replaces its isolates; drop the cached selection so
+      // the next probe rediscovers instead of failing forever.
+      if (_conciseError(error).toLowerCase().contains('isolate')) {
+        _isolateByExtension.clear();
+      }
+      rethrow;
     } finally {
       _pendingRpc.remove(reqId);
     }
@@ -199,6 +234,57 @@ class FlutterVmController {
     } catch (e) {
       throw _DriverException('Snapshot failed: ${_conciseError(e)}');
     }
+  }
+
+  /// Captures the tree together with its change-detection signature.
+  Future<UiTreeCapture> captureTree({
+    String? filter,
+    String? within,
+    bool includeBounds = true,
+    bool onlyWithKeys = false,
+    bool interactiveOnly = false,
+  }) async {
+    final elements = await snapshot(
+      filter: filter,
+      within: within,
+      includeBounds: includeBounds,
+      onlyWithKeys: onlyWithKeys,
+      interactiveOnly: interactiveOnly,
+    );
+    return UiTreeCapture(elements, uiTreeSignature(elements));
+  }
+
+  /// Re-captures until two consecutive trees agree, then returns the settled
+  /// tree. Bounded by [timeout] so an animating Client cannot stall a caller.
+  Future<UiTreeCapture> captureSettledTree({
+    String? filter,
+    String? within,
+    bool includeBounds = true,
+    bool onlyWithKeys = false,
+    bool interactiveOnly = false,
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    var previous = await captureTree(
+      filter: filter,
+      within: within,
+      includeBounds: includeBounds,
+      onlyWithKeys: onlyWithKeys,
+      interactiveOnly: interactiveOnly,
+    );
+    while (stopwatch.elapsed < timeout) {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      final next = await captureTree(
+        filter: filter,
+        within: within,
+        includeBounds: includeBounds,
+        onlyWithKeys: onlyWithKeys,
+        interactiveOnly: interactiveOnly,
+      );
+      if (next.signature == previous.signature) return next;
+      previous = next;
+    }
+    return previous;
   }
 
   /// Returns the active browser authentication URL from this exact driver VM.
@@ -252,6 +338,11 @@ class FlutterVmController {
   }
 
   /// Taps an element resolved by key, text, type, or coordinates.
+  ///
+  /// [verify] enforces a post-condition: the explicit [expect] /
+  /// [expectAbsent] key assertion, or an observable widget-tree change inside
+  /// [verifyTimeout]. A silent no-op becomes an error instead of a false
+  /// success.
   Future<DriverActionResult> tap({
     String? key,
     String? text,
@@ -260,104 +351,156 @@ class FlutterVmController {
     int index = 0,
     double? x,
     double? y,
-    Duration timeout = const Duration(seconds: 10),
+    Duration timeout = const Duration(seconds: 30),
     Duration postDelay = const Duration(milliseconds: 300),
+    String? expect,
+    String? expectAbsent,
+    bool verify = true,
+    Duration verifyTimeout = const Duration(milliseconds: 2000),
   }) async {
     final stopwatch = Stopwatch()..start();
+    final targetDesc = key ?? text ?? type ?? '($x, $y)';
+    final withinDesc = within != null ? ' (within $within)' : '';
 
-    // 1. Try service extension
+    // Verification observes the whole tree: a scoped tap may legitimately
+    // change widgets outside its selector scope.
+    final before = verify ? await captureTree() : null;
+
     Object? extensionError;
+    Map<String, dynamic>? res;
     try {
       final isolateId = await _discoverIsolateId('ext.sanad_client.tap');
-      final res = await _callRpc('ext.sanad_client.tap', {
-        'isolateId': isolateId,
-        if (key != null) 'key': key,
-        if (text != null) 'text': text,
-        if (type != null) 'type': type,
-        if (within != null) 'within': within,
-        if (index > 0) 'index': index.toString(),
-        if (x != null) 'x': x.toString(),
-        if (y != null) 'y': y.toString(),
-      }) as Map<String, dynamic>?;
-
-      if (res != null && res['status'] == 'ok') {
-        if (postDelay > Duration.zero) {
-          await Future<void>.delayed(postDelay);
-        }
-        stopwatch.stop();
-        final targetDesc = key ?? text ?? type ?? '($x, $y)';
-        final withinDesc = within != null ? ' (within $within)' : '';
-        return DriverActionResult(
-          success: true,
-          action: 'tap',
-          message:
-              'Successfully tapped $targetDesc$withinDesc (at ${res["tapped_at"]})',
-          data: res,
-          duration: stopwatch.elapsed,
-        );
-      }
+      res =
+          await _callRpc('ext.sanad_client.tap', {
+            'isolateId': isolateId,
+            if (key != null) 'key': key,
+            if (text != null) 'text': text,
+            if (type != null) 'type': type,
+            if (within != null) 'within': within,
+            if (index > 0) 'index': index.toString(),
+            if (x != null) 'x': x.toString(),
+            if (y != null) 'y': y.toString(),
+          }) as Map<String, dynamic>?;
     } catch (error) {
       extensionError = error;
     }
 
-    // Scoped, indexed, and coordinate actions must never degrade to an
-    // unscoped finder because that could tap a different widget.
-    if (within != null || index != 0 || x != null || y != null) {
+    if (res == null || res['status'] != 'ok') {
       stopwatch.stop();
+      // Scoped, indexed, and coordinate actions must never degrade to an
+      // unscoped finder because that could tap a different widget.
       return DriverActionResult(
         success: false,
         action: 'tap',
         message:
-            'Failed to tap the requested target: ${extensionError == null ? "extension returned no result" : _conciseError(extensionError)}',
+            'Failed to tap $targetDesc$withinDesc: ${extensionError == null ? "extension returned no result" : _conciseError(extensionError)}',
         duration: stopwatch.elapsed,
+        targetKey: key,
+        generation: _nextGeneration(),
       );
     }
 
-    // 2. Fallback to FlutterDriver for simple exact selectors.
-    await _ensureDriverConnected();
-    final finder = _resolveFinder(key: key, text: text, type: type);
+    if (postDelay > Duration.zero) {
+      await Future<void>.delayed(postDelay);
+    }
 
-    try {
-      await _driver!.runUnsynchronized(() async {
-        await _driver!.waitFor(finder, timeout: timeout);
-        await _driver!.tap(finder, timeout: timeout);
-        if (postDelay > Duration.zero) {
-          await Future<void>.delayed(postDelay);
-        }
-      });
+    final tappedAt = res['tapped_at'];
+    final tappedX = tappedAt is Map ? (tappedAt['x'] as num?)?.round() : null;
+    final tappedY = tappedAt is Map ? (tappedAt['y'] as num?)?.round() : null;
+
+    if (before == null) {
       stopwatch.stop();
       return DriverActionResult(
         success: true,
         action: 'tap',
-        message: 'Successfully tapped ${key ?? text ?? type}',
+        message: 'Tapped $targetDesc$withinDesc at ($tappedX, $tappedY)',
+        data: res,
         duration: stopwatch.elapsed,
+        targetKey: key,
+        x: tappedX,
+        y: tappedY,
+        generation: _nextGeneration(),
       );
-    } catch (e) {
-      stopwatch.stop();
+    }
+
+    final outcome = await _awaitPostCondition(
+      before: before,
+      expect: expect,
+      expectAbsent: expectAbsent,
+      window: verifyTimeout,
+    );
+
+    stopwatch.stop();
+    if (!outcome.passed) {
       return DriverActionResult(
         success: false,
         action: 'tap',
-        message: 'Failed to tap ${key ?? text ?? type}: ${_conciseError(e)}',
+        message:
+            'Tap on $targetDesc$withinDesc produced no observable change '
+            'within ${verifyTimeout.inMilliseconds}ms: '
+            '${expect != null ? 'expected $expect to be present' : expectAbsent != null ? 'expected $expectAbsent to be gone' : 'the widget tree did not change'}. '
+            'The target may be offstage, obscured, or animated away; '
+            'pass --expect <key> to assert the intended outcome, --no-verify to '
+            'skip the post-condition, or navigate first.',
+        data: res,
         duration: stopwatch.elapsed,
+        targetKey: key,
+        x: tappedX,
+        y: tappedY,
+        verification: 'none',
+        generation: _nextGeneration(),
       );
     }
+
+    return DriverActionResult(
+      success: true,
+      action: 'tap',
+      message: 'Tapped $targetDesc$withinDesc at ($tappedX, $tappedY)',
+      data: res,
+      duration: stopwatch.elapsed,
+      targetKey: key,
+      x: tappedX,
+      y: tappedY,
+      verification: outcome.verifiedBy,
+      generation: _nextGeneration(),
+    );
   }
 
-  /// Enters text into an input field. If [key] is supplied, taps it first to focus.
+  /// Enters text into an input field and verifies the observable effect.
+  ///
+  /// Verification prefers the field's rendered text (which is compared, never
+  /// echoed). When the Client hides the value (obscured field), an observable
+  /// widget-tree change is required instead.
   Future<DriverActionResult> enterText(
     String text, {
     String? key,
     bool tapFirst = true,
-    Duration timeout = const Duration(seconds: 10),
+    Duration timeout = const Duration(seconds: 30),
     Duration postDelay = const Duration(milliseconds: 300),
+    bool verify = true,
+    Duration verifyTimeout = const Duration(milliseconds: 2000),
   }) async {
     final stopwatch = Stopwatch()..start();
+
+    UiTreeCapture? before;
+    String? observedBefore;
+    if (verify) {
+      try {
+        before = await captureTree();
+        if (key != null) {
+          observedBefore = uiElementByKey(before.elements, key)?.text;
+        }
+      } catch (_) {
+        before = null;
+      }
+    }
 
     if (key != null && tapFirst) {
       final focusResult = await tap(
         key: key,
         timeout: timeout,
         postDelay: const Duration(milliseconds: 150),
+        verify: false,
       );
       if (!focusResult.success) {
         stopwatch.stop();
@@ -366,6 +509,7 @@ class FlutterVmController {
           action: 'enter_text',
           message: 'Failed to focus $key: ${focusResult.message}',
           duration: stopwatch.elapsed,
+          targetKey: key,
         );
       }
     }
@@ -378,56 +522,107 @@ class FlutterVmController {
         'text': text,
         if (key != null) 'key': key,
       }) as Map<String, dynamic>?;
-      if (response?['status'] == 'ok') {
-        if (postDelay > Duration.zero) {
-          await Future<void>.delayed(postDelay);
-        }
-        stopwatch.stop();
-        return DriverActionResult(
-          success: true,
-          action: 'enter_text',
-          message: key == null
-              ? 'Successfully entered text into the focused field'
-              : 'Successfully entered text into $key',
-          duration: stopwatch.elapsed,
+      if (response?['status'] != 'ok') {
+        extensionError = const _DriverException(
+          'extension returned no result',
         );
       }
     } catch (error) {
       extensionError = error;
     }
 
-    // Older driver-enabled Clients may not advertise the Sanad text extension.
-    await _ensureDriverConnected();
-    try {
-      await _driver!.runUnsynchronized(() async {
-        await _driver!.enterText(text, timeout: timeout);
-        if (postDelay > Duration.zero) {
-          await Future<void>.delayed(postDelay);
-        }
-      });
-      stopwatch.stop();
-      return DriverActionResult(
-        success: true,
-        action: 'enter_text',
-        message: key == null
-            ? 'Successfully entered text into the focused field'
-            : 'Successfully entered text into $key',
-        duration: stopwatch.elapsed,
-      );
-    } catch (e) {
+    if (extensionError != null) {
       stopwatch.stop();
       return DriverActionResult(
         success: false,
         action: 'enter_text',
         message:
-            'Failed entering text: ${_conciseError(e)}'
-            '${extensionError == null ? '' : ' (Sanad extension: ${_conciseError(extensionError)})'}',
+            'Failed entering text${key == null ? '' : ' into $key'}: ${_conciseError(extensionError)}',
         duration: stopwatch.elapsed,
+        targetKey: key,
+        generation: _nextGeneration(),
       );
     }
+
+    if (postDelay > Duration.zero) {
+      await Future<void>.delayed(postDelay);
+    }
+
+    final message = key == null
+        ? 'Successfully entered text into the focused field'
+        : 'Successfully entered text into $key';
+
+    if (before == null) {
+      stopwatch.stop();
+      return DriverActionResult(
+        success: true,
+        action: 'enter_text',
+        message: message,
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        generation: _nextGeneration(),
+      );
+    }
+
+    final deadline = Stopwatch()..start();
+    UiTreeCapture latest = before;
+    String? verifiedBy;
+    while (true) {
+      latest = await captureTree();
+      if (key != null) {
+        final observedAfter = uiElementByKey(latest.elements, key)?.text;
+        if (observedAfter != null || observedBefore != null) {
+          if (observedAfter != null && observedAfter == text) {
+            verifiedBy = 'text';
+            break;
+          }
+          if (observedAfter != observedBefore) {
+            verifiedBy = 'text';
+            break;
+          }
+        }
+      } else if (latest.signature != before.signature) {
+        verifiedBy = 'tree';
+        break;
+      }
+      if (deadline.elapsed >= verifyTimeout) break;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+
+    stopwatch.stop();
+    if (verifiedBy == null) {
+      final obscured = key != null && observedBefore == null;
+      return DriverActionResult(
+        success: false,
+        action: 'enter_text',
+        message:
+            'enter-text reported success but had no observable effect on '
+            '${key ?? 'the focused field'} within ${verifyTimeout.inMilliseconds}ms'
+            '${obscured ? ' (the field value is not exposed, so no text change can be observed)' : ''}: '
+            'the field may not be editable or focus was lost; '
+            'pass --no-verify for intentionally obscured fields.',
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        verification: 'none',
+        generation: _nextGeneration(),
+      );
+    }
+
+    return DriverActionResult(
+      success: true,
+      action: 'enter_text',
+      message: message,
+      duration: stopwatch.elapsed,
+      targetKey: key,
+      verification: verifiedBy,
+      generation: _nextGeneration(),
+    );
   }
 
   /// Scrolls a scrollable container or scrolls until target widget is visible.
+  ///
+  /// `untilVisibleKey` is driven by bounded offset scrolling plus tree probes,
+  /// so an unreachable or offstage target fails fast instead of hanging.
   Future<DriverActionResult> scroll({
     String? key,
     double dx = 0.0,
@@ -435,7 +630,7 @@ class FlutterVmController {
     Duration duration = const Duration(milliseconds: 300),
     String? to,
     String? untilVisibleKey,
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 30),
   }) async {
     final stopwatch = Stopwatch()..start();
     if (to != null && to != 'top' && to != 'bottom') {
@@ -457,123 +652,231 @@ class FlutterVmController {
       );
     }
 
-    // Use the custom extension for offset scrolling. `scrollUntilVisible`
-    // remains a FlutterDriver operation because it repeats until the target
-    // is actually visible rather than reporting success after one offset.
-    if (untilVisibleKey == null) {
-      try {
-        final isolateId = await _discoverIsolateId('ext.sanad_client.scroll');
-        final res = await _callRpc('ext.sanad_client.scroll', {
-          'isolateId': isolateId,
-          if (key != null) 'key': key,
-          'dx': dx.toString(),
-          'dy': dy.toString(),
-          if (to != null) 'to': to,
-        }) as Map<String, dynamic>?;
+    if (untilVisibleKey != null) {
+      return _scrollUntilVisible(
+        scrollableKey: key,
+        targetKey: untilVisibleKey,
+        dx: dx,
+        dy: dy,
+        timeout: timeout,
+        stopwatch: stopwatch,
+      );
+    }
 
-        if (res != null && res['status'] == 'ok') {
+    try {
+      final isolateId = await _discoverIsolateId('ext.sanad_client.scroll');
+      final res = await _callRpc('ext.sanad_client.scroll', {
+        'isolateId': isolateId,
+        if (key != null) 'key': key,
+        'dx': dx.toString(),
+        'dy': dy.toString(),
+        if (to != null) 'to': to,
+      }) as Map<String, dynamic>?;
+
+      if (res != null && res['status'] == 'ok') {
+        stopwatch.stop();
+        return DriverActionResult(
+          success: true,
+          action: 'scroll',
+          message:
+              'Scrolled to offset ${res["offset"]} (min: ${res["min_extent"]}, max: ${res["max_extent"]})',
+          data: res,
+          duration: stopwatch.elapsed,
+          targetKey: key,
+          generation: _nextGeneration(),
+        );
+      }
+      throw const _DriverException('extension returned no result');
+    } catch (error) {
+      stopwatch.stop();
+      return DriverActionResult(
+        success: false,
+        action: 'scroll',
+        message: 'Scroll failed: ${_conciseError(error)}',
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        generation: _nextGeneration(),
+      );
+    }
+  }
+
+  Future<DriverActionResult> _scrollUntilVisible({
+    required String? scrollableKey,
+    required String targetKey,
+    required double dx,
+    required double dy,
+    required Duration timeout,
+    required Stopwatch stopwatch,
+  }) async {
+    final stepDy = dy == 0 ? -300.0 : dy;
+    final deadline = Stopwatch()..start();
+    var previousSignature = '';
+    var attempts = 0;
+
+    try {
+      while (true) {
+        final probe = await captureTree();
+        final target = uiElementByKey(probe.elements, targetKey);
+        if (target != null && target.bounds != null) {
           stopwatch.stop();
           return DriverActionResult(
             success: true,
             action: 'scroll',
             message:
-                'Scrolled to offset ${res["offset"]} (min: ${res["min_extent"]}, max: ${res["max_extent"]})',
-            data: res,
+                'Scrolled until $targetKey visible after $attempts scroll step(s)',
+            data: {
+              'attempts': attempts,
+              'bounds': target.bounds!.toJson(),
+            },
             duration: stopwatch.elapsed,
+            targetKey: targetKey,
+            verification: 'tree',
+            generation: _nextGeneration(),
           );
         }
-      } catch (error) {
-        if (to != null) {
+        if (target != null && target.bounds == null) {
           stopwatch.stop();
           return DriverActionResult(
             success: false,
             action: 'scroll',
-            message: 'Scroll failed: ${_conciseError(error)}',
+            message:
+                '$offstageTargetGuidance: $targetKey is mounted but has no '
+                'rendered bounds.',
             duration: stopwatch.elapsed,
+            targetKey: targetKey,
+            verification: 'none',
+            generation: _nextGeneration(),
           );
         }
-      }
-    }
+        if (probe.signature == previousSignature && attempts > 0) {
+          stopwatch.stop();
+          return DriverActionResult(
+            success: false,
+            action: 'scroll',
+            message:
+                '$offstageTargetGuidance: scrolling no longer changes the tree '
+                'and $targetKey never became visible.',
+            duration: stopwatch.elapsed,
+            targetKey: targetKey,
+            verification: 'none',
+            generation: _nextGeneration(),
+          );
+        }
+        if (deadline.elapsed >= timeout) {
+          stopwatch.stop();
+          return DriverActionResult(
+            success: false,
+            action: 'scroll',
+            message:
+                '$offstageTargetGuidance: $targetKey was not visible within '
+                '${timeout.inSeconds}s.',
+            duration: stopwatch.elapsed,
+            targetKey: targetKey,
+            verification: 'none',
+            generation: _nextGeneration(),
+          );
+        }
+        previousSignature = probe.signature;
 
-    // 2. Fallback to FlutterDriver
-    await _ensureDriverConnected();
-    try {
-      await _driver!.runUnsynchronized(() async {
-        if (untilVisibleKey != null) {
-          final scrollable = key != null
-              ? find.byValueKey(key)
-              : find.byType('Scrollable');
-          final item = find.byValueKey(untilVisibleKey);
-          await _driver!.scrollUntilVisible(
-            scrollable,
-            item,
-            dyScroll: dy,
-            dxScroll: dx,
-            timeout: timeout,
-          );
-        } else if (key != null) {
-          final scrollable = find.byValueKey(key);
-          await _driver!.scroll(scrollable, dx, dy, duration, timeout: timeout);
-        } else {
-          final scrollable = find.byType('Scrollable');
-          await _driver!.scroll(scrollable, dx, dy, duration, timeout: timeout);
-        }
-      });
-      stopwatch.stop();
-      return DriverActionResult(
-        success: true,
-        action: 'scroll',
-        message: untilVisibleKey != null
-            ? 'Scrolled until $untilVisibleKey visible'
-            : 'Scrolled (dx: $dx, dy: $dy)',
-        duration: stopwatch.elapsed,
-      );
-    } catch (e) {
+        final isolateId = await _discoverIsolateId('ext.sanad_client.scroll');
+        await _callRpc('ext.sanad_client.scroll', {
+          'isolateId': isolateId,
+          if (scrollableKey != null) 'key': scrollableKey,
+          'dx': dx.toString(),
+          'dy': stepDy.toString(),
+        });
+        attempts++;
+      }
+    } catch (error) {
       stopwatch.stop();
       return DriverActionResult(
         success: false,
         action: 'scroll',
-        message: 'Scroll failed: ${_conciseError(e)}',
+        message:
+            '$offstageTargetGuidance: $targetKey could not be scrolled into view '
+            '(${_conciseError(error)}).',
         duration: stopwatch.elapsed,
+        targetKey: targetKey,
+        verification: 'none',
+        generation: _nextGeneration(),
       );
     }
   }
 
   /// Waits for a widget to be present (or absent if [absent] is true).
+  ///
+  /// Driven by bounded tree probes rather than the Flutter Driver extension, so
+  /// waiting does not depend on animation-free frame synchronization.
   Future<DriverActionResult> waitFor({
     String? key,
     String? text,
     String? type,
     bool absent = false,
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 30),
   }) async {
     final stopwatch = Stopwatch()..start();
-    await _ensureDriverConnected();
-    final finder = _resolveFinder(key: key, text: text, type: type);
-
+    final target = key ?? text ?? type ?? '';
     try {
-      await _driver!.runUnsynchronized(() async {
-        if (absent) {
-          await _driver!.waitForAbsent(finder, timeout: timeout);
-        } else {
-          await _driver!.waitFor(finder, timeout: timeout);
+      while (true) {
+        final elements = await snapshot(includeBounds: false);
+        final present = elements.any(
+          (element) => element.matches(
+            keyFilter: key,
+            textFilter: text,
+            typeFilter: type,
+          ),
+        );
+        if (absent ? !present : present) {
+          stopwatch.stop();
+          return DriverActionResult(
+            success: true,
+            action: 'wait_for',
+            message:
+                '$target is ${absent ? "absent" : "present"} '
+                '(waited ${stopwatch.elapsedMilliseconds}ms)',
+            data: {
+              'waited_ms': stopwatch.elapsedMilliseconds,
+              'absent': absent,
+            },
+            duration: stopwatch.elapsed,
+            targetKey: key,
+            verification: absent ? 'absent' : 'present',
+            generation: _nextGeneration(),
+          );
         }
-      });
-      stopwatch.stop();
-      return DriverActionResult(
-        success: true,
-        action: 'wait_for',
-        message: '${key ?? text ?? type} is ${absent ? "absent" : "present"}',
-        duration: stopwatch.elapsed,
-      );
-    } catch (e) {
+        if (stopwatch.elapsed >= timeout) {
+          stopwatch.stop();
+          return DriverActionResult(
+            success: false,
+            action: 'wait_for',
+            message:
+                'Timed out after ${stopwatch.elapsedMilliseconds}ms waiting for '
+                '$target to be ${absent ? "absent" : "present"}',
+            data: {
+              'waited_ms': stopwatch.elapsedMilliseconds,
+              'absent': absent,
+            },
+            duration: stopwatch.elapsed,
+            targetKey: key,
+            verification: 'none',
+            generation: _nextGeneration(),
+          );
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      }
+    } catch (error) {
       stopwatch.stop();
       return DriverActionResult(
         success: false,
         action: 'wait_for',
         message:
-            'Timeout waiting for ${key ?? text ?? type} to be ${absent ? "absent" : "present"}: ${_conciseError(e)}',
+            'Wait failed for $target: ${_conciseError(error)} '
+            '(waited ${stopwatch.elapsedMilliseconds}ms)',
+        data: {'waited_ms': stopwatch.elapsedMilliseconds},
         duration: stopwatch.elapsed,
+        targetKey: key,
+        verification: 'none',
+        generation: _nextGeneration(),
       );
     }
   }
@@ -608,10 +911,13 @@ class FlutterVmController {
       final step = steps[i];
       final stepTimeout = step.timeoutSeconds != null
           ? Duration(seconds: step.timeoutSeconds!)
-          : const Duration(seconds: 15);
+          : const Duration(seconds: 30);
       final stepDelay = step.delayMs != null
           ? Duration(milliseconds: step.delayMs!)
           : const Duration(milliseconds: 300);
+      final stepVerifyTimeout = stepTimeout < defaultVerifyTimeout
+          ? stepTimeout
+          : defaultVerifyTimeout;
 
       switch (step.action.toLowerCase()) {
         case 'tap':
@@ -625,6 +931,10 @@ class FlutterVmController {
             y: step.y,
             timeout: stepTimeout,
             postDelay: stepDelay,
+            expect: step.expect,
+            expectAbsent: step.expectAbsent,
+            verify: !step.noVerify,
+            verifyTimeout: stepVerifyTimeout,
           );
           results.add(res);
           break;
@@ -636,6 +946,8 @@ class FlutterVmController {
             key: step.key,
             timeout: stepTimeout,
             postDelay: stepDelay,
+            verify: !step.noVerify,
+            verifyTimeout: stepVerifyTimeout,
           );
           results.add(res);
           break;
@@ -692,14 +1004,20 @@ class FlutterVmController {
           break;
 
         case 'snapshot':
-          final elements = await snapshot();
+          final capture = step.fresh
+              ? await captureSettledTree(timeout: stepTimeout)
+              : await captureTree();
           results.add(
             DriverActionResult(
               success: true,
               action: 'snapshot',
-              message: 'Extracted ${elements.length} UI elements',
-              data: {'count': elements.length},
+              message: 'Extracted ${capture.elements.length} UI elements',
+              data: {
+                'count': capture.elements.length,
+                'signature': capture.signature,
+              },
               duration: Duration.zero,
+              generation: _nextGeneration(),
             ),
           );
           break;
@@ -728,6 +1046,7 @@ class FlutterVmController {
                 'truncated': messageBodies.length > bounded.length,
               },
               duration: Duration.zero,
+              generation: _nextGeneration(),
             ),
           );
           break;
@@ -753,31 +1072,54 @@ class FlutterVmController {
     return results;
   }
 
-  SerializableFinder _resolveFinder({String? key, String? text, String? type}) {
-    if (key != null && key.isNotEmpty) {
-      return find.byValueKey(key);
+  /// Polls the tree until the post-condition holds or the window expires.
+  Future<_PostConditionOutcome> _awaitPostCondition({
+    required UiTreeCapture before,
+    required String? expect,
+    required String? expectAbsent,
+    required Duration window,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    final hasExplicitExpectation = expect != null || expectAbsent != null;
+    while (true) {
+      final probe = await captureTree();
+      final expectPresent =
+          expect == null || uiElementByKey(probe.elements, expect) != null;
+      final expectAbsentSatisfied =
+          expectAbsent == null ||
+          uiElementByKey(probe.elements, expectAbsent) == null;
+      if (hasExplicitExpectation) {
+        if (expectPresent && expectAbsentSatisfied) {
+          return const _PostConditionOutcome(passed: true, verifiedBy: 'key');
+        }
+      } else if (probe.signature != before.signature) {
+        return const _PostConditionOutcome(passed: true, verifiedBy: 'tree');
+      }
+      if (stopwatch.elapsed >= window) {
+        return const _PostConditionOutcome(passed: false, verifiedBy: 'none');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 120));
     }
-    if (text != null && text.isNotEmpty) {
-      return find.text(text);
-    }
-    if (type != null && type.isNotEmpty) {
-      return find.byType(type);
-    }
-    throw ArgumentError('Must provide at least one of: key, text, or type');
   }
 
+  int? _nextGeneration() => generationStore?.next();
+
   Future<String> _discoverIsolateId(String requiredExtension) async {
+    final cached = _isolateByExtension[requiredExtension];
+    if (cached != null) return cached;
     final vm = await _callRpc('getVM') as Map<String, dynamic>?;
     final isolates = vm?['isolates'] as List? ?? const [];
     for (final isolateRef in isolates) {
       final id = (isolateRef as Map)['id'] as String?;
       if (id == null) continue;
-      final isolate = await _callRpc('getIsolate', {
-        'isolateId': id,
-      }) as Map<String, dynamic>?;
+      final isolate =
+          await _callRpc('getIsolate', {
+            'isolateId': id,
+          }) as Map<String, dynamic>?;
       final extensions = (isolate?['extensionRPCs'] as List? ?? const [])
           .whereType<String>();
       if (extensions.contains(requiredExtension)) {
+        _isolateByExtension[requiredExtension] = id;
         return id;
       }
     }
@@ -799,4 +1141,14 @@ class FlutterVmController {
       await _driver?.close();
     } catch (_) {}
   }
+}
+
+class _PostConditionOutcome {
+  const _PostConditionOutcome({
+    required this.passed,
+    required this.verifiedBy,
+  });
+
+  final bool passed;
+  final String verifiedBy;
 }
