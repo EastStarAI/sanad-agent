@@ -68,6 +68,10 @@ reproduced with identical errors.
    E2E suite that writes a credential (`'secrets':`, `save_mcp_server`) does not
    declare `SANAD_E2E_TEST_MODE`. The pre-fix remote device control file
    contained zero occurrences, so the guard would have caught the defect.
+5. Follow-up `test(agent): bound the restored-turn history poll` - the I.4 poll
+   now stops at its deadline instead of issuing one request with a non-positive
+   remaining budget, so an exhausted wait reports "not found" instead of a
+   transport timeout.
 
 Contract documents were already correct and were therefore not rewritten:
 

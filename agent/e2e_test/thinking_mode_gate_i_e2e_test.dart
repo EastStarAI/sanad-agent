@@ -771,9 +771,11 @@ class _ThinkingTestClient {
   }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) break;
       final messages = await _loadHistory(
         sessionId: sessionId,
-        timeout: deadline.difference(DateTime.now()),
+        timeout: remaining,
       );
       final found = messages.any(
         (message) =>
