@@ -342,10 +342,20 @@ class SessionShowCommand extends _BaseSessionSubcommand {
                 (pending['questions'] is List &&
                     (pending['questions'] as List).isNotEmpty));
 
+        // The in-flight projection is an in-memory partial-stream snapshot.
+        // A durable execution projection that is unowned (`idle`/`queued`)
+        // proves no run is publishing, so a leftover snapshot must not be
+        // reported as `running` (Task 134).
+        final durableExecutionState = executionSnapshot?['state']?.toString();
+        final durableIsIdle =
+            durableExecutionState == 'idle' ||
+            durableExecutionState == 'queued';
+        final hasRunningExecution = inFlight != null && !durableIsIdle;
+
         final String status;
         if (pending != null) {
           status = isAskUser ? 'needs_input' : 'needs_permission';
-        } else if (inFlight != null) {
+        } else if (hasRunningExecution) {
           status = 'running';
         } else {
           status = 'idle';
@@ -368,7 +378,8 @@ class SessionShowCommand extends _BaseSessionSubcommand {
         final compaction = _latestCompaction(messages);
         final identities = <String, dynamic>{
           'session_id': id,
-          if (inFlight?['run_id'] != null) 'run_id': inFlight!['run_id'],
+          if (hasRunningExecution && inFlight['run_id'] != null)
+            'run_id': inFlight['run_id'],
           if (executionSnapshot?['work_item_id'] != null)
             'work_item_id': executionSnapshot!['work_item_id'],
           if (executionSnapshot?['request_id'] != null)
@@ -604,7 +615,11 @@ class SessionStopCommand extends _BaseSessionSubcommand {
 
     try {
       return await withClient((client) async {
-        await client.stop(sessionId: id);
+        // Name the execution the operator observed. Resolution is best-effort:
+        // the stop must still be dispatched when the session state cannot be
+        // read, and the daemon's stop is session-scoped either way (Task 134).
+        final runId = await _resolveInFlightRunId(client, id);
+        await client.stop(sessionId: id, runId: runId);
 
         if (json) {
           stdoutSink.writeln(
@@ -622,6 +637,28 @@ class SessionStopCommand extends _BaseSessionSubcommand {
       }
       return 1;
     }
+  }
+
+  /// Reads the session's authoritative `in_flight` run identity so the stop
+  /// names the same execution the Client UI would stop.
+  Future<String?> _resolveInFlightRunId(
+    LocalGatewayCliClient client,
+    String sessionId,
+  ) async {
+    try {
+      final history = await client.getSessionHistory(sessionId: sessionId);
+      final payload = history['payload'] is Map
+          ? Map<String, dynamic>.from(history['payload'] as Map)
+          : history;
+      final inFlight = payload['in_flight'];
+      if (inFlight is Map) {
+        final runId = inFlight['run_id']?.toString();
+        if (runId != null && runId.isNotEmpty) return runId;
+      }
+    } catch (_) {
+      // Best-effort: the stop command does not depend on this read.
+    }
+    return null;
   }
 }
 

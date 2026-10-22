@@ -230,7 +230,7 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
 |---|---|---|
 | `list` | `sanad session list [--json]` | Lists active sessions discovered via the gateway. Appends `[Pending intervention]` when a session is suspended awaiting tool approval or user input. |
 | `show` | `sanad session show <session-id> [--json] [--include-messages]` | Authoritative session inspection. Exposes status (`needs_input`, `needs_permission`, `running`, `idle`), owner identities, in-flight execution details, pending request payloads, the effective route, timestamps, and message/tool count summaries. By default the projection is **bounded** and excludes the full messages payload; pass `--include-messages` to opt in to the complete conversation/history. |
-| `stop` | `sanad session stop <session-id> [--json]` | Halts execution strictly for the specified session, leaving other active sessions untouched. |
+| `stop` | `sanad session stop <session-id> [--json]` | Halts execution strictly for the specified session, leaving other active sessions untouched. Dispatches one session-scoped `stop` immediately (naming the in-flight `run_id` resolved from the session projection), then confirms **authoritative idle** state through ordered state reads before reporting success. A matching `stopped` event only shortens the wait to the next read; it never proves the stop on its own. |
 | `compact` | `sanad session compact <session-id> [--json] [--timeout <seconds>]` | Requests manual context compaction for the specified session through one correlated `session.compact` query (`LocalGatewayCliClient.compactSession` with `resendOnTimeout: false`, `agent/lib/cli/runner/commands/session_command.dart`). The daemon replies only after compaction finishes (`SessionRunOrchestrator.handleCompactCommand` awaits `runCompaction`), so the CLI waits for that terminal outcome (`accepted` = completed, `no_op`, or a failure/rejection). The wait is operation-scoped and bounded by the target Home's compaction pass timeout (`ModelAwareRuntimePolicy.compactionPassTimeoutForHome`, `config.yaml` `compaction.passTimeoutSeconds`, default 600 s); a valid `--timeout` overrides it and an invalid one falls back to it (Task 125). Dispatches exactly once. If the bound passes without a result the outcome is `unconfirmed` (exit `124`, JSON `poll: sanad session show <id>`), never failed: the daemon may still be compacting. `dispatched` occurs only on the resend-on-timeout path, which this subcommand disables. |
 | `answer` | `sanad session answer <session-id> -r <req-id> --answer <text> [--file <path>] [--json]` | Explicit resolution path for pending `system_ask_user` questions. Accepts direct text or JSON/text file payload. |
 | `permission` | `sanad session permission <session-id> -r <req-id> (--allow \| --deny) [--decision allow\|deny] [--scope once\|session\|workspace] [--comment <text>] [--file <path>] [--json]` | Explicit decision path for gated tool approvals. Accepts boolean flags or a structured JSON file payload. Aliases: `permit`, `decide`. |
@@ -257,12 +257,38 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
    - The `--allow-all-tools` option automatically approves ordinary tool execution only. Clarification questions (`system_ask_user`) always remain pending and require explicit user input.
    - Secret requests (`system_request_secret`) are never approved or answered by a terminal: `sanad run` records `needs_input` and prints a notice, the REPL prints the same notice and leaves the request pending for the Sanad Client, and the in-process terminal platform skips it. A manual `sanad session permission --allow` carries no values and is refused by the Agent.
 
-### 9.3. Bounded Session Show Projection (Machine-Review Contract)
+### 9.3. Stop Confirmation Contract (`sanad session stop`, Task 134)
+
+The CLI stop is the same session-scoped interruption the Sanad Client UI sends, and it
+confirms the same authoritative outcome:
+
+1. **Run identity.** `SessionStopCommand` reads the session projection first and passes the
+   in-flight `run_id` to `LocalGatewayCliClient.stop()` when one exists, so the daemon
+   acknowledges the execution the operator observed. That read is best-effort: if it fails,
+   the stop is still dispatched (the daemon's stop is session-scoped and never gated on the run).
+2. **Immediate dispatch.** The `stop` command carries `session_id`, the optional `run_id`, and
+   one correlation `request_id`; it is sent before any confirmation read so an interruption is
+   never delayed behind an inspection round trip.
+3. **Authoritative confirmation.** Success requires a post-dispatch read that reports no
+   `in_flight` and no `pending_permission_request`. Reads repeat (bounded by the client request
+   timeout, default 15 s) until that state is observed; a matching `stopped` canonical event
+   only wakes the wait early so the state is re-read. A run that never becomes idle raises
+   `CliClientException(stop_timeout)` and the command exits 1 without claiming success.
+4. **Daemon side.** `SessionStopCoordinator` releases the stopped owner's in-memory
+   `in_flight` projection and its durable interactive-wait checkpoints alongside durable work,
+   recovery, and queued state, so `session show` reports `idle` after the stop instead of a
+   frozen `running` snapshot (with its frozen `updated_at`) or a stale `needs_permission`.
+   `SessionTurnExecutor` releases the same projection when a run enters a blocked/waiting
+   recovery, because that run no longer publishes.
+5. **REPL parity.** `/stop` and `Ctrl+C` use the same client path; an unconfirmed stop renders a
+   neutral “dispatched, not yet confirmed idle” notice instead of a send failure.
+
+### 9.4. Bounded Session Show Projection (Machine-Review Contract)
 
 `session show <session-id> --json` returns a **bounded, reviewer-focused** envelope by default so that supervisors and orchestrators can inspect a session without pulling the entire conversation/history payload. The default envelope includes:
 
 - **Owner identities** (`identities`): `session_id`, active `run_id`, `work_item_id`, `request_id`, `pending_request_id`, `history_revision`, and `route_revision` when present.
-- **Execution status** (`status`): `idle`, `running`, `needs_input`, or `needs_permission`, derived from in-flight state and any pending suspended request.
+- **Execution status** (`status`): `idle`, `running`, `needs_input`, or `needs_permission`, derived from in-flight state, the durable execution snapshot, and any pending suspended request. An in-flight partial-stream snapshot whose durable execution projection is unowned (`idle`/`queued`) is stale and is not reported as `running` (Task 134).
 - **Pending intervention** (`pending_permission_request`) and in-flight execution (`in_flight`, `execution_snapshot`).
 - **Effective route**: `model`, `model_display`, `provider_instance_id`, `model_provider`, `route_revision`, `route_updated_at`, and `thinking_mode`.
 - **Timestamps**: `created_at`, `updated_at`, `last_user_message_at`.

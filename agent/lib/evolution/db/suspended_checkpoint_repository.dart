@@ -118,4 +118,16 @@ class SuspendedCheckpointRepository {
       toolCallId,
     ]);
   }
+
+  /// Deletes every checkpoint of [sessionId].
+  ///
+  /// An explicit Stop terminalizes the session's interactive waits, so a
+  /// leftover `awaiting_permission` row must not outlive it: the history
+  /// projection would keep reporting `pending_permission_request` for a
+  /// session that is already stopped.
+  void deleteSuspendedCheckpointsForSession(String sessionId) {
+    _db.execute('DELETE FROM suspended_checkpoints WHERE session_id = ?', [
+      sessionId,
+    ]);
+  }
 }

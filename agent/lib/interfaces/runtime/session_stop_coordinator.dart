@@ -8,6 +8,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/engine/runtime/tool_terminalization_service.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 
 import 'session_queue_coordinator.dart';
@@ -68,6 +69,7 @@ class SessionStopCoordinator {
     bool forceEmitStopped = false,
     String? stopRequestId,
     String? recoveryOwnerToken,
+    String? stopRunId,
     bool preserveInteractiveWait = false,
   }) {
     final existing = _stopRequests[sessionId];
@@ -79,6 +81,7 @@ class SessionStopCoordinator {
       forceEmitStopped: forceEmitStopped,
       stopRequestId: stopRequestId,
       recoveryOwnerToken: recoveryOwnerToken,
+      stopRunId: stopRunId,
       preserveInteractiveWait: preserveInteractiveWait,
     );
     _stopRequests[sessionId] = future;
@@ -102,6 +105,7 @@ class SessionStopCoordinator {
     required bool forceEmitStopped,
     required String? stopRequestId,
     required String? recoveryOwnerToken,
+    required String? stopRunId,
     required bool preserveInteractiveWait,
   }) async {
     if (preserveInteractiveWait &&
@@ -109,7 +113,10 @@ class SessionStopCoordinator {
       return;
     }
     final activeRun = _turnExecutor.getActiveRun(sessionId);
-    final stoppedRunId = activeRun?.runId;
+    // A stop that names a run (a blocked owner has no live `ActiveRun`) must
+    // still report the identity it addressed, so clients can correlate the
+    // acknowledgement with the in-flight execution they observed.
+    final stoppedRunId = activeRun?.runId ?? stopRunId;
     final stoppedTurnId = activeRun?.turnId;
     final stoppedModelStepId = activeRun?.agentRunner.currentModelStepId;
     final hadWork =
@@ -162,6 +169,11 @@ class SessionStopCoordinator {
       // must remain queued.
       stopFuture = activeRun.requestStop();
     }
+    // The partial-stream projection belongs to the stopped owner. Releasing it
+    // here (synchronously with the invalidation) keeps `get_session_history` /
+    // `session show` from reporting a stopped session as `running` forever
+    // (Task 134).
+    _releaseInFlightProjection(sessionId, activeRun: activeRun);
     if (getIt.isRegistered<RuntimeRecoveryService>()) {
       getIt<RuntimeRecoveryService>().abort(sessionId, runId: activeRun?.runId);
     }
@@ -169,6 +181,12 @@ class SessionStopCoordinator {
     // arriving after this point is intentionally preserved.
     _queueCoordinator.removePendingEvents(sessionId);
     _suspendedEvents.remove(sessionId);
+    // An explicit stop terminalizes the session's interactive waits, so the
+    // durable checkpoints must not outlive the in-memory ones; otherwise the
+    // history projection keeps reporting `pending_permission_request` (and
+    // `session show` keeps reporting `needs_permission`) for a stopped session
+    // (Task 134).
+    persistedState?.deleteSuspendedCheckpointsForSession(sessionId);
     // Gate E.1: clear/stop must remove memory and durable state atomically.
     // The recovery service's in-memory notice and cancel token are cleared
     // here so requestStop (whether called from the event path or directly)
@@ -182,6 +200,11 @@ class SessionStopCoordinator {
         runId: activeRun?.runId,
       );
     }
+    // Stop is authoritative: a durable notice that outlived the in-memory
+    // clear would resurrect a blocked/error state on the next history read
+    // (`session show` falls back to the persisted notice). The session state
+    // query must agree with the stop acknowledgement (Task 134).
+    persistedState?.deleteNotice(sessionId);
     if (stopFuture != null) {
       try {
         await stopFuture.timeout(runStopCleanupTimeout);
@@ -323,6 +346,29 @@ class SessionStopCoordinator {
       _busySessions.remove(sessionId);
       _drainNextQueuedEvent(sessionId);
     }
+  }
+
+  /// Drops the in-memory partial-stream snapshot owned by the run being
+  /// stopped.
+  ///
+  /// `SessionManager.saveInFlightSnapshot` is an in-memory projection used by
+  /// the history query to report `in_flight` (and by `session show` to derive
+  /// `running`). Terminal commits and error paths clear it, but a stop (and a
+  /// blocked recovery) previously left it behind, so an external `session stop`
+  /// that had fully released durable work still observed `running` forever. A
+  /// newer generation that already owns the session keeps its own projection.
+  void _releaseInFlightProjection(
+    String sessionId, {
+    required ActiveRun? activeRun,
+  }) {
+    if (!getIt.isRegistered<SessionManager>()) return;
+    final sessionManager = getIt<SessionManager>();
+    if (sessionManager.getInFlightSnapshot(sessionId) == null) return;
+    final currentRun = _turnExecutor.getActiveRun(sessionId);
+    if (currentRun != null && !identical(currentRun, activeRun)) {
+      return;
+    }
+    sessionManager.clearInFlightSnapshot(sessionId);
   }
 
   /// Preserves a session whose only unfinished work is awaiting user input

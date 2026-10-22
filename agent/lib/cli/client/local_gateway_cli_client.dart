@@ -43,6 +43,9 @@ typedef WebSocketConnector =
 /// Implements Zero-Agent Core Mutation by acting as a clean consumer of
 /// [SanadProtocolBridge] and [LocalDaemonServerPlatform].
 class LocalGatewayCliClient implements CliTurnClient {
+  /// Interval between authoritative state re-reads while a stop is unconfirmed.
+  static const defaultStopPollInterval = Duration(milliseconds: 250);
+
   LocalGatewayCliClient({
     required this.gatewayUri,
     required this.token,
@@ -301,8 +304,21 @@ class LocalGatewayCliClient implements CliTurnClient {
   }
 
   /// Dispatches a `stop` command and waits for authoritative session state.
+  ///
+  /// The command mirrors the Sanad Client stop path: it is sent immediately,
+  /// targets one session, and names the in-flight `run_id` when the caller knows
+  /// it (the `sanad session stop` command resolves it from session state first).
+  /// Success is only reported for an **authoritative idle** session. A matching
+  /// `stopped` event merely wakes the wait early so the state is re-read; it is
+  /// never accepted on its own (Task 134).
   @override
-  Future<void> stop({required String sessionId, String? runId}) async {
+  Future<void> stop({
+    required String sessionId,
+    String? runId,
+    Duration? timeout,
+    Duration stopPollInterval = defaultStopPollInterval,
+  }) async {
+    final deadline = DateTime.now().add(timeout ?? requestTimeout);
     final stopped = Completer<void>();
     final subscription = eventStream
         .where((event) => event is CliTurnCancelledEvent)
@@ -325,31 +341,51 @@ class LocalGatewayCliClient implements CliTurnClient {
         requestId: requestId,
       );
 
-      // The history query is an ordered transport barrier. It keeps this
-      // short-lived CLI connection alive until the daemon has received the
-      // preceding stop command, while also preserving idempotent idle stops.
-      final history = await getSessionHistory(
-        sessionId: sessionId,
-        timeout: requestTimeout,
-      );
-      final historyPayload = history['payload'] is Map
-          ? Map<String, dynamic>.from(history['payload'] as Map)
-          : history;
-      final isIdle =
-          historyPayload['in_flight'] == null &&
-          historyPayload['pending_permission_request'] == null;
-      if (isIdle || stopped.isCompleted) return;
-
-      await stopped.future.timeout(
-        requestTimeout,
-        onTimeout: () => throw CliClientException(
-          'Timed out waiting for session $sessionId to stop.',
-          code: 'stop_timeout',
-        ),
-      );
+      while (true) {
+        // Every re-check is an ordered transport barrier: the daemon answers it
+        // only after it has received the preceding stop command, so a running
+        // projection here means the stop has not landed yet.
+        final current = await _readSessionRuntimeState(sessionId);
+        if (current.isIdle) return;
+        if (!DateTime.now().isBefore(deadline)) {
+          throw CliClientException(
+            'Timed out waiting for session $sessionId to stop.',
+            code: 'stop_timeout',
+          );
+        }
+        if (stopped.isCompleted) {
+          // The daemon already acknowledged this session; re-read immediately.
+          await Future<void>.delayed(Duration.zero);
+        } else {
+          await Future.any<void>([
+            Future<void>.delayed(stopPollInterval),
+            stopped.future,
+          ]);
+        }
+      }
     } finally {
       await subscription.cancel();
     }
+  }
+
+  /// Reads the daemon's authoritative runtime projection for [sessionId].
+  Future<_CliSessionRuntimeState> _readSessionRuntimeState(
+    String sessionId,
+  ) async {
+    final history = await getSessionHistory(
+      sessionId: sessionId,
+      timeout: requestTimeout,
+    );
+    _throwIfError(history);
+    final payload = history['payload'] is Map
+        ? Map<String, dynamic>.from(history['payload'] as Map)
+        : history;
+    final inFlight = payload['in_flight'] is Map
+        ? Map<String, dynamic>.from(payload['in_flight'] as Map)
+        : null;
+    return _CliSessionRuntimeState(
+      isIdle: inFlight == null && payload['pending_permission_request'] == null,
+    );
   }
 
   /// Responds to an interactive tool permission or clarification request.
@@ -945,4 +981,13 @@ class LocalGatewayCliClient implements CliTurnClient {
     }
     return future;
   }
+}
+
+/// The daemon's authoritative runtime projection for one session.
+class _CliSessionRuntimeState {
+  const _CliSessionRuntimeState({required this.isIdle});
+
+  /// True when the session has no in-flight execution and no pending
+  /// intervention request.
+  final bool isIdle;
 }
