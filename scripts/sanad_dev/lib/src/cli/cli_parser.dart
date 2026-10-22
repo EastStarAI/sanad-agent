@@ -26,6 +26,7 @@ class SanadDevCliInvocation {
     this.fixtureName,
     this.saveFixtureName,
     required this.keepData,
+    this.includeMcpConfig = false,
     this.refreshAt,
   });
 
@@ -53,6 +54,9 @@ class SanadDevCliInvocation {
   final String? fixtureName;
   final String? saveFixtureName;
   final bool keepData;
+
+  /// Capture `mcp_config.json` in a fixture (opt-in; it can carry secrets).
+  final bool includeMcpConfig;
   final String? refreshAt;
 }
 
@@ -95,6 +99,7 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
   String? fixtureName;
   String? saveFixtureName;
   bool keepData = false;
+  bool includeMcpConfig = false;
   String? refreshAt;
 
   for (int i = 0; i < args.length; i++) {
@@ -161,6 +166,8 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
       saveFixtureName = arg.substring(15);
     } else if (arg == '--keep-data') {
       keepData = true;
+    } else if (arg == '--include-mcp-config') {
+      includeMcpConfig = true;
     } else if (arg == '--at' && i + 1 < args.length) {
       refreshAt = args[i + 1];
     } else if (arg.startsWith('--at=')) {
@@ -197,6 +204,7 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
     fixtureName: fixtureName,
     saveFixtureName: saveFixtureName,
     keepData: keepData,
+    includeMcpConfig: includeMcpConfig,
     refreshAt: refreshAt,
   );
 }

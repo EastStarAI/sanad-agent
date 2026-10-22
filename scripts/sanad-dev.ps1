@@ -278,7 +278,17 @@ function Invoke-Setup([bool] $AllowExistingShim) {
   return $fvm
 }
 
+function Test-RuntimeCommandToleratesStaleCli {
+  param([string] $Command)
+  # Stopping, inspecting, and reading logs of an already-running runtime never
+  # needs the newest CLI, so these fall back to the last prepared artifact
+  # instead of refusing. Every command that can start or mutate a runtime still
+  # requires a fresh `setup`.
+  return $Command -in @('stop', 'status', 'logs')
+}
+
 function Require-RuntimeCli {
+  param([string] $Command = '')
   if (-not (Get-Command fvm -ErrorAction SilentlyContinue)) {
     throw 'FVM is not installed. Run: sanad-dev install'
   }
@@ -292,10 +302,18 @@ function Require-RuntimeCli {
     throw 'Project runtime is not ready. Run: sanad-dev setup'
   }
   $fingerprint = Get-RuntimeCliFingerprint
-  # Runtime commands are strictly non-mutating: a stale prepared CLI fails with
-  # the exact recovery command instead of running a hidden auto-setup. Only
-  # `setup`, `run`, and `switch` prepare the runtime.
-  if ((Get-Content -Raw $stamp).Trim() -ne $fingerprint) {
+  $recorded = (Get-Content -Raw $stamp).Trim()
+  # Runtime commands are strictly non-mutating: a stale prepared CLI never
+  # triggers a hidden auto-setup. Read-only lifecycle commands use the last
+  # prepared artifact; everything else requires a fresh `setup`.
+  if ($recorded -ne $fingerprint) {
+    if (Test-RuntimeCommandToleratesStaleCli $Command) {
+      $prepared = Join-Path $artifactRoot "sanad-dev-runtime-$recorded.exe"
+      if (Test-Path $prepared) {
+        Write-Warning 'Project runtime is stale; running the last prepared CLI. Run: sanad-dev setup'
+        return $prepared
+      }
+    }
     throw 'Project runtime is stale. Run: sanad-dev setup'
   }
   $artifact = Join-Path $artifactRoot "sanad-dev-runtime-$fingerprint.exe"
@@ -321,7 +339,7 @@ try {
   if ($command -in @('run', 'switch')) {
     Invoke-Setup $true | Out-Null
   }
-  $runtimeCli = Require-RuntimeCli
+  $runtimeCli = Require-RuntimeCli $command
   [string[]] $runtimeArgs = if ($command -eq 'run') {
     [string[]]@($SanadArgs | Where-Object { $_ -ne '--force' })
   } else {

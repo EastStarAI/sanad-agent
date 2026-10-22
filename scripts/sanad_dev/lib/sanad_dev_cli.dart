@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'src/infrastructure/client_launch_profile.dart';
@@ -12,6 +13,7 @@ import 'src/infrastructure/compiled_cli_cache.dart';
 import 'src/infrastructure/component_journal.dart';
 import 'src/infrastructure/foreign_worktree_activity.dart';
 import 'src/infrastructure/local_gateway_credential.dart';
+import 'src/infrastructure/macos_privacy_grants.dart';
 import 'src/infrastructure/path_equivalence.dart';
 import 'src/infrastructure/runtime_component_control.dart';
 import 'src/infrastructure/runtime_context.dart';

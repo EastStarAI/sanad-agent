@@ -7,11 +7,24 @@ import 'package:path/path.dart' as p;
 import 'compiled_cli_cache.dart';
 import 'secure_runtime_file.dart';
 
+export 'runtime_home_restore.dart';
+
 /// Version of the fixture manifest schema.
-const sanadDevFixtureSchemaVersion = 1;
+///
+/// Version 2 records [HomeFixtureManifest.includeMcpConfig] because
+/// `mcp_config.json` is opt-in: it can carry provider headers and environment
+/// values that must never be copied into a worktree by default.
+const sanadDevFixtureSchemaVersion = 2;
 
 /// Fixture directory below the invoking worktree: `<worktree>/.sanad-dev/fixtures`.
 const sanadDevFixturesDirectoryName = 'fixtures';
+
+/// Sibling staging directory used while a restore is in flight.
+///
+/// It is deliberately beside the Home, never inside it, so the Home never shows
+/// a partially restored tree, and a crashed restore is detectable and
+/// recoverable on the next run.
+const fixtureRestoreStagingDirectoryName = '.sanad-dev-reset-staging';
 
 /// Home-relative files a fixture captures.
 ///
@@ -25,6 +38,12 @@ const fixtureIncludedFiles = <String>[
   'models_dev_cache.json',
   'mcp_config.json',
 ];
+
+/// Included files that are captured only on explicit request.
+const fixtureOptInFiles = <String>['mcp_config.json'];
+
+/// The SQLite database and its sidecars, which must always move together.
+const fixtureDatabaseFamily = <String>['state.db', 'state.db-wal', 'state.db-shm'];
 
 /// Home-relative directories a fixture captures recursively.
 const fixtureIncludedDirectories = <String>['skills', 'memories', 'workspaces'];
@@ -50,6 +69,25 @@ const fixtureExcludedNameFragments = <String>[
   '.p12',
   '.p8',
   '.keystore',
+];
+
+/// Directory names that are excluded at any depth.
+///
+/// `logs/` and `request_dumps/` can appear inside an included directory (for
+/// example `workspaces/<id>/logs/`), so the exclusion cannot be a top-level
+/// path check.
+const fixtureExcludedDirectorySegments = <String>['logs', 'request_dumps'];
+
+/// File-name prefixes that are excluded at any depth (`id_ed25519`, `id_rsa`).
+const fixtureExcludedNamePrefixes = <String>['id_'];
+
+/// File-name suffixes that are excluded at any depth.
+const fixtureExcludedNameSuffixes = <String>[
+  '.key',
+  '.pem',
+  '.p12',
+  '.p8',
+  '.netrc',
 ];
 
 /// Home-relative paths that are never captured or replaced by a fixture.
@@ -120,6 +158,7 @@ class HomeFixtureManifest {
     required this.createdAt,
     required this.sourceHome,
     required this.entries,
+    this.includeMcpConfig = false,
   });
 
   final String name;
@@ -127,11 +166,15 @@ class HomeFixtureManifest {
   final String sourceHome;
   final List<HomeFixtureEntry> entries;
 
+  /// Whether this fixture captured `mcp_config.json`.
+  final bool includeMcpConfig;
+
   Map<String, Object?> toJson() => {
     'schema_version': sanadDevFixtureSchemaVersion,
     'name': name,
     'created_at': createdAt.toUtc().toIso8601String(),
     'source_home': sourceHome,
+    'include_mcp_config': includeMcpConfig,
     'entries': entries.map((entry) => entry.toJson()).toList(),
   };
 
@@ -149,6 +192,7 @@ class HomeFixtureManifest {
           DateTime.tryParse(json['created_at']?.toString() ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       sourceHome: json['source_home']?.toString() ?? '',
+      includeMcpConfig: json['include_mcp_config'] == true,
       entries: rawEntries
           .whereType<Map>()
           .map(
@@ -174,20 +218,35 @@ class HomeFixtureRestoreReport {
 
 /// True when [relativePath] is captured by the include allowlist and is not
 /// excluded as secret-bearing.
-bool isFixtureCapturedPath(String relativePath) {
+///
+/// [includeMcpConfig] enables the `mcp_config.json` opt-in; every other rule is
+/// independent of it.
+bool isFixtureCapturedPath(
+  String relativePath, {
+  bool includeMcpConfig = false,
+}) {
   final normalized = relativePath.replaceAll('\\', '/');
   final segments = normalized.split('/').where((part) => part.isNotEmpty);
   if (segments.isEmpty) return false;
   final lowerSegments = segments.map((part) => part.toLowerCase()).toList();
   for (final fragment in fixtureExcludedNameFragments) {
-    if (lowerSegments.any((segment) => segment.contains(fragment)))
+    if (lowerSegments.any((segment) => segment.contains(fragment))) {
       return false;
+    }
+  }
+  for (final excluded in fixtureExcludedDirectorySegments) {
+    if (lowerSegments.any((segment) => segment == excluded)) return false;
+  }
+  for (final segment in lowerSegments) {
+    if (fixtureExcludedNamePrefixes.any(segment.startsWith)) return false;
+    if (fixtureExcludedNameSuffixes.any(segment.endsWith)) return false;
   }
   final head = lowerSegments.first;
   if (fixtureExcludedPaths.map((path) => path.toLowerCase()).contains(head)) {
     return false;
   }
   if (segments.length == 1) {
+    if (fixtureOptInFiles.contains(head)) return includeMcpConfig;
     return fixtureIncludedFiles
         .map((path) => path.toLowerCase())
         .contains(head);
@@ -200,7 +259,10 @@ bool isFixtureCapturedPath(String relativePath) {
 /// Lists every Home-relative path currently captured by a fixture.
 ///
 /// Symbolic links are skipped: a fixture never follows a link out of the Home.
-List<String> listFixtureSourcePaths(String homePath) {
+List<String> listFixtureSourcePaths(
+  String homePath, {
+  bool includeMcpConfig = false,
+}) {
   final home = Directory(homePath);
   if (!home.existsSync()) return const [];
   final collected = <String>[];
@@ -211,7 +273,9 @@ List<String> listFixtureSourcePaths(String homePath) {
         FileSystemEntityType.file) {
       continue;
     }
-    if (!isFixtureCapturedPath(name)) continue;
+    if (!isFixtureCapturedPath(name, includeMcpConfig: includeMcpConfig)) {
+      continue;
+    }
     collected.add(name);
   }
   for (final name in fixtureIncludedDirectories) {
@@ -231,7 +295,9 @@ List<String> listFixtureSourcePaths(String homePath) {
         continue;
       }
       final relative = p.relative(entity.path, from: home.path);
-      if (!isFixtureCapturedPath(relative)) continue;
+      if (!isFixtureCapturedPath(relative, includeMcpConfig: includeMcpConfig)) {
+        continue;
+      }
       collected.add(relative.replaceAll('\\', '/'));
     }
   }
@@ -243,11 +309,13 @@ List<String> listFixtureSourcePaths(String homePath) {
 ///
 /// The fixture replaces any previous fixture with the same name and is written
 /// through a staging directory so an interrupted save never leaves a partially
-/// written fixture in place.
+/// written fixture in place. Every fixture file is owner-only (`0600`) and
+/// every fixture directory is `0700`.
 Future<HomeFixtureManifest> saveHomeFixture({
   required String workspaceRoot,
   required String homePath,
   required String name,
+  bool includeMcpConfig = false,
 }) async {
   if (!isValidSanadDevFixtureName(name)) {
     throw FormatException(
@@ -259,19 +327,24 @@ Future<HomeFixtureManifest> saveHomeFixture({
   if (!home.existsSync()) {
     throw StateError('The Sanad Home does not exist: $homePath');
   }
-  final relativePaths = listFixtureSourcePaths(homePath);
+  final relativePaths = listFixtureSourcePaths(
+    homePath,
+    includeMcpConfig: includeMcpConfig,
+  );
   final destination = Directory(sanadDevFixturePath(workspaceRoot, name));
   final staging = Directory('${destination.path}.building');
   if (staging.existsSync()) staging.deleteSync(recursive: true);
-  staging.createSync(recursive: true);
+  await sanadDevCreateOwnerOnlyDirectory(staging.path);
+  await sanadDevCreateOwnerOnlyDirectory(p.dirname(staging.path));
 
   final entries = <HomeFixtureEntry>[];
   for (final relative in relativePaths) {
     final source = File(p.join(home.path, relative));
     final bytes = source.readAsBytesSync();
     final target = File(p.join(staging.path, relative));
-    target.parent.createSync(recursive: true);
+    Directory(target.parent.path).createSync(recursive: true);
     target.writeAsBytesSync(bytes, flush: true);
+    await sanadDevRestrictOwnerOnly(target.path);
     entries.add(
       HomeFixtureEntry(
         relativePath: relative,
@@ -284,14 +357,41 @@ Future<HomeFixtureManifest> saveHomeFixture({
     name: name,
     createdAt: DateTime.now().toUtc(),
     sourceHome: home.resolveSymbolicLinksSync(),
+    includeMcpConfig: includeMcpConfig,
     entries: entries,
   );
-  File(
-    p.join(staging.path, 'fixture.json'),
-  ).writeAsStringSync('${jsonEncode(manifest.toJson())}\n', flush: true);
+  final manifestFile = File(p.join(staging.path, 'fixture.json'));
+  manifestFile.writeAsStringSync(
+    '${jsonEncode(manifest.toJson())}\n',
+    flush: true,
+  );
+  await sanadDevRestrictOwnerOnly(manifestFile.path);
   if (destination.existsSync()) destination.deleteSync(recursive: true);
   staging.renameSync(destination.path);
   return manifest;
+}
+
+/// Applies an owner-only directory mode, creating the directory when missing.
+///
+/// Shared by fixture capture and restore: a fixture may be published or shared,
+/// so it never inherits a permissive default mode.
+Future<void> sanadDevCreateOwnerOnlyDirectory(String path) async {
+  final directory = Directory(path);
+  if (!directory.existsSync()) directory.createSync(recursive: true);
+  await sanadDevRestrictOwnerOnly(path, directory: true);
+}
+
+/// Applies the owner-only file mode (0600) to [path], best effort.
+Future<void> sanadDevRestrictOwnerOnly(
+  String path, {
+  bool directory = false,
+}) async {
+  try {
+    await restrictRuntimePath(path, directory: directory);
+  } on Object {
+    // Permission hardening is best effort on filesystems without POSIX modes;
+    // the capture rules remain the security boundary for content.
+  }
 }
 
 Future<HomeFixtureManifest> readHomeFixtureManifest({
@@ -311,89 +411,3 @@ Future<HomeFixtureManifest> readHomeFixtureManifest({
   return HomeFixtureManifest.fromJson(Map<String, dynamic>.from(decoded));
 }
 
-/// Restores a saved fixture into [homePath].
-///
-/// Every captured file is staged inside the Home first and then moved into
-/// place with a same-filesystem rename, so no destination file is ever
-/// half-written. Captured files that the fixture does not contain are removed
-/// so the restored state matches the fixture; every path outside the captured
-/// set (secrets, journals, logs, media, `dev/`) is preserved untouched.
-Future<HomeFixtureRestoreReport> restoreHomeFixture({
-  required String workspaceRoot,
-  required String homePath,
-  required String name,
-}) async {
-  final manifest = await readHomeFixtureManifest(
-    workspaceRoot: workspaceRoot,
-    name: name,
-  );
-  final home = Directory(homePath);
-  if (!home.existsSync()) {
-    throw StateError('The Sanad Home does not exist: $homePath');
-  }
-  final fixtureRoot = Directory(sanadDevFixturePath(workspaceRoot, name));
-  final stagingPath = p.join(home.path, '.sanad-dev-reset-staging');
-  final staging = Directory(stagingPath);
-  await secureRuntimeDirectory(home.path, stagingPath);
-  if (staging.existsSync()) staging.deleteSync(recursive: true);
-  staging.createSync(recursive: true);
-
-  for (final entry in manifest.entries) {
-    final source = File(p.join(fixtureRoot.path, entry.relativePath));
-    if (!source.existsSync()) {
-      throw StateError(
-        'Sanad fixture "$name" is incomplete: ${entry.relativePath} is missing.',
-      );
-    }
-    final bytes = source.readAsBytesSync();
-    if (entry.size != bytes.length ||
-        sha256.convert(bytes).toString() != entry.sha256) {
-      throw StateError(
-        'Sanad fixture "$name" is corrupt: ${entry.relativePath} does not '
-        'match its manifest.',
-      );
-    }
-    final target = File(p.join(stagingPath, entry.relativePath));
-    target.parent.createSync(recursive: true);
-    target.writeAsBytesSync(bytes, flush: true);
-  }
-
-  final manifestPaths = manifest.entries
-      .map((entry) => entry.relativePath.replaceAll('\\', '/'))
-      .toSet();
-  var removed = 0;
-  for (final relative in listFixtureSourcePaths(homePath)) {
-    if (manifestPaths.contains(relative)) continue;
-    final file = File(p.join(home.path, relative));
-    if (file.existsSync()) {
-      file.deleteSync();
-      removed++;
-    }
-  }
-  var restored = 0;
-  for (final entry in manifest.entries) {
-    final source = File(p.join(stagingPath, entry.relativePath));
-    final target = File(p.join(home.path, entry.relativePath));
-    target.parent.createSync(recursive: true);
-    if (target.existsSync()) target.deleteSync();
-    source.renameSync(target.path);
-    restored++;
-  }
-  if (staging.existsSync()) staging.deleteSync(recursive: true);
-  _removeEmptyIncludedDirectories(homePath);
-  return HomeFixtureRestoreReport(
-    restoredFiles: restored,
-    removedFiles: removed,
-    preservedPaths: fixtureExcludedPaths.toList(growable: false),
-  );
-}
-
-void _removeEmptyIncludedDirectories(String homePath) {
-  for (final name in fixtureIncludedDirectories) {
-    final directory = Directory(p.join(homePath, name));
-    if (!directory.existsSync()) continue;
-    final remaining = directory.listSync(recursive: true, followLinks: false);
-    if (remaining.isNotEmpty) continue;
-    directory.deleteSync();
-  }
-}

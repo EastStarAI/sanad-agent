@@ -1,5 +1,19 @@
 part of '../../../sanad_dev_cli.dart';
 
+/// Source commit `status` reports for the live runtime.
+///
+/// The launcher lease is authoritative when it recorded a commit. A lease from
+/// before that field, or no lease at all, falls back to the worktree `HEAD`
+/// rather than printing a placeholder, so the line always names a real commit.
+Future<String> resolveStatusSourceCommit({
+  required String recordedCommit,
+  required Future<String> Function() readHeadCommit,
+}) async {
+  final recorded = recordedCommit.trim();
+  if (recorded.isNotEmpty) return recorded;
+  return (await readHeadCommit()).trim();
+}
+
 /// `sanad-dev status` is strictly read-only.
 ///
 /// It performs discovery, reads the launcher lease, and prints the runtime
@@ -66,10 +80,10 @@ Future<void> handleRuntimeStatus({
   print('Worktree: ${runtime.worktreeId}');
   print('Branch: ${runtime.branch}');
 
-  final recordedCommit = ownership.record?.sourceCommit ?? '';
-  final sourceCommit = recordedCommit.isEmpty
-      ? await readRuntimeSourceCommit(runtime.repositoryRoot)
-      : recordedCommit;
+  final sourceCommit = await resolveStatusSourceCommit(
+    recordedCommit: ownership.record?.sourceCommit ?? '',
+    readHeadCommit: () => readRuntimeSourceCommit(runtime.repositoryRoot),
+  );
   print('Runtime source commit: ${sourceCommit.isEmpty ? '-' : sourceCommit}');
   print('Runtime version: ${readRepositoryVersion(runtime.repositoryRoot)}');
 

@@ -21,44 +21,28 @@ class DriverHostGrantReport {
   final String detail;
 }
 
-/// Classifies an Accessibility probe result without re-interpreting text at the
-/// call site.
-DriverHostGrantStatus classifyAccessibilityProbe({
-  required int exitCode,
-  required String output,
-}) {
-  final lower = output.toLowerCase();
-  if (lower.contains('not allowed assistive access') ||
-      lower.contains('(-1719)') ||
-      lower.contains('(-1743)') ||
-      lower.contains('not authorized')) {
-    return DriverHostGrantStatus.missing;
-  }
-  return exitCode == 0
-      ? DriverHostGrantStatus.granted
-      : DriverHostGrantStatus.unknown;
-}
+/// Maps a passive preflight answer onto a report status.
+DriverHostGrantStatus classifyMacOsPrivacyPreflight(
+  MacOsPrivacyPreflight preflight,
+) => switch (preflight) {
+  MacOsPrivacyPreflight.granted => DriverHostGrantStatus.granted,
+  MacOsPrivacyPreflight.denied => DriverHostGrantStatus.missing,
+  MacOsPrivacyPreflight.unavailable => DriverHostGrantStatus.unknown,
+};
 
-/// Classifies a Screen Recording probe result (`screencapture`).
-DriverHostGrantStatus classifyScreenRecordingProbe({
-  required int exitCode,
-  required String output,
-}) {
-  final lower = output.toLowerCase();
-  if (lower.contains('could not create image from display') ||
-      lower.contains('not authorized') ||
-      lower.contains('not permitted')) {
-    return DriverHostGrantStatus.missing;
-  }
-  return exitCode == 0
-      ? DriverHostGrantStatus.granted
-      : DriverHostGrantStatus.unknown;
-}
+const driverHostSettingsHint =
+    'check System Settings > Privacy & Security';
 
 typedef DriverHostGrantProbe = Future<DriverHostGrantReport> Function();
 
-/// Accessibility grant used by `sanad-dev ui` taps and `osascript` actions.
-Future<DriverHostGrantReport> probeAccessibilityGrant() async {
+/// Accessibility grant used by `sanad-dev ui` taps and window actions.
+///
+/// Read with `AXIsProcessTrusted()`, which reports the current trust state and
+/// never prompts. Driving another application through an automation script is a
+/// different permission, so it is not a substitute probe.
+Future<DriverHostGrantReport> probeAccessibilityGrant({
+  MacOsPrivacyPreflightReader? preflight,
+}) async {
   if (!Platform.isMacOS) {
     return const DriverHostGrantReport(
       name: 'Accessibility',
@@ -66,25 +50,29 @@ Future<DriverHostGrantReport> probeAccessibilityGrant() async {
       detail: 'macOS only',
     );
   }
-  final result = await Process.run('osascript', [
-    '-e',
-    'tell application "System Events" to count processes',
-  ]);
-  final output = '${result.stdout}${result.stderr}';
+  final result = (preflight ?? preflightAccessibilityTrust)();
   return DriverHostGrantReport(
     name: 'Accessibility',
-    status: classifyAccessibilityProbe(
-      exitCode: result.exitCode,
-      output: output,
-    ),
-    detail: output.trim().isEmpty
-        ? 'exit ${result.exitCode}'
-        : output.trim().split('\n').first,
+    status: classifyMacOsPrivacyPreflight(result),
+    detail: switch (result) {
+      MacOsPrivacyPreflight.granted => 'AXIsProcessTrusted reported a grant',
+      MacOsPrivacyPreflight.denied =>
+        'AXIsProcessTrusted reported no grant; enable Accessibility for the '
+            'driver host in System Settings > Privacy & Security',
+      MacOsPrivacyPreflight.unavailable =>
+        'passive preflight unavailable; $driverHostSettingsHint',
+    },
   );
 }
 
 /// Screen Recording grant used by `sanad-dev ui screenshot`.
-Future<DriverHostGrantReport> probeScreenRecordingGrant() async {
+///
+/// Read with `CGPreflightScreenCaptureAccess()`, which reports the current
+/// state; the requesting variant is never called, so no Screen Recording prompt
+/// can appear and no screenshot is ever taken.
+Future<DriverHostGrantReport> probeScreenRecordingGrant({
+  MacOsPrivacyPreflightReader? preflight,
+}) async {
   if (!Platform.isMacOS) {
     return const DriverHostGrantReport(
       name: 'Screen Recording',
@@ -92,22 +80,20 @@ Future<DriverHostGrantReport> probeScreenRecordingGrant() async {
       detail: 'macOS only',
     );
   }
-  final result = await Process.run('screencapture', [
-    '-x',
-    '-t',
-    'png',
-    '/dev/null',
-  ]);
-  final output = '${result.stdout}${result.stderr}';
+  final result = (preflight ?? preflightScreenCaptureAccess)();
   return DriverHostGrantReport(
     name: 'Screen Recording',
-    status: classifyScreenRecordingProbe(
-      exitCode: result.exitCode,
-      output: output,
-    ),
-    detail: output.trim().isEmpty
-        ? 'exit ${result.exitCode}'
-        : output.trim().split('\n').first,
+    status: classifyMacOsPrivacyPreflight(result),
+    detail: switch (result) {
+      MacOsPrivacyPreflight.granted =>
+        'CGPreflightScreenCaptureAccess reported a grant',
+      MacOsPrivacyPreflight.denied =>
+        'CGPreflightScreenCaptureAccess reported no grant; enable Screen '
+            'Recording for the driver host in System Settings > Privacy & '
+            'Security',
+      MacOsPrivacyPreflight.unavailable =>
+        'passive preflight unavailable; $driverHostSettingsHint',
+    },
   );
 }
 

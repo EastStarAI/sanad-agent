@@ -8,7 +8,75 @@ class ForeignWorktreeActivity {
   final int pid;
   final String command;
 
-  String get summary => 'PID $pid: ${command.trim()}';
+  /// Redacted one-line summary safe to print and to quote in a report.
+  String get summary => 'PID $pid: ${redactCommandLine(command).trim()}';
+}
+
+/// Placeholder that replaces a redacted command-line value.
+const redactedCommandLineValue = '<redacted>';
+
+/// Name fragments that make a command-line flag or variable value secret-like.
+///
+/// Guard output is printed and often pasted into a report, so a value carried by
+/// a token-like flag must never appear verbatim.
+const secretLikeArgumentNameFragments = <String>[
+  'token',
+  'secret',
+  'key',
+  'password',
+  'passwd',
+  'pwd',
+  'credential',
+  'auth',
+  'bearer',
+  'session',
+  'cookie',
+];
+
+final RegExp _tokenPattern = RegExp(r'\S+');
+final RegExp _flagValuePattern = RegExp(
+  r'(--?[A-Za-z0-9_.-]+)(\s+)(?!-)(?:"[^"]*"|[^\s]+)',
+);
+
+bool _isSecretLikeArgumentName(String name) {
+  final lower = name.replaceFirst(RegExp(r'^--?'), '').toLowerCase();
+  return secretLikeArgumentNameFragments.any(lower.contains);
+}
+
+/// Redacts secret-like values from a foreign command line before printing.
+///
+/// Handles `NAME=value` (including nested forms such as
+/// `--dart-define=SANAD_TOKEN=abc`) and the separated `--flag value` form, and
+/// leaves every other token untouched.
+String redactCommandLine(String command) {
+  final assignments = command.replaceAllMapped(
+    _tokenPattern,
+    (match) => _redactAssignments(match.group(0)!),
+  );
+  return assignments.replaceAllMapped(_flagValuePattern, (match) {
+    final flag = match.group(1)!;
+    if (!_isSecretLikeArgumentName(flag)) return match.group(0)!;
+    return '$flag${match.group(2)}$redactedCommandLineValue';
+  });
+}
+
+/// Redacts every `name=value` segment of one whitespace-free token.
+///
+/// Walking the `=` segments reaches a value nested inside another assignment,
+/// which a single left-to-right match would skip.
+String _redactAssignments(String token) {
+  if (!token.contains('=')) return token;
+  final segments = token.split('=');
+  final result = <String>[segments.first];
+  for (var index = 1; index < segments.length; index++) {
+    final name = segments[index - 1];
+    result.add(
+      _isSecretLikeArgumentName(name)
+          ? redactedCommandLineValue
+          : segments[index],
+    );
+  }
+  return result.join('=');
 }
 
 /// Command-line fragments that make a process a build or test workload.

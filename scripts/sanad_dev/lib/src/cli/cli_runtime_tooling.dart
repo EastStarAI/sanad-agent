@@ -15,6 +15,7 @@ Future<bool> dispatchSanadDevRuntimeToolingCommand(
       await handleRuntimeReset(
         fixture: parsed.fixtureName,
         saveFixture: parsed.saveFixtureName,
+        includeMcpConfig: parsed.includeMcpConfig,
         keepData: parsed.keepData,
         // `reset` exists for testable runtimes, so the driver entry point is
         // always part of its launch contract.

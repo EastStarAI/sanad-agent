@@ -10,6 +10,7 @@ void main() {
   late Directory fixture;
   late Directory workspace;
   late Directory home;
+  late Directory outside;
 
   Future<void> writeHomeFile(String relative, String contents) async {
     final file = File(p.join(home.path, relative));
@@ -17,11 +18,35 @@ void main() {
     await file.writeAsString(contents);
   }
 
+  /// Rewrites the saved manifest with extra entries that point where they must
+  /// never point, so the restore is exercised against a malicious fixture.
+  Future<void> corruptManifest(
+    String name,
+    List<Map<String, Object>> entries,
+  ) async {
+    final path = p.join(sanadDevFixturePath(workspace.path, name), 'fixture.json');
+    final decoded =
+        jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+    decoded['entries'] = [
+      ...(decoded['entries'] as List),
+      ...entries,
+    ];
+    File(path).writeAsStringSync(jsonEncode(decoded));
+  }
+
+  Map<String, Object> entryFor(String relativePath) => {
+    'path': relativePath,
+    'size': 5,
+    'sha256': sha256.convert(utf8.encode('pwned')).toString(),
+  };
+
   setUp(() async {
     fixture = await Directory.systemTemp.createTemp('sanad-home-fixture-');
     workspace = Directory(p.join(fixture.path, 'worktree'))
       ..createSync(recursive: true);
     home = Directory(p.join(fixture.path, 'home'))..createSync(recursive: true);
+    outside = Directory(p.join(fixture.path, 'outside'))
+      ..createSync(recursive: true);
     await writeHomeFile('state.db', 'database-v1');
     await writeHomeFile('config.yaml', 'model: test');
     await writeHomeFile('memories/notes.md', '# memory');
@@ -51,10 +76,17 @@ void main() {
       expect(isFixtureCapturedPath('state.db-wal'), isTrue);
       expect(isFixtureCapturedPath('config.yaml'), isTrue);
       expect(isFixtureCapturedPath('models_dev_cache.json'), isTrue);
-      expect(isFixtureCapturedPath('mcp_config.json'), isTrue);
       expect(isFixtureCapturedPath('memories/notes.md'), isTrue);
       expect(isFixtureCapturedPath('skills/custom/SKILL.md'), isTrue);
       expect(isFixtureCapturedPath('workspaces/registry.json'), isTrue);
+    });
+
+    test('mcp_config.json is opt-in only', () {
+      expect(isFixtureCapturedPath('mcp_config.json'), isFalse);
+      expect(
+        isFixtureCapturedPath('mcp_config.json', includeMcpConfig: true),
+        isTrue,
+      );
     });
 
     test('never captures secrets, runtime state, or content directories', () {
@@ -78,6 +110,13 @@ void main() {
         'skills/vault.json',
         'skills/keyring.dat',
         'workspaces/private.pem',
+        'workspaces/id_ed25519',
+        'workspaces/deploy.key',
+        'workspaces/cert.p12',
+        'memories/.netrc',
+        'workspaces/one/logs/agent.log',
+        'workspaces/one/request_dumps/call.json',
+        'skills/one/logs/trace.log',
       ]) {
         expect(
           isFixtureCapturedPath(path),
@@ -101,16 +140,11 @@ void main() {
       expect(paths, isNot(contains('logs/agent.log')));
       expect(paths, isNot(contains('dev/runtime-launcher-58092.json')));
       expect(paths, isNot(contains('memories/.env.backup')));
+      expect(paths, isNot(contains('mcp_config.json')));
     });
 
     test('rejects unsafe fixture names', () {
-      for (final name in const [
-        '',
-        '../escape',
-        'UPPER',
-        'with space',
-        'a/b',
-      ]) {
+      for (final name in const ['', '../escape', 'UPPER', 'with space', 'a/b']) {
         expect(isValidSanadDevFixtureName(name), isFalse, reason: name);
       }
       expect(isValidSanadDevFixtureName('clean-1.0'), isTrue);
@@ -133,6 +167,7 @@ void main() {
       expect(paths, isNot(contains('.env')));
       expect(paths, isNot(contains('.local_token')));
       expect(paths, isNot(contains('provider_secrets.json')));
+      expect(paths, isNot(contains('mcp_config.json')));
       final stateDb = manifest.entries.firstWhere(
         (entry) => entry.relativePath == 'state.db',
       );
@@ -156,6 +191,57 @@ void main() {
       );
     });
 
+    test('an opt-in fixture captures mcp_config.json and records it', () async {
+      await writeHomeFile('mcp_config.json', '{"mcp":{}}');
+
+      final manifest = await saveHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'with-mcp',
+        includeMcpConfig: true,
+      );
+
+      expect(manifest.includeMcpConfig, isTrue);
+      expect(
+        manifest.entries.map((entry) => entry.relativePath),
+        contains('mcp_config.json'),
+      );
+      final decoded =
+          jsonDecode(
+                File(
+                  p.join(
+                    sanadDevFixturePath(workspace.path, 'with-mcp'),
+                    'fixture.json',
+                  ),
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      expect(decoded['include_mcp_config'], isTrue);
+    });
+
+    test('fixture files and directories are owner-only', () async {
+      if (Platform.isWindows) return;
+      await saveHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+      final root = sanadDevFixturePath(workspace.path, 'clean');
+      final directoryMode = (await Process.run('stat', [
+        '-f',
+        '%Lp',
+        root,
+      ])).stdout.toString().trim();
+      final fileMode = (await Process.run('stat', [
+        '-f',
+        '%Lp',
+        p.join(root, 'state.db'),
+      ])).stdout.toString().trim();
+
+      expect(directoryMode, '700');
+      expect(fileMode, '600');
+    });
+
     test('restores the fixture and removes stale captured files', () async {
       await saveHomeFixture(
         workspaceRoot: workspace.path,
@@ -173,6 +259,7 @@ void main() {
       );
 
       expect(report.restoredFiles, greaterThan(0));
+      expect(report.removedFiles, 1, reason: 'memories/stale.md is stale');
       expect(
         File(p.join(home.path, 'state.db')).readAsStringSync(),
         'database-v1',
@@ -200,10 +287,95 @@ void main() {
         reason: 'runtime leases must survive a fixture restore',
       );
       expect(
-        Directory(p.join(home.path, '.sanad-dev-reset-staging')).existsSync(),
+        Directory(
+          p.join(p.dirname(home.path), fixtureRestoreStagingDirectoryName),
+        ).existsSync(),
         isFalse,
         reason: 'the staging directory is always cleaned up',
       );
+    });
+
+    test('the database family swaps as one unit', () async {
+      await saveHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+      // A stale sidecar from a later session must not survive beside the
+      // restored database.
+      await writeHomeFile('state.db', 'database-v2');
+      await writeHomeFile('state.db-wal', 'stale-wal');
+      await writeHomeFile('state.db-shm', 'stale-shm');
+
+      await restoreHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+
+      expect(
+        File(p.join(home.path, 'state.db')).readAsStringSync(),
+        'database-v1',
+      );
+      expect(File(p.join(home.path, 'state.db-wal')).existsSync(), isFalse);
+      expect(File(p.join(home.path, 'state.db-shm')).existsSync(), isFalse);
+    });
+
+    test('restores a fixture that carries the database sidecars', () async {
+      await writeHomeFile('state.db-wal', 'wal-v1');
+      await writeHomeFile('state.db-shm', 'shm-v1');
+      await saveHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+      File(p.join(home.path, 'state.db-wal')).deleteSync();
+      File(p.join(home.path, 'state.db-shm')).deleteSync();
+
+      await restoreHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+
+      expect(
+        File(p.join(home.path, 'state.db-wal')).readAsStringSync(),
+        'wal-v1',
+      );
+      expect(
+        File(p.join(home.path, 'state.db-shm')).readAsStringSync(),
+        'shm-v1',
+      );
+    });
+
+    test('recovers displaced files from an interrupted restore', () async {
+      await saveHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+      // Simulate a crash after the original files were displaced.
+      final staging = Directory(
+        p.join(p.dirname(home.path), fixtureRestoreStagingDirectoryName),
+      );
+      final backup = Directory(p.join(staging.path, 'backup'));
+      backup.createSync(recursive: true);
+      File(p.join(home.path, 'state.db')).renameSync(
+        p.join(backup.path, 'state.db'),
+      );
+      expect(File(p.join(home.path, 'state.db')).existsSync(), isFalse);
+
+      await restoreHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+
+      expect(
+        File(p.join(home.path, 'state.db')).readAsStringSync(),
+        'database-v1',
+      );
+      expect(staging.existsSync(), isFalse);
     });
 
     test('fails closed for an unknown, corrupt, or partial fixture', () async {
@@ -296,6 +468,160 @@ void main() {
         ),
         throwsA(isA<FormatException>()),
       );
+    });
+  });
+
+  group('malicious fixture refusal', () {
+    /// A malicious fixture must fail closed and leave the Home and every
+    /// sibling path byte-identical.
+    Future<void> expectRefused({required String reason}) async {
+      final outsideFile = File(p.join(outside.path, 'stolen.txt'));
+      final beforeHome = listFixtureSourcePaths(home.path);
+      final beforeToken = File(
+        p.join(home.path, '.local_token'),
+      ).readAsStringSync();
+
+      await expectLater(
+        restoreHomeFixture(
+          workspaceRoot: workspace.path,
+          homePath: home.path,
+          name: 'evil',
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains(reason),
+          ),
+        ),
+      );
+
+      expect(
+        listFixtureSourcePaths(home.path),
+        beforeHome,
+        reason: 'a refused restore must not add or remove a captured file',
+      );
+      expect(
+        File(p.join(home.path, '.local_token')).readAsStringSync(),
+        beforeToken,
+      );
+      expect(
+        outsideFile.existsSync(),
+        isFalse,
+        reason: 'nothing may be written outside the Home',
+      );
+      expect(
+        Directory(
+          p.join(p.dirname(home.path), fixtureRestoreStagingDirectoryName),
+        ).existsSync(),
+        isFalse,
+      );
+    }
+
+    setUp(() async {
+      await saveHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+      // Mirror the captured files so every legitimate entry validates; only the
+      // appended malicious entries are left to refuse.
+      final cleanRoot = Directory(sanadDevFixturePath(workspace.path, 'clean'));
+      final evilRoot = Directory(sanadDevFixturePath(workspace.path, 'evil'))
+        ..createSync(recursive: true);
+      for (final entity in cleanRoot.listSync(recursive: true)) {
+        if (entity is! File) continue;
+        final relative = p.relative(entity.path, from: cleanRoot.path);
+        final target = File(p.join(evilRoot.path, relative));
+        target.parent.createSync(recursive: true);
+        entity.copySync(target.path);
+      }
+    });
+
+    test('refuses a relative traversal out of the Home', () async {
+      await corruptManifest('evil', [
+        entryFor('../../outside/stolen.txt'),
+        entryFor('memories/../../outside/stolen.txt'),
+      ]);
+
+      await expectRefused(reason: 'contains an empty, "." or ".." segment');
+    });
+
+    test('refuses an absolute path', () async {
+      await corruptManifest('evil', [
+        entryFor(p.join(outside.path, 'stolen.txt')),
+        entryFor('/etc/passwd'),
+      ]);
+
+      await expectRefused(reason: 'is an absolute path');
+    });
+
+    test('refuses a symlinked parent that escapes the Home', () async {
+      // `skills` is a captured directory; pointing it at another tree must not
+      // let the restore write through it.
+      final skills = Directory(p.join(home.path, 'skills'))
+        ..createSync(recursive: true);
+      final linked = File(p.join(skills.path, 'custom', 'SKILL.md'));
+      linked.parent.createSync(recursive: true);
+      linked.writeAsStringSync('# skill');
+      await Directory(
+        p.join(sanadDevFixturePath(workspace.path, 'evil'), 'skills', 'custom'),
+      ).create(recursive: true);
+      File(
+        p.join(
+          sanadDevFixturePath(workspace.path, 'evil'),
+          'skills',
+          'custom',
+          'SKILL.md',
+        ),
+      ).writeAsStringSync('pwned');
+      final realSkills = Directory(p.join(outside.path, 'skills'))
+        ..createSync(recursive: true);
+      Directory(p.join(home.path, 'skills')).deleteSync(recursive: true);
+      Link(p.join(home.path, 'skills')).createSync(realSkills.path);
+      addTearDown(() {
+        final link = Link(p.join(home.path, 'skills'));
+        if (link.existsSync()) link.deleteSync();
+      });
+
+      await corruptManifest('evil', [
+        {
+          'path': 'skills/custom/SKILL.md',
+          'size': 5,
+          'sha256': sha256.convert(utf8.encode('pwned')).toString(),
+        },
+      ]);
+
+      await expectLater(
+        restoreHomeFixture(
+          workspaceRoot: workspace.path,
+          homePath: home.path,
+          name: 'evil',
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('symbolic link'),
+          ),
+        ),
+      );
+      expect(
+        File(p.join(realSkills.path, 'custom', 'SKILL.md')).existsSync(),
+        isFalse,
+        reason: 'nothing may be written through a symlinked parent',
+      );
+    });
+
+    test('refuses a denylisted entry such as the gateway credential', () async {
+      await corruptManifest('evil', [
+        entryFor('.local_token'),
+        entryFor('.env'),
+        entryFor('logs/agent.log'),
+        entryFor('workspaces/private.pem'),
+      ]);
+
+      await expectRefused(reason: 'is not a captured fixture path');
     });
   });
 }

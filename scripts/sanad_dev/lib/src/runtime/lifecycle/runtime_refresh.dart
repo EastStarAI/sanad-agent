@@ -12,6 +12,10 @@ typedef SanadDevRefreshLauncher =
 /// - macOS: a detached `sh` child (never launchd);
 /// - Linux: `systemd-run --user --collect --on-active`;
 /// - Windows: `schtasks /SC ONCE` that deletes itself.
+///
+/// The plan records the worktree branch and `HEAD` at scheduling time and passes
+/// the target Home, so the fired script refuses to pull or restart when the
+/// worktree is gone or has moved to another branch.
 Future<void> handleRuntimeRefresh({
   required String at,
   String? sanadHomePath,
@@ -20,6 +24,7 @@ Future<void> handleRuntimeRefresh({
   Map<String, String>? environment,
   SanadDevResetRuntimeProvider? runtimeProvider,
   SanadDevRefreshLauncher? launcher,
+  Future<String> Function(String repositoryRoot)? sourceCommit,
   void Function(String message)? printMessage,
   void Function(String message)? printError,
 }) async {
@@ -34,23 +39,44 @@ Future<void> handleRuntimeRefresh({
     exitCode = 64;
     return;
   }
+  final selectedScheduler = scheduler ?? sanadDevRefreshSchedulerFor();
+  final problem = sanadDevRefreshDelayProblem(
+    delay,
+    scheduler: selectedScheduler,
+  );
+  if (problem != null) {
+    logError(sanadDevRefreshDelayProblemMessage(problem));
+    exitCode = 64;
+    return;
+  }
   final runtime =
       await (runtimeProvider ??
           ({String? sanadHomeOverride}) => _currentRuntime(
             sanadHomePath: sanadHomeOverride,
           ))(sanadHomeOverride: sanadHomePath);
+  if (runtime.branch.trim().isEmpty) {
+    logError(
+      'Refusing to schedule a refresh from a detached HEAD: check out a named '
+      'branch so the scheduled run can verify the worktree.',
+    );
+    exitCode = 64;
+    return;
+  }
+  final homePath = runtime.sanadHome;
   final plan = buildSanadDevRefreshPlan(
     repositoryRoot: runtime.repositoryRoot,
     workspaceRoot: runtime.workspaceRoot,
+    homePath: homePath,
+    branch: runtime.branch,
+    headCommit: await (sourceCommit ?? readRuntimeSourceCommit)(
+      runtime.repositoryRoot,
+    ),
     runtimeDirectory: runtime.runtimeDirectory,
     delay: delay,
-    scheduler: scheduler ?? sanadDevRefreshSchedulerFor(),
+    scheduler: selectedScheduler,
     now: now,
   );
-  await (launcher ?? _defaultRefreshLauncher)(
-    plan,
-    homePath: runtime.sanadHome,
-  );
+  await (launcher ?? _defaultRefreshLauncher)(plan, homePath: homePath);
   for (final line in sanadDevRefreshVerificationLines(plan)) {
     log(line);
   }
@@ -66,11 +92,17 @@ Future<void> _defaultRefreshLauncher(
   final script = File(plan.scriptPath);
   await script.writeAsString(plan.scriptContents, flush: true);
   if (!Platform.isWindows) await _restrictRefreshScript(script);
+  // The planned Home is carried as a script argument so the scheduled restarts
+  // keep targeting the Home this refresh was scheduled against.
+  assert(plan.homePath == homePath, 'refresh plan Home must match the launcher');
   switch (plan.scheduler) {
     case SanadDevRefreshScheduler.detachedShell:
-      await Process.start('/bin/sh', [
-        plan.scriptPath,
-      ], mode: ProcessStartMode.detached);
+      final launch = plan.launchArguments;
+      await Process.start(
+        launch.first,
+        launch.skip(1).toList(),
+        mode: ProcessStartMode.detached,
+      );
     case SanadDevRefreshScheduler.systemdRun:
     case SanadDevRefreshScheduler.schtasks:
       final result = await Process.run(

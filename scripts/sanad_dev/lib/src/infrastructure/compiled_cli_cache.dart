@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,6 +7,24 @@ import 'package:path/path.dart' as p;
 
 /// Cache root name owned by `sanad-dev` inside the invoking worktree.
 const compiledCliCacheDirectoryName = '.sanad-dev';
+
+/// How many historical commits stay cached beside the current one.
+///
+/// Each entry is a native build, so retaining a small window keeps a checkout
+/// switch or a rebase from paying a full rebuild while never growing without
+/// bound.
+const compiledCliRetainedCommits = 3;
+
+/// How long a builder or reader waits for another process to release the
+/// component build lock before giving up.
+const compiledCliLockTimeout = Duration(minutes: 15);
+
+/// File name of the per-component build lock below a cache key directory.
+///
+/// A builder takes the lock exclusively and a runner takes it shared, so a
+/// process never starts an artifact while it is being replaced.
+String compiledCliLockFileName(CompiledCliComponent component) =>
+    '${component.name}.build.lock';
 
 /// The two command-line entry points `sanad-dev` compiles and caches.
 ///
@@ -53,6 +72,9 @@ typedef CompiledCliBuilder =
 /// Reads the current source commit of the runtime repository.
 typedef CompiledCliCommitReader = Future<String> Function();
 
+/// Reads the effective Dart SDK version when the repository has no FVM pin.
+typedef DartSdkVersionReader = Future<String> Function();
+
 class CompiledCliArtifact {
   const CompiledCliArtifact({
     required this.component,
@@ -91,15 +113,21 @@ String formatCompiledCliDuration(Duration duration) {
 /// stamp decides whether the artifact still matches the component sources, so a
 /// dirty tree or a changed path dependency rebuilds in place instead of being
 /// silently reused.
+///
+/// Publishing is serialized per component by an exclusive file lock, and every
+/// reader takes the same lock shared before it starts the artifact, so a binary
+/// is never executed while it is being replaced.
 class CompiledCliCache {
   CompiledCliCache({
     required this.workspaceRoot,
     required this.repositoryRoot,
     CompiledCliBuilder? builder,
     CompiledCliCommitReader? sourceCommit,
+    DartSdkVersionReader? dartSdkVersion,
     Map<String, String>? environment,
   }) : _environment = environment ?? Platform.environment,
-       _sourceCommit = sourceCommit ?? (() => _gitHead(repositoryRoot)) {
+       _sourceCommit = sourceCommit ?? (() => _gitHead(repositoryRoot)),
+       _dartSdkVersion = dartSdkVersion ?? _readDartSdkVersion {
     _builder =
         builder ??
         ({required String workingDirectory, required List<String> arguments}) =>
@@ -114,6 +142,7 @@ class CompiledCliCache {
   final String repositoryRoot;
   final Map<String, String> _environment;
   final CompiledCliCommitReader _sourceCommit;
+  final DartSdkVersionReader _dartSdkVersion;
   late final CompiledCliBuilder _builder;
 
   String get cacheRoot =>
@@ -126,45 +155,133 @@ class CompiledCliCache {
     void Function(String message)? log,
   }) async {
     final cacheKey = await resolveCacheKey();
-    final directory = Directory(p.join(cacheRoot, cacheKey));
-    final fingerprint = await computeFingerprint(component);
-    final executable = File(_executablePath(component, directory.path));
-    final stamp = File(_stampPath(component, directory.path));
-    if (!force &&
-        executable.existsSync() &&
-        stamp.existsSync() &&
-        stamp.readAsStringSync().trim() == fingerprint) {
+    final directory = p.join(cacheRoot, cacheKey);
+    await Directory(directory).create(recursive: true);
+    final lockFile = File(_lockPath(component, directory));
+    // The exclusive lock covers the stamp check, the build, the publish, and the
+    // prune, so two `sanad-dev cli` calls for the same component never publish
+    // over each other. POSIX record locks belong to the process, so an in-process
+    // mutex is layered on top for two callers inside one isolate.
+    return _withProcessLock(_lockKey(component, cacheKey), () {
+      return _withFileLock(lockFile, FileLock.exclusive, () async {
+      final fingerprint = await computeFingerprint(component);
+      final executable = File(_executablePath(component, directory));
+      final stamp = File(_stampPath(component, directory));
+      if (!force &&
+          executable.existsSync() &&
+          stamp.existsSync() &&
+          stamp.readAsStringSync().trim() == fingerprint) {
+        return CompiledCliArtifact(
+          component: component,
+          executablePath: executable.path,
+          fingerprint: fingerprint,
+          cacheKey: cacheKey,
+          rebuilt: false,
+        );
+      }
+      log?.call(
+        'Building ${component.name} CLI for $cacheKey '
+        '(${force ? 'forced' : 'source changed'})...',
+      );
+      final stopwatch = Stopwatch()..start();
+      await _build(component, directory);
+      stopwatch.stop();
+      if (!File(_executablePath(component, directory)).existsSync()) {
+        throw StateError(
+          'The ${component.name} CLI build did not produce '
+          '${_executablePath(component, directory)}.',
+        );
+      }
+      await stamp.writeAsString('$fingerprint\n', flush: true);
+      await prune(keepCacheKey: cacheKey);
       return CompiledCliArtifact(
         component: component,
-        executablePath: executable.path,
+        executablePath: _executablePath(component, directory),
         fingerprint: fingerprint,
         cacheKey: cacheKey,
-        rebuilt: false,
+        rebuilt: true,
+        buildDuration: stopwatch.elapsed,
       );
-    }
-    log?.call(
-      'Building ${component.name} CLI for $cacheKey '
-      '(${force ? 'forced' : 'source changed'})...',
+    });
+    });
+  }
+
+  /// Runs [action] under the shared half of the component build lock.
+  ///
+  /// A concurrent builder waits until the started reader has resolved and
+  /// launched the artifact, so a reader never executes a binary that is being
+  /// replaced.
+  Future<T> withReadLock<T>(
+    CompiledCliComponent component,
+    Future<T> Function() action,
+  ) async {
+    final cacheKey = await resolveCacheKey();
+    final lockFile = File(_lockPath(component, p.join(cacheRoot, cacheKey)));
+    if (!lockFile.existsSync()) return action();
+    return _withProcessLock(
+      _lockKey(component, cacheKey),
+      () => _withFileLock(lockFile, FileLock.shared, action),
     );
-    final stopwatch = Stopwatch()..start();
-    await directory.create(recursive: true);
-    await _build(component, directory.path);
-    stopwatch.stop();
-    if (!File(_executablePath(component, directory.path)).existsSync()) {
-      throw StateError(
-        'The ${component.name} CLI build did not produce '
-        '${_executablePath(component, directory.path)}.',
-      );
+  }
+
+  static final Map<String, Future<void>> _processLocks = {};
+
+  String _lockKey(CompiledCliComponent component, String cacheKey) =>
+      '$cacheRoot|$cacheKey|${component.name}';
+
+  /// Serializes callers inside this process before they touch the file lock.
+  ///
+  /// POSIX `fcntl` locks are held by the process rather than by an open file
+  /// description, so a second acquisition inside the same process succeeds
+  /// immediately. Chaining futures keeps two in-process callers ordered without
+  /// blocking the event loop.
+  Future<T> _withProcessLock<T>(String key, Future<T> Function() action) {
+    final previous = _processLocks[key] ?? Future<void>.value();
+    final gate = Completer<void>();
+    _processLocks[key] = gate.future;
+    return previous
+        .then((_) => action())
+        .whenComplete(() {
+          gate.complete();
+          if (identical(_processLocks[key], gate.future)) {
+            _processLocks.remove(key);
+          }
+        });
+  }
+
+  /// Deletes cached commits beyond [compiledCliRetainedCommits] and the current
+  /// cache key. Returns the removed directory names.
+  Future<List<String>> prune({required String keepCacheKey}) async {
+    final root = Directory(cacheRoot);
+    if (!root.existsSync()) return const [];
+    final directories =
+        root
+            .listSync(followLinks: false)
+            .whereType<Directory>()
+            .where((entry) => !p.basename(entry.path).startsWith('.'))
+            .toList()
+          ..sort(
+            (left, right) => right.statSync().modified.compareTo(
+              left.statSync().modified,
+            ),
+          );
+    final keep = <String>{keepCacheKey};
+    for (final directory in directories) {
+      if (keep.length >= compiledCliRetainedCommits + 1) break;
+      keep.add(p.basename(directory.path));
     }
-    await stamp.writeAsString('$fingerprint\n', flush: true);
-    return CompiledCliArtifact(
-      component: component,
-      executablePath: _executablePath(component, directory.path),
-      fingerprint: fingerprint,
-      cacheKey: cacheKey,
-      rebuilt: true,
-      buildDuration: stopwatch.elapsed,
-    );
+    final removed = <String>[];
+    for (final directory in directories) {
+      final name = p.basename(directory.path);
+      if (keep.contains(name)) continue;
+      try {
+        directory.deleteSync(recursive: true);
+        removed.add(name);
+      } on FileSystemException {
+        // A directory held open by another process is retried on the next build.
+      }
+    }
+    return removed;
   }
 
   /// Cache directory name: the runtime source commit, or `nogit` outside Git.
@@ -179,31 +296,122 @@ class CompiledCliCache {
   }
 
   /// SHA-256 over every relevant source file of [component].
+  ///
+  /// The fingerprint covers the package `lib/`, `bin/`, and `hook/` trees, the
+  /// pubspecs, the whole transitive closure of path dependencies, and either the
+  /// FVM pin or the effective `dart --version`, so a build-script or SDK change
+  /// can never reuse a stale artifact.
   Future<String> computeFingerprint(CompiledCliComponent component) async {
-    final inputs = <String>[];
+    final inputs = <_FingerprintInput>[];
     final packageRoot = p.join(repositoryRoot, component.packageDirectory);
     inputs.addAll(_packageInputs(packageRoot));
-    for (final dependency in _pathDependencies(
-      File(p.join(packageRoot, 'pubspec.yaml')),
-    )) {
-      // Path dependencies are relative to the package directory.
-      inputs.addAll(
-        _packageInputs(p.normalize(p.join(packageRoot, dependency))),
-      );
+    for (final dependency in _pathDependencyClosure(packageRoot)) {
+      inputs.addAll(_packageInputs(dependency));
     }
     final fvmPin = File(p.join(repositoryRoot, '.fvmrc'));
-    if (fvmPin.existsSync()) inputs.add(fvmPin.path);
-    inputs.sort();
-    final digest = _DigestSink();
-    final input = sha256.startChunkedConversion(digest);
-    for (final path in inputs) {
-      final relative = p.relative(path, from: repositoryRoot);
-      input.add(utf8.encode('$relative:'));
-      input.add(sha256.convert(File(path).readAsBytesSync()).bytes);
-      input.add(const [0x0a]);
+    if (fvmPin.existsSync()) {
+      inputs.add(_FingerprintInput('fvm-pin', fvmPin.readAsBytesSync()));
+    } else {
+      inputs.add(
+        _FingerprintInput('dart-sdk', utf8.encode(await _dartSdkVersion())),
+      );
     }
-    input.close();
+    final byPath = <String, _FingerprintInput>{};
+    for (final input in inputs) {
+      byPath[input.path] = input;
+    }
+    final ordered = byPath.values.toList()
+      ..sort((left, right) => left.path.compareTo(right.path));
+    final digest = _DigestSink();
+    final sink = sha256.startChunkedConversion(digest);
+    for (final input in ordered) {
+      sink.add(utf8.encode('${input.path}:'));
+      sink.add(sha256.convert(input.bytes).bytes);
+      sink.add(const [0x0a]);
+    }
+    sink.close();
     return digest.value.toString();
+  }
+
+  /// Every file under `lib/`, `bin/`, and `hook/` plus the package pubspecs.
+  List<_FingerprintInput> _packageInputs(String packageRoot) {
+    final inputs = <_FingerprintInput>[];
+    for (final name in const ['pubspec.yaml', 'pubspec.lock']) {
+      final file = File(p.join(packageRoot, name));
+      if (file.existsSync()) {
+        inputs.add(_FingerprintInput(file.path, file.readAsBytesSync()));
+      }
+    }
+    for (final name in const ['lib', 'bin']) {
+      final directory = Directory(p.join(packageRoot, name));
+      if (!directory.existsSync()) continue;
+      for (final entity in directory.listSync(recursive: true)) {
+        if (entity is File && entity.path.endsWith('.dart')) {
+          inputs.add(_FingerprintInput(entity.path, entity.readAsBytesSync()));
+        }
+      }
+    }
+    // Native build hooks change the produced artifact even when no Dart source
+    // changes, so every hook file is an input regardless of extension.
+    final hookDirectory = Directory(p.join(packageRoot, 'hook'));
+    if (hookDirectory.existsSync()) {
+      for (final entity in hookDirectory.listSync(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is! File) continue;
+        inputs.add(_FingerprintInput(entity.path, entity.readAsBytesSync()));
+      }
+    }
+    return inputs;
+  }
+
+  /// Absolute paths of every transitive `path:` dependency package.
+  ///
+  /// A path dependency can itself depend on another path package, so a single
+  /// level would miss shared primitives such as the release contract.
+  List<String> _pathDependencyClosure(String packageRoot) {
+    final collected = <String>[];
+    final visited = <String>{p.normalize(packageRoot)};
+    final queue = <String>[p.normalize(packageRoot)];
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      final pubspec = File(p.join(current, 'pubspec.yaml'));
+      if (!pubspec.existsSync()) continue;
+      for (final dependency in _pathDependencies(pubspec)) {
+        final resolved = p.normalize(p.join(current, dependency));
+        if (!visited.add(resolved)) continue;
+        if (!Directory(resolved).existsSync()) continue;
+        collected.add(resolved);
+        queue.add(resolved);
+      }
+    }
+    collected.sort();
+    return collected;
+  }
+
+  List<String> _pathDependencies(File pubspec) {
+    if (!pubspec.existsSync()) return const [];
+    final dependencies = <String>[];
+    final pattern = RegExp(r'^\s+path:\s*(\S+)\s*$', multiLine: true);
+    for (final match in pattern.allMatches(pubspec.readAsStringSync())) {
+      dependencies.add(p.normalize(match.group(1)!));
+    }
+    return dependencies;
+  }
+
+  /// `-DSANAD_AGENT_VERSION=<agent/pubspec.yaml version>` when readable.
+  String? _agentVersionDefine() {
+    final pubspec = File(p.join(repositoryRoot, 'agent', 'pubspec.yaml'));
+    if (!pubspec.existsSync()) return null;
+    final match = RegExp(
+      r'^version:\s*([^\s#]+)',
+      multiLine: true,
+    ).firstMatch(pubspec.readAsStringSync());
+    final version = match?.group(1);
+    return version == null || version.isEmpty
+        ? null
+        : '-DSANAD_AGENT_VERSION=$version';
   }
 
   String _executablePath(CompiledCliComponent component, String directory) =>
@@ -222,6 +430,9 @@ class CompiledCliCache {
 
   String _stampPath(CompiledCliComponent component, String directory) =>
       p.join(directory, '${component.name}.stamp');
+
+  String _lockPath(CompiledCliComponent component, String directory) =>
+      p.join(directory, compiledCliLockFileName(component));
 
   Future<void> _build(CompiledCliComponent component, String directory) async {
     final workingDirectory = p.join(repositoryRoot, component.packageDirectory);
@@ -250,7 +461,10 @@ class CompiledCliCache {
             'The Agent CLI build failed with exit code $exitCode.',
           );
         }
-        _deletePathSync(target);
+        // One rename publishes the new artifact: POSIX replaces the destination
+        // atomically, and on Windows the exclusive lock already excludes every
+        // reader, so the short delete window is invisible to them.
+        if (Platform.isWindows) _deletePathSync(target);
         File(staging).renameSync(target);
       case CompiledCliComponent.client:
         // `dart compile exe` refuses packages with native build hooks
@@ -278,52 +492,15 @@ class CompiledCliCache {
           );
         }
         final destination = p.join(directory, 'client-bundle');
-        _deletePathSync(destination);
+        final previous = p.join(directory, '.client-bundle-previous');
+        _deletePathSync(previous);
+        if (Directory(destination).existsSync()) {
+          Directory(destination).renameSync(previous);
+        }
         Directory(produced).renameSync(destination);
         _deletePathSync(staging);
+        _deletePathSync(previous);
     }
-  }
-
-  List<String> _packageInputs(String packageRoot) {
-    final inputs = <String>[];
-    for (final name in const ['pubspec.yaml', 'pubspec.lock']) {
-      final file = File(p.join(packageRoot, name));
-      if (file.existsSync()) inputs.add(file.path);
-    }
-    for (final name in const ['lib', 'bin']) {
-      final directory = Directory(p.join(packageRoot, name));
-      if (!directory.existsSync()) continue;
-      for (final entity in directory.listSync(recursive: true)) {
-        if (entity is File && entity.path.endsWith('.dart')) {
-          inputs.add(entity.path);
-        }
-      }
-    }
-    return inputs;
-  }
-
-  List<String> _pathDependencies(File pubspec) {
-    if (!pubspec.existsSync()) return const [];
-    final dependencies = <String>[];
-    final pattern = RegExp(r'^\s+path:\s*(\S+)\s*$', multiLine: true);
-    for (final match in pattern.allMatches(pubspec.readAsStringSync())) {
-      dependencies.add(p.normalize(match.group(1)!));
-    }
-    return dependencies;
-  }
-
-  /// `-DSANAD_AGENT_VERSION=<agent/pubspec.yaml version>` when readable.
-  String? _agentVersionDefine() {
-    final pubspec = File(p.join(repositoryRoot, 'agent', 'pubspec.yaml'));
-    if (!pubspec.existsSync()) return null;
-    final match = RegExp(
-      r'^version:\s*([^\s#]+)',
-      multiLine: true,
-    ).firstMatch(pubspec.readAsStringSync());
-    final version = match?.group(1);
-    return version == null || version.isEmpty
-        ? null
-        : '-DSANAD_AGENT_VERSION=$version';
   }
 
   static Future<String> _gitHead(String repositoryRoot) async {
@@ -336,6 +513,68 @@ class CompiledCliCache {
     if (result.exitCode != 0) return '';
     return result.stdout.toString().trim();
   }
+
+  static Future<String> _readDartSdkVersion() async {
+    try {
+      final result = await Process.run('dart', ['--version']);
+      return '${result.stdout}${result.stderr}'.trim();
+    } on Object {
+      return 'unknown';
+    }
+  }
+}
+
+Future<T> _withFileLock<T>(
+  File lockFile,
+  FileLock mode,
+  Future<T> Function() action,
+) async {
+  await lockFile.create(recursive: true);
+  final randomAccess = await lockFile.open(
+    mode: mode == FileLock.shared ? FileMode.read : FileMode.append,
+  );
+  try {
+    await _acquireLock(randomAccess, mode);
+    return await action();
+  } finally {
+    try {
+      await randomAccess.unlock();
+    } on Object {
+      // The lock is released by closing the handle even if unlock fails.
+    }
+    await randomAccess.close();
+  }
+}
+
+/// Acquires [mode] without blocking the event loop.
+///
+/// The lock is retried instead of taken blocking, so a second `ensure` in the
+/// same process waits cooperatively rather than freezing the isolate that the
+/// first build needs in order to finish.
+Future<void> _acquireLock(RandomAccessFile handle, FileLock mode) async {
+  final deadline = DateTime.now().add(compiledCliLockTimeout);
+  while (true) {
+    try {
+      await handle.lock(mode);
+      return;
+    } on FileSystemException {
+      if (!DateTime.now().isBefore(deadline)) {
+        throw StateError(
+          'Timed out after ${compiledCliLockTimeout.inMinutes} minutes waiting '
+          'for the compiled CLI build lock.',
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+}
+
+/// One fingerprint input: a stable label and its bytes.
+class _FingerprintInput {
+  const _FingerprintInput(this.path, this.bytes);
+
+  final String path;
+  final List<int> bytes;
 }
 
 /// Production builder: every Dart/Flutter child process runs through FVM.
@@ -359,9 +598,17 @@ void _deletePathSync(String path) {
   final type = FileSystemEntity.typeSync(path, followLinks: false);
   if (type == FileSystemEntityType.notFound) return;
   if (type == FileSystemEntityType.directory) {
-    Directory(path).deleteSync(recursive: true);
+    try {
+      Directory(path).deleteSync(recursive: true);
+    } on FileSystemException {
+      // A running Windows artifact cannot be removed yet; the next build retries.
+    }
   } else {
-    File(path).deleteSync();
+    try {
+      File(path).deleteSync();
+    } on FileSystemException {
+      // Same as above.
+    }
   }
 }
 

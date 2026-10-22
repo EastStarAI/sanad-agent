@@ -16,27 +16,30 @@ void main() {
     await file.writeAsString(contents);
   }
 
-  CompiledCliCache cache({String commit = 'abcdef1234567890'}) =>
-      CompiledCliCache(
-        workspaceRoot: workspace.path,
-        repositoryRoot: repository.path,
-        sourceCommit: () async => commit,
-        builder: ({required workingDirectory, required arguments}) async {
-          builds.add(arguments);
-          if (arguments.contains('build')) {
-            final outputIndex = arguments.indexOf('-o') + 1;
-            final bundle = Directory(p.join(arguments[outputIndex], 'bundle'));
-            await Directory(p.join(bundle.path, 'bin')).create(recursive: true);
-            await File(
-              p.join(bundle.path, 'bin', 'sanad_client'),
-            ).writeAsString('client-binary');
-          } else {
-            final outputIndex = arguments.indexOf('-o') + 1;
-            await File(arguments[outputIndex]).writeAsString('agent-binary');
-          }
-          return 0;
-        },
-      );
+  CompiledCliCache cache({
+    String commit = 'abcdef1234567890',
+    String sdkVersion = 'dart 3.10.7',
+  }) => CompiledCliCache(
+    workspaceRoot: workspace.path,
+    repositoryRoot: repository.path,
+    sourceCommit: () async => commit,
+    dartSdkVersion: () async => sdkVersion,
+    builder: ({required workingDirectory, required arguments}) async {
+      builds.add(arguments);
+      if (arguments.contains('build')) {
+        final outputIndex = arguments.indexOf('-o') + 1;
+        final bundle = Directory(p.join(arguments[outputIndex], 'bundle'));
+        await Directory(p.join(bundle.path, 'bin')).create(recursive: true);
+        await File(
+          p.join(bundle.path, 'bin', 'sanad_client'),
+        ).writeAsString('client-binary');
+      } else {
+        final outputIndex = arguments.indexOf('-o') + 1;
+        await File(arguments[outputIndex]).writeAsString('agent-binary');
+      }
+      return 0;
+    },
+  );
 
   setUp(() async {
     fixture = await Directory.systemTemp.createTemp('sanad-cli-cache-');
@@ -126,6 +129,118 @@ void main() {
       expect(builds, hasLength(2));
     });
 
+    test('rebuilds when a native build hook changes', () async {
+      await cache().ensure(CompiledCliComponent.client);
+      await writeSource('client/hook/build.dart', 'void main() {}');
+
+      final rebuilt = await cache().ensure(CompiledCliComponent.client);
+
+      expect(rebuilt.rebuilt, isTrue);
+      expect(builds, hasLength(2));
+    });
+
+    test('rebuilds when a transitive path dependency changes', () async {
+      await writeSource(
+        'shared/windows_path/pubspec.yaml',
+        'name: sanad_windows_path\ndependencies:\n  deep:\n'
+            '    path: ../deep\n',
+      );
+      await writeSource('shared/deep/lib/deep.dart', '// deep');
+      await cache().ensure(CompiledCliComponent.client);
+      await writeSource('shared/deep/lib/deep.dart', '// deep changed');
+
+      final rebuilt = await cache().ensure(CompiledCliComponent.client);
+
+      expect(
+        rebuilt.rebuilt,
+        isTrue,
+        reason: 'a path dependency of a path dependency is still an input',
+      );
+      expect(builds, hasLength(2));
+    });
+
+    test('rebuilds when the effective SDK changes without an FVM pin', () async {
+      expect(File(p.join(repository.path, '.fvmrc')).existsSync(), isFalse);
+      await cache(sdkVersion: 'dart 3.10.7').ensure(CompiledCliComponent.agent);
+
+      final rebuilt = await cache(
+        sdkVersion: 'dart 3.11.0',
+      ).ensure(CompiledCliComponent.agent);
+
+      expect(rebuilt.rebuilt, isTrue);
+      expect(builds, hasLength(2));
+    });
+
+    test('publishes atomically and leaves no staging artifact', () async {
+      final artifact = await cache().ensure(CompiledCliComponent.agent);
+
+      expect(File(artifact.executablePath).readAsStringSync(), 'agent-binary');
+      expect(
+        Directory(p.dirname(artifact.executablePath))
+            .listSync()
+            .where((entity) => entity.path.contains('.building')),
+        isEmpty,
+      );
+    });
+
+    test('concurrent builds publish one complete artifact', () async {
+      final results = await Future.wait([
+        cache().ensure(CompiledCliComponent.agent),
+        cache().ensure(CompiledCliComponent.agent),
+      ]);
+
+      expect(
+        builds,
+        hasLength(1),
+        reason: 'the per-commit build lock serializes compilation',
+      );
+      for (final artifact in results) {
+        expect(File(artifact.executablePath).readAsStringSync(), 'agent-binary');
+      }
+      expect(results.where((artifact) => artifact.rebuilt), hasLength(1));
+    });
+
+    test('a reader takes the shared lock and runs the action', () async {
+      final artifact = await cache().ensure(CompiledCliComponent.agent);
+      final lockFile = File(
+        p.join(
+          p.dirname(artifact.executablePath),
+          compiledCliLockFileName(CompiledCliComponent.agent),
+        ),
+      );
+      expect(lockFile.existsSync(), isTrue);
+
+      final value = await cache().withReadLock(
+        CompiledCliComponent.agent,
+        () async => File(artifact.executablePath).readAsStringSync(),
+      );
+
+      expect(value, 'agent-binary');
+    });
+
+    test('prunes older commits and keeps the current one', () async {
+      for (var index = 0; index < compiledCliRetainedCommits + 3; index++) {
+        await cache(
+          commit: 'commit${index.toString().padLeft(6, '0')}',
+        ).ensure(CompiledCliComponent.agent);
+      }
+      final binRoot = Directory(
+        p.join(workspace.path, '.sanad-dev', 'bin'),
+      );
+      final remaining = binRoot
+          .listSync()
+          .whereType<Directory>()
+          .map((directory) => p.basename(directory.path))
+          .toSet();
+
+      expect(
+        remaining.length,
+        lessThanOrEqualTo(compiledCliRetainedCommits + 1),
+        reason: 'the cache keeps a bounded window plus the current commit',
+      );
+      expect(remaining, contains('commit000005'));
+    });
+
     test('force rebuilds an unchanged artifact', () async {
       await cache().ensure(CompiledCliComponent.agent);
 
@@ -168,8 +283,16 @@ void main() {
       expect(
         Directory(
           p.join(workspace.path, '.sanad-dev', 'bin', 'cccc55556666'),
-        ).listSync().whereType<File>(),
+        )
+            .listSync()
+            .whereType<File>()
+            .where(
+              (file) =>
+                  p.basename(file.path) !=
+                  compiledCliLockFileName(CompiledCliComponent.agent),
+            ),
         isEmpty,
+        reason: 'a failed build publishes no artifact and no stamp',
       );
     });
 

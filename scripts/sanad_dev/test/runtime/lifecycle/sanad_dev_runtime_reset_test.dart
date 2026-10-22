@@ -2,13 +2,9 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:sanad_dev/sanad_dev_cli.dart' as sanad_dev;
-import 'package:sanad_dev/src/infrastructure/foreign_worktree_activity.dart'
-    as activity;
 import 'package:sanad_dev/src/infrastructure/runtime_context.dart'
     as runtime_context;
 import 'package:test/test.dart';
-
-import '../../support/sanad_dev_test_fixtures.dart';
 
 void main() {
   group('reset Home ownership', () {
@@ -97,10 +93,9 @@ void main() {
     late Directory workspace;
     late runtime_context.SanadDevRuntime runtime;
     late List<String> events;
-    // `exitCode` is process-global under package:test, so capture and clear it
-    // immediately instead of leaking a failure code into concurrently running
-    // suites.
-    late int lastExitCode;
+    // `exitCode` is process-global under package:test, so the handler reports
+    // its status through an injected seam instead of the shared global.
+    late List<int> exitCodes;
 
     Future<String> runReset({
       String? fixtureName,
@@ -120,7 +115,8 @@ void main() {
         device: 'macos',
         environment: {'HOME': userHome.path},
         runtimeProvider: ({sanadHomeOverride}) async => runtime,
-        portsFreeProbe: (runtime, homePath) async => portsFree,
+        portsFreeProbe:
+            (runtime, homePath, {agentPort}) async => portsFree,
         stopRuntime: (homePath) async {
           events.add('stop:$homePath');
           return !stopFails;
@@ -137,9 +133,8 @@ void main() {
             },
         printMessage: lines.add,
         printError: (message) => lines.add(message),
+        setExitCode: exitCodes.add,
       );
-      lastExitCode = exitCode;
-      exitCode = 0;
       return lines.join('\n');
     }
 
@@ -150,6 +145,9 @@ void main() {
       home = Directory(
         p.join(userHome.path, '.sanad', 'dev', 'homes', 'feat-x-12345678'),
       )..createSync(recursive: true);
+      // `reset` resolves the Home once and uses the canonical path for every
+      // stop, restore, and launch step, so the fixture Home is canonical too.
+      home = Directory(home.resolveSymbolicLinksSync());
       await File(p.join(home.path, 'state.db')).writeAsString('database');
       await File(p.join(home.path, 'config.yaml')).writeAsString('model: x');
       await File(p.join(home.path, '.local_token')).writeAsString('secret');
@@ -168,7 +166,7 @@ void main() {
       );
       Directory(runtime.repositoryRoot).createSync(recursive: true);
       events = [];
-      lastExitCode = 0;
+      exitCodes = [];
       exitCode = 0;
     });
 
@@ -184,7 +182,7 @@ void main() {
       expect(output, contains('Data: keep existing data'));
       expect(output, contains('Mode: interactive-driver'));
       expect(events, isEmpty);
-      expect(lastExitCode, 0);
+      expect(exitCodes, isEmpty);
     });
 
     test('keeps data by default and prints one summary line', () async {
@@ -201,7 +199,7 @@ void main() {
       expect(summary, contains('state=stopped'));
       expect(summary, contains('fixture=kept'));
       expect(summary, contains(' sha='));
-      expect(lastExitCode, 0);
+      expect(exitCodes, isEmpty);
     });
 
     test('saves a fixture before restoring the requested one', () async {
@@ -228,7 +226,8 @@ void main() {
       expect(output, contains('Saved fixture "before"'));
       expect(events.first, startsWith('stop:'));
       expect(events, hasLength(1));
-      expect(lastExitCode, isNot(0));
+      expect(exitCodes, isNotEmpty);
+      expect(exitCodes.last, isNot(0));
     });
 
     test('restores a saved fixture and reports the file counts', () async {
@@ -257,7 +256,7 @@ void main() {
 
       expect(output, contains('Invalid fixture name'));
       expect(events, isEmpty);
-      expect(lastExitCode, 64);
+      expect(exitCodes, [64]);
     });
 
     test('rejects --fixture with --keep-data', () async {
@@ -265,14 +264,15 @@ void main() {
 
       expect(output, contains('cannot be combined'));
       expect(events, isEmpty);
-      expect(lastExitCode, 64);
+      expect(exitCodes, [64]);
     });
 
     test('refuses to continue when the stop fails', () async {
       await runReset(stopFails: true);
 
       expect(events, ['stop:${home.path}']);
-      expect(lastExitCode, isNot(0));
+      expect(exitCodes, isNotEmpty);
+      expect(exitCodes.last, isNot(0));
     });
 
     test('stops before the port check and refuses when ports stay busy', () async {
@@ -280,7 +280,7 @@ void main() {
 
       expect(events, ['stop:${home.path}']);
       expect(output, contains('or a managed Client endpoint is still live'));
-      expect(lastExitCode, 1);
+      expect(exitCodes, [1]);
     });
 
     test('refuses a Home this worktree does not own', () async {
@@ -302,7 +302,7 @@ void main() {
       expect(output, contains('Refusing to reset'));
       expect(output, contains('never reset'));
       expect(events, isEmpty);
-      expect(lastExitCode, 64);
+      expect(exitCodes, [64]);
     });
 
     test('is wired into the CLI parser', () {
@@ -312,63 +312,15 @@ void main() {
         'clean',
         '--save-fixture=before',
         '--keep-data',
+        '--include-mcp-config',
       ]);
 
       expect(parsed!.command, 'reset');
       expect(parsed.fixtureName, 'clean');
       expect(parsed.saveFixtureName, 'before');
       expect(parsed.keepData, isTrue);
+      expect(parsed.includeMcpConfig, isTrue);
     });
   });
 
-  group('apply guard', () {
-    test('refuses a restart while a foreign build runs', () async {
-      exitCode = 0;
-      final messages = <String>[];
-      final refused = await sanad_dev.refuseRestartDuringForeignActivity(
-        runtime: createTestRuntime(platformNeutral: true),
-        force: false,
-        detectActivity: (workspaceRoot) async => const [
-          activity.ForeignWorktreeActivity(
-            pid: 42,
-            command: 'flutter build macos',
-          ),
-        ],
-        printError: messages.add,
-      );
-
-      expect(refused, isTrue);
-      expect(messages.single, contains('Refusing to restart'));
-      expect(messages.single, contains('PID 42'));
-      expect(exitCode, 1);
-      exitCode = 0;
-    });
-
-    test('--force bypasses the guard', () async {
-      var probed = false;
-      final refused = await sanad_dev.refuseRestartDuringForeignActivity(
-        runtime: createTestRuntime(platformNeutral: true),
-        force: true,
-        detectActivity: (workspaceRoot) async {
-          probed = true;
-          return const [
-            activity.ForeignWorktreeActivity(pid: 42, command: 'dart test'),
-          ];
-        },
-      );
-
-      expect(refused, isFalse);
-      expect(probed, isFalse);
-    });
-
-    test('allows the restart when nothing foreign is running', () async {
-      final refused = await sanad_dev.refuseRestartDuringForeignActivity(
-        runtime: createTestRuntime(platformNeutral: true),
-        force: false,
-        detectActivity: (workspaceRoot) async => const [],
-      );
-
-      expect(refused, isFalse);
-    });
-  });
 }

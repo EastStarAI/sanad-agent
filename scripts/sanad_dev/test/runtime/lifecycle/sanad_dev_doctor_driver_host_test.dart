@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:sanad_dev/sanad_dev_cli.dart' as sanad_dev;
+import 'package:sanad_dev/src/infrastructure/macos_privacy_grants.dart'
+    as privacy;
 import 'package:sanad_dev/src/runtime/ownership/runtime_ownership.dart'
     as runtime_ownership;
 import 'package:test/test.dart';
@@ -9,47 +11,125 @@ import 'package:test/test.dart';
 import '../../support/sanad_dev_test_fixtures.dart';
 
 void main() {
-  group('driver host grant classification', () {
-    test('detects a missing Accessibility grant', () {
+  group('passive macOS preflight classification', () {
+    test('maps every preflight answer onto a report status', () {
       expect(
-        sanad_dev.classifyAccessibilityProbe(
-          exitCode: 1,
-          output: 'osascript: not allowed assistive access',
+        sanad_dev.classifyMacOsPrivacyPreflight(
+          privacy.MacOsPrivacyPreflight.granted,
         ),
-        sanad_dev.DriverHostGrantStatus.missing,
-      );
-      expect(
-        sanad_dev.classifyAccessibilityProbe(
-          exitCode: 1,
-          output: 'System Events got an error: (-1743)',
-        ),
-        sanad_dev.DriverHostGrantStatus.missing,
-      );
-      expect(
-        sanad_dev.classifyAccessibilityProbe(exitCode: 0, output: '42'),
         sanad_dev.DriverHostGrantStatus.granted,
       );
       expect(
-        sanad_dev.classifyAccessibilityProbe(
-          exitCode: 1,
-          output: 'something unexpected',
+        sanad_dev.classifyMacOsPrivacyPreflight(
+          privacy.MacOsPrivacyPreflight.denied,
+        ),
+        sanad_dev.DriverHostGrantStatus.missing,
+      );
+      expect(
+        sanad_dev.classifyMacOsPrivacyPreflight(
+          privacy.MacOsPrivacyPreflight.unavailable,
         ),
         sanad_dev.DriverHostGrantStatus.unknown,
       );
     });
 
-    test('detects a missing Screen Recording grant', () {
+    test(
+      'an unavailable preflight points at System Settings, never at a probe',
+      () async {
+        final report = await sanad_dev.probeAccessibilityGrant(
+          preflight: () => privacy.MacOsPrivacyPreflight.unavailable,
+        );
+
+        expect(report.status, isNot(sanad_dev.DriverHostGrantStatus.granted));
+        if (Platform.isMacOS) {
+          expect(report.detail, contains('System Settings > Privacy & Security'));
+        }
+      },
+    );
+
+    test('reports a missing grant without a false success', () async {
+      final accessibility = await sanad_dev.probeAccessibilityGrant(
+        preflight: () => privacy.MacOsPrivacyPreflight.denied,
+      );
+      final screen = await sanad_dev.probeScreenRecordingGrant(
+        preflight: () => privacy.MacOsPrivacyPreflight.denied,
+      );
+
+      if (Platform.isMacOS) {
+        expect(accessibility.status, sanad_dev.DriverHostGrantStatus.missing);
+        expect(screen.status, sanad_dev.DriverHostGrantStatus.missing);
+        expect(accessibility.detail, contains('Accessibility'));
+        expect(screen.detail, contains('Screen Recording'));
+      }
+    });
+  });
+
+  group('real preflight probes', () {
+    test('the production probes answer without prompting or spawning', () async {
+      // The real defaults run here: on macOS they call AXIsProcessTrusted and
+      // CGPreflightScreenCaptureAccess through dart:ffi. A prompting
+      // alternative would raise a consent dialog during this test run.
+      final accessibility = await sanad_dev.probeAccessibilityGrant();
+      final screen = await sanad_dev.probeScreenRecordingGrant();
+
+      expect(accessibility.name, 'Accessibility');
+      expect(screen.name, 'Screen Recording');
+      if (!Platform.isMacOS) {
+        expect(
+          accessibility.status,
+          sanad_dev.DriverHostGrantStatus.notApplicable,
+        );
+        return;
+      }
       expect(
-        sanad_dev.classifyScreenRecordingProbe(
-          exitCode: 1,
-          output: 'could not create image from display',
+        accessibility.status,
+        isNot(sanad_dev.DriverHostGrantStatus.notApplicable),
+      );
+      expect(
+        accessibility.detail,
+        anyOf(
+          contains('AXIsProcessTrusted'),
+          contains('System Settings > Privacy & Security'),
         ),
-        sanad_dev.DriverHostGrantStatus.missing,
       );
       expect(
-        sanad_dev.classifyScreenRecordingProbe(exitCode: 0, output: ''),
-        sanad_dev.DriverHostGrantStatus.granted,
+        screen.detail,
+        anyOf(
+          contains('CGPreflightScreenCaptureAccess'),
+          contains('System Settings > Privacy & Security'),
+        ),
       );
+    });
+
+    test('the grant path never asks the OS for permission', () async {
+      final doctorSource = await File(
+        p.join('lib', 'src', 'runtime', 'lifecycle', 'runtime_doctor.dart'),
+      ).readAsString();
+      final preflightSource = await File(
+        p.join('lib', 'src', 'infrastructure', 'macos_privacy_grants.dart'),
+      ).readAsString();
+
+      for (final forbidden in const [
+        // Quoted process names only: the passive API names such as
+        // `CGPreflightScreenCaptureAccess` legitimately contain "screen capture".
+        "'osascript'",
+        "'screencapture'",
+        'Process.run',
+        'Process.start',
+        'CGRequestScreenCaptureAccess',
+        'AXIsProcessTrustedWithOptions',
+      ]) {
+        expect(
+          doctorSource.toLowerCase(),
+          isNot(contains(forbidden.toLowerCase())),
+          reason:
+              'runtime_doctor.dart must only read grants passively; '
+              '"$forbidden" can raise a consent dialog',
+        );
+      }
+      expect(preflightSource, isNot(contains('Process.')));
+      expect(preflightSource, contains('AXIsProcessTrusted'));
+      expect(preflightSource, contains('CGPreflightScreenCaptureAccess'));
     });
   });
 
@@ -75,12 +155,12 @@ void main() {
         accessibilityProbe: () async => const sanad_dev.DriverHostGrantReport(
           name: 'Accessibility',
           status: sanad_dev.DriverHostGrantStatus.granted,
-          detail: '42',
+          detail: 'AXIsProcessTrusted reported a grant',
         ),
         screenRecordingProbe: () async => const sanad_dev.DriverHostGrantReport(
           name: 'Screen Recording',
           status: sanad_dev.DriverHostGrantStatus.missing,
-          detail: 'could not create image from display',
+          detail: 'CGPreflightScreenCaptureAccess reported no grant',
         ),
         printMessage: lines.add,
       );

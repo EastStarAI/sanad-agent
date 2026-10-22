@@ -1,8 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:sanad_dev/sanad_dev_cli.dart' as sanad_dev;
+import 'package:sanad_dev/src/infrastructure/foreign_worktree_activity.dart'
+    as activity;
 import 'package:test/test.dart';
+
+import '../../support/sanad_dev_test_fixtures.dart';
 
 void main() {
   group('apply decision table', () {
@@ -23,29 +28,43 @@ void main() {
       );
     });
 
-    test(
-      'client startup, DI, pubspec, assets and native restart the client',
-      () {
-        for (final path in const [
-          'client/lib/main.dart',
-          'client/lib/driver_main.dart',
-          'client/lib/app/bootstrap/app_bootstrap.dart',
-          'client/lib/core/startup/startup_gate.dart',
-          'client/lib/core/di/service_locator.dart',
-          'client/pubspec.yaml',
-          'client/pubspec.lock',
-          'client/assets/app-logo.png',
-          'client/macos/Runner/Info.plist',
-          'client/windows/runner/main.cpp',
-          'client/linux/CMakeLists.txt',
-          'client/web/index.html',
-        ]) {
-          expect(actionsFor([path]), [
-            sanad_dev.SanadDevApplyAction.restartClient,
-          ], reason: '$path must restart the client');
-        }
-      },
-    );
+    test('client startup and DI Dart restart the client', () {
+      for (final path in const [
+        'client/lib/main.dart',
+        'client/lib/driver_main.dart',
+        'client/lib/app/bootstrap/app_bootstrap.dart',
+        'client/lib/core/startup/startup_gate.dart',
+        'client/lib/core/di/service_locator.dart',
+      ]) {
+        expect(actionsFor([path]), [
+          sanad_dev.SanadDevApplyAction.restartClient,
+        ], reason: '$path must restart the client');
+      }
+    });
+
+    test('pubspec, native, plugin and asset changes need stop + run', () {
+      for (final path in const [
+        'client/pubspec.yaml',
+        'client/pubspec.lock',
+        'client/macos/Runner/Info.plist',
+        'client/macos/Flutter/GeneratedPluginRegistrant.swift',
+        'client/windows/runner/main.cpp',
+        'client/linux/CMakeLists.txt',
+        'client/web/index.html',
+        'client/assets/app-logo.png',
+        'client/assets/fonts/inter.ttf',
+        'client/assets/data/seed.json',
+        'client/assets/README.md',
+      ]) {
+        expect(
+          actionsFor([path]),
+          [sanad_dev.SanadDevApplyAction.restartRuntime],
+          reason:
+              '$path is compiled into the desktop bundle, so a hot restart '
+              'cannot apply it',
+        );
+      }
+    });
 
     test('agent changes restart the agent only', () {
       final decision = sanad_dev.decideSanadDevApply(
@@ -95,16 +114,15 @@ void main() {
       final decision = sanad_dev.decideSanadDevApply(
         changedPaths: [
           'agent/lib/daemon.dart',
-          'client/lib/main.dart',
           'client/lib/features/chat/chat_view.dart',
         ],
       );
 
       expect(decision.actions, [
-        sanad_dev.SanadDevApplyAction.restartClient,
+        sanad_dev.SanadDevApplyAction.reloadClient,
         sanad_dev.SanadDevApplyAction.restartAgent,
       ]);
-      expect(decision.actionLabel, 'restart client, restart agent');
+      expect(decision.actionLabel, 'reload client, restart agent');
     });
 
     test('shared packages restart both components', () {
@@ -188,6 +206,14 @@ void main() {
       }
     }
 
+    Future<String> head() async =>
+        (await Process.run('git', [
+          '-C',
+          repository.path,
+          'rev-parse',
+          'HEAD',
+        ])).stdout.toString().trim();
+
     setUp(() async {
       fixture = await Directory.systemTemp.createTemp('sanad-apply-diff-');
       repository = Directory(p.join(fixture.path, 'repo'))
@@ -205,38 +231,34 @@ void main() {
     });
 
     test('includes committed and uncommitted changes', () async {
-      final start = (await Process.run('git', [
-        '-C',
-        repository.path,
-        'rev-parse',
-        'HEAD',
-      ])).stdout.toString().trim();
-      final committed = File(p.join(repository.path, 'agent_change.dart'));
-      await committed.writeAsString('// committed\n');
+      final start = await head();
+      await File(p.join(repository.path, 'agent_change.dart')).writeAsString(
+        '// committed\n',
+      );
       await git(['add', '.']);
       await git(['commit', '-q', '-m', 'second']);
       await File(
         p.join(repository.path, 'client_change.dart'),
       ).writeAsString('// uncommitted\n');
 
-      final paths = await sanad_dev.changedPathsSince(
+      final changed = await sanad_dev.inspectChangedPaths(
         repositoryRoot: repository.path,
         startCommit: start,
       );
 
-      expect(paths, contains('agent_change.dart'));
-      expect(paths, contains('client_change.dart'));
+      expect(changed.paths, contains('agent_change.dart'));
+      expect(changed.paths, contains('client_change.dart'));
     });
 
     test('reports working-tree changes only without a start commit', () async {
       await File(p.join(repository.path, 'new_file.dart')).writeAsString('x');
 
-      final paths = await sanad_dev.changedPathsSince(
+      final changed = await sanad_dev.inspectChangedPaths(
         repositoryRoot: repository.path,
         startCommit: null,
       );
 
-      expect(paths, ['new_file.dart']);
+      expect(changed.paths, ['new_file.dart']);
     });
 
     test('unwraps porcelain rename entries', () async {
@@ -247,12 +269,157 @@ void main() {
       await git(['commit', '-q', '-m', 'add old']);
       await git(['mv', 'old_name.dart', 'new_name.dart']);
 
-      final paths = await sanad_dev.changedPathsSince(
+      final changed = await sanad_dev.inspectChangedPaths(
         repositoryRoot: repository.path,
         startCommit: 'HEAD',
       );
 
-      expect(paths, ['new_name.dart']);
+      expect(changed.paths, ['new_name.dart']);
+    });
+
+    test('an applied working-tree signature makes a repeat apply a no-op', () async {
+      final start = await head();
+      await File(
+        p.join(repository.path, 'client_change.dart'),
+      ).writeAsString('// uncommitted\n');
+      final first = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repository.path,
+        startCommit: start,
+      );
+      expect(first.paths, ['client_change.dart']);
+
+      // This is exactly what `apply` records after a successful run.
+      final repeated = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repository.path,
+        startCommit: start,
+        appliedWorktreeSignature: first.worktreeSignature,
+      );
+
+      expect(repeated.paths, isEmpty);
+      expect(
+        sanad_dev.decideSanadDevApply(changedPaths: repeated.paths).actions,
+        isEmpty,
+      );
+    });
+
+    test('a new edit after an applied baseline is reported again', () async {
+      final start = await head();
+      await File(
+        p.join(repository.path, 'client_change.dart'),
+      ).writeAsString('// first\n');
+      final first = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repository.path,
+        startCommit: start,
+      );
+      await File(
+        p.join(repository.path, 'client_change.dart'),
+      ).writeAsString('// second\n');
+
+      final repeated = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repository.path,
+        startCommit: start,
+        appliedWorktreeSignature: first.worktreeSignature,
+      );
+
+      expect(repeated.paths, ['client_change.dart']);
+    });
+  });
+
+  group('apply baseline record', () {
+    test('round-trips and ignores an invalid record', () async {
+      final directory = await Directory.systemTemp.createTemp('sanad-baseline-');
+      addTearDown(() => directory.delete(recursive: true));
+      final path = p.join(directory.path, 'apply-baseline.json');
+
+      expect(await sanad_dev.readSanadDevApplyBaseline(path), isNull);
+      await sanad_dev.writeSanadDevApplyBaseline(
+        path,
+        const sanad_dev.SanadDevApplyBaseline(
+          commit: 'abc1234',
+          worktreeSignature: 'signature',
+        ),
+      );
+      final restored = await sanad_dev.readSanadDevApplyBaseline(path);
+      expect(restored!.commit, 'abc1234');
+      expect(restored.worktreeSignature, 'signature');
+
+      await File(path).writeAsString('not json');
+      expect(await sanad_dev.readSanadDevApplyBaseline(path), isNull);
+
+      await File(path).writeAsString(jsonEncode({'commit': '', 'worktree_signature': ''}));
+      expect(await sanad_dev.readSanadDevApplyBaseline(path), isNull);
+    });
+  });
+
+  group('restart build guard', () {
+    test('the real default detector runs without throwing', () async {
+      // This exercises the production seam: the guard must call
+      // `detectForeignWorktreeActivity` with its named parameter. A positional
+      // call raised NoSuchMethodError before the seam was typed.
+      final directory = await Directory.systemTemp.createTemp('sanad-guard-');
+      addTearDown(() => directory.delete(recursive: true));
+      final messages = <String>[];
+      final exitCodes = <int>[];
+
+      final refused = await sanad_dev.refuseRestartDuringForeignActivity(
+        runtime: createTestRuntime(workspaceRoot: directory.path),
+        force: false,
+        printError: messages.add,
+        setExitCode: exitCodes.add,
+      );
+
+      expect(refused, isFalse, reason: messages.join('\n'));
+      expect(messages, isEmpty);
+      expect(exitCodes, isEmpty);
+    });
+
+    test('refuses a restart while a foreign build runs', () async {
+      final messages = <String>[];
+      final exitCodes = <int>[];
+      final refused = await sanad_dev.refuseRestartDuringForeignActivity(
+        runtime: createTestRuntime(platformNeutral: true),
+        force: false,
+        detectActivity: ({required workspaceRoot}) async => const [
+          activity.ForeignWorktreeActivity(
+            pid: 42,
+            command: 'flutter build macos',
+          ),
+        ],
+        printError: messages.add,
+        setExitCode: exitCodes.add,
+      );
+
+      expect(refused, isTrue);
+      expect(messages.single, contains('Refusing to restart'));
+      expect(messages.single, contains('PID 42'));
+      expect(exitCodes, [1]);
+    });
+
+    test('--force bypasses the guard', () async {
+      var probed = false;
+      final refused = await sanad_dev.refuseRestartDuringForeignActivity(
+        runtime: createTestRuntime(platformNeutral: true),
+        force: true,
+        detectActivity: ({required workspaceRoot}) async {
+          probed = true;
+          return const [
+            activity.ForeignWorktreeActivity(pid: 42, command: 'dart test'),
+          ];
+        },
+      );
+
+      expect(refused, isFalse);
+      expect(probed, isFalse);
+    });
+
+    test('allows the restart when nothing foreign is running', () async {
+      final refused = await sanad_dev.refuseRestartDuringForeignActivity(
+        runtime: createTestRuntime(platformNeutral: true),
+        force: false,
+        detectActivity: ({required workspaceRoot}) async => const [],
+      );
+
+      expect(refused, isFalse);
     });
   });
 }

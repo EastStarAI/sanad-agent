@@ -81,9 +81,12 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 
 | Scenario | Expected result |
 |---|---|
-| Run `status` in a worktree whose prepared runtime CLI is stale | The wrapper prints `Project runtime is stale. Run: sanad-dev setup` and exits nonzero; nothing is compiled, resolved, or restarted. `status` prints `Runtime source commit:` and `Runtime version:`. |
+| Run `status` in a worktree whose prepared runtime CLI is stale | The wrapper prints `running the last prepared CLI` on stderr, runs that artifact, exits 0, and never rewrites the stamp; nothing is compiled, resolved, or restarted. The same tolerance applies to `stop` and `logs`. |
+| Run `status` in a worktree with no prepared artifact at all | The wrapper prints `Project runtime is stale. Run: sanad-dev setup` and exits nonzero; nothing is compiled, resolved, or restarted. |
 | Run `status` twice while another agent edits code in the same worktree | Output changes only with real runtime state; no file, lease, journal, Home entry, or process is created or modified. |
 | `sanad-dev cli path agent` and then `sanad-dev cli path client` twice | Each printed artifact is under `<worktree>/.sanad-dev/bin/<12-char sha>/`; the first call may print `built in <duration>`, the second prints `reused`, and no build repeats. |
+| Start two `sanad-dev cli path agent` calls at once | One builds under `<component>.build.lock`, the other waits and then reports `reused`; no caller ever sees a partially published executable. |
+| Publish a fourth commit directory | The three most recent commit directories are kept and older ones are pruned; the directory just published is never removed. |
 | Change one Dart file of a component after a cached build | Only that component rebuilds; the stamp changes and the artifact path stays inside the same commit directory. |
 | Change only `docs/**` after a cached build | Both artifacts stay `reused`; the fingerprint ignores documentation. |
 | Change `shared/**` that both packages depend on | Both the Agent and Client artifacts rebuild. |
@@ -96,19 +99,30 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | `reset --save-fixture before --fixture missing` | Saves the fixture successfully, then reports the failed restore and returns nonzero. |
 | `reset --fixture clean` on a Home holding provider keys | The restored Home contains the fixture's database and config, and `.env`, `.local_token`, credential JSON files, `dev/`, `logs/`, and `media/` are byte-identical to before. |
 | Save a fixture whose Home contains `.env`, `.local_token`, or a `secrets`-like file inside `memories/` | None of them appear in the fixture directory or in `fixture.json`. |
+| Save a fixture from a Home with `mcp_config.json` | The file is skipped unless `--include-mcp-config` is passed, and that flag prints a warning that the fixture inherits its contents. |
+| Save a fixture from a Home with `logs/`, `request_dumps/`, `id_ed25519`, or a `.pem` file inside `memories/` | None of them are captured. |
+| Inspect the fixture and restored Home modes | Captured directories are `0700` and files `0600`; a restore never widens the Home's permissions. |
+| Restore a fixture whose manifest records `../escape`, an absolute path, or a symlinked parent | Refuses before writing anything and names the offending entry; no file outside the Home is read or written. |
 | Restore a fixture that lacks a captured file present in the Home | The stale captured file is removed; excluded paths are untouched. |
+| Restore over a Home whose `state.db` has a live WAL and SHM | The database family is swapped as one group, so the restored database never sits beside a stale WAL or SHM. |
+| Interrupt a restore after the first group was swapped, then retry | The leftover staging directory is found, the previous state is rolled back, and the retry either completes or reports `The Home was rolled back to its previous state.` |
 | Run `apply --dry-run` after a UI-only Client change | Prints `reload client` with the reason and example path; no component action is requested. |
-| Run `apply --dry-run` after a Client `main.dart`, pubspec, asset, or native change | Prints `restart client`. |
+| Run `apply --dry-run` after a Client `main.dart`, startup, or DI change | Prints `restart client`. |
+| Run `apply --dry-run` after a Client pubspec, asset, plugin, or native change | Prints `stop + run`, because a hot restart cannot apply a compiled bundle change. |
 | Run `apply --dry-run` after an Agent change | Prints `restart agent`. |
 | Run `apply --dry-run` after a `scripts/sanad_dev/**` change or with a driver-mode change | Prints `stop + run` and no lighter action. |
 | Run `apply --dry-run` after docs, tests, or CI-only changes | Prints `none` and requests nothing. |
-| Run `apply` while another build or test runs in the same worktree | Prints the refusal with every matching PID and command line, returns nonzero, and requests no component action. |
+| Run `apply` twice with no edit in between | The second run reports that the worktree is up to date and requests no component action. |
+| Edit an already-dirty file after a successful `apply` | The next `apply` reports the change instead of treating the worktree as already applied, because the recorded baseline covers content, not just the file list. |
+| Run `apply` while another build or test runs in the same worktree | Prints the refusal with every matching PID and redacted command line, returns nonzero, and requests no component action. A `--dart-define=SANAD_TOKEN=…` value never appears in that output. |
 | Run `sanad-dev restart agent` or `restart client` during the same condition | Same refusal; `--force` performs the restart anyway. |
-| Run `doctor` on a driver-enabled pair with both macOS grants | Reports the driver entry point, the driver-enabled Client count, port and Home ownership, `Accessibility: granted`, and `Screen Recording: granted`, and mutates nothing. |
-| Run `doctor` on a host without Accessibility or Screen Recording | Reports `missing` with the OS message and still prints the ownership next action. |
+| Run `doctor` on a driver-enabled pair with both macOS grants | Reports the driver entry point, the driver-enabled Client count, port and Home ownership, and `Accessibility: granted` plus `Screen Recording: granted` after the next-action line; mutates nothing and opens no OS dialog. |
+| Run `doctor` on a host without Accessibility or Screen Recording | Reports `unknown — check System Settings > Privacy & Security` for that grant, opens no dialog, and still prints the ownership next action. |
 | Run `doctor` on Linux or Windows | Reports the driver entry point, ports, and Home, and states that grants are not applicable. |
-| Run `refresh --at +2m` on macOS | Returns immediately, prints the task name, fire time, script, log, and verification commands; a detached `sh` child (never launchd) later pulls, runs `setup`, and restarts both components, then deletes itself. |
-| Run `refresh --at 2m` or `--at +2d` | Usage error 64; nothing is scheduled. |
+| Run `refresh --at +2m` on macOS | Returns immediately, prints the task name, fire time, script, log, and verification commands; a detached `sh` child (never launchd) later refuses when the branch or `HEAD` moved, otherwise pulls, runs `setup`, and restarts both components, then deletes itself. |
+| Run `refresh --at 2m`, `--at +0m`, or `--at +2d` | Usage error 64; nothing is scheduled. |
+| Run `refresh --at +30s` | Usage error 64: below the one-minute scheduler resolution. |
+| Run `refresh --at +10m` and then commit on the same branch before it fires | The scheduled script refuses to run, logs the branch/commit mismatch, and deletes itself without pulling or restarting. |
 | Run `refresh --at +1m` on Linux or Windows | Schedules `systemd-run --user --on-active` or a self-deleting `schtasks /SC ONCE` task; the script deletes its own task and file. |
 
 ## Bootstrap, journal, and terminal matrix

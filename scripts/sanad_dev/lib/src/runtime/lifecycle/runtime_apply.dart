@@ -45,18 +45,30 @@ bool _matchesSanadDevItself(String path) =>
 
 bool _matchesAgent(String path) => _isUnder(path, 'agent');
 
-bool _matchesClientStartupOrNative(String path) {
+/// Directories whose contents are compiled into the native Client binary.
+const _clientNativeDirectories = <String>[
+  'client/macos',
+  'client/windows',
+  'client/linux',
+  'client/web',
+  'client/ios',
+  'client/android',
+];
+
+/// Public assets are packaged by the Flutter build, not by the Dart VM hot
+/// reloader or hot restarter, so any extension under `client/assets/**` needs a
+/// full stop and run.
+bool _matchesClientNativeOrAssets(String path) {
   if (_isUnder(path, 'client/pubspec.yaml') ||
       _isUnder(path, 'client/pubspec.lock') ||
-      _isUnder(path, 'client/assets') ||
-      _isUnder(path, 'client/macos') ||
-      _isUnder(path, 'client/windows') ||
-      _isUnder(path, 'client/linux') ||
-      _isUnder(path, 'client/web') ||
-      _isUnder(path, 'client/ios') ||
-      _isUnder(path, 'client/android')) {
+      _isUnder(path, 'client/assets')) {
     return true;
   }
+  return _clientNativeDirectories.any((prefix) => _isUnder(path, prefix));
+}
+
+/// Dart files whose identity is fixed at process start.
+bool _matchesClientStartup(String path) {
   if (!_isUnder(path, 'client/lib') || !path.endsWith('.dart')) return false;
   final segments = path.split('/');
   final file = segments.last;
@@ -69,6 +81,9 @@ bool _matchesClientDart(String path) =>
     _isUnder(path, 'client/lib') && path.endsWith('.dart');
 
 bool _matchesNonRuntime(String path) {
+  // Assets are build inputs even when they are Markdown or another text format,
+  // so the documentation rule must not shadow a packaged asset.
+  if (_isUnder(path, 'client/assets')) return false;
   const prefixes = [
     'docs',
     '.github',
@@ -88,16 +103,19 @@ bool _matchesSharedSource(String path) =>
 ///
 /// | Changed path | Action |
 /// | --- | --- |
-/// | docs, tests, `.github/**`, `**.md` | none |
+/// | docs, tests, `.github/**`, `**.md` (except `client/assets/**`) | none |
 /// | `scripts/sanad_dev/**`, `scripts/sanad-dev*` | `stop + run` |
 /// | `agent/**` | `restart agent` |
-/// | `client/pubspec.*`, `client/assets/**`, native/Web directories, `client/lib/main.dart`, startup/DI files | `restart client` |
+/// | `client/lib/main.dart`, `driver_main.dart`, startup/DI Dart | `restart client` |
+/// | `client/pubspec.*`, `client/assets/**` (any extension), native/Web directories | `stop + run` |
 /// | other `client/lib/**.dart` | `reload client` |
 /// | `shared/**`, `release/contract/**` | `restart agent` + `restart client` |
 /// | anything else | `restart agent` + `restart client` |
 ///
 /// `stop + run` subsumes every other action and `restart client` subsumes
-/// `reload client`.
+/// `reload client`. Pubspec, asset, plugin, and native changes are compiled into
+/// the desktop bundle, so a hot restart cannot apply them; they need a full
+/// stop and run.
 const sanadDevApplyRules = <SanadDevApplyRule>[
   SanadDevApplyRule(
     id: 'non-runtime',
@@ -118,10 +136,18 @@ const sanadDevApplyRules = <SanadDevApplyRule>[
     matches: _matchesAgent,
   ),
   SanadDevApplyRule(
-    id: 'client-startup-or-native',
-    label: 'Client startup, DI, pubspec, asset or native source changed',
+    id: 'client-startup',
+    label: 'Client startup or dependency-injection Dart changed',
     actions: [SanadDevApplyAction.restartClient],
-    matches: _matchesClientStartupOrNative,
+    matches: _matchesClientStartup,
+  ),
+  SanadDevApplyRule(
+    id: 'client-native-or-assets',
+    label:
+        'Client pubspec, plugin, asset or native source changed; a hot restart '
+        'cannot apply it',
+    actions: [SanadDevApplyAction.restartRuntime],
+    matches: _matchesClientNativeOrAssets,
   ),
   SanadDevApplyRule(
     id: 'client-ui-dart',
@@ -234,12 +260,94 @@ SanadDevApplyDecision decideSanadDevApply({
   );
 }
 
+/// Recorded state of the last successful `sanad-dev apply`.
+///
+/// Advancing it is what makes a repeated `apply` idempotent: the commit baseline
+/// moves to the applied `HEAD`, and the recorded working-tree signature means an
+/// uncommitted change that was already applied is not reported again.
+class SanadDevApplyBaseline {
+  const SanadDevApplyBaseline({
+    required this.commit,
+    required this.worktreeSignature,
+  });
+
+  final String commit;
+  final String worktreeSignature;
+
+  Map<String, Object?> toJson() => {
+    'commit': commit,
+    'worktree_signature': worktreeSignature,
+    'applied_at': DateTime.now().toUtc().toIso8601String(),
+  };
+
+  static SanadDevApplyBaseline? fromJson(Map<String, dynamic> json) {
+    final commit = json['commit']?.toString() ?? '';
+    final signature = json['worktree_signature']?.toString() ?? '';
+    if (commit.isEmpty && signature.isEmpty) return null;
+    return SanadDevApplyBaseline(commit: commit, worktreeSignature: signature);
+  }
+}
+
+String sanadDevApplyBaselinePath(SanadDevRuntime runtime) =>
+    p.join(runtime.runtimeDirectory, 'apply-baseline.json');
+
+/// Reads the recorded apply baseline, or null when none is valid.
+Future<SanadDevApplyBaseline?> readSanadDevApplyBaseline(String path) async {
+  final file = File(path);
+  if (!file.existsSync()) return null;
+  try {
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map) return null;
+    return SanadDevApplyBaseline.fromJson(Map<String, dynamic>.from(decoded));
+  } on Object {
+    return null;
+  }
+}
+
+Future<void> writeSanadDevApplyBaseline(
+  String path,
+  SanadDevApplyBaseline baseline,
+) async {
+  final file = File(path);
+  await file.parent.create(recursive: true);
+  await file.writeAsString('${jsonEncode(baseline.toJson())}\n', flush: true);
+  await restrictRuntimePath(file.path);
+}
+
+/// Changed paths plus the working-tree signature they were derived from.
+class SanadDevChangedPaths {
+  const SanadDevChangedPaths({
+    required this.paths,
+    required this.worktreeSignature,
+  });
+
+  final List<String> paths;
+  final String worktreeSignature;
+}
+
 /// Paths changed since [startCommit], plus the current working tree.
-Future<List<String>> changedPathsSince({
+///
+/// When [appliedWorktreeSignature] matches the current working tree, that part
+/// was already applied by a earlier `apply`, so only the commit range is
+/// reported.
+Future<SanadDevChangedPaths> inspectChangedPaths({
   required String repositoryRoot,
   required String? startCommit,
+  String? appliedWorktreeSignature,
 }) async {
   final paths = <String>{};
+  final statusOutput = await _gitOutput(repositoryRoot, [
+    'status',
+    '--porcelain',
+    '--untracked-files=all',
+  ]);
+  final signature = await _worktreeSignature(
+    repositoryRoot: repositoryRoot,
+    statusOutput: statusOutput,
+  );
+  if (appliedWorktreeSignature != signature) {
+    paths.addAll(_porcelainPaths(statusOutput));
+  }
   if (startCommit != null && startCommit.trim().isNotEmpty) {
     paths.addAll(
       await _gitChangedPaths(repositoryRoot, [
@@ -249,36 +357,73 @@ Future<List<String>> changedPathsSince({
       ]),
     );
   }
-  paths.addAll(
-    await _gitChangedPaths(repositoryRoot, [
-      'status',
-      '--porcelain',
-      '--untracked-files=all',
-    ], porcelain: true),
-  );
   final sorted = paths.toList()..sort();
-  return sorted;
+  return SanadDevChangedPaths(paths: sorted, worktreeSignature: signature);
+}
+
+/// Content-sensitive identity of the current working tree.
+///
+/// The porcelain status alone cannot tell two different edits of the same file
+/// apart, so the tracked patch and each untracked file's size and mtime are part
+/// of the signature. Without them an `apply` after a second edit would be
+/// silently treated as already applied.
+Future<String> _worktreeSignature({
+  required String repositoryRoot,
+  required String statusOutput,
+}) async {
+  final buffer = StringBuffer(statusOutput);
+  buffer.write(await _gitOutput(repositoryRoot, [
+    'diff',
+    'HEAD',
+    '--no-color',
+    '--no-ext-diff',
+  ]));
+  for (final path in _porcelainPaths(statusOutput)) {
+    final file = File(p.join(repositoryRoot, path));
+    if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      continue;
+    }
+    final stat = file.statSync();
+    buffer.write(
+      '$path:${stat.size}:${stat.modified.millisecondsSinceEpoch}',
+    );
+  }
+  return sha256.convert(utf8.encode(buffer.toString())).toString();
+}
+
+Future<String> _gitOutput(String repositoryRoot, List<String> arguments) async {
+  final result = await Process.run('git', [
+    '-C',
+    repositoryRoot,
+    ...arguments,
+  ]);
+  return result.exitCode == 0 ? result.stdout.toString() : '';
+}
+
+List<String> _porcelainPaths(String output) {
+  final paths = <String>[];
+  for (final raw in const LineSplitter().convert(output)) {
+    final line = raw.trimRight();
+    if (line.isEmpty) continue;
+    final path = line.length > 3 ? line.substring(3).trim() : '';
+    if (path.isEmpty) continue;
+    final renamed = path.contains(' -> ') ? path.split(' -> ').last.trim() : path;
+    paths.add(renamed.replaceAll('"', ''));
+  }
+  return paths;
 }
 
 Future<List<String>> _gitChangedPaths(
   String repositoryRoot,
-  List<String> arguments, {
-  bool porcelain = false,
-}) async {
-  final result = await Process.run('git', ['-C', repositoryRoot, ...arguments]);
-  if (result.exitCode != 0) return const [];
+  List<String> arguments,
+) async {
+  final output = await _gitOutput(repositoryRoot, arguments);
   final paths = <String>[];
-  for (final raw in const LineSplitter().convert(result.stdout.toString())) {
+  for (final raw in const LineSplitter().convert(output)) {
     final line = raw.trimRight();
     if (line.isEmpty) continue;
-    final path = porcelain
-        ? (line.length > 3 ? line.substring(3).trim() : '')
-        : line;
-    if (path.isEmpty) continue;
-    final renamed = path.contains(' -> ')
-        ? path.split(' -> ').last.trim()
-        : path;
-    paths.add(renamed.replaceAll('"', ''));
+    paths.add(line.replaceAll('"', ''));
   }
   return paths;
 }
@@ -290,14 +435,18 @@ Future<void> handleRuntimeApply({
   required bool force,
   String? sanadHomePath,
   bool? driverClientsPresent,
-  Future<List<ForeignWorktreeActivity>> Function(String workspaceRoot)?
-  detectActivity,
+  ForeignActivityDetector? detectActivity,
+  Future<SanadDevRuntime> Function({String? sanadHomeOverride})? runtimeProvider,
   void Function(String message)? printMessage,
   void Function(String message)? printError,
 }) async {
   final log = printMessage ?? print;
-  final logError = printError ?? stderr.writeln;
-  final runtime = await _currentRuntime(sanadHomePath: sanadHomePath);
+  final void Function(String message) logError = printError ?? stderr.writeln;
+  final runtime =
+      await (runtimeProvider ??
+          ({String? sanadHomeOverride}) => _currentRuntime(
+            sanadHomePath: sanadHomeOverride,
+          ))(sanadHomeOverride: sanadHomePath);
   final state = selectRuntimeProcessState(
     activeAgents: await discoverAgentInstances(
       sanadHomeOverride: sanadHomePath,
@@ -321,10 +470,15 @@ Future<void> handleRuntimeApply({
   final isDriverRuntime =
       driverClientsPresent ??
       selectManagedUiDriverClients(ownership).isNotEmpty;
-  final startCommit = record.sourceCommit;
-  final changed = await changedPathsSince(
+  final baselinePath = sanadDevApplyBaselinePath(runtime);
+  final appliedBaseline = await readSanadDevApplyBaseline(baselinePath);
+  final startCommit = record.sourceCommit.trim().isEmpty
+      ? (appliedBaseline?.commit ?? '')
+      : record.sourceCommit;
+  final inspected = await inspectChangedPaths(
     repositoryRoot: runtime.repositoryRoot,
     startCommit: startCommit,
+    appliedWorktreeSignature: appliedBaseline?.worktreeSignature,
   );
   if (startCommit.isEmpty) {
     log(
@@ -333,14 +487,14 @@ Future<void> handleRuntimeApply({
     );
   }
   final decision = decideSanadDevApply(
-    changedPaths: changed,
+    changedPaths: inspected.paths,
     driverModeChange: driverMode && !isDriverRuntime,
   );
   log('Worktree: ${runtime.worktreeId}');
   log(
     'Runtime source commit at start: ${startCommit.isEmpty ? '-' : startCommit}',
   );
-  log('Changed paths: ${changed.length}');
+  log('Changed paths: ${inspected.paths.length}');
   log('Action: ${decision.actionLabel}');
   for (final reason in decision.reasons) {
     log('  reason: $reason');
@@ -357,20 +511,14 @@ Future<void> handleRuntimeApply({
         action == SanadDevApplyAction.restartAgent ||
         action == SanadDevApplyAction.restartClient,
   );
-  if (restartsRuntime && !force) {
-    final activities = await (detectActivity ?? detectForeignWorktreeActivity)(
-      runtime.workspaceRoot,
-    );
-    if (activities.isNotEmpty) {
-      logError(
-        foreignWorktreeActivityMessage(
-          worktreeId: runtime.worktreeId,
-          activities: activities,
-        ),
-      );
-      exitCode = 1;
-      return;
-    }
+  if (restartsRuntime &&
+      await refuseRestartDuringForeignActivity(
+        runtime: runtime,
+        force: force,
+        detectActivity: detectActivity,
+        printError: logError,
+      )) {
+    return;
   }
 
   final home = record.sanadHome;
@@ -423,4 +571,20 @@ Future<void> handleRuntimeApply({
         );
     }
   }
+  if (exitCode != 0) return;
+
+  // Advance the baseline only after every action succeeded, so a repeated
+  // `apply` on an unchanged tree reports no action instead of restarting again.
+  final appliedCommit = await readRuntimeSourceCommit(runtime.repositoryRoot);
+  await writeSanadDevApplyBaseline(
+    baselinePath,
+    SanadDevApplyBaseline(
+      commit: appliedCommit.isEmpty ? startCommit : appliedCommit,
+      worktreeSignature: inspected.worktreeSignature,
+    ),
+  );
+  log(
+    'Applied at ${appliedCommit.isEmpty ? '-' : appliedCommit}; the next '
+    '"sanad-dev apply" starts from here.',
+  );
 }

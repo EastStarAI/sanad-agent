@@ -19,9 +19,13 @@ Future<void> handleCompiledCliCommand(
   })?
   ensureArtifact,
   Future<int> Function(String executable, List<String> arguments)? runArtifact,
+  void Function(int code)? setExitCode,
 }) async {
   final log = printMessage ?? print;
   final logError = printError ?? stderr.writeln;
+  // The exit status is injected so tests can assert it without touching
+  // `dart:io`'s process-global [exitCode], which parallel suites share.
+  final assignExitCode = setExitCode ?? _assignProcessExitCode;
   final runtime = await _currentRuntime(sanadHomePath: sanadHomePath);
   final cache = CompiledCliCache(
     workspaceRoot: runtime.workspaceRoot,
@@ -42,11 +46,10 @@ Future<void> handleCompiledCliCommand(
       'Usage: sanad-dev cli path agent|client | '
       'sanad-dev cli agent|client -- <args>',
     );
-    exitCode = 64;
+    assignExitCode(64);
     return;
   }
-  final separator = arguments.indexOf('--');
-  final forwarded = separator >= 0
+  final separator = arguments.indexOf('--');  final forwarded = separator >= 0
       ? arguments.sublist(separator + 1)
       : (isPathForm ? const <String>[] : arguments.skip(1).toList());
   final artifact = await ensure(component, log: log);
@@ -60,20 +63,30 @@ Future<void> handleCompiledCliCommand(
       'Nothing to run: pass the arguments after "--", for example '
       'sanad-dev cli agent -- --version',
     );
-    exitCode = 64;
+    assignExitCode(64);
     return;
   }
   final runner = runArtifact ?? _runCompiledCliArtifact;
   final stopwatch = Stopwatch()..start();
-  final childExitCode = await runner(artifact.executablePath, forwarded);
+  // Production runs hold the shared half of the build lock while the artifact is
+  // started, so a concurrent rebuild cannot swap the binary out from under this
+  // call. Injected runners are in-process seams and take no lock.
+  final childExitCode = ensureArtifact == null && runArtifact == null
+      ? await cache.withReadLock(
+          component,
+          () => runner(artifact.executablePath, forwarded),
+        )
+      : await runner(artifact.executablePath, forwarded);
   stopwatch.stop();
   stderr.writeln(
     '[sanad-dev] cli ${component.name}: call '
     '${formatCompiledCliDuration(stopwatch.elapsed)}, '
     'artifact ${artifact.buildLabel}',
   );
-  if (childExitCode != 0) exitCode = childExitCode;
+  if (childExitCode != 0) assignExitCode(childExitCode);
 }
+
+void _assignProcessExitCode(int code) => exitCode = code;
 
 Future<int> _runCompiledCliArtifact(
   String executable,

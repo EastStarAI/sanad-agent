@@ -236,7 +236,7 @@ fi
       );
       await source.writeAsString('void main() { print(1); }');
 
-      final result = await runBootstrap(const ['status']);
+      final result = await runBootstrap(const ['apply']);
 
       expect(result.exitCode, isNot(0));
       expect(
@@ -248,9 +248,55 @@ fi
       expect(
         invocations,
         isEmpty,
-        reason: 'read-only runtime commands never bootstrap implicitly',
+        reason: 'a mutating runtime command never bootstraps implicitly',
       );
     });
+
+    test(
+      'stop, status and logs keep working on a stale prepared runtime',
+      () async {
+        expect((await runBootstrap(['setup'])).exitCode, 0);
+        final source = File(
+          '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad_dev${Platform.pathSeparator}lib${Platform.pathSeparator}sanad_dev_cli.dart',
+        );
+        final fingerprint = await File(
+          '${fixture.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}sanad-dev${Platform.pathSeparator}runtime-cli.stamp',
+        ).readAsString();
+        await source.writeAsString('void main() { print(1); }');
+
+        for (final command in const ['status', 'stop', 'logs']) {
+          await calls.writeAsString('');
+          final result = await runBootstrap([command]);
+
+          expect(
+            result.exitCode,
+            0,
+            reason:
+                '$command must not refuse just because the tree moved on: '
+                '${result.stdout}\n${result.stderr}',
+          );
+          expect(
+            result.stderr,
+            contains('running the last prepared CLI'),
+            reason: '$command must say it used the prepared runtime',
+          );
+          final invocations = await calls.readAsLines();
+          expect(
+            invocations,
+            hasLength(1),
+            reason: '$command must not rebuild anything',
+          );
+          expect(invocations.single, contains('runtime|$command'));
+          expect(
+            await File(
+              '${fixture.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}sanad-dev${Platform.pathSeparator}runtime-cli.stamp',
+            ).readAsString(),
+            fingerprint,
+            reason: 'the prepared stamp is never rewritten by a read-only run',
+          );
+        }
+      },
+    );
 
     test('run rebuilds a stale runtime before entering the CLI', () async {
       expect((await runBootstrap(['setup'])).exitCode, 0);

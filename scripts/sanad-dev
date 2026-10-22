@@ -240,7 +240,21 @@ run_setup() {
   ensure_runtime_cli
 }
 
+# Commands that must keep working on a stale prepared runtime.
+#
+# Stopping, inspecting, and reading logs of an already-running runtime never
+# needs the newest CLI, so these fall back to the last prepared artifact instead
+# of refusing. Every command that can start or mutate a runtime still requires a
+# fresh `setup`.
+runtime_command_tolerates_stale_cli() {
+  case "${1:-}" in
+    stop | status | logs) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 require_runtime_cli() {
+  local command="${1:-}"
   command -v fvm >/dev/null 2>&1 || { echo 'FVM is not installed. Run: sanad-dev install' >&2; return 1; }
   local artifact_root stamp fingerprint
   artifact_root="$PROJECT_DIR/.dart_tool/sanad-dev"
@@ -258,6 +272,15 @@ require_runtime_cli() {
   # the exact recovery command instead of running a hidden auto-setup. Only
   # `setup`, `run`, and `switch` prepare the runtime.
   if [ "$(cat "$stamp")" != "$fingerprint" ]; then
+    if runtime_command_tolerates_stale_cli "$command"; then
+      local prepared
+      prepared="$artifact_root/sanad-dev-runtime-$(cat "$stamp")"
+      if [ -x "$prepared" ]; then
+        echo 'Project runtime is stale; running the last prepared CLI. Run: sanad-dev setup' >&2
+        RUNTIME_CLI="$prepared"
+        return 0
+      fi
+    fi
     echo 'Project runtime is stale. Run: sanad-dev setup' >&2
     return 1
   fi
@@ -290,7 +313,7 @@ main() {
     *)
       ;;
   esac
-  require_runtime_cli
+  require_runtime_cli "$command"
   local runtime_args=("$@")
   if [ "$command" = run ] && [ "$force" = true ]; then
     runtime_args=()

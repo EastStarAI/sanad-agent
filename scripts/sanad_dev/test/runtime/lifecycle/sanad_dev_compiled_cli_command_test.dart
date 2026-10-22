@@ -14,6 +14,7 @@ void main() {
   late List<String> errors;
   late List<CompiledCliComponent> ensured;
   late List<List<String>> runs;
+  late List<int> exitCodes;
 
   Future<void> invoke(
     List<String> arguments, {
@@ -42,6 +43,7 @@ void main() {
         runs.add([executable, ...arguments]);
         return childExitCode;
       },
+      setExitCode: exitCodes.add,
     );
   }
 
@@ -64,12 +66,11 @@ void main() {
     errors = [];
     ensured = [];
     runs = [];
-    exitCode = 0;
+    exitCodes = [];
   });
 
   tearDown(() async {
     if (fixture.existsSync()) await fixture.delete(recursive: true);
-    exitCode = 0;
   });
 
   group('compiled CLI command', () {
@@ -96,7 +97,7 @@ void main() {
 
       expect(runs.single, ['/cache/agent', '--version']);
       expect(errors, isEmpty);
-      expect(exitCode, 0);
+      expect(exitCodes, isEmpty);
     });
 
     test('forwards every argument when no separator is given', () async {
@@ -109,19 +110,19 @@ void main() {
     test('returns the child exit status', () async {
       await invoke(const ['agent', '--', 'session', 'stop'], childExitCode: 3);
 
-      expect(exitCode, 3);
+      expect(exitCodes, [3]);
     });
 
     test('rejects an unknown or missing component', () async {
       await invoke(const ['path']);
       expect(errors.single, contains('Usage: sanad-dev cli'));
-      expect(exitCode, 64);
+      expect(exitCodes, [64]);
 
       errors.clear();
-      exitCode = 0;
+      exitCodes.clear();
       await invoke(const ['server', '--', 'list']);
       expect(errors.single, contains('Usage: sanad-dev cli'));
-      expect(exitCode, 64);
+      expect(exitCodes, [64]);
       expect(ensured, isEmpty);
     });
 
@@ -130,7 +131,7 @@ void main() {
 
       expect(errors.single, contains('Nothing to run'));
       expect(runs, isEmpty);
-      expect(exitCode, 64);
+      expect(exitCodes, [64]);
     });
   });
 }

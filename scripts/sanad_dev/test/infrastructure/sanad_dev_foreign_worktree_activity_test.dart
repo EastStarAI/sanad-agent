@@ -66,6 +66,51 @@ void main() {
       expect(message, contains('--force'));
     });
 
+    test('redacts secret-like values from a printed command line', () {
+      const command =
+          'flutter test --dart-define=SANAD_TOKEN=abc123 --api-key sk-live-9 '
+          '--port 58092 client/test';
+
+      final redacted = redactCommandLine(command);
+
+      expect(redacted, isNot(contains('abc123')));
+      expect(redacted, isNot(contains('sk-live-9')));
+      expect(redacted, contains('--dart-define=SANAD_TOKEN=<redacted>'));
+      expect(redacted, contains('--api-key <redacted>'));
+      expect(redacted, contains('--port 58092'));
+      expect(redacted, contains('client/test'));
+    });
+
+    test('redacts a secret-like flag value and leaves normal flags alone', () {
+      expect(
+        redactCommandLine('dart test --password hunter2 --reporter expanded'),
+        'dart test --password <redacted> --reporter expanded',
+      );
+      expect(
+        redactCommandLine('GITHUB_TOKEN=ghp_x dart test'),
+        'GITHUB_TOKEN=<redacted> dart test',
+      );
+      expect(
+        redactCommandLine('flutter build macos --flavor production'),
+        'flutter build macos --flavor production',
+      );
+    });
+
+    test('the refusal message never echoes a secret', () {
+      final message = foreignWorktreeActivityMessage(
+        worktreeId: 'feat-x-12345678',
+        activities: const [
+          ForeignWorktreeActivity(
+            pid: 101,
+            command: 'flutter test --dart-define=SANAD_TOKEN=abc123',
+          ),
+        ],
+      );
+
+      expect(message, isNot(contains('abc123')));
+      expect(message, contains('<redacted>'));
+    });
+
     test('returns nothing for an empty workspace root', () async {
       final activities = await detectForeignWorktreeActivity(
         workspaceRoot: '   ',

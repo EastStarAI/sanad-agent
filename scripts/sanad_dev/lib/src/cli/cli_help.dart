@@ -92,7 +92,13 @@ void printUsage() {
   print(
     '  --save-fixture <name>     Snapshot the Home databases and config before reset.',
   );
-  print('  --keep-data               Keep existing Home data (reset default).');
+  print(
+    '  --keep-data               Reset without restoring a fixture (the default).',
+  );
+  print(
+    '  --include-mcp-config      Also capture mcp_config.json in a fixture (may '
+    'contain secrets).',
+  );
   print(
     '  --at <+duration>          Refresh delay, for example +2m, +90s, or +1h.',
   );

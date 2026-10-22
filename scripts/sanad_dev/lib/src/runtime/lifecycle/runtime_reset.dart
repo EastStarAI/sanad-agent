@@ -86,16 +86,25 @@ typedef SanadDevResetStarter =
       required String device,
     });
 typedef SanadDevResetPortsFreeProbe =
-    Future<bool> Function(SanadDevRuntime runtime, String homePath);
+    Future<bool> Function(
+      SanadDevRuntime runtime,
+      String homePath, {
+      int? agentPort,
+    });
 
 /// `sanad-dev reset [--fixture <name>] [--save-fixture <name>] [--keep-data]`.
 ///
 /// Steps: stop this worktree's Agent and Client and prove the ports are free,
 /// optionally save and/or restore a Home fixture, then launch a matched
 /// driver-enabled runtime and print one summary line.
+///
+/// `--keep-data` is the documented default when no fixture is requested; the
+/// flag exists so a scripted call states its intent explicitly, and it is
+/// rejected together with `--fixture`.
 Future<void> handleRuntimeReset({
   String? fixture,
   String? saveFixture,
+  bool includeMcpConfig = false,
   required bool keepData,
   required bool driverMode,
   required bool dryRun,
@@ -109,13 +118,17 @@ Future<void> handleRuntimeReset({
   SanadDevResetPortsFreeProbe? portsFreeProbe,
   void Function(String message)? printMessage,
   void Function(String message)? printError,
+  void Function(int code)? setExitCode,
 }) async {
   final log = printMessage ?? print;
   final logError = printError ?? stderr.writeln;
+  // The exit status is injected so tests can assert it without reading
+  // `dart:io`'s process-global [exitCode], which parallel suites share.
+  final fail = setExitCode ?? _assignResetProcessExitCode;
   final env = environment ?? Platform.environment;
   if (fixture != null && keepData) {
     logError('--fixture and --keep-data cannot be combined.');
-    exitCode = 64;
+    fail(64);
     return;
   }
   for (final name in [fixture, saveFixture]) {
@@ -124,7 +137,7 @@ Future<void> handleRuntimeReset({
         'Invalid fixture name "$name": use lowercase letters, digits, ".", '
         '"_" or "-" (max 64 characters).',
       );
-      exitCode = 64;
+      fail(64);
       return;
     }
   }
@@ -136,7 +149,7 @@ Future<void> handleRuntimeReset({
   final userHome = env[Platform.isWindows ? 'USERPROFILE' : 'HOME']?.trim();
   if (userHome == null || userHome.isEmpty) {
     logError('Could not determine the user home directory.');
-    exitCode = 1;
+    fail(1);
     return;
   }
   final assessment = assessSanadDevResetHome(
@@ -145,10 +158,18 @@ Future<void> handleRuntimeReset({
   );
   if (!assessment.allowed) {
     logError('Refusing to reset ${runtime.worktreeId}: ${assessment.reason}');
-    exitCode = 64;
+    fail(64);
     return;
   }
-  final home = assessment.homePath;
+  // Every later step uses the resolved canonical Home, so the validated path and
+  // the path that is stopped, restored and launched are the same inode.
+  final home = canonicalComparablePath(assessment.homePath);
+  if (includeMcpConfig) {
+    log(
+      'Warning: --include-mcp-config captures mcp_config.json, which can '
+      'contain provider headers and environment values.',
+    );
+  }
   log('Worktree: ${runtime.worktreeId}');
   log('Test home: $home');
   log('Agent port: ${runtime.agentPort}');
@@ -160,22 +181,27 @@ Future<void> handleRuntimeReset({
   log('Mode: ${driverMode ? 'interactive-driver' : 'interactive'}');
   if (dryRun) return;
 
+  // Probe the port the live lease actually published, not only the deterministic
+  // per-worktree default, so a lease on an explicit port is still verified free.
+  final leasedAgentPort =
+      (await _readRuntimeLauncherRecordSafely(home, runtime.agentPort))?.agentPort;
   final stopped = await (stopRuntime ?? _defaultResetStop)(home);
   if (!stopped) {
     logError('Stopping this worktree runtime failed; Home data is unchanged.');
-    exitCode = 1;
+    fail(1);
     return;
   }
   final portsFree = await (portsFreeProbe ?? _waitForResetPortsFree)(
     runtime,
     home,
+    agentPort: leasedAgentPort,
   );
   if (!portsFree) {
     logError(
       'Refusing to reset ${runtime.worktreeId}: the Agent port '
       '${runtime.agentPort} or a managed Client endpoint is still live.',
     );
-    exitCode = 1;
+    fail(1);
     return;
   }
   log('Stopped this worktree runtime; ports are free.');
@@ -186,6 +212,7 @@ Future<void> handleRuntimeReset({
         workspaceRoot: runtime.workspaceRoot,
         homePath: home,
         name: saveFixture,
+        includeMcpConfig: includeMcpConfig,
       );
       log(
         'Saved fixture "$saveFixture" (${manifest.entries.length} files) to '
@@ -193,7 +220,7 @@ Future<void> handleRuntimeReset({
       );
     } on Object catch (error) {
       logError('Could not save fixture "$saveFixture": $error');
-      exitCode = 1;
+      fail(1);
       return;
     }
   }
@@ -212,10 +239,10 @@ Future<void> handleRuntimeReset({
     } on Object catch (error) {
       logError(
         'Could not restore fixture "$fixture": $error '
-        'The runtime was stopped and left unchanged; rerun '
+        'The runtime was stopped and no Home file was changed; rerun '
         '"sanad-dev reset --keep-data" to start it again.',
       );
-      exitCode = 1;
+      fail(1);
       return;
     }
   } else {
@@ -233,7 +260,7 @@ Future<void> handleRuntimeReset({
       'Restarting this worktree runtime failed; the Home is prepared but not '
       'running. Rerun "sanad-dev run".',
     );
-    exitCode = 1;
+    fail(1);
     return;
   }
   final summary = await _describeResetRuntime(
@@ -243,6 +270,8 @@ Future<void> handleRuntimeReset({
   );
   log(summary);
 }
+
+void _assignResetProcessExitCode(int code) => exitCode = code;
 
 Future<bool> _defaultResetStop(String homePath) async {
   await handleRuntimeStop(
@@ -284,18 +313,21 @@ Future<bool> _defaultResetStart({
 Future<bool> _waitForResetPortsFree(
   SanadDevRuntime runtime,
   String homePath, {
+  int? agentPort,
   Duration timeout = const Duration(seconds: 20),
 }) async {
   final deadline = DateTime.now().add(timeout);
+  final leasedAgentPort = agentPort ?? runtime.agentPort;
   while (true) {
     final listening = <int>[];
-    for (final port in {runtime.agentPort, runtime.vmServicePort}) {
+    for (final port in {runtime.agentPort, leasedAgentPort, runtime.vmServicePort}) {
       if (await _isTcpPortListening(port)) listening.add(port);
     }
     final clients = await discoverClientInstances();
     final live = clients.where(
       (client) =>
           clientAgentPort(client) == runtime.agentPort ||
+          clientAgentPort(client) == leasedAgentPort ||
           client.launchProfile?.define('SANAD_HOME') == homePath,
     );
     if (listening.isEmpty && live.isEmpty) return true;
