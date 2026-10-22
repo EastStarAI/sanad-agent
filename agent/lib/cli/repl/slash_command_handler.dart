@@ -892,6 +892,17 @@ Shortcuts:
     if (context.client != null && context.client!.isConnected) {
       try {
         await context.client!.stop(sessionId: context.sessionId);
+      } on CliClientException catch (e) {
+        // A dispatch that the daemon has not confirmed yet is not a failed
+        // send: the interruption request is already on the wire (Task 134).
+        if (e.code == 'stop_timeout' || e.code == 'query_timeout') {
+          context.renderer.renderNotice(
+            'Stop signal dispatched. The daemon has not confirmed the session '
+            'is idle yet.',
+          );
+        } else {
+          context.renderer.renderError('Failed to send stop command: $e');
+        }
       } catch (e) {
         context.renderer.renderError('Failed to send stop command: $e');
       }

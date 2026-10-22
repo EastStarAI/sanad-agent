@@ -535,7 +535,16 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
         _observedPendingRequestId = pendingRequestId;
       } else if (_observedPendingRequestId != null) {
         _observedPendingRequestId = null;
-        _setComposerText('');
+        // An accepted send drops its draft, so the composer starts empty. A
+        // released wait (a refused or blocked turn the daemon never accepted)
+        // keeps the draft, and the user's text must come back for the retry
+        // instead of being erased under them.
+        final keptText = authoritativeDraft?.text ?? '';
+        if (keptText.trim().isEmpty) {
+          _setComposerText('');
+        } else if (keptText != _chatController.exportPlainText()) {
+          _setComposerText(keptText);
+        }
         _hasUnsavedDraftChanges = false;
       } else if (!_hasUnsavedDraftChanges &&
           authoritativeDraft != null &&

@@ -67,6 +67,12 @@ class E2eFixtureAdapter
   static const summarizationFailurePrompt =
       '__SANAD_E2E_SUMMARIZATION_FAILURE__';
 
+  /// A history marker `__SANAD_E2E_COMPACTION_DELAY__<seconds>` holds every
+  /// compaction summary pass for that many seconds, so daemon E2E can prove a
+  /// client waits for a slow compaction's real terminal result.
+  static const compactionDelayPromptPrefix = '__SANAD_E2E_COMPACTION_DELAY__';
+  static const _compactionInstructionMarker = 'The JSON schema version is 1';
+
   @override
   final ToolResultMediaCapability toolResultMediaCapability;
 
@@ -85,7 +91,7 @@ class E2eFixtureAdapter
         latestUserContent = message.content ?? '';
       }
     }
-    if (latestUserContent?.contains('The JSON schema version is 1') ?? false) {
+    if (latestUserContent?.contains(_compactionInstructionMarker) ?? false) {
       if (history.any(
         (message) =>
             message.content?.contains(summarizationFailurePrompt) ?? false,
@@ -651,6 +657,35 @@ class E2eFixtureAdapter
         : viewImageInvalidResponseText;
   }
 
+  Future<void> _waitForCompactionDelayFixture(
+    List<Message> history,
+    LLMRequestOptions options,
+  ) async {
+    final latestUser = history.lastWhere(
+      (message) => message.role == MessageRole.user,
+      orElse: () => Message(role: MessageRole.user, content: ''),
+    );
+    if (!(latestUser.content?.contains(_compactionInstructionMarker) ??
+        false)) {
+      return;
+    }
+    final marker = RegExp(
+      '${RegExp.escape(compactionDelayPromptPrefix)}(\\d+)',
+    );
+    for (final message in history) {
+      final match = marker.firstMatch(message.content ?? '');
+      if (match == null) continue;
+      final delay = Future<void>.delayed(
+        Duration(seconds: int.parse(match.group(1)!)),
+      );
+      final cancellation = options.cancellationScope?.whenCancelled;
+      await (cancellation == null
+          ? delay
+          : Future.any<void>([delay, cancellation]));
+      return;
+    }
+  }
+
   Future<void> _waitForDelayedFixture(
     List<Message> history,
     LLMRequestOptions options,
@@ -686,6 +721,7 @@ class E2eFixtureAdapter
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
+    await _waitForCompactionDelayFixture(history, options);
     await _waitForDelayedFixture(history, options);
     return _response(history, tools, options: options);
   }
@@ -721,6 +757,7 @@ class E2eFixtureAdapter
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async* {
+    await _waitForCompactionDelayFixture(history, options);
     await _waitForDelayedFixture(history, options);
     yield await _response(history, tools, options: options);
   }

@@ -19,19 +19,23 @@ Future releases use the release-delivery reference loaded on demand by the
 repository `Sanad Pull Request Lifecycle` skill and the FVM-managed
 `agent/tool/release_tool.dart prepare-release` command. The command
 accepts one increasing Stable semantic version and build number, validates every
-source surface before writing, and updates Agent/Client package metadata,
-release-contract package lock entries, native Windows version resources, the
-canonical contract/tag/artifact filenames, release-note identity, changelog
-slot, and this current-release statement. `check-preparation` then rejects stale
-or unfinished release identity before a pull request can pass CI. Release prose
-remains derived from merged Git history by the skill rather than invented by the
-mechanical command.
+source surface before writing, and updates Agent/Client package metadata, the
+`sanad-client` CLI version literal, release-contract package lock entries, native
+Windows version resources, the canonical contract/tag/artifact filenames,
+release-note identity, changelog slot, and this current-release statement.
+`check-preparation` then rejects stale or unfinished release identity before a
+pull request can pass CI. Release prose remains derived from merged Git history
+by the skill rather than invented by the mechanical command.
 
 A release-preparation pull request may pass without `release-reviewed` only when
 `scripts/release/verify_metadata_release_diff.sh` proves the diff is exactly the
-11 established metadata/prose files and every changed mechanical line is a
-version, build, tag, or canonical artifact-filename substitution. The normal
-protected review remains fail-closed for any workflow, signing, deployment,
+12 established metadata/prose files and every changed mechanical line is a
+version, build, tag, or canonical artifact-filename substitution. The twelfth
+path, `client/lib/features/client_cli/domain/models/client_cli_version.dart`,
+is accepted only when the sole changed line is
+`const String sanadClientCliVersion = '<X.Y.Z>';`; any other change to that file
+stays a source change that needs protected review. The normal protected review
+remains fail-closed for any workflow, signing, deployment,
 script, installer-logic, task-plan, unrelated-file, or unexpected-line change.
 This narrow exception permits the explicitly requested release-delivery
 extension to prepare, push, and squash-merge the metadata PR without introducing

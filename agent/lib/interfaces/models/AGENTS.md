@@ -14,6 +14,7 @@ This contract applies to `agent/lib/interfaces/models/`.
 - Mint `event_id` once for one semantic event and preserve it across local/cloud copies.
 - Never derive event identity from content or timestamp alone and never regenerate it per transport.
 - Capture origin platform/family/transport at admission so later suspension, recovery, and terminal delivery retain the initiating scope.
+- Terminal answers that no provider call completed (a typed `turn_failed` refusal, a thinking-selection rejection) carry the originating `request_id` on `GatewayResponse` and publish it beside `error_code`, so a waiting client attributes the answer to its own send. An answer that completed a provider call keeps message identity instead and publishes no `request_id`.
 - Keep hardware identity distinct from backend device registration identity.
 
 ## Model Safety

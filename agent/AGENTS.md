@@ -18,6 +18,7 @@ This contract applies to `agent/`.
 - `agent/lib/evolution/` owns sessions, memory, scheduling, titles, and durable runtime state.
 - `agent/lib/interfaces/` owns platform adapters, gateway delivery, admission/orchestration, and canonical client protocols.
 - `agent/lib/infrastructure/` owns OS/platform and voice infrastructure implementations.
+- `agent/tool/` owns release preparation and contract tooling. It is the single writer of tracked release-identity literals, including the `sanad-client` CLI version constant, so release identity is never advanced by hand.
 - `agent/lib/plugins/` owns generic lifecycle hooks only.
 
 ## Critical Cross-Domain Invariants
@@ -26,7 +27,7 @@ This contract applies to `agent/`.
 - `SessionRunOrchestrator` is the sole admission and active-run authority. Durable work state decides running versus queued; in-memory busy, queue, suspension, and cancellation maps are projections only.
 - Every turn is owned by session id, work-item id, immutable run id, and generation. Only the current owner may emit callbacks, commit terminal state, clear busy ownership, or drain queued work.
 - Final delivery occurs only after a successful idempotent durable terminal commit for the exact owner.
-- Stop invalidates the active owner before awaiting cancellation and atomically releases recovery, durable work, and owned queued state without deleting newer-generation input.
+- Stop invalidates the active owner before awaiting cancellation and atomically releases recovery, durable work, its durable interactive-wait checkpoints, and owned queued state without deleting newer-generation input. A stop also releases the in-memory partial-stream (`in_flight`) projection of the owner it stopped, so no runtime or query projection may keep reporting a stopped session as `running`; a blocked or waiting recovery releases that projection for its own run in the same way.
 - Retry, resume, route change, and automatic failover require an atomic claim of the current durable owner; stale or concurrent losers are controlled no-ops.
 - Crash recovery never replays a started tool without a durable result. Owned recognized checkpoints receive a neutral unknown-outcome result and continue automatically; only ownerless, malformed, or unrecognized state becomes blocked recovery.
 - A resumable daemon shutdown must cross the global checkpoint drain and exit without session-wide Stop so startup recovery retains safe non-terminal work. Destructive shutdown requires an explicit cancellation mode and terminalizes owned work before exit.

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:uuid/uuid.dart';
 
+import '../../../core/config.dart';
 import '../../client/local_gateway_cli_client.dart';
 import '../../oneshot/oneshot_runner.dart';
 import '../sanad_command.dart';
@@ -341,10 +342,20 @@ class SessionShowCommand extends _BaseSessionSubcommand {
                 (pending['questions'] is List &&
                     (pending['questions'] as List).isNotEmpty));
 
+        // The in-flight projection is an in-memory partial-stream snapshot.
+        // A durable execution projection that is unowned (`idle`/`queued`)
+        // proves no run is publishing, so a leftover snapshot must not be
+        // reported as `running` (Task 134).
+        final durableExecutionState = executionSnapshot?['state']?.toString();
+        final durableIsIdle =
+            durableExecutionState == 'idle' ||
+            durableExecutionState == 'queued';
+        final hasRunningExecution = inFlight != null && !durableIsIdle;
+
         final String status;
         if (pending != null) {
           status = isAskUser ? 'needs_input' : 'needs_permission';
-        } else if (inFlight != null) {
+        } else if (hasRunningExecution) {
           status = 'running';
         } else {
           status = 'idle';
@@ -364,9 +375,11 @@ class SessionShowCommand extends _BaseSessionSubcommand {
         // Full history is exposed only through the explicit --include-messages
         // opt-in flag.
         final summary = _summarizeMessages(messages);
+        final compaction = _latestCompaction(messages);
         final identities = <String, dynamic>{
           'session_id': id,
-          if (inFlight?['run_id'] != null) 'run_id': inFlight!['run_id'],
+          if (hasRunningExecution && inFlight['run_id'] != null)
+            'run_id': inFlight['run_id'],
           if (executionSnapshot?['work_item_id'] != null)
             'work_item_id': executionSnapshot!['work_item_id'],
           if (executionSnapshot?['request_id'] != null)
@@ -410,6 +423,7 @@ class SessionShowCommand extends _BaseSessionSubcommand {
             'last_user_message_at': payload['last_user_message_at'],
           'message_count': messages.length,
           'summary': summary,
+          'compaction': ?compaction,
           if (includeFullHistory) 'messages': messages,
         };
 
@@ -433,6 +447,12 @@ class SessionShowCommand extends _BaseSessionSubcommand {
         stdoutSink.writeln(
           'Messages: ${messages.length} (${_describeSummary(summary)})',
         );
+        if (compaction != null) {
+          stdoutSink.writeln(
+            'Latest compaction: ${compaction['compaction_id']} '
+            '(${compaction['status']}, ${compaction['trigger']})',
+          );
+        }
         if (messages.isNotEmpty && !includeFullHistory) {
           stdoutSink.writeln(
             '  Full history is not shown by default. Add --include-messages to embed the complete messages payload.',
@@ -490,6 +510,23 @@ class SessionShowCommand extends _BaseSessionSubcommand {
       }
       return 1;
     }
+  }
+
+  /// The latest compaction lifecycle row of hydrated history, so a caller can
+  /// poll a compaction that outlived `sanad session compact` (Task 125).
+  static Map<String, dynamic>? _latestCompaction(
+    List<Map<String, dynamic>> messages,
+  ) {
+    for (final message in messages.reversed) {
+      final type = message['type']?.toString() ?? '';
+      if (!type.startsWith('context_compaction.')) continue;
+      return {
+        'compaction_id': message['compaction_id'],
+        'status': message['status'],
+        'trigger': message['trigger'],
+      };
+    }
+    return null;
   }
 
   /// Builds a bounded, reviewer-focused message/tool count summary without
@@ -578,7 +615,11 @@ class SessionStopCommand extends _BaseSessionSubcommand {
 
     try {
       return await withClient((client) async {
-        await client.stop(sessionId: id);
+        // Name the execution the operator observed. Resolution is best-effort:
+        // the stop must still be dispatched when the session state cannot be
+        // read, and the daemon's stop is session-scoped either way (Task 134).
+        final runId = await _resolveInFlightRunId(client, id);
+        await client.stop(sessionId: id, runId: runId);
 
         if (json) {
           stdoutSink.writeln(
@@ -596,6 +637,28 @@ class SessionStopCommand extends _BaseSessionSubcommand {
       }
       return 1;
     }
+  }
+
+  /// Reads the session's authoritative `in_flight` run identity so the stop
+  /// names the same execution the Client UI would stop.
+  Future<String?> _resolveInFlightRunId(
+    LocalGatewayCliClient client,
+    String sessionId,
+  ) async {
+    try {
+      final history = await client.getSessionHistory(sessionId: sessionId);
+      final payload = history['payload'] is Map
+          ? Map<String, dynamic>.from(history['payload'] as Map)
+          : history;
+      final inFlight = payload['in_flight'];
+      if (inFlight is Map) {
+        final runId = inFlight['run_id']?.toString();
+        if (runId != null && runId.isNotEmpty) return runId;
+      }
+    } catch (_) {
+      // Best-effort: the stop command does not depend on this read.
+    }
+    return null;
   }
 }
 
@@ -633,9 +696,17 @@ class SessionCompactCommand extends _BaseSessionSubcommand {
       return 1;
     }
 
-    final timeout = timeoutSeconds != null
-        ? Duration(seconds: int.tryParse(timeoutSeconds!) ?? 5)
-        : null;
+    // The daemon replies only when its compaction operation ends, so the
+    // wait is bounded by the runtime's own compaction pass timeout unless
+    // the caller sets --timeout (Task 125).
+    final configuredBound =
+        ModelAwareRuntimePolicy.compactionPassTimeoutForHome(sanadHome);
+    final explicitSeconds = timeoutSeconds == null
+        ? null
+        : int.tryParse(timeoutSeconds!);
+    final timeout = explicitSeconds != null && explicitSeconds > 0
+        ? Duration(seconds: explicitSeconds)
+        : configuredBound;
 
     try {
       return await withClient((client) async {
@@ -696,19 +767,41 @@ class SessionCompactCommand extends _BaseSessionSubcommand {
         }
         return isSuccess ? 0 : 1;
       });
-    } catch (e) {
-      stderrSink.writeln('Error: Failed to compact session: $e');
+    } on CliClientException catch (e) {
+      if (e.code != 'query_timeout') return _reportCompactError(id, e);
+      // No result within the bound is not a failure: the single dispatch is
+      // never resent and the daemon may still be compacting.
+      final poll = 'sanad session show $id';
+      const exitCode = 124;
+      final message =
+          'Compaction for session $id is unconfirmed after '
+          '${timeout.inSeconds}s; the daemon may still be compacting. '
+          'Check with: $poll';
       if (json) {
         stdoutSink.writeln(
           jsonEncode({
             'session_id': id,
-            'exit_code': 1,
-            'error': e.toString(),
+            'outcome': 'unconfirmed',
+            'poll': poll,
+            'exit_code': exitCode,
           }),
         );
       }
-      return 1;
+      stderrSink.writeln('Notice: $message');
+      return exitCode;
+    } catch (e) {
+      return _reportCompactError(id, e);
     }
+  }
+
+  int _reportCompactError(String id, Object e) {
+    stderrSink.writeln('Error: Failed to compact session: $e');
+    if (json) {
+      stdoutSink.writeln(
+        jsonEncode({'session_id': id, 'exit_code': 1, 'error': e.toString()}),
+      );
+    }
+    return 1;
   }
 }
 

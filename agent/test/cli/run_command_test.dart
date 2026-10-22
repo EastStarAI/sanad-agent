@@ -1044,7 +1044,7 @@ void main() {
     );
 
     test(
-      'stays attached through waiting, blocked, and resuming runtime notices',
+      'stays attached through waiting and resuming runtime notices',
       () async {
         final runner = SanadCommandRunner(
           stdoutSink: stdoutBuffer,
@@ -1089,10 +1089,6 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         expect(completed, isFalse);
 
-        emitNotice('blocked', 'Waiting for retry or route intervention.');
-        await Future<void>.delayed(Duration.zero);
-        expect(completed, isFalse);
-
         emitNotice('resuming', 'Resuming last request with the new route.');
         await Future<void>.delayed(Duration.zero);
         expect(completed, isFalse);
@@ -1114,6 +1110,152 @@ void main() {
         expect(
           stderrBuffer.toString(),
           contains('Resuming last request with the new route.'),
+        );
+      },
+    );
+
+    test(
+      'exits 1 at once on a blocked notice with one reason line and no stop',
+      () async {
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          client: client,
+          stdinReader: () async => null,
+        );
+
+        final runFuture = _runTargeted(runner, [
+          'run',
+          '--timeout',
+          '300',
+          'Blocked provider turn',
+        ]);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final sentEnvelope =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final sessionId = sentEnvelope['payload']['session_id'] as String;
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': sessionId,
+            'event': {
+              'type': 'session.runtime_notice',
+              'session_id': sessionId,
+              'payload': {
+                'status': 'blocked',
+                'reason': 'invalidRequest',
+                'title': 'Image input not supported',
+                'message': 'Change provider or stop.',
+              },
+            },
+          }),
+        );
+
+        // The daemon already blocked the turn: the run ends now, not at its
+        // own 300 s timeout.
+        final exitCode = await runFuture.timeout(const Duration(seconds: 5));
+        expect(exitCode, 1);
+        final errorLines = const LineSplitter()
+            .convert(stderrBuffer.toString())
+            .where((line) => line.startsWith('Error:'))
+            .toList();
+        expect(errorLines, hasLength(1));
+        expect(
+          errorLines.single,
+          startsWith('Error: blocked: Image input not supported'),
+        );
+        expect(errorLines.single, contains('sanad session stop $sessionId'));
+        // Blocked work stays daemon-owned for intervention: no Stop is sent.
+        expect(
+          mockSocket.sentMessages.where((m) => m.contains('"stop"')),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'reports one clean reason for a typed refusal and a blocked notice',
+      () async {
+        Future<({String line, String sessionId})> runAndCapture(
+          void Function(String sessionId) emit,
+        ) async {
+          stderrBuffer.clear();
+          final runner = SanadCommandRunner(
+            stdoutSink: stdoutBuffer,
+            stderrSink: stderrBuffer,
+            client: client,
+            stdinReader: () async => null,
+          );
+          final runFuture = _runTargeted(runner, [
+            'run',
+            '--timeout',
+            '300',
+            'Refused provider turn',
+          ]);
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          final sentEnvelope =
+              jsonDecode(mockSocket.sentMessages.last) as Map<String, dynamic>;
+          final sessionId = sentEnvelope['payload']['session_id'] as String;
+          emit(sessionId);
+          expect(await runFuture.timeout(const Duration(seconds: 5)), 1);
+          final line = const LineSplitter()
+              .convert(stderrBuffer.toString())
+              .where((value) => value.startsWith('Error:'))
+              .join('\n');
+          return (line: line, sessionId: sessionId);
+        }
+
+        // A refused turn: the daemon's answer already reads as an error line.
+        final refusal = await runAndCapture((sessionId) {
+          mockSocket.emitFromServer(
+            jsonEncode({
+              'type': 'device_event',
+              'session_id': sessionId,
+              'event': {
+                'type': 'final_answer',
+                'session_id': sessionId,
+                'payload': {
+                  'content': 'Error: Bad state: Workspace folder is unavailable.',
+                  'status': 'done',
+                  'error_code': 'turn_failed',
+                },
+              },
+            }),
+          );
+        });
+        expect(
+          refusal.line,
+          'Error: turn_failed: Bad state: Workspace folder is unavailable.',
+          reason: 'one reason line, one Error: prefix, one terminal period',
+        );
+
+        // A blocked notice whose own message is already a full sentence.
+        final blocked = await runAndCapture((sessionId) {
+          mockSocket.emitFromServer(
+            jsonEncode({
+              'type': 'device_event',
+              'session_id': sessionId,
+              'event': {
+                'type': 'session.runtime_notice',
+                'session_id': sessionId,
+                'payload': {
+                  'status': 'blocked',
+                  'reason': 'networkError',
+                  'title': 'Connection failed',
+                  'message':
+                      'The agent could not reach the runtime service.',
+                },
+              },
+            }),
+          );
+        });
+        expect(
+          blocked.line,
+          'Error: blocked: Connection failed: The agent could not reach the '
+          'runtime service. Intervene with sanad session stop '
+          '${blocked.sessionId} or retry from a client.',
+          reason: 'no doubled period between the reason and the intervention',
         );
       },
     );

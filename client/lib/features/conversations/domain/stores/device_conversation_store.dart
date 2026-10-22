@@ -111,6 +111,14 @@ class DeviceConversationStore {
   final LinkedHashMap<String, _RetainedSessionHistory> _retainedSessionHistories =
       LinkedHashMap<String, _RetainedSessionHistory>();
 
+  /// The latest typed refusal (`final_answer.error_code`) of each session.
+  ///
+  /// A turn refused before it starts persists no durable history, so the
+  /// refusal can only be delivered live. It is retained until the conversation
+  /// moves on with an accepted user message, so an authoritative history swap
+  /// cannot silently drop the user's only record of the send.
+  final Map<String, CanonicalEvent> _refusedTurnsBySession = {};
+
   DeviceConversationStore({
     ThinkingStreamMode thinkingStreamMode = ThinkingStreamMode.auto,
     DeviceConversationStoreSnapshot? initialSnapshot,
@@ -392,9 +400,48 @@ class DeviceConversationStore {
         _emitQueuedMessages();
       }
       _conversation.apply(event);
+      _trackRefusedTurn(event);
       _moveCurrentPendingSteersToTail();
       _emitMessages();
     }
+  }
+
+  /// A typed refusal is retained because no durable history will ever carry it:
+  /// the turn was rejected before the root message was persisted. An accepted
+  /// user message supersedes it, because the conversation has moved on.
+  void _trackRefusedTurn(CanonicalEvent event) {
+    final sessionId = event.sessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    if (event.kind == EventKind.finalAnswer &&
+        event.metadata?['error_code']?.toString().isNotEmpty == true) {
+      _refusedTurnsBySession[sessionId] = event;
+      return;
+    }
+    if (event.kind == EventKind.userMessage) {
+      _refusedTurnsBySession.remove(sessionId);
+    }
+  }
+
+  /// Re-append the retained refusal of [sessionId] when the hydrated history
+  /// does not already represent the same request.
+  List<CanonicalEvent> _withRetainedRefusal(
+    List<CanonicalEvent> events,
+    String? sessionId,
+  ) {
+    if (sessionId == null) return events;
+    final retained = _refusedTurnsBySession[sessionId];
+    if (retained == null) return events;
+    final requestId = retained.requestId;
+    final represented = events.any(
+      (event) =>
+          event.id == retained.id ||
+          (requestId != null && event.requestId == requestId),
+    );
+    if (represented) {
+      _refusedTurnsBySession.remove(sessionId);
+      return events;
+    }
+    return [...events, retained];
   }
 
   void applyPendingSteer(PendingSteerRecord record) {
@@ -599,7 +646,9 @@ class DeviceConversationStore {
     bool hasNewer = false,
     String? nextNewerCursor,
   }) {
-    _conversation.setHistory(events);
+    _conversation.setHistory(
+      _withRetainedRefusal(events, _currentSessionId),
+    );
     _reconcileCurrentPendingSteerProjections();
     _historyHasMore = hasMore && nextCursor != null;
     _historyNextCursor = _historyHasMore ? nextCursor : null;

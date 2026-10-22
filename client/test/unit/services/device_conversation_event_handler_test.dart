@@ -1159,6 +1159,76 @@ void main() {
     expect(tool.revision, 50);
     expect(tool.metadata, containsPair('reason', 'user_stop'));
   });
+
+  // F1 (Task 125 round 2): a turn that is refused before it starts is never
+  // persisted by the daemon, so the conversation's own history can never carry
+  // its answer. The refusal must stay visible instead of disappearing the next
+  // time the conversation swaps in authoritative history.
+  group('typed refusal visibility', () {
+    const refusalRequestId = 'request-refused';
+
+    void emitRefusal() {
+      socket.eventRouter.routeEvent(
+        _envelope('final_answer', {
+          'content': 'Error: Bad state: Workspace folder is unavailable.',
+          'status': 'done',
+          'session_id': 'session-1',
+          'request_id': refusalRequestId,
+          'run_id': 'run-refused',
+          'error_code': 'turn_failed',
+        }),
+      );
+    }
+
+    test('a typed refusal keeps its code and survives an empty history swap', () async {
+      emitRefusal();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(store.currentMessages.single.kind, EventKind.finalAnswer);
+      expect(store.currentMessages.single.metadata, containsPair('error_code', 'turn_failed'));
+
+      // The daemon persisted nothing for this turn: the authoritative history
+      // of the session is empty.
+      store.setHistory(const []);
+
+      expect(
+        store.currentMessages,
+        hasLength(1),
+        reason: 'the refused turn is the user’s only record of the send',
+      );
+      expect(
+        store.currentMessages.single.text,
+        'Error: Bad state: Workspace folder is unavailable.',
+      );
+    });
+
+    test('an accepted user message after the refusal drops the retained turn', () async {
+      emitRefusal();
+      await Future<void>.delayed(Duration.zero);
+
+      socket.eventRouter.routeEvent(
+        _envelope('user_message', {
+          'content': 'Reply with exactly: G2-S1-MSG2',
+          'status': 'done',
+          'session_id': 'session-1',
+          'request_id': 'request-follow-up',
+          'message_id': 'message-2',
+          'turn_id': 'turn-2',
+          'input_kind': 'root_turn',
+          'replay_eligible': true,
+        }),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      store.setHistory(const []);
+
+      expect(
+        store.currentMessages.where((event) => event.kind == EventKind.finalAnswer),
+        isEmpty,
+        reason: 'the conversation moved on, so the refusal is superseded',
+      );
+    });
+  });
 }
 
 Map<String, dynamic> _envelope(String event, Map<String, dynamic> payload) => {

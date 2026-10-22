@@ -8,5 +8,8 @@
 /// duplicating that literal anywhere else.
 ///
 /// `client/test/unit/client_cli/client_cli_version_test.dart` fails when this
-/// constant drifts from `client/pubspec.yaml`.
+/// constant drifts from `client/pubspec.yaml`. Release preparation
+/// (`agent/tool/release_tool.dart prepare-release`) advances this literal with
+/// the Client release version, and `check-preparation` rejects a stale value,
+/// so the literal is never edited by hand.
 const String sanadClientCliVersion = '1.0.17';

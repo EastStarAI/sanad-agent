@@ -80,7 +80,7 @@ void main() {
   );
 
   test(
-    'standalone entry point keeps an unrecoverable runtime failure non-terminal until its own timeout',
+    'standalone entry point exits at once when the runtime blocks or refuses the turn',
     () async {
       final root = Directory(
         (await Directory.systemTemp.createTemp(
@@ -104,7 +104,7 @@ void main() {
             root.path,
             '--json',
             '--timeout',
-            '5',
+            '60',
             '__SANAD_E2E_RUNTIME_FAILURE__',
           ],
           workingDirectory: Directory.current.path,
@@ -116,21 +116,21 @@ void main() {
           },
         ).timeout(const Duration(seconds: 90));
 
-        // The deterministic provider failure suspends the session in a
-        // blocked recovery state (advisory, awaiting intervention), so the
-        // attached run must NOT terminate early as a success or a generic
-        // failure. Without intervention, the run's own --timeout ends it with
-        // the stable timeout contract (exit 124 / terminal JSON).
-        expect(result.exitCode, 124, reason: result.stderr.toString());
+        // The deterministic provider failure leaves the turn blocked (or
+        // refused) by the runtime. A non-interactive run cannot intervene, so
+        // it must end at once with exit 1 and one reason, never wait for its
+        // own 60 s timeout (Task 125).
+        expect(result.exitCode, 1, reason: result.stderr.toString());
         final outputLines = const LineSplitter()
             .convert(result.stdout.toString())
             .where((line) => line.trim().isNotEmpty)
             .toList();
         expect(outputLines, hasLength(1));
         final jsonResult = jsonDecode(outputLines.single);
-        expect(jsonResult['exit_code'], 124);
+        expect(jsonResult['exit_code'], 1);
         expect(jsonResult['text'], isEmpty);
-        expect(jsonResult['error'], contains('timed out'));
+        expect(jsonResult['error'], isNot(contains('timed out')));
+        expect(jsonResult['error'], isNotEmpty);
       } finally {
         try {
           if (await root.exists()) {

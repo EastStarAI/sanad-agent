@@ -15,6 +15,7 @@ import 'runtime/runtime_state_cleanup.dart';
 import 'runtime/session_execution_snapshot_repository.dart';
 import 'runtime/session_execution_state_coordinator.dart';
 import 'runtime/session_work_item_repository.dart';
+import 'suspended_checkpoint_repository.dart';
 
 /// Persisted runtime state for a session — the durable mirror of
 /// `SessionRunOrchestrator`'s in-memory `_suspendedEvents`/`_pendingEvents`
@@ -40,6 +41,7 @@ class PersistedRuntimeStateRepository {
   late final SessionExecutionStateCoordinator _executionState;
   late final RuntimeNoticeRepository _notices;
   late final PendingInputRepository _pendingInputs;
+  late final SuspendedCheckpointRepository _suspendedCheckpoints;
   late final LegacyRuntimeStateMigrator _legacy;
   late final RuntimeStateCleanup _cleanup;
 
@@ -58,6 +60,7 @@ class PersistedRuntimeStateRepository {
       pendingInputs: _pendingInputs,
     );
     _notices = RuntimeNoticeRepository(_db);
+    _suspendedCheckpoints = SuspendedCheckpointRepository(state);
     _legacy = LegacyRuntimeStateMigrator(_db);
     _cleanup = RuntimeStateCleanup(
       noticeRepository: _notices,
@@ -278,6 +281,15 @@ class PersistedRuntimeStateRepository {
     sessionId,
     publishExecutionChange: publishExecutionChange,
   );
+
+  /// Deletes the durable interactive-wait checkpoints of [sessionId].
+  ///
+  /// An explicit Stop terminalizes the session's interactive waits, so a
+  /// leftover `awaiting_permission` row must not outlive it: the history
+  /// projection would keep reporting `pending_permission_request` for a
+  /// session that is already stopped.
+  void deleteSuspendedCheckpointsForSession(String sessionId) =>
+      _suspendedCheckpoints.deleteSuspendedCheckpointsForSession(sessionId);
 
   // ── Work Items (Gate C.1) — facade delegation ───────────────────────────
 
