@@ -102,6 +102,27 @@ void main() {
       expect(plan.wallTimeout, const Duration(seconds: 20));
     });
 
+    test('batch --timeout is the per-step deadline the driver enforces', () {
+      // The recipe declares no per-step timeout, so the batch flag is the only
+      // deadline in play. The launcher must budget exactly that value plus its
+      // fixed grace, and forward the same flag, so the driver never waits
+      // longer (or shorter) than the wall clock allows.
+      final plan = sanad_dev.planUiDriverRun([
+        'batch',
+        '--json-steps',
+        '[{"action":"wait_for","key":"idle_label"}]',
+        '--timeout',
+        '5',
+      ]);
+
+      expect(plan.isBatch, isTrue);
+      expect(plan.driverArguments, containsAllInOrder(['--timeout', '5']));
+      expect(
+        plan.wallTimeout,
+        const Duration(seconds: 5 + sanad_dev.uiDriverChildGraceSeconds),
+      );
+    });
+
     test('falls back to a bounded batch wall clock for stdin recipes', () {
       final plan = sanad_dev.planUiDriverRun(['batch']);
       expect(

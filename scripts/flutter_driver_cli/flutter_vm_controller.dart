@@ -58,12 +58,22 @@ class UiTreeCapture {
 /// absent one. The census answers "is this type rendered at all", which is what
 /// an absence claim requires.
 class UiTypeCensus {
-  const UiTypeCensus(this.types, {required this.truncated});
+  const UiTypeCensus(
+    this.types, {
+    required this.truncated,
+    this.visitedElements = 0,
+  });
 
   final Set<String> types;
 
   /// True when the client stopped enumerating; absence is then unprovable.
   final bool truncated;
+
+  /// Rendered elements the Client walked before it stopped.
+  ///
+  /// Zero when the Client does not report a walk count, which keeps the
+  /// truncation diagnostic accurate against an older driver entry point.
+  final int visitedElements;
 
   bool contains(String typeFilter) {
     final needle = typeFilter.toLowerCase();
@@ -80,6 +90,42 @@ const String offstageTargetGuidance =
 
 /// Default window used to observe an action's post-condition.
 const Duration defaultVerifyTimeout = Duration(milliseconds: 2000);
+
+/// Appended to a tap result when the Client does not register
+/// `ext.sanad_client.reveal`.
+///
+/// An unrevealed baseline may predate an auto-scroll, so an observed tree
+/// change is weaker evidence than a revealed one: it may be the scroll rather
+/// than the action. The note is reported on success as well as on failure,
+/// because a verified tap on an unrevealed baseline carries the same caveat.
+const String revealUnavailableNote =
+    ' Reveal was unavailable on this Client, so verification may be affected '
+    'by auto-scroll.';
+
+/// Resolves the deadline a single batch step runs under.
+///
+/// A step may declare its own `timeout_seconds`; otherwise it inherits the
+/// batch `--timeout` that the launcher budgets the whole recipe with. Sharing
+/// that one value keeps the wall clock and the enforced deadline from drifting
+/// apart, which is what a hidden per-step default would do.
+Duration batchStepTimeout(BatchStep step, Duration? defaultStepTimeout) =>
+    step.timeoutSeconds != null
+    ? Duration(seconds: step.timeoutSeconds!)
+    : defaultStepTimeout ?? const Duration(seconds: 30);
+
+/// Longest deadline any step in [steps] can run under.
+///
+/// The VM Service transport timeout must never be shorter than a step's own
+/// deadline, or a deliberately slow step dies as a transport error before its
+/// budget is spent.
+Duration batchRpcTimeout(List<BatchStep> steps, Duration defaultStepTimeout) {
+  var longest = defaultStepTimeout;
+  for (final step in steps) {
+    final stepTimeout = batchStepTimeout(step, defaultStepTimeout);
+    if (stepTimeout > longest) longest = stepTimeout;
+  }
+  return longest;
+}
 
 /// Controller that coordinates Sanad VM service extensions and optional
 /// Flutter Driver screenshot capture.
@@ -342,7 +388,11 @@ class FlutterVmController {
         'widget key instead.',
       );
     }
-    return UiTypeCensus(types, truncated: result?['truncated'] == true);
+    return UiTypeCensus(
+      types,
+      truncated: result?['truncated'] == true,
+      visitedElements: (result?['visited_elements'] as num?)?.toInt() ?? 0,
+    );
   }
 
   /// Returns the active browser authentication URL from this exact driver VM.
@@ -430,8 +480,10 @@ class FlutterVmController {
 
     // Scrolling is part of resolving the target, not part of the tap: reveal
     // first so the captured baseline already reflects the new scroll offset.
+    // A coordinate tap has nothing to reveal, so it never claims the caveat.
+    final revealAttempted = verify && selectorTarget;
     var revealed = false;
-    if (verify && selectorTarget) {
+    if (revealAttempted) {
       revealed = await revealTarget(
         key: key,
         text: text,
@@ -510,16 +562,15 @@ class FlutterVmController {
     );
 
     stopwatch.stop();
+    final revealedNote = !revealAttempted || revealed
+        ? ''
+        : revealUnavailableNote;
     if (!outcome.passed) {
       final expectation = expect != null
           ? 'expected $expect to be present'
           : expectAbsent != null
           ? 'expected $expectAbsent to be gone'
           : 'the widget tree did not change';
-      final revealedNote = revealed
-          ? ''
-          : ' Reveal was unavailable, so a scroll may be missing from the '
-                'baseline.';
       if (!strict) {
         return DriverActionResult(
           success: true,
@@ -562,7 +613,8 @@ class FlutterVmController {
     return DriverActionResult(
       success: true,
       action: 'tap',
-      message: 'Tapped $targetDesc$withinDesc at ($tappedX, $tappedY)',
+      message:
+          'Tapped $targetDesc$withinDesc at ($tappedX, $tappedY)$revealedNote',
       data: res,
       duration: stopwatch.elapsed,
       targetKey: key,
@@ -975,17 +1027,24 @@ class FlutterVmController {
           final census = await typeCensus();
           if (census.truncated) {
             stopwatch.stop();
+            // Truncation is not a timeout: no amount of waiting can complete a
+            // walk the Client bounded on purpose, so the diagnostic must name
+            // the census instead of implying a slow Client.
+            final bound = census.visitedElements > 0
+                ? ' at its ${census.visitedElements}-element bound'
+                : '';
             return DriverActionResult(
               success: false,
               action: 'wait_for',
               message:
-                  'Timed out after ${stopwatch.elapsedMilliseconds}ms: cannot '
-                  'prove that $type is absent because the rendered type census '
-                  'was truncated. Wait on a widget key or text instead.',
+                  'type census truncated$bound: cannot prove that $type is '
+                  'absent. Wait on a widget key or text instead.',
               data: {
                 'waited_ms': stopwatch.elapsedMilliseconds,
                 'absent': absent,
                 'census_truncated': true,
+                if (census.visitedElements > 0)
+                  'census_visited_elements': census.visitedElements,
               },
               duration: stopwatch.elapsed,
               targetKey: key,
@@ -1131,17 +1190,20 @@ class FlutterVmController {
   /// [onProgress] is invoked after every step with the results so far so a
   /// caller can persist partial evidence; a wall-clock kill can then still
   /// report which steps completed.
+  ///
+  /// [defaultStepTimeout] is the recipe-wide deadline for steps that declare no
+  /// `timeout_seconds`. It is the batch `--timeout`, so the caller's wall clock
+  /// and the deadline enforced here come from the same option.
   Future<List<DriverActionResult>> runBatch(
     List<BatchStep> steps, {
     void Function(List<DriverActionResult> results)? onProgress,
+    Duration? defaultStepTimeout,
   }) async {
     final results = <DriverActionResult>[];
 
     for (int i = 0; i < steps.length; i++) {
       final step = steps[i];
-      final stepTimeout = step.timeoutSeconds != null
-          ? Duration(seconds: step.timeoutSeconds!)
-          : const Duration(seconds: 30);
+      final stepTimeout = batchStepTimeout(step, defaultStepTimeout);
       final stepDelay = step.delayMs != null
           ? Duration(milliseconds: step.delayMs!)
           : const Duration(milliseconds: 300);

@@ -34,16 +34,19 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Fresh snapshot that never settles | `snapshot --fresh` still returns the last tree but reports `settled: false` instead of claiming quiescence |
 | Wait with elapsed time | `wait-for --key` returns `duration_ms` and `data.waited_ms`, and succeeds after a late element appears |
 | Wait for absence | `wait-for --absent` fails closed when the element persists past `--timeout` |
-| Type absence proof | `wait-for --absent --type` succeeds only when the rendered type census shows the type is not rendered; a type that is rendered but uninspected fails instead of passing, and a truncated census fails closed |
+| Type absence proof | `wait-for --absent --type` succeeds only when the rendered type census shows the type is not rendered; a type that is rendered but uninspected fails instead of passing, and a truncated census fails closed with a `type census truncated` message rather than a timeout diagnostic |
+| Census bound | The rendered type census is bounded by the elements it walks (20000) and not by the number of distinct rendered types, so a tree with hundreds of distinct widget types is still a complete census |
 | Rendered but uninspected type | `wait-for --type CircularProgressIndicator` fails immediately with `rendered but is not inspected` instead of waiting out the timeout |
 | Offstage scroll target | `scroll --until-visible` fails fast with `target offstage/not found; navigate first` instead of hanging, and succeeds without scrolling when the target is already rendered |
 | Plain tap on an inert widget | Exits `0` with `verified: false` and `verification: no_observable_change`; the message contains `tap dispatched; no observable change` and warns against a blind retry |
 | Strict tap post-condition | `tap --verify`, `--expect`, or `--expect-absent` make an unchanged tree a failure with `verified: false`, `verification: none`, and the same dispatched-once wording; `--no-verify` accepts a deliberate no-op and omits the verification fields |
 | Tap baseline placement | The controller reveals the selector (`ext.sanad_client.reveal`) before capturing the baseline, so an auto-scroll that moves bounds is not credited to the tap as `verified: tree` |
+| Unrevealed baseline | A Client that does not register `ext.sanad_client.reveal` still taps and verifies, and both the verified and the failed messages state that verification may be affected by auto-scroll |
 | Tap result shape | JSON reports `key`, `x`, `y`, `generation`, and `duration_ms` in addition to the existing fields |
 | Enter-text post-condition | A changed rendered value verifies as `text` without echoing the value; an obscured field verifies as `tree` when the widget tree changes and fails with `--no-verify` offered when it does not |
 | Wall-clock kill | A driver child that overruns the computed cap is killed and the command exits `124` with a bounded diagnostic |
 | Wall-clock budget | The cap includes each action's post-delay and verify window, and a batch recipe adds every step's own timeout, delay, verify window, and sleep |
+| Batch deadline source | A step without its own timeout runs under the batch `--timeout`, so the launcher's budget and the driver's enforced deadline are the same value; a step with its own longer timeout keeps it and the transport timeout follows the longest step |
 | Process-tree kill | A killed driver child leaves no live descendant, so the `dart` grandchild behind an `fvm` wrapper cannot keep acting |
 | Compile deadline | A driver CLI compilation that exceeds its deadline is killed with its process tree and falls back to the JIT path |
 | Partial batch evidence | A batch killed at the wall clock reports the steps that completed, both as persisted per-step evidence and as a partial result (`timed_out`, `partial`, `steps_total`, `completed`) |

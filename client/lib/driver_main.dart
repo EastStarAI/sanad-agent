@@ -11,6 +11,7 @@ import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/driver/ui_inspection_state.dart';
 import 'package:sanad_client/driver/ui_inspection_text.dart';
+import 'package:sanad_client/driver/ui_type_census.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 
 void main() {
@@ -231,11 +232,8 @@ void main() {
 
     // A type census enumerates rendered widget runtime types instead of the
     // inspected element subset, so a caller can prove that a type is genuinely
-    // absent rather than merely uninspected. It is bounded and reports
-    // truncation explicitly.
-    const int maxCensusTypes = 400;
-    const int maxCensusElements = 20000;
-
+    // absent rather than merely uninspected. It is bounded by the walk and
+    // reports truncation explicitly.
     if (typeCensus) {
       try {
         final root = WidgetsBinding.instance.rootElement;
@@ -252,32 +250,22 @@ void main() {
             json.encode({'error': 'UI scope not found: $withinTarget'}),
           );
         }
-        final types = <String>{};
-        var visited = 0;
-        var truncated = false;
-        void census(Element element) {
-          if (truncated) return;
-          visited++;
-          if (visited > maxCensusElements) {
-            truncated = true;
-            return;
-          }
-          types.add(element.widget.runtimeType.toString());
-          if (types.length > maxCensusTypes) {
-            truncated = true;
-            return;
-          }
-          element.visitChildren(census);
-        }
-
-        census(startElement);
-        final sorted = types.toList()..sort();
+        final census = boundedRenderedTypeCensus<Element>(
+          root: startElement,
+          label: (element) => element.widget.runtimeType.toString(),
+          children: (element) {
+            final childElements = <Element>[];
+            element.visitChildren(childElements.add);
+            return childElements;
+          },
+        );
         return developer.ServiceExtensionResponse.result(
           json.encode({
             'status': 'ok',
-            'types': sorted,
-            'type_count': sorted.length,
-            'truncated': truncated,
+            'types': census.types,
+            'type_count': census.types.length,
+            'truncated': census.truncated,
+            'visited_elements': census.visitedElements,
           }),
         );
       } catch (e) {

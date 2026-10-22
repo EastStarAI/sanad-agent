@@ -606,9 +606,13 @@ class CliRunner {
       print('🚀 Running batch with ${steps.length} steps...');
     }
     final reportFile = _getOption(cmdArgs, '--report-file');
+    // One value drives both sides: the launcher budgets the wall clock with the
+    // batch `--timeout`, and the driver applies the same value to every step
+    // that declares no timeout of its own.
+    final defaultStepTimeout = Duration(seconds: timeoutSec);
     final controller = await _connect(
       explicitUrl: explicitUrl,
-      rpcTimeout: Duration(seconds: timeoutSec),
+      rpcTimeout: batchRpcTimeout(steps, defaultStepTimeout),
     );
     try {
       // Every completed step is persisted before the next one starts, so a
@@ -638,6 +642,7 @@ class CliRunner {
 
       final results = await controller.runBatch(
         steps,
+        defaultStepTimeout: defaultStepTimeout,
         onProgress: (soFar) {
           persist(soFar);
           if (!isJson) print('${soFar.length}. ${soFar.last}');
@@ -740,8 +745,9 @@ Commands:
                  Options: --out <path>, --json
 
   batch          Execute a sequence of actions from a JSON recipe file
-                 Options: --file <path>, --json-steps '<json>', --report-file <path>, --json, --timeout <sec> (per step)
+                 Options: --file <path>, --json-steps '<json>', --report-file <path>, --json, --timeout <sec> (default per-step deadline)
                  Steps: tap, enter_text, scroll, wait_for, snapshot, screenshot, message_bodies, sleep.
+                 A step's own timeout_seconds replaces the batch --timeout for that step.
                  --report-file receives each completed step before the next starts.
 
 Global Options:

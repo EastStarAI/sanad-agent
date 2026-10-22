@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/driver/ui_type_census.dart';
 
 import '../../../../scripts/flutter_driver_cli/cli_runner.dart';
 import '../../../../scripts/flutter_driver_cli/flutter_vm_controller.dart';
@@ -570,6 +571,7 @@ void main() {
         ],
         typeCensusTypes: ['Column', 'Text'],
         typeCensusTruncated: true,
+        typeCensusVisitedElements: 20000,
       );
       try {
         final result = await _runCli([
@@ -585,17 +587,75 @@ void main() {
         ], store: generationStore);
 
         expect(result.code, 1);
-        expect(
-          json.decode(result.lines.single)['message'],
-          contains('census was truncated'),
-        );
+        final payload = json.decode(result.lines.single);
+        // Truncation is a census fact, not a slow-Client timeout: waiting
+        // longer would never make the walk complete.
+        expect(payload['message'], contains('type census truncated'));
+        expect(payload['message'], contains('20000-element bound'));
+        expect(payload['message'], isNot(contains('Timed out')));
+        expect(payload['data']['census_truncated'], isTrue);
+        expect(payload['data']['census_visited_elements'], 20000);
       } finally {
         await fake.close();
       }
     });
 
-    test('scroll --until-visible fails fast for an unreachable target', () async {
-      final fake = await _FakeDriverVm.start(
+    test('type census bounds the element walk, never the distinct types', () {
+      // A real Client legitimately renders hundreds of distinct widget types.
+      // A cap on the distinct type set would mark every such tree truncated and
+      // make every absence claim unprovable, so the bound belongs on the walk.
+      final root = _CensusNode(
+        'Root',
+        List.generate(499, (index) => _CensusNode('WidgetType$index')),
+      );
+
+      final census = boundedRenderedTypeCensus<_CensusNode>(
+        root: root,
+        label: (node) => node.label,
+        children: (node) => node.children,
+      );
+
+      expect(census.types, hasLength(500));
+      expect(census.visitedElements, 500);
+      expect(census.truncated, isFalse);
+    });
+
+    test('type census truncates when the element walk exceeds its bound', () {
+      final root = _CensusNode(
+        'Root',
+        List.generate(20, (index) => _CensusNode('WidgetType$index')),
+      );
+
+      final census = boundedRenderedTypeCensus<_CensusNode>(
+        root: root,
+        label: (node) => node.label,
+        children: (node) => node.children,
+        maxElements: 5,
+      );
+
+      expect(census.visitedElements, 5);
+      expect(census.types.length, lessThanOrEqualTo(5));
+      expect(census.truncated, isTrue);
+    });
+
+    test('type census de-duplicates repeated rendered types', () {
+      final root = _CensusNode(
+        'Root',
+        List.generate(40, (_) => _CensusNode('Text')),
+      );
+
+      final census = boundedRenderedTypeCensus<_CensusNode>(
+        root: root,
+        label: (node) => node.label,
+        children: (node) => node.children,
+      );
+
+      expect(census.types, ['Root', 'Text']);
+      expect(census.visitedElements, 41);
+      expect(census.truncated, isFalse);
+    });
+
+    test('scroll --until-visible fails fast for an unreachable target', () async {      final fake = await _FakeDriverVm.start(
         elements: [
           {'type': 'Text', 'key': 'visible_row'},
         ],
@@ -786,6 +846,71 @@ void main() {
         expect(payload['verification'], 'no_observable_change');
         // Reveal must run before the baseline capture, which must precede tap.
         expect(fake.rpcOrder.take(3), ['reveal', 'inspect', 'tap']);
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('tap on an older Client reports the auto-scroll caveat on success',
+        () async {
+      // A Client without the reveal extension still taps and verifies, but the
+      // verified change may be an auto-scroll rather than the action, so the
+      // success path must carry the same caveat the failure path carries.
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'send_message_btn'},
+        ],
+        mutateOnTapKey: 'send_message_btn',
+        tapAdds: {'type': 'Text', 'key': 'assistant_message_body:e1'},
+        revealAvailable: false,
+      );
+      try {
+        final result = await _runCli([
+          'tap',
+          '--key',
+          'send_message_btn',
+          '--expect',
+          'assistant_message_body:e1',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['verified'], 'key');
+        expect(payload['message'], contains('auto-scroll'));
+        expect(fake.rpcOrder, isNot(contains('reveal')));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('tap on a newer Client stays free of the auto-scroll caveat', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'send_message_btn'},
+        ],
+        mutateOnTapKey: 'send_message_btn',
+        tapAdds: {'type': 'Text', 'key': 'assistant_message_body:e1'},
+      );
+      try {
+        final result = await _runCli([
+          'tap',
+          '--key',
+          'send_message_btn',
+          '--expect',
+          'assistant_message_body:e1',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['verified'], 'key');
+        expect(payload['message'], isNot(contains('auto-scroll')));
       } finally {
         await fake.close();
       }
@@ -1108,6 +1233,103 @@ void main() {
         await fake.close();
       }
     });
+
+    test('batch --timeout is the deadline a step without a timeout runs under',
+        () async {
+      // The launcher budgets the whole recipe with the batch --timeout, so the
+      // driver must apply the same value instead of a hidden 30 s default.
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label', 'text': 'Idle'},
+        ],
+      );
+      try {
+        final started = DateTime.now();
+        final result = await _runCli([
+          'batch',
+          '--timeout',
+          '1',
+          '--json-steps',
+          json.encode([
+            {'action': 'wait_for', 'key': 'never_present'},
+          ]),
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        final waited = payload['results'][0]['data']['waited_ms'] as int;
+        expect(waited, greaterThanOrEqualTo(900));
+        expect(waited, lessThan(5000));
+        expect(DateTime.now().difference(started).inSeconds, lessThan(6));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('batch keeps a step deadline longer than its own timeout', () async {
+      // The step owns a longer deadline than the batch default, and its first
+      // inspection is slower than that default. The transport timeout must
+      // follow the longest step, or a slow RPC is misreported as a failure.
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'Text', 'key': 'idle_label', 'text': 'Idle'},
+        ],
+        inspectDelayMs: 1200,
+      );
+      try {
+        final result = await _runCli([
+          'batch',
+          '--timeout',
+          '1',
+          '--json-steps',
+          json.encode([
+            {'action': 'wait_for', 'key': 'idle_label', 'timeout': 15},
+          ]),
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(json.decode(result.lines.single)['passed'], 1);
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('batch transport timeout covers the longest step deadline', () {
+      const defaultStepTimeout = Duration(seconds: 5);
+
+      // A step without a timeout inherits the batch deadline.
+      expect(
+        batchStepTimeout(
+          const BatchStep(action: 'wait_for'),
+          defaultStepTimeout,
+        ),
+        defaultStepTimeout,
+      );
+      // A step with its own timeout keeps it, even above the batch default.
+      expect(
+        batchRpcTimeout(
+          const [
+            BatchStep(action: 'wait_for'),
+            BatchStep(action: 'tap', timeoutSeconds: 60),
+          ],
+          defaultStepTimeout,
+        ),
+        const Duration(seconds: 60),
+      );
+      expect(
+        batchRpcTimeout(
+          const [BatchStep(action: 'wait_for')],
+          defaultStepTimeout,
+        ),
+        defaultStepTimeout,
+      );
+    });
   });
 
   group('Flutter VM driver tree state', () {
@@ -1220,7 +1442,12 @@ void main() {
         contains("registerExtension('ext.sanad_client.reveal'"),
       );
       expect(driverSource, contains("parameters['typeCensus'] == 'true'"));
-      expect(driverSource, contains("'truncated': truncated"));
+      expect(driverSource, contains('boundedRenderedTypeCensus<Element>'));
+      expect(driverSource, contains("'visited_elements': census.visitedElements"));
+      // The census must be bounded by its walk: a distinct-type cap marks any
+      // large tree truncated and makes every absence claim unprovable.
+      expect(driverSource, isNot(contains('maxCensusTypes')));
+      expect(driverSource, isNot(contains('types.length >')));
     });
 
     test('batch step accepts documented aliases', () {
@@ -1288,8 +1515,17 @@ class _FakeDriverVm {
   /// When set, a reveal step moves the element at this index to this y value,
   /// simulating the auto-scroll that must not count as the tap's effect.
   int? revealScrollsTo;
+
+  /// False models an older Client whose isolate does not advertise
+  /// `ext.sanad_client.reveal`.
+  bool revealAvailable = true;
+
+  /// Delays a non-census inspection, modelling a Client slower than a short
+  /// batch default so the transport timeout is observable.
+  int inspectDelayMs = 0;
   List<String> typeCensusTypes = const [];
   bool typeCensusTruncated = false;
+  int? typeCensusVisitedElements;
   int inspectCalls = 0;
   int scrollCalls = 0;
 
@@ -1308,6 +1544,9 @@ class _FakeDriverVm {
     int? revealScrollsTo,
     List<String>? typeCensusTypes,
     bool typeCensusTruncated = false,
+    int? typeCensusVisitedElements,
+    bool revealAvailable = true,
+    int inspectDelayMs = 0,
     bool mutateOnInspect = false,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -1327,6 +1566,9 @@ class _FakeDriverVm {
     fake.revealScrollsTo = revealScrollsTo;
     fake.typeCensusTypes = typeCensusTypes ?? const [];
     fake.typeCensusTruncated = typeCensusTruncated;
+    fake.typeCensusVisitedElements = typeCensusVisitedElements;
+    fake.revealAvailable = revealAvailable;
+    fake.inspectDelayMs = inspectDelayMs;
     fake.mutateOnInspect = mutateOnInspect;
     if (obscuredKeys != null) fake.obscuredKeys.addAll(obscuredKeys);
     if (enterTextAdds != null) fake.enterTextAdds.addAll(enterTextAdds);
@@ -1359,10 +1601,10 @@ class _FakeDriverVm {
         case 'getIsolate':
           response['result'] = {
             'extensionRPCs': params['isolateId'] == 'isolates/main'
-                ? const [
+                ? [
                     'ext.sanad_client.inspect_ui',
                     'ext.sanad_client.tap',
-                    'ext.sanad_client.reveal',
+                    if (revealAvailable) 'ext.sanad_client.reveal',
                     'ext.sanad_client.enter_text',
                     'ext.sanad_client.scroll',
                     'ext.sanad_client.auth_url',
@@ -1378,6 +1620,8 @@ class _FakeDriverVm {
               'types': typeCensusTypes,
               'type_count': typeCensusTypes.length,
               'truncated': typeCensusTruncated,
+              'visited_elements':
+                  typeCensusVisitedElements ?? typeCensusTypes.length,
             };
             break;
           }
@@ -1406,6 +1650,10 @@ class _FakeDriverVm {
           };
         case 'ext.sanad_client.reveal':
           rpcOrder.add('reveal');
+          if (!revealAvailable) {
+            response['error'] = {'code': -32601, 'message': 'Method not found'};
+            break;
+          }
           final revealIndex = revealScrollsTo;
           if (revealIndex != null && revealIndex < _elements.length) {
             final element = _elements[revealIndex];
@@ -1474,7 +1722,19 @@ class _FakeDriverVm {
             'message': 'Method not found',
           };
       }
-      socket.add(json.encode(response));
+      final delayMs =
+          method == 'ext.sanad_client.inspect_ui' &&
+              params['typeCensus'] != 'true'
+          ? inspectDelayMs
+          : 0;
+      if (delayMs > 0) {
+        Timer(
+          Duration(milliseconds: delayMs),
+          () => socket.add(json.encode(response)),
+        );
+      } else {
+        socket.add(json.encode(response));
+      }
     });
   }
 
@@ -1576,4 +1836,12 @@ class _FakeVmService {
     }
     await _server.close(force: true);
   }
+}
+
+/// Minimal rendered-tree node used to exercise the bounded type census walk.
+class _CensusNode {
+  _CensusNode(this.label, [this.children = const []]);
+
+  final String label;
+  final List<_CensusNode> children;
 }
