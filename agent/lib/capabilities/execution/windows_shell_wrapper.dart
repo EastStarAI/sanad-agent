@@ -15,8 +15,8 @@ import 'package:path/path.dart' as p;
 /// The wrapper separates the two concerns:
 ///
 /// 1. a pure-ASCII wrapper switches `cmd.exe` to code page 65001 as its first
-///    executed line, and its own ASCII text is decoded identically by every
-///    code page;
+///    executed line (via `%SystemRoot%\System32\chcp.com`), and its own ASCII
+///    text is decoded identically by every code page;
 /// 2. the model command lives only in a UTF-8 payload file that the wrapper
 ///    `call`s, so the payload is opened and decoded after the switch instead
 ///    of arriving in a buffer cmd already decoded under the old code page.
@@ -24,6 +24,10 @@ import 'package:path/path.dart' as p;
 /// The payload is UTF-8 without a BOM: a BOM would become part of the first
 /// command line. The wrapper keeps the ownership start gate, so no
 /// model-requested command runs before the daemon attached its process tree.
+/// Internal helpers invoke `%SystemRoot%\System32\` executables directly so
+/// they do not depend on child `PATH`, and `%errorlevel%` is reset via `(call )`
+/// right before delegating to the payload so wrapper mechanics never leak
+/// into command results.
 class WindowsShellWrapper {
   const WindowsShellWrapper._();
 
@@ -62,14 +66,20 @@ class WindowsShellWrapper {
   /// with whatever code page `cmd.exe` starts in. Uses `%~dp0` to reference
   /// sibling files in the same directory so the wrapper script contains no
   /// path characters that could depend on code page or username encoding.
+  ///
+  /// Invokes `chcp.com` and `ping.exe` from `%SystemRoot%\System32\` directly so
+  /// the wrapper does not depend on the child process's resolved `PATH`.
+  /// Resets `%errorlevel%` to 0 via `(call )` right before calling the payload
+  /// so wrapper operations never leak into the reported command status.
   static String renderWrapper([String? directoryPath]) =>
-      '@chcp $codePage>nul 2>&1\r\n'
+      '@%SystemRoot%\\System32\\chcp.com $codePage>nul 2>&1\r\n'
       '@echo off\r\n'
       ':wait_for_owner\r\n'
       'if not exist "%~dp0$startGateFileName" (\r\n'
-      '  >nul 2>&1 ping -n 2 127.0.0.1\r\n'
+      '  >nul 2>&1 %SystemRoot%\\System32\\ping.exe -n 2 127.0.0.1\r\n'
       '  goto wait_for_owner\r\n'
       ')\r\n'
+      '(call )\r\n'
       'call "%~dp0$payloadFileName"\r\n'
       'exit /b %errorlevel%\r\n';
 

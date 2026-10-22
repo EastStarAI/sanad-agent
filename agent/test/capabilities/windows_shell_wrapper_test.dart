@@ -48,14 +48,32 @@ void main() {
     test('renderWrapper generates pure ASCII start gate and payload call', () {
       final wrapper = WindowsShellWrapper.renderWrapper();
 
-      expect(wrapper.startsWith('@chcp 65001>nul 2>&1\r\n'), isTrue);
+      expect(
+        wrapper.startsWith(
+          r'@%SystemRoot%\System32\chcp.com 65001>nul 2>&1' '\r\n',
+        ),
+        isTrue,
+      );
+      expect(wrapper, contains(r'@%SystemRoot%\System32\chcp.com'));
       expect(wrapper, contains('@echo off\r\n'));
       expect(wrapper, contains(':wait_for_owner\r\n'));
       expect(wrapper, contains('if not exist "%~dp0owned.ready" (\r\n'));
-      expect(wrapper, contains('>nul 2>&1 ping -n 2 127.0.0.1\r\n'));
+      expect(wrapper, contains(r'%SystemRoot%\System32\ping.exe'));
+      expect(
+        wrapper,
+        contains(
+          r'>nul 2>&1 %SystemRoot%\System32\ping.exe -n 2 127.0.0.1' '\r\n',
+        ),
+      );
       expect(wrapper, contains('goto wait_for_owner\r\n'));
-      expect(wrapper, contains('call "%~dp0payload.cmd"\r\n'));
+      expect(wrapper, contains('(call )\r\ncall "%~dp0payload.cmd"\r\n'));
       expect(wrapper.endsWith('exit /b %errorlevel%\r\n'), isTrue);
+
+      final resetIndex = wrapper.indexOf('(call )\r\n');
+      final callIndex = wrapper.indexOf('call "%~dp0payload.cmd"\r\n');
+      expect(resetIndex, isNonNegative);
+      expect(callIndex, isNonNegative);
+      expect(resetIndex + '(call )\r\n'.length, equals(callIndex));
 
       expect(WindowsShellWrapper.isAsciiOnly(wrapper), isTrue);
     });
@@ -126,8 +144,12 @@ void main() {
       final wrapperBytes = await files.wrapper.readAsBytes();
       final wrapperText = utf8.decode(wrapperBytes);
       expect(WindowsShellWrapper.isAsciiOnly(wrapperText), isTrue);
-      expect(wrapperText, contains('@chcp 65001>nul 2>&1'));
-      expect(wrapperText, contains('call "%~dp0payload.cmd"'));
+      expect(
+        wrapperText,
+        contains(r'@%SystemRoot%\System32\chcp.com 65001>nul 2>&1'),
+      );
+      expect(wrapperText, contains(r'%SystemRoot%\System32\ping.exe'));
+      expect(wrapperText, contains('(call )\r\ncall "%~dp0payload.cmd"'));
 
       final payloadBytes = await files.payload.readAsBytes();
       final payloadText = utf8.decode(payloadBytes);
