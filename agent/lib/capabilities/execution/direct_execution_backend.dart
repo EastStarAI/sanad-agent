@@ -12,6 +12,7 @@ import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_windows_path/windows_path.dart';
 
 import 'execution_backend.dart';
+import 'windows_shell_wrapper.dart';
 
 /// Direct Developer execution on the host.
 ///
@@ -59,22 +60,18 @@ class DirectExecutionBackend implements ExecutionBackend {
   _shellCommand(String command) async {
     if (Platform.isWindows) {
       final directory = await Directory.systemTemp.createTemp('sanad-shell-');
-      final script = File('${directory.path}\\command.cmd');
-      final startGate = File('${directory.path}\\owned.ready');
-      await script.writeAsString(
-        '@echo off\r\n'
-        ':wait_for_owner\r\n'
-        'if not exist "${startGate.path}" (\r\n'
-        '  >nul 2>&1 ping -n 2 127.0.0.1\r\n'
-        '  goto wait_for_owner\r\n'
-        ')\r\n'
-        '$command\r\n',
+      // cmd.exe decodes the command text with the console code page, so the
+      // UTF-8 command is kept in its own payload file that the ASCII wrapper
+      // hands over after it switched cmd to UTF-8.
+      final files = await writeWindowsShellFiles(
+        directoryPath: directory.path,
+        command: command,
       );
       return (
         executable: Platform.environment['COMSPEC'] ?? 'cmd.exe',
-        arguments: ['/d', '/q', '/c', script.path],
+        arguments: ['/d', '/q', '/c', files.wrapper.path],
         cleanupDirectory: directory,
-        startGate: startGate,
+        startGate: files.startGate,
         usesProcessGroup: false,
       );
     }
@@ -172,11 +169,15 @@ class DirectExecutionBackend implements ExecutionBackend {
       ToolProcessCleanupReport? cleanup,
       String? terminalReason,
       ToolResultErrorCode? errorCode,
+      // Reported only when the command exited on its own; a timeout,
+      // cancellation or failed spawn has no observed exit status.
+      int? exitCode,
     }) {
       final payload = <String, dynamic>{
         if (isError) 'isError': true,
         'output': redactor.redact(output),
         'duration_ms': stopwatch.elapsedMilliseconds,
+        'exit_code': ?exitCode,
         'cleanup_outcome': ?cleanup?.outcome.name,
         'terminal_reason': ?terminalReason,
       };
@@ -305,6 +306,7 @@ class DirectExecutionBackend implements ExecutionBackend {
             isError: exitCode != 0 || cleanupFailed,
             output: output,
             cleanup: cleanupFailed ? naturalCleanup : null,
+            exitCode: exitCode,
           );
         case _ShellWaitTimedOut():
           final cleanup = await tree.terminate(gracePeriod: _terminationGrace);

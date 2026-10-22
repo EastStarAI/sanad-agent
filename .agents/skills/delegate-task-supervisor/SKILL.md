@@ -1,10 +1,10 @@
 ---
 name: delegate-task-supervisor
-description: Bootstrap and orchestrate one or many delegated coding-agent CLI tasks through installed delegate-skills, preserve workspace/project/session identity, expose live task timelines, and wait event-first for the next meaningful transition. Use whenever work is handed to OpenCode, Antigravity/agy, or multiple external implementers, especially for parallel, long-running, resumable, or human-observable delegation. Do not replace the implementer-specific delegate skill; load and follow it.
+description: Bootstrap and orchestrate one or many delegated coding-agent CLI tasks through installed delegate-skills, preserve workspace/project/session identity, expose live task timelines, and wait event-first for the next meaningful transition. Use whenever work is handed to OpenCode, Antigravity/agy, or Sanad Agent either locally or remotely through `sanad-client`, especially for parallel, long-running, resumable, or human-observable delegation. Do not replace the implementer-specific delegate skill; load and follow it.
 license: MIT
 compatibility: Requires Node.js 18+ and git. The bootstrap helper can install delegate-skills and supported implementer CLIs with explicit approval. Runtime scripts use Node built-ins only and support macOS, Linux, and Windows.
 metadata:
-  version: 0.2.0
+  version: 0.3.0
 ---
 
 # Delegate Task Supervisor
@@ -111,6 +111,36 @@ For a temporary unregistered Sanad context, replace the `--workspace` pair with 
 
 For source development, use `command: "fvm"`, `args: ["dart", "run", "agent/bin/sanad_agent.dart", "run", ...]`, and optionally `sourceRoot: "<sanad-source-checkout>"` when that checkout differs from the target `workspace`. `sourceRoot` is accepted only for this FVM form, must contain the requested entry point, and is recorded with the effective spawn directory in the run manifest. Installed `sanad run` tasks and non-Sanad implementers must not declare it.
 
+### Remote Sanad (`sanad-client`) Specification Example:
+
+```json
+{
+  "tasks": [
+    {
+      "id": "task-03",
+      "implementer": "sanad",
+      "workspace": "<caller-side-orchestration-root>",
+      "command": "sanad-client",
+      "args": [
+        "-d", "<remote-device-id>",
+        "run",
+        "--workspace", "<remote-workspace-id>",
+        "--brief-file", "<absolute-local-brief-file>",
+        "--session", "<preallocated-session-id>",
+        "--events",
+        "--json"
+      ]
+    }
+  ]
+}
+```
+
+A remote task drives the same `run` machine contract on another machine through the loopback Client CLI relay. `command` is `sanad-client` or an explicit absolute path to a built binary. The supervisor requires the canonical prefix `-d|--device <device-id> run` (or `--device=<id> run`), plus `--brief-file`, `--session`, `--events`, and `--json`; it accepts `--workspace <remote-workspace-id>` or `--execution-root <remote-path>` and rejects `--out-dir`, a second device flag, and `timelinePath`.
+
+Device ids, remote workspace ids, and remote execution roots describe the target machine and are never resolved, canonicalized, or compared with the local `workspace` field, which remains the supervisor's identity and spawn directory on the caller machine. `--brief-file` is the one caller-side path and must exist locally, because `sanad-client` reads it and relays only its content. Declaring `home` selects the caller-side Sanad Home whose Client owns the relay endpoint; it is injected as `--home` and exported exactly like a local task.
+
+Remote tasks are streamed rather than file-tailed: the supervisor spawns them with stdin closed (`sanad-client` waits for stdin EOF), mirrors the relayed streams into the run directory, journals lifecycle events live, and captures the terminal `--json` envelope from stdout into `resultPath` (default `<run-dir>/<task-id>.result.json`). The observed timeline is the task's stdout log. Exit codes map to supervisor states instead of the generic success/failure split: `0` completed, `124` timeout, `130` cancelled, `69` blocked (`cause: client_unavailable`), `77` blocked (`cause: client_cli_disabled`), and exit `0` without an envelope `incomplete` (`cause: missing_result_envelope`), so a closed control socket never reads as success. The relay window is the relayed command's `--timeout` plus 30 seconds (300 seconds without one), so set `--timeout` to the expected run length; a run that outlives the window reports `timeout`.
+
 A Sanad task running against a managed custom Home must declare `home: "<absolute-sanad-home>"`. The supervisor validates the path (absolute, existing directory), injects `--home` into the worker invocation, and spawns the worker with `SANAD_HOME` set to that Home and any inherited `SANAD_STATE_HOME` removed, so a detached worker and everything it starts never fall back to the caller's or the default Home (observed standalone/exit 78 and a migrated default Home). Declaring `--home` inside `args` is rejected as ambiguous, and `home` is valid only for Sanad tasks. Secrets and tokens never belong in `home`, briefs, arguments, or specs.
 
 Build relay arguments from the loaded delegate skill. The supervisor treats non-Sanad relay arguments as opaque; for Sanad it validates only the required machine-contract flags and workspace boundary. Commands are spawned directly except that Windows `.cmd`/`.bat` wrappers require Node's shell mode after shell metacharacters have been rejected. Keep secrets out of briefs, arguments, specs, and logs.
@@ -176,7 +206,7 @@ node "<skill-dir>/scripts/watch-once.mjs" \
   --since <last-sequence>
 ```
 
-This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed. It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a one-second bounded liveness fallback so callers cannot block forever on stale state. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
+This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`, `incomplete`, `needs_review`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed. It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a one-second bounded liveness fallback so callers cannot block forever on stale state. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
 
 A watcher can be interrupted and restarted without stopping workers or losing already-journaled events.
 

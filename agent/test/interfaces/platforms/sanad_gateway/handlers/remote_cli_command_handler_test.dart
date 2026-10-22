@@ -371,6 +371,54 @@ void main() {
       expect(resultEvent['payload']['exit_code'], 0);
     });
 
+    test('returns the CLI usage exit code as one terminal result for a rejected argv',
+        () async {
+      // A relayed argv that the local CLI rejects must still produce a single
+      // terminal result: a headless caller has no other way to learn the
+      // outcome, and the usage exit code belongs to the CLI.
+      final rejectingHandler = RemoteCliCommandHandler(
+        bridge: bridge,
+        authManager: authManager,
+        runnerFactory: ({
+          required stdoutSink,
+          required stderrSink,
+          required stdinReader,
+          workspaceService,
+          signalStream,
+          eventSink,
+        }) {
+          return SanadCommandRunner(
+            stdoutSink: stdoutSink,
+            stderrSink: stderrSink,
+          );
+        },
+      );
+
+      await rejectingHandler.handleExecute(
+        CanonicalEvent(
+          type: RemoteCliCommands.execute,
+          payload: const {
+            'request_id': 'req-usage-rejected',
+            'argv': ['providers', 'list', '--provider-that-does-not-exist'],
+          },
+        ),
+        emitEnvelope,
+      );
+
+      final resultEvents = emittedEnvelopes
+          .where((e) => e['event'] == RemoteCliCommands.result)
+          .toList();
+      expect(resultEvents, hasLength(1));
+      expect(resultEvents.single['payload']['exit_code'], 64);
+      expect(resultEvents.single['payload']['timed_out'], isFalse);
+
+      final stderrText = emittedEnvelopes
+          .where((e) => e['event'] == RemoteCliCommands.stderr)
+          .map((e) => e['payload']['text'] as String)
+          .join();
+      expect(stderrText, isNotEmpty);
+    });
+
     test('preserves stdin semantics and supplies input to runner', () async {
       String? receivedStdin;
       final customHandler = RemoteCliCommandHandler(

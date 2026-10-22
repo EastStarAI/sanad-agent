@@ -17,6 +17,7 @@ import {
   unlinkSync,
   watch,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -36,6 +37,18 @@ const TERMINAL_STATUSES = new Set([
   'agy_unavailable',
   'opencode_unavailable',
 ]);
+// Remote delegation through `sanad-client` reports the relayed CLI exit code
+// instead of a locally produced `result.json` status, so the supervisor owns
+// this mapping. 69 (no live Client for the Home) and 77 (Client CLI disabled)
+// mean the task never started on the target device and needs operator action,
+// so both surface as blocked with the Client's own diagnostic as the cause.
+const REMOTE_EXIT_STATUSES = new Map([
+  [124, { status: 'timeout', cause: 'timeout' }],
+  [130, { status: 'cancelled', cause: 'cancelled' }],
+  [69, { status: 'blocked', cause: 'client_unavailable' }],
+  [77, { status: 'blocked', cause: 'client_cli_disabled' }],
+]);
+const SANAD_CLIENT_COMMAND = /^sanad-client(\.(exe|cmd|bat))?$/;
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const SHELL_META = /[|;&<>$`]/;
 const WINDOWS_BATCH_META = /[|;&<>$`%^!]/;
@@ -262,6 +275,9 @@ function validateTask(item, existingIds = new Set()) {
   let resultPath = normalizeOptionalPath(item.resultPath, 'resultPath');
   let timelinePath = normalizeOptionalPath(item.timelinePath, 'timelinePath');
   let timelineFormat = item.timelineFormat ?? (item.implementer === 'sanad' ? 'jsonl' : 'text');
+  // Remote `sanad-client` tasks record the validated target device so the run
+  // manifest shows which device a task was dispatched to.
+  let remoteDevice = null;
 
   if (!['text', 'jsonl'].includes(timelineFormat)) {
     fail(`task ${item.id} timelineFormat must be text or jsonl`);
@@ -280,8 +296,44 @@ function validateTask(item, existingIds = new Set()) {
       && item.args[3] === 'run'
       && typeof item.args[2] === 'string'
       && /sanad_agent\.dart$/.test(item.args[2]);
-    if (!isInstalledSanad && !isFvmSanad) {
-      fail(`task ${item.id} sanad invocation must be 'sanad run' or 'fvm dart run <entry>/sanad_agent.dart run'`);
+    // Remote delegation drives the `sanad-client` relay at the live Client of a
+    // Sanad Home. A built binary may be addressed by an explicit absolute path.
+    const isRemoteClient = SANAD_CLIENT_COMMAND.test(cmdBase);
+    if (!isInstalledSanad && !isFvmSanad && !isRemoteClient) {
+      fail(`task ${item.id} sanad invocation must be 'sanad run', 'fvm dart run <entry>/sanad_agent.dart run', or 'sanad-client -d <device-id> run'`);
+    }
+
+    if (isRemoteClient) {
+      if (/[\\/]/.test(item.command) && !isAbsolute(item.command)) {
+        fail(`task ${item.id} sanad-client command path must be absolute: ${item.command}`);
+      }
+      // Accept only the documented prefix `-d|--device <device-id> run` (or the
+      // `--device=<id>` form). Requiring `run` as the relayed subcommand keeps
+      // the target inside the one-shot surface, exactly like `sanad run`.
+      const [first] = item.args;
+      let device = null;
+      let runIndex = -1;
+      if (first === '-d' || first === '--device') {
+        const value = item.args[1];
+        if (!value || value.startsWith('-')) fail(`task ${item.id} ${first} requires a value`);
+        device = value;
+        runIndex = 2;
+      } else if (typeof first === 'string' && first.startsWith('--device=')) {
+        device = first.slice('--device='.length);
+        if (!device) fail(`task ${item.id} --device requires a value`);
+        runIndex = 1;
+      }
+      if (runIndex === -1 || item.args[runIndex] !== 'run') {
+        fail(`task ${item.id} sanad-client invocation must be 'sanad-client -d <device-id> run ...'`);
+      }
+      // A later device flag would silently retarget the relayed command away
+      // from the device this task validated (the Client CLI keeps the last one).
+      if (item.args.slice(runIndex + 1).some(
+        (arg) => arg === '-d' || arg === '--device' || (typeof arg === 'string' && arg.startsWith('--device=')),
+      )) {
+        fail(`task ${item.id} contains duplicate --device values`);
+      }
+      remoteDevice = device;
     }
 
     if (item.sourceRoot != null) {
@@ -334,51 +386,92 @@ function validateTask(item, existingIds = new Set()) {
       }
     }
 
-    const logicalWorkspace = getArgValue(item.args, item.id, '--workspace', '-w');
-
-    const execRoot = getArgValue(item.args, item.id, '--execution-root');
-    if (!logicalWorkspace && !execRoot) {
-      fail(`task ${item.id} sanad task requires --workspace or --execution-root`);
-    }
-    // A logical workspace may own the conversation while an explicit
-    // execution root targets this task's isolated worktree. Whenever present,
-    // validate that filesystem boundary even when --workspace is also present.
-    if (execRoot) {
-      if (!isAbsolute(execRoot)) {
-        fail(`task ${item.id} --execution-root must be an absolute path`);
+    if (isRemoteClient) {
+      // Remote delegation: the brief file is the only caller-side path. Device
+      // ids, remote workspace ids, and remote execution roots describe the
+      // target machine, so they are never resolved, canonicalized, or compared
+      // with the local workspace here.
+      const remoteWorkspace = getArgValue(item.args, item.id, '--workspace', '-w');
+      const remoteExecutionRoot = getArgValue(item.args, item.id, '--execution-root');
+      if (!remoteWorkspace && !remoteExecutionRoot) {
+        fail(`task ${item.id} sanad-client task requires --workspace (remote workspace id) or --execution-root`);
       }
-      if (canonicalWorkspace(execRoot) !== workspace) {
-        fail(`task ${item.id} --execution-root must match task workspace`);
+      const remoteBriefFile = getArgValue(item.args, item.id, '--brief-file', '-b');
+      if (!remoteBriefFile) {
+        fail(`task ${item.id} sanad-client task requires --brief-file`);
       }
-    }
+      // `sanad-client` reads the brief locally and relays only its content, so
+      // this path is genuinely caller-side and must exist before dispatch.
+      if (!isAbsolute(remoteBriefFile) || !existsSync(remoteBriefFile) || !statSync(remoteBriefFile).isFile()) {
+        fail(`task ${item.id} --brief-file must be an existing absolute file path`);
+      }
+      if (!getArgValue(item.args, item.id, '--session', '-s')) {
+        fail(`task ${item.id} sanad-client task requires --session`);
+      }
+      if (!item.args.includes('--json')) {
+        fail(`task ${item.id} sanad-client task requires --json so the result envelope can be captured`);
+      }
+      if (!item.args.includes('--events')) {
+        fail(`task ${item.id} sanad-client task requires --events so relayed lifecycle events stay observable`);
+      }
+      if (getArgValue(item.args, item.id, '--out-dir', '-o')) {
+        fail(`task ${item.id} sanad-client task must not pass --out-dir; remote artifacts are written on the target device`);
+      }
+      if (item.timelinePath != null) {
+        fail(`task ${item.id} sanad-client task relays its timeline on stdout; do not declare timelinePath`);
+      }
+      // The relayed stdout carries the NDJSON lifecycle events, so it becomes
+      // the observed timeline, and the terminal `--json` envelope captured from
+      // that same stream becomes the task result.
+      timelinePath = null;
+      timelineFormat = 'jsonl';
+    } else {
+      const logicalWorkspace = getArgValue(item.args, item.id, '--workspace', '-w');
 
-    const briefFile = getArgValue(item.args, item.id, '--brief-file', '-b');
-    if (!briefFile) {
-      fail(`task ${item.id} sanad task requires --brief-file`);
-    }
-    if (!isAbsolute(briefFile) || !existsSync(briefFile) || !statSync(briefFile).isFile()) {
-      fail(`task ${item.id} --brief-file must be an existing absolute file path`);
-    }
+      const execRoot = getArgValue(item.args, item.id, '--execution-root');
+      if (!logicalWorkspace && !execRoot) {
+        fail(`task ${item.id} sanad task requires --workspace or --execution-root`);
+      }
+      // A logical workspace may own the conversation while an explicit
+      // execution root targets this task's isolated worktree. Whenever present,
+      // validate that filesystem boundary even when --workspace is also present.
+      if (execRoot) {
+        if (!isAbsolute(execRoot)) {
+          fail(`task ${item.id} --execution-root must be an absolute path`);
+        }
+        if (canonicalWorkspace(execRoot) !== workspace) {
+          fail(`task ${item.id} --execution-root must match task workspace`);
+        }
+      }
 
-    const outDir = getArgValue(item.args, item.id, '--out-dir', '-o');
-    if (!outDir) {
-      fail(`task ${item.id} sanad task requires --out-dir`);
-    }
-    if (!isAbsolute(outDir)) {
-      fail(`task ${item.id} --out-dir must be an absolute path`);
-    }
+      const briefFile = getArgValue(item.args, item.id, '--brief-file', '-b');
+      if (!briefFile) {
+        fail(`task ${item.id} sanad task requires --brief-file`);
+      }
+      if (!isAbsolute(briefFile) || !existsSync(briefFile) || !statSync(briefFile).isFile()) {
+        fail(`task ${item.id} --brief-file must be an existing absolute file path`);
+      }
 
-    const expectedResultPath = resolve(outDir, 'result.json');
-    const expectedTimelinePath = resolve(outDir, 'events.jsonl');
-    if (resultPath && resolve(resultPath) !== expectedResultPath) {
-      fail(`task ${item.id} resultPath must match --out-dir result.json`);
+      const outDir = getArgValue(item.args, item.id, '--out-dir', '-o');
+      if (!outDir) {
+        fail(`task ${item.id} sanad task requires --out-dir`);
+      }
+      if (!isAbsolute(outDir)) {
+        fail(`task ${item.id} --out-dir must be an absolute path`);
+      }
+
+      const expectedResultPath = resolve(outDir, 'result.json');
+      const expectedTimelinePath = resolve(outDir, 'events.jsonl');
+      if (resultPath && resolve(resultPath) !== expectedResultPath) {
+        fail(`task ${item.id} resultPath must match --out-dir result.json`);
+      }
+      if (timelinePath && resolve(timelinePath) !== expectedTimelinePath) {
+        fail(`task ${item.id} timelinePath must match --out-dir events.jsonl`);
+      }
+      resultPath = expectedResultPath;
+      timelinePath = expectedTimelinePath;
+      timelineFormat = 'jsonl';
     }
-    if (timelinePath && resolve(timelinePath) !== expectedTimelinePath) {
-      fail(`task ${item.id} timelinePath must match --out-dir events.jsonl`);
-    }
-    resultPath = expectedResultPath;
-    timelinePath = expectedTimelinePath;
-    timelineFormat = 'jsonl';
   }
 
   return {
@@ -397,6 +490,10 @@ function validateTask(item, existingIds = new Set()) {
     resultPath,
     timelinePath,
     timelineFormat,
+    // Remote `sanad-client` tasks capture their result envelope from the relayed
+    // stdout and derive both artifact paths inside the run directory.
+    remote: remoteDevice != null,
+    remoteDevice,
     knownIdentity: identityFor(workspace),
   };
 }
@@ -423,7 +520,93 @@ function runPaths(runDir) {
   };
 }
 
+// Task artifacts live in the run directory. A remote `sanad-client` task
+// streams its NDJSON lifecycle events and terminal `--json` envelope over
+// stdout, so the relayed stdout log is both the observed timeline and the
+// source of the captured result; `--out-dir` would only create remote files.
+function taskRunPaths(task, runDir) {
+  const stdoutPath = join(runDir, `${task.id}.stdout.log`);
+  const stderrPath = join(runDir, `${task.id}.stderr.log`);
+  if (!task.remote) {
+    return { stdoutPath, stderrPath, timelinePath: task.timelinePath, resultPath: task.resultPath };
+  }
+  return {
+    stdoutPath,
+    stderrPath,
+    timelinePath: stdoutPath,
+    resultPath: task.resultPath ?? join(runDir, `${task.id}.result.json`),
+  };
+}
+
+function withRunPaths(task, runDir) {
+  return { ...task, ...taskRunPaths(task, runDir) };
+}
+
+// The terminal `--json` envelope relayed on stdout is the remote task result:
+// a compact JSON object without a `type` field that carries the relayed exit
+// code (and normally the session identity). Relayed lifecycle events always
+// carry `type`, so they can never be mistaken for the envelope.
+function lastRemoteEnvelope(content) {
+  const accept = (value) => value != null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && !('type' in value)
+    && (typeof value.exit_code === 'number' || typeof value.session_id === 'string');
+  const lines = content.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (!line.startsWith('{') || !line.endsWith('}')) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (accept(parsed)) return parsed;
+  }
+  // A client that pretty-prints the envelope still produces one JSON document.
+  const trimmed = content.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (accept(parsed)) return parsed;
+    } catch {
+      // Mixed stdout: only the line scan can succeed.
+    }
+  }
+  return null;
+}
+
+function captureRemoteResult(task) {
+  if (!task.resultPath || !task.stdoutPath || !existsSync(task.stdoutPath)) return;
+  let content;
+  try {
+    content = readFileSync(task.stdoutPath, 'utf8');
+  } catch {
+    return;
+  }
+  const envelope = lastRemoteEnvelope(content);
+  if (!envelope) return;
+  writeJsonAtomic(task.resultPath, envelope);
+}
+
+// The Client CLI writes its unreachable/disabled diagnostics to stderr; the
+// last line is the operator-facing cause behind a blocked remote task.
+function lastDiagnosticLine(path) {
+  if (!path || !existsSync(path)) return null;
+  let content;
+  try {
+    content = readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+  const line = content.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean).at(-1) ?? null;
+  if (!line) return null;
+  return line.length > 400 ? `${line.slice(0, 397)}...` : line;
+}
+
 function publicTask(task, runDir, initialStatus = 'queued') {
+  const derived = taskRunPaths(task, runDir);
   return {
     id: task.id,
     implementer: task.implementer,
@@ -431,17 +614,19 @@ function publicTask(task, runDir, initialStatus = 'queued') {
     sourceRoot: task.sourceRoot ?? null,
     home: task.home ?? null,
     spawnCwd: task.spawnCwd ?? task.workspace,
+    remote: task.remote ?? false,
+    remoteDevice: task.remoteDevice ?? null,
     status: initialStatus,
     pid: null,
     startedAt: null,
     finishedAt: null,
     exitCode: null,
     signal: null,
-    resultPath: task.resultPath,
-    timelinePath: task.timelinePath,
+    resultPath: derived.resultPath,
+    timelinePath: derived.timelinePath,
     timelineFormat: task.timelineFormat,
-    stdoutPath: join(runDir, `${task.id}.stdout.log`),
-    stderrPath: join(runDir, `${task.id}.stderr.log`),
+    stdoutPath: derived.stdoutPath,
+    stderrPath: derived.stderrPath,
     knownIdentity: task.knownIdentity,
     identity: null,
   };
@@ -591,7 +776,8 @@ function workerCommand(options) {
   }
   const paths = runPaths(runDir);
   mkdirSync(paths.requests, { recursive: true });
-  const initialTasks = readJson(paths.tasks, 'normalized tasks').tasks;
+  const initialTasks = readJson(paths.tasks, 'normalized tasks').tasks
+    .map((task) => withRunPaths(task, runDir));
   const taskMap = new Map(initialTasks.map((task) => [task.id, task]));
   const taskList = [...initialTasks];
 
@@ -646,6 +832,9 @@ function workerCommand(options) {
     }
 
     let result = null;
+    // Remote tasks have no local artifact producer, so the relayed `--json`
+    // envelope on stdout is materialized into the task result path first.
+    if (task.remote) captureRemoteResult(task);
     if (task.resultPath && existsSync(task.resultPath)) {
       try {
         result = JSON.parse(readFileSync(task.resultPath, 'utf8'));
@@ -654,11 +843,25 @@ function workerCommand(options) {
       }
     }
     const reportedStatus = result?.status ?? null;
+    const remoteExit = task.remote && !TERMINAL_STATUSES.has(reportedStatus)
+      ? REMOTE_EXIT_STATUSES.get(code) ?? null
+      : null;
+    // A relay that exits 0 without publishing the `--json` envelope cannot be
+    // trusted as a completed turn: the Client CLI also reports success when the
+    // control socket closes without a terminal result frame.
+    const remoteCaptureMissing = task.remote && !launchError && code === 0 && result == null;
     const status = TERMINAL_STATUSES.has(reportedStatus)
       ? reportedStatus
-      : code === 0 && !launchError
-        ? 'completed'
-        : 'failed';
+      : remoteExit
+        ? remoteExit.status
+        : remoteCaptureMissing
+          ? 'incomplete'
+          : code === 0 && !launchError
+            ? 'completed'
+            : 'failed';
+    const remoteDiagnostic = task.remote && (remoteExit || remoteCaptureMissing)
+      ? lastDiagnosticLine(task.stderrPath)
+      : null;
     const identity = result == null ? null : {
       projectId: result.projectId ?? result.project_id ?? null,
       conversationId: result.conversationId ?? result.conversation_id ?? null,
@@ -674,11 +877,118 @@ function workerCommand(options) {
       signal,
       reportedStatus,
       identity,
+      ...(task.remote ? { resultCaptured: result != null } : {}),
+      ...(remoteExit ? { cause: remoteExit.cause } : {}),
+      ...(remoteCaptureMissing ? { cause: 'missing_result_envelope' } : {}),
+      ...(remoteDiagnostic ? { error: remoteDiagnostic } : {}),
       ...(launchError ? { error: launchError.message } : {}),
     });
 
     checkRunCompletion();
     launchAvailable();
+  };
+
+  // One processed timeline record. Local tasks tail an artifact file and remote
+  // relay tasks parse their streamed stdout, but both must produce exactly the
+  // same journal transitions, so the handler is shared.
+  const createTimelineHandler = (task) => {
+    let lastSeenType = null;
+    let lastSeenRequestId = null;
+
+    return (line) => {
+      if (!line || !line.trim() || settled.has(task.id)) return;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        return;
+      }
+
+      const type = event.type;
+      const data = event.data || {};
+      const sessionId = event.session_id || event.sessionId || data.session_id || data.sessionId || null;
+      const requestId = data.request_id || data.requestId || null;
+
+      if (type === 'needs_input' || type === 'needs_permission') {
+        if (lastSeenType === type && lastSeenRequestId === requestId) return;
+        lastSeenType = type;
+        lastSeenRequestId = requestId;
+
+        // Forward only the documented G2 intervention fields. Whitelisting
+        // avoids leaking future provider/tool payload fields into the shared
+        // supervisor journal.
+        const intervention = {
+          kind: data.kind || type,
+          ...(requestId ? { request_id: requestId } : {}),
+          ...(typeof data.tool_name === 'string'
+            ? { tool_name: data.tool_name }
+            : {}),
+          ...(Array.isArray(data.questions)
+            ? { questions: data.questions }
+            : {}),
+        };
+
+        transition(task, type, {
+          sessionId,
+          requestId,
+          intervention,
+          kind: type,
+          stateSince: event.timestamp || null,
+        });
+      } else if (type === 'blocked' || type === 'waiting') {
+        const cause = data.cause || data.code || 'unknown';
+        const noticeIdentity = requestId || cause;
+        if (lastSeenType === type && lastSeenRequestId === noticeIdentity) return;
+        lastSeenType = type;
+        lastSeenRequestId = noticeIdentity;
+        transition(task, type, {
+          sessionId,
+          cause,
+          stateSince: event.timestamp || null,
+        });
+      } else if (type === 'resumed') {
+        if (manifest.tasks[task.id]?.status === 'running') return;
+        lastSeenType = 'resumed';
+        transition(task, 'resuming', {
+          sessionId,
+          requestId: null,
+          intervention: null,
+          cause: null,
+          stateSince: event.timestamp || null,
+        });
+      } else if (type === 'running') {
+        if (manifest.tasks[task.id]?.status === 'running') return;
+        lastSeenType = 'running';
+        transition(task, 'running', {
+          sessionId,
+          requestId: null,
+          intervention: null,
+          cause: null,
+          stateSince: event.timestamp || null,
+        });
+      }
+
+      if (type === 'tool_use' || event.part?.type === 'tool' || event.tool_executions) {
+        const taskState = manifest.tasks[task.id];
+        if (taskState) {
+          const progressAt = event.timestamp || null;
+          if (!progressAt) return;
+          if (taskState.status === 'resuming') {
+            transition(task, 'running', {
+              cause: null,
+              stateSince: progressAt,
+              lastProgressAt: progressAt,
+            });
+          } else {
+            // Tool boundaries are meaningful progress and low-frequency.
+            // Assistant text can arrive per token, so it must never trigger
+            // persistent manifest writes here.
+            taskState.lastProgressAt = progressAt;
+            persist();
+          }
+        }
+      }
+    };
   };
 
   const observeTimeline = (task, child) => {
@@ -688,8 +998,7 @@ function workerCommand(options) {
     mkdirSync(dir, { recursive: true });
 
     let offset = 0;
-    let lastSeenType = null;
-    let lastSeenRequestId = null;
+    const handleLine = createTimelineHandler(task);
 
     const readAvailable = () => {
       if (settled.has(task.id)) return;
@@ -721,98 +1030,7 @@ function workerCommand(options) {
 
       const lines = completeChunk.split(/\r?\n/);
       for (const line of lines) {
-        if (!line.trim() || settled.has(task.id)) continue;
-        let event;
-        try {
-          event = JSON.parse(line);
-        } catch {
-          continue;
-        }
-
-        const type = event.type;
-        const data = event.data || {};
-        const sessionId = event.session_id || event.sessionId || data.session_id || data.sessionId || null;
-        const requestId = data.request_id || data.requestId || null;
-
-        if (type === 'needs_input' || type === 'needs_permission') {
-          if (lastSeenType === type && lastSeenRequestId === requestId) continue;
-          lastSeenType = type;
-          lastSeenRequestId = requestId;
-
-          // Forward only the documented G2 intervention fields. Whitelisting
-          // avoids leaking future provider/tool payload fields into the shared
-          // supervisor journal.
-          const intervention = {
-            kind: data.kind || type,
-            ...(requestId ? { request_id: requestId } : {}),
-            ...(typeof data.tool_name === 'string'
-              ? { tool_name: data.tool_name }
-              : {}),
-            ...(Array.isArray(data.questions)
-              ? { questions: data.questions }
-              : {}),
-          };
-
-          transition(task, type, {
-            sessionId,
-            requestId,
-            intervention,
-            kind: type,
-            stateSince: event.timestamp || null,
-          });
-        } else if (type === 'blocked' || type === 'waiting') {
-          const cause = data.cause || data.code || 'unknown';
-          const noticeIdentity = requestId || cause;
-          if (lastSeenType === type && lastSeenRequestId === noticeIdentity) continue;
-          lastSeenType = type;
-          lastSeenRequestId = noticeIdentity;
-          transition(task, type, {
-            sessionId,
-            cause,
-            stateSince: event.timestamp || null,
-          });
-        } else if (type === 'resumed') {
-          if (manifest.tasks[task.id]?.status === 'running') continue;
-          lastSeenType = 'resumed';
-          transition(task, 'resuming', {
-            sessionId,
-            requestId: null,
-            intervention: null,
-            cause: null,
-            stateSince: event.timestamp || null,
-          });
-        } else if (type === 'running') {
-          if (manifest.tasks[task.id]?.status === 'running') continue;
-          lastSeenType = 'running';
-          transition(task, 'running', {
-            sessionId,
-            requestId: null,
-            intervention: null,
-            cause: null,
-            stateSince: event.timestamp || null,
-          });
-        }
-
-        if (type === 'tool_use' || event.part?.type === 'tool' || event.tool_executions) {
-          const taskState = manifest.tasks[task.id];
-          if (taskState) {
-            const progressAt = event.timestamp || null;
-            if (!progressAt) continue;
-            if (taskState.status === 'resuming') {
-              transition(task, 'running', {
-                cause: null,
-                stateSince: progressAt,
-                lastProgressAt: progressAt,
-              });
-            } else {
-              // Tool boundaries are meaningful progress and low-frequency.
-              // Assistant text can arrive per token, so it must never trigger
-              // persistent manifest writes here.
-              taskState.lastProgressAt = progressAt;
-              persist();
-            }
-          }
-        }
+        handleLine(line);
       }
     };
 
@@ -830,19 +1048,56 @@ function workerCommand(options) {
     readAvailable();
   };
 
+  // Remote relay tasks are streamed through the worker: their lifecycle events
+  // and terminal `--json` envelope share stdout, so the worker mirrors both
+  // streams into the task logs and journals events as they arrive. A filesystem
+  // watch over a file the worker itself opened is not reliable enough for live
+  // intervention detection, and the terminal transition must wait for the pipe
+  // to drain so the envelope is never truncated.
+  const observeRelayStream = (task, child, stdoutFd, stderrFd) => {
+    const handleLine = createTimelineHandler(task);
+    let pending = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      try { writeSync(stdoutFd, chunk); } catch {}
+      pending += chunk;
+      let index = pending.indexOf('\n');
+      while (index !== -1) {
+        handleLine(pending.slice(0, index));
+        pending = pending.slice(index + 1);
+        index = pending.indexOf('\n');
+      }
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => {
+      try { writeSync(stderrFd, chunk); } catch {}
+    });
+  };
+
   const launchTask = (task) => {
     active += 1;
     const stdoutFd = openSync(manifest.tasks[task.id].stdoutPath, 'a');
     const stderrFd = openSync(manifest.tasks[task.id].stderrPath, 'a');
     const isBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(task.command);
     const effectiveArgs = task.effectiveArgs || task.args;
+    const streamRelay = task.remote === true;
+    let fdsClosed = false;
+    const closeTaskFds = () => {
+      if (fdsClosed) return;
+      fdsClosed = true;
+      try { closeSync(stdoutFd); } catch {}
+      try { closeSync(stderrFd); } catch {}
+    };
     let child;
     try {
+      // Stdin is never inherited: a delegated Sanad task reads its brief from
+      // `--brief-file`, and `sanad-client` blocks on piped stdin until EOF, so
+      // the child receives an immediate EOF instead of the supervisor's stdin.
       const spawnOptions = {
         cwd: task.spawnCwd || task.workspace,
         env: taskEnvironment(task, process.env),
         windowsHide: true,
-        stdio: ['ignore', stdoutFd, stderrFd],
+        stdio: streamRelay ? ['ignore', 'pipe', 'pipe'] : ['ignore', stdoutFd, stderrFd],
       };
       if (isBatch) {
         const batchCommand = [task.command, ...effectiveArgs].map(windowsBatchQuote).join(' ');
@@ -855,13 +1110,11 @@ function workerCommand(options) {
         child = spawn(task.command, effectiveArgs, spawnOptions);
       }
     } catch (error) {
-      closeSync(stdoutFd);
-      closeSync(stderrFd);
+      closeTaskFds();
       finishTask(task, 127, null, error);
       return;
     }
-    closeSync(stdoutFd);
-    closeSync(stderrFd);
+    if (!streamRelay) closeTaskFds();
     const startedAt = new Date().toISOString();
     transition(task, 'running', {
       pid: child.pid,
@@ -869,10 +1122,26 @@ function workerCommand(options) {
       stateSince: startedAt,
     });
 
-    observeTimeline(task, child);
+    if (streamRelay) {
+      observeRelayStream(task, child, stdoutFd, stderrFd);
+    } else {
+      observeTimeline(task, child);
+    }
 
-    child.once('error', (error) => finishTask(task, 127, null, error));
-    child.once('exit', (code, signal) => finishTask(task, code, signal));
+    child.once('error', (error) => {
+      closeTaskFds();
+      finishTask(task, 127, null, error);
+    });
+    if (streamRelay) {
+      // `close` fires after both pipes are drained, so the captured envelope is
+      // complete before the terminal transition reads it.
+      child.once('close', (code, signal) => {
+        closeTaskFds();
+        finishTask(task, code, signal);
+      });
+    } else {
+      child.once('exit', (code, signal) => finishTask(task, code, signal));
+    }
   };
 
   function launchAvailable() {
@@ -922,10 +1191,11 @@ function workerCommand(options) {
         }
       }
       for (const t of newTasks) {
-        taskMap.set(t.id, t);
-        taskList.push(t);
-        manifest.tasks[t.id] = publicTask(t, runDir, 'held');
-        transition(t, 'held');
+        const task = withRunPaths(t, runDir);
+        taskMap.set(task.id, task);
+        taskList.push(task);
+        manifest.tasks[task.id] = publicTask(task, runDir, 'held');
+        transition(task, 'held');
       }
       persist();
       return { ok: true, taskIds: newTasks.map((t) => t.id) };
@@ -943,10 +1213,11 @@ function workerCommand(options) {
           }
         }
         for (const t of newTasks) {
-          taskMap.set(t.id, t);
-          taskList.push(t);
-          manifest.tasks[t.id] = publicTask(t, runDir, 'queued');
-          transition(t, 'queued');
+          const task = withRunPaths(t, runDir);
+          taskMap.set(task.id, task);
+          taskList.push(task);
+          manifest.tasks[task.id] = publicTask(task, runDir, 'queued');
+          transition(task, 'queued');
         }
         persist();
         launchAvailable();

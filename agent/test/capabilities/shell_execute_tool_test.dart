@@ -410,6 +410,7 @@ void main() {
       expect(result['duration_ms'], isA<int>());
       expect(result['duration_ms'] as int, greaterThanOrEqualTo(0));
       expect(result['output']?.toString().trim(), equals('timing_success'));
+      expect(result['exit_code'], equals(0));
     });
 
     test(
@@ -424,6 +425,7 @@ void main() {
         expect(result['isError'], isTrue);
         expect(result['duration_ms'], isA<int>());
         expect(result['duration_ms'] as int, greaterThanOrEqualTo(0));
+        expect(result['exit_code'], equals(1));
       },
     );
   });
