@@ -13,6 +13,8 @@ const WATCH_STATUSES = new Set([
   'aborted',
   'interrupted',
   'cancelled',
+  'incomplete',
+  'needs_review',
   'agy_unavailable',
   'opencode_unavailable',
   'needs_input',

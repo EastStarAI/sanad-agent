@@ -461,3 +461,11 @@ the stderr stream.
   `providers list`) is accepted by the local CLI parser: the command runs
   normally and returns exit `0`. Only an unknown command name returns the usage
   error with exit `64`.
+- A relayed `run` that outlives its relay window (`--timeout` + 30 s, or 300 s
+  when no `--timeout` is given) ends with `exit_code: 124` and
+  `timed_out: true`. Orchestrators must report that as a timeout boundary
+  rather than as a failed task.
+- A control socket that closes before the terminal `device.cli.result` frame
+  completes the caller with exit code `1` and a diagnostic, never a silent
+  `0`. A relayed `--json` envelope is still the only proof of a completed
+  remote turn.

@@ -52,6 +52,7 @@ void main() {
 
         expect(result['isError'], isTrue);
         expect(result['output'], contains('Command cancelled by user.'));
+        expect(result.containsKey('exit_code'), isFalse);
       },
       skip: Platform.isWindows,
     );
