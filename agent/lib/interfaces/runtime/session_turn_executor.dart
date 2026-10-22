@@ -696,6 +696,7 @@ class SessionTurnExecutor {
           isComplete: true,
           runId: activeRun.runId,
           turnId: activeRun.turnId,
+          requestId: turnRequest.requestId,
           modelStepId: agentRunner.currentModelStepId,
         ),
       );
@@ -799,6 +800,7 @@ class SessionTurnExecutor {
           isComplete: true,
           runId: activeRun.runId,
           turnId: activeRun.turnId,
+          requestId: turnRequest.requestId,
           modelStepId: agentRunner.currentModelStepId,
           usage: agentRunner.lastUsage,
           contextUsage: contextUsageOnError,

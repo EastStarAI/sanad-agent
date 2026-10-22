@@ -50,6 +50,11 @@ void main() {
           );
           final failed = await client.waitForFinalAnswer(sessionId);
           expect(failed['error_code'], 'turn_failed');
+          expect(
+            failed['request_id'],
+            'req-fails',
+            reason: 'the refusal must answer the send that is waiting for it',
+          );
           expect(failed['content'], startsWith('Error:'));
           expect(
             client.noticeStatuses(sessionId),

@@ -726,8 +726,17 @@ sent. Two authoritative shapes carry that outcome:
 - a `session.runtime_notice` in `blocked` status, which waits for a Retry,
   Change Provider or Stop intervention.
 
-Neither publishes the canonical `user_message` that accepts a send, and neither
-writes durable history for the refused turn. The originating client therefore:
+Both keep the identity of the request they answer. The daemon sets
+`GatewayResponse.requestId` from the refused turn's `turnRequest.requestId`, the
+`final_answer` canonical payload publishes it as `request_id` next to
+`error_code`, and the protocol envelope repeats `request_id` at the top. A
+`blocked` notice carries the same value through `RuntimeNotice.requestId` and
+its durable mirror. An ordinary completed answer publishes no `request_id`: its
+turn is identified by message identity instead.
+
+Neither shape publishes the canonical `user_message` that accepts a send, and
+neither writes durable history for the refused turn. The originating client
+therefore:
 
 1. releases the acceptance wait of the draft whose `pendingRequestId` matches
    that request — keeping its text, workspace and route for an immediate retry
@@ -740,6 +749,24 @@ writes durable history for the refused turn. The originating client therefore:
 
 A successful turn is unaffected: its canonical acceptance already removes the
 draft, so the release is a no-op.
+
+### 4.6.1. When a refusal names no request
+
+The release is decision-theoretic, not heuristic, on the identity it has:
+
+- **Identified refusal.** A `request_id` that differs from the draft's pending
+  request never releases it. Only the request the daemon refused ends its own
+  acceptance wait.
+- **Identified blocked notice.** A `blocked` notice releases only on a matching
+  `request_id`. An accepted turn can block while a newer send is already
+  waiting, so an unattributed notice proves nothing about the newer wait and is
+  ignored for release purposes.
+- **Unidentified typed refusal.** An older agent reports no `request_id` for a
+  refused `final_answer`. The composer admits one acceptance wait per session
+  (`isAwaitingMessageAcceptance` blocks a second send), so that wait can only
+  belong to the refused send; it is released in session scope. The scope never
+  reaches the per-device New Conversation draft, whose request the refusal does
+  not name a session for.
 
 ---
 

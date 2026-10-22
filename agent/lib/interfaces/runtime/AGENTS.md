@@ -49,7 +49,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 ## Stop, Retry, and Route Recovery
 - Atomic stop clears notice, cancel token, suspended state, durable work, and queue ownership, then emits one authoritative clear/stop transition.
 - Restored blocked work always exposes Stop, Retry, and Change Provider.
-- Durable `blocked` work is never left without a recorded suspended run. A fresh turn that fails outside the engine's typed recovery has no resumable checkpoint: its exact durable owner is terminalized `cancelled`, it answers once with typed `error_code: turn_failed`, only its own notice is cleared, and FIFO drains. A failed resume keeps its checkpoint, stays `blocked`, and records its suspended run so Retry, Change Provider and new-message resume can claim it.
+- Durable `blocked` work is never left without a recorded suspended run. A fresh turn that fails outside the engine's typed recovery has no resumable checkpoint: its exact durable owner is terminalized `cancelled`, it answers once with typed `error_code: turn_failed` carrying the refused request's `request_id`, only its own notice is cleared, and FIFO drains. A failed resume keeps its checkpoint, stays `blocked`, and records its suspended run so Retry, Change Provider and new-message resume can claim it.
 - Retry/resume must atomically claim waiting or blocked ownership before any provider call.
 - A second concurrent claimant is an idempotent no-op; the first claimant owns route changes across runner, session, queue, persistence, and client confirmation.
 - Provider/model changes rewrite every non-terminal work item, not queued rows only.
