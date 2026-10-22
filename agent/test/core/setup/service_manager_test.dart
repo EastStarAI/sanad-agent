@@ -193,5 +193,27 @@ void main() {
       );
       expect(result.success, isTrue, reason: result.error);
     }, skip: Platform.isMacOS ? false : 'launchd runs on macOS only.');
+
+    test('a start never resolves the launchd user id', () async {
+      final runner = ServiceManager.launchctl;
+      final userId = ServiceManager.launchdUserId;
+      var resolvedUserId = false;
+      addTearDown(() {
+        ServiceManager.launchctl = runner;
+        ServiceManager.launchdUserId = userId;
+      });
+      ServiceManager.launchdUserId = () async {
+        resolvedUserId = true;
+        return 501;
+      };
+      ServiceManager.launchctl = (arguments) async =>
+          ProcessResult(0, arguments.first == 'list' ? 1 : 0, '', '');
+
+      await ServiceManager.start();
+
+      // Only a stop targets the `gui` domain, so a start must not fail on a
+      // lookup its plan never reads.
+      expect(resolvedUserId, isFalse);
+    }, skip: Platform.isMacOS ? false : 'launchd runs on macOS only.');
   });
 }

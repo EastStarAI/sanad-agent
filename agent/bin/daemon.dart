@@ -139,23 +139,12 @@ Future<void> main(List<String> args) async {
 ///
 /// The daemon had no termination hook, so `sanad-dev stop` (SIGTERM) or Ctrl+C
 /// left `.local_gateway_endpoint.json` naming a pid that no longer existed.
-/// The next Home-selected call then reported a stale record for a Home that was
-/// stopped cleanly, which made a stopped Home indistinguishable from one whose
-/// daemon crashed. Removal is ownership-checked, so a successor runtime that
-/// already republished the record keeps it.
+/// The same hook is the coordinator's pre-exit cleanup, so a managed pause or
+/// stop removes the record as well. Removal is ownership-checked, so a
+/// successor runtime that already republished the record keeps it.
 void _installEndpointRecordCleanup() {
   TerminationCleanup(
-    cleanup: () async {
-      try {
-        await LocalGatewayEndpointRecord.removeIfOwned();
-      } catch (error) {
-        // The process is ending either way; a leftover record still fails
-        // closed as stale on the next call.
-        Logger('DaemonStartup').warning(
-          'Could not remove the local gateway endpoint record on shutdown: $error',
-        );
-      }
-    },
+    cleanup: LocalGatewayEndpointRecord.removeOwnedOnExit,
   ).install();
 }
 

@@ -257,10 +257,11 @@ class ServiceManager {
       command: command,
       configPath: getServiceConfigPath(),
       label: label,
-      // Only a stop needs the `gui` domain target. Resolving it before any
-      // step also keeps a stop from falling back to signalling when the
-      // domain name is unavailable.
-      userId: await launchdUserId(),
+      // Only a stop needs the `gui` domain target, so only a stop resolves the
+      // user id: a start must not fail on a lookup it never uses, and resolving
+      // it before the first step keeps a stop from falling back to signalling
+      // when the domain name is unavailable.
+      userId: command == 'stop' ? await launchdUserId() : null,
     );
     var result = await launchctl(plan.first);
     for (final arguments in plan.skip(1)) {
@@ -280,20 +281,29 @@ class ServiceManager {
   /// (`143` for `SIGTERM`) counts as an unsuccessful exit and `launchctl stop`
   /// would make `launchd` launch the Agent again. `bootout` removes the job
   /// from the user's domain, so nothing can respawn it.
+  ///
+  /// [userId] is required by, and read only by, the `stop` plan: every other
+  /// command runs inside the caller's domain and ignores it.
   static List<List<String>> launchdLifecyclePlan({
     required String command,
     required String configPath,
     required String label,
-    required int userId,
-  }) => command == 'stop'
-      ? <List<String>>[
-          <String>['unload', configPath],
-          launchdBootoutArguments(label: label, userId: userId),
-        ]
-      : <List<String>>[
-          <String>['load', configPath],
-          <String>['start', label],
-        ];
+    int? userId,
+  }) {
+    if (command != 'stop') {
+      return <List<String>>[
+        <String>['load', configPath],
+        <String>['start', label],
+      ];
+    }
+    if (userId == null) {
+      throw ArgumentError.notNull('userId');
+    }
+    return <List<String>>[
+      <String>['unload', configPath],
+      launchdBootoutArguments(label: label, userId: userId),
+    ];
+  }
 
   /// The `launchctl` target that unloads [label] from the caller's `gui`
   /// domain.

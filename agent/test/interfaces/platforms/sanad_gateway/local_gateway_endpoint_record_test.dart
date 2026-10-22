@@ -159,6 +159,34 @@ void main() {
     expect(recordFile().existsSync(), isFalse);
   });
 
+  test('the pre-exit hook removes this process record and never throws', () async {
+    // This is the one hook every runtime exit path awaits: it must remove the
+    // record the daemon published for itself, and an exit that never published
+    // one must not turn into an error that blocks the exit.
+    await LocalGatewayEndpointRecord.write(host: '127.0.0.1', port: 58134);
+
+    await LocalGatewayEndpointRecord.removeOwnedOnExit();
+
+    expect(recordFile().existsSync(), isFalse);
+    await LocalGatewayEndpointRecord.removeOwnedOnExit();
+    expect(recordFile().existsSync(), isFalse);
+  });
+
+  test('the pre-exit hook keeps a record a successor republished', () async {
+    // A restart exits the outgoing daemon; the successor publishes its own
+    // record. Even if that publish landed first, the outgoing hook must not
+    // delete it.
+    await LocalGatewayEndpointRecord.write(
+      host: '127.0.0.1',
+      port: 58135,
+      processId: 4712,
+    );
+
+    await LocalGatewayEndpointRecord.removeOwnedOnExit();
+
+    expect(LocalGatewayEndpointRecord.tryRead()?.ownerProcessId, 4712);
+  });
+
   test('the record lives inside the Home it describes', () async {
     await LocalGatewayEndpointRecord.write(host: '127.0.0.1', port: 58126);
 

@@ -94,8 +94,16 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
    - **Selected Home:** when `--home` or `SANAD_HOME` selects a Home, the CLI
      resolves the endpoint from that Home's own runtime record
      (`.local_gateway_endpoint.json`, written by the daemon after it binds and
-     removed on that daemon's clean shutdown — `SIGTERM`/`SIGINT` — while the
-     record still names its own pid) and probes only that endpoint. A record is
+     removed on every exit path that ends the runtime) and probes only that
+     endpoint. Three paths end the runtime and all of them run one bounded
+     pre-exit cleanup: a termination signal (`SIGTERM`/`SIGINT`), the managed
+     pause or stop a coordinator performs after `/shutdown` or `/restart`
+     flushed its response (exit `123`, which is what `sanad-dev stop` produces),
+     and a controlled refresh (exit `0`) whose successor republishes the record
+     when it binds. Every path removes the record only while it still names its
+     own pid, and a cleanup that fails or never completes still lets the daemon
+     exit — a runtime that refuses to stop is worse than a record the next call
+     fails closed on. A record is
      usable only when it is owner-only (`0600`), names a loopback host, carries
      a process id that is still alive, and its `home_id` matches the selected
      Home's identity; the answer is then accepted only when `/health` reports
@@ -104,7 +112,7 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
      daemon can never delete a successor runtime's republished record. An
      unclean death (`SIGKILL`) leaves the record to fail closed as
      `home_runtime_stale`, which is the signal that the previous runtime did not
-     stop cleanly. The hook keeps the signal's own exit status
+     stop cleanly. A signal-driven exit keeps the signal's own status
      (`128 + signal`: `143` for `SIGTERM`, `130` for `SIGINT`) instead of
      exiting `0`, so a shell, `sanad-dev`, and a real supervisor still see a
      signal termination rather than a requested clean stop.

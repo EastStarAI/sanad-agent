@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:sanad_agent/core/constants.dart';
@@ -223,6 +224,32 @@ class LocalGatewayEndpointRecord {
     // The claim captured a newer runtime's record: leave it in place.
     await restoreClaim();
     return false;
+  }
+
+  /// The one pre-exit hook for a daemon that is ending, which never throws.
+  ///
+  /// Every runtime exit path awaits this single cleanup: the termination-signal
+  /// handlers and the managed pause, stop, and restart a coordinator performs
+  /// after its transport flushed one response. Removing the record only from
+  /// `dispose()` left the managed-stop path uncovered, so `sanad-dev stop` and
+  /// a controlled `/shutdown` ended the process with
+  /// `.local_gateway_endpoint.json` still naming a pid that was gone — and the
+  /// next Home-selected call reported a Home that stopped cleanly as stale.
+  ///
+  /// A supervised restart is covered too, and safely: the successor publishes
+  /// the record again when it binds its listener, and [removeIfOwned] restores
+  /// a record a successor published before the outgoing daemon reached here.
+  ///
+  /// A failure is logged, never rethrown: the process is ending either way, and
+  /// a leftover record still fails closed as stale on the next call.
+  static Future<void> removeOwnedOnExit() async {
+    try {
+      await removeIfOwned();
+    } on Object catch (error) {
+      Logger('LocalGatewayEndpointRecord').warning(
+        'Could not remove the local gateway runtime record on shutdown: $error',
+      );
+    }
   }
 }
 
