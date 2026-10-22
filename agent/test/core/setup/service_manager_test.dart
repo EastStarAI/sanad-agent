@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:sanad_agent/core/setup/service_manager.dart';
 import 'package:test/test.dart';
@@ -83,5 +84,136 @@ void main() {
     }
 
     expect(String.fromCharCodes(codeUnits), command);
+  });
+
+  group('launchd lifecycle', () {
+    const configPath =
+        '/Users/sanad/Library/LaunchAgents/com.eaststarai.sanad.agent.plist';
+    const label = 'com.eaststarai.sanad.agent';
+
+    test('a stop unloads the job instead of signalling it', () {
+      final plan = ServiceManager.launchdLifecyclePlan(
+        command: 'stop',
+        configPath: configPath,
+        label: label,
+        userId: 501,
+      );
+
+      expect(plan, <List<String>>[
+        <String>['unload', configPath],
+        <String>['bootout', 'gui/501/$label'],
+      ]);
+      // `launchctl stop` only signals the job, and the plist keeps
+      // `KeepAlive { SuccessfulExit = false }`: the daemon's `143` would count
+      // as an unsuccessful exit and `launchd` would launch it again.
+      expect(plan.expand((arguments) => arguments), isNot(contains('stop')));
+    });
+
+    test('a start loads the plist and falls back to the label', () {
+      final plan = ServiceManager.launchdLifecyclePlan(
+        command: 'start',
+        configPath: configPath,
+        label: label,
+        userId: 501,
+      );
+
+      expect(plan, <List<String>>[
+        <String>['load', configPath],
+        <String>['start', label],
+      ]);
+    });
+
+    test(
+      'a stop whose unload fails boots the job out of the user domain',
+      () async {
+        final runner = ServiceManager.launchctl;
+        final userId = ServiceManager.launchdUserId;
+        final calls = <List<String>>[];
+        addTearDown(() {
+          ServiceManager.launchctl = runner;
+          ServiceManager.launchdUserId = userId;
+        });
+        ServiceManager.launchdUserId = () async => 501;
+        ServiceManager.launchctl = (arguments) async {
+          calls.add(arguments);
+          // `unload` fails when the loaded job came from another plist path,
+          // and the job is gone once it is booted out.
+          final exitCode = switch (arguments.first) {
+            'unload' => 1,
+            'list' => 1,
+            _ => 0,
+          };
+          return ProcessResult(0, exitCode, '', '');
+        };
+
+        final result = await ServiceManager.stop();
+
+        expect(calls.first, <String>[
+          'unload',
+          ServiceManager.getServiceConfigPath(),
+        ]);
+        expect(calls[1], <String>[
+          'bootout',
+          'gui/501/${ServiceManager.label}',
+        ]);
+        expect(
+          calls.where((arguments) => arguments.first == 'bootout'),
+          hasLength(1),
+        );
+        expect(calls.expand((arguments) => arguments), isNot(contains('stop')));
+        expect(result.success, isTrue, reason: result.error);
+        expect(result.status.running, isFalse);
+      },
+      skip: Platform.isMacOS ? false : 'launchd runs on macOS only.',
+    );
+
+    test('a stop whose unload succeeds leaves the job alone', () async {
+      final runner = ServiceManager.launchctl;
+      final userId = ServiceManager.launchdUserId;
+      final calls = <List<String>>[];
+      addTearDown(() {
+        ServiceManager.launchctl = runner;
+        ServiceManager.launchdUserId = userId;
+      });
+      ServiceManager.launchdUserId = () async => 501;
+      ServiceManager.launchctl = (arguments) async {
+        calls.add(arguments);
+        return ProcessResult(0, arguments.first == 'list' ? 1 : 0, '', '');
+      };
+
+      final result = await ServiceManager.stop();
+
+      expect(calls.first, <String>[
+        'unload',
+        ServiceManager.getServiceConfigPath(),
+      ]);
+      expect(
+        calls.expand((arguments) => arguments),
+        isNot(contains('bootout')),
+      );
+      expect(result.success, isTrue, reason: result.error);
+    }, skip: Platform.isMacOS ? false : 'launchd runs on macOS only.');
+
+    test('a start never resolves the launchd user id', () async {
+      final runner = ServiceManager.launchctl;
+      final userId = ServiceManager.launchdUserId;
+      var resolvedUserId = false;
+      addTearDown(() {
+        ServiceManager.launchctl = runner;
+        ServiceManager.launchdUserId = userId;
+      });
+      ServiceManager.launchdUserId = () async {
+        resolvedUserId = true;
+        return 501;
+      };
+      ServiceManager.launchctl = (arguments) async =>
+          ProcessResult(0, arguments.first == 'list' ? 1 : 0, '', '');
+
+      await ServiceManager.start();
+
+      // Only a stop targets the `gui` domain, so a start must not fail on a
+      // lookup its plan never reads.
+      expect(resolvedUserId, isFalse);
+    }, skip: Platform.isMacOS ? false : 'launchd runs on macOS only.');
   });
 }

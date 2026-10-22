@@ -10,6 +10,7 @@ import 'dart:math';
 import 'package:logging/logging.dart';
 
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 
 class LocalGatewayCredentials {
   static final _logger = Logger('LocalGatewayCredentials');
@@ -17,14 +18,33 @@ class LocalGatewayCredentials {
   /// Canonical relative path under the Sanad Home.
   static const String relativePath = '.local_token';
 
+  /// Owner-only file that binds [relativePath] to one Home identity.
+  ///
+  /// A Home that was cloned from another Home carries the source token; the
+  /// binding is what proves the token was generated for this root, so a copied
+  /// token is rotated on the copy's next daemon start instead of letting two
+  /// Homes accept the same credential.
+  static const String bindingRelativePath = '.local_token.home';
+
   /// Custom header used for the credential over HTTP and the WebSocket
   /// upgrade. The same value is also accepted as `Authorization: Bearer`.
   static const String headerName = 'x-sanad-local-token';
 
   /// Returns the persisted credential, generating a fresh one and
-  /// writing it through [SanadHomeBootstrap.writeSecret] on first use.
+  /// writing it through [SanadHomeBootstrap.writeSecretBytes] on first use.
   /// Idempotent and serialized across concurrent processes sharing one Home.
-  static Future<LocalGatewayCredential> loadOrCreate() async {
+  ///
+  /// **Daemon start only.** Rotation is what makes a Home's credential its
+  /// own: a missing, foreign, or unreadable Home binding rotates the
+  /// credential, which is the documented migration for Homes cloned or
+  /// restored from another Home. Rotating while an older daemon still serves
+  /// the same Home would invalidate the credential that daemon (and every
+  /// desktop Client re-reading `.local_token`) is holding, so no other caller
+  /// may reach this method: login, logout notification, the CLI and
+  /// `sanad-dev` read through [readExisting], [tryRead] or the discovery
+  /// token read instead. Renaming this method is deliberate — the compiler
+  /// now enforces the boundary.
+  static Future<LocalGatewayCredential> loadOrCreateForDaemonStart() async {
     final boundary = SanadHomeBootstrap.identity();
     await boundary.prepare();
     const lockRelativePath = '.local_token.lock';
@@ -60,14 +80,31 @@ class LocalGatewayCredentials {
       }
     }
     try {
+      final expected = sanadHomeIdentity(boundary.canonicalRoot());
       final persisted = _readFrom(boundary);
-      if (persisted != null) return persisted;
+      if (persisted != null && _readBinding(boundary) == expected) {
+        return persisted;
+      }
 
       final generated = _generate();
+      // The binding is written first so a concurrent reader never observes a
+      // rotated token beside a stale (foreign) binding, which would report
+      // `token_bound_to_other_home` for a Home that is in fact this one's.
+      await boundary.writeSecretBytes(
+        bindingRelativePath,
+        utf8.encode(expected),
+      );
       await boundary.writeSecretBytes(
         relativePath,
         utf8.encode(generated.value),
       );
+      if (persisted != null) {
+        // Never log a credential value; only that a rotation happened.
+        _logger.warning(
+          'Local gateway credential was not bound to this Sanad Home; '
+          'rotated it for this Home.',
+        );
+      }
       return _readFrom(boundary) ?? generated;
     } finally {
       await lock.unlock();
@@ -78,8 +115,32 @@ class LocalGatewayCredentials {
   /// Returns the persisted credential, or null if none exists. Does
   /// NOT generate one. Used by the desktop client for read-only lookup
   /// before the daemon has started.
+  ///
+  /// A credential whose binding names a different Home is treated as absent,
+  /// so a clone never lends its credential to the Home it was cloned into.
   static LocalGatewayCredential? tryRead() {
     return _readFrom(SanadHomeBootstrap.identity());
+  }
+
+  /// The persisted credential, read without rotation, for callers that are not
+  /// the daemon.
+  ///
+  /// This is the path login/logout, the CLI and `sanad-dev` use. It never
+  /// creates, migrates or rotates anything: a caller must not be able to
+  /// invalidate the credential a running daemon is currently serving.
+  ///
+  /// Throws [LocalGatewayCredentialUnavailable] when the Home has no usable
+  /// credential, which login surfaces as "the running service did not accept
+  /// the exchange" rather than silently rotating under it.
+  static LocalGatewayCredential readExisting() {
+    final credential = tryRead();
+    if (credential == null) {
+      throw const LocalGatewayCredentialUnavailable(
+        'No local gateway credential exists for this Sanad Home. Start the '
+        'Agent for this Home to issue one.',
+      );
+    }
+    return credential;
   }
 
   static LocalGatewayCredential? _readFrom(SanadHomeBootstrap boundary) {
@@ -88,9 +149,36 @@ class LocalGatewayCredentials {
       final bytes = boundary.readSecretBytes(relativePath);
       final value = utf8.decode(bytes).trim();
       if (value.isEmpty) return null;
+      if (isBoundToAnotherHome(boundary)) return null;
       return LocalGatewayCredential(value);
     } catch (error) {
       _logger.warning('Failed to decode the local token; regenerating.');
+      return null;
+    }
+  }
+
+  /// Whether [boundary]'s credential is explicitly bound to a different Home.
+  ///
+  /// A missing binding is a legacy or freshly cloned Home, not foreign proof
+  /// on its own; the next [loadOrCreate] writes the binding or rotates.
+  static bool isBoundToAnotherHome(SanadHomeBootstrap boundary) {
+    final binding = _readBinding(boundary);
+    if (binding == null) return false;
+    try {
+      return binding != sanadHomeIdentity(boundary.canonicalRoot());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String? _readBinding(SanadHomeBootstrap boundary) {
+    if (!boundary.fileExists(bindingRelativePath)) return null;
+    try {
+      final value = utf8
+          .decode(boundary.readSecretBytes(bindingRelativePath))
+          .trim();
+      return value.isEmpty ? null : value;
+    } catch (_) {
       return null;
     }
   }
@@ -164,4 +252,16 @@ class LocalGatewayCredential {
 
   @override
   int get hashCode => value.hashCode;
+}
+
+/// Raised when a read-only caller finds no usable credential for a Home.
+///
+/// Deliberately distinct from a permission failure: this is "nothing issued
+/// yet", not "the file exists but must not be trusted".
+class LocalGatewayCredentialUnavailable implements Exception {
+  final String message;
+  const LocalGatewayCredentialUnavailable(this.message);
+
+  @override
+  String toString() => 'LocalGatewayCredentialUnavailable: $message';
 }

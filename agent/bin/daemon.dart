@@ -17,11 +17,13 @@ import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
+import 'package:sanad_agent/core/termination_cleanup.dart';
 
 import 'package:sanad_agent/core/utils/logger.dart';
 
@@ -66,6 +68,12 @@ Future<void> main(List<String> args) async {
     // SEC-02 / Gate B: load or create the local gateway credential,
     // enforce loopback bind policy, and wire the security helper into
     // the platform so every HTTP and WebSocket request is gated.
+    //
+    // This is the only rotation point in the system, and it runs here on
+    // purpose: after `SanadRuntimeOwnership.acquire()` above, so this process
+    // provably owns the Home, and before the listener serves, so rotating a
+    // cloned or legacy credential cannot invalidate a credential another live
+    // daemon is still using. No CLI, login, or sanad-dev path may rotate.
     if (!LoopbackPolicy.isLoopbackHost(config.localGatewayHost)) {
       final logger = Logger('DaemonStartup');
       logger.severe(
@@ -74,7 +82,8 @@ Future<void> main(List<String> args) async {
       );
       throw LocalGatewayBindViolation(config.localGatewayHost);
     }
-    final credential = await LocalGatewayCredentials.loadOrCreate();
+    final credential =
+        await LocalGatewayCredentials.loadOrCreateForDaemonStart();
     final security = LocalGatewaySecurity(
       config: LocalGatewaySecurityConfig(allowedPort: config.localGatewayPort),
       expectedToken: credential,
@@ -106,6 +115,7 @@ Future<void> main(List<String> args) async {
 
   print('Starting Gateway Manager...');
   await gatewayManager.start();
+  _installEndpointRecordCleanup();
   unawaited(_recoverPendingTitlesSafely(getIt<TitleService>()));
 
   print(
@@ -123,6 +133,19 @@ Future<void> main(List<String> args) async {
   //   await gatewayManager.stop();
   //   exit(0);
   // });
+}
+
+/// Removes this Home's published endpoint record when the daemon stops.
+///
+/// The daemon had no termination hook, so `sanad-dev stop` (SIGTERM) or Ctrl+C
+/// left `.local_gateway_endpoint.json` naming a pid that no longer existed.
+/// The same hook is the coordinator's pre-exit cleanup, so a managed pause or
+/// stop removes the record as well. Removal is ownership-checked, so a
+/// successor runtime that already republished the record keeps it.
+void _installEndpointRecordCleanup() {
+  TerminationCleanup(
+    cleanup: LocalGatewayEndpointRecord.removeOwnedOnExit,
+  ).install();
 }
 
 /// Resolves and runs deferred database maintenance without allowing any

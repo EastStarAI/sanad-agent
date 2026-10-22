@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 
 import '../constants.dart';
 import 'sanad_home_boundary.dart';
+import 'sanad_home_identity.dart';
 import 'windows_secure_runtime_backend.dart';
 
 enum SanadHomeScope { identity, state }
@@ -728,19 +729,34 @@ class SanadHomeBootstrap {
     }
   }
 
-  static String _expandPath(String value) {
-    if (value == '~' || value.startsWith('~/')) {
-      final userHome =
-          Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
-      if (userHome == null || userHome.isEmpty) {
-        throw const SanadHomeBoundaryViolation(
-          'home_environment_missing',
-          'The current user home could not be resolved.',
-        );
-      }
-      return p.join(userHome, value.substring(1));
+  /// Whether [file] is owner-only (0600) on POSIX.
+  ///
+  /// Every consumer of a Home secret applies this same rule — the desktop
+  /// Client, `sanad-dev` and the CLI all refuse anything but [secretFileMode]
+  /// — so a credential or endpoint record that a wider umask produced is
+  /// rejected consistently instead of being trusted by whichever reader is
+  /// lenient. Windows has no mode bits; ACLs are enforced by the writer.
+  static bool isOwnerOnlyFile(File file) {
+    if (Platform.isWindows) return true;
+    try {
+      return (file.statSync().mode & 0x1ff) == secretFileMode;
+    } on FileSystemException {
+      return false;
     }
-    return value;
+  }
+
+  /// Expands a leading `~`, through the helper that
+  /// [canonicalSanadHomePath] uses, so a Home's identity and its boundary
+  /// always derive from the same path spelling.
+  static String _expandPath(String value) {
+    final expanded = expandLeadingTilde(value);
+    if (expanded == null) {
+      throw const SanadHomeBoundaryViolation(
+        'home_environment_missing',
+        'The current user home could not be resolved.',
+      );
+    }
+    return expanded;
   }
 
   // Compatibility surface for already-landed local-gateway callers.
