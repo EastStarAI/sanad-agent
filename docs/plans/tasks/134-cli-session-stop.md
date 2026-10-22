@@ -207,6 +207,46 @@ Never touch `~/.sanad` or a running runtime. Use a dedicated Test Home worktree
   tests fail by design (they assert the real defaults), so the full suite is run bare.
 - No runtime was started, stopped, or restarted; `~/.sanad` was not touched; nothing pushed.
 
+### Round 2 — 2026-10-22 (live check, attempt 2, safe method)
+
+TH2 (`test-home-2`, Home `~/.sanad-test-2`, port 58124) on `5569efdd`. Only
+`fvm dart run bin/sanad_agent.dart` was used, every call pinned with `--home`,
+`SANAD_HOME` and `--gateway-url ws://127.0.0.1:58124/ws`; no compiled binary, no
+launchd/relaunch wrapper, no detached process, no OS credential prompt. Full
+evidence: `~/.sanad-delegate/runs/release-gate/live-134/RESULT.md`.
+
+- **Stop during a running tool call — PASS.** Marker `sh -c sleep 300; …` was a
+  direct child of the TH2 daemon. Two snapshots during the tool call showed
+  `execution_snapshot.state: running` with a frozen `updated_at`. `session stop`
+  returned rc=0 in 5.18 s and printed `Session <id> stopped.` at 04:49:06.703Z,
+  i.e. **25 ms after** the durable state became idle (`updated_at`
+  04:49:06.677836Z); the marker process was already gone, still gone at +5 s.
+- **Idempotent — PASS.** Second stop rc=0 in 5.05 s, printed `stopped.`, no
+  `stop_timeout`, state unchanged.
+- **UI state — PASS.** The Client's per-workspace conversation cache never learns
+  CLI-created sessions (no sidebar refresh), so one managed client restart was
+  needed; afterwards both stopped sessions render as normal, enabled rows with no
+  blocked/ERROR indicator and no approval card, and the daemon logged
+  `RuntimeNotice [cleared]` at the stop.
+- **Continue after stop — PASS.** A new short message on the stopped session
+  returned exit 0 with the expected text.
+- **Permission-parked stop — PASS (protocol), card PARTIAL.** Default mode, no
+  `--allow-all-tools`: the park survived its own CLI client exiting, and the stop
+  cleared `pending_permission_request` to idle in 5.88 s (still idle at +5 s). The
+  card itself was never rendered for that request (it predated the Client knowing
+  the session), and a second identical gated request ran **without** any
+  permission request, so card disappearance could not be observed. RD11's durable
+  checkpoint delete is likewise not exercised live: this park path writes no
+  `suspended_checkpoints` row.
+- **Discovery leak — FINDING.** `--home` + `SANAD_HOME` do not pin the endpoint:
+  discovery probes **58085 (main) first** and otherwise scans 58086..58185. Both
+  read-only probes without `--gateway-url` went to `ws://127.0.0.1:58085/gateway`
+  and got 401. TH1/TH2/TH3 share one `.local_token`, so with 58085 not answering,
+  an unpinned `session stop` could attach to a sibling Test Home. `--gateway-url`
+  must stay mandatory for CLI live work.
+- Teardown: TH2 reset `5569efdd` → `dc7ee42f`, agent restarted and healthy on
+  58124, worktree unlocked, no leftovers.
+
 ### Open items for the coordinator
 
 - Live verification steps 1–8 require a Test Home runtime and the Client UI; not run by the
