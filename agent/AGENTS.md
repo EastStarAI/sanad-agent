@@ -19,6 +19,7 @@ This contract applies to `agent/`.
 - `agent/lib/interfaces/` owns platform adapters, gateway delivery, admission/orchestration, and canonical client protocols.
 - `agent/lib/infrastructure/` owns OS/platform and voice infrastructure implementations.
 - `agent/tool/` owns release preparation and contract tooling. It is the single writer of tracked release-identity literals, including the `sanad-client` CLI version constant, so release identity is never advanced by hand.
+- Generated-source tooling stays platform-neutral: manifest paths are validated in the POSIX context and joined with the platform separator, and every generated file or embedded asset is compared and hashed as canonical LF text, so Windows `core.autocrlf` checkout behavior can never report a clean tree as stale or embed different bytes per platform. `.gitattributes` pins `eol=lf` for those byte-sensitive paths.
 - `agent/lib/plugins/` owns generic lifecycle hooks only.
 
 ## Critical Cross-Domain Invariants

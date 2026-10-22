@@ -1,0 +1,11 @@
+# Line-ending contract for files whose exact bytes are hashed, embedded in the
+# Agent executable, or compared by repository tooling. Git for Windows checks
+# text files out with CRLF by default, which made
+# `tool/generate_model_capability_defaults.dart --check` report a clean Windows
+# checkout as stale and made the bundled-skill bundle platform-dependent. These
+# paths stay LF in the index and in every working tree.
+agent/bundled_skills.json text eol=lf
+agent/model_capability_defaults.yaml text eol=lf
+agent/lib/capabilities/skills/generated_bundled_skills.dart text eol=lf
+agent/lib/core/provider_thinking/generated_model_capability_defaults.dart text eol=lf
+.agents/skills/** text eol=lf

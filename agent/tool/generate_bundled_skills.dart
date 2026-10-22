@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import 'canonical_source.dart';
+
 const _manifestPath = 'bundled_skills.json';
 const _outputPath = 'lib/capabilities/skills/generated_bundled_skills.dart';
 
@@ -17,7 +19,11 @@ void main(List<String> arguments) {
   final output = File(p.join(agentRoot.path, _outputPath));
 
   if (check) {
-    if (!output.existsSync() || output.readAsStringSync() != generated) {
+    if (!output.existsSync() ||
+        !generatedSourceMatches(
+          onDisk: output.readAsStringSync(),
+          rendered: generated,
+        )) {
       stderr.writeln(
         'Bundled skill output is stale. Run: '
         'fvm dart run tool/generate_bundled_skills.dart',
@@ -66,12 +72,15 @@ _Bundle _readManifest(File file, Directory repoRoot) {
       throw FormatException('Invalid or duplicate skill id: $id');
     }
     final source = _required(raw, 'source');
-    if (p.isAbsolute(source) ||
-        p.normalize(source) != source ||
-        source.contains('..')) {
+    if (!isSafeManifestPath(source)) {
       throw FormatException('Unsafe skill source: $source');
     }
-    final sourceDir = Directory(p.join(repoRoot.path, source));
+    // Manifest paths are authored with POSIX separators and must resolve
+    // identically on every platform, so they are validated in the POSIX
+    // context and joined with the platform separator only at the use site.
+    final sourceDir = Directory(
+      p.joinAll([repoRoot.path, ...p.posix.split(source)]),
+    );
     final canonicalRepo = repoRoot.resolveSymbolicLinksSync();
     if (!sourceDir.existsSync() ||
         FileSystemEntity.typeSync(sourceDir.path, followLinks: false) !=
@@ -86,7 +95,14 @@ _Bundle _readManifest(File file, Directory repoRoot) {
       throw FormatException('Skill $id is missing SKILL.md.');
     }
     final licenseFile = _required(raw, 'license_file');
-    if (!File(p.join(sourceDir.path, licenseFile)).existsSync()) {
+    if (!isSafeManifestPath(licenseFile)) {
+      throw FormatException('Skill $id has an unsafe license file: $licenseFile');
+    }
+    final licensePath = p.joinAll([
+      sourceDir.path,
+      ...p.posix.split(licenseFile),
+    ]);
+    if (!File(licensePath).existsSync()) {
       throw FormatException('Skill $id is missing $licenseFile.');
     }
 
@@ -96,10 +112,7 @@ _Bundle _readManifest(File file, Directory repoRoot) {
     }
     final executablePaths = <String>{};
     for (final value in executableRows) {
-      if (value is! String ||
-          p.posix.isAbsolute(value) ||
-          p.posix.normalize(value) != value ||
-          p.posix.split(value).any((part) => part == '..' || part.isEmpty)) {
+      if (value is! String || !isSafeManifestPath(value)) {
         throw FormatException('Skill $id has an unsafe executable path.');
       }
       executablePaths.add(value);
@@ -175,7 +188,7 @@ void _walk(
         p.posix.split(posix).any((part) => part == '..')) {
       throw FormatException('Unsafe bundled file path.');
     }
-    final bytes = File(entity.path).readAsBytesSync();
+    final bytes = canonicalContentBytes(File(entity.path).readAsBytesSync());
     output.add(
       _BundledFile(
         skillId: skillId,
@@ -246,6 +259,25 @@ String _render(_Bundle bundle) {
     )
     ..writeln('}');
   return out.toString();
+}
+
+/// Whether [value] is a repository-relative path that means the same thing on
+/// every platform.
+///
+/// A bundled-skill manifest is authored with `/` separators inside a checked-in
+/// JSON file, so it is validated in the POSIX context only. Validating it with
+/// the platform context is a Windows-only false positive: `p.normalize`
+/// rewrites the separators there, so a clean manifest entry was reported as
+/// `Unsafe skill source`. Absolute, traversal, backslash, and drive-letter input
+/// stay rejected.
+bool isSafeManifestPath(String value) {
+  if (value.isEmpty || value.contains(r'\')) return false;
+  // Windows drive-relative input (`C:skills/x`) is not POSIX-absolute, so it
+  // needs its own rejection.
+  if (RegExp(r'^[A-Za-z]:').hasMatch(value)) return false;
+  if (p.posix.isAbsolute(value)) return false;
+  if (p.posix.normalize(value) != value) return false;
+  return !p.posix.split(value).any((part) => part == '..' || part == '.');
 }
 
 String _required(Map<String, dynamic> row, String key) {

@@ -165,6 +165,8 @@ jobs:
         working-directory: agent
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           cmake -S windows/launcher -B build/windows-launcher -A x64
           cmake --build build/windows-launcher --config Release
           fvm dart compile exe bin/sanad_agent.dart -o build/windows-launcher/sanad.exe

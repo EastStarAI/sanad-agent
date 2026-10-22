@@ -160,6 +160,8 @@ jobs:
         working-directory: agent
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           fvm dart pub get
           fvm dart run tool/generate_bundled_skills.dart --check
           fvm dart run tool/generate_model_capability_defaults.dart --check
@@ -170,6 +172,8 @@ jobs:
         working-directory: agent
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
           cmake -S windows/launcher -B build/windows-launcher -A x64
           cmake --build build/windows-launcher --config Release
@@ -182,7 +186,18 @@ jobs:
           set -euo pipefail
           agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
           home="$RUNNER_TEMP/sanad-bundled-skills-home"
+          rm -rf "$home"
+          # `version` is a pure query and answers before Home preparation, so it
+          # proves nothing about the embedded skills and must create nothing.
           SANAD_HOME="$home" "$agent" version >/dev/null
+          if [ -e "$home" ]; then
+            echo "version created a Sanad Home; pure queries must stay side-effect free." >&2
+            exit 1
+          fi
+          # `skills list` is read-only but not pure: it runs Home bootstrap and
+          # the bundled-skill reconcile, then lists. It starts no daemon and
+          # opens no network connection.
+          SANAD_HOME="$home" "$agent" skills list --json >/dev/null
           test -f "$home/skills/skill-creator/SKILL.md"
           test -f "$home/skills/skill-creator/references/schemas.md"
           test -f "$home/skills/find-skills/LICENSE.txt"
@@ -191,11 +206,24 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $agent = "dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
           $sanadHome = Join-Path $env:RUNNER_TEMP "sanad-bundled-skills-home"
+          if (Test-Path $sanadHome) { Remove-Item -Recurse -Force $sanadHome }
           $env:SANAD_HOME = $sanadHome
+          # `version` is a pure query and answers before Home preparation, so it
+          # proves nothing about the embedded skills and must create nothing.
           & $agent version | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Agent smoke test failed" }
+          if ($LASTEXITCODE -ne 0) { throw "Agent version probe failed." }
+          if (Test-Path $sanadHome) {
+            throw "version created a Sanad Home; pure queries must stay side-effect free."
+          }
+          # `skills list` is read-only but not pure: it runs Home bootstrap and
+          # the bundled-skill reconcile, then lists. It starts no daemon and
+          # opens no network connection.
+          & $agent skills list --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Bundled skill smoke failed." }
           @(
             "skills/skill-creator/SKILL.md",
             "skills/skill-creator/references/schemas.md",
@@ -515,6 +543,8 @@ jobs:
         working-directory: client
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           fvm flutter pub get
           ./release/windows/release.ps1
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
