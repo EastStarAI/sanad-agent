@@ -313,6 +313,10 @@ jobs:
           grep -F '.arch == $arch' .github/workflows/release.yml
           grep -F 'fvm dart compile exe "-DSANAD_AGENT_VERSION=' .github/workflows/release.yml
           ! grep -F 'fvm dart compile exe `' .github/workflows/release.yml
+          grep -F 'SANAD_AGENT_CODESIGN_IDENTIFIER: com.eaststarai.sanad.agent' .github/workflows/release.yml
+          ! grep -E 'SANAD_AGENT_CODESIGN_IDENTIFIER: .*(\$|artifact_version)' .github/workflows/release.yml
+          grep -F -- '--identifier "$SANAD_AGENT_CODESIGN_IDENTIFIER"' .github/workflows/release.yml
+          grep -F 'designated_requirement="$(codesign -d -r- "$agent" 2>&1)"' .github/workflows/release.yml
           grep -F 'workflow_call:' .github/workflows/deploy.yml
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
