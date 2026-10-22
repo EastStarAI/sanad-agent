@@ -5,10 +5,14 @@ import 'package:test/test.dart';
 
 import '../../tool/release_preparation.dart';
 
+const _clientCliVersionPath =
+    'client/lib/features/client_cli/domain/models/client_cli_version.dart';
+
 const _releaseFiles = [
   'agent/CHANGELOG.md',
   'agent/pubspec.lock',
   'agent/pubspec.yaml',
+  'client/lib/features/client_cli/domain/models/client_cli_version.dart',
   'client/pubspec.lock',
   'client/pubspec.yaml',
   'client/release/windows/sanad_client_installer.iss',
@@ -79,6 +83,10 @@ void main() {
       contains('version: $nextVersion+$nextBuildNumber'),
     );
     expect(
+      readFixture(_clientCliVersionPath),
+      contains("const String sanadClientCliVersion = '$nextVersion';"),
+    );
+    expect(
       readFixture('client/release/windows/sanad_client_installer.iss'),
       contains('AppVersion=$nextVersion'),
     );
@@ -139,6 +147,42 @@ void main() {
       readFixture('client/windows/runner/Runner.rc').replaceFirst(
         '#define VERSION_AS_STRING "$currentVersion"',
         '#define VERSION_AS_STRING "stale"',
+      ),
+    );
+    final before = {for (final path in _releaseFiles) path: readFixture(path)};
+
+    expect(
+      () =>
+          ReleasePreparation(fixture)
+              .prepare(version: nextVersion, buildNumber: nextBuildNumber),
+      throwsFormatException,
+    );
+
+    for (final entry in before.entries) {
+      expect(readFixture(entry.key), entry.value, reason: entry.key);
+    }
+  });
+
+  test('check rejects a stale sanad-client CLI version constant', () async {
+    final preparation = ReleasePreparation(fixture);
+    preparation.check();
+
+    writeFixture(
+      _clientCliVersionPath,
+      readFixture(_clientCliVersionPath).replaceFirst(
+        "const String sanadClientCliVersion = '$currentVersion';",
+        "const String sanadClientCliVersion = '0.0.0';",
+      ),
+    );
+    expect(preparation.check, throwsFormatException);
+  });
+
+  test('prepare rejects a stale sanad-client CLI version constant', () async {
+    writeFixture(
+      _clientCliVersionPath,
+      readFixture(_clientCliVersionPath).replaceFirst(
+        "const String sanadClientCliVersion = '$currentVersion';",
+        "const String sanadClientCliVersion = '0.0.0';",
       ),
     );
     final before = {for (final path in _releaseFiles) path: readFixture(path)};

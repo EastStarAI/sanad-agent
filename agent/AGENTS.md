@@ -18,6 +18,7 @@ This contract applies to `agent/`.
 - `agent/lib/evolution/` owns sessions, memory, scheduling, titles, and durable runtime state.
 - `agent/lib/interfaces/` owns platform adapters, gateway delivery, admission/orchestration, and canonical client protocols.
 - `agent/lib/infrastructure/` owns OS/platform and voice infrastructure implementations.
+- `agent/tool/` owns release preparation and contract tooling. It is the single writer of tracked release-identity literals, including the `sanad-client` CLI version constant, so release identity is never advanced by hand.
 - `agent/lib/plugins/` owns generic lifecycle hooks only.
 
 ## Critical Cross-Domain Invariants

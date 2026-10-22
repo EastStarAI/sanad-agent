@@ -1,6 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+/// Release-managed `sanad-client` relay CLI version literal.
+const clientCliVersionPath =
+    'client/lib/features/client_cli/domain/models/client_cli_version.dart';
+
 class ReleasePreparation {
   ReleasePreparation(Directory repoRoot) : root = repoRoot.absolute;
 
@@ -47,6 +51,14 @@ class ReleasePreparation {
         text,
         'version: $currentVersionText+$currentBuild',
         'version: $version+$buildNumber',
+      ),
+    );
+    update(
+      clientCliVersionPath,
+      (text) => _replaceExactly(
+        text,
+        "const String sanadClientCliVersion = '$currentVersionText';",
+        "const String sanadClientCliVersion = '$version';",
       ),
     );
     update(
@@ -155,6 +167,10 @@ class ReleasePreparation {
 
     _requireContains('agent/pubspec.yaml', 'version: $version');
     _requireContains('client/pubspec.yaml', 'version: $version+$build');
+    _requireContains(
+      clientCliVersionPath,
+      "const String sanadClientCliVersion = '$version';",
+    );
     _requireContains('release/contract/pubspec.yaml', 'version: $version');
     for (final path in ['agent/pubspec.lock', 'client/pubspec.lock']) {
       _replacePathPackageVersion(
