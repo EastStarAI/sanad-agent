@@ -18,6 +18,37 @@ Map<String, dynamic> _unwrapPayload(Map<String, dynamic> result) =>
     ? Map<String, dynamic>.from(result['payload'] as Map)
     : result;
 
+/// Client-side failure codes that are transport problems, never gateway
+/// verdicts. Every session intervention command reports them as exit `1`.
+const Set<String> _transportErrorCodes = {
+  'client_error',
+  'connection_failed',
+  'disposed',
+  'not_connected',
+  'disconnected',
+  'send_error',
+  'query_timeout',
+};
+
+/// Shared upper bound of `--timeout` (`addCommonOptions`), in seconds.
+const int _maxTimeoutSeconds = 86400;
+
+/// Parses the shared `--timeout` option as an acknowledgement bound.
+///
+/// A value outside the documented `1..86400` range is a usage error, never a
+/// silent fall-back to the default. Returns `null` when the option is unset.
+Duration? _acknowledgementTimeout(String? raw) {
+  if (raw == null) return null;
+  final parsed = int.tryParse(raw.trim());
+  if (parsed == null || parsed < 1 || parsed > _maxTimeoutSeconds) {
+    throw FormatException(
+      '--timeout must be a whole number of seconds from 1 to '
+      '$_maxTimeoutSeconds.',
+    );
+  }
+  return Duration(seconds: parsed);
+}
+
 /// Command to manage and inspect conversation sessions.
 class SessionCommand extends SanadCommand {
   final ClientFactory? clientFactory;
@@ -73,6 +104,13 @@ class SessionCommand extends SanadCommand {
     );
     addSubcommand(
       SessionSteerCommand(
+        clientFactory: clientFactory,
+        clientOverride: clientOverride,
+        customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
+      ),
+    );
+    addSubcommand(
+      SessionRetryCommand(
         clientFactory: clientFactory,
         clientOverride: clientOverride,
         customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
@@ -170,6 +208,51 @@ abstract class _BaseSessionSubcommand extends SanadCommand {
         } catch (_) {}
       }
     }
+  }
+
+  int reportUsage({required String? id, String? message, int exitCode = 2}) {
+    if (message != null) {
+      stderrSink.writeln('Error: $message');
+      stderrSink.writeln('Usage: $invocation');
+    }
+    if (json) {
+      stdoutSink.writeln(
+        jsonEncode({
+          'session_id': ?id,
+          'status': 'error',
+          'error_code': 'invalid_arguments',
+          'error': message ?? 'Invalid invocation.',
+          'exit_code': exitCode,
+        }),
+      );
+    }
+    return exitCode;
+  }
+
+  int reportFailure({
+    required String sessionId,
+    required String errorCode,
+    required String message,
+    required int exitCode,
+    String? requestId,
+  }) {
+    // Every outcome after a dispatch names its request id, so a caller can
+    // correlate a late acknowledgement with the request it already attempted.
+    final trace = requestId == null ? '' : ' (request $requestId)';
+    stderrSink.writeln('Error: $message$trace');
+    if (json) {
+      stdoutSink.writeln(
+        jsonEncode({
+          'session_id': sessionId,
+          'request_id': ?requestId,
+          'status': 'error',
+          'error_code': errorCode,
+          'error': message,
+          'exit_code': exitCode,
+        }),
+      );
+    }
+    return exitCode;
   }
 
   String? resolveSessionId() {
@@ -1144,20 +1227,6 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
   /// The session projection could not be read, so no steer was dispatched.
   static const int exitStateUnreadable = 8;
 
-  /// Client-side failures that are transport problems, never gateway verdicts.
-  static const Set<String> _transportErrorCodes = {
-    'client_error',
-    'connection_failed',
-    'disposed',
-    'not_connected',
-    'disconnected',
-    'send_error',
-    'query_timeout',
-  };
-
-  /// Shared upper bound of `--timeout` (`addCommonOptions`), in seconds.
-  static const int _maxTimeoutSeconds = 86400;
-
   SessionSteerCommand({
     super.clientFactory,
     super.clientOverride,
@@ -1191,7 +1260,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
   Future<int> execute() async {
     final id = resolveSessionId();
     if (id == null) {
-      return _reportUsage(id: null, message: 'Session ID is required.');
+      return reportUsage(id: null, message: 'Session ID is required.');
     }
 
     final rawMessage = getOption('message');
@@ -1200,13 +1269,13 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
     // Presence, not content, decides the shape: `--message "" --message-file f`
     // is an ambiguous invocation even though one of them is blank.
     if (rawMessage != null && rawMessageFile != null) {
-      return _reportUsage(
+      return reportUsage(
         id: id,
         message: '--message cannot be combined with --message-file.',
       );
     }
     if (rawMessage == null && rawMessageFile == null) {
-      return _reportUsage(
+      return reportUsage(
         id: id,
         message: 'One of --message or --message-file is required.',
       );
@@ -1215,19 +1284,11 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
     // `--timeout` is the acknowledgement bound and reuses the shared option's
     // documented range; a value outside it is a usage error, never a silent
     // fall-back to the default.
-    final rawTimeout = timeoutSeconds;
-    Duration? ackTimeout;
-    if (rawTimeout != null) {
-      final parsed = int.tryParse(rawTimeout.trim());
-      if (parsed == null || parsed < 1 || parsed > _maxTimeoutSeconds) {
-        return _reportUsage(
-          id: id,
-          message:
-              '--timeout must be a whole number of seconds from 1 to '
-              '$_maxTimeoutSeconds.',
-        );
-      }
-      ackTimeout = Duration(seconds: parsed);
+    final Duration? ackTimeout;
+    try {
+      ackTimeout = _acknowledgementTimeout(timeoutSeconds);
+    } on FormatException catch (e) {
+      return reportUsage(id: id, message: e.message);
     }
 
     final String text;
@@ -1236,17 +1297,17 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
       // the bytes it passed.
       final path = rawMessageFile;
       if (path.trim().isEmpty) {
-        return _reportUsage(id: id, message: 'Message file path is required.');
+        return reportUsage(id: id, message: 'Message file path is required.');
       }
       final type = FileSystemEntity.typeSync(path);
       if (type == FileSystemEntityType.directory) {
-        return _reportUsage(
+        return reportUsage(
           id: id,
           message: 'Message file "$path" is a directory; pass a file path.',
         );
       }
       if (type == FileSystemEntityType.notFound) {
-        return _reportUsage(
+        return reportUsage(
           id: id,
           message: 'Message file does not exist: $path',
         );
@@ -1255,19 +1316,19 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
       try {
         content = File(path).readAsStringSync().trim();
       } on FileSystemException catch (e) {
-        return _reportUsage(
+        return reportUsage(
           id: id,
           message: 'Failed to read message file "$path": ${e.message}',
         );
       }
       if (content.isEmpty) {
-        return _reportUsage(id: id, message: 'Message file "$path" is empty.');
+        return reportUsage(id: id, message: 'Message file "$path" is empty.');
       }
       text = content;
     } else {
       final content = rawMessage!.trim();
       if (content.isEmpty) {
-        return _reportUsage(id: id, message: 'Message cannot be empty.');
+        return reportUsage(id: id, message: 'Message cannot be empty.');
       }
       text = content;
     }
@@ -1289,7 +1350,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
           );
         } on CliClientException catch (e) {
           if (_transportErrorCodes.contains(e.code)) {
-            return _reportFailure(
+            return reportFailure(
               sessionId: id,
               requestId: requestId,
               errorCode: e.code,
@@ -1299,7 +1360,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
               exitCode: exitFailed,
             );
           }
-          return _reportFailure(
+          return reportFailure(
             sessionId: id,
             requestId: requestId,
             errorCode: 'session_state_unreadable',
@@ -1309,7 +1370,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
             exitCode: exitStateUnreadable,
           );
         } catch (e) {
-          return _reportFailure(
+          return reportFailure(
             sessionId: id,
             requestId: requestId,
             errorCode: 'session_state_unreadable',
@@ -1320,7 +1381,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
           );
         }
         if (!_hasActiveTurn(projection)) {
-          return _reportFailure(
+          return reportFailure(
             sessionId: id,
             requestId: requestId,
             errorCode: 'no_active_turn',
@@ -1362,7 +1423,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
         }
 
         if (classification == 'think') {
-          return _reportFailure(
+          return reportFailure(
             sessionId: id,
             requestId: ackRequestId,
             errorCode: 'admitted_as_turn',
@@ -1376,7 +1437,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
         }
 
         if (classification == 'queue') {
-          return _reportFailure(
+          return reportFailure(
             sessionId: id,
             requestId: ackRequestId,
             errorCode: 'queued_as_turn',
@@ -1389,7 +1450,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
           );
         }
 
-        return _reportFailure(
+        return reportFailure(
           sessionId: id,
           requestId: ackRequestId,
           errorCode: 'steer_not_applied',
@@ -1402,7 +1463,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
       });
     } on CliClientException catch (e) {
       if (e.code == 'steer_unacknowledged') {
-        return _reportFailure(
+        return reportFailure(
           sessionId: id,
           requestId: requestId,
           errorCode: e.code,
@@ -1413,7 +1474,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
         );
       }
       if (_transportErrorCodes.contains(e.code)) {
-        return _reportFailure(
+        return reportFailure(
           sessionId: id,
           requestId: requestId,
           errorCode: e.code,
@@ -1425,7 +1486,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
         // The daemon's own `steer_only` rejection: nothing was started and
         // nothing was queued, so this is the same condition as the local
         // pre-check, reported the same way.
-        return _reportFailure(
+        return reportFailure(
           sessionId: id,
           requestId: requestId,
           errorCode: 'no_active_turn',
@@ -1438,7 +1499,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
         );
       }
       // A typed gateway verdict (for example a rejected or invalid request).
-      return _reportFailure(
+      return reportFailure(
         sessionId: id,
         requestId: requestId,
         errorCode: e.code,
@@ -1446,7 +1507,7 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
         exitCode: exitNotSteerable,
       );
     } catch (e) {
-      return _reportFailure(
+      return reportFailure(
         sessionId: id,
         requestId: requestId,
         errorCode: 'steer_failed',
@@ -1467,8 +1528,9 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
   /// Two further signals prove the run is past steering even while it still
   /// reads `running`:
   ///
-  /// * a stop request (`stop_requested` on the snapshot, or the durable
-  ///   `stopping` state, which the stop path writes before it cancels the run);
+  /// * the durable `stopping` state, which the stop path writes before it
+  ///   cancels the run (the projection carries no in-memory stop flag, and the
+  ///   daemon's own `steer_only` guard owns that distinction);
   /// * an active runtime recovery notice whose status is not `resuming` — a
   ///   `waiting` or `blocked` run is not executing, so a steer would have no
   ///   execution boundary to reach.
@@ -1481,56 +1543,231 @@ class SessionSteerCommand extends _BaseSessionSubcommand {
     final state = snapshot is Map ? snapshot['state']?.toString() : null;
     if (state == null) return projection['in_flight'] is Map;
     if (state != 'running' && state != 'resuming') return false;
-    if (snapshot is Map && snapshot['stop_requested'] == true) return false;
     final notice = projection['runtime_notice'];
     final noticeStatus = notice is Map ? notice['status']?.toString() : null;
     if (noticeStatus != null && noticeStatus != 'resuming') return false;
     return true;
   }
+}
 
-  int _reportUsage({required String? id, String? message}) {
-    if (message != null) {
-      stderrSink.writeln('Error: $message');
-      stderrSink.writeln('Usage: $invocation');
+/// Non-interactive runtime recovery retry (`sanad session retry`).
+///
+/// A blocked `sanad run` worker has no client attached, so nothing presses the
+/// Sanad Client's Retry action and the session can stay blocked indefinitely.
+/// This command dispatches the same `session.runtime_retry` command that action
+/// sends and reports the daemon's own recovery transition.
+///
+/// It resumes the suspended request the session already owns, on the same route
+/// unless `--provider`/`--model` override it. The dedicated "Change Provider"
+/// action is a different command (`session.runtime_continue_with_provider`,
+/// reason `provider_changed`, route-confirmation broadcast); this one is the
+/// recovery Retry with an optional route override, reason `manual_retry`.
+class SessionRetryCommand extends _BaseSessionSubcommand {
+  /// The daemon accepted the retry and is resuming the suspended request.
+  static const int exitAccepted = 0;
+
+  /// Transport, connection, or unexpected gateway failure.
+  static const int exitFailed = 1;
+
+  /// Invalid invocation (missing session id or an unusable `--timeout`).
+  static const int exitUsage = 2;
+
+  /// The session is not in a retryable blocked or waiting recovery state.
+  static const int exitNotBlocked = 3;
+
+  /// The daemon rejected the retry with a typed recovery notice.
+  static const int exitRejected = 4;
+
+  /// Dispatched but not acknowledged within the bounded wait.
+  static const int exitUnacknowledged = 5;
+
+  /// The session projection could not be read, so no retry was dispatched.
+  static const int exitStateUnreadable = 8;
+
+  SessionRetryCommand({
+    super.clientFactory,
+    super.clientOverride,
+    super.customAction,
+  });
+
+  @override
+  String get name => 'retry';
+
+  @override
+  String get description =>
+      'Retry a blocked or waiting session through the daemon recovery owner';
+
+  @override
+  String get invocation =>
+      'sanad session retry <session-id> [--provider <instance-id>] '
+      '[--model <model-id>]';
+
+  @override
+  Future<int> execute() async {
+    final id = resolveSessionId();
+    if (id == null) {
+      return reportUsage(id: null, message: 'Session ID is required.');
     }
-    if (json) {
-      stdoutSink.writeln(
-        jsonEncode({
-          'session_id': ?id,
-          'status': 'error',
-          'error_code': 'invalid_arguments',
-          'error': message ?? 'Invalid invocation.',
-          'exit_code': exitUsage,
-        }),
+
+    final Duration? ackTimeout;
+    try {
+      ackTimeout = _acknowledgementTimeout(timeoutSeconds);
+    } on FormatException catch (e) {
+      return reportUsage(id: id, message: e.message);
+    }
+
+    // The shared `--provider`/`--model` options map to the retry payload's
+    // `provider_instance_id`/`model_id`. A blank value is treated as absent so
+    // an empty shell variable never becomes a provider id.
+    final providerInstanceId = _blankToNull(getOption('provider'));
+    final modelId = _blankToNull(getOption('model'));
+
+    // Allocated before dispatch so a timeout still names the identity a caller
+    // can correlate a late acknowledgement with.
+    final requestId = const Uuid().v4();
+
+    try {
+      return await withClient((client) async {
+        // The pre-check answers without a dispatch and keeps "nothing was sent"
+        // exact: a retry on a healthy session would be a silent no-op at best
+        // (already resuming) and a second turn at worst.
+        final Map<String, dynamic> projection;
+        try {
+          projection = _unwrapPayload(
+            await client.getSessionHistory(sessionId: id),
+          );
+        } on CliClientException catch (e) {
+          if (_transportErrorCodes.contains(e.code)) {
+            return reportFailure(
+              sessionId: id,
+              requestId: requestId,
+              errorCode: e.code,
+              message:
+                  'Failed to read the state of session $id before retrying, '
+                  'so nothing was sent: $e',
+              exitCode: exitFailed,
+            );
+          }
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'session_state_unreadable',
+            message:
+                'Could not read the state of session $id, so nothing was sent '
+                '(gateway code ${e.code}): ${e.message}',
+            exitCode: exitStateUnreadable,
+          );
+        } catch (e) {
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'session_state_unreadable',
+            message:
+                'Could not read the state of session $id, so nothing was sent: '
+                '$e',
+            exitCode: exitStateUnreadable,
+          );
+        }
+
+        if (!_isRetryable(projection)) {
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'not_blocked',
+            message:
+                'Session $id is not blocked or waiting for a retry, so nothing '
+                'was sent. Inspect it with: sanad session show $id',
+            exitCode: exitNotBlocked,
+          );
+        }
+
+        final ack = await client.retryRuntimeAndAwaitAck(
+          sessionId: id,
+          requestId: requestId,
+          providerInstanceId: providerInstanceId,
+          modelId: modelId,
+          timeout: ackTimeout,
+        );
+        final ackRequestId = ack['request_id']?.toString() ?? requestId;
+        final noticeRequestId = ack['notice_request_id']?.toString();
+
+        if (json) {
+          stdoutSink.writeln(
+            jsonEncode({
+              'session_id': id,
+              'request_id': ackRequestId,
+              'status': 'retrying',
+              'notice_request_id': ?noticeRequestId,
+            }),
+          );
+        } else {
+          stdoutSink.writeln(
+            'Retry accepted for session $id (request $ackRequestId): the '
+            'daemon is resuming the last request.',
+          );
+        }
+        return exitAccepted;
+      });
+    } on CliClientException catch (e) {
+      if (e.code == 'retry_unacknowledged') {
+        return reportFailure(
+          sessionId: id,
+          requestId: requestId,
+          errorCode: e.code,
+          message:
+              'Retry dispatched to session $id but not acknowledged in time; '
+              'the daemon may still resume it. Confirm with: '
+              'sanad session show $id',
+          exitCode: exitUnacknowledged,
+        );
+      }
+      if (_transportErrorCodes.contains(e.code)) {
+        return reportFailure(
+          sessionId: id,
+          requestId: requestId,
+          errorCode: e.code,
+          message: 'Failed to retry session: $e',
+          exitCode: exitFailed,
+        );
+      }
+      return reportFailure(
+        sessionId: id,
+        requestId: requestId,
+        errorCode: e.code,
+        message: 'Gateway rejected the retry: ${e.message}',
+        exitCode: exitRejected,
+      );
+    } catch (e) {
+      return reportFailure(
+        sessionId: id,
+        requestId: requestId,
+        errorCode: 'retry_failed',
+        message: 'Failed to retry session: $e',
+        exitCode: exitFailed,
       );
     }
-    return exitUsage;
   }
 
-  int _reportFailure({
-    required String sessionId,
-    required String errorCode,
-    required String message,
-    required int exitCode,
-    String? requestId,
-  }) {
-    // Every outcome after a dispatch names its request id, so a caller can
-    // correlate a late acknowledgement with the steer it already attempted.
-    final trace = requestId == null ? '' : ' (request $requestId)';
-    stderrSink.writeln('Error: $message$trace');
-    if (json) {
-      stdoutSink.writeln(
-        jsonEncode({
-          'session_id': sessionId,
-          'request_id': ?requestId,
-          'status': 'error',
-          'error_code': errorCode,
-          'error': message,
-          'exit_code': exitCode,
-        }),
-      );
-    }
-    return exitCode;
+  /// Whether the projection proves the session is waiting for a recovery.
+  ///
+  /// The daemon's own recovery notice is authoritative: `blocked` waits for an
+  /// explicit Retry/Change Provider/Stop, and `waiting` waits on a resume timer
+  /// a manual retry may shorten. The durable execution snapshot is the second
+  /// signal, because restored blocked work can be projected before its notice is
+  /// rehydrated. Anything else — idle, queued, running, resuming, stopping — is
+  /// not a retry target, and this command sends nothing for it.
+  static bool _isRetryable(Map<String, dynamic> projection) {
+    final notice = projection['runtime_notice'];
+    final noticeStatus = notice is Map ? notice['status']?.toString() : null;
+    if (noticeStatus == 'blocked' || noticeStatus == 'waiting') return true;
+    final snapshot = projection['execution_snapshot'];
+    final state = snapshot is Map ? snapshot['state']?.toString() : null;
+    return state == 'blocked' || state == 'waiting';
+  }
+
+  static String? _blankToNull(String? value) {
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
   }
 }
 

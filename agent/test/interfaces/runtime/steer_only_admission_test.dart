@@ -29,6 +29,8 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
+import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
+import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
@@ -344,5 +346,101 @@ void main() {
       reason: 'without the flag an idle session still admits a new turn',
     );
     expect(classifications('req-legacy-idle'), ['think']);
+  });
+
+  test('steer_only during a restart drain is rejected, never queued', () async {
+    orchestrator.beginControlledRestartDrain();
+    addTearDown(orchestrator.cancelControlledRestartDrain);
+
+    await orchestrator.handleEvent(
+      steer('req-steer-only-drain', steerOnly: true),
+    );
+    await settle();
+
+    final rejections = canonical('error', 'req-steer-only-drain');
+    expect(rejections, hasLength(1));
+    expect(rejections.single['code'], 'no_active_turn');
+    expect(
+      adapter.calls,
+      0,
+      reason: 'a draining daemon must not start a turn from a steer',
+    );
+    expect(
+      runtime.findActiveWorkItem(sessionId),
+      isNull,
+      reason: 'a rejected steer creates no durable work',
+    );
+    expect(classifications('req-steer-only-drain'), isEmpty);
+    expect(queuedEchoFor('req-steer-only-drain'), isFalse);
+  });
+
+  test('steer_only is rejected while a waiting recovery notice owns the session',
+      () async {
+    final recovery = getIt<RuntimeRecoveryService>();
+    recovery.reportFailure(
+      sessionId: sessionId,
+      reason: RuntimeFailureReason.rateLimit,
+      providerInstanceId: providerId,
+      retryAfter: const Duration(minutes: 30),
+    );
+    expect(
+      recovery.activeNotice(sessionId)?.status,
+      RuntimeNoticeStatus.waiting,
+    );
+
+    await orchestrator.handleEvent(
+      steer('req-steer-only-waiting', steerOnly: true),
+    );
+    await settle();
+
+    final rejections = canonical('error', 'req-steer-only-waiting');
+    expect(rejections, hasLength(1));
+    expect(rejections.single['code'], 'no_active_turn');
+    expect(
+      adapter.calls,
+      0,
+      reason: 'a waiting session has no execution boundary to steer',
+    );
+    expect(classifications('req-steer-only-waiting'), isEmpty);
+  });
+
+  test('a steer_only rejection without a request id is still published',
+      () async {
+    // No turn request, no payload request id, and no run id: nothing can be
+    // correlated, and the rejection must still be observable.
+    await orchestrator.handleEvent(
+      GatewayEvent(
+        sessionId: sessionId,
+        platformId: 'cli_client',
+        type: 'steer',
+        message: Message(role: MessageRole.user, content: 'Add an audit trail'),
+        metadata: const {
+          'command': 'steer',
+          'payload': {'session_id': sessionId, 'steer_only': true},
+        },
+      ),
+    );
+    await settle();
+
+    final rejections = responses
+        .where(
+          (response) =>
+              response.message.metadata?['canonical_event_type'] == 'error',
+        )
+        .map(
+          (response) => Map<String, dynamic>.from(
+            response.message.metadata!['canonical_payload'] as Map,
+          ),
+        )
+        .toList();
+    expect(rejections, hasLength(1));
+    expect(rejections.single['code'], 'no_active_turn');
+    expect(
+      rejections.single.containsKey('request_id'),
+      isFalse,
+      reason: 'an uncorrelated rejection must not invent a correlation id',
+    );
+    expect(adapter.calls, 0);
+    expect(runtime.findActiveWorkItem(sessionId), isNull);
   });
 }

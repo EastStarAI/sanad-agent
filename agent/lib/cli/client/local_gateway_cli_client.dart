@@ -427,6 +427,117 @@ class LocalGatewayCliClient implements CliTurnClient {
     return ack;
   }
 
+  /// Dispatches `session.runtime_retry` and waits for the daemon's own
+  /// recovery transition for the session.
+  ///
+  /// The retry resumes the suspended request the session already owns, so the
+  /// acknowledgement is the daemon's recovery projection, not a reply to the
+  /// command: `session.runtime_notice` moving to `resuming` for [sessionId].
+  ///
+  /// * A `resuming` notice for the session is accepted even without a matching
+  ///   request id: the daemon resumes under the *turn's* request id, so a strict
+  ///   correlation would make every successful retry look unacknowledged. The
+  ///   caller's pre-check ensures the session was blocked or waiting first, so a
+  ///   `resuming` transition after the dispatch is the recovery it asked for.
+  /// * A typed rejection is a correlated `error` frame or a correlated
+  ///   `session.runtime_notice` whose status is `blocked`/`fatal`, and is thrown
+  ///   as [CliClientException] carrying the gateway's own code.
+  ///
+  /// No answer within [requestTimeout] (or the caller's [timeout]) raises
+  /// [CliClientException] with code `retry_unacknowledged`, so an unconfirmed
+  /// retry is never reported as accepted.
+  Future<Map<String, dynamic>> retryRuntimeAndAwaitAck({
+    required String sessionId,
+    String? requestId,
+    String? providerInstanceId,
+    String? modelId,
+    Duration? timeout,
+  }) async {
+    final reqId = requestId ?? _uuid.v4();
+    final completer = Completer<Map<String, dynamic>>();
+    final subscription = eventStream.listen((event) {
+      if (completer.isCompleted) return;
+      try {
+        final ack = _retryAckFor(event, reqId, sessionId);
+        if (ack != null) completer.complete(ack);
+      } on CliClientException catch (error) {
+        if (!completer.isCompleted) completer.completeError(error);
+      }
+    });
+    final effectiveTimeout = timeout ?? requestTimeout;
+    try {
+      await sendCommand(
+        command: 'session.runtime_retry',
+        payload: {
+          'session_id': sessionId,
+          'request_id': reqId,
+          'provider_instance_id': ?providerInstanceId,
+          'model_id': ?modelId,
+        },
+        requestId: reqId,
+      );
+      return await completer.future.timeout(
+        effectiveTimeout,
+        onTimeout: () => throw CliClientException(
+          'Gateway did not acknowledge the retry within '
+          '${effectiveTimeout.inSeconds}s; it may still be applied.',
+          code: 'retry_unacknowledged',
+        ),
+      );
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
+  /// Normalizes one inbound event into a retry acknowledgement for
+  /// [requestId] and [sessionId].
+  Map<String, dynamic>? _retryAckFor(
+    CliEvent event,
+    String requestId,
+    String sessionId,
+  ) {
+    final rawPayload = event.raw['payload'];
+    final payload = rawPayload is Map
+        ? Map<String, dynamic>.from(rawPayload)
+        : const <String, dynamic>{};
+    final eventRequestId = payload['request_id']?.toString();
+    final correlated = eventRequestId == requestId;
+    final payloadSessionId = payload['session_id']?.toString();
+    final forThisSession =
+        payloadSessionId == null || payloadSessionId == sessionId;
+
+    if (event is CliErrorEvent) {
+      if (!correlated) return null;
+      throw CliClientException(
+        event.message,
+        code: event.code.isEmpty ? 'gateway_error' : event.code,
+      );
+    }
+    if (event is! CliRuntimeNoticeEvent || !forThisSession) return null;
+
+    final status = payload['status']?.toString();
+    if (status == 'resuming') {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'event': event.type,
+        'status': status,
+        'reason': payload['reason']?.toString(),
+        'notice_request_id': eventRequestId,
+        'correlated': correlated,
+      };
+    }
+    if (correlated && (status == 'blocked' || status == 'fatal')) {
+      final title = payload['title']?.toString() ?? 'Retry rejected';
+      final message = payload['message']?.toString() ?? '';
+      throw CliClientException(
+        message.isEmpty ? title : '$title: $message',
+        code: 'retry_rejected',
+      );
+    }
+    return null;
+  }
+
   /// Dispatches a `stop` command and waits for authoritative session state.
   ///
   /// The command mirrors the Sanad Client stop path: it is sent immediately,

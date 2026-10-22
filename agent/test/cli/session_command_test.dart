@@ -42,6 +42,14 @@ class FakeSessionGatewayClient extends LocalGatewayCliClient {
   int steerCallCount = 0;
   Map<String, dynamic>? steerAckToReturn;
   Object? steerErrorToThrow;
+  String? lastRetrySessionId;
+  String? lastRetryRequestId;
+  String? lastRetryProviderInstanceId;
+  String? lastRetryModelId;
+  Duration? lastRetryAckTimeout;
+  int retryCallCount = 0;
+  Map<String, dynamic>? retryAckToReturn;
+  Object? retryErrorToThrow;
   bool isDisposed = false;
   Object? errorToThrow;
 
@@ -124,6 +132,32 @@ class FakeSessionGatewayClient extends LocalGatewayCliClient {
           'request_id': requestId ?? 'req-steer-fake-1',
           'event': 'session.message_classified',
           'classification': 'steer',
+        };
+  }
+
+  @override
+  Future<Map<String, dynamic>> retryRuntimeAndAwaitAck({
+    required String sessionId,
+    String? requestId,
+    String? providerInstanceId,
+    String? modelId,
+    Duration? timeout,
+  }) async {
+    retryCallCount++;
+    lastRetrySessionId = sessionId;
+    lastRetryRequestId = requestId;
+    lastRetryProviderInstanceId = providerInstanceId;
+    lastRetryModelId = modelId;
+    lastRetryAckTimeout = timeout;
+    if (retryErrorToThrow != null) throw retryErrorToThrow!;
+    return retryAckToReturn ??
+        {
+          'session_id': sessionId,
+          'request_id': requestId ?? 'req-retry-fake-1',
+          'event': 'session.runtime_notice',
+          'status': 'resuming',
+          'notice_request_id': 'req-turn-fake-1',
+          'correlated': false,
         };
   }
 
@@ -1715,13 +1749,23 @@ void main() {
         },
       );
 
-      test('treats a stop request as not steerable', () async {
+      test('reads the daemon execution-snapshot payload as the ownership '
+          'proof', () async {
+        // Exactly the fields `SessionExecutionSnapshot.toPayload` projects. The
+        // payload carries no in-memory stop flag, so steerability is decided on
+        // the durable state alone and an extra unknown field changes nothing.
         client.historyToReturn = {
           'payload': {
-            'session_id': 'sess-stopping',
+            'session_id': 'sess-live',
             'execution_snapshot': {
+              'session_id': 'sess-live',
               'state': 'running',
-              'stop_requested': true,
+              'work_item_id': 'wi-1',
+              'request_id': 'req-1',
+              'revision': 3,
+              'updated_at': '2026-10-22T20:00:00.000Z',
+              'turn_started_at': '2026-10-22T19:59:00.000Z',
+              'elapsed_ms': 60000,
             },
             'messages': [],
           },
@@ -1731,20 +1775,27 @@ void main() {
         final exitCode = await runner.run([
           'session',
           'steer',
-          'sess-stopping',
+          'sess-live',
           '--message',
           'Add scope',
         ]);
 
-        expect(exitCode, equals(SessionSteerCommand.exitNoActiveTurn));
-        expect(client.steerCallCount, isZero);
+        expect(exitCode, equals(SessionSteerCommand.exitAccepted));
+        expect(client.steerCallCount, equals(1));
       });
 
       test('treats the durable stopping state as not steerable', () async {
         client.historyToReturn = {
           'payload': {
             'session_id': 'sess-stopping',
-            'execution_snapshot': {'state': 'stopping'},
+            'execution_snapshot': {
+              'session_id': 'sess-stopping',
+              'state': 'stopping',
+              'work_item_id': 'wi-1',
+              'request_id': 'req-1',
+              'revision': 4,
+              'updated_at': '2026-10-22T20:00:00.000Z',
+            },
             'messages': [],
           },
         };
@@ -2020,6 +2071,320 @@ void main() {
 
         expect(exitCode, equals(0));
         expect(client.lastSteerSessionId, equals('sess-option'));
+      });
+    });
+
+    group('session retry', () {
+      /// Exactly the fields `SessionExecutionSnapshot.toPayload` plus the
+      /// recovery notice `session show` projects.
+      void useRecoverySession({
+        String sessionId = 'sess-blocked',
+        String? noticeStatus = 'blocked',
+        String snapshotState = 'blocked',
+      }) {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': sessionId,
+            'execution_snapshot': {
+              'session_id': sessionId,
+              'state': snapshotState,
+              'work_item_id': 'wi-blocked',
+              'request_id': 'req-turn-blocked',
+              'revision': 7,
+              'updated_at': '2026-10-22T20:00:00.000Z',
+            },
+            if (noticeStatus != null)
+              'runtime_notice': {
+                'session_id': sessionId,
+                'request_id': 'req-turn-blocked',
+                'status': noticeStatus,
+                'reason': 'timeout',
+                'severity': 'error',
+                'title': 'Request timed out',
+                'message': 'The request to OpenCode Go took too long to '
+                    'complete.',
+              },
+            'messages': [],
+          },
+        };
+      }
+
+      test('dispatches one retry and reports the daemon acceptance', () async {
+        useRecoverySession();
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-blocked',
+          '--json',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+        expect(client.retryCallCount, equals(1));
+        expect(client.lastRetrySessionId, equals('sess-blocked'));
+        expect(
+          client.lastRetryRequestId,
+          isNotNull,
+          reason: 'the request id is allocated before the dispatch',
+        );
+        expect(client.lastRetryProviderInstanceId, isNull);
+        expect(client.lastRetryModelId, isNull);
+
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['status'], equals('retrying'));
+        expect(decoded['session_id'], equals('sess-blocked'));
+        expect(decoded['request_id'], equals(client.lastRetryRequestId));
+        expect(decoded['notice_request_id'], equals('req-turn-fake-1'));
+        expect(stdoutBuf.toString(), isNot(contains('error')));
+      });
+
+      test('refuses to dispatch when the session is not blocked or waiting',
+          () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-idle',
+            'execution_snapshot': {
+              'session_id': 'sess-idle',
+              'state': 'running',
+              'work_item_id': 'wi-live',
+              'request_id': 'req-turn-live',
+              'revision': 2,
+              'updated_at': '2026-10-22T20:00:00.000Z',
+            },
+            'messages': [],
+          },
+        };
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-idle',
+          '--json',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitNotBlocked));
+        expect(
+          client.retryCallCount,
+          isZero,
+          reason: 'nothing is sent for a session that is not in recovery',
+        );
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['error_code'], equals('not_blocked'));
+        expect(decoded['request_id'], isNotNull);
+      });
+
+      test('treats a waiting notice as retryable', () async {
+        useRecoverySession(noticeStatus: 'waiting', snapshotState: 'waiting');
+        final runner = buildRunner();
+        final exitCode = await runner.run(['session', 'retry', 'sess-blocked']);
+
+        expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+        expect(client.retryCallCount, equals(1));
+        expect(
+          stdoutBuf.toString(),
+          contains('Retry accepted for session sess-blocked'),
+        );
+      });
+
+      test('treats restored blocked work without a notice as retryable',
+          () async {
+        useRecoverySession(noticeStatus: null);
+        final runner = buildRunner();
+        final exitCode = await runner.run(['session', 'retry', 'sess-blocked']);
+
+        expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+        expect(client.retryCallCount, equals(1));
+      });
+
+      test('maps --provider and --model onto the payload fields', () async {
+        useRecoverySession();
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-blocked',
+          '--provider',
+          'inst-openai-1',
+          '--model',
+          'gpt-5.1',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+        expect(client.lastRetryProviderInstanceId, equals('inst-openai-1'));
+        expect(client.lastRetryModelId, equals('gpt-5.1'));
+      });
+
+      test('treats a blank --provider and --model as absent', () async {
+        useRecoverySession();
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-blocked',
+          '--provider',
+          '',
+          '--model',
+          '  ',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+        expect(client.lastRetryProviderInstanceId, isNull);
+        expect(client.lastRetryModelId, isNull);
+      });
+
+      test('reports a typed rejection with exit 4', () async {
+        useRecoverySession();
+        client.retryErrorToThrow = const CliClientException(
+          'The interrupted provider request has no recognized checkpoint.',
+          code: 'retry_rejected',
+        );
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-blocked',
+          '--json',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitRejected));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['error_code'], equals('retry_rejected'));
+        expect(decoded['error'], contains('no recognized checkpoint'));
+        expect(decoded['request_id'], equals(client.lastRetryRequestId));
+      });
+
+      test('reports an unacknowledged retry with exit 5 and its request id',
+          () async {
+        useRecoverySession();
+        client.retryErrorToThrow = const CliClientException(
+          'Gateway did not acknowledge the retry within 15s',
+          code: 'retry_unacknowledged',
+        );
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-blocked',
+          '--json',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitUnacknowledged));
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['error_code'], equals('retry_unacknowledged'));
+        expect(decoded['request_id'], isNotEmpty);
+        expect(
+          stderrBuf.toString(),
+          contains('(request ${decoded['request_id']})'),
+          reason: 'a caller can correlate a late acknowledgement',
+        );
+      });
+
+      test('reports a transport failure with exit 1', () async {
+        useRecoverySession();
+        client.retryErrorToThrow = const CliClientException(
+          'socket is gone',
+          code: 'connection_failed',
+        );
+
+        final runner = buildRunner();
+        final exitCode = await runner.run(['session', 'retry', 'sess-blocked']);
+
+        expect(exitCode, equals(SessionRetryCommand.exitFailed));
+        expect(stderrBuf.toString(), isNot(contains('Gateway rejected')));
+      });
+
+      test('reports an unreadable session projection with exit 8', () async {
+        client.historyErrorToThrow = const CliClientException(
+          'cursor is stale',
+          code: 'stale_cursor',
+        );
+
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-blocked',
+          '--json',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitStateUnreadable));
+        expect(
+          client.retryCallCount,
+          isZero,
+          reason: 'no retry is dispatched after a failed read',
+        );
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['error_code'], equals('session_state_unreadable'));
+      });
+
+      test('requires a session id', () async {
+        final runner = buildRunner();
+        final exitCode = await runner.run(['session', 'retry', '--json']);
+
+        expect(exitCode, equals(SessionRetryCommand.exitUsage));
+        expect(client.retryCallCount, isZero);
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['error_code'], equals('invalid_arguments'));
+      });
+
+      test('rejects an unusable --timeout as a usage error', () async {
+        useRecoverySession();
+        for (final value in ['0', '-1', 'soon', '86401']) {
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'retry',
+            'sess-blocked',
+            '--timeout',
+            value,
+          ]);
+
+          expect(
+            exitCode,
+            equals(SessionRetryCommand.exitUsage),
+            reason: '--timeout $value',
+          );
+        }
+        expect(client.retryCallCount, isZero);
+      });
+
+      test('honours --timeout as the acknowledgement bound', () async {
+        useRecoverySession();
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-blocked',
+          '--timeout',
+          '9',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+        expect(client.lastRetryAckTimeout, equals(const Duration(seconds: 9)));
+      });
+
+      test('resolves the target from --session so a relayed retry reuses an '
+          'approved session', () async {
+        useRecoverySession(sessionId: 'sess-option');
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          '--session',
+          'sess-option',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+        expect(client.lastRetrySessionId, equals('sess-option'));
       });
     });
   });

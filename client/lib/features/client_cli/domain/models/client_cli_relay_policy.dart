@@ -43,44 +43,80 @@ const String clientCliApprovalPendingMessage =
 /// Commands whose remote form reads standard input when it carries the prompt.
 const Set<String> _clientCliStdinCommands = {'run', 'chat', 'cli'};
 
-/// Options that consume the following argv token as their value.
-const Set<String> _clientCliValueOptions = {
-  '--workspace',
-  '-w',
-  '--session',
-  '-s',
-  '--model',
-  '-m',
-  '--provider',
-  '--thinking-mode',
-  '--timeout',
-  '--account',
-  '--home',
-  '--gateway-url',
-  '--url',
-  '--prompt',
-  '-p',
-  '--brief-file',
-  '-b',
-  '--execution-root',
-  '--out-dir',
-  '-o',
-  // `session` subcommand options. A value that looks like an option (for
-  // example `--message -s`) is the *value* of the preceding option in the
-  // Agent's own grammar, so it must never be re-read as a session flag here.
-  '--message',
-  '--message-file',
-  '-f',
-  '--request-id',
-  '-r',
-  '--answer',
-  '-a',
-  '--file',
-  '--decision',
-  '-d',
-  '--scope',
-  '--comment',
-  '-c',
+/// Long options that consume a value, using the Agent CLI's own grammar.
+///
+/// This is the whole `SanadCommandRunner` surface, not just the options this
+/// policy acts on: every value option must consume its value so a value that
+/// looks like an option (for example `--message -s`) is never re-read as a
+/// session flag.
+const Set<String> _clientCliLongValueOptions = {
+  'account',
+  'answer',
+  'brief-file',
+  'comment',
+  'decision',
+  'execution-root',
+  'expected-version',
+  'file',
+  'gateway-url',
+  // Registered alias of `--gateway-url`.
+  'url',
+  'health-timeout',
+  'home',
+  'max-entries',
+  'message',
+  'message-file',
+  'model',
+  'name',
+  'out-dir',
+  'path',
+  'prompt',
+  'provider',
+  'ref',
+  'request-id',
+  'scope',
+  'session',
+  'skill',
+  'sub-path',
+  'thinking-mode',
+  'timeout',
+  'workspace',
+};
+
+/// Short options and whether each one consumes a value (`args` abbreviations).
+const Map<String, bool> _clientCliShortOptions = {
+  'a': true, // --answer
+  'b': true, // --brief-file
+  'c': true, // --comment
+  'd': true, // --decision
+  'f': true, // --message-file / --file
+  'm': true, // --model
+  'n': true, // --name
+  'o': true, // --out-dir
+  'p': true, // --prompt
+  'q': false, // --quiet
+  'r': true, // --request-id
+  's': true, // --session
+  'v': false, // --version
+  'w': true, // --workspace
+};
+
+/// Long name of each short option, so both forms resolve identically.
+const Map<String, String> _clientCliShortNames = {
+  'a': 'answer',
+  'b': 'brief-file',
+  'c': 'comment',
+  'd': 'decision',
+  'f': 'message-file',
+  'm': 'model',
+  'n': 'name',
+  'o': 'out-dir',
+  'p': 'prompt',
+  'q': 'quiet',
+  'r': 'request-id',
+  's': 'session',
+  'v': 'version',
+  'w': 'workspace',
 };
 
 /// `session` subcommands that carry no positional session id.
@@ -105,80 +141,151 @@ class ClientCliSessionTarget {
 
 /// Resolves the session a relayed argv targets, for approval scoping.
 ///
-/// The Agent's own parser consumes the token after every value option, so
-/// `session steer B --message -s A` carries the literal text `-s` as its
-/// message and targets `B`: `-s` is never a session flag there. Scanning argv
-/// for the first `-s`/`--session` token — the previous caller-side behaviour —
-/// approved such a command against `A` while the Agent acted on `B`, so this
-/// grammar skips value positions exactly like the Agent parser and reads the
-/// positional session id of `session` subcommands instead.
+/// The resolver tokenizes the argv with the Agent's `args` grammar so an
+/// approval can only ever name the session the forwarded command acts on:
 ///
-/// Two different ids are reported as [ClientCliSessionTarget.conflict] rather
-/// than silently preferring one of them.
+/// * every value option consumes its value, so `session steer B --message -s A`
+///   carries the literal text `-s` and targets `B`;
+/// * a short option accepts an attached value (`-sA` is `--session A`), and the
+///   attached text is the value verbatim, exactly as `args` reads it (`-s=A`
+///   names the id `=A`, not `A`);
+/// * `--name=value` and `--name value` are equivalent;
+/// * `--` ends option parsing, so nothing after it is a session flag;
+/// * the first positional token is the root command, the next is the `session`
+///   subcommand, and only the positional after that is a session id.
+///
+/// Every session id the argv names — in any placement, because the Agent reads
+/// a global `--session` and a subcommand `--session` through the same accessor —
+/// is collected. Two different ids are reported as
+/// [ClientCliSessionTarget.conflict] and the caller must refuse to relay, rather
+/// than prefer one of them the way the Agent's own "last value wins" accessor
+/// would.
 ClientCliSessionTarget clientCliSessionTargetFor(List<String> argv) {
   if (argv.isEmpty) return ClientCliSessionTarget.none;
 
-  final isSessionCommand = argv.first == 'session';
-  final subcommand = isSessionCommand && argv.length > 1 ? argv[1] : null;
-  final takesPositionalSessionId =
-      isSessionCommand &&
-      (subcommand == null ||
-          !_clientCliSessionlessSubcommands.contains(subcommand));
+  final ids = <String>{};
+  var commandSeen = false;
+  var isSessionCommand = false;
+  var subcommandSeen = false;
+  var takesPositionalSessionId = false;
 
-  String? explicitId;
-  String? positionalId;
-  var optionsEnded = false;
-
-  for (var i = 1; i < argv.length; i++) {
-    final token = argv[i];
-    if (optionsEnded) {
-      positionalId ??= takesPositionalSessionId ? _nonEmpty(token) : null;
+  for (final token in _tokenize(argv)) {
+    if (token.isOption) {
+      if (token.name == 'session' && token.takesValue) {
+        final id = _nonEmpty(token.value);
+        if (id != null) ids.add(id);
+      }
       continue;
     }
-    if (token == '--') {
-      optionsEnded = true;
+    if (!commandSeen) {
+      commandSeen = true;
+      isSessionCommand = token.value == 'session';
       continue;
     }
-    if (token.startsWith('-') && token.length > 1) {
-      final equalsAt = token.indexOf('=');
-      final name = equalsAt == -1 ? token : token.substring(0, equalsAt);
-      final inlineValue = equalsAt == -1
-          ? null
-          : token.substring(equalsAt + 1);
-      if (name == '--session' || name == '-s') {
-        if (inlineValue != null) {
-          explicitId ??= _nonEmpty(inlineValue);
-        } else if (i + 1 < argv.length) {
-          i++;
-          explicitId ??= _nonEmpty(argv[i]);
-        }
-        continue;
-      }
-      if (inlineValue == null && _clientCliValueOptions.contains(name)) {
-        i++; // Skip this option's value, exactly like the Agent parser.
-      }
+    if (isSessionCommand && !subcommandSeen) {
+      subcommandSeen = true;
+      takesPositionalSessionId = !_clientCliSessionlessSubcommands.contains(
+        token.value,
+      );
       continue;
     }
     if (takesPositionalSessionId) {
-      // The subcommand token itself is not a positional session id.
-      if (isSessionCommand && i == 1) continue;
-      positionalId ??= _nonEmpty(token);
+      // Only the first positional after the subcommand is the session id;
+      // a later one is a request id or another argument.
+      takesPositionalSessionId = false;
+      final id = _nonEmpty(token.value);
+      if (id != null) ids.add(id);
     }
   }
 
-  if (explicitId != null && positionalId != null) {
-    if (explicitId != positionalId) {
-      return const ClientCliSessionTarget(conflict: true);
-    }
-    return ClientCliSessionTarget(sessionId: explicitId);
-  }
-  final resolved = explicitId ?? positionalId;
-  return resolved == null
-      ? ClientCliSessionTarget.none
-      : ClientCliSessionTarget(sessionId: resolved);
+  if (ids.length > 1) return const ClientCliSessionTarget(conflict: true);
+  if (ids.isEmpty) return ClientCliSessionTarget.none;
+  return ClientCliSessionTarget(sessionId: ids.single);
 }
 
-String? _nonEmpty(String value) {
+/// One classified argv token, mirroring how the Agent's `args` parser reads it.
+class _ClientCliToken {
+  const _ClientCliToken.option(
+    this.name,
+    this.value, {
+    required this.takesValue,
+  }) : isOption = true;
+
+  const _ClientCliToken.argument(this.value)
+    : isOption = false,
+      name = '',
+      takesValue = false;
+
+  final bool isOption;
+
+  /// Long option name for an option, or the literal text for an argument.
+  final String name;
+  final String? value;
+  final bool takesValue;
+}
+
+/// Splits [argv] into option and argument tokens with the Agent's grammar.
+///
+/// Only [ _clientCliLongValueOptions] and [_clientCliShortOptions] are known.
+/// An unknown option is treated as a flag, which cannot desynchronize the walk:
+/// the Agent rejects an unknown option before it acts, so a misread there can
+/// never approve a session the command goes on to use. A collapsed short group
+/// (`-qs`) is read as flags too; a group whose first short takes a value is
+/// always an attached value (`-sA`), and the Agent rejects a value-taking short
+/// that follows a flag in the same token.
+List<_ClientCliToken> _tokenize(List<String> argv) {
+  final tokens = <_ClientCliToken>[];
+  var optionsEnded = false;
+
+  for (var i = 0; i < argv.length; i++) {
+    final token = argv[i];
+    if (!optionsEnded) {
+      if (token == '--') {
+        optionsEnded = true;
+        continue;
+      }
+      if (token.startsWith('--') && token.length > 2) {
+        final equalsAt = token.indexOf('=');
+        final name = equalsAt == -1
+            ? token.substring(2)
+            : token.substring(2, equalsAt);
+        final takesValue = _clientCliLongValueOptions.contains(name);
+        var value = equalsAt == -1 ? null : token.substring(equalsAt + 1);
+        if (takesValue && value == null && i + 1 < argv.length) {
+          value = argv[++i];
+        }
+        tokens.add(
+          _ClientCliToken.option(name, value, takesValue: takesValue),
+        );
+        continue;
+      }
+      if (token.startsWith('-') && token.length > 1) {
+        final body = token.substring(1);
+        final short = body[0];
+        final shortName = _clientCliShortNames[short] ?? short;
+        if (_clientCliShortOptions[short] ?? false) {
+          // `args` treats the rest of the token as the value verbatim; an empty
+          // rest takes the next token instead.
+          var value = body.substring(1);
+          if (value.isEmpty && i + 1 < argv.length) value = argv[++i];
+          tokens.add(
+            _ClientCliToken.option(shortName, value, takesValue: true),
+          );
+          continue;
+        }
+        tokens.add(
+          _ClientCliToken.option(shortName, null, takesValue: false),
+        );
+        continue;
+      }
+    }
+    tokens.add(_ClientCliToken.argument(token));
+  }
+  return tokens;
+}
+
+String? _nonEmpty(String? value) {
+  if (value == null) return null;
   final trimmed = value.trim();
   return trimmed.isEmpty ? null : trimmed;
 }
@@ -191,18 +298,13 @@ String? _nonEmpty(String value) {
 /// protocol bounds so an out-of-range value cannot widen the relay.
 int clientCliRelayTimeoutSecondsFor(List<String> argv) {
   int? requestedSeconds;
-  for (var i = 0; i < argv.length; i++) {
-    final token = argv[i];
-    if (token == '--') break;
-    if (token == '--timeout') {
-      requestedSeconds = i + 1 < argv.length
-          ? int.tryParse(argv[i + 1].trim())
-          : null;
-    } else if (token.startsWith('--timeout=')) {
-      requestedSeconds = int.tryParse(
-        token.substring('--timeout='.length).trim(),
-      );
+  for (final token in _tokenize(argv)) {
+    if (!token.isOption || token.name != 'timeout' || !token.takesValue) {
+      continue;
     }
+    final value = token.value?.trim();
+    if (value == null) continue;
+    requestedSeconds = int.tryParse(value);
   }
 
   if (requestedSeconds == null) return clientCliRelayDefaultTimeoutSeconds;
@@ -226,18 +328,10 @@ bool clientCliRelayConsumesStdin(List<String> argv) {
   if (argv.isEmpty) return false;
   if (!_clientCliStdinCommands.contains(argv.first)) return false;
 
-  for (var i = 1; i < argv.length; i++) {
-    final token = argv[i];
-    if (token == '--') return false;
-    if (token.startsWith('-') && token.length > 1) {
-      final name = token.contains('=')
-          ? token.substring(0, token.indexOf('='))
-          : token;
-      if (name == '--brief-file' || name == '-b') return false;
-      if (name == '--prompt' || name == '-p') return false;
-      if (!token.contains('=') && _clientCliValueOptions.contains(name)) {
-        i++;
-      }
+  // Skip the command token itself; everything after it decides the prompt.
+  for (final token in _tokenize(argv).skip(1)) {
+    if (token.isOption) {
+      if (token.name == 'brief-file' || token.name == 'prompt') return false;
       continue;
     }
     // A positional prompt is supplied, so standard input is not the prompt.

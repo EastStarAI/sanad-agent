@@ -647,10 +647,14 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   /// condition for every caller.
   void _emitSteerRejected({
     required GatewayEvent event,
-    required String requestId,
+    required String? requestId,
     required String code,
     required String message,
   }) {
+    // The rejection is always published, even when the steer carries no request
+    // id to correlate it with. A silent rejection would leave a caller waiting
+    // for an answer that cannot arrive, and the text is still neither queued nor
+    // admitted, so the outcome must be observable either way.
     _emitResponse(
       GatewayResponse(
         sessionId: event.sessionId,
@@ -661,7 +665,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             'canonical_event_type': 'error',
             'canonical_payload': {
               'session_id': event.sessionId,
-              'request_id': requestId,
+              'request_id': ?requestId,
               'code': code,
               'message': message,
               'is_fatal': false,
@@ -932,18 +936,15 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           event.type == 'steer' &&
           (event.metadata['payload'] as Map?)?['steer_only'] == true;
       if (steerOnly && !canSteer) {
-        final requestId = turnRequest.requestId ?? requestIdForEvent(event);
-        if (requestId != null) {
-          _emitSteerRejected(
-            event: event,
-            requestId: requestId,
-            code: 'no_active_turn',
-            message:
-                'No run currently owns session ${event.sessionId}, so the '
-                'steer was rejected. No turn was started and the text was not '
-                'queued.',
-          );
-        }
+        _emitSteerRejected(
+          event: event,
+          requestId: turnRequest.requestId ?? requestIdForEvent(event),
+          code: 'no_active_turn',
+          message:
+              'No run currently owns session ${event.sessionId}, so the '
+              'steer was rejected. No turn was started and the text was not '
+              'queued.',
+        );
         return;
       }
       if (!canSteer && isQueuePromotionCommand) {

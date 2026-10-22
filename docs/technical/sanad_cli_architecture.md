@@ -1,6 +1,6 @@
 ---
 title: "Sanad CLI Architecture"
-description: "Attached and in-process transports, runtime ownership, automation output, non-interactive session steering, cancellation, and test-isolation contracts."
+description: "Attached and in-process transports, runtime ownership, automation output, non-interactive session steering and runtime recovery retry, cancellation, and test-isolation contracts."
 ---
 
 # Sanad CLI Architecture & Gateway Runtime Contract
@@ -236,6 +236,7 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
 | `answer` | `sanad session answer <session-id> -r <req-id> --answer <text> [--file <path>] [--json]` | Explicit resolution path for pending `system_ask_user` questions. Accepts direct text or JSON/text file payload. |
 | `permission` | `sanad session permission <session-id> -r <req-id> (--allow \| --deny) [--decision allow\|deny] [--scope once\|session\|workspace] [--comment <text>] [--file <path>] [--json]` | Explicit decision path for gated tool approvals. Accepts boolean flags or a structured JSON file payload. Aliases: `permit`, `decide`. |
 | `steer` | `sanad session steer <session-id> (--message <text> \| --message-file <path>) [--timeout <seconds>] [--json]` | Non-interactive live steering for an orchestrator that supervises a running turn. Dispatches one `steer` command with `steer_only: true` and reports the daemon's own delivery classification for that message id; see §9.5 for the exit codes and what "sent" proves. |
+| `retry` | `sanad session retry <session-id> [--provider <instance-id>] [--model <model-id>] [--timeout <seconds>] [--json]` | Non-interactive recovery retry. Refuses before dispatch unless the session is `blocked`/`waiting`, then sends the same `session.runtime_retry` command the Sanad Client's Retry action sends and reports the daemon's own `resuming` transition; see §9.6 for the exit codes, the route override, and the automatic-retry rule. |
 | `new` | `sanad session new` | Generates and outputs a fresh UUID session identifier. |
 | `delete` | `sanad session delete <session-id> [--json]` | Deletes a session and its cached turns from the daemon. |
 
@@ -347,7 +348,9 @@ running, without waiting for it to finish and re-dispatching.
    id that does not exist is indistinguishable from an idle session in that projection
    and is reported the same way. A read that fails is its own condition
    (`session_state_unreadable`, exit `8`) because no steer was sent; a transport failure
-   during that read stays exit `1`.
+   during that read stays exit `1`. The projection carries no in-memory stop flag: an
+   in-flight stop is visible only as the durable `stopping` state (written before the run
+   is cancelled) and, immediately after, as the daemon's own rejection.
 5. **Acknowledgement mapping.** The acknowledgement is the daemon's own classification
    of the dispatched message id: `session.pending_steer_changed` or
    `session.message_classified` with `classification: steer` proves the pending steer was
@@ -390,8 +393,96 @@ running, without waiting for it to finish and re-dispatching.
    to correlate the printed request id). Codes `6`/`7` exist so a caller can never read
    "a turn is now running/queued" as a successful steer.
 
-8. **Logging.** The steer body never enters stdout, stderr, or logs; failures report only
+8. **Known edge: a steer that outlives the turn.** A steer delivered at the last tool
+   boundary of a turn, which the run never reaches an execution boundary to drain, is not
+   applied. `sanad session steer` has already exited `0` at that point, because its claim
+   is only that the text was acknowledged as a pending steer for the owning run — not that
+   it was applied. At the next daemon restart that unresolved pending record becomes a
+   durable **recovered draft** (never a new generation's steer), visible as recovered text
+   in the session history. A caller that must know whether the text took effect reads the
+   session history (`sanad session show <id>`, or the `session.pending_steer_changed`
+   lifecycle record) instead of treating the exit code as application.
+
+9. **Logging.** The steer body never enters stdout, stderr, or logs; failures report only
    identities, codes, and lifecycle metadata.
+
+---
+
+### 9.6. Runtime Recovery Retry (`sanad session retry`)
+
+The daemon already owns recovery: a blocked session waits for the Sanad Client's Retry
+action (`session.runtime_retry`) or for an automatic retry budget. A non-interactive
+`sanad run` worker has no client attached, so nothing presses Retry, and the session stays
+blocked until a person or supervisor intervenes. `sanad session retry` is the
+non-interactive equivalent of that action.
+
+1. **Argument contract.** `sanad session retry <session-id> [--provider <instance-id>]
+   [--model <model-id>]`, plus the shared `--home`/`--gateway-url` pins every session
+   subcommand honours. `--provider` is a provider **instance id** (the value
+   `sanad providers` and `sanad models` report), not a template name; a blank value is
+   treated as absent so an empty shell variable never becomes a provider id. `--model`
+   is a model id for that provider. `--timeout` bounds the acknowledgement wait exactly
+   like `session steer` (default: the client request timeout, 15 s; range `1..86400`).
+2. **Retry, not "change provider".** The payload maps `--provider`/`--model` onto the
+   retry command's own `provider_instance_id`/`model_id` fields and resumes the suspended
+   request the session already owns with recovery reason `manual_retry`. The dedicated
+   Change Provider action is a **different** command — `session.runtime_continue_with_provider`
+   — which requires a provider instance id, resolves that provider's default model and
+   refuses with `model_not_found` when it has none, rewrites the route with reason
+   `provider_changed`, and broadcasts the canonical route confirmation. `session retry`
+   changes the route only as an override of the same suspended request: it also rewrites
+   every non-terminal queued work item's route, but it never confirms a route change as a
+   configuration decision.
+3. **Pre-check (nothing is sent when it cannot help).** The command reads the session
+   projection first and refuses with `not_blocked` (exit `3`) unless the session is in a
+   retryable recovery state: the daemon's `runtime_notice` status is `blocked` or
+   `waiting`, or the durable execution snapshot state is `blocked`/`waiting` (restored
+   blocked work can be projected before its notice is rehydrated). A `waiting` session is
+   retryable because a manual retry shortens the remaining cooldown. Idle, queued,
+   running, resuming, and stopping sessions are not retried, so the command never turns a
+   healthy session into a second turn.
+4. **What the acknowledgement proves.** Accepted means the daemon's recovery projection
+   moved the session to `resuming` after the dispatch; it never proves the resumed provider
+   request succeeded. The daemon resumes under the **turn's** request id, so a `resuming`
+   notice for the session is accepted without strict correlation while typed rejections
+   require it: a correlated `error` frame, or a correlated `runtime_notice` whose status is
+   `blocked`/`fatal` (for example an unsafe checkpoint or a provider with no default
+   model), is reported as a rejection with the gateway's own code. A scattered rejection
+   the daemon cannot answer — a retry that arrives while the session is busy with another
+   resume — produces no event at all, which is reported as unacknowledged with the request
+   id rather than as accepted.
+5. **Output.** Plain success is `Retry accepted for session <id> (request <reqId>): the
+   daemon is resuming the last request.`; `--json` emits
+   `{"session_id":..., "request_id":..., "status":"retrying", "notice_request_id":...}`.
+   The request id is allocated before the dispatch and printed in every outcome, including
+   a timeout, so a late acknowledgement can always be correlated.
+6. **Exit codes.** Every non-zero code carries a distinct JSON `error_code` in `--json`
+   mode (`{"session_id":..., "request_id":..., "status":"error", "error_code":..., "error":..., "exit_code":...}`).
+
+| Exit | `error_code` | Meaning |
+|---|---|---|
+| `0` | — | Accepted: the daemon is resuming the suspended request. |
+| `1` | transport code (`connection_failed`, `disposed`, `not_connected`, `disconnected`, `send_error`, `query_timeout`, `retry_failed`) | The retry could not be dispatched, or the projection could not be read over a transport that failed. |
+| `2` | `invalid_arguments` | Invalid invocation: missing session id, or an unusable `--timeout`. |
+| `3` | `not_blocked` | The session is not blocked or waiting, so nothing was sent. |
+| `4` | `retry_rejected`, or the gateway's own code | A correlated typed rejection from the daemon. |
+| `5` | `retry_unacknowledged` | Dispatched, but not acknowledged within the bound; it may still resume. Confirm with `sanad session show <id>`. |
+| `8` | `session_state_unreadable` | The projection could not be read, so nothing was sent — distinct from a rejection because no retry was dispatched. |
+
+7. **Automatic retry rule (why a blocked worker can wait forever).** Before any manual
+   intervention the runner already retries some provider failures on its own
+   (`RunnerRecoveryCoordinator.automaticRetryBudget`): `timeout` and the local tool/runtime
+   errors get **one** automatic attempt, `networkError` two, and
+   `rateLimit`/`upstreamRateLimit`/`overloaded` three, with a `2 s` base delay
+   (`fallbackRetryDelay`) doubled per attempt and clamped to `60 s` — and only when no
+   output has started streaming. A `timeout` after the first automatic attempt therefore
+   becomes a `blocked` notice with Retry/Change Provider actions and **no** further timer:
+   a headless worker stays blocked indefinitely. The blocked notice states what the
+   automatic retry already did ("gave up after N attempts", or that streaming output
+   prevented one), so the state is never mistaken for a first failure that is still
+   retrying. `sanad session retry` is the missing manual step.
+8. **Logging.** The command reports identities, codes, and lifecycle metadata only; it
+   never prints provider bodies or session content.
 
 ---
 
@@ -408,12 +499,18 @@ The Sanad CLI architecture provides a remote execution seam so that `sanad-clien
 
 ### 10.2. Relay Boundaries per Command Family
 
-- Read and control commands (`devices`, `ws list`, `session show|steer|answer|stop`,
+- Read and control commands (`devices`, `ws list`, `session show|steer|retry|answer|stop`,
   `run`) execute through the remote runner and return ordered output plus one
   terminal result. The relay forwards the argument vector to the target Agent's own
   `SanadCommandRunner`, so a new session subcommand is relayable without a separate
-  allow-list entry; `sanad-client -d <device-id> session steer ...` therefore works as
-  soon as the Agent exposes it.
+  allow-list entry; `sanad-client -d <device-id> session steer ...` and
+  `sanad-client -d <device-id> session retry ...` therefore work as soon as the Agent
+  exposes them. Default-mode approval is keyed on the session the forwarded argv will act
+  on, resolved with the Agent's own `args` grammar (attached short values, `--name=value`,
+  the `--` terminator, and every value option consuming its value). An argv that names two
+  different sessions — a positional id plus a disagreeing `--session`, a repeated
+  `--session`, or `-s<id>` beside a different positional — is refused before approval with
+  `ambiguous_session_target` and is never relayed.
 - `login` stays host-local by design: the remote runner has no interactive login
   handler, so a forwarded `login` returns exit code 0 with no relayed output.
   Hosts that need device authorization run `sanad login` locally in the target

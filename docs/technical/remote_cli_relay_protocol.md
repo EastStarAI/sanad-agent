@@ -1,6 +1,6 @@
 ---
 title: "Remote CLI Relay Protocol"
-description: "Typed protocol commands, streamed output, execution seam, and boundaries for remote Sanad CLI relay."
+description: "Typed protocol commands, streamed output, execution seam, session-scoped approval grammar, and boundaries for remote Sanad CLI relay."
 ---
 
 # Remote CLI Relay Protocol
@@ -71,7 +71,7 @@ The remote relay executes against `SanadCommandRunner`, which registers the foll
 |---|---|---|
 | `run` | None | One-shot execution with prompt or stdin, tool execution, and artifact generation. |
 | `workspace` (`ws`) | `list`, `current`, `switch`, `select`, `add`, `create`, `tree`, `policy` | Workspace discovery, registration, directory structure, and permission mode. |
-| `session` | `list`, `show`, `steer`, `stop`, `answer`, `permission` (`permit`, `decide`), `new`, `delete` | Session inspection, live steering, interruption, clarification answering, and tool approvals. |
+| `session` | `list`, `show`, `steer`, `retry`, `stop`, `answer`, `permission` (`permit`, `decide`), `new`, `delete` | Session inspection, live steering, runtime recovery retry, interruption, clarification answering, and tool approvals. |
 | `models` | None | Listing available LLM models on the target Agent. |
 | `providers` | None | Listing and inspecting configured LLM providers. |
 | `skills` | None | Listing installed and bundled capabilities. |
@@ -433,17 +433,25 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
   the wait. A session that is already approved emits no notice. The caller writes
   the message once to standard error and never to standard output, keeping
   `--json` output parseable. Approval is keyed on **the session the forwarded
-  command will act on**, resolved with the Agent's own argv grammar: the
-  positional session id of a `session` subcommand, and/or an explicit
+  command will act on**, resolved with the Agent's own `args` grammar: the
+  positional session id of a `session` subcommand and/or an explicit
   `--session`/`-s`, while every value-taking option keeps its value — so
   `session steer B --message -s A` is approved against `B` (the parser consumes
-  `-s` as the message text) and never against `A`. A supervisor that steers or
-  stops one worker repeatedly should pass `--session <id>` (accepted by every
-  `session` subcommand, including `session steer`) to reuse one approved session
-  instead of prompting per call. When the argv names two different sessions
-  (`session steer B --session A ...`) the host refuses before approval with
-  `code: ambiguous_session_target` and relays nothing, instead of approving one
-  session while the Agent acts on the other.
+  `-s` as the message text) and never against `A`. Every documented `args` form is
+  read the same way: an attached short value (`-sA` is `--session A`, and `-s=A`
+  names the literal id `=A`), `--session=<id>`, an option placed before the
+  command, and the `--` terminator, after which nothing is a session flag. A
+  supervisor that steers, retries, or stops one worker repeatedly should pass
+  `--session <id>` (accepted by every `session` subcommand, including
+  `session steer` and `session retry`) to reuse one approved session instead of
+  prompting per call. When the argv names two **different** sessions — a
+  positional id beside a disagreeing `--session`, a repeated `--session` with
+  different values, or an attached `-s<id>` beside another positional — the host
+  refuses before approval with `code: ambiguous_session_target` and relays
+  nothing, instead of approving one session while the Agent acts on the other.
+  The Agent itself keeps the last value for a repeated option; the host prefers
+  the fail-closed refusal because an approval must never name a session the
+  forwarded command might not use.
 - **Terminal Execution Result (`type: result`):**
   ```json
   {
