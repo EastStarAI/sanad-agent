@@ -228,6 +228,16 @@ installed version responds locally and, for connected installs, cloud
 registration is complete. A failed attempt restores the prior executable,
 service state, and pending pairing state without deleting the wider Sanad Home.
 
+A normal `sanad service stop` ends the daemon with its signal exit status, which
+the current systemd unit declares as successful termination
+(`SuccessExitStatus=130 143`). A unit installed by an earlier Agent lacks that
+line, so on Linux its stop leaves the unit in the `failed` state and
+`service status` reports `Failed` until the service is started again. Run
+`sanad service install` once after upgrading to refresh the definition; on Linux
+that does not interrupt a running Agent, while macOS reloads the launchd job.
+`systemctl --user reset-failed sanad-agent.service` clears a leftover `failed`
+state without reinstalling.
+
 ## Providers and accounts
 
 Open Provider Settings on the selected device to:

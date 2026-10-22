@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/config.dart';
 import '../../client/local_gateway_cli_client.dart';
+import '../../discovery/local_gateway_discovery.dart';
 import '../../oneshot/oneshot_runner.dart';
 import '../sanad_command.dart';
 
@@ -285,6 +286,16 @@ abstract class _BaseSessionSubcommand extends SanadCommand {
     return null;
   }
 
+  /// Lets endpoint resolution failures reach the top-level runner.
+  ///
+  /// Those failures are environment answers (no live runtime for the selected
+  /// Home, a foreign record, an unreachable recorded endpoint), so the runner
+  /// reports the actionable message and the configuration exit code instead of
+  /// a command-specific "failed to …" wrapper.
+  void rethrowEndpointFailure(Object error) {
+    if (error is GatewayDiscoveryException) throw error;
+  }
+
   String? readAnswerFile(String filePath) {
     final file = File(filePath);
     if (!file.existsSync()) {
@@ -374,6 +385,7 @@ class SessionListCommand extends _BaseSessionSubcommand {
         return 0;
       });
     } catch (e) {
+      rethrowEndpointFailure(e);
       stderrSink.writeln('Error: Failed to list sessions: $e');
       if (json) {
         stdoutSink.writeln(jsonEncode({'exit_code': 1, 'error': e.toString()}));
@@ -601,6 +613,7 @@ class SessionShowCommand extends _BaseSessionSubcommand {
         return 0;
       });
     } catch (e) {
+      rethrowEndpointFailure(e);
       stderrSink.writeln('Error: Failed to show session: $e');
       if (json) {
         stdoutSink.writeln(jsonEncode({'exit_code': 1, 'error': e.toString()}));
@@ -728,6 +741,7 @@ class SessionStopCommand extends _BaseSessionSubcommand {
         return 0;
       });
     } catch (e) {
+      rethrowEndpointFailure(e);
       stderrSink.writeln('Error: Failed to stop session: $e');
       if (json) {
         stdoutSink.writeln(jsonEncode({'exit_code': 1, 'error': e.toString()}));
@@ -782,10 +796,7 @@ class SessionCompactCommand extends _BaseSessionSubcommand {
       stderrSink.writeln('Usage: $invocation');
       if (json) {
         stdoutSink.writeln(
-          jsonEncode({
-            'exit_code': 1,
-            'error': 'Session ID is required.',
-          }),
+          jsonEncode({'exit_code': 1, 'error': 'Session ID is required.'}),
         );
       }
       return 1;
@@ -815,8 +826,7 @@ class SessionCompactCommand extends _BaseSessionSubcommand {
             ? Map<String, dynamic>.from(result['payload'] as Map)
             : result;
         final rawOutcome =
-            unwrapped['outcome']?.toString() ??
-            result['outcome']?.toString();
+            unwrapped['outcome']?.toString() ?? result['outcome']?.toString();
 
         final isMalformed = rawOutcome == null || rawOutcome.trim().isEmpty;
         final outcome = isMalformed ? 'failed' : rawOutcome.trim();
@@ -885,6 +895,7 @@ class SessionCompactCommand extends _BaseSessionSubcommand {
       stderrSink.writeln('Notice: $message');
       return exitCode;
     } catch (e) {
+      rethrowEndpointFailure(e);
       return _reportCompactError(id, e);
     }
   }
@@ -993,6 +1004,7 @@ class SessionAnswerCommand extends _BaseSessionSubcommand {
         return 0;
       });
     } catch (e) {
+      rethrowEndpointFailure(e);
       stderrSink.writeln('Error: $e');
       if (json) {
         stdoutSink.writeln(
@@ -1169,6 +1181,7 @@ class SessionPermissionCommand extends _BaseSessionSubcommand {
         return 0;
       });
     } catch (e) {
+      rethrowEndpointFailure(e);
       stderrSink.writeln('Error: $e');
       if (json) {
         stdoutSink.writeln(
@@ -1829,6 +1842,7 @@ class SessionDeleteCommand extends _BaseSessionSubcommand {
         return 0;
       });
     } catch (e) {
+      rethrowEndpointFailure(e);
       stderrSink.writeln('Error: Failed to delete session: $e');
       if (json) {
         stdoutSink.writeln(jsonEncode({'exit_code': 1, 'error': e.toString()}));

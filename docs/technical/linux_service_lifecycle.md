@@ -63,6 +63,33 @@ bounded restart policy, journal output, and boot enablement. The OpenRC service
 uses `supervise-daemon`, owner-home logs, the same umask and state variables,
 boot registration, and restart behavior.
 
+### Stop exit statuses and upgrading an installed unit
+
+The unit keeps `Restart=on-failure` and adds `SuccessExitStatus=130 143`. The
+daemon catches `SIGTERM` and `SIGINT` and exits with `128 + signal`, so systemd
+observes a normal exit with status `143` or `130` rather than a signal death.
+Those are exit codes, not signals: the implicit success set covers exit `0` and
+the default signal deaths only, so a requested `systemctl --user stop` would
+otherwise leave the unit `failed`, and `sanad service status` would report
+`Failed` for a service that stopped exactly as asked, while an operator
+`SIGTERM` would be restarted once instead of leaving the Agent stopped. A crash
+still exits non-zero and is still restarted.
+
+An installed unit is only rewritten by `sanad service install`. The Client's
+update lifecycle re-registers an existing macOS or Linux definition only when
+`sanad service definition` reports `matches: false`, and that read-only report
+compares the executable, arguments, `SANAD_HOME`, and service instance — not the
+rest of the unit body. A unit written by a release that predates
+`SuccessExitStatus` therefore keeps the old body after an in-place upgrade; a
+fresh installation through `scripts/install.sh` always writes the current unit,
+because the installer runs `service install` itself. Run
+`sanad service install` once after an in-place upgrade: it replaces the definition
+without interrupting a running Agent, because activation only starts a unit that
+is not already active. Until then the only difference is the reported state — a
+stop leaves the unit `failed` and `sanad service status` shows `Failed` until the
+next start, and `systemctl --user reset-failed <unit>` clears that state without
+reinstalling.
+
 ## Ownership, conflicts, and transactions
 
 A successful installation writes non-secret `service.json` ownership metadata

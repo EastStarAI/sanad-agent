@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:sanad_agent/cli/cli.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import '../support/isolated_sanad_test_home.dart';
@@ -410,46 +411,49 @@ void main() {
       await client.dispose();
     });
 
-    test('never treats a stopped event as proof that the session is idle', () async {
-      final client = createClient();
-      await client.connect();
+    test(
+      'never treats a stopped event as proof that the session is idle',
+      () async {
+        final client = createClient();
+        await client.connect();
 
-      var stopCompleted = false;
-      final stopFuture = client
-          .stop(sessionId: 'session-42', stopPollInterval: Duration.zero)
-          .then((_) => stopCompleted = true);
-      await settle();
-      expect(sentCommands()[0]['command'], 'stop');
+        var stopCompleted = false;
+        final stopFuture = client
+            .stop(sessionId: 'session-42', stopPollInterval: Duration.zero)
+            .then((_) => stopCompleted = true);
+        await settle();
+        expect(sentCommands()[0]['command'], 'stop');
 
-      answerPendingHistory(
-        (_) => {
-          'in_flight': {'status': 'running', 'run_id': 'run-1'},
-        },
-      );
-      await settle();
+        answerPendingHistory(
+          (_) => {
+            'in_flight': {'status': 'running', 'run_id': 'run-1'},
+          },
+        );
+        await settle();
 
-      mockSocket.emitFromServer(
-        jsonEncode({
-          'type': 'stopped',
-          'session_id': 'session-42',
-          'run_id': 'run-1',
-          'payload': {'session_id': 'session-42'},
-        }),
-      );
-      await settle();
-      expect(
-        stopCompleted,
-        isFalse,
-        reason: 'the acknowledgement must be re-read from state',
-      );
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'stopped',
+            'session_id': 'session-42',
+            'run_id': 'run-1',
+            'payload': {'session_id': 'session-42'},
+          }),
+        );
+        await settle();
+        expect(
+          stopCompleted,
+          isFalse,
+          reason: 'the acknowledgement must be re-read from state',
+        );
 
-      answerPendingHistory((_) => {'in_flight': null});
-      await settle();
+        answerPendingHistory((_) => {'in_flight': null});
+        await settle();
 
-      await stopFuture;
-      expect(stopCompleted, isTrue);
-      await client.dispose();
-    });
+        await stopFuture;
+        expect(stopCompleted, isTrue);
+        await client.dispose();
+      },
+    );
 
     test('treats an already-idle scoped stop as idempotent', () async {
       final client = createClient();
@@ -463,8 +467,9 @@ void main() {
 
       await stopFuture;
       expect(
-        sentCommands()
-            .where((command) => command['command'] == 'get_session_history'),
+        sentCommands().where(
+          (command) => command['command'] == 'get_session_history',
+        ),
         hasLength(1),
         reason: 'an idle session is confirmed with a single state read',
       );
@@ -614,96 +619,108 @@ void main() {
       },
     );
 
-    test('compactSession dispatches query and returns payload on success', () async {
-      final client = createClient();
-      await client.connect();
+    test(
+      'compactSession dispatches query and returns payload on success',
+      () async {
+        final client = createClient();
+        await client.connect();
 
-      final compactFuture = client.compactSession(
-        sessionId: 'sess-compact-1',
-        resendOnTimeout: false,
-      );
+        final compactFuture = client.compactSession(
+          sessionId: 'sess-compact-1',
+          resendOnTimeout: false,
+        );
 
-      expect(mockSocket.sentMessages.length, 1);
-      final sent =
-          jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
-      expect(sent['command'], equals('session.compact'));
-      expect(sent['payload']['session_id'], equals('sess-compact-1'));
+        expect(mockSocket.sentMessages.length, 1);
+        final sent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        expect(sent['command'], equals('session.compact'));
+        expect(sent['payload']['session_id'], equals('sess-compact-1'));
 
-      final reqId = sent['request_id'] as String;
-      mockSocket.emitFromServer(
-        jsonEncode({
-          'type': 'event',
-          'event': 'session.compact_result',
-          'request_id': reqId,
-          'payload': {
-            'session_id': 'sess-compact-1',
-            'outcome': 'accepted',
-            'compaction_id': 'cmp-100',
-          },
-        }),
-      );
+        final reqId = sent['request_id'] as String;
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.compact_result',
+            'request_id': reqId,
+            'payload': {
+              'session_id': 'sess-compact-1',
+              'outcome': 'accepted',
+              'compaction_id': 'cmp-100',
+            },
+          }),
+        );
 
-      final result = await compactFuture;
-      expect(result['outcome'], equals('accepted'));
-      expect(result['compaction_id'], equals('cmp-100'));
+        final result = await compactFuture;
+        expect(result['outcome'], equals('accepted'));
+        expect(result['compaction_id'], equals('cmp-100'));
 
-      await client.dispose();
-    });
+        await client.dispose();
+      },
+    );
 
-    test('compactSession with resendOnTimeout: false rethrows query_timeout and does not resend', () async {
-      final client = createClient();
-      await client.connect();
+    test(
+      'compactSession with resendOnTimeout: false rethrows query_timeout and does not resend',
+      () async {
+        final client = createClient();
+        await client.connect();
 
-      final compactFuture = client.compactSession(
-        sessionId: 'sess-compact-timeout',
-        timeout: const Duration(milliseconds: 20),
-        resendOnTimeout: false,
-      );
+        final compactFuture = client.compactSession(
+          sessionId: 'sess-compact-timeout',
+          timeout: const Duration(milliseconds: 20),
+          resendOnTimeout: false,
+        );
 
-      expect(mockSocket.sentMessages.length, 1);
-      final initialSent =
-          jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
-      expect(initialSent['command'], equals('session.compact'));
+        expect(mockSocket.sentMessages.length, 1);
+        final initialSent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        expect(initialSent['command'], equals('session.compact'));
 
-      await expectLater(
-        compactFuture,
-        throwsA(
-          isA<CliClientException>().having(
-            (e) => e.code,
-            'code',
-            equals('query_timeout'),
+        await expectLater(
+          compactFuture,
+          throwsA(
+            isA<CliClientException>().having(
+              (e) => e.code,
+              'code',
+              equals('query_timeout'),
+            ),
           ),
-        ),
-      );
+        );
 
-      // Verify no second fire-and-forget message was dispatched
-      expect(mockSocket.sentMessages.length, 1);
+        // Verify no second fire-and-forget message was dispatched
+        expect(mockSocket.sentMessages.length, 1);
 
-      await client.dispose();
-    });
+        await client.dispose();
+      },
+    );
 
-    test('compactSession with resendOnTimeout: true sends fire-and-forget fallback on query_timeout', () async {
-      final client = createClient();
-      await client.connect();
+    test(
+      'compactSession with resendOnTimeout: true sends fire-and-forget fallback on query_timeout',
+      () async {
+        final client = createClient();
+        await client.connect();
 
-      final compactFuture = client.compactSession(
-        sessionId: 'sess-compact-resend',
-        timeout: const Duration(milliseconds: 20),
-        resendOnTimeout: true,
-      );
+        final compactFuture = client.compactSession(
+          sessionId: 'sess-compact-resend',
+          timeout: const Duration(milliseconds: 20),
+          resendOnTimeout: true,
+        );
 
-      final result = await compactFuture;
-      expect(result['outcome'], equals('dispatched'));
+        final result = await compactFuture;
+        expect(result['outcome'], equals('dispatched'));
 
-      // Verify both query and fire-and-forget fallback were dispatched
-      expect(mockSocket.sentMessages.length, 2);
-      final secondSent =
-          jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
-      expect(secondSent['command'], equals('session.compact'));
-      expect(secondSent['payload']['session_id'], equals('sess-compact-resend'));
+        // Verify both query and fire-and-forget fallback were dispatched
+        expect(mockSocket.sentMessages.length, 2);
+        final secondSent =
+            jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
+        expect(secondSent['command'], equals('session.compact'));
+        expect(
+          secondSent['payload']['session_id'],
+          equals('sess-compact-resend'),
+        );
 
-      await client.dispose();
-    });
+        await client.dispose();
+      },
+    );
 
     test('query correlates responses by request_id', () async {
       final client = createClient();
@@ -1065,7 +1082,9 @@ void main() {
           request.response
             ..statusCode = HttpStatus.ok
             ..headers.contentType = ContentType.json
-            ..write('{"status":"ok"}');
+            ..write(
+              '{"status":"ok","home_id":"${sanadHomeIdentity(tempHome.path)}"}',
+            );
           await request.response.close();
         });
 
@@ -1114,10 +1133,7 @@ void main() {
             stopwatch.elapsed,
             greaterThanOrEqualTo(const Duration(milliseconds: 1500)),
           );
-          expect(
-            stopwatch.elapsed,
-            lessThan(const Duration(seconds: 4)),
-          );
+          expect(stopwatch.elapsed, lessThan(const Duration(seconds: 4)));
         } finally {
           await server.close(force: true);
           await requests.cancel();
@@ -1170,7 +1186,9 @@ void main() {
           request.response
             ..statusCode = HttpStatus.ok
             ..headers.contentType = ContentType.json
-            ..write('{"status":"ok"}');
+            ..write(
+              '{"status":"ok","home_id":"${sanadHomeIdentity(tempHome.path)}"}',
+            );
           await request.response.close();
         });
         try {

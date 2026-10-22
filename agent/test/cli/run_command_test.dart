@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:sanad_agent/cli/cli.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
 import 'package:sanad_agent/core/sanad_home/runtime_ownership.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:test/test.dart';
@@ -172,6 +173,7 @@ class DelayedHealthyGateway {
   String get gatewayUrl => 'ws://127.0.0.1:${server.port}/gateway';
 
   static Future<DelayedHealthyGateway> start({
+    required String homeId,
     Duration healthDelay = const Duration(milliseconds: 450),
     String finalAnswer = 'attached gateway answer',
   }) async {
@@ -185,7 +187,9 @@ class DelayedHealthyGateway {
         request.response
           ..statusCode = HttpStatus.ok
           ..headers.contentType = ContentType.json
-          ..write('{"status":"ok"}');
+          // A real daemon reports the Home identity it serves; discovery now
+          // refuses a healthy answer that belongs to another Home.
+          ..write(jsonEncode({'status': 'ok', 'home_id': homeId}));
         await request.response.close();
         return;
       }
@@ -1516,7 +1520,12 @@ void main() {
           request.response
             ..statusCode = HttpStatus.ok
             ..headers.contentType = ContentType.json
-            ..write('{"status":"ok"}');
+            ..write(
+              jsonEncode({
+                'status': 'ok',
+                'home_id': sanadHomeIdentity(home.path),
+              }),
+            );
           await request.response.close();
         });
         await File(
@@ -1565,7 +1574,9 @@ void main() {
         // is deterministically slower than the 300 ms speculative bound and
         // comfortably inside the 2 s targeted bound, so the ownership pre-check
         // decides on its deadline policy alone.
-        final gateway = await DelayedHealthyGateway.start();
+        final gateway = await DelayedHealthyGateway.start(
+          homeId: sanadHomeIdentity(home.path),
+        );
         var standaloneFactoryCalled = false;
         final err = StringBuffer();
 
@@ -1611,7 +1622,9 @@ void main() {
         final home = await Directory.systemTemp.createTemp(
           'sanad-cli-slow-gateway-',
         );
-        final gateway = await DelayedHealthyGateway.start();
+        final gateway = await DelayedHealthyGateway.start(
+          homeId: sanadHomeIdentity(home.path),
+        );
         var standaloneFactoryCalled = false;
         final out = StringBuffer();
         final err = StringBuffer();

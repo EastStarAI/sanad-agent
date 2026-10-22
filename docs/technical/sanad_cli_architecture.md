@@ -58,13 +58,113 @@ The CLI auto-discovers active runtime configuration from `SANAD_HOME`:
 
 2. **Secret Credential Lookup:**
    - The CLI reads the local gateway token from `SANAD_HOME/.local_token`.
-   - File permissions are validated to ensure owner-only access.
+   - File permissions are validated to ensure owner-only access: a token that is
+     not `0600` is refused with code `token_permissions` (never auto-repaired,
+     because a non-daemon caller must not write to the Home), and a missing,
+     empty, or unreadable file keeps its own `token_not_found` / `token_empty` /
+     `token_read_error` code. The desktop Client and `sanad-dev` apply the same
+     `0600` rule.
    - The token is never exposed in logs, CLI arguments, or printed output.
+   - Each Home owns a distinct token. `.local_token.home` binds `.local_token`
+     to the SHA-256 identity of that Home root, so a Home cloned or restored
+     from another Home (the Test-Home practice that once produced one shared
+     `.local_token` across `~/.sanad-test-*`) is detected and rotated instead of
+     inheriting the source credential.
+   - **Only the daemon rotates.** `LocalGatewayCredentials.loadOrCreateForDaemonStart`
+     is the single entry point that creates, migrates, or rotates the
+     credential, and only `bin/daemon.dart` (after `SanadRuntimeOwnership.acquire`
+     and before the listener serves) and the daemon's own platform fallback call
+     it. It rotates when the binding is missing (a pre-binding Home) or names a
+     different Home, and it writes the binding *before* the token so a concurrent
+     reader never sees a rotated token beside a stale binding.
+   - Every non-daemon caller is read-only: `sanad login`/logout notify through
+     `LocalAuthenticationExchangeNotifier`, whose default loader reads with
+     `LocalGatewayCredentials.readExisting()` and never creates or rotates.
+     Rotating from there would invalidate the credential a running daemon (and
+     every desktop Client re-reading `.local_token`) already holds, which is the
+     upgrade regression this contract rules out. `tryRead` treats a token bound
+     to another Home as absent, so a clone never lends its credential to the
+     Home it was copied into.
+   - A `.local_token` whose binding names another Home is refused by discovery
+     with `token_bound_to_other_home`; start the Agent for that Home to issue
+     its own credential.
 
 3. **Port Resolution & Probing:**
-   - Explicit override: `--url <url>` or `--port <port>` or `LOCAL_GATEWAY_PORT`.
-   - Default probe: `http://127.0.0.1:58085/health` with `x-sanad-local-token: <token>`.
-   - Worktree range scan: If 58085 does not answer, the discovery service scans ports `58086`–`58185` with bounded timeout to find the instance matching the active workspace.
+   - Explicit override: `--gateway-url <url>` or `--port <port>`.
+   - **Selected Home:** when `--home` or `SANAD_HOME` selects a Home, the CLI
+     resolves the endpoint from that Home's own runtime record
+     (`.local_gateway_endpoint.json`, written by the daemon after it binds and
+     removed on every exit path that ends the runtime) and probes only that
+     endpoint. Three paths end the runtime and all of them run one bounded
+     pre-exit cleanup: a termination signal (`SIGTERM`/`SIGINT`), the managed
+     pause or stop a coordinator performs after `/shutdown` or `/restart`
+     flushed its response (exit `123`, which is what `sanad-dev stop` produces),
+     and a controlled refresh (exit `0`) whose successor republishes the record
+     when it binds. Every path removes the record only while it still names its
+     own pid, and a cleanup that fails or never completes still lets the daemon
+     exit — a runtime that refuses to stop is worse than a record the next call
+     fails closed on. A record is
+     usable only when it is owner-only (`0600`), names a loopback host, carries
+     a process id that is still alive, and its `home_id` matches the selected
+     Home's identity; the answer is then accepted only when `/health` reports
+     the same `home_id`. Removal is ownership-checked and atomic: the record is
+     claimed with a rename before the identity is re-verified, so a draining
+     daemon can never delete a successor runtime's republished record. An
+     unclean death (`SIGKILL`) leaves the record to fail closed as
+     `home_runtime_stale`, which is the signal that the previous runtime did not
+     stop cleanly. A signal-driven exit keeps the signal's own status
+     (`128 + signal`: `143` for `SIGTERM`, `130` for `SIGINT`) instead of
+     exiting `0`, so a shell, `sanad-dev`, and a real supervisor still see a
+     signal termination rather than a requested clean stop.
+   - **Inherited values never override a selection.** `SANAD_GATEWAY_URL`,
+     `LOCAL_GATEWAY_URL`, and `LOCAL_GATEWAY_PORT` come from a parent process
+     (a launcher, a test harness, another runtime) and are ignored entirely when
+     a Home is selected, so a Home X token is never sent to an endpoint that was
+     not chosen for that Home. They are still honoured when no Home is selected.
+   - **Every healthy answer must prove the Home.** An explicit
+     `--gateway-url`/`--port` target, an inherited URL/port, the default port
+     probe, and every scanned port are all accepted only when `/health` reports
+     the resolved Home identity — token acceptance alone is not evidence.
+   - **A refusal is an answer, not silence.** With a selected Home, an explicit
+     `--gateway-url`/`--port` target that answers `401`/`403` has provably
+     refused *this Home's* credential, so it is not that Home's daemon: the call
+     fails closed with `home_identity_mismatch` and exit `78`, and no WebSocket
+     connect is attempted. A target that does not answer at all remains "not
+     running", which keeps `--standalone` and the oneshot standalone fallback
+     working. A recorded endpoint (`step 3`) that refuses the credential is
+     treated the same way; without a selected Home the historical behaviour is
+     kept, so the legacy default-Home flow is unchanged.
+   - **Backward compatibility (default Home only):** a daemon released before
+     `home_id` existed reports none. A *missing* `home_id` is tolerated only on
+     the default Home's port `58085`; a named Home, a scanned port, or a
+     *mismatching* `home_id` always fails closed.
+   - A selected Home with no live record, a stale record (its publisher process
+     is gone), an unreachable recorded endpoint, or a daemon that serves another
+     Home fails closed with exit code `78` and an actionable message. A
+     Home-selected call never probes `58085` and never scans the range, so an
+     unpinned mutating command can no longer attach to another Home's runtime.
+   - Default Home only: probe `http://127.0.0.1:58085/health`, then scan
+     `58086`–`58185` with a bounded timeout. Every candidate must prove the
+     resolved Home identity over `/health`.
+
+   **Endpoint-resolution failures (`session …` and any other attached command):**
+   - Exit code `78` (configuration), not `1`. Exit code `1` continues to mean the
+     command ran and failed; `78` means the environment could not name an
+     endpoint this Home owns, and the message names the fix.
+   - `--json` emits the same result envelope the CLI uses elsewhere
+     (`session_id`, `text`, `tool_executions`, `exit_code`, `error`), not the
+     removed `{"exit_code": 1, "error": …}` shape, and the message is duplicated
+     on `stderr` so a text consumer sees it too. The envelope also carries
+     `error_code`, the discovery code below, so a consumer branches on the code
+     instead of parsing English; it is absent when the failure has no code.
+     Commands that deliberately fall back instead of failing (`sanad run`,
+     workspace, doctor) keep their own contract and report no code because no
+     endpoint failure terminates them.
+   - Error codes: `home_runtime_missing`, `home_runtime_foreign`,
+     `home_runtime_stale`, `home_runtime_unhealthy`, `home_identity_mismatch`,
+     plus the token codes above. Token-read and permission problems stay
+     distinguishable (`token_permissions` vs `token_read_error` vs
+     `token_not_found`).
 
 ---
 
@@ -606,4 +706,13 @@ content is joined as `"<prompt>\n\n<piped>"`, and piped content alone becomes th
   iteration.
 - The flag does not change dispatch, session, artifact, or exit-code behavior: it only removes the
   stdin splice.
+- **Endpoint failures fall back to standalone, deliberately.** `StandaloneFallbackStrategy.resolveMode`
+  catches every discovery failure, so the `home_runtime_*` codes (`home_runtime_missing`,
+  `home_runtime_foreign`, `home_runtime_stale`, `home_runtime_unhealthy`, `home_identity_mismatch`)
+  resolve to `CliRuntimeMode.standalone` for `sanad run` instead of exiting `78`. That is correct
+  for a one-shot command: no daemon proves it owns the Home, so the command runs in-process rather
+  than attaching to a runtime that may belong to another Home. The state-root ownership lease is the
+  backstop — if a runtime really does own that Home, the standalone start fails closed with exit `78`
+  and an explicit message instead of competing for SQLite. `session …` commands have no standalone
+  path, so they surface the same discovery failures directly with exit `78` (see §3).
 - Coverage: `agent/test/cli/run_command_test.dart`.
