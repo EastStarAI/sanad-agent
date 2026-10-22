@@ -251,3 +251,10 @@ Round 4 gate results on the same tree:
   - **Green evidence:** the daemon wire test, the E2E G2.1 case, the mapper contract and all six client release cases pass; both analyzers, the full agent and client suites, `test/cli/`, `test/interfaces/` and `lint_wiki` are clean (see Gates).
   - **Test-home note:** the fast suites run without a run-wide `SANAD_HOME`/`SANAD_STATE_HOME` override. A run-wide override fails the CLI home-selection contracts that assert default root resolution; the merged isolation guard already refuses real-Home access from a test, so no live runtime root is touched.
   - **Still out of scope:** the daemon persists neither the refused user root nor its answer, so another client or a restart still cannot see the refusal. The round 2 retained-refusal projection remains client-local.
+
+- **Round 5 (live executor, 2026-10-22):** F1(b) recheck on TH1 (`~/.sanad-test`, port 58107, `--no-cloud`) at `a351d052`, loaded on `test/test-home` and run with a full rebuilt runtime. Evidence: `~/.sanad-delegate/runs/release-gate/live-g2/RESULT.md` round 3 and `.../live-g2/r3-*.json`.
+  - **F1 PASS on (a)(b)(c)(d).** The refusal renders once as the typed error row, the app bar keeps the workspace, and the composer keeps the text while `send_message_btn` returns enabled with no `send_message_acceptance_indicator` — at +8 s and after a session switch back.
+  - **Retry proven live:** a second Send dispatched a new turn and produced a second refusal row (`answer_run_…_2`), so the queue is usable after a refusal.
+  - **Accepted send PASS:** a `suggestion-box` turn cleared the composer, rendered the user row and answered; no indicator left behind.
+  - **N1 not re-run:** the CLI reason path is unchanged in this round and passed in round 3.
+  - **Teardown:** temp workspace removed through Client Settings, CLI active workspace restored, TH1 back to `6b364147` on `test/test-home` with an agent-only runtime, worktree unlocked.
