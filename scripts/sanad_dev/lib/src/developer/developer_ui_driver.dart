@@ -37,6 +37,15 @@ const Set<String> uiDriverActivatingCommands = {
   'run',
 };
 
+/// Driver commands whose wall clock must also cover a post-delay and a
+/// post-condition window.
+const Set<String> uiDriverVerifyingCommands = {
+  'tap',
+  'enter-text',
+  'entertext',
+  'type',
+};
+
 /// Driver options that consume the following argument as their value.
 ///
 /// The launcher only strips its own flags from value positions that cannot be a
@@ -251,6 +260,7 @@ UiDriverRunPlan planUiDriverRun(
         : Duration(seconds: budget + uiDriverChildGraceSeconds);
   } else {
     final actionSeconds = explicitSeconds ?? uiDriverDefaultActionTimeoutSeconds;
+    final verifies = uiDriverVerifyingCommands.contains(command);
     final delayMs = int.tryParse(
       _uiDriverOptionValue(driverArgs, '--delay') ?? '',
     );
@@ -260,13 +270,8 @@ UiDriverRunPlan planUiDriverRun(
     wallTimeout = Duration(
       seconds: actionSeconds + uiDriverChildGraceSeconds,
       milliseconds:
-          (delayMs ?? (uiDriverActivatingCommands.contains(command)
-                  ? uiDriverDefaultDelayMs
-                  : 0)) +
-          (verifyMs ??
-              (uiDriverActivatingCommands.contains(command)
-                  ? uiDriverDefaultVerifyMs
-                  : 0)),
+          (delayMs ?? (verifies ? uiDriverDefaultDelayMs : 0)) +
+          (verifyMs ?? (verifies ? uiDriverDefaultVerifyMs : 0)),
     );
   }
 
