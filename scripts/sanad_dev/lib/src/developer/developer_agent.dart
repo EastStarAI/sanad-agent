@@ -43,6 +43,8 @@ Future<bool> handleAgentRestart(
   int timeoutSeconds = 60,
   String? sanadHomePath,
   bool exitOnError = true,
+  bool guardForeignActivity = true,
+  ForeignActivityDetector? detectActivity,
 }) async {
   final instance = await selectAgentInstance(
     portOverride,
@@ -58,6 +60,14 @@ Future<bool> handleAgentRestart(
     callerDirectory: _callerDirectory,
     sanadHomeOverride: sanadHomePath,
   );
+  if (guardForeignActivity &&
+      await refuseRestartDuringForeignActivity(
+        runtime: runtime,
+        force: force,
+        detectActivity: detectActivity,
+      )) {
+    return false;
+  }
   final workspaceHash = runtime.worktreeId.split('-').last;
   if (instance.workspaceHash != workspaceHash) {
     stderr.writeln(

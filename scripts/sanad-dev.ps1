@@ -292,14 +292,11 @@ function Require-RuntimeCli {
     throw 'Project runtime is not ready. Run: sanad-dev setup'
   }
   $fingerprint = Get-RuntimeCliFingerprint
+  # Runtime commands are strictly non-mutating: a stale prepared CLI fails with
+  # the exact recovery command instead of running a hidden auto-setup. Only
+  # `setup`, `run`, and `switch` prepare the runtime.
   if ((Get-Content -Raw $stamp).Trim() -ne $fingerprint) {
-    [Console]::Error.WriteLine('[sanad-dev] Project runtime is stale; running auto-setup...')
-    try {
-      Invoke-Setup $true | Out-Null
-    } catch {
-      throw "Project runtime setup failed: $_"
-    }
-    $fingerprint = Get-RuntimeCliFingerprint
+    throw 'Project runtime is stale. Run: sanad-dev setup'
   }
   $artifact = Join-Path $artifactRoot "sanad-dev-runtime-$fingerprint.exe"
   if (-not (Test-Path $artifact)) {

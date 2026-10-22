@@ -321,6 +321,7 @@ Future<void> handleRun({
   );
   final runtimeNonce = _newRuntimeOwnershipToken();
   final launcherId = 'launcher-$runtimeNonce';
+  final sourceCommit = await readRuntimeSourceCommit(runtime.repositoryRoot);
   var launcherRecord = RuntimeLauncherRecord(
     launcherId: launcherId,
     runtimeNonce: runtimeNonce,
@@ -339,6 +340,7 @@ Future<void> handleRun({
     vmServicePorts: const [],
     status: 'starting',
     updatedAt: DateTime.now().toUtc(),
+    sourceCommit: sourceCommit,
   );
   await writeRuntimeLauncherRecord(launcherRecord);
   await recordStartup(stage: SanadDevStartupStage.recordCreated);

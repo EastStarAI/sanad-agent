@@ -23,6 +23,10 @@ class SanadDevCliInvocation {
     this.clientInstanceSlot,
     this.sanadHomePath,
     required this.runtimeSelector,
+    this.fixtureName,
+    this.saveFixtureName,
+    required this.keepData,
+    this.refreshAt,
   });
 
   final String command;
@@ -46,6 +50,10 @@ class SanadDevCliInvocation {
   final String? clientInstanceSlot;
   final String? sanadHomePath;
   final String runtimeSelector;
+  final String? fixtureName;
+  final String? saveFixtureName;
+  final bool keepData;
+  final String? refreshAt;
 }
 
 SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
@@ -84,6 +92,10 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
   String? clientInstanceSlot;
   String? sanadHomePath;
   String runtimeSelector = 'current';
+  String? fixtureName;
+  String? saveFixtureName;
+  bool keepData = false;
+  String? refreshAt;
 
   for (int i = 0; i < args.length; i++) {
     final arg = args[i];
@@ -139,6 +151,20 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
       sanadHomePath = args[i + 1];
     } else if (arg.startsWith('--home=')) {
       sanadHomePath = arg.substring(7);
+    } else if (arg == '--fixture' && i + 1 < args.length) {
+      fixtureName = args[i + 1];
+    } else if (arg.startsWith('--fixture=')) {
+      fixtureName = arg.substring(10);
+    } else if (arg == '--save-fixture' && i + 1 < args.length) {
+      saveFixtureName = args[i + 1];
+    } else if (arg.startsWith('--save-fixture=')) {
+      saveFixtureName = arg.substring(15);
+    } else if (arg == '--keep-data') {
+      keepData = true;
+    } else if (arg == '--at' && i + 1 < args.length) {
+      refreshAt = args[i + 1];
+    } else if (arg.startsWith('--at=')) {
+      refreshAt = arg.substring(5);
     } else if (arg == '--runtime' && i + 1 < args.length) {
       runtimeSelector = args[i + 1].toLowerCase();
     } else if (arg.startsWith('--runtime=')) {
@@ -168,5 +194,9 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
     clientInstanceSlot: clientInstanceSlot,
     sanadHomePath: sanadHomePath,
     runtimeSelector: runtimeSelector,
+    fixtureName: fixtureName,
+    saveFixtureName: saveFixtureName,
+    keepData: keepData,
+    refreshAt: refreshAt,
   );
 }

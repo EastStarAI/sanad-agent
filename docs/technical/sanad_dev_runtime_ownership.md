@@ -1,6 +1,6 @@
 ---
 title: "sanad-dev Runtime Ownership"
-description: "Managed launcher leases, workspace/client ownership, clone isolation, reconciliation, and continuous source handoff."
+description: "Managed launcher leases, workspace/client ownership, clone isolation, continuous source handoff, and the reset, apply, refresh, `cli`, status, and doctor runtime tooling."
 ---
 
 # sanad-dev Runtime Ownership
@@ -17,15 +17,17 @@ responsibility:
   authenticated Agents, infers the active Home, and performs exact selection;
 - `runtime/ownership/` projects process state and validates managed launcher
   ownership;
-- `runtime/lifecycle/` owns run, readiness, status, component stop/control,
-  doctor, orphan cleanup, takeover, and bounded wait orchestration;
+- `runtime/lifecycle/` owns run, readiness, status, reset with Home fixtures,
+  apply, refresh, the compiled-CLI runner, the restart build guard, component
+  stop/control, doctor, orphan cleanup, takeover, and bounded wait orchestration;
 - `runtime/switch/` owns source-handoff admission, process waits, transaction
   control, target launch, rollback, and terminal result persistence;
 - `developer/` owns bounded journals, Client reload/restart/DevTools actions,
   Agent restart/log actions, and UI-driver forwarding;
 - `infrastructure/` owns secure files, credentials, runtime context, launch
-  profiles, journals, startup records, endpoint configuration, and terminal
-  adapters.
+  profiles, journals, startup records, endpoint configuration, terminal adapters,
+  the per-SHA compiled CLI cache, Home fixtures, the foreign-worktree build probe,
+  and scheduled refresh plans.
 
 Files in `lib/src/` depend directly on the narrow owning implementation rather
 than importing through root compatibility facades. The `lib/` root contains
@@ -264,7 +266,188 @@ The development profile and endpoint overrides are explicit internal integration
 choices; `--no-cloud` is the explicit hosted-disable boundary. Automated tests
 inject fakes and never connect to Production.
 
+## Runtime tooling commands
+
+`reset`, `apply`, `refresh`, `cli`, `status`, and `doctor` are the worktree-local
+tooling surface for live rounds. Every one of them is scoped to the invoking
+worktree's own runtime and Test Home; none of them can reach another worktree's
+runtime or the primary user Home. `status` and `doctor` are strictly read-only,
+and `reset` is the only command that destroys runtime state.
+
+### Compiled CLI cache (`sanad-dev cli`)
+
+`fvm dart run bin/sanad_agent.dart` costs 6.5 s per call on the reference host
+(SDK resolution plus kernel compile). `sanad-dev` therefore keeps one native
+artifact per component and per runtime commit:
+
+| Component | Entry point | Build command | Cached executable |
+| --- | --- | --- | --- |
+| Agent | `agent/bin/sanad_agent.dart` | `fvm dart compile exe bin/sanad_agent.dart -o …` | `.sanad-dev/bin/<sha>/agent[.exe]` |
+| Client | `client/bin/sanad_client.dart` | `fvm dart build cli -t bin/sanad_client.dart -o …` | `.sanad-dev/bin/<sha>/client-bundle/bin/sanad_client[.exe]` |
+
+The Client CLI cannot use `dart compile exe`: the Client package carries native
+build hooks (`cnativeapi`, `objective_c`), so `dart build cli` is used and its
+bundle keeps the dynamic libraries beside the executable. The Agent compile
+receives `-DSANAD_AGENT_VERSION=<agent/pubspec.yaml version>` so a compiled
+binary reports the same version as the `fvm dart run` path.
+
+`<sha>` is the first 12 characters of the runtime source `HEAD` (`nogit` outside
+a Git checkout). Beside each artifact, `<component>.stamp` holds a SHA-256 over
+that component's `pubspec.yaml`, `pubspec.lock`, every `lib/` and `bin/` Dart
+file, every `path:` dependency package root, and `.fvmrc`. The artifact is
+reused only when the stamp matches, so a dirty tree, a changed shared package,
+or a new Flutter pin rebuilds in place; nothing is ever reused across commits.
+Builds are staged (`agent.building`, `.client-bundle-building`) and renamed, so a
+failed build leaves no usable artifact.
+
+| Command | Effect |
+| --- | --- |
+| `sanad-dev cli path agent\|client` | Ensures the artifact and prints its path with the cache key and `built in <duration>` or `reused`. |
+| `sanad-dev cli agent\|client -- <args>` | Ensures the artifact and runs it with inherited stdio, then prints `call <duration>` on stderr and returns the child exit status. |
+
+Measured on the reference macOS host (Dart 3.13, warm pub cache): Agent build
+14.4 s cold, `cli path agent` 0.27 s warm, `sanad-dev cli agent -- --version`
+355 ms; Client bundle 47 s with a cold hook build and 2.1 s warm,
+`sanad-dev cli client -- --version` 239 ms. `.sanad-dev/` is gitignored.
+
+### `sanad-dev reset` and Home fixtures
+
+`sanad-dev reset [--fixture <name>] [--save-fixture <name>] [--keep-data]` is the
+single command that replaces the hand-written stop/restore/run sequences:
+
+1. Refuse a Home this worktree does not own (see below) before any mutation.
+2. Stop this worktree's Agent and Client through the normal managed component
+   boundary, then prove the Agent port, the reserved VM-service port, and every
+   managed Client endpoint are free (TCP connect plus client discovery).
+3. `--save-fixture <name>` snapshots the Home's databases and configuration into
+   `<worktree>/.sanad-dev/fixtures/<name>/` through a staging directory.
+4. Restore `--fixture <name>` when requested; otherwise keep the data.
+5. Launch the matched runtime with `run --driver` in the background, wait for the
+   managed state, and print exactly one summary line:
+   `reset: worktree=… agent=… vm=… sha=… state=… home=… fixture=…`.
+
+`reset` always launches a driver-enabled runtime, because that is its purpose.
+`--fixture` and `--keep-data` are mutually exclusive; `--dry-run` prints the plan
+and touches nothing.
+
+Home scope is deliberately narrower than every other command. Only a Home equal
+to, or below, `<user home>/.sanad/dev/homes/<worktree id>` is accepted. The
+primary user Home `~/.sanad` is always refused, and shared homes such as
+`~/.sanad-test*` or another worktree's Test Home are refused as foreign.
+
+A fixture captures an explicit allowlist and nothing else:
+
+| Included | Excluded (never copied, never replaced) |
+| --- | --- |
+| `state.db`, `state.db-wal`, `state.db-shm` | `.env`, `.env.*` (provider keys) |
+| `config.yaml` | `.local_token`, `.local_token.lock` (local gateway credential) |
+| `models_dev_cache.json`, `mcp_config.json` | `provider_secrets.json`, `provider_auth.json`, `mcp_secrets.json`, `auth.json` |
+| `skills/` (recursive) | `agent_credentials.json`, `agent_credential_backend.json` |
+| `memories/` (recursive) | OS keychain/SecretVault material and any file whose name contains `token`, `secret`, `credential`, `vault`, `keyring`, `password`, `apikey`, `id_rsa`, `.pem`, `.p12`, `.p8`, `.keystore` |
+| `workspaces/` (recursive) | `dev/` (leases, journals, control and switch records), `logs/`, `media/`, `attachments/`, `sessions/`, `bin/` |
+
+Capture is by allowlist and every path is filtered again by the exclusion list,
+so a secret placed inside `memories/` or `skills/` is still skipped. Symbolic
+links are never followed. The fixture manifest (`fixture.json`) records the
+schema version, creation time, source Home, and the size plus SHA-256 of every
+file.
+
+Restore verifies every manifest entry's size and hash, stages all captured files
+inside the Home (`.sanad-dev-reset-staging`), removes captured files the fixture
+does not contain, and moves the staged files into place with same-filesystem
+renames. No destination file is ever half-written, and no excluded path is read,
+replaced, or deleted — the gateway credential, `.env`, journals, logs, media, and
+runtime leases survive a restore untouched. A missing, partial, or corrupt
+fixture fails closed before the runtime is started.
+
+### `sanad-dev apply`
+
+`apply` compares the working tree and every commit since the runtime's recorded
+start commit with the decision table and executes the lightest correct action. It
+prints the action, one reason per matched row, and up to three example paths.
+`--dry-run` prints the decision only.
+
+| Changed path | Action |
+| --- | --- |
+| docs, tests (`*/test/**`), `.github/**`, `**.md` | none |
+| `scripts/sanad_dev/**`, `scripts/sanad-dev*` | `stop` + `run` |
+| `agent/**` | `restart agent` |
+| `client/pubspec.yaml`, `client/pubspec.lock`, `client/assets/**`, `client/{macos,windows,linux,web,ios,android}/**`, `client/lib/main.dart`, `client/lib/driver_main.dart`, files containing `bootstrap`/`startup`, and files under a `di/` or `startup/` directory | `restart client` |
+| other `client/lib/**.dart` | `reload client` |
+| `shared/**`, `release/contract/**` | `restart agent` + `restart client` |
+| anything else | `restart agent` + `restart client` |
+
+`stop + run` subsumes every other action and `restart client` subsumes
+`reload client`. A requested driver-mode change (the running pair has no
+`lib/driver_main.dart` Client) also selects `stop + run`. The start commit is the
+`source_commit` recorded in the launcher lease at launch; a lease that predates
+that field yields a note and inspects the working tree only.
+
+### `status` is read-only
+
+`status` performs discovery, reads the lease, and prints the projection. It never
+starts, stops, restarts, repairs, or prepares anything. Before this contract, a
+stale prepared runtime CLI triggered a hidden `auto-setup` during `status`; the
+wrappers now fail with `Project runtime is stale. Run: sanad-dev setup` and leave
+the environment untouched. Only `setup`, `run`, and `switch` prepare the runtime.
+
+`status` also prints the runtime source commit (`Runtime source commit:`) from the
+launcher lease, falling back to the current `HEAD` when the lease predates the
+field, and the product version (`Runtime version:`) from the Client pubspec.
+
+### `doctor` driver-host checks
+
+`doctor` keeps its ownership diagnosis and adds report-only driver-host checks
+before the next action line:
+
+- **Driver entry point:** whether `client/lib/driver_main.dart` exists in the
+  runtime source and how many lease-owned Clients were started from it.
+- **Port and Home ownership:** the Agent and VM-service ports selected for this
+  worktree with the current ownership class, plus the Home and whether it is
+  worktree-scoped.
+- **macOS grants:** Accessibility (via `osascript`/System Events) and Screen
+  Recording (via `screencapture -x -t png /dev/null`) for the host that runs the
+  driver. Missing grants report `missing` with the OS message; other platforms
+  report `not applicable`.
+
+The new checks never mutate state. `doctor --fix` keeps its existing narrow
+stale-record repair and does not attempt to grant or change OS permissions.
+
+### `sanad-dev refresh --at <+duration>`
+
+`refresh` schedules an out-of-tree refresh that survives the tree it refreshes,
+for remote test devices. `--at` accepts `+<n>s`, `+<n>m`, or `+<n>h`.
+
+| Platform | Scheduler |
+| --- | --- |
+| macOS | detached `sh` child (`ProcessStartMode.detached`), never launchd |
+| Linux | `systemd-run --user --collect --unit=<task> --on-active=<seconds>` |
+| Windows | `schtasks /Create /SC ONCE` with a script that deletes the task and itself |
+
+The scheduled script runs `git -C <repo> pull --ff-only`, then
+`sanad-dev setup` (the prepared runtime CLI must match the new source), then
+`sanad-dev restart agent` and `sanad-dev restart client`, appending everything to
+`<runtime directory>/refresh/<task>.log`, and finally deletes itself. After
+scheduling, `refresh` prints the task name, fire time, script path, log path, and
+the exact verification commands (`git -C <repo> rev-parse HEAD`,
+`sanad-dev status`, bounded Agent/Client logs).
+
+### Restart build guard
+
+`restart client`, `reload client`, `restart agent`, and the restart actions of
+`apply` first check for a foreign build or test in the same worktree: one `ps`
+(POSIX) or `Get-CimInstance Win32_Process` (Windows) query, filtered for a
+command line that references the worktree root and invokes `flutter test`,
+`dart test`, `flutter build`, `dart build`, `dart compile`, `flutter assemble`,
+`xcodebuild`, `cargokit`, `flutter pub get`, or `dart pub get`. A path match must
+be a real path boundary, and a quoted occurrence (a search pattern) is ignored.
+
+When something is running, the command prints `Refusing to restart <worktree>`
+with every matching PID and command line and returns nonzero instead of waiting
+for an unbounded rebuild. `--force` skips the check.
+
 ## Detached background launch
+
 
 `sanad-dev run --background` is the official detached source-runtime command.
 On POSIX hosts, the foreground requester starts the pinned runtime entry point in

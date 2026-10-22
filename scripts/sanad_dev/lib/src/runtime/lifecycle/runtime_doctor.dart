@@ -6,6 +6,164 @@ bool canRemoveStaleLauncherRecord({
   required bool clientLive,
 }) => !launcherLive && !endpointLive && !clientLive;
 
+/// Driver-host grant check for one macOS TCC permission.
+enum DriverHostGrantStatus { granted, missing, unknown, notApplicable }
+
+class DriverHostGrantReport {
+  const DriverHostGrantReport({
+    required this.name,
+    required this.status,
+    required this.detail,
+  });
+
+  final String name;
+  final DriverHostGrantStatus status;
+  final String detail;
+}
+
+/// Classifies an Accessibility probe result without re-interpreting text at the
+/// call site.
+DriverHostGrantStatus classifyAccessibilityProbe({
+  required int exitCode,
+  required String output,
+}) {
+  final lower = output.toLowerCase();
+  if (lower.contains('not allowed assistive access') ||
+      lower.contains('(-1719)') ||
+      lower.contains('(-1743)') ||
+      lower.contains('not authorized')) {
+    return DriverHostGrantStatus.missing;
+  }
+  return exitCode == 0
+      ? DriverHostGrantStatus.granted
+      : DriverHostGrantStatus.unknown;
+}
+
+/// Classifies a Screen Recording probe result (`screencapture`).
+DriverHostGrantStatus classifyScreenRecordingProbe({
+  required int exitCode,
+  required String output,
+}) {
+  final lower = output.toLowerCase();
+  if (lower.contains('could not create image from display') ||
+      lower.contains('not authorized') ||
+      lower.contains('not permitted')) {
+    return DriverHostGrantStatus.missing;
+  }
+  return exitCode == 0
+      ? DriverHostGrantStatus.granted
+      : DriverHostGrantStatus.unknown;
+}
+
+typedef DriverHostGrantProbe = Future<DriverHostGrantReport> Function();
+
+/// Accessibility grant used by `sanad-dev ui` taps and `osascript` actions.
+Future<DriverHostGrantReport> probeAccessibilityGrant() async {
+  if (!Platform.isMacOS) {
+    return const DriverHostGrantReport(
+      name: 'Accessibility',
+      status: DriverHostGrantStatus.notApplicable,
+      detail: 'macOS only',
+    );
+  }
+  final result = await Process.run('osascript', [
+    '-e',
+    'tell application "System Events" to count processes',
+  ]);
+  final output = '${result.stdout}${result.stderr}';
+  return DriverHostGrantReport(
+    name: 'Accessibility',
+    status: classifyAccessibilityProbe(
+      exitCode: result.exitCode,
+      output: output,
+    ),
+    detail: output.trim().isEmpty
+        ? 'exit ${result.exitCode}'
+        : output.trim().split('\n').first,
+  );
+}
+
+/// Screen Recording grant used by `sanad-dev ui screenshot`.
+Future<DriverHostGrantReport> probeScreenRecordingGrant() async {
+  if (!Platform.isMacOS) {
+    return const DriverHostGrantReport(
+      name: 'Screen Recording',
+      status: DriverHostGrantStatus.notApplicable,
+      detail: 'macOS only',
+    );
+  }
+  final result = await Process.run('screencapture', [
+    '-x',
+    '-t',
+    'png',
+    '/dev/null',
+  ]);
+  final output = '${result.stdout}${result.stderr}';
+  return DriverHostGrantReport(
+    name: 'Screen Recording',
+    status: classifyScreenRecordingProbe(
+      exitCode: result.exitCode,
+      output: output,
+    ),
+    detail: output.trim().isEmpty
+        ? 'exit ${result.exitCode}'
+        : output.trim().split('\n').first,
+  );
+}
+
+/// Report-only driver-host checks: TCC grants, driver entry point, and
+/// port/Home ownership. Never mutates runtime or system state.
+Future<void> reportSanadDevDoctorDriverHost({
+  required SanadDevRuntime runtime,
+  required RuntimeOwnershipAssessment ownership,
+  required bool Function(String path) fileExists,
+  DriverHostGrantProbe? accessibilityProbe,
+  DriverHostGrantProbe? screenRecordingProbe,
+  void Function(String message)? printMessage,
+}) async {
+  final log = printMessage ?? print;
+  final driverEntryPoint = p.join(
+    runtime.repositoryRoot,
+    'client',
+    'lib',
+    'driver_main.dart',
+  );
+  log(
+    'Driver entry point: '
+    '${fileExists(driverEntryPoint) ? 'present' : 'missing'} '
+    '($driverEntryPoint)',
+  );
+  final driverClients = selectManagedUiDriverClients(ownership);
+  log(
+    'Driver-enabled clients: ${driverClients.length}'
+    '${driverClients.isEmpty ? ' (run "sanad-dev run --driver")' : ''}',
+  );
+  log(
+    'Port ownership: agent ${runtime.agentPort} / vm '
+    '${runtime.vmServicePort} selected by this worktree '
+    '(${ownership.classification.name})',
+  );
+  log(
+    'Home ownership: ${runtime.sanadHome} '
+    '(${runtime.isLinkedWorktree ? 'worktree-scoped' : 'primary or explicit'})',
+  );
+  if (!Platform.isMacOS) {
+    log('Driver host grants: not applicable on this platform');
+    return;
+  }
+  final probes = [
+    accessibilityProbe ?? probeAccessibilityGrant,
+    screenRecordingProbe ?? probeScreenRecordingGrant,
+  ];
+  for (final probe in probes) {
+    final report = await probe();
+    log(
+      'Driver host grant ${report.name}: ${report.status.name} '
+      '(${report.detail})',
+    );
+  }
+}
+
 Future<void> handleRuntimeDoctor({
   required bool fix,
   String? sanadHomePath,
@@ -15,6 +173,10 @@ Future<void> handleRuntimeDoctor({
       discoverAgentInstances,
   Future<List<ClientInstance>> Function() discoverClients =
       discoverClientInstances,
+  bool Function(String path)? fileExists,
+  DriverHostGrantProbe? accessibilityProbe,
+  DriverHostGrantProbe? screenRecordingProbe,
+  void Function(String message)? printMessage,
 }) async {
   final runtime = await _currentRuntime(sanadHomePath: sanadHomePath);
   final agents = await discoverAgents(sanadHomeOverride: sanadHomePath);
@@ -198,6 +360,14 @@ Future<void> handleRuntimeDoctor({
     staleRecordRemovalAvailable: staleRecordRemovalAvailable,
   );
   print('Next action: $nextAction');
+  await reportSanadDevDoctorDriverHost(
+    runtime: runtime,
+    ownership: ownership,
+    fileExists: fileExists ?? (path) => File(path).existsSync(),
+    accessibilityProbe: accessibilityProbe,
+    screenRecordingProbe: screenRecordingProbe,
+    printMessage: printMessage,
+  );
 }
 
 String doctorNextAction({

@@ -17,6 +17,22 @@ void printUsage() {
     '  doctor [--fix]            Diagnose ownership; remove only stale records.',
   );
   print(
+    '                            Reports driver-host grants, the driver entry point, and port/Home ownership.',
+  );
+  print(
+    '  reset                     Stop this worktree runtime, apply a Home fixture, then run --driver.',
+  );
+  print(
+    '  apply [--dry-run]         Inspect changes since the runtime started; run the lightest correct action.',
+  );
+  print(
+    '  refresh --at <+duration>  Schedule an out-of-tree pull, then restart agent and client.',
+  );
+  print(
+    '  cli path agent|client     Print the cached compiled CLI artifact path.',
+  );
+  print('  cli agent|client -- <args>  Run the cached compiled CLI artifact.');
+  print(
     '  takeover                  Relaunch a complete manual pair under sanad-dev.',
   );
   print(
@@ -70,6 +86,16 @@ void printUsage() {
   print(
     '  --config <path>           Client config file (default: $defaultSanadDevClientConfig).',
   );
+  print(
+    '  --fixture <name>          Home fixture to restore during reset (atomic).',
+  );
+  print(
+    '  --save-fixture <name>     Snapshot the Home databases and config before reset.',
+  );
+  print('  --keep-data               Keep existing Home data (reset default).');
+  print(
+    '  --at <+duration>          Refresh delay, for example +2m, +90s, or +1h.',
+  );
   print('  --dry-run                 Resolve and print runtime settings only.');
   print(
     '  --background              Launch detached and wait for a managed/failure result.',
@@ -93,4 +119,9 @@ void printUsage() {
   print('  sanad-dev logs client -n 50 -f');
   print('  sanad-dev logs client -p 50139');
   print('  sanad-dev restart agent -p 58085');
+  print('  sanad-dev reset --keep-data');
+  print('  sanad-dev reset --fixture clean --save-fixture before-fix');
+  print('  sanad-dev apply --dry-run');
+  print('  sanad-dev cli agent -- session list');
+  print('  sanad-dev refresh --at +5m');
 }

@@ -1,5 +1,11 @@
 part of '../../../sanad_dev_cli.dart';
 
+/// `sanad-dev status` is strictly read-only.
+///
+/// It performs discovery, reads the launcher lease, and prints the runtime
+/// projection. It never starts, stops, restarts, repairs, or bootstraps
+/// anything, so it is always safe to call while another agent is working in the
+/// same worktree.
 Future<void> handleRuntimeStatus({
   int? portOverride,
   String? sanadHomePath,
@@ -59,6 +65,13 @@ Future<void> handleRuntimeStatus({
   );
   print('Worktree: ${runtime.worktreeId}');
   print('Branch: ${runtime.branch}');
+
+  final recordedCommit = ownership.record?.sourceCommit ?? '';
+  final sourceCommit = recordedCommit.isEmpty
+      ? await readRuntimeSourceCommit(runtime.repositoryRoot)
+      : recordedCommit;
+  print('Runtime source commit: ${sourceCommit.isEmpty ? '-' : sourceCommit}');
+  print('Runtime version: ${readRepositoryVersion(runtime.repositoryRoot)}');
 
   print(
     'Cloud gateway: ${matchingAgent?.gatewayEnabled == true ? 'enabled' : 'disabled'}',

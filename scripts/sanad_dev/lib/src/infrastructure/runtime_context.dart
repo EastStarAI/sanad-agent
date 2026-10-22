@@ -373,6 +373,42 @@ Future<SanadDevRuntimeRecord?> readRuntimeRecord(
   return null;
 }
 
+/// Current `HEAD` commit of [repositoryRoot], or an empty string when Git is
+/// unavailable.
+///
+/// The value is recorded in the launcher lease so `status` can report the live
+/// runtime source commit and `apply` can diff against the commit the runtime
+/// started from. It is diagnostic identity, never ownership evidence.
+Future<String> readRuntimeSourceCommit(String repositoryRoot) async {
+  try {
+    final result = await Process.run('git', [
+      '-C',
+      repositoryRoot,
+      'rev-parse',
+      'HEAD',
+    ]);
+    if (result.exitCode != 0) return '';
+    return result.stdout.toString().trim();
+  } on Object {
+    return '';
+  }
+}
+
+/// Repository version read from the product pubspec, without a build suffix.
+String readRepositoryVersion(String repositoryRoot) {
+  for (final relative in const ['client/pubspec.yaml', 'agent/pubspec.yaml']) {
+    final file = File(_join(repositoryRoot, relative));
+    if (!file.existsSync()) continue;
+    final match = RegExp(
+      r'^version:\s*([^\s#+]+)',
+      multiLine: true,
+    ).firstMatch(file.readAsStringSync());
+    final version = match?.group(1);
+    if (version != null && version.isNotEmpty) return version;
+  }
+  return '-';
+}
+
 Future<bool> isProcessRunning(int? pid) async {
   if (pid == null || pid <= 0) return false;
   if (Platform.isWindows) {

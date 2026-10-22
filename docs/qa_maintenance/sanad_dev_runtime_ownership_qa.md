@@ -77,13 +77,47 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Recovery repeats after terminal result persistence | The switch is not replayed and the original result is not duplicated. |
 | Health discovery | HTTP contains hashes, abstract modes, and launcher correlation tokens only; never absolute source or Home paths. |
 
+## Runtime tooling matrix
+
+| Scenario | Expected result |
+|---|---|
+| Run `status` in a worktree whose prepared runtime CLI is stale | The wrapper prints `Project runtime is stale. Run: sanad-dev setup` and exits nonzero; nothing is compiled, resolved, or restarted. `status` prints `Runtime source commit:` and `Runtime version:`. |
+| Run `status` twice while another agent edits code in the same worktree | Output changes only with real runtime state; no file, lease, journal, Home entry, or process is created or modified. |
+| `sanad-dev cli path agent` and then `sanad-dev cli path client` twice | Each printed artifact is under `<worktree>/.sanad-dev/bin/<12-char sha>/`; the first call may print `built in <duration>`, the second prints `reused`, and no build repeats. |
+| Change one Dart file of a component after a cached build | Only that component rebuilds; the stamp changes and the artifact path stays inside the same commit directory. |
+| Change only `docs/**` after a cached build | Both artifacts stay `reused`; the fingerprint ignores documentation. |
+| Change `shared/**` that both packages depend on | Both the Agent and Client artifacts rebuild. |
+| `sanad-dev cli agent -- --version` | Runs the cached binary with inherited stdio, prints `call <duration>` on stderr, reports the pubspec version, and returns the child exit status. |
+| Client CLI build | Uses `dart build cli` and produces `client-bundle/bin/sanad_client` beside its dynamic libraries; `dart compile exe` is never attempted for the Client. |
+| `reset --dry-run` in a linked worktree | Prints worktree, Test Home, ports, data plan, and `interactive-driver`; no process, Home, or fixture is touched. |
+| `reset` from a worktree whose runtime is running | Stops only this worktree's Agent and Client, proves the ports are free, then starts a driver-enabled pair and prints one `reset:` line with ports, commit, state, Home, and fixture. |
+| `reset` while the Home is `~/.sanad`, `~/.sanad-test*`, or another worktree's Test Home | Refuses with exit 64 before stopping anything and names the worktree-owned Home. |
+| `reset --fixture clean` with a corrupt or missing fixture | Fails closed after the stop, prints the reason plus the `--keep-data` recovery command, and does not start a runtime. |
+| `reset --save-fixture before --fixture missing` | Saves the fixture successfully, then reports the failed restore and returns nonzero. |
+| `reset --fixture clean` on a Home holding provider keys | The restored Home contains the fixture's database and config, and `.env`, `.local_token`, credential JSON files, `dev/`, `logs/`, and `media/` are byte-identical to before. |
+| Save a fixture whose Home contains `.env`, `.local_token`, or a `secrets`-like file inside `memories/` | None of them appear in the fixture directory or in `fixture.json`. |
+| Restore a fixture that lacks a captured file present in the Home | The stale captured file is removed; excluded paths are untouched. |
+| Run `apply --dry-run` after a UI-only Client change | Prints `reload client` with the reason and example path; no component action is requested. |
+| Run `apply --dry-run` after a Client `main.dart`, pubspec, asset, or native change | Prints `restart client`. |
+| Run `apply --dry-run` after an Agent change | Prints `restart agent`. |
+| Run `apply --dry-run` after a `scripts/sanad_dev/**` change or with a driver-mode change | Prints `stop + run` and no lighter action. |
+| Run `apply --dry-run` after docs, tests, or CI-only changes | Prints `none` and requests nothing. |
+| Run `apply` while another build or test runs in the same worktree | Prints the refusal with every matching PID and command line, returns nonzero, and requests no component action. |
+| Run `sanad-dev restart agent` or `restart client` during the same condition | Same refusal; `--force` performs the restart anyway. |
+| Run `doctor` on a driver-enabled pair with both macOS grants | Reports the driver entry point, the driver-enabled Client count, port and Home ownership, `Accessibility: granted`, and `Screen Recording: granted`, and mutates nothing. |
+| Run `doctor` on a host without Accessibility or Screen Recording | Reports `missing` with the OS message and still prints the ownership next action. |
+| Run `doctor` on Linux or Windows | Reports the driver entry point, ports, and Home, and states that grants are not applicable. |
+| Run `refresh --at +2m` on macOS | Returns immediately, prints the task name, fire time, script, log, and verification commands; a detached `sh` child (never launchd) later pulls, runs `setup`, and restarts both components, then deletes itself. |
+| Run `refresh --at 2m` or `--at +2d` | Usage error 64; nothing is scheduled. |
+| Run `refresh --at +1m` on Linux or Windows | Schedules `systemd-run --user --on-active` or a self-deleting `schtasks /SC ONCE` task; the script deletes its own task and file. |
+
 ## Bootstrap, journal, and terminal matrix
 
 | Scenario | Expected result |
 |---|---|
 | Fresh POSIX or Windows user environment, `run` | Install ensures verified FVM, pinned Flutter, and the user shim; setup resolves Release Contract, standalone CLI, Agent, then Client and compiles the native runtime CLI through FVM; runtime begins only after every stage succeeds. |
 | `install`, `setup`, and `run` stage boundaries | Install stops before packages; setup ensures install, resolves packages, prepares the source-fingerprinted native runtime CLI, and stops before runtime; run ensures every layer and enters the prepared CLI. Every work-performing child streams real stdout/stderr and receives a duration/result footer. |
-| Explicit `status`, logs, or another non-run runtime command with missing prerequisites | No bootstrap mutation occurs. A missing FVM command reports `sanad-dev install`; when FVM exists but package state or the prepared runtime artifact is missing/stale, the wrapper reports `sanad-dev setup`. |
+| Explicit `status`, logs, or another non-run runtime command with missing prerequisites | No bootstrap mutation occurs. A missing FVM command reports `sanad-dev install`; when FVM exists but package state or the prepared runtime artifact is missing/stale, the wrapper reports `sanad-dev setup` and exits nonzero. |
 | Prepared unchanged runtime command | The wrapper validates package configs plus the source fingerprint and executes the checkout-local native CLI without invoking FVM or dependency setup. |
 | Runtime CLI source, pubspec, or lockfile changes after setup | A non-run command fails closed with `sanad-dev setup`; `run` and `switch` rebuild the artifact through FVM before runtime entry. |
 | Runtime source returns to a fingerprint whose Windows executable is still active while the stamp names another build | Setup reuses the content-addressed artifact and repairs the stamp without trying to overwrite the locked executable. |
