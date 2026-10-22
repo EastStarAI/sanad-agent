@@ -415,3 +415,10 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
 - The `login` command is host-local by design: forwarding it through the relay
   returns a zero exit code with no relayed output rather than an explicit
   unsupported-command result.
+- Every `sanad-client` execution request currently carries a fixed
+  `timeout_seconds` of 300, so a relayed `run` longer than five minutes ends with
+  `exit_code: 124` and `timed_out: true`. Orchestrators must report that as a
+  timeout boundary rather than as a failed task.
+- A control socket that closes before the terminal `device.cli.result` frame
+  completes the caller with exit code `0` and no relayed `--json` envelope, so a
+  zero exit alone never proves a completed remote turn.
