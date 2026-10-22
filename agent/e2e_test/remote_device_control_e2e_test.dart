@@ -37,6 +37,11 @@ void main() {
             ...Platform.environment,
             'SANAD_HOME': sanadHomePath,
             'SANAD_STATE_HOME': sanadStateHomePath,
+            // The MCP save below stores a credential. E2E mode is the switch
+            // that keeps the Agent secret store on the owner-only file store
+            // inside the temporary Home instead of the OS credential vault
+            // (agent/AGENTS.md: E2E subprocesses never reach it).
+            'SANAD_E2E_TEST_MODE': 'true',
             'ENABLE_LOCAL_GATEWAY': 'true',
             'LOCAL_GATEWAY_HOST': '127.0.0.1',
             'LOCAL_GATEWAY_PORT': '$port',

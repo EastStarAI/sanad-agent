@@ -51,6 +51,20 @@ Source-daemon startup coverage also verifies that the supervisor parent does
 not prepare the Home redundantly, while the child prepares the roots before
 daemon composition without recursively enumerating their contents.
 
+## Daemon-Backed E2E Isolation Checks
+
+- A daemon started by an E2E suite for any credential-writing path (for example
+  `save_mcp_server` with `secrets`) must declare `SANAD_E2E_TEST_MODE=true`
+  together with a temporary `SANAD_HOME` and a separate temporary
+  `SANAD_STATE_HOME`. E2E mode is the switch that keeps the Agent secret store
+  on the owner-only file store inside that Home; without it the daemon uses the
+  OS credential vault and fails on any host whose vault is unavailable to a
+  non-interactive process (`AgentSecretStoreUnavailable`, Keychain `-60008`).
+- The local welcome frame is `type` + `platform_id` + `url` only. A test that
+  needs a device identity supplies it on its own canonical envelopes; reading
+  `device_id` from the welcome frame is a fixture defect, never a product
+  expectation.
+
 ## Restart and Isolation Matrix
 
 1. Start with an existing Home, connect the native client, restart the daemon, and
