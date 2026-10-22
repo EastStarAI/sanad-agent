@@ -15,6 +15,7 @@ import 'dart:math';
 
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:test/test.dart';
@@ -25,6 +26,16 @@ import '../test/support/isolated_sanad_test_home.dart';
 const _template = 'openai';
 const _authMethod = 'api_key';
 const _protocol = 'openai_compatible';
+
+/// A model whose thinking controls are documented as unsupported by the
+/// shipped-defaults authority layer (agent/model_capability_defaults.yaml,
+/// route class `any`).
+///
+/// `unsupported` comes only from a positive authority report
+/// (agent/lib/core/AGENTS.md); a hand-seeded cache record can never manufacture
+/// it, and an `unknown` route deliberately admits the turn with the provider
+/// default instead of rejecting the selection.
+const _unsupportedModel = 'grok-4.20-0309-non-reasoning';
 
 void main() {
   // In-process seeding and inspection open the temporary state roots the
@@ -77,7 +88,7 @@ void main() {
             sessionId: sessionId,
             requestId: 'i2-${_unique()}',
             message: 'hello',
-            model: 'gpt-test',
+            model: _unsupportedModel,
             providerInstanceId: h.instanceId,
             thinkingMode: 'deep',
           );
@@ -85,7 +96,12 @@ void main() {
             sessionId: sessionId,
             timeout: const Duration(seconds: 45),
           );
-          expect(outcome.blocked, isTrue);
+          // A typed pre-dispatch rejection keeps its code on the terminal
+          // frame so the rejection is never read as a completed turn.
+          expect(
+            outcome.errorCode,
+            ThinkingSelectionErrorCode.capabilityUnsupported,
+          );
           expect(h.fakeLlm.requestCount, 0);
         } finally {
           await client.close();
@@ -126,7 +142,7 @@ void main() {
             sessionId: sessionId,
             requestId: 'i3b-${_unique()}',
             message: 'second',
-            model: 'gpt-test',
+            model: _unsupportedModel,
             providerInstanceId: h.instanceId,
             thinkingMode: 'high',
           );
@@ -166,17 +182,22 @@ void main() {
         final sessionId = 'gate-i-restart-${_unique()}';
         await h.seedPersistedSession(
           sessionId: sessionId,
-          model: 'gpt-test',
+          model: _unsupportedModel,
           thinkingMode: 'high',
           queuedMessage: 'resume after restart',
         );
 
         final client = await h.startDaemon();
         try {
-          await client.waitForFinalAnswer(
+          // Recovery drains the queued turn as soon as the gateway is up, so
+          // the live event can be published before this client attaches. The
+          // durable answer is the observable outcome of the restored turn.
+          final restored = await client.waitForPersistedAnswer(
             sessionId: sessionId,
+            content: 'restored-turn',
             timeout: const Duration(seconds: 60),
           );
+          expect(restored, isTrue);
           expect(h.readSessionThinkingMode(sessionId), isNull);
           expect(h.fakeLlm.requestCount, 1);
           expect(
@@ -312,14 +333,6 @@ PROVIDER_AUTO_FAILOVER=false
                 {'id': 'high', 'label': 'High'},
               ],
               'capability_revision': '1:1:openai_chat_effort:o3',
-              'source': 'profile',
-            },
-          },
-          {
-            'value': 'gpt-test',
-            'thinking_control': {
-              'status': 'unsupported',
-              'capability_revision': '1:1:openai_chat_effort:gpt-test',
               'source': 'profile',
             },
           },
@@ -607,10 +620,14 @@ class _TurnTerminalOutcome {
   const _TurnTerminalOutcome({
     this.finalAnswer,
     this.blocked = false,
+    this.errorCode,
   });
 
   final String? finalAnswer;
   final bool blocked;
+
+  /// Typed pre-dispatch rejection code carried by the terminal frame.
+  final String? errorCode;
 }
 
 class _ThinkingTestClient {
@@ -694,7 +711,10 @@ class _ThinkingTestClient {
       if (eventName == 'final_answer') {
         final content = payload['content']?.toString() ?? '';
         if (content.trim().isNotEmpty) {
-          return _TurnTerminalOutcome(finalAnswer: content.trim());
+          return _TurnTerminalOutcome(
+            finalAnswer: content.trim(),
+            errorCode: payload['error_code']?.toString(),
+          );
         }
       }
       if (eventName == 'session.runtime_notice') {
@@ -738,10 +758,79 @@ class _ThinkingTestClient {
     );
   }
 
-  Future<List<Map<String, dynamic>>> loadSessions({
-    required String requestId,
+  /// Waits until [content] is persisted as an assistant message.
+  ///
+  /// Startup recovery drains queued work as soon as the gateway is up, so the
+  /// live `final_answer` can be published before this client attaches. History
+  /// hydration exposes the same durable outcome, so it is the reliable
+  /// observation point for a restored turn.
+  Future<bool> waitForPersistedAnswer({
+    required String sessionId,
+    required String content,
+    required Duration timeout,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) break;
+      final messages = await _loadHistory(
+        sessionId: sessionId,
+        timeout: remaining,
+      );
+      final found = messages.any(
+        (message) =>
+            message['sender'] == 'ai' &&
+            message['content']?.toString().trim() == content,
+      );
+      if (found) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    return false;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadHistory({
+    required String sessionId,
+    required Duration timeout,
   }) async {
     _send(<String, dynamic>{
+      'type': 'execute_command',
+      'command': 'get_session_history',
+      'payload': {
+        'request_id': 'history-${_unique()}',
+        'session_id': sessionId,
+      },
+    });
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      late final bool moved;
+      try {
+        moved = await frames.moveNext().timeout(remaining);
+      } on TimeoutException {
+        break;
+      }
+      if (!moved) break;
+      final frame =
+          jsonDecode(frames.current as String) as Map<String, dynamic>;
+      if (frame['type'] != 'device_event') continue;
+      if (frame['event'] != 'session_history') continue;
+      final payload = frame['payload'] is Map
+          ? Map<String, dynamic>.from(frame['payload'] as Map)
+          : <String, dynamic>{};
+      final eventSessionId =
+          frame['session_id']?.toString() ?? payload['session_id']?.toString();
+      if (eventSessionId != sessionId) continue;
+      return (payload['messages'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList(growable: false);
+    }
+    throw TimeoutException('Timed out waiting for session_history');
+  }
+
+  Future<List<Map<String, dynamic>>> loadSessions({
+    required String requestId,
+  }) async {    _send(<String, dynamic>{
       'type': 'execute_command',
       'command': 'get_sessions',
       'payload': {'request_id': requestId},

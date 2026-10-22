@@ -63,16 +63,18 @@ Common shape for every probe:
 | Probe | Assistant tool-call message under test | Request shape | Decides |
 |---|---|---|---|
 | P1 | Current turn, same route, `reasoning_content: ""` | `{role: assistant, content: "", reasoning_content: "", tool_calls: [...]}` | `sameRouteEmpty`: 2xx keeps `asRecorded`; the reported 400 means `reject` |
-| P2 | Current turn, same route, field absent | `{role: assistant, content: "", tool_calls: [...]}` | `sameRouteAbsent` |
-| P3 | Current turn, same route, `reasoning_content: null` | `{..., reasoning_content: null, tool_calls: [...]}` | `sameRouteNull` |
-| P4 | Clean current turn; an earlier user turn holds a foreign tool exchange with no field | user₁, foreign assistant tool call (no field), tool result, assistant text, user₂ | `foreignEarlierTurn` |
-| P5 | Current turn holds a foreign tool exchange with no field | user, foreign assistant tool call (no field), tool result | `foreignCurrentTurn` |
+| P2 | Current turn, same route, field absent | `{role: assistant, content: "", tool_calls: [...]}` | `sameRouteAbsent`: Task 131 resolves to `emptyString` (`""`) in thinking mode |
+| P3 | Current turn, same route, `reasoning_content: null` | `{..., reasoning_content: null, tool_calls: [...]}` | `sameRouteNull`: Task 131 resolves to `emptyString` (`""`) in thinking mode |
+| P4 | Clean current turn; an earlier user turn holds a foreign tool exchange with no field | user₁, foreign assistant tool call (no field), tool result, assistant text, user₂ | `foreignEarlierTurn`: keeps `asRecorded` (unpadded) |
+| P5 | Current turn holds a foreign tool exchange with no field | user, foreign assistant tool call (no field), tool result | `foreignCurrentTurn`: keeps `asRecorded` (unpadded) |
 
 Budget: five ordinary requests, one per probe, each with a small output cap.
 A transport or quota failure is recorded as a gap and is not retried into a
-conclusion. If P1 and P2 both fail, genuine same-route zero-reasoning turns
-have no truthful representation and become rejections; padding (`" "`) is not
-an accepted remedy.
+conclusion. Live evidence on 2026-10-22 confirmed that omission of
+`reasoning_content` on same-route thinking mode requests causes 400
+`invalid_request_error`. Supplying `""` for same-route zero-reasoning turns (P2/P3)
+is accepted and required by the provider. Padding (`" "`) or synthetic text
+remains strictly rejected.
 
 ## Review Checklist
 
