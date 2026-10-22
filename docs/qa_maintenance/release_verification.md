@@ -62,22 +62,24 @@ alternative.
 
 `prepare-release` must reject malformed, equal, or decreasing Stable versions
 and non-increasing build numbers before writing any file. A successful run must
-update all package, lockfile, native Windows, release-contract, artifact-name,
-release-note identity, changelog-slot, and current-release documentation
-surfaces. `check-preparation` must then reject any stale surface or unfinished
-`TODO`. Focused tests copy the current 11-file release surface into an isolated
-temporary fixture, derive the next patch and build from its current contract,
-and prove successful transformation, no mutation after prevalidation failure,
-and stale native/prose rejection. Tests must not pin the release identity that
-they are designed to advance.
+update all package, lockfile, native Windows, `sanad-client` CLI version,
+release-contract, artifact-name, release-note identity, changelog-slot, and
+current-release documentation surfaces. `check-preparation` must then reject any
+stale surface or unfinished `TODO`. Focused tests copy the current 12-file
+release surface into an isolated temporary fixture, derive the next patch and
+build from its current contract, and prove successful transformation, no
+mutation after prevalidation failure, and stale native/prose rejection. Tests
+must not pin the release identity that they are designed to advance.
 
 The protected-review exception is valid only for an exact metadata release PR.
 `scripts/release/verify_metadata_release_diff.sh` compares the PR merge range
-against the fixed 11-file set and inspects every changed line outside release
+against the fixed 12-file set and inspects every changed line outside release
 notes and changelog. Only semantic version/build declarations, the Stable tag,
-canonical `sanad-agent`/`sanad-client` filenames, and the single current-release
-documentation sentence are accepted. Tests must prove the expected diff passes
-while an unrelated path or installer metadata line fails. CI must also run the
+canonical `sanad-agent`/`sanad-client` filenames, the single current-release
+documentation sentence, and the single `sanadClientCliVersion` literal are
+accepted. Tests must prove the expected diff passes while an unrelated path, an
+installer metadata line, or any other edit to the `sanad-client` CLI version
+file fails. CI must also run the
 normal release contract, Agent/Client analyzer, tests, secret scan, and release
 security lanes; the exception replaces only the early `release-reviewed` label,
 not technical validation or final publication approval.

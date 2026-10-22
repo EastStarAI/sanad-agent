@@ -53,12 +53,16 @@ fvm dart analyze
 (cd ../client && fvm flutter analyze)
 ```
 
-Review the complete diff, then require the branch to match the exact 11-file
+Review the complete diff, then require the branch to match the exact 12-file
 metadata surface accepted by:
 
 ```bash
 scripts/release/verify_metadata_release_diff.sh <base-sha> <head-sha>
 ```
+
+`client/lib/features/client_cli/domain/models/client_cli_version.dart` joins that
+surface only through its single `const String sanadClientCliVersion = '…';`
+version literal; any other edit to that file is a source change.
 
 Any workflow, script, signing, deployment, installer-logic, task-plan,
 unrelated path, unexpected line, stale identity, placeholder, secret, or private

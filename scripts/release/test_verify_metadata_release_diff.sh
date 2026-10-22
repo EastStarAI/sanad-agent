@@ -18,6 +18,7 @@ write_file() {
 write_file agent/CHANGELOG.md $'## 1.0.6\n\n- Old release.'
 write_file agent/pubspec.lock $'  sanad_release_contract:\n    version: "1.0.6"'
 write_file agent/pubspec.yaml 'version: 1.0.6'
+write_file client/lib/features/client_cli/domain/models/client_cli_version.dart "const String sanadClientCliVersion = '1.0.6';"
 write_file client/pubspec.lock $'  sanad_release_contract:\n    version: "1.0.6"'
 write_file client/pubspec.yaml 'version: 1.0.6+7'
 write_file client/release/windows/sanad_client_installer.iss $'AppVersion=1.0.6\nAppPublisher=EastStar AI'
@@ -30,7 +31,7 @@ git add .
 git commit -qm baseline
 base="$(git rev-parse HEAD)"
 
-sed -i.bak 's/1\.0\.6/1.0.7/g; s/+7/+8/g' agent/pubspec.lock agent/pubspec.yaml client/pubspec.lock client/pubspec.yaml client/release/windows/sanad_client_installer.iss client/windows/runner/Runner.rc docs/operations/release_and_signing.md release/contract/pubspec.yaml release/release-contract.json release/release-notes.md
+sed -i.bak 's/1\.0\.6/1.0.7/g; s/+7/+8/g' agent/pubspec.lock agent/pubspec.yaml client/lib/features/client_cli/domain/models/client_cli_version.dart client/pubspec.lock client/pubspec.yaml client/release/windows/sanad_client_installer.iss client/windows/runner/Runner.rc docs/operations/release_and_signing.md release/contract/pubspec.yaml release/release-contract.json release/release-notes.md
 find . -name '*.bak' -delete
 sed -i.bak 's/1,0,6,7/1,0,7,8/' client/windows/runner/Runner.rc
 sed -i.bak 's/"build_number": 7/"build_number": 8/' release/release-contract.json
@@ -55,6 +56,24 @@ git add .
 git commit -qm unrelated-path
 if "$validator" "$base" HEAD >/dev/null 2>&1; then
   echo "Validator accepted an unrelated path." >&2
+  exit 1
+fi
+
+git reset --hard -q "$head"
+write_file client/lib/features/client_cli/domain/models/client_cli_version.dart "const String sanadClientCliVersion = '1.0.7'; // hand-edited"
+git add .
+git commit -qm forbidden-version-line
+if "$validator" "$base" HEAD >/dev/null 2>&1; then
+  echo "Validator accepted a non-version change on the sanad-client CLI version line." >&2
+  exit 1
+fi
+
+git reset --hard -q "$head"
+write_file client/lib/features/client_cli/domain/models/client_cli_version.dart $'const String sanadClientCliVersion = \'1.0.7\';\nconst String extra = \'unexpected\';'
+git add .
+git commit -qm extra-version-file-line
+if "$validator" "$base" HEAD >/dev/null 2>&1; then
+  echo "Validator accepted an extra line in the sanad-client CLI version file." >&2
   exit 1
 fi
 

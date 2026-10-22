@@ -80,3 +80,4 @@ When interface or runtime ownership changes affect the local daemon contract, pr
 ## Boundary Ownership
 - Keep infrastructure-specific transport laws in the infrastructure domain.
 - Keep feature-specific runtime laws in the nearest owning feature contract; do not duplicate them in this client-wide contract.
+- `client/lib/features/client_cli/domain/models/client_cli_version.dart` owns the `sanad-client` CLI version literal. It is release-managed identity: release preparation advances it with the Client release version and CI rejects drift, so it is never edited by hand.
