@@ -8,9 +8,14 @@ import 'package:uuid/uuid.dart';
 import '../data/client_cli_discovery.dart';
 import '../domain/models/client_cli_exceptions.dart';
 import '../domain/models/client_cli_record.dart';
+import '../domain/models/client_cli_relay_policy.dart';
 import '../domain/models/client_cli_version.dart';
 
 typedef WebSocketConnector = Future<WebSocket> Function(Uri uri, {Map<String, dynamic>? headers});
+
+/// Reads the caller's piped standard input once, or `null` when there is
+/// nothing to forward.
+typedef ClientCliStdinReader = Future<String?> Function();
 
 class SanadClientRunner {
   final ClientCliDiscovery discovery;
@@ -18,6 +23,7 @@ class SanadClientRunner {
   final Uuid uuid;
   final http.Client Function()? httpClientFactory;
   final WebSocketConnector? webSocketConnector;
+  final ClientCliStdinReader? stdinReader;
 
   const SanadClientRunner({
     this.discovery = const ClientCliDiscovery(),
@@ -25,6 +31,7 @@ class SanadClientRunner {
     this.uuid = const Uuid(),
     this.httpClientFactory,
     this.webSocketConnector,
+    this.stdinReader,
   });
 
   Future<int> run(
@@ -51,11 +58,15 @@ class SanadClientRunner {
     String? targetDevice;
     bool jsonOutput = false;
     bool quietOutput = false;
+    final forwardStdin = clientCliHasForwardStdinFlag(rawArgs);
     final remainingArgs = <String>[];
 
     for (var i = 0; i < rawArgs.length; i++) {
       final arg = rawArgs[i];
-      if (arg == '--home' && i + 1 < rawArgs.length) {
+      if (arg == clientCliForwardStdinFlag) {
+        // Host-local flag: it must never reach the remote Agent.
+        continue;
+      } else if (arg == '--home' && i + 1 < rawArgs.length) {
         explicitHome = rawArgs[++i];
       } else if (arg.startsWith('--home=')) {
         explicitHome = arg.substring('--home='.length);
@@ -106,6 +117,7 @@ class SanadClientRunner {
       targetDevice: targetDevice.trim(),
       argv: remainingArgs,
       stdinContent: stdinContent,
+      forwardStdin: forwardStdin,
       jsonOutput: jsonOutput,
       quietOutput: quietOutput,
       out: out,
@@ -182,6 +194,7 @@ class SanadClientRunner {
     required String targetDevice,
     required List<String> argv,
     String? stdinContent,
+    bool forwardStdin = false,
     required bool jsonOutput,
     required bool quietOutput,
     required StringSink out,
@@ -222,18 +235,21 @@ class SanadClientRunner {
       }
     }
 
-    // Read piped stdin if not supplied explicitly
+    // Read piped stdin only when the forwarded command can consume it. A
+    // background caller owns a non-TTY standard input that may never reach
+    // EOF, so an unconditional read would block before anything is forwarded.
     String? effectiveStdin = stdinContent;
-    if (effectiveStdin == null && !stdin.hasTerminal) {
-      try {
-        effectiveStdin = await stdin.transform(utf8.decoder).join();
-      } catch (_) {}
+    if (effectiveStdin == null &&
+        (forwardStdin || clientCliRelayConsumesStdin(argv))) {
+      effectiveStdin = await (stdinReader ?? _readProcessStdin)();
     }
 
     final requestId = uuid.v4();
     final wsUri = Uri.parse('ws://127.0.0.1:${record.port}/ws?token=${record.token}');
 
     final completer = Completer<int>();
+    var terminalResultReceived = false;
+    var approvalNoticePrinted = false;
     WebSocket? webSocket;
     StreamSubscription? signalSub;
 
@@ -278,6 +294,17 @@ class SanadClientRunner {
               out.write(msg['text'] ?? '');
             } else if (type == 'stderr') {
               err.write(msg['text'] ?? '');
+            } else if (type == 'status') {
+              // Status frames explain a wait the caller cannot otherwise see.
+              // They stay off standard output so `--json` remains parseable.
+              if (!quietOutput &&
+                  !approvalNoticePrinted &&
+                  msg['code']?.toString() == clientCliApprovalPendingStatus) {
+                approvalNoticePrinted = true;
+                err.writeln(
+                  msg['message']?.toString() ?? clientCliApprovalPendingMessage,
+                );
+              }
             } else if (type == 'event') {
               if (argv.contains('--events')) {
                 out.writeln(jsonEncode(msg['event'] ?? msg));
@@ -289,11 +316,13 @@ class SanadClientRunner {
                 err.writeln(error);
               }
               if (!completer.isCompleted) {
+                terminalResultReceived = true;
                 completer.complete(exitCode);
               }
             } else if (type == 'error') {
               err.writeln('Error: ${msg['message'] ?? 'Remote execution error'}');
               if (!completer.isCompleted) {
+                terminalResultReceived = true;
                 completer.complete(1);
               }
             }
@@ -303,7 +332,16 @@ class SanadClientRunner {
         },
         onDone: () {
           if (!completer.isCompleted) {
-            completer.complete(0);
+            // A relay that ends without a terminal result is a failure, never a
+            // silent success: the caller must not report a completed run it
+            // never received.
+            if (!terminalResultReceived) {
+              err.writeln(
+                'Error: The relay ended without a terminal result for request '
+                '$requestId.',
+              );
+            }
+            completer.complete(1);
           }
         },
         onError: (e) {
@@ -323,7 +361,7 @@ class SanadClientRunner {
           'argv': argv,
           'stdin': effectiveStdin,
           'brief_content': briefContent,
-          'timeout_seconds': 300,
+          'timeout_seconds': clientCliRelayTimeoutSecondsFor(argv),
         }),
       );
 
@@ -337,6 +375,17 @@ class SanadClientRunner {
       try {
         await webSocket?.close(WebSocketStatus.normalClosure);
       } catch (_) {}
+    }
+  }
+
+  /// Reads the caller's piped standard input, or `null` when the process owns
+  /// an interactive terminal.
+  Future<String?> _readProcessStdin() async {
+    if (stdin.hasTerminal) return null;
+    try {
+      return await stdin.transform(utf8.decoder).join();
+    } catch (_) {
+      return null;
     }
   }
 
@@ -356,8 +405,14 @@ Options:
   --home <path>              Custom Sanad Home directory
   --json                     Output structured machine-readable JSON
   -q, --quiet                Suppress non-essential output
+  --stdin                    Forward piped standard input even when the command
+                             already carries its prompt (never relayed)
   -h, --help                 Show this help documentation
   -v, --version              Show version information
+
+Relay window:
+  The relay keeps the forwarded command's own --timeout plus a 30s grace
+  (1..86400), and the protocol default of 300s without one.
 
 Examples:
   sanad-client devices

@@ -335,6 +335,117 @@ void main() {
       await socket.close();
     });
 
+    test('default mode announces the pending approval before it prompts', () async {
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      final wsUri = Uri.parse('ws://127.0.0.1:${host.port}/ws?token=${host.token}');
+      final socket = await WebSocket.connect(wsUri.toString());
+
+      final frames = <Map<String, dynamic>>[];
+      final statusSeen = Completer<Map<String, dynamic>>();
+      final resultSeen = Completer<Map<String, dynamic>>();
+      socket.listen((msg) {
+        final data = jsonDecode(msg.toString()) as Map<String, dynamic>;
+        frames.add(data);
+        if (data['type'] == 'status' && !statusSeen.isCompleted) {
+          statusSeen.complete(data);
+        }
+        if (data['type'] == 'result' && !resultSeen.isCompleted) {
+          resultSeen.complete(data);
+        }
+      });
+
+      socket.add(
+        jsonEncode({
+          'type': 'execute',
+          'request_id': 'req-approval-notice',
+          'device_id': 'dev-remote-1',
+          'argv': ['ws', 'list'],
+        }),
+      );
+
+      final status = await statusSeen.future.timeout(const Duration(seconds: 2));
+      expect(status['code'], 'approval_pending');
+      expect(status['message'], contains('Waiting for approval'));
+      // The notice precedes the approval prompt, so a headless caller explains
+      // the wait before the user is asked.
+      expect(approvalCoordinator.currentRequest, isNotNull);
+
+      approvalCoordinator.resolveCurrent(ClientCliApprovalDecision.deny);
+      final result = await resultSeen.future.timeout(const Duration(seconds: 2));
+      expect(result['exit_code'], 1);
+      expect(result['error'], contains('rejected by user'));
+      expect(
+        frames.indexOf(status) < frames.indexOf(result),
+        isTrue,
+        reason: 'the approval notice must precede the terminal result',
+      );
+
+      await socket.close();
+    });
+
+    test('a relay whose device event stream ends still returns one terminal result',
+        () async {
+      final livenessSocket = TestSanadSocketService()..setConnected(true);
+      final livenessCoordinator = FakeTestDeviceConnectionCoordinator(livenessSocket);
+      final livenessHost = ClientCliHost(
+        connectionCoordinator: livenessCoordinator,
+        deviceRepository: deviceRepo,
+        ownership: ownership,
+        approvalCoordinator: ClientCliApprovalCoordinator(),
+        sanadHome: tempHome.path,
+        clientVersion: '1.0.15',
+        initialEnabled: true,
+        initialPermissionMode: ClientCliSettings.fullAccessMode,
+      );
+
+      try {
+        await livenessHost.start();
+        final wsUri = Uri.parse(
+          'ws://127.0.0.1:${livenessHost.port}/ws?token=${livenessHost.token}',
+        );
+        final socket = await WebSocket.connect(wsUri.toString());
+
+        final resultFrames = <Map<String, dynamic>>[];
+        final terminal = Completer<Map<String, dynamic>>();
+        socket.listen((msg) {
+          final data = jsonDecode(msg.toString()) as Map<String, dynamic>;
+          if (data['type'] == 'result') {
+            resultFrames.add(data);
+            if (!terminal.isCompleted) terminal.complete(data);
+          }
+        });
+
+        socket.add(
+          jsonEncode({
+            'type': 'execute',
+            'request_id': 'req-stream-lost',
+            'device_id': 'dev-remote-1',
+            'argv': ['run', '--workspace', 'ws-core', 'work'],
+          }),
+        );
+
+        // The remote execution started, then the device transport was torn
+        // down before any terminal result arrived.
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(livenessSocket.sentCommands, isNotEmpty);
+        livenessSocket.dispose();
+
+        final result = await terminal.future.timeout(const Duration(seconds: 2));
+        expect(result['exit_code'], isNot(0));
+        expect(result['error'], contains('ended before a terminal result'));
+        expect(resultFrames, hasLength(1));
+
+        await socket.close();
+        await livenessHost.stop();
+      } finally {
+        await livenessHost.stop();
+      }
+    });
+
     test('stopping host releases ownership and closes server', () async {
       await host.updateSettings(
         enabled: true,

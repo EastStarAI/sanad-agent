@@ -58,6 +58,30 @@ target device and the requested command:
 
 Keyboard shortcuts `1`, `2`, `3`, and `Escape` resolve the overlay.
 
+While the overlay is waiting for you, the caller prints one line on its standard
+error channel:
+
+```text
+Waiting for approval in Sanad Client...
+```
+
+That line never appears on standard output, so `--json` output stays valid. A
+session you already allowed does not print it again.
+
+---
+
+## 3.1 How Long a Command May Run
+
+The relay keeps the forwarded command's own time budget: a
+`run --timeout 5400` request is relayed for its full 90 minutes plus a short
+grace, not the 5-minute default. Commands without `--timeout` keep the 5-minute
+relay default. The caller stops when the command does and exits with the
+command's own exit code.
+
+If the connection to the device is lost before the command reports an outcome,
+the relay ends with a failure exit code and an explanatory message instead of
+leaving the caller waiting.
+
 ---
 
 ## 4. Multiple Homes and Multiple Clients
@@ -103,5 +127,9 @@ action lives in the menu, including `Show`.
   by a shell on the target device.
 - File-backed input such as `--brief-file` is read locally and transported as
   request content, so the target device never reads your local path.
+- Piped input is forwarded only when the remote command uses it as its prompt. A
+  background job whose pipe stays open therefore never stalls, and `--stdin`
+  forces the read when you need to add context to a command that already has a
+  prompt.
 - Account credentials are never printed by `sanad-client` and never written into
   local runtime records.
