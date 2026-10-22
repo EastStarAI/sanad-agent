@@ -75,7 +75,7 @@ A turn that fails before or outside the engine's typed recovery never holds the 
 
 - A `blocked` runtime notice for the run's session ends `sanad run` at once:
   - exit `1`, terminal status `failed`, `cause: blocked`
-  - one stderr line: `Error: blocked: <notice>. Intervene with sanad session stop <id> or retry from a client.`
+  - one stderr line: `Error: blocked: <reason>. Intervene with sanad session stop <id> or retry from a client.` The reason and the intervention sentence are composed by the CLI, so exactly one period separates them (round 2, N1).
 - The CLI does not send Stop on `blocked`. The blocked work stays daemon-owned for intervention.
 - `waiting`, `resuming` and `cleared` stay advisory, because the daemon still owns automatic progress for them.
 - A typed refusal (`final_answer.error_code`, including the new `turn_failed`) already exits `1` at once.
@@ -95,6 +95,12 @@ A turn that fails before or outside the engine's typed recovery never holds the 
 - [x] CLI compact against the daemon contract: `agent/test/cli/session_command_test.dart`. The default bound comes from config, an invalid `--timeout` falls back to it, an exhausted bound reports `unconfirmed` with `124`, and `session show` reports the latest `compaction`.
 - [x] Contract flip: `agent/test/interfaces/platforms/sanad_gateway/attachment_replay_boundary_test.dart`. A failed attachment admission is now `cancelled`, not `blocked`.
 - [x] Standalone process contract flipped: `agent/test/cli/standalone_cli_process_test.dart` now expects an immediate `1`, not `124`.
+- [x] Round 2 client visibility (F1), red first then green:
+  - `client/test/unit/bloc/refused_first_turn_release_test.dart`: a `turn_failed` answer and a `blocked` notice each release the awaiting draft and keep its text; a canonical acceptance still clears it.
+  - `client/test/unit/services/device_conversation_event_handler_test.dart`: a typed refusal keeps its `error_code` and survives an empty history swap; an accepted user message supersedes it.
+  - `client/test/unit/home_screen_route_session_test.dart`: a selected session with no device projection is presented instead of the `Loading...` placeholder.
+  - `client/test/widget/refused_send_composer_test.dart`: a refused send ends the acceptance wait and keeps the text editable.
+- [x] Round 2 CLI reason text (N1), red first then green: `agent/test/cli/run_command_test.dart` pins one clean reason line for a typed refusal and for a blocked notice.
 - [x] Daemon E2E (`--concurrency=1`): `agent/e2e_test/session_queue_release_e2e_test.dart`.
   - A real daemon releases the queue after a pre-start failure.
   - The real `sanad run` exits at once on a refused turn.
@@ -102,7 +108,15 @@ A turn that fails before or outside the engine's typed recovery never holds the 
 
 ## Gates
 
+Round 2 gate results on the merged tree:
+
 - [x] `fvm dart analyze` (agent) and `fvm flutter analyze` (client) are clean.
+- [x] Full agent suite: 3419 passed, 15 skipped.
+- [x] Full client suite: 2016 passed.
+- [x] Agent E2E with `--concurrency=1`: `session_queue_release_e2e_test.dart` 3 passed; `context_compaction_daemon_e2e_test.dart` plus `durable_recovery_restart_e2e_test.dart` 23 passed.
+- [x] Client E2E with `--concurrency=1`: 14 passed.
+- [x] Merge integration: the merge from `182d6a40` brought the new on-disk state isolation guard, so the r1 E2E harness now declares its temporary roots with `setSanadHomeOverride`/`setSanadStateHomeOverride`. Without that, all three E2E cases failed on the merged tree.
+- [x] Test-home isolation for round 2: the fast suites keep their own contracts (in-process overrides and one temporary `SANAD_STATE_HOME` per spawned daemon). A run-wide `SANAD_HOME`/`SANAD_STATE_HOME` override is not possible because the suite asserts default root resolution, and redirecting `HOME` makes the toolchain re-resolve its own cache.
 - [x] The full agent suite (3322 passed, 15 skipped) and the full client suite (1952 passed, 1 skipped) pass.
 - [x] The affected E2E passes with `--concurrency=1`: the new `session_queue_release_e2e_test.dart`, plus `context_compaction_daemon_e2e_test.dart` and `durable_recovery_restart_e2e_test.dart` (25 tests).
 - [x] `lint_wiki` passes.
@@ -113,6 +127,12 @@ A turn that fails before or outside the engine's typed recovery never holds the 
   - `docs/qa_maintenance/cli_session_observability_intervention_qa.md` §6
   - `docs/operations/user_guide.md`
   - `docs/agent_engine/sanad_delegate_relay.md` §4.3
+- [x] Round 2 docs and contracts:
+  - `client/AGENTS.md` (conversation ownership: acceptance release and retained refusal)
+  - `docs/technical/client_conversation_cache_schema.md` §5 and §6
+  - `docs/technical/communication_protocols.md` §4.6
+  - `docs/technical/sanad_cli_architecture.md` §5
+  - `docs/qa_maintenance/cli_session_observability_intervention_qa.md` §4
 - [ ] Coordinator review and live acceptance on one Test Home (scenarios below).
 
 ## Proposed Live Scenarios (one Test Home)
@@ -146,3 +166,34 @@ A turn that fails before or outside the engine's typed recovery never holds the 
   - **Green evidence:** focused tests, the full suites, the affected E2E and lint all passed. Logs are in the private workspace `temp/g2/`.
   - **Not verified live:** the Test Home scenarios above are proposed only.
   - **Out of scope, noted:** `runTurn` returns before creating an `ActiveRun` when `turnRequest.message` is empty, which would leave admitted durable work `running`. Whether any admitted turn, such as an attachment-only one, can reach it was not confirmed, so this was not changed and is left for triage.
+
+- **Round 2 (writer, 2026-10-22):** Merged `origin/main` (`182d6a40`, merge `1e29c8fc`, no conflicts) and closed F1 and N1 from the live r1 findings.
+  - **F1 on main: yes.** The client defects reproduce on `182d6a40`'s own code paths.
+    - The r1 branch carried no client changes, so before this round its client tree was byte-identical to `origin/main` (`git diff origin/main 1e29c8fc -- client/` is empty).
+    - Reverting only `client/lib` to that tree and rerunning the four new tests failed all of them:
+      - `a typed turn_failed refusal releases the awaiting draft and keeps the text`: the draft stayed pending.
+      - `a blocked runtime notice releases the awaiting draft and keeps the text`: the same on main's daemon outcome, so the composer stayed locked there too.
+      - `a typed refusal keeps its code and survives an empty history swap`: the refusal was dropped and `error_code` never reached the canonical event.
+      - `a selected session with no device projection is still presented`: the route returned the `Loading...` placeholder.
+    - What differs on main is which surface shows the failure, not whether the client defects exist.
+      - Main's generic `catch` (`git show origin/main:agent/lib/interfaces/runtime/session_turn_executor.dart`) leaves the work item `blocked`, reports a forced blocked notice ("Execution could not start"), and still emits `Error: <cause>` without an `error_code`.
+      - The client therefore showed a blocked banner (an error surface) while its composer stayed locked, its header stayed on `Loading...`, and nothing was persisted.
+      - On this branch the same failure delivers one typed `turn_failed` answer instead of a notice, and the client rendered none of it because the answer was not persisted and the empty history swap dropped it.
+  - **F1 root causes (client):**
+    1. `ConversationDraftCache` cleared a pending request only from a matching canonical acceptance. A turn refused before dispatch never publishes `user_message`, so `pendingRequestId` stayed set: the composer kept its acceptance indicator, refused a second send, and only an edit cleared it.
+    2. `UnifiedDeviceMapper` dropped `error_code`, so a typed refusal was indistinguishable from a completed answer.
+    3. `DeviceConversationStore.setHistory` replaced the whole timeline, and a refused turn persists no history, so the live `final_answer` disappeared on the next hydration (empty session, no user row, no error).
+    4. `HomeScreen.resolveRouteSession` required a matching `deviceId` as well as a matching session id. A session the Client had just created was selected before its device projection settled, so the route kept presenting the identity placeholder (`Loading...`) for a session id it already owned.
+  - **F1 fix:**
+    - `ConversationDraftCache.releasePendingRequest` (via `ConversationCacheStore.releasePendingRequest` and `ConversationCacheRepository.releaseRefusedDraft`) clears only the pending marker of the draft whose request matches, keeping its text, workspace and route.
+    - `SessionCubit` releases that draft on a `final_answer` carrying `error_code` and on a `blocked` `session.runtime_notice`, so main's behaviour and this branch's behaviour both unlock the composer.
+    - `ConversationInputPanel` restores the draft text instead of clearing the composer when the pending marker is released without acceptance.
+    - `UnifiedDeviceMapper` keeps `error_code` in canonical metadata.
+    - `DeviceConversationStore` retains the session's latest typed refusal and re-appends it after every `setHistory` that does not represent the same request, dropping it once an accepted `user_message` for that session arrives.
+    - `HomeScreen.resolveRouteSession` presents a selected session by id, and `SessionCubit.markSessionSelectedSync` upgrades an identity placeholder to the authoritative session of the same id.
+  - **N1 root cause:** both CLI reason lines reused daemon text verbatim. The typed-refusal branch composed `'$code: ${event.finalMessage}'` on an answer that already read `'Error: <cause>'`, and the blocked branch appended `. Intervene …` to a notice that already ended with a period.
+  - **N1 fix:** `OneshotRunner._reasonSentence` is the single owner of the reason text: it drops a leading `Error:` prefix and the trailing punctuation, then supplies exactly one terminal period. The refusal line is now `Error: turn_failed: Bad state: Workspace folder is unavailable.` and the block line is `Error: blocked: <reason>. Intervene with sanad session stop <id> or retry from a client.`
+  - **Red evidence:** every new test failed before its fix, and the four F1 tests also failed with `client/lib` reverted to `182d6a40`.
+  - **Green evidence:** the focused tests, the affected client unit/widget suites and both analyzers passed. Suite results are recorded under Gates.
+  - **Merge integration:** the merge brought the new on-disk state isolation guard, which rejected the r1 E2E harness' in-isolate database seed. The harness now declares its own temporary roots with `setSanadHomeOverride`/`setSanadStateHomeOverride` and clears them on teardown.
+  - **Not fixed, now out of scope by design:** the daemon still persists neither the refused user root nor its answer. The client keeps that refusal visible for the session, but a Client restart or another Client will not see it. Persisting the refused turn durably is a daemon contract change and is left for triage.
