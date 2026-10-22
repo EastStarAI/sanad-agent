@@ -219,9 +219,7 @@ class DelayedHealthyGateway {
     DelayedHealthyGateway gateway,
   ) {
     final payload = envelope['payload'];
-    final sessionId = payload is Map
-        ? payload['session_id']?.toString()
-        : null;
+    final sessionId = payload is Map ? payload['session_id']?.toString() : null;
     return {
       'type': 'device_event',
       'session_id': sessionId,
@@ -1318,7 +1316,8 @@ void main() {
                 'type': 'final_answer',
                 'session_id': sessionId,
                 'payload': {
-                  'content': 'Error: Bad state: Workspace folder is unavailable.',
+                  'content':
+                      'Error: Bad state: Workspace folder is unavailable.',
                   'status': 'done',
                   'error_code': 'turn_failed',
                 },
@@ -1345,8 +1344,7 @@ void main() {
                   'status': 'blocked',
                   'reason': 'networkError',
                   'title': 'Connection failed',
-                  'message':
-                      'The agent could not reach the runtime service.',
+                  'message': 'The agent could not reach the runtime service.',
                 },
               },
             }),
@@ -1552,6 +1550,56 @@ void main() {
         } finally {
           await server.close(force: true);
           await requests.cancel();
+          await home.delete(recursive: true);
+        }
+      },
+    );
+
+    test(
+      'rejects a forced standalone run when the Home daemon answers slower than the speculative probe deadline',
+      () async {
+        final home = await Directory.systemTemp.createTemp(
+          'sanad-cli-slow-owned-home-',
+        );
+        // The answer delay is owned by this fake daemon, not by runner load: it
+        // is deterministically slower than the 300 ms speculative bound and
+        // comfortably inside the 2 s targeted bound, so the ownership pre-check
+        // decides on its deadline policy alone.
+        final gateway = await DelayedHealthyGateway.start();
+        var standaloneFactoryCalled = false;
+        final err = StringBuffer();
+
+        try {
+          await File(
+            '${home.path}/${LocalGatewayCredentials.relativePath}',
+          ).writeAsString('test-token');
+
+          final runner = OneshotRunner(
+            stdinReader: () async => null,
+            standaloneClientFactory: ({sanadHomeOverride}) async {
+              standaloneFactoryCalled = true;
+              return FakeInProcessTurnClient();
+            },
+          );
+
+          final exitCode = await runner.run(
+            prompt: 'must not execute',
+            standalone: true,
+            sanadHome: home.path,
+            gatewayUrl: gateway.gatewayUrl,
+            stdoutSink: StringBuffer(),
+            stderrSink: err,
+          );
+
+          expect(exitCode, 78);
+          expect(standaloneFactoryCalled, isFalse);
+          expect(err.toString(), contains('daemon is active'));
+          expect(err.toString(), contains('omit --standalone'));
+          // Forced standalone resolves its mode without probing, so the single
+          // health request belongs to the ownership pre-check.
+          expect(gateway.healthRequests, 1);
+        } finally {
+          await gateway.close();
           await home.delete(recursive: true);
         }
       },
