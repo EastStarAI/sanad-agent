@@ -89,7 +89,7 @@ An explicitly targeted endpoint is the only evidence that the requested gateway 
 
 Discovery remains fail-closed and bounded in every other case. It never bypasses health, authentication or Home ownership, never rewrites the requested endpoint, and never starts another daemon, Home or runtime. An explicitly supplied probe deadline still overrides both scopes.
 
-Reaching the in-process standalone path without `--standalone` means no healthy daemon could be confirmed for that Home. When another runtime owns that Home, the run stops with exit code `78` and reports that the daemon endpoint for the Home could not be confirmed, rather than blaming a `--standalone` flag the caller never passed. `--standalone` stays an explicit guarded choice: a forced standalone run refuses a Home whose daemon is healthy, and the exclusive ownership lease remains the authoritative backstop.
+Reaching the in-process standalone path without `--standalone` means no healthy daemon could be confirmed for that Home. When another runtime owns that Home, the run stops with exit code `78` and reports that the daemon endpoint for the Home could not be confirmed, rather than blaming a `--standalone` flag the caller never passed. `--standalone` stays an explicit guarded choice: a forced standalone run refuses a Home whose daemon is healthy, and the exclusive ownership lease remains the authoritative backstop. The forced-standalone ownership pre-check applies the same scope policy as attachment through one run-scoped discovery, so an explicitly targeted endpoint keeps the 2 s targeted deadline and a healthy but busy daemon is never mistaken for an absent one on that path.
 
 ---
 

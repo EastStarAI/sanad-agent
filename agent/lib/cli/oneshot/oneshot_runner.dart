@@ -250,8 +250,13 @@ class OneshotRunner {
     bool shouldDisposeClient = false;
 
     if (activeClient == null) {
+      // One run-scoped discovery serves both mode resolution and the forced
+      // standalone ownership pre-check, so both apply the same documented
+      // deadline policy: an explicitly targeted endpoint keeps the wider
+      // targeted bound, while speculative probes stay cheap.
+      final discovery = LocalGatewayDiscovery(sanadHomeOverride: sanadHome);
       final effectiveFallback = StandaloneFallbackStrategy(
-        discovery: LocalGatewayDiscovery(sanadHomeOverride: sanadHome),
+        discovery: discovery,
       );
       final mode = await effectiveFallback.resolveMode(
         forceStandalone: standalone,
@@ -261,16 +266,12 @@ class OneshotRunner {
       if (mode == CliRuntimeMode.standalone) {
         if (standalone) {
           try {
-            final owner =
-                await LocalGatewayDiscovery(
-                  sanadHomeOverride: sanadHome,
-                ).discover(
-                  urlOverride: gatewayUrl,
-                  // Cheap pre-check only: the ownership lease below remains the
-                  // authoritative backstop, and a forced standalone start must
-                  // not be delayed by the wider targeted deadline.
-                  probeTimeout: LocalGatewayDiscovery.speculativeProbeTimeout,
-                );
+            // The pre-check owns the same evidence as the attach path: a
+            // healthy but busy daemon whose first health answer is slower than
+            // the speculative bound must not be mistaken for an absent one,
+            // and the ownership lease below remains the authoritative
+            // backstop.
+            final owner = await discovery.discover(urlOverride: gatewayUrl);
             if (owner.isDaemonRunning) {
               err.writeln(
                 'Error: --standalone cannot use this Sanad Home while its daemon is active.',

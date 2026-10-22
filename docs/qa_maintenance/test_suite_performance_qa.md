@@ -48,6 +48,27 @@ and dry-run discovery without starting a runtime or changing source ownership.
   collision (`agent/test/support/ephemeral_loopback_port.dart`); a released
   probe port is never treated as owned, and a fixed port is never acceptable.
 
+## Slow-runner timing contracts
+
+Release-workflow runners (macOS Intel, `windows-2025`) are much slower than a
+developer machine, so OS-boundary tests declare explicit budgets instead of
+relying on the default 30-second test timeout:
+
+- A guard that must spawn the real CLI entrypoint compiles the Agent once per
+  file (`dart compile kernel` into a temporary directory) and runs that artifact
+  for every case, so one file pays one compilation instead of one per test.
+  Compilation is awaited inside the first case because `setUpAll` inherits the
+  default test timeout and cannot declare a generous one; each case declares a
+  test timeout above the compile plus invocation budget.
+- Waits on a process the test does not own are deadline-based, exit as soon as
+  the observable contract appears, and set the surrounding test timeout above
+  the deadline. Sampling that boundary on an interval is not a settling sleep
+  and never retries the producer: the Windows detached PowerShell replacement
+  handshake observes its result file for up to 60 seconds, and the daemon-backed
+  readiness case observes `Daemon is running` for up to 120 seconds.
+- A larger budget changes no assertion: exceeding a deadline still fails the
+  case on its original expectations.
+
 ## Performance regression gates
 
 For a changed hotspot, compare like-for-like warm runs. It passes when median
