@@ -514,6 +514,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     bool forceEmitStopped = false,
     String? stopRequestId,
     String? recoveryOwnerToken,
+    String? stopRunId,
     bool preserveInteractiveWait = false,
   }) =>
       _stopCoordinator.requestStop(
@@ -521,6 +522,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         forceEmitStopped: forceEmitStopped,
         stopRequestId: stopRequestId,
         recoveryOwnerToken: recoveryOwnerToken,
+        stopRunId: stopRunId,
         preserveInteractiveWait: preserveInteractiveWait,
       );
 
@@ -833,6 +835,11 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         event.sessionId,
         forceEmitStopped: forceEmitStopped,
         stopRequestId: requestIdForEvent(event),
+        // The addressed run travels with the stop so the acknowledgement names
+        // the execution the client observed, even when the run already left the
+        // active map (blocked recovery). Stop stays session-scoped; the run id
+        // never gates the cancellation itself.
+        stopRunId: event.runId,
         recoveryOwnerToken:
             (event.metadata['payload'] as Map?)?['recovery_owner_token']
                 ?.toString(),

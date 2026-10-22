@@ -645,6 +645,16 @@ class SessionTurnExecutor {
           activeRun.workItemId,
         );
       }
+      // A blocked or waiting recovery ends this run's publication. Keeping the
+      // partial-stream snapshot would make `get_session_history` / `session
+      // show` report a blocked session as `running` with a frozen timestamp
+      // (Task 134). Only this run's own projection is released.
+      if (activeRun != null) {
+        final snapshot = sessionManager.getInFlightSnapshot(event.sessionId);
+        if (snapshot == null || snapshot['run_id'] == activeRun.runId) {
+          sessionManager.clearInFlightSnapshot(event.sessionId);
+        }
+      }
     } on ThinkingSelectionException catch (e) {
       if (activeRun == null || !ownsRun(activeRun)) {
         return;

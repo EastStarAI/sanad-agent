@@ -270,6 +270,7 @@ void main() {
     late MockWebSocket mockSocket;
     late Map<String, dynamic> capturedHeaders;
     late Uri capturedUri;
+    late Set<String> answeredHistoryIds;
 
     LocalGatewayCliClient createClient({
       Uri? uri,
@@ -279,6 +280,7 @@ void main() {
       Duration requestTimeout = const Duration(seconds: 2),
     }) {
       mockSocket = MockWebSocket();
+      answeredHistoryIds = <String>{};
       return LocalGatewayCliClient(
         gatewayUri: uri ?? Uri.parse('ws://127.0.0.1:58085/gateway'),
         token: token,
@@ -375,6 +377,37 @@ void main() {
       },
     );
 
+    /// Answers every not-yet-answered `get_session_history` query, so each
+    /// ordered state re-read of [LocalGatewayCliClient.stop] gets exactly one
+    /// deterministic response.
+    void answerPendingHistory(
+      Map<String, dynamic> Function(Map<String, dynamic> command) payloadFor,
+    ) {
+      for (final raw in mockSocket.sentMessages) {
+        final command = jsonDecode(raw) as Map<String, dynamic>;
+        if (command['command'] != 'get_session_history') continue;
+        final requestId = command['request_id']?.toString();
+        if (requestId == null || !answeredHistoryIds.add(requestId)) continue;
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'request_id': requestId,
+            'payload': {
+              'session_id': (command['payload'] as Map)['session_id'],
+              ...payloadFor(command),
+            },
+          }),
+        );
+      }
+    }
+
+    List<Map<String, dynamic>> sentCommands() => mockSocket.sentMessages
+        .map((raw) => jsonDecode(raw) as Map<String, dynamic>)
+        .toList();
+
+    Future<void> settle() =>
+        Future<void>.delayed(const Duration(milliseconds: 10));
+
     test('dispatches steer and waits for authoritative scoped stop', () async {
       final client = createClient();
       await client.connect();
@@ -391,21 +424,22 @@ void main() {
 
       var stopCompleted = false;
       final stopFuture = client
-          .stop(sessionId: 'session-42', runId: 'run-1')
+          .stop(
+            sessionId: 'session-42',
+            runId: 'run-1',
+            stopPollInterval: Duration.zero,
+          )
           .then((_) => stopCompleted = true);
-      await Future<void>.delayed(Duration.zero);
+      await settle();
 
-      expect(mockSocket.sentMessages.length, 3);
-      final stopMsg =
-          jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
+      // The stop is dispatched immediately so an interruption is never delayed
+      // behind an inspection round trip.
+      final stopMsg = sentCommands()[1];
       expect(stopMsg['command'], 'stop');
+      expect(stopMsg['payload']['session_id'], 'session-42');
       expect(stopMsg['payload']['run_id'], 'run-1');
       expect(stopMsg['payload']['request_id'], stopMsg['request_id']);
-
-      final historyMsg =
-          jsonDecode(mockSocket.sentMessages[2]) as Map<String, dynamic>;
-      expect(historyMsg['command'], 'get_session_history');
-      expect(historyMsg['payload']['session_id'], 'session-42');
+      expect(sentCommands()[2]['command'], 'get_session_history');
 
       mockSocket.emitFromServer(
         jsonEncode({
@@ -414,19 +448,47 @@ void main() {
           'payload': {'session_id': 'another-session'},
         }),
       );
-      await Future<void>.delayed(Duration.zero);
+      await settle();
       expect(stopCompleted, isFalse);
 
-      mockSocket.emitFromServer(
-        jsonEncode({
-          'type': 'device_event',
-          'request_id': historyMsg['request_id'],
-          'payload': {
-            'session_id': 'session-42',
-            'in_flight': {'status': 'running'},
-          },
-        }),
+      answerPendingHistory(
+        (_) => {
+          'in_flight': {'status': 'running', 'run_id': 'run-1'},
+        },
       );
+      await settle();
+      expect(
+        stopCompleted,
+        isFalse,
+        reason: 'a running projection is never confirmation',
+      );
+
+      answerPendingHistory((_) => {'in_flight': null});
+      await settle();
+
+      await stopFuture;
+      expect(stopCompleted, isTrue);
+      await client.dispose();
+    });
+
+    test('never treats a stopped event as proof that the session is idle', () async {
+      final client = createClient();
+      await client.connect();
+
+      var stopCompleted = false;
+      final stopFuture = client
+          .stop(sessionId: 'session-42', stopPollInterval: Duration.zero)
+          .then((_) => stopCompleted = true);
+      await settle();
+      expect(sentCommands()[0]['command'], 'stop');
+
+      answerPendingHistory(
+        (_) => {
+          'in_flight': {'status': 'running', 'run_id': 'run-1'},
+        },
+      );
+      await settle();
+
       mockSocket.emitFromServer(
         jsonEncode({
           'type': 'stopped',
@@ -435,6 +497,15 @@ void main() {
           'payload': {'session_id': 'session-42'},
         }),
       );
+      await settle();
+      expect(
+        stopCompleted,
+        isFalse,
+        reason: 'the acknowledgement must be re-read from state',
+      );
+
+      answerPendingHistory((_) => {'in_flight': null});
+      await settle();
 
       await stopFuture;
       expect(stopCompleted, isTrue);
@@ -446,22 +517,50 @@ void main() {
       await client.connect();
 
       final stopFuture = client.stop(sessionId: 'session-idle');
-      await Future<void>.delayed(Duration.zero);
-      final historyMsg =
-          jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
-      mockSocket.emitFromServer(
-        jsonEncode({
-          'type': 'device_event',
-          'request_id': historyMsg['request_id'],
-          'payload': {
-            'session_id': 'session-idle',
-            'in_flight': null,
-            'pending_permission_request': null,
-          },
-        }),
+      await settle();
+      answerPendingHistory(
+        (_) => {'in_flight': null, 'pending_permission_request': null},
       );
 
       await stopFuture;
+      expect(
+        sentCommands()
+            .where((command) => command['command'] == 'get_session_history'),
+        hasLength(1),
+        reason: 'an idle session is confirmed with a single state read',
+      );
+      await client.dispose();
+    });
+
+    test('fails with stop_timeout while the session keeps running', () async {
+      final client = createClient(
+        requestTimeout: const Duration(milliseconds: 80),
+      );
+      await client.connect();
+
+      final answerTimer = Timer.periodic(
+        const Duration(milliseconds: 1),
+        (_) => answerPendingHistory(
+          (_) => {
+            'in_flight': {'status': 'running', 'run_id': 'run-1'},
+          },
+        ),
+      );
+      addTearDown(answerTimer.cancel);
+
+      await expectLater(
+        client.stop(
+          sessionId: 'session-42',
+          stopPollInterval: const Duration(milliseconds: 1),
+        ),
+        throwsA(
+          isA<CliClientException>().having(
+            (error) => error.code,
+            'code',
+            'stop_timeout',
+          ),
+        ),
+      );
       await client.dispose();
     });
 

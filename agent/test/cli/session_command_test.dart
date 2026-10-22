@@ -17,6 +17,8 @@ class FakeSessionGatewayClient extends LocalGatewayCliClient {
   List<Map<String, dynamic>> sessionsToReturn = [];
   Map<String, dynamic>? historyToReturn;
   String? lastStoppedSessionId;
+  String? lastStoppedRunId;
+  Object? historyErrorToThrow;
   String? lastAnswerSessionId;
   String? lastAnswerRequestId;
   String? lastAnswer;
@@ -73,14 +75,21 @@ class FakeSessionGatewayClient extends LocalGatewayCliClient {
     required String sessionId,
     Duration? timeout,
   }) async {
+    if (historyErrorToThrow != null) throw historyErrorToThrow!;
     if (errorToThrow != null) throw errorToThrow!;
     return historyToReturn ?? {'messages': []};
   }
 
   @override
-  Future<void> stop({required String sessionId, String? runId}) async {
+  Future<void> stop({
+    required String sessionId,
+    String? runId,
+    Duration? timeout,
+    Duration stopPollInterval = LocalGatewayCliClient.defaultStopPollInterval,
+  }) async {
     if (errorToThrow != null) throw errorToThrow!;
     lastStoppedSessionId = sessionId;
+    lastStoppedRunId = runId;
   }
 
   @override
@@ -425,6 +434,49 @@ void main() {
         expect(exitCode, equals(1));
         expect(stderrBuf.toString(), contains('Session ID is required'));
       });
+
+      test(
+        'reports idle instead of a stale in-flight snapshot when no run owns '
+        'the durable execution',
+        () async {
+          client.historyToReturn = {
+            'payload': {
+              'session_id': 'sess-stale',
+              'in_flight': {
+                'run_id': 'run-stale',
+                'type': 'thought_stream',
+                'status': 'running',
+                'updated_at': 1792632757780,
+              },
+              'execution_snapshot': {
+                'session_id': 'sess-stale',
+                'state': 'idle',
+                'revision': 4,
+              },
+            },
+          };
+
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'show',
+            'sess-stale',
+            '--json',
+          ]);
+          expect(exitCode, equals(0));
+
+          final decoded =
+              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+          expect(
+            decoded['status'],
+            equals('idle'),
+            reason:
+                'an idle durable projection means no run is publishing, so a '
+                'leftover partial-stream snapshot is stale',
+          );
+          expect((decoded['identities'] as Map)['run_id'], isNull);
+        },
+      );
     });
 
     group('session stop', () {
@@ -434,6 +486,49 @@ void main() {
         expect(exitCode, equals(0));
         expect(client.lastStoppedSessionId, equals('sess-to-stop'));
         expect(stdoutBuf.toString(), contains('Session sess-to-stop stopped.'));
+      });
+
+      test('names the in-flight run id from session state', () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-running',
+            'in_flight': {
+              'run_id': 'run-inflight-1',
+              'type': 'thought_stream',
+              'status': 'running',
+            },
+          },
+        };
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'stop',
+          'sess-running',
+        ]);
+        expect(exitCode, equals(0));
+        expect(client.lastStoppedSessionId, equals('sess-running'));
+        expect(
+          client.lastStoppedRunId,
+          equals('run-inflight-1'),
+          reason:
+              'the CLI stop must name the execution the operator observed',
+        );
+      });
+
+      test('still dispatches the stop when session state cannot be read', () async {
+        client.historyErrorToThrow = const CliClientException(
+          'state unavailable',
+          code: 'query_timeout',
+        );
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'stop',
+          'sess-unknown',
+        ]);
+        expect(exitCode, equals(0));
+        expect(client.lastStoppedSessionId, equals('sess-unknown'));
+        expect(client.lastStoppedRunId, isNull);
       });
 
       test('returns structured JSON in --json mode', () async {

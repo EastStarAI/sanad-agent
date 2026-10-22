@@ -60,6 +60,17 @@ class _TitleRouteAdapter implements LLMAdapter {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+/// Waits for an asynchronous projection to reach [condition] without sleeping
+/// through a production interval; the bound only turns a hung test into an
+/// actionable failure.
+Future<void> _awaitUntil(bool Function() condition) async {
+  for (var attempt = 0; attempt < 200; attempt++) {
+    if (condition()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+  }
+  fail('Condition was not met within the bounded wait.');
+}
+
 @GenerateMocks([
   BasePlatform,
   AgentRunner,
@@ -311,9 +322,9 @@ Use the review skill.''',
       );
       inFlightSnapshots[sessionId] = snapshot;
     });
-    when(mockSessionManager.clearInFlightSnapshot(any)).thenAnswer((
-      invocation,
-    ) {
+    when(
+      mockSessionManager.clearInFlightSnapshot(any),
+    ).thenAnswer((invocation) {
       final sessionId = invocation.positionalArguments.single as String;
       inFlightSnapshots.remove(sessionId);
     });
@@ -2639,6 +2650,155 @@ Use the review skill.''',
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
       ).called(1);
+    },
+  );
+
+  test(
+    'stop releases the partial-stream projection so the session reports idle',
+    () async {
+      final orchestrator = getIt<SessionRunOrchestrator>();
+      const sessionId = 'session-stop-projection';
+      final controller = StreamController<String>();
+      addTearDown(() async {
+        if (!controller.isClosed) await controller.close();
+      });
+      when(
+        mockAgentRunner.streamMessage(
+          any,
+          runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+          providerId: anyNamed('providerId'),
+          model: anyNamed('model'),
+          thinkingMode: anyNamed('thinkingMode'),
+          receivedAt: anyNamed('receivedAt'),
+          onToolEvent: anyNamed('onToolEvent'),
+          onSteerContinuation: anyNamed('onSteerContinuation'),
+          onThoughtDelta: anyNamed('onThoughtDelta'),
+          onReasoningDelta: anyNamed('onReasoningDelta'),
+        ),
+      ).thenAnswer((_) => controller.stream);
+
+      final responses = <GatewayResponse>[];
+      final responseSubscription = orchestrator.responses.listen(responses.add);
+      addTearDown(responseSubscription.cancel);
+
+      unawaited(
+        orchestrator.handleEvent(
+          GatewayEvent(
+            sessionId: sessionId,
+            platformId: 'test-platform',
+            message: Message(role: MessageRole.user, content: 'Streaming'),
+            turnRequest: const AgentTurnRequest(
+              sessionId: sessionId,
+              message: 'Streaming',
+              requestId: 'req-stop-projection',
+            ),
+          ),
+        ),
+      );
+      await _awaitUntil(() => controller.hasListener);
+      controller.add('partial answer');
+      await _awaitUntil(
+        () => getIt<SessionManager>().getInFlightSnapshot(sessionId) != null,
+      );
+
+      await orchestrator.requestStop(sessionId);
+
+      expect(
+        getIt<SessionManager>().getInFlightSnapshot(sessionId),
+        isNull,
+        reason:
+            'a stopped session must not keep reporting a frozen in-flight '
+            'stream as running',
+      );
+      final stopped = responses.lastWhere(
+        (response) =>
+            response.message.metadata?['canonical_event_type'] == 'stopped',
+      );
+      final stoppedPayload = Map<String, dynamic>.from(
+        stopped.message.metadata?['canonical_payload'] as Map,
+      );
+      expect(stoppedPayload['run_id'], stopped.runId);
+    },
+  );
+
+  test(
+    'blocked recovery releases the projection and stop names the addressed run',
+    () async {
+      final orchestrator = getIt<SessionRunOrchestrator>();
+      const sessionId = 'session-blocked-projection';
+      final controller = StreamController<String>();
+      addTearDown(() async {
+        if (!controller.isClosed) await controller.close();
+      });
+      when(
+        mockAgentRunner.streamMessage(
+          any,
+          runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+          providerId: anyNamed('providerId'),
+          model: anyNamed('model'),
+          thinkingMode: anyNamed('thinkingMode'),
+          receivedAt: anyNamed('receivedAt'),
+          onToolEvent: anyNamed('onToolEvent'),
+          onSteerContinuation: anyNamed('onSteerContinuation'),
+          onThoughtDelta: anyNamed('onThoughtDelta'),
+          onReasoningDelta: anyNamed('onReasoningDelta'),
+        ),
+      ).thenAnswer((_) => controller.stream);
+
+      final responses = <GatewayResponse>[];
+      final responseSubscription = orchestrator.responses.listen(responses.add);
+      addTearDown(responseSubscription.cancel);
+
+      unawaited(
+        orchestrator.handleEvent(
+          GatewayEvent(
+            sessionId: sessionId,
+            platformId: 'test-platform',
+            message: Message(role: MessageRole.user, content: 'Streaming'),
+            turnRequest: const AgentTurnRequest(
+              sessionId: sessionId,
+              message: 'Streaming',
+              requestId: 'req-blocked-projection',
+            ),
+          ),
+        ),
+      );
+      await _awaitUntil(() => controller.hasListener);
+      controller.add('partial answer');
+      await _awaitUntil(
+        () => getIt<SessionManager>().getInFlightSnapshot(sessionId) != null,
+      );
+
+      controller.addError(
+        const RuntimeRecoveryRequired(sessionId, RuntimeFailureReason.rateLimit),
+      );
+      await _awaitUntil(() => orchestrator.hasSuspendedEvent(sessionId));
+      await _awaitUntil(
+        () => getIt<SessionManager>().getInFlightSnapshot(sessionId) == null,
+      );
+
+      expect(
+        getIt<SessionManager>().getInFlightSnapshot(sessionId),
+        isNull,
+        reason: 'a blocked session is not publishing a running stream',
+      );
+
+      await orchestrator.requestStop(sessionId, stopRunId: 'run-addressed');
+
+      final stopped = responses.lastWhere(
+        (response) =>
+            response.message.metadata?['canonical_event_type'] == 'stopped',
+      );
+      final stoppedPayload = Map<String, dynamic>.from(
+        stopped.message.metadata?['canonical_payload'] as Map,
+      );
+      expect(
+        stoppedPayload['run_id'],
+        'run-addressed',
+        reason:
+            'the acknowledgement must name the run the client addressed even '
+            'when that owner already left the active map',
+      );
     },
   );
 
@@ -5171,6 +5331,18 @@ Use the review skill.''',
           "INSERT INTO sessions (session_id, model, created_at, updated_at) "
           "VALUES ('session-stop-atomic', 'gpt-4o', '2026-07-11', '2026-07-11')",
         );
+        // A session parked on a tool-permission prompt owns a durable
+        // checkpoint; stopping it must terminalize that wait.
+        final checkpointAt = DateTime.now().toUtc().toIso8601String();
+        stateDb.db.execute(
+          'INSERT INTO suspended_checkpoints ('
+          'checkpoint_id, session_id, request_id, tool_call_id, tool_name, '
+          'status, tool_arguments, permission_payload, created_at, updated_at'
+          ") VALUES ('cp-stop-atomic', 'session-stop-atomic', 'perm-stop-atomic', "
+          "'call-stop-atomic', 'run_terminal_command', 'awaiting_permission', "
+          "'{}', '{}', ?, ?)",
+          [checkpointAt, checkpointAt],
+        );
 
         // Seed a blocked work item + notice
         repo.upsertNotice(
@@ -5225,6 +5397,17 @@ Use the review skill.''',
         expect(repo.findActiveWorkItem('session-stop-atomic'), isNull);
         expect(repo.findQueuedWorkItems('session-stop-atomic'), isEmpty);
         expect(repo.findNotice('session-stop-atomic'), isNull);
+        // Interactive waits are terminalized by an explicit stop, so their
+        // durable checkpoints must not survive the in-memory ones: otherwise
+        // `pending_permission_request` (and `session show`'s `needs_permission`)
+        // would outlive the stop (Task 134).
+        expect(
+          stateDb.db.select(
+            'SELECT COUNT(*) AS total FROM suspended_checkpoints '
+            "WHERE session_id = 'session-stop-atomic'",
+          ).first['total'],
+          0,
+        );
         final allItems = repo.findAllWorkItems('session-stop-atomic');
         for (final item in allItems) {
           expect(

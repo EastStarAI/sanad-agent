@@ -61,9 +61,11 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 | Scenario | CLI Command | Expected Runtime Behavior | Exit Code |
 |---|---|---|---|
-| Stop specific session | `sanad session stop <session-id>` | Daemon emits `stop` GatewayEvent targeting `<session-id>` specifically. Ongoing turn halts. Other active sessions remain unaffected. | 0 |
-| Stop session in JSON mode | `sanad session stop <session-id> --json` | Outputs `{"session_id": "<id>", "status": "stopped"}`. | 0 |
+| Stop specific session | `sanad session stop <session-id>` | The CLI dispatches one session-scoped `stop` (naming the in-flight `run_id` it resolved from `session show` state, if any) and then confirms authoritative idle state. The daemon halts the turn, releases the in-flight projection and any interactive-wait checkpoints, and other active sessions remain unaffected. | 0 |
+| Stop session in JSON mode | `sanad session stop <session-id> --json` | Outputs `{"session_id": "<id>", "status": "stopped"}` only after the idle confirmation. | 0 |
+| Stop an unresponsive turn | `sanad session stop <session-id>` | The command keeps re-reading session state until the client request timeout (default 15 s) and then fails with `stop_timeout` and exit 1; it never prints `stopped` for a session that is still running. | 1 |
 | Stop session missing argument | `sanad session stop` | Error message `Error: Session ID is required.` and usage instructions. | 1 |
+| Post-stop state | `sanad session show <session-id> --json` | `status` is `idle`, `in_flight` is `null`, and `pending_permission_request` is `null`; a frozen `in_flight` snapshot (`type: thought_stream`, frozen `updated_at`) after a stop is a defect. | 0 |
 
 ---
 
