@@ -310,3 +310,32 @@ The desktop Sanad Client governs `sanad-client` execution through **Settings > C
 3. Default Home: `~/.sanad`
 
 The endpoint record is read from `<SANAD_HOME>/runtime/client_cli.json` and authenticated via the ephemeral token recorded during Client startup. If no live Client is running for that Home, `sanad-client` exits with code 69 (`No live Sanad Client is running for Home ...`).
+
+### 6.8. Supervised Remote Delegation
+
+Orchestrators that use `delegate-task-supervisor` do not run `sanad-client` themselves: the supervisor accepts the remote form as a Sanad task, so remote tasks get the same durable manifest state, live timeline, and event-driven `watch-once` wake-ups as local ones. Register one task per remote run with the canonical prefix:
+
+```json
+{
+  "id": "remote-01",
+  "implementer": "sanad",
+  "workspace": "<caller-side-orchestration-root>",
+  "command": "sanad-client",
+  "args": [
+    "-d", "<remote-device-id>",
+    "run",
+    "--workspace", "<remote-workspace-id>",
+    "--brief-file", "<absolute-local-brief-file>",
+    "--session", "<preallocated-session-id>",
+    "--events",
+    "--json"
+  ]
+}
+```
+
+`-d|--device <device-id> run`, `--brief-file`, `--session`, `--events`, and `--json` are required; `--workspace` (remote workspace id) or `--execution-root` (remote path) selects the target, and `--out-dir` is rejected because remote artifacts stay on the target device. The supervisor closes the worker's stdin so `sanad-client` never waits for EOF, captures the relayed `--json` envelope as the task result, journals relayed lifecycle events as the live timeline, and maps exit codes `0`/`124`/`130`/`69`/`77` to `completed`/`timeout`/`cancelled`/`blocked` (`client_unavailable`)/`blocked` (`client_cli_disabled`). Interventions stay resolvable while the run is active, because the preallocated session id is recorded:
+
+```bash
+sanad-client -d <remote-device-id> session answer <preallocated-session-id> "Option 2"
+sanad-client -d <remote-device-id> session stop <preallocated-session-id>
+```

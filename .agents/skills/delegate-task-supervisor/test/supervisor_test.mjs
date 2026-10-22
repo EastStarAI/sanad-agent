@@ -1515,3 +1515,315 @@ test('observer records start timing and cancellation without manufacturing durat
     assert.equal(finalRecord.endedAt, null, 'endedAt remains null on hard kill');
   }
 });
+
+// Remote `sanad-client` delegation: the supervisor drives the loopback Client
+// CLI instead of a local `sanad run`. The fixture stands in for that client:
+// it reads the local brief, requires immediate stdin EOF, relays NDJSON
+// lifecycle events plus the terminal `--json` envelope on stdout, and exits
+// with the documented Client CLI codes.
+function writeRemoteSanadClientFixture(root) {
+  const fixture = join(root, 'mock_sanad_client.mjs');
+  writeFileSync(fixture, `
+    import {readFileSync} from 'node:fs';
+
+    const args = process.argv.slice(2);
+    const deviceFlagIndex = args.findIndex((arg) => arg === '-d' || arg === '--device');
+    const device = deviceFlagIndex >= 0
+      ? args[deviceFlagIndex + 1]
+      : (args[0]?.startsWith('--device=') ? args[0].slice('--device='.length) : null);
+    const valueOf = (flag) => {
+      const index = args.indexOf(flag);
+      return index >= 0 ? args[index + 1] : null;
+    };
+    const session = valueOf('--session');
+    const briefPath = valueOf('--brief-file');
+
+    // A supervised child must observe immediate stdin EOF. An inherited pipe
+    // that the supervisor never closes blocks this read forever.
+    const stdinText = readFileSync(0, 'utf8');
+    const brief = readFileSync(briefPath, 'utf8');
+    const envelope = (exitCode) => JSON.stringify({
+      session_id: session,
+      text: brief.trim(),
+      tool_executions: [],
+      exit_code: exitCode,
+      remote_argv: args,
+      stdin_bytes: stdinText.length,
+    });
+
+    if (device === 'dev-ok') {
+      process.stdout.write(JSON.stringify({
+        type: 'running',
+        timestamp: new Date().toISOString(),
+        session_id: session,
+        data: {},
+      }) + '\\n');
+      process.stdout.write(JSON.stringify({
+        type: 'needs_input',
+        timestamp: new Date().toISOString(),
+        session_id: session,
+        data: { request_id: 'req-remote-1', kind: 'question', questions: [{ text: 'Which branch?' }] },
+      }) + '\\n');
+      setTimeout(() => {
+        process.stdout.write(envelope(0) + '\\n');
+        process.exit(0);
+      }, 400);
+    } else if (device === 'silent-0') {
+      // A control socket that closes without a terminal result frame.
+      process.exit(0);
+    } else {
+      const code = Number(String(device).replace('code-', ''));
+      if (code === 69) {
+        process.stderr.write('Error: No active Sanad Client found for Sanad Home: /tmp/remote-home.\\n');
+      }
+      if (code === 77) {
+        process.stderr.write('Error: Client CLI is disabled in Sanad Client settings for Sanad Home: /tmp/remote-home.\\n');
+      }
+      if (code === 124 || code === 130) {
+        process.stdout.write(envelope(code) + '\\n');
+      }
+      process.exit(code);
+    }
+  `, 'utf8');
+  return createNamedWrapper(root, 'sanad-client', fixture);
+}
+
+test('sanad-client remote validation requires the relay contract and rejects malformed forms', () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-remote-val-test-'));
+  const workspace = join(root, 'workspace');
+  const brief = join(root, 'brief.md');
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(brief, 'Remote brief\n', 'utf8');
+
+  const remoteBin = writeRemoteSanadClientFixture(root);
+  const baseArgs = (extra = []) => [
+    '-d', 'dev-linux-build-node', 'run',
+    '--workspace', 'ws-remote-01',
+    '--brief-file', brief,
+    '--session', 'session-remote-01',
+    '--events', '--json',
+    ...extra,
+  ];
+
+  const validate = (taskOverrides) => {
+    const spec = join(root, `spec_${Math.random().toString(36).slice(2)}.json`);
+    const runDir = join(root, `run_${Math.random().toString(36).slice(2)}`);
+    writeFileSync(spec, JSON.stringify({
+      tasks: [{
+        id: 'remote-val-task',
+        implementer: 'sanad',
+        workspace,
+        command: remoteBin,
+        args: baseArgs(),
+        ...taskOverrides,
+      }],
+    }), 'utf8');
+    return runNodeThrows(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir]);
+  };
+
+  // 1. The canonical form is accepted and derives its own artifact paths.
+  const acceptedSpec = join(root, 'spec_ok.json');
+  const acceptedRun = join(root, 'run_ok');
+  writeFileSync(acceptedSpec, JSON.stringify({
+    tasks: [{
+      id: 'remote-accepted',
+      implementer: 'sanad',
+      workspace,
+      command: remoteBin,
+      args: baseArgs(),
+    }],
+  }), 'utf8');
+  runNode(SUPERVISOR, ['start', '--spec', acceptedSpec, '--run-dir', acceptedRun]);
+  const acceptedManifest = JSON.parse(readFileSync(join(acceptedRun, 'manifest.json'), 'utf8'));
+  const accepted = acceptedManifest.tasks['remote-accepted'];
+  assert.equal(accepted.remote, true);
+  assert.equal(accepted.remoteDevice, 'dev-linux-build-node');
+  assert.equal(resolve(accepted.timelinePath), resolve(accepted.stdoutPath));
+  assert.equal(resolve(accepted.resultPath), resolve(acceptedRun, 'remote-accepted.result.json'));
+  runNode(SUPERVISOR, ['close', '--run', acceptedRun]);
+
+  // 2. Only `-d <device> run` may be relayed: no other Sanad subcommand.
+  assert.match(validate({ args: ['-d', 'dev-a', 'session', 'stop', 'sess-1', '--json'] }), /sanad-client invocation must be/);
+  assert.match(validate({ args: ['run', '--workspace', 'ws', '--brief-file', brief, '--session', 's', '--events', '--json'] }), /sanad-client invocation must be/);
+
+  // 3. The device is mandatory, needs a value, and cannot be re-targeted later.
+  assert.match(validate({ args: ['--json', 'run'] }), /sanad-client invocation must be/);
+  assert.match(validate({ args: ['-d', '--json', 'run', '--workspace', 'ws', '--brief-file', brief, '--session', 's', '--events'] }), /-d requires a value/);
+  assert.match(validate({ args: baseArgs(['-d', 'dev-other']) }), /duplicate --device/);
+
+  // 4. A built binary path must be absolute when it names a location.
+  assert.match(validate({ command: 'bin/sanad-client' }), /sanad-client command path must be absolute/);
+
+  // 5. Remote targeting: one of --workspace/--execution-root, brief, session.
+  assert.match(validate({ args: ['-d', 'dev-a', 'run', '--brief-file', brief, '--session', 's', '--events', '--json'] }), /requires --workspace \(remote workspace id\) or --execution-root/);
+  assert.match(validate({ args: ['-d', 'dev-a', 'run', '--workspace', 'ws', '--session', 's', '--events', '--json'] }), /requires --brief-file/);
+  assert.match(validate({ args: ['-d', 'dev-a', 'run', '--workspace', 'ws', '--brief-file', join(root, 'missing.md'), '--session', 's', '--events', '--json'] }), /--brief-file must be an existing absolute file path/);
+  assert.match(validate({ args: ['-d', 'dev-a', 'run', '--workspace', 'ws', '--brief-file', brief, '--events', '--json'] }), /requires --session/);
+
+  // 6. Machine-readable artifacts are mandatory and caller-owned.
+  assert.match(validate({ args: ['-d', 'dev-a', 'run', '--workspace', 'ws', '--brief-file', brief, '--session', 's', '--events'] }), /requires --json/);
+  assert.match(validate({ args: ['-d', 'dev-a', 'run', '--workspace', 'ws', '--brief-file', brief, '--session', 's', '--json'] }), /requires --events/);
+  assert.match(validate({ args: baseArgs(['--out-dir', join(root, 'out')]) }), /must not pass --out-dir/);
+  assert.match(validate({ timelinePath: join(root, 'events.jsonl') }), /do not declare timelinePath/);
+
+  // 7. Shared Sanad guards still apply to the remote form.
+  assert.match(validate({ sourceRoot: root }), /sourceRoot is only valid for the fvm/);
+  assert.match(validate({ args: baseArgs(['--home', root]) }), /declare the custom Home via task.home/);
+  assert.match(validate({ args: baseArgs(['--api-key=secret']) }), /must not pass credentials/);
+  assert.match(validate({ home: 'relative-home' }), /home must be an absolute path/);
+});
+
+test('sanad-client remote task streams relayed events, captures the envelope, and preserves identity', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-remote-run-test-'));
+  const workspace = join(root, 'workspace');
+  const brief = join(root, 'brief.md');
+  const runDir = join(root, 'run');
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(brief, 'Remote brief body\n', 'utf8');
+
+  const remoteBin = writeRemoteSanadClientFixture(root);
+  const spec = join(root, 'tasks.json');
+  writeFileSync(spec, JSON.stringify({
+    tasks: [{
+      id: 'remote-run',
+      implementer: 'sanad',
+      workspace,
+      command: remoteBin,
+      args: [
+        '-d', 'dev-ok', 'run',
+        '--workspace', 'ws-remote-01',
+        // A remote execution root is a target-side path: it must never be
+        // validated or canonicalized against the local workspace.
+        '--execution-root', '/srv/remote/worktree',
+        '--brief-file', brief,
+        '--session', 'session-remote-1',
+        '--events', '--json',
+      ],
+    }],
+  }), 'utf8');
+
+  runNode(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir, '--max-concurrency', '1']);
+
+  const intervention = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '0']));
+  assert.equal(intervention.to, 'needs_input');
+  assert.equal(intervention.requestId, 'req-remote-1');
+  assert.equal(intervention.intervention.kind, 'question');
+
+  const completion = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(intervention.seq)]));
+  assert.equal(completion.to, 'completed');
+
+  const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+  const task = manifest.tasks['remote-run'];
+  assert.equal(task.status, 'completed');
+  assert.equal(task.exitCode, 0);
+  assert.equal(task.resultCaptured, true);
+  assert.equal(task.remoteDevice, 'dev-ok');
+  assert.equal(task.identity.sessionId, 'session-remote-1');
+  assert.equal(resolve(task.timelinePath), resolve(task.stdoutPath));
+
+  const envelope = JSON.parse(readFileSync(task.resultPath, 'utf8'));
+  assert.equal(envelope.exit_code, 0);
+  assert.equal(envelope.session_id, 'session-remote-1');
+  assert.equal(envelope.text, 'Remote brief body');
+  // The brief was read locally and stdin reached EOF; the relayed argv kept the
+  // remote workspace id and remote execution root verbatim.
+  assert.equal(envelope.stdin_bytes, 0);
+  assert.match(envelope.remote_argv.join(' '), /--workspace ws-remote-01/);
+  assert.match(envelope.remote_argv.join(' '), /--execution-root \/srv\/remote\/worktree/);
+
+  const status = runNode(SUPERVISOR, ['status', '--run', runDir, '--task', 'remote-run']);
+  assert.match(status, /Session State:\s+completed/);
+  assert.match(status, /Observation Source:\s+result\.json/);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir]);
+});
+
+test('sanad-client remote exit codes map to timeout, cancelled, blocked, and incomplete', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-remote-exit-test-'));
+  const workspace = join(root, 'workspace');
+  const brief = join(root, 'brief.md');
+  const runDir = join(root, 'run');
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(brief, 'Remote brief body\n', 'utf8');
+
+  const remoteBin = writeRemoteSanadClientFixture(root);
+  const devices = [
+    ['remote-timeout', 'code-124'],
+    ['remote-cancelled', 'code-130'],
+    ['remote-client-down', 'code-69'],
+    ['remote-cli-disabled', 'code-77'],
+    ['remote-silent-success', 'silent-0'],
+  ];
+  const spec = join(root, 'tasks.json');
+  writeFileSync(spec, JSON.stringify({
+    tasks: devices.map(([id, device]) => ({
+      id,
+      implementer: 'sanad',
+      workspace,
+      command: remoteBin,
+      args: [
+        '-d', device, 'run',
+        '--workspace', 'ws-remote-01',
+        '--brief-file', brief,
+        '--session', `session-${id}`,
+        '--events', '--json',
+      ],
+    })),
+  }), 'utf8');
+
+  runNode(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir, '--max-concurrency', '1']);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait']);
+
+  const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+  const timeout = manifest.tasks['remote-timeout'];
+  assert.equal(timeout.status, 'timeout');
+  assert.equal(timeout.cause, 'timeout');
+  assert.equal(timeout.exitCode, 124);
+
+  const cancelled = manifest.tasks['remote-cancelled'];
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.exitCode, 130);
+
+  const clientDown = manifest.tasks['remote-client-down'];
+  assert.equal(clientDown.status, 'blocked');
+  assert.equal(clientDown.cause, 'client_unavailable');
+  assert.equal(clientDown.exitCode, 69);
+  assert.match(clientDown.error, /No active Sanad Client/);
+
+  const disabled = manifest.tasks['remote-cli-disabled'];
+  assert.equal(disabled.status, 'blocked');
+  assert.equal(disabled.cause, 'client_cli_disabled');
+  assert.match(disabled.error, /Client CLI is disabled/);
+
+  // Exit 0 without a relayed envelope is not a completed turn.
+  const silent = manifest.tasks['remote-silent-success'];
+  assert.equal(silent.status, 'incomplete');
+  assert.equal(silent.cause, 'missing_result_envelope');
+  assert.equal(silent.resultCaptured, false);
+  assert.equal(existsSync(silent.resultPath), false);
+});
+
+test('watch-once wakes on journaled incomplete and needs_review terminals', () => {
+  const root = mkdtempSync(join(tmpdir(), 'watch-incomplete-test-'));
+  const runDir = join(root, 'run');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify({
+    version: 'delegate-supervisor.v1',
+    runDir,
+    supervisorPid: process.pid,
+    status: 'running',
+    closed: false,
+    seq: 2,
+    tasks: {},
+  }), 'utf8');
+  writeFileSync(join(runDir, 'events.jsonl'), [
+    JSON.stringify({ seq: 1, taskId: 'remote-silent', to: 'running', at: '2026-10-22T00:00:00.000Z' }),
+    JSON.stringify({ seq: 2, taskId: 'remote-silent', to: 'incomplete', at: '2026-10-22T00:00:01.000Z' }),
+    JSON.stringify({ seq: 3, taskId: 'review', to: 'needs_review', at: '2026-10-22T00:00:02.000Z' }),
+  ].join('\n') + '\n', 'utf8');
+
+  const first = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '0']));
+  assert.equal(first.to, 'incomplete');
+  const second = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(first.seq)]));
+  assert.equal(second.to, 'needs_review');
+});
