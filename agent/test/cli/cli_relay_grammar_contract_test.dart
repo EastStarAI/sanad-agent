@@ -21,6 +21,7 @@ import 'package:test/test.dart';
 
 import '../../tool/canonical_source.dart';
 import '../../tool/cli_relay_grammar.dart';
+import '../support/isolated_sanad_test_home.dart';
 
 /// The agent package root, resolved independently of the process working
 /// directory (other suites change it while files run concurrently).
@@ -32,6 +33,9 @@ File _contractFile() =>
     File.fromUri(_agentRoot().resolve(cliRelayGrammarContractPath));
 
 void main() {
+  // Building the runner must never resolve an inherited user Home.
+  useIsolatedSanadTestHome();
+
   test('the checked-in relay grammar contract matches the Agent CLI', () {
     final file = _contractFile();
     final onDisk = file.existsSync() ? file.readAsStringSync() : '';
