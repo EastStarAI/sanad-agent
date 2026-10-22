@@ -1,3 +1,8 @@
+## 1.0.19
+
+- Applied `sanad models --provider/--model`, added a `sanad.models.v1` `--json` document, and failed closed on unknown or ambiguous selectors (#261).
+- Added `sanad run --no-stdin` so shell read loops keep their input (#261).
+
 ## 1.0.18
 
 - Released the session queue after a pre-start turn refusal, reported one clean reason line, ended `sanad run` at once when the daemon blocks a turn, and waited for the real outcome in `sanad session compact` (#253).
