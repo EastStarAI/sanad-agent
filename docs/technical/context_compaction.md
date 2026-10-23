@@ -231,7 +231,7 @@ Typed, redactable failures for persistence and protocol. Initial set:
 Plan 106 Gate G8 introduces allowlisted, typed failure diagnostics carrying stage and cause across:
 1. Command Result (`SessionCompactResult` via `sessionCompactResult` envelope payload: `failure_stage`, `failure_cause`).
 2. Live Lifecycle Broadcast (`CompactionLifecycleEvent` via `contextCompactionFailed` canonical event: `failure_stage`, `failure_cause`).
-3. Historical Timeline Hydration (`SessionQueryHandler._compactionLifecycleHistoryRow`: `failure_stage`, `failure_cause` extracted from durable `failure_detail_json`).
+3. Historical Timeline Hydration (`compactionLifecycleHistoryRow` in `agent/lib/interfaces/platforms/sanad_gateway/handlers/session_history/history_row_placement.dart`: `failure_stage`, `failure_cause` extracted from durable `failure_detail_json`).
 4. Durable Persistence (`session_compaction_operations.failure_detail_json`: `{"stage": stage, "cause": cause, ...}`).
 
 #### Allowlisted Stages (`CompactionFailureStage`)

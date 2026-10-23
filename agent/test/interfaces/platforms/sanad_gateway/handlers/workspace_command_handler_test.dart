@@ -7,9 +7,9 @@ import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/interfaces/models/device_control.dart';
 import 'package:sanad_agent/interfaces/models/workspace_control.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/mcp_command_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/workspace_command_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
-import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:test/test.dart';
@@ -26,6 +26,7 @@ void main() {
   late DeviceCommandAdmission admission;
   late LocalWorkspaceRuntimeService runtime;
   late WorkspaceCommandHandler handler;
+  late McpCommandHandler mcp;
   late String workspacePath;
   late MemoryWorkspacePolicyStore policyStore;
 
@@ -48,7 +49,10 @@ void main() {
       policyStore: policyStore = MemoryWorkspacePolicyStore(
         paths: const {},
       ),
-      bridge: SanadProtocolBridge(),
+      admission: admission,
+    );
+    mcp = McpCommandHandler(
+      runtimeService: runtime,
       admission: admission,
     );
     final created = await runtime.createWorkspace(
@@ -181,7 +185,7 @@ void main() {
   }
 
   test('cloud MCP save without a token returns a redacted preview', () async {
-    final envelope = await handler.buildSaveMcpServerEnvelope(
+    final envelope = await mcp.buildSaveMcpServerEnvelope(
       cloudMcpEvent(CanonicalEventTypes.saveMcpServer, {
         'request_id': 'req-mcp-preview',
         'scope': 'global',
@@ -198,7 +202,7 @@ void main() {
   });
 
   test('cloud MCP confirmation is bound to secret mutations', () async {
-    final preview = await handler.buildSaveMcpServerEnvelope(
+    final preview = await mcp.buildSaveMcpServerEnvelope(
       cloudMcpEvent(CanonicalEventTypes.saveMcpServer, {
         'request_id': 'req-secret-preview',
         'scope': 'global',
@@ -208,7 +212,7 @@ void main() {
     );
     final previewPayload = Map<String, dynamic>.from(preview['payload'] as Map);
 
-    final envelope = await handler.buildSaveMcpServerEnvelope(
+    final envelope = await mcp.buildSaveMcpServerEnvelope(
       cloudMcpEvent(CanonicalEventTypes.saveMcpServer, {
         'request_id': 'req-secret-confirm',
         'scope': 'global',
@@ -229,7 +233,7 @@ void main() {
   });
 
   test('cloud MCP save confirmation persists the server', () async {
-    final preview = await handler.buildSaveMcpServerEnvelope(
+    final preview = await mcp.buildSaveMcpServerEnvelope(
       cloudMcpEvent(CanonicalEventTypes.saveMcpServer, {
         'request_id': 'req-mcp-preview-2',
         'scope': 'global',
@@ -238,7 +242,7 @@ void main() {
     );
     final previewPayload = Map<String, dynamic>.from(preview['payload'] as Map);
 
-    final envelope = await handler.buildSaveMcpServerEnvelope(
+    final envelope = await mcp.buildSaveMcpServerEnvelope(
       cloudMcpEvent(CanonicalEventTypes.saveMcpServer, {
         'request_id': 'req-mcp-confirm',
         'scope': 'global',
@@ -256,7 +260,7 @@ void main() {
   });
 
   test('cloud MCP save rejects a stale confirmation after mutation', () async {
-    final preview = await handler.buildSaveMcpServerEnvelope(
+    final preview = await mcp.buildSaveMcpServerEnvelope(
       cloudMcpEvent(CanonicalEventTypes.saveMcpServer, {
         'request_id': 'req-mcp-stale-preview',
         'scope': 'global',
@@ -270,7 +274,7 @@ void main() {
       config: {'name': 'other', 'url': 'https://other.example/mcp'},
     );
 
-    final envelope = await handler.buildSaveMcpServerEnvelope(
+    final envelope = await mcp.buildSaveMcpServerEnvelope(
       cloudMcpEvent(CanonicalEventTypes.saveMcpServer, {
         'request_id': 'req-mcp-stale',
         'scope': 'global',
@@ -406,7 +410,6 @@ void main() {
       final fanOut = WorkspaceCommandHandler(
         runtimeService: runtime,
         policyStore: announcing,
-        bridge: SanadProtocolBridge(),
         admission: admission,
       );
       final requesterFrames = <Map<String, dynamic>>[];
