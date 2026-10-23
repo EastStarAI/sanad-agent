@@ -12,6 +12,7 @@ This contract applies to `agent/`.
 
 ## Package Boundaries
 - `agent/bin/` owns CLI, daemon, setup, service, and supervisor composition only.
+- `agent/lib/cli/` owns the CLI transport, command-runner composition, and the command families. A command family keeps its family command as the single dispatcher in one file and gives each subcommand its own library under the family directory, so shared option, payload, and exit-code behavior has exactly one owner.
 - `agent/lib/core/` owns configuration, identity/auth, provider runtime, shared models, and dependency composition contracts.
 - `agent/lib/engine/` owns provider-neutral model execution, adapters, prompt assembly, tools loop, steering, and model-step state.
 - `agent/lib/capabilities/` owns tool/skill/MCP catalogs, runtime context, permission policy, and tool execution contracts.
@@ -107,4 +108,5 @@ This contract applies to `agent/`.
 - Relevant focused tests cover behavior and failure/recovery paths.
 - Analyzer and required test scope pass.
 - Full-suite and E2E results are reported only when required by the blast-radius rules above.
+- A new or grown non-generated `lib/` file stays inside the size ratchet: over 1000 lines it fails `test/guards/file_size_ratchet_guard_test.dart`, and an allowlisted file never exceeds its recorded count; split the file instead of raising the number.
 - Runtime-law changes update the nearest contract and active design documentation in the same session.

@@ -5,6 +5,9 @@ This contract applies to `agent/lib/capabilities/runtime/`.
 
 ## Per-Turn Assembly
 - Build workspace-bound, MCP-bound, skill, web, and explicit platform tool context for every turn.
+- `LocalRuntimeCatalog` remains the single per-turn assembler and the only place a turn's tool list is composed; it delegates each tool family to exactly one builder in `capabilities/runtime/tool_builders/` (`workspace_file_tools`, `web_tools`, `ask_user_tool`, `view_image_tool`, `secret_tools`, `platform_tool_specs`). Builders return tool instances to the catalog and never register themselves, cache a turn, or become a second registry.
+- Tool names and JSON schemas are model-visible: a change to either is a contract change, and `test/capabilities/tool_schema_snapshot_test.dart` must move with it.
+- The workspace- and attachment-scoped external-path approval gate has exactly one owner, `authorizeExternalWorkspacePath` in `workspace_file_tools.dart`; every tool that can reach a canonical path outside the selected workspace must pass through it, so approval key, permission class, and display arguments cannot diverge per tool.
 - Do not cache mutable workspace/MCP catalogs across turns without an identity/fingerprint invalidation boundary.
 - Preserve local tool source, execution target, approval, workspace, availability, and replay metadata.
 - Every sensitive MCP tool executes through `PermissionManager` before `McpRuntimeManager`; denial prevents the server call, and once/session/workspace grants use the canonical approval owner.

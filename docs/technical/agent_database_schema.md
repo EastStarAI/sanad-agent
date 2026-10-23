@@ -805,3 +805,27 @@ After readiness:
 5. Never run full `VACUUM` while transports are serving. After a controlled restart drain is safe and its response has flushed, `DaemonRestartCoordinator` runs the pending vacuum immediately before process exit. Failure leaves the marker pending and does not cancel restart.
 
 `provider_model_cache` is not pruned. Conversation `messages`, sessions, scheduled tasks, and active work remain complete. Routine skips stay quiet.
+
+---
+
+## 10. Schema Snapshot Characterization
+
+`AgentStateDatabase` owns the whole DDL block and every in-place migration, so its output shape is pinned by `agent/test/evolution/agent_state_schema_snapshot_test.dart`. The test records `sqlite_master` (tables, indexes, triggers, and their DDL text), `PRAGMA table_info`, `PRAGMA index_list` with `PRAGMA index_info`, and `PRAGMA foreign_key_list` for a fresh database and for three legacy fixtures.
+
+| Snapshot | Shape it represents |
+|---|---|
+| `fresh` | A newly created `state.db`, in memory and on disk (a second open is also asserted to be a no-op) |
+| `legacy_pre_workspace_uuid` | `workspaces(path PRIMARY KEY)` with path-valued `sessions.workspace_id` |
+| `legacy_pre_attachments_v2` | `user_attachments` without `admission_id`, with a NOT NULL `message_id` and the v1 insert trigger |
+| `legacy_pre_112_schedules` | `scheduled_tasks` before Task 112: `run_at` NOT NULL and no recurrence, zone, `next_run_at`, or `enabled` columns |
+
+Committed snapshots live in `agent/test/evolution/fixtures/agent_state/*.schema.txt`; the legacy inputs are the sibling `*.sql` files and contain synthetic placeholders only — no user data or secrets.
+
+What the snapshots enforce:
+
+- A change to a table, column, column order, type, default, constraint, index, trigger, or foreign key must update the snapshot in the same change and be reviewed as a schema change.
+- A code move that only relocates or re-indents the DDL must leave every snapshot byte-identical. DDL text is whitespace-canonicalized, so formatting alone never fails the guard while every token stays pinned.
+- `PRAGMA user_version` stays `0` on fresh and migrated databases; a versioned migration baseline is a separate, unapproved change (decision A3).
+- A legacy upgrade may differ from a fresh create only where a snapshot already records the difference — for example the retained legacy `run_at NOT NULL`, or a column that a legacy database receives through `ALTER TABLE` instead of the base `CREATE TABLE`.
+
+The snapshots characterize current behavior; they are not a target. A difference they surface is either a deliberate schema change or a separate follow-up, and it is never relaxed by editing an expectation silently.

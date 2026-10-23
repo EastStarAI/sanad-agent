@@ -28,6 +28,14 @@ Dependencies must follow:
 - Implement repositories, DTO mapping, persistence, and feature-facing transport coordination.
 - Preserve one managed client per device through the owning registry; widgets must not construct registries or transport clients.
 
+## Presentation Decomposition
+- Component splits stay flat in their owning folder (`conversation_input/composer_*.dart`); settings pages split into `widgets/settings_pages/`. Never introduce `pages/`, `dialogs/`, or `components/` folders.
+- An extracted widget becomes a separate library with a feature-specific public name (`ComposerModelChip`) and `@internal` when it is not reusable. `part`/`part of` is forbidden.
+- Never spread one cubit's state across several cubits: extract helper coordinators that receive typed callbacks from the host cubit (Task 110 precedent).
+- A high-fan-in transport, repository, or cubit file keeps its path as a façade that re-exports its owners; a low-fan-in UI file is deleted and every importer is updated in the same change.
+- Keys and semantics are protocol: every `Key`/`ValueKey` string, `Semantics` label/flag, and tooltip stays byte-identical across a move, and a test that reads a source file by path is retargeted in the same change as that move.
+- Diff parsing and diff rendering stay Client-local under `widgets/tools/diff/`; the parser is pure Dart with its own unit tests.
+
 ## Cross-Feature Laws
 - The Dart daemon is authoritative for runtime execution, delivery classification, provider state, session recovery, and agent-owned catalogs. The client projects that authority and must not reconstruct it from presentation state.
 - Device-targeted operations must carry explicit device identity and use the shared connection/command abstractions rather than forcing a transport.

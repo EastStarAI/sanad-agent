@@ -6,7 +6,7 @@ This contract governs runtime state projection, ownership assessment, lifecycle 
 
 ## 1. Domain Structure
 * **`ownership/`**: Owns launcher record models, lease validation, runtime process state projection, and managed-ownership assessment.
-* **`lifecycle/`**: Owns foreground run orchestration, background launch, status projection, component control, doctor repairs, orphan cleanup, takeover, and wait helpers.
+* **`lifecycle/`**: Owns foreground run orchestration, background launch, status projection, the read-only inventory projection, component control, doctor repairs, orphan cleanup, takeover, and wait helpers.
 * **`switch/`**: Owns switch admission, process termination waits, transaction control, target launch, rollback, and tool-result checkpointing.
 
 ---

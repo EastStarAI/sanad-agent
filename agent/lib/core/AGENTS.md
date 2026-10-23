@@ -5,6 +5,7 @@ This contract applies to `agent/lib/core/`.
 
 ## Core Ownership
 - Own configuration, environment paths, identity/auth persistence, provider runtime, shared request/message models, and dependency-composition primitives.
+- `core/config.dart` is the configuration entry point and the stable import path. It keeps `Config` (process env and `.env` resolution) and re-exports its owners in `core/config/`: `compaction_policy.dart` owns compaction thresholds, exact per-model overrides, the post-compaction request target, and the bounded recovery limits; `thinking_control_override.dart` owns the single `thinking_control` declaration schema (validation and fingerprint); `model_aware_runtime_policy.dart` owns the parsed `config.yaml` policy, its exact-model capability override, its strict loader, and the model-id key form shared with `Config`. Importers keep using `core/config.dart`; never add a second `config.yaml` parser, a second thinking-control validator, or a second model-id normalizer.
 - `core/update/` owns verified standalone-agent replacement. CLI, local daemon, and client requests must delegate to it; source/FVM execution must never pull Git or replace a checkout.
 - `core/setup/` owns typed service state, platform capability selection, service-definition generation, lifecycle execution, ownership metadata, conflict migration, and transactional restore; entry points only validate commands and present results.
 - Do not absorb engine loops, interface protocols, capability catalogs, or evolution database workflows.

@@ -9,3 +9,6 @@ agent/model_capability_defaults.yaml text eol=lf
 agent/lib/capabilities/skills/generated_bundled_skills.dart text eol=lf
 agent/lib/core/provider_thinking/generated_model_capability_defaults.dart text eol=lf
 .agents/skills/** text eol=lf
+# Agent-state schema snapshots are compared line-by-line by
+# `agent/test/evolution/agent_state_schema_snapshot_test.dart`.
+agent/test/evolution/fixtures/agent_state/*.schema.txt text eol=lf
