@@ -45,6 +45,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./client/lib/features/home/AGENTS.md): Rules governing ./client/lib/features/home.
 - [AGENTS](./client/lib/features/mcp/AGENTS.md): Rules governing ./client/lib/features/mcp.
 - [AGENTS](./client/lib/features/provider_setup/AGENTS.md): Rules governing ./client/lib/features/provider_setup.
+- [AGENTS](./client/lib/features/schedules/AGENTS.md): Rules governing ./client/lib/features/schedules.
 - [AGENTS](./client/lib/features/settings/AGENTS.md): Rules governing ./client/lib/features/settings.
 - [AGENTS](./client/lib/features/voice/AGENTS.md): Rules governing ./client/lib/features/voice.
 - [AGENTS](./client/lib/infrastructure/AGENTS.md): Rules governing ./client/lib/infrastructure.

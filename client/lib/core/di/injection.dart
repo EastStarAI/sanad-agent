@@ -28,6 +28,7 @@ import 'package:sanad_client/features/settings/data/device_control_client.dart';
 import 'package:sanad_client/features/settings/data/workspace_security_client.dart';
 import 'package:sanad_client/features/settings/data/device_skills_client.dart';
 import 'package:sanad_client/features/settings/data/secrets_client.dart';
+import 'package:sanad_client/features/schedules/data/schedules_client.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
@@ -387,6 +388,15 @@ Future<void> configureDependencies({
     );
     getIt.registerLazySingleton<SecretsClient>(
       () => SecretsClient(getIt<DeviceCommandClient>()),
+    );
+  }
+
+  if (!getIt.isRegistered<SchedulesClient>()) {
+    // The schedule protocol's only Client transport (Task 139 C6). It is a thin
+    // wrapper over the same DeviceCommandClient, so local and cloud routes are
+    // identical and no screen selects a transport.
+    getIt.registerLazySingleton<SchedulesClient>(
+      () => SchedulesClient(getIt<DeviceCommandClient>()),
     );
   }
 
