@@ -159,6 +159,13 @@ Future<File> _validatedFile(
   return file;
 }
 
+/// Applies the owner-only mode (0700 directory, 0600 file) to an absolute path.
+///
+/// Used by the fixture layer for paths that live beside the Home, outside the
+/// Home-relative secure-write boundary.
+Future<void> restrictRuntimePath(String path, {bool directory = false}) =>
+    _restrictRuntimePath(path, directory: directory);
+
 Future<void> _restrictRuntimePath(String path, {bool directory = false}) async {
   if (!Platform.isWindows) {
     final result = await Process.run('chmod', [

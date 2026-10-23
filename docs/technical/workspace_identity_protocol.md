@@ -11,6 +11,19 @@ description: "Stable workspace UUID, availability projection, rename, path repai
 
 A workspace whose path is unavailable remains in `list_workspaces` with its UUID, display name, last known path, `is_missing: true`, and `availability: missing`. Historical sessions remain queryable. New execution against that workspace fails with an actionable reconnect message until Change Path succeeds.
 
+## Path Resolution
+
+Resolving a workspace id or path is always a read. One rule serves every daemon-side lookup — workspace policy queries, catalog and runtime-context targeting, session metadata, resume, and CLI lookups:
+
+1. an explicit id resolves to its registered workspace;
+2. a path resolves to the registered workspace whose root equals it or contains it, innermost first;
+3. any other existing directory resolves to that path's synthetic `exec_root:<normalized_path>` identity;
+4. an unknown id, a non-directory, or a missing path resolves to nothing.
+
+A path never registers a workspace. Only an explicit `workspace.create` (a picked folder, a new folder, or a managed remote create), Change Path, or the legacy migration writes a `workspaces` row. A session created with only an execution root therefore stays a session with no registered workspace: opening it, reading its policy, or running a turn in it cannot make an empty workspace appear in the workspace list.
+
+Rows registered implicitly by an older build remain ordinary registered workspaces after upgrade; the metadata-only `workspace.remove` deletes such a row without touching its folder, its files, or its sessions.
+
 ## Commands
 
 ### `workspace.rename`
@@ -39,7 +52,7 @@ When a client cache still uses path ids and the daemon returns UUID workspaces, 
 
 When a CLI execution runs with a temporary directory context via `--execution-root`, the runtime synthesizes an ephemeral workspace identifier with the prefix `exec_root:<normalized_path>`. The following isolation and security rules apply:
 
-1. **Path Validation and Policy Writes:** Updating permission mode via `workspace.set_permission_mode` for an `exec_root:` target strictly validates and normalizes the target path using `WorkspacePathResolver.validateAndNormalizeExecutionRoot`. Non-existent paths, invalid entities, and traversal attempts are rejected immediately, preventing arbitrary policy files from being written to disk.
+1. **Path Validation and Policy Writes:** Updating permission mode via `workspace.set_permission_mode` for an `exec_root:` target strictly validates and normalizes the target path using `WorkspacePathResolver.validateAndNormalizeExecutionRoot`. Non-existent paths, invalid entities, and traversal attempts are rejected immediately, preventing arbitrary policy files from being written to disk. Reading policy resolves the same normalized path read-only and never registers the folder as a workspace (see [Path Resolution](#path-resolution)).
 2. **Explicit Workspace Precedence:** Turn requests specifying an explicit named `workspace_id` take absolute precedence over stale `execution_root` attributes stored in session metadata. A prior CLI execution root in session history never shadows an explicitly selected workspace.
 3. **Turn-Scoped `allow_all_tools` Provenance:** Automatic tool approval flags (`allow_all_tools: true`) are evaluated on a per-turn basis from the originating request and are honoured only when transport ingress stamped the turn as owner authority (any authenticated client transport); an unverified transport loses the flag. Only the CLI sends it (`sanad run --yes`, locally or through the remote CLI relay); no Sanad Client, local or cloud, has an `allow_all_tools` control. Session metadata `permission_mode` never grants approval. They are not persisted into session metadata to silently escalate permissions on subsequent turns.
 4. **Authoritative Workspace Deny Rules:** Explicit `deny` entries in the Agent-owned workspace policy remain authoritative and take precedence over `allow_all_tools` and workspace `full_access`. Policy is keyed by the workspace UUID (or `exec_root:` key) and bound to its current root; see [Execution Trust and Permission Authority](execution_trust_and_permission_authority.md).

@@ -574,6 +574,103 @@ void main() {
     });
   });
 
+  group('LocalWorkspaceRuntimeService path resolution', () {
+    late Directory tempDir;
+    late LocalWorkspaceRuntimeService service;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp(
+        'sanad-agent-workspace-lookup-test',
+      );
+      await SanadHomeBootstrap.atRoot(
+        tempDir.path,
+        scope: SanadHomeScope.identity,
+      ).prepare();
+      service = LocalWorkspaceRuntimeService(
+        sanadHomePath: tempDir.path,
+        currentWorkingDirectory: tempDir.path,
+      );
+    });
+
+    tearDown(() async {
+      try {
+        if (tempDir.existsSync()) {
+          await tempDir.delete(recursive: true);
+        }
+      } catch (_) {}
+    });
+
+    test('resolving an execution root registers no workspace', () async {
+      final execRoot = Directory('${tempDir.path}/exec-root-only')
+        ..createSync();
+
+      final described = await service.describeWorkspace(execRoot.path);
+
+      expect(
+        described?['id'],
+        'exec_root:${execRoot.resolveSymbolicLinksSync()}',
+      );
+      expect(described?['path'], execRoot.resolveSymbolicLinksSync());
+      expect(described?['name'], 'exec-root-only');
+      expect(described?['is_missing'], isFalse);
+      expect(await service.listWorkspaces(), isEmpty);
+    });
+
+    test('resolves a path inside a registered workspace to it', () async {
+      final registered = Directory('${tempDir.path}/registered')..createSync();
+      final created = await service.createWorkspace(path: registered.path);
+      final nested = Directory('${created['path']}/nested/deeper')
+        ..createSync(recursive: true);
+
+      final described = await service.describeWorkspace(nested.path);
+
+      expect(described?['id'], created['id']);
+      expect(described?['path'], created['path']);
+      expect(described?['name'], 'registered');
+      expect(await service.listWorkspaces(), hasLength(1));
+    });
+
+    test('resolves the innermost containing workspace', () async {
+      final outer = Directory('${tempDir.path}/outer')..createSync();
+      final inner = Directory('${outer.path}/inner')..createSync();
+      final deeper = Directory('${inner.path}/deeper')..createSync();
+      final outerWorkspace = await service.createWorkspace(path: outer.path);
+      final innerWorkspace = await service.createWorkspace(path: inner.path);
+
+      expect(
+        (await service.describeWorkspace(outer.path))?['id'],
+        outerWorkspace['id'],
+      );
+      expect(
+        (await service.describeWorkspace(deeper.path))?['id'],
+        innerWorkspace['id'],
+      );
+      expect(await service.listWorkspaces(), hasLength(2));
+    });
+
+    test('an unknown id resolves to nothing instead of a path', () async {
+      expect(await service.describeWorkspace('missing-workspace'), isNull);
+      expect(await service.describeWorkspace(tempDir.path), isNotNull);
+      expect(
+        await service.describeWorkspace('${tempDir.path}/does-not-exist'),
+        isNull,
+      );
+      expect(await service.listWorkspaces(), isEmpty);
+    });
+
+    test('create_workspace still registers the folder', () async {
+      final folder = Directory('${tempDir.path}/explicit')..createSync();
+
+      final created = await service.createWorkspace(path: folder.path);
+      final stored = await service.listWorkspaces();
+
+      expect(stored, hasLength(1));
+      expect(stored.single['id'], created['id']);
+      expect(stored.single['path'], created['path']);
+      expect(stored.single['source'], 'existing');
+    });
+  });
+
   test(
     'keeps stable identity while renaming and changing a missing path',
     () async {

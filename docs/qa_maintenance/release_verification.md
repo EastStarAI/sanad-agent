@@ -43,8 +43,13 @@ complete checked-out Git history with redaction enabled, and requires no
 repository secret or commercial license. The tracked configuration extends the
 default rules and narrowly allows only reviewed `generic-api-key` fixtures in
 exact credential/redaction test files. `.gitleaksignore` additionally identifies
-three historical synthetic test findings by their complete commit/path/rule/line
-fingerprints (secret-acquisition input and in-memory vault migration fixtures).
+reviewed synthetic test findings by their complete commit/path/rule/line
+fingerprints: the secret-acquisition input and in-memory vault migration
+fixtures, plus fixture literals that a superseded feature-branch commit carried
+before the published tree started deriving them at runtime. Sanad-dev fixtures
+therefore derive hash-like cache keys from their source commit and assemble
+credential headers from parts, and a fingerprint exists only where committed
+history still holds an old literal.
 These entries are not path-wide or value-wide exemptions: future findings in
 the same files or other commits remain subject to the default rules. Full
 checked-out history scanning, redaction, production paths, and every other rule

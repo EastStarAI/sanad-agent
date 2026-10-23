@@ -13,7 +13,7 @@ This contract governs foundational models, storage, process execution, and confi
 * `runtime_context.dart`: Worktree path, branch, and port calculation models.
 * `path_equivalence.dart`: Host-aware canonical path identity and Windows device-prefix normalization.
 * `runtime_component_control.dart`: Component control IPC manifest structures.
-* `startup_attempt.dart`, `startup_probe.dart`: Startup attempt and probe primitives.
+* `startup_attempt.dart`, `startup_probe.dart`: Startup attempt, bounded readiness probe, and Agent crash-loop detection primitives.
 * `terminal_launcher.dart`: External OS terminal window launching.
 
 ---
@@ -22,4 +22,5 @@ This contract governs foundational models, storage, process execution, and confi
 * **Owner-Only Runtime Files:** All launcher records, IPC requests, and journals must be written using atomic file operations with strict owner-only permissions rooted at the owning Sanad Home or runtime directory.
 * **Credential Isolation:** The Local Gateway credential must be transmitted strictly in the authorization header. It must never be written to a journal, command argument, log output, or unauthenticated file.
 * **Windows Shell Execution Constraint:** When spawning `Process.start` for executable batch scripts on Windows, `runInShell: Platform.isWindows` must be set.
+* **Per-Target Mutation Staging:** A destructive mutation of a Home must stage in a location keyed to that exact target, never in a name shared by sibling targets, and recovery must touch only its own location. When a failure cannot be repaired automatically, the surviving copy is retained and its path is reported; no recovery path may report a clean state it did not reach.
 * **Hermetic Tests:** Automated tests must never contact real production cloud endpoints or rely on live network availability.

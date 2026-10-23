@@ -1,5 +1,25 @@
 part of '../../../sanad_dev_cli.dart';
 
+/// Source commit `status` reports for the live runtime.
+///
+/// The launcher lease is authoritative when it recorded a commit. A lease from
+/// before that field, or no lease at all, falls back to the worktree `HEAD`
+/// rather than printing a placeholder, so the line always names a real commit.
+Future<String> resolveStatusSourceCommit({
+  required String recordedCommit,
+  required Future<String> Function() readHeadCommit,
+}) async {
+  final recorded = recordedCommit.trim();
+  if (recorded.isNotEmpty) return recorded;
+  return (await readHeadCommit()).trim();
+}
+
+/// `sanad-dev status` is strictly read-only.
+///
+/// It performs discovery, reads the launcher lease, and prints the runtime
+/// projection. It never starts, stops, restarts, repairs, or bootstraps
+/// anything, so it is always safe to call while another agent is working in the
+/// same worktree.
 Future<void> handleRuntimeStatus({
   int? portOverride,
   String? sanadHomePath,
@@ -59,6 +79,13 @@ Future<void> handleRuntimeStatus({
   );
   print('Worktree: ${runtime.worktreeId}');
   print('Branch: ${runtime.branch}');
+
+  final sourceCommit = await resolveStatusSourceCommit(
+    recordedCommit: ownership.record?.sourceCommit ?? '',
+    readHeadCommit: () => readRuntimeSourceCommit(runtime.repositoryRoot),
+  );
+  print('Runtime source commit: ${sourceCommit.isEmpty ? '-' : sourceCommit}');
+  print('Runtime version: ${readRepositoryVersion(runtime.repositoryRoot)}');
 
   print(
     'Cloud gateway: ${matchingAgent?.gatewayEnabled == true ? 'enabled' : 'disabled'}',
