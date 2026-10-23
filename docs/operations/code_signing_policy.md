@@ -13,6 +13,8 @@ Windows installers remain **Unsigned Windows builds** until the documented Authe
 
 macOS and Android signing follow the protected release workflow and platform-specific credentials. Private keys and signing credentials must never enter Git, pull-request jobs, fork jobs, logs, or general build artifacts.
 
+Released macOS executables keep one stable code-signing identifier across versions and architectures. The identifier is part of the designated requirement, and macOS records that requirement as the trusted code of the Keychain items an application creates, so a version-derived identifier would silently revoke every earlier version's Keychain authorization on upgrade. Release CI asserts the identifier and its designated requirement on every signed Agent artifact.
+
 ## Trusted Build Boundary
 
 - The tagged source revision is the build origin.

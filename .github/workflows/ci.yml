@@ -313,6 +313,10 @@ jobs:
           grep -F '.arch == $arch' .github/workflows/release.yml
           grep -F 'fvm dart compile exe "-DSANAD_AGENT_VERSION=' .github/workflows/release.yml
           ! grep -F 'fvm dart compile exe `' .github/workflows/release.yml
+          grep -F 'SANAD_AGENT_CODESIGN_IDENTIFIER: com.eaststarai.sanad.agent' .github/workflows/release.yml
+          ! grep -E 'SANAD_AGENT_CODESIGN_IDENTIFIER: .*(\$|artifact_version)' .github/workflows/release.yml
+          grep -F -- '--identifier "$SANAD_AGENT_CODESIGN_IDENTIFIER"' .github/workflows/release.yml
+          grep -F 'designated_requirement="$(codesign -d -r- "$agent" 2>&1)"' .github/workflows/release.yml
           grep -F 'workflow_call:' .github/workflows/deploy.yml
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
@@ -332,6 +336,11 @@ jobs:
           grep -F 'restoring the previous selector' .github/workflows/deploy.yml
           test "$(grep -Fc 'environment: client-downloads-production' .github/workflows/deploy.yml)" -eq 3
           ! grep -Eq 'environment: (web|updates|installers)-production' .github/workflows/deploy.yml
+          grep -F 'needs: updates' .github/workflows/deploy.yml
+          grep -F 'needs: [updates, web]' .github/workflows/deploy.yml
+          grep -F "needs.updates.result == 'success' || needs.updates.result == 'skipped'" .github/workflows/deploy.yml
+          grep -F "needs.web.result == 'success' || needs.web.result == 'skipped'" .github/workflows/deploy.yml
+          test "$(grep -Fc 'for attempt in $(seq 1 12); do' .github/workflows/deploy.yml)" -eq 6
           grep -F 'environment: client-downloads-production' .github/workflows/release.yml
           grep -F 'deploy_production_asset.sh deploy-client-aliases' .github/workflows/release.yml
           ! grep -Fq 'sudo /usr/local/sbin/sanad-client-downloads-control' .github/workflows/release.yml
@@ -366,6 +375,12 @@ jobs:
           }
       - name: Scan committed content for credentials
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
         run: |
           archive="$RUNNER_TEMP/gitleaks.tar.gz"
           curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
@@ -373,7 +388,39 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$archive" | sha256sum --check
           tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" detect --source . --config .gitleaks.toml --redact --no-banner
+          # The checkout holds every ref, so an unbounded scan reports findings
+          # from unrelated branches and fails this change for someone else's
+          # commit. Bound the range to the code under review and keep the scan
+          # itself unchanged.
+          zero_sha="0000000000000000000000000000000000000000"
+          case "$EVENT_NAME" in
+            pull_request)
+              if [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+                log_opts="$BASE_SHA..$HEAD_SHA"
+              else
+                log_opts=""
+              fi
+              ;;
+            push)
+              if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$zero_sha" ]; then
+                log_opts="$PUSH_BEFORE..$PUSH_AFTER"
+              else
+                # A brand new branch has no previous commit: scan the ancestry of
+                # the pushed commit without the other refs the checkout fetched.
+                log_opts="$PUSH_AFTER"
+              fi
+              ;;
+            *)
+              log_opts=""
+              ;;
+          esac
+          if [ -n "$log_opts" ]; then
+            echo "Scanning $log_opts"
+            "$RUNNER_TEMP/gitleaks" detect --source . --config .gitleaks.toml --redact --no-banner --log-opts="$log_opts"
+          else
+            echo "Scanning every ref"
+            "$RUNNER_TEMP/gitleaks" detect --source . --config .gitleaks.toml --redact --no-banner
+          fi
 
   sensitive-review:
     name: Verify protected review labels

@@ -19,8 +19,12 @@ class LocalAuthenticationExchangeNotifier {
     this.requestTimeout = const Duration(seconds: 2),
     this.retryDelay = const Duration(milliseconds: 150),
   }) : _clientFactory = clientFactory ?? http.Client.new,
+       // Read-only on purpose: this notifier runs in login/logout, never in
+       // the daemon, so it must not rotate the credential that a running
+       // daemon and the desktop Client are already holding.
        _credentialLoader =
-           credentialLoader ?? LocalGatewayCredentials.loadOrCreate,
+           credentialLoader ??
+           (() async => LocalGatewayCredentials.readExisting()),
        _delay = delay ?? Future<void>.delayed {
     if (maximumAttempts < 1) {
       throw ArgumentError.value(maximumAttempts, 'maximumAttempts');

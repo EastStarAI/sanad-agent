@@ -45,7 +45,11 @@ it the stopped Agent instead of starting the service first:
    `sanad service definition` report says the installed plist or systemd user
    unit differs from the one it would generate (executable, arguments,
    `SANAD_HOME`, and the plist's `SANAD_SERVICE_INSTANCE`); then the service is
-   re-registered exactly once. An unknown report reuses the registration.
+   re-registered exactly once. An unknown report reuses the registration. That
+   report compares definitions, not complete bodies: a change to any other unit
+   or plist field, such as the systemd unit's `SuccessExitStatus`, is not
+   detected and reaches an existing installation only through a later
+   `sanad service install`.
    Windows refreshes its Scheduled Task on every registration. A failure after replacing an existing executable restores the
    previous copy (see [Release and Update Architecture](update_architecture.md));
    success removes the `.rollback` copy.

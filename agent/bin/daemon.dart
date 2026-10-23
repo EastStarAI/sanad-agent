@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/auth/secret_vault.dart';
@@ -17,17 +18,28 @@ import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
+import 'package:sanad_agent/core/termination_cleanup.dart';
 
 import 'package:sanad_agent/core/utils/logger.dart';
 
 SanadHomeFileLockLease? _runtimeOwnership;
 
 Future<void> main(List<String> args) async {
+  // The daemon keeps the normal macOS Keychain prompt at every entry point: it
+  // is the process that migrates legacy secret files, an operator starts it, and
+  // its authorization dialog is the intended way to grant access. It therefore
+  // never inherits the CLI's stdio-shaped detection, and a vault that closes
+  // here is reported through the log and the local gateway `/health` payload.
+  SecretVaultPolicy.apply(
+    SecretVaultPolicy.daemonEntryDecision,
+    vaultSkipped: false,
+  );
   // Must run before DI/config/auth can read or open anything under either
   // configured runtime root. The outer CLI also performs this for supervised
   // launches; keeping it here protects direct daemon entry points and tests.
@@ -42,8 +54,12 @@ Future<void> main(List<String> args) async {
   // Plan 83: open the Agent vault (migrating legacy secret files) after
   // logging starts and before any service resolves a secret, replay vault
   // events a CLI recorded without a log, and follow other processes' writes.
-  (await SecretVaults.open()).startWatching();
+  final vaults = await SecretVaults.open();
+  vaults.startWatching();
   SecretVaults.drainStartupEvents();
+  if (!vaults.available) {
+    Logger('DaemonStartup').warning(_agentVaultUnavailableMessage(vaults));
+  }
 
   print('--- Sanad Agent Daemon ---');
 
@@ -66,6 +82,12 @@ Future<void> main(List<String> args) async {
     // SEC-02 / Gate B: load or create the local gateway credential,
     // enforce loopback bind policy, and wire the security helper into
     // the platform so every HTTP and WebSocket request is gated.
+    //
+    // This is the only rotation point in the system, and it runs here on
+    // purpose: after `SanadRuntimeOwnership.acquire()` above, so this process
+    // provably owns the Home, and before the listener serves, so rotating a
+    // cloned or legacy credential cannot invalidate a credential another live
+    // daemon is still using. No CLI, login, or sanad-dev path may rotate.
     if (!LoopbackPolicy.isLoopbackHost(config.localGatewayHost)) {
       final logger = Logger('DaemonStartup');
       logger.severe(
@@ -74,7 +96,8 @@ Future<void> main(List<String> args) async {
       );
       throw LocalGatewayBindViolation(config.localGatewayHost);
     }
-    final credential = await LocalGatewayCredentials.loadOrCreate();
+    final credential =
+        await LocalGatewayCredentials.loadOrCreateForDaemonStart();
     final security = LocalGatewaySecurity(
       config: LocalGatewaySecurityConfig(allowedPort: config.localGatewayPort),
       expectedToken: credential,
@@ -106,6 +129,7 @@ Future<void> main(List<String> args) async {
 
   print('Starting Gateway Manager...');
   await gatewayManager.start();
+  _installEndpointRecordCleanup();
   unawaited(_recoverPendingTitlesSafely(getIt<TitleService>()));
 
   print(
@@ -123,6 +147,19 @@ Future<void> main(List<String> args) async {
   //   await gatewayManager.stop();
   //   exit(0);
   // });
+}
+
+/// Removes this Home's published endpoint record when the daemon stops.
+///
+/// The daemon had no termination hook, so `sanad-dev stop` (SIGTERM) or Ctrl+C
+/// left `.local_gateway_endpoint.json` naming a pid that no longer existed.
+/// The same hook is the coordinator's pre-exit cleanup, so a managed pause or
+/// stop removes the record as well. Removal is ownership-checked, so a
+/// successor runtime that already republished the record keeps it.
+void _installEndpointRecordCleanup() {
+  TerminationCleanup(
+    cleanup: LocalGatewayEndpointRecord.removeOwnedOnExit,
+  ).install();
 }
 
 /// Resolves and runs deferred database maintenance without allowing any
@@ -202,4 +239,30 @@ Future<void> _restoreDurableStateSafely(
       stack,
     );
   }
+}
+
+/// The actionable message the daemon logs when the Agent vault is closed.
+///
+/// It states what is unreadable, why, and how to recover, so an operator who
+/// upgraded the Agent never has to discover a silent loss of provider keys and
+/// the Device Credential from a single line. It never carries a secret value.
+String _agentVaultUnavailableMessage(SecretVaults vaults) {
+  final reason = vaults.unavailableReason ?? 'unavailable';
+  final diagnostic = vaults.unavailableMessage;
+  final recovery = Platform.isMacOS
+      ? 'Recovery: quit the Agent, then start it again from a desktop session so '
+            'macOS can show the one-time Keychain authorization dialog and you '
+            'can approve it; if no dialog appears, open Keychain Access, select '
+            'the $agentVaultKeychainService items under the login keychain, and '
+            'add the running Agent binary to Access Control.'
+      : 'Recovery: quit the Agent, then start it again in a session where the '
+            'operating-system credential store is unlocked (Windows DPAPI or the '
+            'Linux Secret Service).';
+  return [
+    'The Agent vault is closed ($reason); provider keys, MCP secrets, user '
+        'secrets and the Device Credential cannot be read.',
+    if (diagnostic != null && diagnostic.isNotEmpty) diagnostic,
+    recovery,
+    'No secret is deleted while the vault is closed.',
+  ].join(' ');
 }

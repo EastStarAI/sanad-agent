@@ -760,6 +760,15 @@ until interrupted, normally returns to the tool only by timeout, and leaves a
 tool marked as executing while controlled restart is trying to reach a safe
 checkpoint.
 
+An attached `sanad run` worker follows its turn across a daemon restart:
+- When the gateway connection drops while a turn is in flight, `sanad run` does not fail immediately. Instead, it enters a bounded reconnect window governed by `--reconnect-timeout` (default 60 seconds).
+- It discovers the restarted daemon on the same Home's endpoint using Home-bound discovery (`LocalGatewayDiscovery`), enforcing fail-closed checks against foreign Homes (exit `78` with reason `home_identity_mismatch`).
+- Upon reconnection, it queries the durable execution snapshot via session history and compares its `request_id` with the turn it dispatched, because restart recovery reclaims the same work item and request lineage. On a match it re-attaches to the event stream and continues following without admitting a second turn or re-submitting input.
+- `running`, `resuming`, `waiting`, `queued`, and `stopping` are followed to the turn's own terminal outcome; `waiting` and `resuming` are the transient recovery states the daemon owns. `blocked` is never transient, because the daemon schedules automatic resume only for a `waiting` notice, so a blocked turn keeps the immediate exit `1` documented in the CLI architecture.
+- If the reconnect window expires before the daemon recovers or the turn is reclaimed, `sanad run` exits `1` with reason `reconnect_window_expired`. If the turn is missing from history after reconnect, or another turn's lineage now owns the session, it exits `1` with reason `turn_lost`.
+- Attempting to re-dispatch `sanad run --session <id>` while a session's durable turn still owns it refuses dispatch early with exit code `3` and reason `turn_in_flight`; a queued or parked (blocked) turn never refuses.
+- The run emits `reconnecting`, `reconnected`, `re_attached`, and `refused` lifecycle records on its event stream, so a supervisor sees the restart crossing instead of inferring a hang.
+
 Use this path only after analyzer, focused startup/recovery tests, and diff
 review pass. Broad bootstrap, supervisor, dependency-injection, migration, or
 other changes that could prevent the daemon from returning or the turn from

@@ -97,6 +97,13 @@ void main() {
     expect(payload['command_request_id'], startsWith('req_'));
     expect(payload['session_id'], 'session-1');
     expect(payload['message'], 'use the safer migration');
+    expect(
+      payload.containsKey('steer_only'),
+      isFalse,
+      reason:
+          'the Client keeps the legacy delivery classification: it never opts '
+          'into the daemon `steer_only` rejection',
+    );
   });
 
   test('deleteSession fails when the daemon does not confirm deletion', () async {

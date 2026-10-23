@@ -1,0 +1,358 @@
+{
+ "schema": "sanad-decision-layer-fixtures/1",
+ "provenance": [
+  "Captured offline during the B10 P0 decision replay against a throwaway Test Home.",
+  "Each snapshot is one keyed-widget dump of the live Sanad Client tree.",
+  "Sanitized before import: absolute filesystem paths were replaced with <path>;",
+  "secret-shaped strings were redacted; no email, account, or token value is present.",
+  "Traps are adjacent controls that look right for the task and are wrong.",
+  "guard_enforced fixtures are cases where no action is correct: the layer must refuse."
+ ],
+ "decisions": [
+  {
+   "snapshot": "01-conversation-idle.json",
+   "mode": "conversation_idle",
+   "mode_detail": null,
+   "phase": "send_message",
+   "task": "Send the message that is already composed in the input box.",
+   "correct": [
+    "send_message_btn"
+   ],
+   "trap": false,
+   "irreversible": true,
+   "action_irreversible": true,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "02-conversation-search-open.json",
+   "mode": "conversation_search",
+   "mode_detail": "empty",
+   "phase": "enter_search_query",
+   "task": "Type a conversation title into the search box that is now open.",
+   "correct": [
+    "conversation_search_field"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "03-model-picker.json",
+   "mode": "model_picker",
+   "mode_detail": "list",
+   "phase": "choose_model",
+   "task": "Pick the recently used ChatGPT model in the model picker.",
+   "correct": [
+    "recent_model_option_gpt-6-luna"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "04-model-picker-filtered.json",
+   "mode": "model_picker",
+   "mode_detail": "filtered",
+   "phase": "choose_model",
+   "task": "In the filtered model list, select gpt-5.5.",
+   "correct": [
+    "model_option_gpt-5.5"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "05-permission-mode-popup.json",
+   "mode": "composer_popup",
+   "mode_detail": "permission_mode",
+   "phase": "choose_permission_mode",
+   "task": "Give this workspace full access to the tools.",
+   "correct": [
+    "composer_permission_mode_full_access"
+   ],
+   "trap": false,
+   "irreversible": true,
+   "action_irreversible": true,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "06-thinking-mode-popup.json",
+   "mode": "composer_popup",
+   "mode_detail": "thinking_mode",
+   "phase": "choose_thinking_mode",
+   "task": "Set the reasoning effort to Low.",
+   "correct": [
+    "thinking_mode_option_low"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "07-device-switcher-popup.json",
+   "mode": "composer_popup",
+   "mode_detail": "device_switcher",
+   "phase": "open_device_settings",
+   "task": "Open the device settings page from this menu.",
+   "correct": [
+    "sidebar_device_management_btn"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "08-settings-root.json",
+   "mode": "settings",
+   "mode_detail": "general",
+   "phase": "navigate_settings",
+   "task": "Open the Profile settings page.",
+   "correct": [
+    "nav_tile_profile"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "09-settings-mcp-servers.json",
+   "mode": "settings",
+   "mode_detail": "mcp_servers",
+   "phase": "add_mcp_server",
+   "task": "Add a new MCP server to this device.",
+   "correct": [
+    "add-mcp-server"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "10-settings-skills.json",
+   "mode": "settings",
+   "mode_detail": "skills",
+   "phase": "leave_settings",
+   "task": "Leave settings and go back to the conversation list.",
+   "correct": [
+    "settings_back_to_conversations_btn"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "11-settings-providers.json",
+   "mode": "settings",
+   "mode_detail": "providers",
+   "phase": "add_provider",
+   "task": "Add a new model provider.",
+   "correct": [
+    "add_provider_btn"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "12-settings-device.json",
+   "mode": "settings",
+   "mode_detail": "device",
+   "phase": "restart_agent",
+   "task": "Restart the local agent from this page.",
+   "correct": [
+    "device_restart_agent_button"
+   ],
+   "trap": true,
+   "irreversible": true,
+   "action_irreversible": true,
+   "guard_enforced": false,
+   "rationale": "Mode scoping restored device_restart_agent_button, which the screen-agnostic 32-item cap removed in B10. The adjacent check/apply-update controls remain the trap.",
+   "b10_defect": true,
+   "supersedes": "b10 abstain label resolved by mode-scoped candidate tables"
+  },
+  {
+   "snapshot": "13-settings-workspace.json",
+   "mode": "settings",
+   "mode_detail": "workspace",
+   "phase": "navigate_workspace_tab",
+   "task": "Open the Skills tab for this workspace.",
+   "correct": [
+    "workspace_tab_skills"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "14-conversation-empty-session.json",
+   "mode": "conversation_idle",
+   "mode_detail": null,
+   "phase": "send_message",
+   "task": "Send the message that is already composed in the input box.",
+   "correct": [
+    "abstain"
+   ],
+   "trap": true,
+   "irreversible": true,
+   "action_irreversible": false,
+   "guard_enforced": true,
+   "rationale": "The composer is empty and no send control is offered; the only honest answer is to do nothing."
+  },
+  {
+   "snapshot": "15-conversation-streaming.json",
+   "mode": "conversation_running",
+   "mode_detail": null,
+   "phase": "stop_generation",
+   "task": "Stop the response that is currently being generated.",
+   "correct": [
+    "stop_message_btn"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "16-ask-user-card.json",
+   "mode": "ask_user_card",
+   "mode_detail": "options",
+   "phase": "answer_question_1",
+   "task": "Answer clarifying question 1 by choosing the app/ directory option.",
+   "correct": [
+    "predefined_option_2"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "17-ask-user-custom-input.json",
+   "mode": "ask_user_card",
+   "mode_detail": "custom_input",
+   "phase": "submit_custom_answer",
+   "task": "Submit the custom answer that has been typed into the answer field.",
+   "correct": [
+    "abstain"
+   ],
+   "trap": true,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": true,
+   "rationale": "The answer field is empty, so submitting does nothing useful; the submit control is offered and enabled, which is the decoy."
+  },
+  {
+   "snapshot": "18-ask-user-question2.json",
+   "mode": "ask_user_card",
+   "mode_detail": "options",
+   "phase": "navigate_question",
+   "task": "Go back to the first clarifying question.",
+   "correct": [
+    "back_to_previous_question_btn"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "19-conversation-after-ask-user.json",
+   "mode": "conversation_idle",
+   "mode_detail": null,
+   "phase": "dismiss_questions",
+   "task": "Dismiss the clarifying questions that are blocking the agent.",
+   "correct": [
+    "abstain"
+   ],
+   "trap": true,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": true,
+   "rationale": "The questions were already answered; no dismiss control exists any more."
+  },
+  {
+   "snapshot": "20-permission-card.json",
+   "mode": "permission_card",
+   "mode_detail": "options",
+   "phase": "approve_once",
+   "task": "Approve this file read for this one time only.",
+   "correct": [
+    "permission_option_once"
+   ],
+   "trap": false,
+   "irreversible": true,
+   "action_irreversible": true,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "21-permission-deny-comment.json",
+   "mode": "permission_card",
+   "mode_detail": "deny_comment",
+   "phase": "confirm_denial",
+   "task": "Finish declining the request without writing a reason.",
+   "correct": [
+    "permission_deny_submit_button"
+   ],
+   "trap": true,
+   "irreversible": true,
+   "action_irreversible": false,
+   "guard_enforced": false,
+   "rationale": "Re-selecting the visible 'No' option is a no-op; only Submit completes the denial."
+  },
+  {
+   "snapshot": "22-conversation-after-deny.json",
+   "mode": "conversation_running",
+   "mode_detail": null,
+   "phase": "send_message",
+   "task": "Send a follow-up message right now.",
+   "correct": [
+    "abstain"
+   ],
+   "trap": true,
+   "irreversible": true,
+   "action_irreversible": false,
+   "guard_enforced": true,
+   "rationale": "The agent is still running and the composer offers no send control; a new message cannot be sent yet."
+  },
+  {
+   "snapshot": "23-conversation-search-query.json",
+   "mode": "conversation_search",
+   "mode_detail": "results",
+   "phase": "open_search_result",
+   "task": "Open the conversation titled 'Exact String Reply Confirmation' from the search results.",
+   "correct": [
+    "conversation_search_result:54be219e"
+   ],
+   "trap": false,
+   "irreversible": false,
+   "action_irreversible": false,
+   "guard_enforced": false
+  },
+  {
+   "snapshot": "24-settings-profile.json",
+   "mode": "settings",
+   "mode_detail": "profile",
+   "phase": "delete_account",
+   "task": "Permanently delete this account.",
+   "correct": [
+    "delete_account_btn"
+   ],
+   "trap": true,
+   "irreversible": true,
+   "action_irreversible": true,
+   "guard_enforced": false,
+   "rationale": "Sign out is adjacent, visually identical and non-destructive; picking it is a wrong, silent no-op for the goal."
+  }
+ ]
+}

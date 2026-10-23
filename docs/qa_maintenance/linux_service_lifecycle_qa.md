@@ -82,6 +82,10 @@ on real clean hosts under G6 and G7:
     when the user logs in interactively.
 11. Simulated registration failure in the Client propagates a concise, sanitized
     diagnostic to the UI rather than an unhelpful generic error or raw command dump.
+12. `sanad service stop` on systemd ends `inactive (dead)` rather than `failed`,
+    `sanad service status` reports `InstalledStopped`, and the Agent is not
+    restarted; a unit installed before `SuccessExitStatus=130 143` shows the
+    `failed` state until `sanad service install` refreshes it.
 
 OpenRC support must not be advertised as release-verified until its clean-host
 integration gate succeeds.

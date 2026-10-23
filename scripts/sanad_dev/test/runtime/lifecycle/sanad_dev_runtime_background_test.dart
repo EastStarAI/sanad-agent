@@ -7,6 +7,10 @@ import 'package:sanad_dev/src/infrastructure/command_options.dart';
 import 'package:sanad_dev/src/infrastructure/startup_attempt.dart';
 import '../../support/sanad_dev_test_fixtures.dart';
 
+/// `exitCode` is process-global under `package:test`, so a concurrently
+/// running suite can set it at any moment. This suite therefore passes
+/// an injected `setExitCode` callback to capture the exit status without
+/// racing on or mutating the ambient process-global `exitCode`.
 void main() {
   late Directory testHome;
 
@@ -27,6 +31,7 @@ void main() {
     () async {
       final messages = <String>[];
       final errors = <String>[];
+      final exitCodes = <int>[];
       var checkCount = 0;
       var attemptReadCount = 0;
 
@@ -74,9 +79,9 @@ void main() {
         processRunning: (pid) async => true,
         printMessage: messages.add,
         printError: errors.add,
+        setExitCode: exitCodes.add,
       );
 
-      expect(exitCode, 0);
       expect(checkCount, greaterThanOrEqualTo(3));
       expect(
         messages,
@@ -86,6 +91,7 @@ void main() {
         ),
       );
       expect(errors, isEmpty);
+      expect(exitCodes, isEmpty);
     },
   );
 
@@ -94,6 +100,7 @@ void main() {
     () async {
       final messages = <String>[];
       final errors = <String>[];
+      final exitCodes = <int>[];
       var attemptReadCount = 0;
 
       final attempt = SanadDevStartupAttempt(
@@ -138,9 +145,9 @@ void main() {
         processRunning: (pid) async => false,
         printMessage: messages.add,
         printError: errors.add,
+        setExitCode: exitCodes.add,
       );
 
-      expect(exitCode, 1);
       expect(
         messages.any((m) => m.contains('✓ Background runtime is managed')),
         isFalse,
@@ -152,6 +159,7 @@ void main() {
           'startup result. Run "sanad-dev status" for diagnostics.',
         ),
       );
+      expect(exitCodes, [1]);
     },
   );
 
@@ -160,6 +168,7 @@ void main() {
     () async {
       final messages = <String>[];
       final errors = <String>[];
+      final exitCodes = <int>[];
       var attemptReadCount = 0;
 
       final attempt = SanadDevStartupAttempt(
@@ -203,9 +212,9 @@ void main() {
         processRunning: (pid) async => true,
         printMessage: messages.add,
         printError: errors.add,
+        setExitCode: exitCodes.add,
       );
 
-      expect(exitCode, 0);
       expect(
         messages,
         contains(
@@ -214,6 +223,7 @@ void main() {
         ),
       );
       expect(errors, isEmpty);
+      expect(exitCodes, isEmpty);
     },
   );
 
@@ -222,6 +232,7 @@ void main() {
     () async {
       final messages = <String>[];
       final errors = <String>[];
+      final exitCodes = <int>[];
       var attemptReadCount = 0;
 
       final attempt = SanadDevStartupAttempt(
@@ -267,9 +278,9 @@ void main() {
         processRunning: (pid) async => true,
         printMessage: messages.add,
         printError: errors.add,
+        setExitCode: exitCodes.add,
       );
 
-      expect(exitCode, 64);
       expect(
         messages.any((m) => m.contains('✓ Background runtime is managed')),
         isFalse,
@@ -281,6 +292,7 @@ void main() {
           'agent readiness probe failed (exit 64).',
         ),
       );
+      expect(exitCodes, [64]);
     },
   );
 
@@ -289,6 +301,7 @@ void main() {
     () async {
       final messages = <String>[];
       final errors = <String>[];
+      final exitCodes = <int>[];
 
       final oldAttempt = SanadDevStartupAttempt(
         attemptId: 'attempt-old',
@@ -328,9 +341,9 @@ void main() {
         processRunning: (pid) async => true,
         printMessage: messages.add,
         printError: errors.add,
+        setExitCode: exitCodes.add,
       );
 
-      expect(exitCode, 0);
       expect(
         messages,
         contains(
@@ -338,6 +351,7 @@ void main() {
           'Use "sanad-dev status" or bounded "sanad-dev logs" commands.',
         ),
       );
+      expect(exitCodes, isEmpty);
     },
   );
 }

@@ -694,6 +694,13 @@ void main() {
           );
           final steerJson = jsonDecode(steerMsg) as Map<String, dynamic>;
           expect(steerJson['payload']['message'], 'Skip documentation files');
+          expect(
+            (steerJson['payload'] as Map).containsKey('steer_only'),
+            isFalse,
+            reason:
+                'the interactive REPL keeps the legacy behaviour: it never '
+                'opts into `steer_only`',
+          );
           expect(stdoutBuf.toString(), contains('Steer signal dispatched'));
         },
       );

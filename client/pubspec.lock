@@ -58,7 +58,7 @@ packages:
     source: hosted
     version: "4.0.9"
   args:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       name: args
       sha256: d0481093c50b1da8910eb0bb301626d4d8eb7284aa739614d2b394ee09e3ea04
@@ -1111,7 +1111,7 @@ packages:
       path: "../release/contract"
       relative: true
     source: path
-    version: "1.0.19"
+    version: "1.0.20"
   screen_retriever:
     dependency: transitive
     description:

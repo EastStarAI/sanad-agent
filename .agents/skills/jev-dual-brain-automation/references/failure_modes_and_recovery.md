@@ -54,6 +54,18 @@ System 1 classifies evidence. It does not own causal recovery, phase history, or
 
 **Response:** Keep exact operations in code and route structural reasoning to System 2. Jev may later resume narrow judgments after a fresh observation.
 
+### Provider unavailable
+
+**Signal:** The System One request fails: unreachable origin or network error, a deadline, an HTTP error status, a redirect, or a body that is not the documented shape.
+
+**Response:** Never let it crash the step and never act on a guess. `JevClientError` keeps the cause code (`network`, `timeout`, `http_error`, `redirect`, `malformed`) and the HTTP status; escalate with those and with no response body or header, then re-observe. A redirect is an error, not a hop: following it would carry the bearer token to another origin.
+
+### Self-contradictory reply
+
+**Signal:** The answer parses but disagrees with itself: probability keys do not match the offered candidates, the mass is not 1 ± 0.01, the chosen option is not the argmax, or a probability is outside 0..1.
+
+**Response:** Refuse the reply and escalate naming the invariant. A choice that is not the maximum means the ranking read by callers and the label they act on are two different answers, whatever the confidence says.
+
 ## Event-driven waiting
 
 After an action, subscribe to the owning event stream and block for relevant transitions. Examples:

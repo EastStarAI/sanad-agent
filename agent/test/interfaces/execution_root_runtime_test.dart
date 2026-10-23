@@ -330,6 +330,37 @@ void main() {
         final shellTools = tools.whereType<ShellExecuteTool>().toList();
         expect(shellTools, isNotEmpty);
         expect(shellTools.first.workspacePath, equals(executionRootDir.path));
+        expect(await workspaceService.listWorkspaces(), isEmpty);
+      },
+    );
+
+    test(
+      'a oneshot execution-root-only turn leaves no workspace row',
+      () async {
+        // The same request a `sanad run --execution-root` turn dispatches:
+        // catalog tools, runtime context, and session metadata are produced
+        // without a registered workspace.
+        final request = AgentTurnRequest(
+          sessionId: 'sess-exec-root-oneshot',
+          message: 'run test',
+          metadata: {'execution_root': executionRootDir.path},
+        );
+
+        final tools = await catalog.buildTools(
+          registry: ToolsRegistry(),
+          request: request,
+        );
+        final runtimeContext = await orchestrator.buildRuntimeContext(request);
+        final metadata = await orchestrator.buildSessionMetadata(request);
+
+        final shellTools = tools.whereType<ShellExecuteTool>().toList();
+        expect(shellTools, isNotEmpty);
+        expect(shellTools.first.workspacePath, equals(executionRootDir.path));
+        expect(contextBuilder.lastWorkspacePath, equals(executionRootDir.path));
+        expect(runtimeContext, contains(executionRootDir.path));
+        expect(metadata['execution_root'], equals(executionRootDir.path));
+        expect(metadata, isNot(contains('workspace_id')));
+        expect(await workspaceService.listWorkspaces(), isEmpty);
       },
     );
 

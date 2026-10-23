@@ -4,71 +4,11 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:sanad_agent/cli/cli.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import '../support/isolated_sanad_test_home.dart';
-
-/// In-memory mock WebSocket implementing the minimal interface required by LocalGatewayCliClient.
-class MockWebSocket implements WebSocket {
-  final _incomingController = StreamController<dynamic>();
-  final List<String> sentMessages = [];
-  bool _closed = false;
-  final Completer<void> _doneCompleter = Completer<void>();
-
-  void emitFromServer(dynamic data) {
-    if (!_closed) {
-      _incomingController.add(data);
-    }
-  }
-
-  void simulateClose([int? closeCode, String? closeReason]) {
-    if (!_closed) {
-      _closed = true;
-      _incomingController.close();
-      if (!_doneCompleter.isCompleted) {
-        _doneCompleter.complete();
-      }
-    }
-  }
-
-  void simulateError(Object error) {
-    if (!_closed) {
-      _incomingController.addError(error);
-    }
-  }
-
-  @override
-  void add(dynamic data) {
-    if (_closed) throw const SocketException('Socket closed');
-    sentMessages.add(data.toString());
-  }
-
-  @override
-  Future close([int? code, String? reason]) async {
-    simulateClose(code, reason);
-  }
-
-  @override
-  StreamSubscription<dynamic> listen(
-    void Function(dynamic event)? onData, {
-    Function? onError,
-    void Function()? onDone,
-    bool? cancelOnError,
-  }) {
-    return _incomingController.stream.listen(
-      onData,
-      onError: onError,
-      onDone: onDone,
-      cancelOnError: cancelOnError,
-    );
-  }
-
-  @override
-  Future get done => _doneCompleter.future;
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
+import '../support/mock_gateway_websocket.dart';
 
 void main() {
   useIsolatedSanadTestHome();
@@ -267,7 +207,7 @@ void main() {
   });
 
   group('LocalGatewayCliClient', () {
-    late MockWebSocket mockSocket;
+    late MockGatewayWebSocket mockSocket;
     late Map<String, dynamic> capturedHeaders;
     late Uri capturedUri;
     late Set<String> answeredHistoryIds;
@@ -279,7 +219,7 @@ void main() {
       Duration connectTimeout = const Duration(seconds: 2),
       Duration requestTimeout = const Duration(seconds: 2),
     }) {
-      mockSocket = MockWebSocket();
+      mockSocket = MockGatewayWebSocket();
       answeredHistoryIds = <String>{};
       return LocalGatewayCliClient(
         gatewayUri: uri ?? Uri.parse('ws://127.0.0.1:58085/gateway'),
@@ -471,46 +411,49 @@ void main() {
       await client.dispose();
     });
 
-    test('never treats a stopped event as proof that the session is idle', () async {
-      final client = createClient();
-      await client.connect();
+    test(
+      'never treats a stopped event as proof that the session is idle',
+      () async {
+        final client = createClient();
+        await client.connect();
 
-      var stopCompleted = false;
-      final stopFuture = client
-          .stop(sessionId: 'session-42', stopPollInterval: Duration.zero)
-          .then((_) => stopCompleted = true);
-      await settle();
-      expect(sentCommands()[0]['command'], 'stop');
+        var stopCompleted = false;
+        final stopFuture = client
+            .stop(sessionId: 'session-42', stopPollInterval: Duration.zero)
+            .then((_) => stopCompleted = true);
+        await settle();
+        expect(sentCommands()[0]['command'], 'stop');
 
-      answerPendingHistory(
-        (_) => {
-          'in_flight': {'status': 'running', 'run_id': 'run-1'},
-        },
-      );
-      await settle();
+        answerPendingHistory(
+          (_) => {
+            'in_flight': {'status': 'running', 'run_id': 'run-1'},
+          },
+        );
+        await settle();
 
-      mockSocket.emitFromServer(
-        jsonEncode({
-          'type': 'stopped',
-          'session_id': 'session-42',
-          'run_id': 'run-1',
-          'payload': {'session_id': 'session-42'},
-        }),
-      );
-      await settle();
-      expect(
-        stopCompleted,
-        isFalse,
-        reason: 'the acknowledgement must be re-read from state',
-      );
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'stopped',
+            'session_id': 'session-42',
+            'run_id': 'run-1',
+            'payload': {'session_id': 'session-42'},
+          }),
+        );
+        await settle();
+        expect(
+          stopCompleted,
+          isFalse,
+          reason: 'the acknowledgement must be re-read from state',
+        );
 
-      answerPendingHistory((_) => {'in_flight': null});
-      await settle();
+        answerPendingHistory((_) => {'in_flight': null});
+        await settle();
 
-      await stopFuture;
-      expect(stopCompleted, isTrue);
-      await client.dispose();
-    });
+        await stopFuture;
+        expect(stopCompleted, isTrue);
+        await client.dispose();
+      },
+    );
 
     test('treats an already-idle scoped stop as idempotent', () async {
       final client = createClient();
@@ -524,8 +467,9 @@ void main() {
 
       await stopFuture;
       expect(
-        sentCommands()
-            .where((command) => command['command'] == 'get_session_history'),
+        sentCommands().where(
+          (command) => command['command'] == 'get_session_history',
+        ),
         hasLength(1),
         reason: 'an idle session is confirmed with a single state read',
       );
@@ -675,96 +619,108 @@ void main() {
       },
     );
 
-    test('compactSession dispatches query and returns payload on success', () async {
-      final client = createClient();
-      await client.connect();
+    test(
+      'compactSession dispatches query and returns payload on success',
+      () async {
+        final client = createClient();
+        await client.connect();
 
-      final compactFuture = client.compactSession(
-        sessionId: 'sess-compact-1',
-        resendOnTimeout: false,
-      );
+        final compactFuture = client.compactSession(
+          sessionId: 'sess-compact-1',
+          resendOnTimeout: false,
+        );
 
-      expect(mockSocket.sentMessages.length, 1);
-      final sent =
-          jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
-      expect(sent['command'], equals('session.compact'));
-      expect(sent['payload']['session_id'], equals('sess-compact-1'));
+        expect(mockSocket.sentMessages.length, 1);
+        final sent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        expect(sent['command'], equals('session.compact'));
+        expect(sent['payload']['session_id'], equals('sess-compact-1'));
 
-      final reqId = sent['request_id'] as String;
-      mockSocket.emitFromServer(
-        jsonEncode({
-          'type': 'event',
-          'event': 'session.compact_result',
-          'request_id': reqId,
-          'payload': {
-            'session_id': 'sess-compact-1',
-            'outcome': 'accepted',
-            'compaction_id': 'cmp-100',
-          },
-        }),
-      );
+        final reqId = sent['request_id'] as String;
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.compact_result',
+            'request_id': reqId,
+            'payload': {
+              'session_id': 'sess-compact-1',
+              'outcome': 'accepted',
+              'compaction_id': 'cmp-100',
+            },
+          }),
+        );
 
-      final result = await compactFuture;
-      expect(result['outcome'], equals('accepted'));
-      expect(result['compaction_id'], equals('cmp-100'));
+        final result = await compactFuture;
+        expect(result['outcome'], equals('accepted'));
+        expect(result['compaction_id'], equals('cmp-100'));
 
-      await client.dispose();
-    });
+        await client.dispose();
+      },
+    );
 
-    test('compactSession with resendOnTimeout: false rethrows query_timeout and does not resend', () async {
-      final client = createClient();
-      await client.connect();
+    test(
+      'compactSession with resendOnTimeout: false rethrows query_timeout and does not resend',
+      () async {
+        final client = createClient();
+        await client.connect();
 
-      final compactFuture = client.compactSession(
-        sessionId: 'sess-compact-timeout',
-        timeout: const Duration(milliseconds: 20),
-        resendOnTimeout: false,
-      );
+        final compactFuture = client.compactSession(
+          sessionId: 'sess-compact-timeout',
+          timeout: const Duration(milliseconds: 20),
+          resendOnTimeout: false,
+        );
 
-      expect(mockSocket.sentMessages.length, 1);
-      final initialSent =
-          jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
-      expect(initialSent['command'], equals('session.compact'));
+        expect(mockSocket.sentMessages.length, 1);
+        final initialSent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        expect(initialSent['command'], equals('session.compact'));
 
-      await expectLater(
-        compactFuture,
-        throwsA(
-          isA<CliClientException>().having(
-            (e) => e.code,
-            'code',
-            equals('query_timeout'),
+        await expectLater(
+          compactFuture,
+          throwsA(
+            isA<CliClientException>().having(
+              (e) => e.code,
+              'code',
+              equals('query_timeout'),
+            ),
           ),
-        ),
-      );
+        );
 
-      // Verify no second fire-and-forget message was dispatched
-      expect(mockSocket.sentMessages.length, 1);
+        // Verify no second fire-and-forget message was dispatched
+        expect(mockSocket.sentMessages.length, 1);
 
-      await client.dispose();
-    });
+        await client.dispose();
+      },
+    );
 
-    test('compactSession with resendOnTimeout: true sends fire-and-forget fallback on query_timeout', () async {
-      final client = createClient();
-      await client.connect();
+    test(
+      'compactSession with resendOnTimeout: true sends fire-and-forget fallback on query_timeout',
+      () async {
+        final client = createClient();
+        await client.connect();
 
-      final compactFuture = client.compactSession(
-        sessionId: 'sess-compact-resend',
-        timeout: const Duration(milliseconds: 20),
-        resendOnTimeout: true,
-      );
+        final compactFuture = client.compactSession(
+          sessionId: 'sess-compact-resend',
+          timeout: const Duration(milliseconds: 20),
+          resendOnTimeout: true,
+        );
 
-      final result = await compactFuture;
-      expect(result['outcome'], equals('dispatched'));
+        final result = await compactFuture;
+        expect(result['outcome'], equals('dispatched'));
 
-      // Verify both query and fire-and-forget fallback were dispatched
-      expect(mockSocket.sentMessages.length, 2);
-      final secondSent =
-          jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
-      expect(secondSent['command'], equals('session.compact'));
-      expect(secondSent['payload']['session_id'], equals('sess-compact-resend'));
+        // Verify both query and fire-and-forget fallback were dispatched
+        expect(mockSocket.sentMessages.length, 2);
+        final secondSent =
+            jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
+        expect(secondSent['command'], equals('session.compact'));
+        expect(
+          secondSent['payload']['session_id'],
+          equals('sess-compact-resend'),
+        );
 
-      await client.dispose();
-    });
+        await client.dispose();
+      },
+    );
 
     test('query correlates responses by request_id', () async {
       final client = createClient();
@@ -853,6 +809,198 @@ void main() {
 
       await client.dispose();
     });
+    group('steer acknowledgement', () {
+      /// Dispatching is fire-and-forget, so wait for the outbound envelope
+      /// instead of sleeping before the fake server answers it.
+      Future<String> awaitSentSteer() async {
+        while (sentCommands().isEmpty) {
+          await Future<void>.delayed(Duration.zero);
+        }
+        final command = sentCommands().single;
+        expect(command['type'], 'execute_command');
+        expect(command['command'], 'steer');
+        final payload = command['payload'] as Map<String, dynamic>;
+        expect(payload['session_id'], 'session-77');
+        expect(payload['message'], 'Add the audit trail');
+        expect(payload['request_id'], isNotEmpty);
+        expect(command['request_id'], payload['request_id']);
+        return payload['request_id'] as String;
+      }
+
+      test('dispatches the canonical steer envelope', () async {
+        final client = createClient();
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id':
+                  (sentCommands().single['payload'] as Map)['request_id'],
+              'classification': 'steer',
+            },
+          }),
+        );
+
+        final ack = await ackFuture;
+        expect(ack['session_id'], 'session-77');
+        expect(ack['classification'], 'steer');
+        expect(ack['event'], 'session.message_classified');
+        await client.dispose();
+      });
+
+      test('treats a pending-steer record as the acknowledgement', () async {
+        final client = createClient();
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        final requestId = await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.pending_steer_changed',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': requestId,
+              'state': 'pending',
+            },
+          }),
+        );
+
+        final ack = await ackFuture;
+        expect(ack['classification'], 'steer');
+        expect(ack['state'], 'pending');
+        expect(ack['request_id'], requestId);
+        await client.dispose();
+      });
+
+      test('ignores acks published for another request id', () async {
+        final client = createClient(requestTimeout: const Duration(seconds: 5));
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        final requestId = await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': 'req-another-turn',
+              'classification': 'queue',
+            },
+          }),
+        );
+        await settle();
+
+        var resolved = false;
+        unawaited(ackFuture.then((_) => resolved = true));
+        await settle();
+        expect(
+          resolved,
+          isFalse,
+          reason: 'another turn classification must not answer this steer',
+        );
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': requestId,
+              'classification': 'steer',
+            },
+          }),
+        );
+        final ack = await ackFuture;
+        expect(ack['classification'], 'steer');
+        await client.dispose();
+      });
+
+      test(
+        'surfaces a typed gateway rejection as a client exception',
+        () async {
+          final client = createClient();
+          await client.connect();
+
+          final ackFuture = client.steerAndAwaitAck(
+            sessionId: 'session-77',
+            message: 'Add the audit trail',
+          );
+          final requestId = await awaitSentSteer();
+
+          mockSocket.emitFromServer(
+            jsonEncode({
+              'type': 'error',
+              'request_id': requestId,
+              'payload': {
+                'request_id': requestId,
+                'code': 'invalid_request',
+                'message': 'steer target is not steerable',
+              },
+            }),
+          );
+
+          await expectLater(
+            ackFuture,
+            throwsA(
+              isA<CliClientException>()
+                  .having((e) => e.code, 'code', 'invalid_request')
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('not steerable'),
+                  ),
+            ),
+          );
+          await client.dispose();
+        },
+      );
+
+      test('raises steer_unacknowledged instead of reporting an unconfirmed '
+          'steer as sent', () async {
+        final client = createClient(
+          requestTimeout: const Duration(milliseconds: 20),
+        );
+        await client.connect();
+
+        await expectLater(
+          client.steerAndAwaitAck(
+            sessionId: 'session-77',
+            message: 'Add the audit trail',
+          ),
+          throwsA(
+            isA<CliClientException>().having(
+              (e) => e.code,
+              'code',
+              'steer_unacknowledged',
+            ),
+          ),
+        );
+        await client.dispose();
+      });
+    });
   });
 
   group('LocalGatewayDiscovery', () {
@@ -934,7 +1082,9 @@ void main() {
           request.response
             ..statusCode = HttpStatus.ok
             ..headers.contentType = ContentType.json
-            ..write('{"status":"ok"}');
+            ..write(
+              '{"status":"ok","home_id":"${sanadHomeIdentity(tempHome.path)}"}',
+            );
           await request.response.close();
         });
 
@@ -983,10 +1133,7 @@ void main() {
             stopwatch.elapsed,
             greaterThanOrEqualTo(const Duration(milliseconds: 1500)),
           );
-          expect(
-            stopwatch.elapsed,
-            lessThan(const Duration(seconds: 4)),
-          );
+          expect(stopwatch.elapsed, lessThan(const Duration(seconds: 4)));
         } finally {
           await server.close(force: true);
           await requests.cancel();
@@ -1039,7 +1186,9 @@ void main() {
           request.response
             ..statusCode = HttpStatus.ok
             ..headers.contentType = ContentType.json
-            ..write('{"status":"ok"}');
+            ..write(
+              '{"status":"ok","home_id":"${sanadHomeIdentity(tempHome.path)}"}',
+            );
           await request.response.close();
         });
         try {

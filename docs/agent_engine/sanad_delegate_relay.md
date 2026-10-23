@@ -62,6 +62,7 @@ Deterministic validation ensures invalid or contradictory options fail early wit
 | `--model` / `-m` | String | Optional | Model name override. |
 | `--thinking-mode` | Enum | Optional | Explicit thinking option id such as `medium`, `off` or `on` (the product option ids plus legacy aliases); forwarded unchanged to the daemon, which validates it against the route before dispatch. A rejected value fails the run with exit `1` and the specific code. Legacy `--thinking` remains a shorthand for `deep`. |
 | `--timeout` | Seconds | Optional | Whole number of seconds (1–86400). Scoped session stop is triggered upon expiry. |
+| `--reconnect-timeout` | Seconds | Optional | Whole number of seconds (1–86400, default `60`). Bounded window that an attached `sanad run` spends reconnecting to the same Home's daemon and re-attaching to its own in-flight turn across a restart. |
 | `--events` | Flag | Optional | Streams real-time NDJSON events to standard output. |
 | `--allow-all-tools` | Flag | Optional | Auto-approves ordinary tool execution requests. Questions (`system_ask_user`) remain pending. |
 | `--quiet` / `-q` | Flag | Optional | Suppresses banners and tool output, printing only the final assistant text. |
@@ -138,6 +139,15 @@ Appended newline-delimited event records matching status transitions:
 {"timestamp":"2026-09-22T04:02:15.120Z","type":"completed","session_id":"8fa27f42-498c-4573-8d07-285698b671a9","data":{"session_id":"8fa27f42-498c-4573-8d07-285698b671a9","status":"completed","exit_code":0}}
 ```
 
+A restart adds up to three non-terminal lifecycle records between `running` and the terminal record, so a supervisor can tell an attached run that is crossing a restart from one that is hung:
+
+| Type | Meaning |
+|---|---|
+| `reconnecting` | The gateway dropped mid-turn. `data.window_seconds` is the reconnect window that bounds the wait. |
+| `reconnected` | A same-Home endpoint answered and the transport is live again. `data.attempts` and `data.elapsed_ms` bound the cost. |
+| `re_attached` | The durable turn was reclaimed and is being followed. `data.state` is the snapshot state, `data.request_id` the followed turn, and `data.recovery_scheduled` whether the daemon owns automatic recovery. |
+| `refused` | A dispatch was refused before sending anything. `data.reason` is the typed cause. |
+
 ### 4.3. Exit Codes & Scoped Cancellation
 
 `sanad session stop <session_id>` is session-scoped and transport-confirmed: the daemon-backed CLI dispatches one `stop` immediately (naming the in-flight `run_id` when the session projection reports one), then keeps its Local Gateway connection open through ordered state reads and returns success only after the target is authoritatively idle. A matching `stopped` event is only a signal to re-read; it never counts as confirmation on its own, a stop event for another session cannot complete the command, and an unconfirmed active stop fails instead of reporting false success. The owning contract is [Sanad CLI Architecture § 9.3](../technical/sanad_cli_architecture.md).
@@ -145,9 +155,33 @@ Appended newline-delimited event records matching status transitions:
 - **`0`**: Successful turn completion (`status: "completed"`).
 - **`1`**: Execution failure or prompt error (`status: "failed"`). Also returned at once when the daemon blocks the turn (`cause: "blocked"`, no Stop sent; the blocked work awaits Retry, Change Provider or `sanad session stop`) or refuses it with a typed `error_code` such as `turn_failed`.
 - **`2`**: Validation error (invalid arguments or missing paths).
+- **`3`**: Refused before dispatch because the target session's durable turn still owns it (`cause: "turn_in_flight"`). No `think` is sent and no turn is admitted; the refusal names the daemon's own `execution_snapshot.state`.
+- **`78`**: Configuration/ownership error. Returned when a `--standalone` run cannot confirm the Home's daemon endpoint, when a forced standalone run meets a healthy daemon, when the state-root lock is already owned, and when a reconnect discovers an endpoint serving a different Sanad Home (`cause: "home_identity_mismatch"`).
 - **`124`**: Execution timeout (`status: "timeout"`). Automatically sends `sanad session stop <session_id>`.
 - **`130` / `143`**: Process interrupted via `SIGINT` or `SIGTERM` (`status: "interrupted"`). Automatically sends `sanad session stop <session_id>`.
 - **`130`**: Execution cancelled externally via daemon stop (`status: "cancelled"`). Triggered by `sanad session stop <session_id>`.
+
+Attached runs also report these reconnect reason codes in `--json` `error_code` and in the terminal event's `cause`:
+
+| Cause | Exit | Meaning |
+|---|---|---|
+| `reconnect_window_expired` | `1` | The gateway dropped mid-turn and no healthy endpoint for the same Home answered within `--reconnect-timeout`. The turn may still be running headless in the daemon; re-dispatch after verifying daemon health. |
+| `turn_lost` | `1` | Reconnection succeeded, but the durable snapshot shows another turn's `request_id` or an idle session with no recorded result. The brief is never re-sent. |
+| `home_identity_mismatch` | `78` | The endpoint discovered after the drop belongs to a different Sanad Home. Fatal isolation error; do not retry against that endpoint. |
+| `connection_lost` | `1` | The gateway dropped before a turn was dispatched, or the reconnect sequence itself could not complete. |
+
+### 4.4. Following a Turn Across a Daemon Restart
+
+An attached `sanad run` treats a mid-turn gateway drop as a restart, not a failure. It enters one bounded window per drop (`--reconnect-timeout`), re-discovers the selected Home's live endpoint, and only connects when the discovered daemon proves the same Home identity. It then reads the durable execution snapshot from `get_session_history` and compares `execution_snapshot.request_id` with the request id it dispatched, because restart recovery reclaims the same work item and request lineage.
+
+| Snapshot state | Attached run behaviour |
+|---|---|
+| `running`, `resuming`, `waiting`, `queued`, `stopping` | Re-subscribe and keep following to the turn's own terminal outcome. |
+| `blocked` | Exit `1` with `cause: blocked`, unchanged from Task 125. The daemon schedules automatic resume only for `waiting`, so a blocked turn is parked, not transient. |
+| `idle` | Exit `0` when the last recorded assistant message is a result; otherwise exit `1` with `cause: turn_lost`. |
+| no snapshot | Keep following without claiming the turn was lost. |
+
+Re-dispatch onto a session whose durable turn is still in flight is refused with exit `3` (`turn_in_flight`) rather than attached: a non-interactive run cannot prove the caller still wants the in-flight turn's result, and silently attaching would drop the newly supplied brief. A queued or parked (blocked) turn does not own the session and is never refused.
 
 ---
 

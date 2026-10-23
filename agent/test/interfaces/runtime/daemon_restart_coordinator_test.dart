@@ -1,10 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:test/test.dart';
 
+import '../../support/isolated_sanad_test_home.dart';
+
 void main() {
+  useIsolatedSanadTestHome();
+
   test('controlled restart timeout defaults to one minute', () {
     expect(
       SessionRunOrchestrator.controlledRestartCheckpointTimeout,
@@ -319,6 +326,197 @@ void main() {
 
       await coordinator.completePreparedRestart(preparation);
       expect(exitCode, 0);
+    },
+  );
+
+  test(
+    'prepared pause removes the runtime record before its exit',
+    () async {
+      final steps = <String>[];
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: _BoundaryOrchestrator(),
+        beforeDaemonExit: () async => steps.add('cleanup'),
+        exitDaemon: (code) => steps.add('exit $code'),
+      );
+
+      final preparation = await coordinator.prepareRestart();
+      await coordinator.completePreparedPause(preparation);
+
+      expect(steps, ['cleanup', 'exit 123']);
+    },
+  );
+
+  test(
+    'a permanent stop removes the runtime record before its exit',
+    () async {
+      final steps = <String>[];
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: _BoundaryOrchestrator(),
+        beforeDaemonExit: () async => steps.add('cleanup'),
+        exitDaemon: (code) => steps.add('exit $code'),
+      );
+
+      await coordinator.stop(acknowledgementDelay: Duration.zero);
+
+      expect(steps, ['cleanup', 'exit 123']);
+    },
+  );
+
+  test(
+    'a prepared permanent stop removes the runtime record before its exit',
+    () async {
+      final steps = <String>[];
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: _BoundaryOrchestrator(),
+        beforeDaemonExit: () async => steps.add('cleanup'),
+        exitDaemon: (code) => steps.add('exit $code'),
+      );
+
+      final preparation = await coordinator.prepareRestart();
+      await coordinator.completePreparedStop(preparation);
+
+      // `completePreparedStop` delegates to `stop`, so the record removal runs
+      // exactly once.
+      expect(steps, ['cleanup', 'exit 123']);
+    },
+  );
+
+  test(
+    'a supervised restart removes the record before its successor publishes',
+    () async {
+      final steps = <String>[];
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: _BoundaryOrchestrator(),
+        beforeControlledExit: () async => steps.add('maintenance'),
+        beforeDaemonExit: () async => steps.add('cleanup'),
+        exitDaemon: (code) => steps.add('exit $code'),
+      );
+
+      final preparation = await coordinator.prepareRestart();
+      await coordinator.completePreparedRestart(preparation);
+
+      expect(steps, ['maintenance', 'cleanup', 'exit 0']);
+    },
+  );
+
+  test('a failing pre-exit cleanup still exits', () async {
+    final exitCodes = <int>[];
+    final coordinator = DaemonRestartCoordinator(
+      sessionOrchestrator: _BoundaryOrchestrator(),
+      beforeDaemonExit: () async => throw StateError('record is busy'),
+      exitDaemon: exitCodes.add,
+    );
+
+    final preparation = await coordinator.prepareRestart();
+    await coordinator.completePreparedPause(preparation);
+
+    expect(exitCodes, [123]);
+  });
+
+  test('a pre-exit cleanup that never completes still exits', () async {
+    final exitCodes = <int>[];
+    final coordinator = DaemonRestartCoordinator(
+      sessionOrchestrator: _BoundaryOrchestrator(),
+      beforeDaemonExit: () => Completer<void>().future,
+      beforeDaemonExitTimeout: const Duration(milliseconds: 20),
+      exitDaemon: exitCodes.add,
+    );
+
+    final preparation = await coordinator.prepareRestart();
+    await coordinator.completePreparedPause(preparation);
+
+    expect(exitCodes, [123]);
+  });
+
+  test('a restart that leaves the daemon running keeps the record', () async {
+    var cleanups = 0;
+    final exitCodes = <int>[];
+    final blocked = _BoundaryOrchestrator(
+      result: const ControlledRestartCheckpointResult(
+        isSafe: false,
+        blockers: [
+          ControlledRestartBlocker(
+            sessionId: 'blocked-session',
+            toolCallIds: ['unsafe-tool'],
+            checkpointRecognized: true,
+          ),
+        ],
+      ),
+    );
+    final coordinator = DaemonRestartCoordinator(
+      sessionOrchestrator: blocked,
+      beforeDaemonExit: () async => cleanups++,
+      exitDaemon: exitCodes.add,
+    );
+
+    final rejected = await coordinator.prepareRestart();
+    await coordinator.completePreparedRestart(rejected);
+
+    expect(rejected.accepted, isFalse);
+    expect(cleanups, 0);
+    expect(exitCodes, isEmpty);
+  });
+
+  test('an abandoned restart keeps the record and leaves the daemon up', () async {
+    var cleanups = 0;
+    final exitCodes = <int>[];
+    final coordinator = DaemonRestartCoordinator(
+      sessionOrchestrator: _BoundaryOrchestrator(),
+      beforeDaemonExit: () async => cleanups++,
+      exitDaemon: exitCodes.add,
+    );
+
+    final preparation = await coordinator.prepareRestart();
+    coordinator.abandonPreparedRestart(preparation);
+
+    expect(preparation.accepted, isTrue);
+    expect(cleanups, 0);
+    expect(exitCodes, isEmpty);
+  });
+
+  test(
+    'a managed stop removes the real runtime record before its exit',
+    () async {
+      // The production wiring: the coordinator owns the exit, so a
+      // `sanad-dev stop` (a `/shutdown` pause or a permanent stop) must remove
+      // the Home's record itself; `dispose()` is never reached on that path.
+      await LocalGatewayEndpointRecord.write(host: '127.0.0.1', port: 58136);
+      final recordFile = File(
+        SanadHomeBootstrap.resolveChild(LocalGatewayEndpointRecord.relativePath),
+      );
+      expect(recordFile.existsSync(), isTrue);
+
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: _BoundaryOrchestrator(),
+        beforeDaemonExit: LocalGatewayEndpointRecord.removeOwnedOnExit,
+        exitDaemon: (_) {},
+      );
+
+      await coordinator.stop(acknowledgementDelay: Duration.zero);
+
+      expect(recordFile.existsSync(), isFalse);
+    },
+  );
+
+  test(
+    'a prepared pause removes the real runtime record before its exit',
+    () async {
+      // `sanad-dev stop` pauses; the successor publish of a restart cannot be
+      // involved, so the record must be gone once the pause completes.
+      await LocalGatewayEndpointRecord.write(host: '127.0.0.1', port: 58137);
+      final recordFile = File(
+        SanadHomeBootstrap.resolveChild(LocalGatewayEndpointRecord.relativePath),
+      );
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: _BoundaryOrchestrator(),
+        beforeDaemonExit: LocalGatewayEndpointRecord.removeOwnedOnExit,
+        exitDaemon: (_) {},
+      );
+
+      final preparation = await coordinator.prepareRestart();
+      await coordinator.completePreparedPause(preparation);
+
+      expect(recordFile.existsSync(), isFalse);
     },
   );
 

@@ -3,8 +3,37 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/termination_cleanup.dart';
 
 const _localGatewayCredentialHeader = 'x-sanad-local-token';
+
+/// The exit status a supervised daemon uses to ask its supervisor for a
+/// permanent stop instead of a restart.
+const int supervisedPermanentShutdownExitCode = 123;
+
+/// What a supervisor does after the supervised daemon exits.
+enum SupervisedChildExit {
+  /// A shutdown is already in progress: the supervisor is about to end, so it
+  /// must neither restart the child nor race its own exit.
+  ignore,
+
+  /// The child asked for a permanent stop.
+  stop,
+
+  /// Start the child again.
+  restart,
+}
+
+SupervisedChildExit decideSupervisedChildExit({
+  required int exitCode,
+  required bool shuttingDown,
+}) {
+  if (shuttingDown) return SupervisedChildExit.ignore;
+  if (exitCode == supervisedPermanentShutdownExitCode) {
+    return SupervisedChildExit.stop;
+  }
+  return SupervisedChildExit.restart;
+}
 
 bool shouldUseHotRestartSupervisor({required List<String> arguments}) {
   final command = arguments.isEmpty ? '' : arguments.first.toLowerCase();
@@ -126,6 +155,7 @@ class HotRestartManager {
 
     Process? childProcess;
     var manualRestartInProgress = false;
+    var shuttingDown = false;
     final failureWindow = RestartFailureWindow(
       maxFailures: _maxFailuresPerWindow,
       window: _failureWindow,
@@ -170,29 +200,35 @@ class HotRestartManager {
 
       // Listen for exit code to restart automatically if the process exits on its own (e.g. /restart POST)
       spawned.exitCode.then((exitCode) async {
-        if (childProcess == spawned) {
-          if (exitCode == 123) {
-            print(
-              '\n[HotRestartManager] Child requested permanent shutdown. Exiting...',
-            );
-            exit(0);
-          }
-          if (exitCode != 0) {
-            final shouldRestart = failureWindow.recordFailure();
-            if (!shouldRestart) {
-              print(
-                '\n=== ⛔ Child process failed more than $_maxFailuresPerWindow times within ${_failureWindow.inSeconds} seconds. Stopping supervisor. ===',
-              );
-              exit(exitCode);
-            }
-          }
+        if (childProcess != spawned) return;
+        // A shutdown in progress owns the exit: restarting here would orphan a
+        // fresh daemon behind a supervisor that is already leaving.
+        final decision = decideSupervisedChildExit(
+          exitCode: exitCode,
+          shuttingDown: shuttingDown,
+        );
+        if (decision == SupervisedChildExit.ignore) return;
+        if (decision == SupervisedChildExit.stop) {
           print(
-            '\n=== ⚠️ Child process exited with code $exitCode. Supervisor auto-restarting... ===',
+            '\n[HotRestartManager] Child requested permanent shutdown. Exiting...',
           );
-          childProcess = null;
-          await Future.delayed(const Duration(milliseconds: 500));
-          await startChild();
+          exit(0);
         }
+        if (exitCode != 0) {
+          final shouldRestart = failureWindow.recordFailure();
+          if (!shouldRestart) {
+            print(
+              '\n=== ⛔ Child process failed more than $_maxFailuresPerWindow times within ${_failureWindow.inSeconds} seconds. Stopping supervisor. ===',
+            );
+            exit(exitCode);
+          }
+        }
+        print(
+          '\n=== ⚠️ Child process exited with code $exitCode. Supervisor auto-restarting... ===',
+        );
+        childProcess = null;
+        await Future.delayed(const Duration(milliseconds: 500));
+        await startChild();
       });
     }
 
@@ -263,7 +299,9 @@ class HotRestartManager {
       }
     }
 
-    Future<void> shutdown() async {
+    Future<void> shutdown(ProcessSignal signal) async {
+      if (shuttingDown) return;
+      shuttingDown = true;
       print('\n[HotRestartManager] Shutting down cleanly...');
       // Restore the terminal before exit: raw mode was enabled for the 'r'
       // key listener, and without this the host terminal stays corrupted
@@ -276,17 +314,26 @@ class HotRestartManager {
           // The host terminal may not expose mutable modes.
         }
       }
-      childProcess?.kill();
-      if (childProcess != null) {
-        await childProcess!.exitCode;
+      // The daemon owns the Home's runtime record, not this supervisor: the
+      // child receives this SIGTERM, runs one bounded cleanup, and exits. The
+      // supervisor only waits for that to finish.
+      final child = childProcess;
+      childProcess = null;
+      child?.kill();
+      if (child != null) {
+        await child.exitCode;
       }
-      exit(0);
+      // A supervisor that exits 0 after a signal looks like a requested clean
+      // stop: `launchd` keeps `KeepAlive { SuccessfulExit = false }`, so the
+      // service would stay down after a stray SIGTERM. Report the signal the
+      // way a signal death would (143 for SIGTERM, 130 for SIGINT).
+      exit(signalExitCode(signal));
     }
 
     // Clean shutdown of child on terminal or supervisor termination.
-    ProcessSignal.sigint.watch().listen((_) => shutdown());
+    ProcessSignal.sigint.watch().listen(shutdown);
     if (!Platform.isWindows) {
-      ProcessSignal.sigterm.watch().listen((_) => shutdown());
+      ProcessSignal.sigterm.watch().listen(shutdown);
     }
   }
 }

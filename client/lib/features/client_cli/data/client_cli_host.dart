@@ -376,7 +376,22 @@ class ClientCliHost {
 
             // Permission checking
             if (_permissionMode == ClientCliSettings.defaultMode) {
-              final sessionId = _extractSessionId(argv);
+              final sessionTarget = clientCliSessionTargetFor(argv);
+              if (sessionTarget.conflict) {
+                // Two different sessions are named. Relaying would act on one
+                // while the approval names the other, so refuse instead of
+                // guessing.
+                sendTerminalFrame({
+                  'type': 'error',
+                  'request_id': requestId,
+                  'code': 'ambiguous_session_target',
+                  'message':
+                      'The command names two different sessions; send exactly '
+                      'one of the positional session id or --session.',
+                }, closeCode: WebSocketStatus.protocolError);
+                return;
+              }
+              final sessionId = sessionTarget.sessionId;
               // Announce the wait before prompting, so a headless caller can
               // explain why nothing has been relayed yet.
               if (sessionId == null ||
@@ -544,18 +559,6 @@ class ClientCliHost {
           agent.accountDeviceId == deviceId ||
           agent.name.toLowerCase() == deviceId.toLowerCase()) {
         return agent;
-      }
-    }
-    return null;
-  }
-
-  String? _extractSessionId(List<String> argv) {
-    for (var i = 0; i < argv.length; i++) {
-      if ((argv[i] == '-s' || argv[i] == '--session') && i + 1 < argv.length) {
-        return argv[i + 1];
-      }
-      if (argv[i].startsWith('--session=')) {
-        return argv[i].substring('--session='.length);
       }
     }
     return null;

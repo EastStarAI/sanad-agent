@@ -44,6 +44,11 @@ sha256_file() {
   elif command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
   else echo 'A SHA-256 utility (shasum or sha256sum) is required.' >&2; return 1; fi
 }
+sha256_stream() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 | awk '{print $1}';
+  elif command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}';
+  else echo 'A SHA-256 utility (shasum or sha256sum) is required.' >&2; return 1; fi
+}
 
 print_help() {
   cat <<'EOF'
@@ -179,7 +184,7 @@ ensure_dependencies() {
   flutter_pin="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/.fvmrc")"
   stamp_root="$PROJECT_DIR/.dart_tool/sanad-dev"
   mkdir -p "$stamp_root"
-  fingerprint="$(printf '%s:%s:%s:%s:%s' "$flutter_pin" "$(sha256_file "$PROJECT_DIR/release/contract/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/scripts/sanad_dev/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/agent/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/client/pubspec.lock")" | { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | awk '{print $1}')"
+  fingerprint="$(printf '%s:%s:%s:%s:%s' "$flutter_pin" "$(sha256_file "$PROJECT_DIR/release/contract/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/scripts/sanad_dev/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/agent/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/client/pubspec.lock")" | sha256_stream)"
   stamp="$stamp_root/setup.stamp"
   [ -f "$PROJECT_DIR/release/contract/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/scripts/sanad_dev/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/agent/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] && packages_ready=true
   if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$fingerprint" ] && [ "$packages_ready" = true ]; then return; fi
@@ -190,17 +195,123 @@ ensure_dependencies() {
   printf '%s' "$fingerprint" > "$stamp"
 }
 
-runtime_cli_fingerprint() {
+# Prints every file of one package that can change the compiled runtime CLI.
+#
+# The set matches `CompiledCliCache._packageInputs` in the Dart CLI: both
+# pubspecs, the `lib`/`bin` Dart trees, and every file under `hook`, because a
+# native build hook changes the artifact without changing any Dart source.
+runtime_cli_package_inputs() {
+  local package_root="$1" name file
+  for name in pubspec.yaml pubspec.lock; do
+    if [ -f "$package_root/$name" ]; then printf '%s\n' "$package_root/$name"; fi
+  done
+  for name in lib bin; do
+    if [ -d "$package_root/$name" ]; then
+      find "$package_root/$name" -type f -name '*.dart' -print
+    fi
+  done
+  if [ -d "$package_root/hook" ]; then
+    find "$package_root/hook" -type f -print
+  fi
+}
+
+runtime_cli_path_dependencies() {
+  local package_root="$1"
+  if [ -f "$package_root/pubspec.yaml" ]; then
+    sed -n 's/^[[:space:]][[:space:]]*path:[[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' "$package_root/pubspec.yaml"
+  fi
+  return 0
+}
+
+# Prints the root of every package compiled into the prepared runtime CLI.
+#
+# A `path:` dependency such as `shared/windows_path` is compiled into the CLI, so
+# the fingerprint must cover it. Hashing only `scripts/sanad_dev` would keep the
+# recorded stamp matching after a `shared/` edit, and `run`, `reset`, `switch`,
+# and `apply` would then execute code the developer no longer has. The closure is
+# walked breadth-first because a path package can itself depend on another path
+# package.
+runtime_cli_package_roots() {
   local package_root="$PROJECT_DIR/scripts/sanad_dev"
+  local current dependency resolved seen known
+  local -a queue=("$package_root") visited=("$package_root")
+  printf '%s\n' "$package_root"
+  while [ "${#queue[@]}" -gt 0 ]; do
+    current="${queue[0]}"
+    queue=("${queue[@]:1}")
+    while IFS= read -r dependency; do
+      [ -n "$dependency" ] || continue
+      resolved="$(cd "$current" 2>/dev/null && cd "$dependency" 2>/dev/null && pwd -P)" || continue
+      known=false
+      for seen in "${visited[@]}"; do
+        if [ "$seen" = "$resolved" ]; then known=true; break; fi
+      done
+      if [ "$known" = false ]; then
+        visited+=("$resolved")
+        queue+=("$resolved")
+        printf '%s\n' "$resolved"
+      fi
+    done < <(runtime_cli_path_dependencies "$current")
+  done
+}
+
+runtime_cli_inputs() {
+  local package_root
+  while IFS= read -r package_root; do
+    runtime_cli_package_inputs "$package_root"
+  done < <(runtime_cli_package_roots)
+}
+
+# Warm fingerprint of the watched closure.
+#
+# The content hash below spawns one `shasum` per file, which dominates a warm
+# `sanad-dev` invocation. When `git status` reports no change anywhere in the
+# closure, the working tree content of every tracked input is exactly its staged
+# index blob, so one `git ls-files --stage` listing is the whole fingerprint.
+# Edits, staged edits, untracked files, deletions, ignored files, and branch
+# switches all make that status non-empty and fall back to the content hash, so
+# the warm path can never mask a change that requires a rebuild.
+runtime_cli_git_fingerprint() {
+  command -v git >/dev/null 2>&1 || return 1
+  local repository_root
+  repository_root="$(cd "$PROJECT_DIR" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$repository_root" ] || return 1
   (
-    cd "$package_root"
-    {
-      printf '%s\n' pubspec.yaml pubspec.lock
-      find lib -type f -name '*.dart' -print
-    } | sort | while IFS= read -r file; do
-      printf '%s:%s\n' "$file" "$(sha256_file "$file")"
-    done
-  ) | { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | awk '{print $1}'
+    cd "$repository_root" || exit 1
+    local package_root relative status listing name
+    local -a pathspecs=()
+    while IFS= read -r package_root; do
+      case "$package_root" in
+        "$repository_root"/*) ;;
+        *) exit 1 ;;
+      esac
+      relative="${package_root#"$repository_root"/}"
+      pathspecs+=("$relative/pubspec.yaml" "$relative/pubspec.lock")
+      for name in lib bin hook; do
+        if [ -d "$package_root/$name" ]; then pathspecs+=("$relative/$name"); fi
+      done
+    done < <(runtime_cli_package_roots)
+    [ "${#pathspecs[@]}" -gt 0 ] || exit 1
+    status="$(git --no-optional-locks status --porcelain \
+      --untracked-files=all --ignored=matching -- \
+      "${pathspecs[@]}" 2>/dev/null)" || exit 1
+    [ -z "$status" ] || exit 1
+    listing="$(git ls-files --stage -- "${pathspecs[@]}" 2>/dev/null)" || exit 1
+    [ -n "$listing" ] || exit 1
+    printf '%s\n' "$listing" | sha256_stream
+  )
+}
+
+runtime_cli_fingerprint() {
+  local fast
+  if fast="$(runtime_cli_git_fingerprint)" && [ -n "$fast" ]; then
+    printf 'g%s\n' "$fast"
+    return
+  fi
+  local file
+  while IFS= read -r file; do
+    printf '%s:%s\n' "${file#"$PROJECT_DIR"/}" "$(sha256_file "$file")"
+  done < <(runtime_cli_inputs | sort) | sha256_stream
 }
 
 compile_runtime_cli() {
@@ -240,7 +351,21 @@ run_setup() {
   ensure_runtime_cli
 }
 
+# Commands that must keep working on a stale prepared runtime.
+#
+# Stopping, inspecting, and reading logs of an already-running runtime never
+# needs the newest CLI, so these fall back to the last prepared artifact instead
+# of refusing. Every command that can start or mutate a runtime still requires a
+# fresh `setup`.
+runtime_command_tolerates_stale_cli() {
+  case "${1:-}" in
+    stop | status | logs) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 require_runtime_cli() {
+  local command="${1:-}"
   command -v fvm >/dev/null 2>&1 || { echo 'FVM is not installed. Run: sanad-dev install' >&2; return 1; }
   local artifact_root stamp fingerprint
   artifact_root="$PROJECT_DIR/.dart_tool/sanad-dev"
@@ -254,18 +379,21 @@ require_runtime_cli() {
       return 1
     }
   fingerprint="$(runtime_cli_fingerprint)"
+  # Runtime commands are strictly non-mutating: a stale prepared CLI fails with
+  # the exact recovery command instead of running a hidden auto-setup. Only
+  # `setup`, `run`, and `switch` prepare the runtime.
   if [ "$(cat "$stamp")" != "$fingerprint" ]; then
-    echo '[sanad-dev] Project runtime is stale; running auto-setup...' >&2
-    local setup_output setup_status
-    if setup_output="$(run_setup false true 2>&1)"; then
-      :
-    else
-      setup_status=$?
-      echo "$setup_output" >&2
-      echo 'Project runtime setup failed.' >&2
-      return $setup_status
+    if runtime_command_tolerates_stale_cli "$command"; then
+      local prepared
+      prepared="$artifact_root/sanad-dev-runtime-$(cat "$stamp")"
+      if [ -x "$prepared" ]; then
+        echo 'Project runtime is stale; running the last prepared CLI. Run: sanad-dev setup' >&2
+        RUNTIME_CLI="$prepared"
+        return 0
+      fi
     fi
-    fingerprint="$(runtime_cli_fingerprint)"
+    echo 'Project runtime is stale. Run: sanad-dev setup' >&2
+    return 1
   fi
   RUNTIME_CLI="$artifact_root/sanad-dev-runtime-$fingerprint"
   [ -x "$RUNTIME_CLI" ] || {
@@ -296,7 +424,7 @@ main() {
     *)
       ;;
   esac
-  require_runtime_cli
+  require_runtime_cli "$command"
   local runtime_args=("$@")
   if [ "$command" = run ] && [ "$force" = true ]; then
     runtime_args=()

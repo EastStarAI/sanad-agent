@@ -9,7 +9,7 @@ description: "The stable release pipeline, protected signing boundaries, artifac
 
 The public `EastStarAI/sanad-agent` repository owns CI, artifact construction,
 signing orchestration, the release manifest, update-feed generation, and the
-canonical installer sources. The current patch release uses marketing version `1.0.19` and build number `20` for both Sanad Agent and Sanad Client. RC tags use `v1.0.19-rc.N`; Stable uses `v1.0.19`. The unpublished `v1.0.3` candidate tag is retained as failed provenance after its Windows smoke gate rejected a PowerShell reserved-variable collision; it owns no GitHub Release or Production asset. Each later candidate records its increasing build number in the checked-in contract.
+canonical installer sources. The current patch release uses marketing version `1.0.20` and build number `21` for both Sanad Agent and Sanad Client. RC tags use `v1.0.20-rc.N`; Stable uses `v1.0.20`. The unpublished `v1.0.3` candidate tag is retained as failed provenance after its Windows smoke gate rejected a PowerShell reserved-variable collision; it owns no GitHub Release or Production asset. Each later candidate records its increasing build number in the checked-in contract.
 
 Pull-request CI is read-only and never receives signing or deployment credentials. A protected validation-only dispatch from `main` can build the complete signed Agent/Client matrix, including a private IPA, as retained private artifacts without a tag, Draft, Release, TestFlight upload, or deployment. Signing jobs use protected GitHub Environments. Assembly remains contents-read; only the separate Draft and publication jobs receive contents-write.
 
@@ -147,6 +147,75 @@ Keychain when no explicit Sparkle key-file path is supplied. Windows signing
 likewise passes `WINSPARKLE_PRIVATE_KEY_PATH` directly to `sign_update`; the DSA
 private key is never copied into the Client checkout.
 
+## Stable macOS Agent signing identifier
+
+`codesign` derives the signing identifier from the file name when a call omits
+`--identifier`, and the Agent artifact name carries the release version. The
+identifier is part of the designated requirement, so every release used to
+publish a different requirement. macOS records that requirement as the trusted
+code of the Keychain items an application creates, which made each release look
+like a different program to the login Keychain: an ACL granted to one version
+never covered the next one, and an Agent without a user present could block on a
+prompt nobody could answer.
+
+The workflow therefore defines one workflow-level
+`SANAD_AGENT_CODESIGN_IDENTIFIER` (`com.eaststarai.sanad.agent`) and passes it to
+the macOS Agent `codesign` call. The value contains neither the release version
+nor the architecture, because both change per artifact while the identifier must
+not. After signing, the workflow fails unless `codesign -d --verbose=2` reports
+exactly that `Identifier` and `codesign -d -r-` reports a designated requirement
+that names the same identifier and the `UC2824B99G` team OU. The
+`release-security` CI job additionally guards the env definition, the
+`--identifier` argument, and the requirement assertion as static checks that run
+on pull requests, so a future edit cannot silently drop them.
+
+The signed Client `.app`, its nested frameworks, helpers, and bundles, and the
+signed disk image stay unchanged. A bundle takes its identifier from its own
+bundle identifier, and a bare helper executable inside one keeps the stable file
+name its bundle layout gives it; neither carries a release version. A disk image
+is not an executable whose requirement can become a Keychain ACL entry. Those are
+the only other macOS `codesign` calls in the release surface, so no version-named
+standalone executable is signed anywhere else.
+
+### Upgrade behaviour
+
+- Keychain items created by v1.0.18 and v1.0.19 carry authorized-application ACL
+  entries for those binaries' exact requirements, which contain
+  `identifier "sanad-agent-<version>-macos-<arch>"`.
+- The first release with the stable identifier can therefore still prompt once
+  for such an item. Choosing **Always Allow** adds the new, now
+  version-independent requirement to that item, so every later release with the
+  same identifier and team is already authorized for it. Users on the x64 and
+  arm64 builds share that outcome, because the identifier does not encode the
+  architecture.
+- A fresh installation creates its items with the stable requirement directly
+  and never prompts.
+- `MacOsKeychainAgentSecretStore.write` in `agent/lib/core/auth/agent_secret_store.dart`
+  performs `SecItemAdd` with only the item class, the service
+  `ai.eaststar.sanad.agent`, the account `<scope>:<key>`, the value, and
+  `kSecAttrAccessibleAfterFirstUnlock`. It sets no `kSecAttrAccess` ACL and no
+  `kSecAttrAccessGroup`, so macOS defaults the item's authorized applications to
+  the creating application, matched by its designated requirement. A later
+  `SecItemUpdate` rewrites only the value and leaves that ACL untouched, which is
+  why an existing item keeps its old requirement until the new binary is
+  authorized once.
+- Commands that never open the vault never reach this prompt; the prompt can only
+  appear on an actual secret read or write.
+
+### Installer and runtime verification
+
+`scripts/install.sh` and the runtime updater keep verifying the Apple-anchored
+NanoSoft publisher requirement — team `UC2824B99G` and the exact
+`Developer ID Application: NanoSoft LY LLC` common name — instead of pinning the
+identifier. `install.sh` resolves its manifest from `SANAD_RELEASE_MANIFEST_URL`
+and validates whatever version that manifest declares, so it must still accept an
+older artifact that was signed before the stable identifier existed; pinning the
+identifier would reject exactly those installer runs. The identifier is also not
+a trust boundary: any signer can assert any identifier, while the Apple anchor,
+team, and publisher name decide who is allowed to sign. Release CI pins the
+identifier so the ACL continuity above holds; installation and update keep
+proving the publisher.
+
 ## Protected environments
 
 | Environment | Responsibility |
@@ -274,6 +343,43 @@ Web assets use content-hashed Flutter output plus a small no-cache
 `version.json`. The server must route unknown application paths to
 `index.html`, serve immutable hashed assets with long-lived caching, and serve
 the shell, version marker, and Appcast without stale caching.
+
+### Asset deployment serialization and health sweep resilience
+
+In release v1.0.20 (run `39881789408`), the three Production asset deployment jobs
+(`web`, `updates`, and `installers`) ran in parallel on the same Production host.
+Workflow-level `concurrency: production-assets` serializes separate workflow
+runs against the host, but jobs within a single run ran concurrently. When
+`installers` finished promoting its source files, its post-promotion health sweep
+checked every Production service. At that exact instant, the parallel `updates`
+job was recreating its Docker container, causing a transient connection refusal
+on loopback port 8299 (`curl: (7) Failed to connect to 127.0.0.1 port 8299`).
+`installers` treated this transient refusal as an immediate verification failure
+and executed an automated rollback, even though `updates` became healthy 10
+seconds later.
+
+To eliminate cross-job interference while maintaining strict safety boundaries:
+
+1. **Deterministic job serialization:** In `.github/workflows/deploy.yml`, the
+   jobs are strictly serialized in the deterministic order:
+   `updates` → `web` → `installers`.
+2. **Explicit skip and failure propagation:** Jobs must still execute when an
+   upstream job is intentionally skipped (for example when `deploy_updates` is
+   false), but any job failure must stop all subsequent jobs immediately. This
+   is enforced using explicit `needs:` dependencies and fail-closed conditionals:
+   - `web`: `needs: updates` with
+     `if: always() && inputs.deploy_web == true && (needs.updates.result == 'success' || needs.updates.result == 'skipped')`
+   - `installers`: `needs: [updates, web]` with
+     `if: always() && inputs.deploy_installers == true && (needs.updates.result == 'success' || needs.updates.result == 'skipped') && (needs.web.result == 'success' || needs.web.result == 'skipped')`
+3. **Bounded fail-closed verification sweeps:** Both activation verification
+   and rollback verification across all three surfaces (`updates`, `web`, and
+   `installers`) use bounded retry loops: up to 12 attempts with a 5-second sleep
+   between attempts (a 60-second total deadline per checked endpoint). A single
+   transient connection refusal or container restart blip will not trigger an
+   immediate rollback. If an endpoint fails to return the expected status or bytes
+   within the 60-second deadline, the sweep fails closed and initiates rollback.
+   The job's own release surface verification (exact payload bytes, SHA-256
+   digests, version markers) is strictly verified and never relaxed.
 
 ## Readiness and live handoff
 

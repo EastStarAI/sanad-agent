@@ -48,8 +48,109 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  updates:
+    if: inputs.deploy_updates == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: client-downloads-production
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+      - name: Configure pinned SSH host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Fetch verified Appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.release_tag }}" \
+            --pattern appcast.xml \
+            --pattern release-manifest.json \
+            --pattern SHA256SUMS \
+            --dir download
+          (cd download && sha256sum --check SHA256SUMS --ignore-missing)
+          gh attestation verify download/appcast.xml \
+            --repo "$GITHUB_REPOSITORY"
+          gh attestation verify download/release-manifest.json \
+            --repo "$GITHUB_REPOSITORY"
+      - name: Activate, verify, and roll back updates on failure
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.release_tag }}"
+          revision="$(git rev-parse HEAD)"
+          expected_appcast="$(sha256sum download/appcast.xml | awk '{print $1}')"
+          expected_manifest="$(sha256sum download/release-manifest.json | awk '{print $1}')"
+          read -r previous_identity previous_digest \
+            <<<"$(scripts/release/deploy_production_asset.sh previous static-updates)"
+          previous_appcast="$(scripts/release/deploy_production_asset.sh hash static-updates appcast.xml)"
+          previous_manifest="$(scripts/release/deploy_production_asset.sh hash static-updates release-manifest.json)"
+          digest="$(scripts/release/deploy_production_asset.sh \
+            publish static-updates "$revision" download)"
+
+          verify_update() {
+            local name="$1" expected="$2" output="$3" marker="$4"
+            curl --fail --silent --show-error --max-time 20 \
+              "https://updates.sanad.eaststarai.com/$name?$marker" -o "$output"
+            test "$(sha256sum "$output" | awk '{print $1}')" = "$expected"
+          }
+
+          temporary="$(mktemp -d)"
+          trap 'rm -rf "$temporary"' EXIT
+          rollback_updates() {
+            if ! scripts/release/deploy_production_asset.sh rollback static-updates \
+              "$previous_identity" "$previous_digest"; then
+              echo "Updates rollback command failed." >&2
+              return 1
+            fi
+            for attempt in $(seq 1 12); do
+              if verify_update appcast.xml "$previous_appcast" "$temporary/rollback-appcast.xml" "rollback=$previous_appcast" && \
+                verify_update release-manifest.json "$previous_manifest" "$temporary/rollback-manifest.json" "rollback=$previous_manifest"; then
+                return 0
+              fi
+              sleep 5
+            done
+            echo "Updates rollback verification failed." >&2
+            return 1
+          }
+
+          if ! scripts/release/deploy_production_asset.sh activate static-updates "$revision" "$digest"; then
+            echo "Updates activation failed; restoring the previous selector."
+            if ! rollback_updates; then
+              echo "Updates rollback did not complete." >&2
+            fi
+            exit 1
+          fi
+
+          verified=false
+          for attempt in $(seq 1 12); do
+            if verify_update appcast.xml "$expected_appcast" "$temporary/appcast.xml" "release=$tag" && \
+              verify_update release-manifest.json "$expected_manifest" "$temporary/release-manifest.json" "release=$tag"; then
+              verified=true
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$verified" != true ]]; then
+            echo "Updates verification failed; restoring the previous selector."
+            if ! rollback_updates; then
+              echo "Updates rollback did not complete." >&2
+            fi
+            exit 1
+          fi
+
   web:
-    if: inputs.deploy_web == true
+    needs: updates
+    if: always() && inputs.deploy_web == true && (needs.updates.result == 'success' || needs.updates.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: client-downloads-production
@@ -187,96 +288,11 @@ jobs:
             exit 1
           fi
 
-  updates:
-    if: inputs.deploy_updates == true
-    runs-on: ubuntu-24.04
-    environment: client-downloads-production
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.release_tag }}
-      - name: Configure pinned SSH host
-        env:
-          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-        run: |
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
-      - name: Fetch verified Appcast
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download "${{ inputs.release_tag }}" \
-            --pattern appcast.xml \
-            --pattern release-manifest.json \
-            --pattern SHA256SUMS \
-            --dir download
-          (cd download && sha256sum --check SHA256SUMS --ignore-missing)
-          gh attestation verify download/appcast.xml \
-            --repo "$GITHUB_REPOSITORY"
-          gh attestation verify download/release-manifest.json \
-            --repo "$GITHUB_REPOSITORY"
-      - name: Activate, verify, and roll back updates on failure
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
-        run: |
-          set -euo pipefail
-          tag="${{ inputs.release_tag }}"
-          revision="$(git rev-parse HEAD)"
-          expected_appcast="$(sha256sum download/appcast.xml | awk '{print $1}')"
-          expected_manifest="$(sha256sum download/release-manifest.json | awk '{print $1}')"
-          read -r previous_identity previous_digest \
-            <<<"$(scripts/release/deploy_production_asset.sh previous static-updates)"
-          previous_appcast="$(scripts/release/deploy_production_asset.sh hash static-updates appcast.xml)"
-          previous_manifest="$(scripts/release/deploy_production_asset.sh hash static-updates release-manifest.json)"
-          digest="$(scripts/release/deploy_production_asset.sh \
-            publish static-updates "$revision" download)"
-
-          verify_update() {
-            local name="$1" expected="$2" output="$3" marker="$4"
-            curl --fail --silent --show-error --max-time 20 \
-              "https://updates.sanad.eaststarai.com/$name?$marker" -o "$output"
-            test "$(sha256sum "$output" | awk '{print $1}')" = "$expected"
-          }
-
-          temporary="$(mktemp -d)"
-          trap 'rm -rf "$temporary"' EXIT
-          rollback_updates() {
-            if ! scripts/release/deploy_production_asset.sh rollback static-updates \
-              "$previous_identity" "$previous_digest"; then
-              echo "Updates rollback command failed." >&2
-              return 1
-            fi
-            if ! verify_update appcast.xml "$previous_appcast" "$temporary/rollback-appcast.xml" "rollback=$previous_appcast" || \
-              ! verify_update release-manifest.json "$previous_manifest" "$temporary/rollback-manifest.json" "rollback=$previous_manifest"; then
-              echo "Updates rollback verification failed." >&2
-              return 1
-            fi
-          }
-
-          if ! scripts/release/deploy_production_asset.sh activate static-updates "$revision" "$digest"; then
-            echo "Updates activation failed; restoring the previous selector."
-            if ! rollback_updates; then
-              echo "Updates rollback did not complete." >&2
-            fi
-            exit 1
-          fi
-
-          if ! verify_update appcast.xml "$expected_appcast" "$temporary/appcast.xml" "release=$tag" || \
-            ! verify_update release-manifest.json "$expected_manifest" "$temporary/release-manifest.json" "release=$tag"; then
-            echo "Updates verification failed; restoring the previous selector."
-            if ! rollback_updates; then
-              echo "Updates rollback did not complete." >&2
-            fi
-            exit 1
-          fi
-
   installers:
-    if: inputs.deploy_installers == true
+    needs: [updates, web]
+    if: always() && inputs.deploy_installers == true && (needs.updates.result == 'success' || needs.updates.result == 'skipped') && (needs.web.result == 'success' || needs.web.result == 'skipped')
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment: client-downloads-production
     steps:
       - uses: actions/checkout@v6
@@ -322,11 +338,15 @@ jobs:
               echo "Installer rollback command failed." >&2
               return 1
             fi
-            if ! verify_installer install.sh "$previous_sh" "$temporary/rollback.sh" "rollback=$previous_sh" || \
-              ! verify_installer install.ps1 "$previous_ps1" "$temporary/rollback.ps1" "rollback=$previous_ps1"; then
-              echo "Installer rollback verification failed." >&2
-              return 1
-            fi
+            for attempt in $(seq 1 12); do
+              if verify_installer install.sh "$previous_sh" "$temporary/rollback.sh" "rollback=$previous_sh" && \
+                verify_installer install.ps1 "$previous_ps1" "$temporary/rollback.ps1" "rollback=$previous_ps1"; then
+                return 0
+              fi
+              sleep 5
+            done
+            echo "Installer rollback verification failed." >&2
+            return 1
           }
 
           if ! scripts/release/deploy_production_asset.sh activate static-downloads "$revision" "$digest"; then
@@ -337,8 +357,16 @@ jobs:
             exit 1
           fi
 
-          if ! verify_installer install.sh "$expected_sh" "$temporary/install.sh" "release=$revision" || \
-            ! verify_installer install.ps1 "$expected_ps1" "$temporary/install.ps1" "release=$revision"; then
+          verified=false
+          for attempt in $(seq 1 12); do
+            if verify_installer install.sh "$expected_sh" "$temporary/install.sh" "release=$revision" && \
+              verify_installer install.ps1 "$expected_ps1" "$temporary/install.ps1" "release=$revision"; then
+              verified=true
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$verified" != true ]]; then
             echo "Installer verification failed; restoring the previous selector."
             if ! rollback_installers; then
               echo "Installer rollback did not complete." >&2

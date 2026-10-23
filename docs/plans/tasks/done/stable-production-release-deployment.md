@@ -143,3 +143,28 @@ Stable Client aliases use the same bounded upload protocol.
 - [x] Focused workflow and YAML validation pass on the final branch.
 - [x] The public PR is merged before the private repository pins the resulting
       public commit and performs the live credential cutover.
+
+## Production asset job serialization follow-up (v1.0.20 incident)
+
+In release v1.0.20 (run `39881789408`), parallel asset deployment jobs on the
+same Production host caused the `installers` post-promotion health check sweep to
+fail with a transient connection refusal on port 8299 while the parallel `updates`
+job was restarting its container. This caused an unnecessary rollback on
+`installers`. The workflow now strictly serializes asset deployment jobs, enforces
+fail-closed conditional execution across skipped and failed jobs, and unifies
+bounded verification retry sweeps.
+
+### Follow-up Definition of Done
+
+- [x] Serialize `.github/workflows/deploy.yml` jobs in deterministic order:
+      `updates` → `web` → `installers` via `needs:` dependencies.
+- [x] Enforce fail-closed skip and failure propagation with explicit `if: always() && ...`
+      conditions checking upstream `result == 'success' || result == 'skipped'`.
+- [x] Standardize bounded retry loops across activation and rollback verification
+      for `updates`, `web`, and `installers` (12 attempts, 5s delay, 60s deadline).
+- [x] Add static structural assertions in `.github/workflows/ci.yml` and
+      `scripts/release/test_deploy_production_asset.sh` validating the serialization
+      graph and bounded verification policy.
+- [x] Update release operations and QA verification documentation with the
+      serialization order, retry bounds, and incident root cause.
+
