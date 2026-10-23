@@ -51,6 +51,12 @@ This contract applies to `client/lib/features/settings/`.
 - Connected Agents reuse the existing `DeviceCubit` inventory and navigate to device Overview. Do not create another device store or `/agents` management surface.
 - Revoke is confirmed and per-row single-flight. Unknown outcomes retain the last snapshot and refetch; a confirmed current-session revoke delegates to the normal logout flow.
 
+## Presentation Layout
+- Settings pages are one library each under `client/lib/features/settings/presentation/widgets/settings_pages/`; `settings_screen.dart` composes them and owns destination selection.
+- Shared page chrome (`PageFrame`, `SettingsCard`) stays in `client/lib/features/settings/presentation/widgets/settings_widgets.dart`; a page keeps its own private helpers in its own file.
+- Cross-page embedding that already existed stays explicit: `workspace_page.dart` renders the Skills page and the embedded MCP screen rather than duplicating them.
+- The desktop update-check copy pinned by `client/test/tool/settings_update_contract_test.dart` lives in `settings_pages/general_page.dart`.
+
 ## Client-Owned Preferences
 - General application preferences such as theme remain client-owned and must not emit agent commands.
 - Settings-local UI state must not become a source of truth for runtime readiness, device connection, or conversation recovery.

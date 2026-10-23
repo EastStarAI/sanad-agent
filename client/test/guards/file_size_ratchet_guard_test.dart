@@ -36,7 +36,6 @@ const Map<String, int> allowlistedFiles = <String, int>{
       1055,
   'lib/features/provider_setup/presentation/bloc/provider_setup_cubit.dart':
       1119,
-  'lib/features/settings/presentation/widgets/settings_pages.dart': 2018,
 };
 
 void main() {
@@ -110,7 +109,7 @@ void main() {
 
     for (final handwrittenPath in <String>[
       'lib/driver_main.dart',
-      'lib/features/settings/presentation/widgets/settings_pages.dart',
+      'lib/features/settings/presentation/widgets/settings_pages/general_page.dart',
       'lib/utils/toast_utils.dart',
     ]) {
       expect(
