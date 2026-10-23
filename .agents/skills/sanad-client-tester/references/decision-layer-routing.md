@@ -37,6 +37,11 @@ numbers above are the durable record.
 
 ## USE the decision layer
 
+One sentence decides every step: if a step can be done by the decision model, route it
+there directly, without LLM thinking. Compose the state, ask one closed-choice
+question, admit the answer, and dispatch it; do not re-derive the choice in prose
+before the call or second-guess it afterwards.
+
 Route a step to the layer when the next action depends on the current screen but is
 chosen from a known, finite set:
 
@@ -68,6 +73,7 @@ chosen from a known, finite set:
   candidates.py   mode-scoped extractor: stable ids, enabled filter, structural pre-filter, cap 32, abstain/reobserve
   observation.py  one immutable snapshot with generation/status/fingerprint provenance
   guard.py        the code-owned precondition guard and its stable reason codes
+  brake.py        the requests-per-minute window, the per-run USD ceiling, and the one price constant
   model.py        DecisionModel interface, DecisionContext/ModelChoice, fake, Jev, default deadline
   escalation.py   bounded escalation payload + resume contract
   trace.py        JSONL step trace, replay, summary
@@ -129,6 +135,8 @@ first failing rule wins, in this order:
 | `mode_mismatch` | the phase's expected mode is not the live mode |
 | `empty_candidate_table` | the mode is known but no declared control is valid |
 | `phase_reentry` | the phase already completed an irreversible action and may not be decided again |
+| `rate_limited` | the requests-per-minute limit is already spent; the brake refuses instead of sleeping |
+| `cost_ceiling_reached` | the next decision would cross the per-run USD ceiling |
 | `model_unavailable` | the decision model could not answer: network, timeout, HTTP error, redirect, or an unusable body |
 | `model_contradiction` | the reply contradicted itself: probability keys, mass, or argmax disagree with the candidates |
 | `model_abstained` | the model chose `abstain` |
@@ -156,6 +164,25 @@ model raises - network, timeout, HTTP status, redirect, malformed body, or a
 self-contradictory reply - and returns an escalation instead. Its evidence carries
 only the error class, the typed cause code, the HTTP status when there was one, and
 the invariant a contradictory reply broke: never a response body and never a header.
+
+## Budget brake
+
+The brake is the one owner of both live-loop limits, and it refuses rather than
+sleeping or retrying:
+
+| Knob | Default | Effect |
+| --- | --- | --- |
+| `BudgetBrake(requests_per_minute=...)` | unset (unlimited) | counts admitted calls in a sliding 60 s window; one more returns `rate_limited` |
+| `BudgetBrake(max_usd=...)` | unset (unlimited) | refuses a call whose estimated cost would cross the per-run ceiling, returning `cost_ceiling_reached` with spend and remaining budget |
+| `USD_PER_MILLION_INPUT_TOKENS` | `0.042` | the single documented price, imported by `smoke` instead of duplicated |
+| `ESTIMATED_INPUT_TOKENS_PER_CALL` | `2_000` | the charge for a reply that reports no usage, marked estimated |
+
+`DecisionLayer(model, brake=BudgetBrake(requests_per_minute=30, max_usd=1.0))` is
+the whole wiring. The brake runs after the screen guard and before the model call, so
+an unusable screen costs nothing and a tripped limit costs no quota; an admitted call
+is counted immediately and charged from the reply's `usage.input_tokens` (exposed as
+`ModelChoice.input_tokens`) even when the guard then refuses the answer. Every trace
+line carries the running `spend_usd`.
 
 ## Irreversible actions
 

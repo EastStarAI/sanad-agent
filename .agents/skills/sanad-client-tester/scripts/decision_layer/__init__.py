@@ -12,6 +12,12 @@ whether an action may be dispatched at all.
 """
 
 from .actions import ACTION_RULES, ActionRule, rule_by_name, rule_for, rules_for_mode
+from .brake import (
+    ESTIMATED_INPUT_TOKENS_PER_CALL,
+    USD_PER_MILLION_INPUT_TOKENS,
+    BrakeCharge,
+    BudgetBrake,
+)
 from .candidates import MAX_CANDIDATES, RESERVED, Candidate, CandidateTable, extract
 from .escalation import RESUME_STEPS, EscalationPayload
 from .guard import REASON_CODES, Refusal
@@ -34,6 +40,8 @@ __all__ = [
     "ACTION_RULES",
     "ActionRule",
     "AdmittedAction",
+    "BrakeCharge",
+    "BudgetBrake",
     "Candidate",
     "CandidateTable",
     "DEFAULT_DECISION_TIMEOUT",
@@ -43,6 +51,7 @@ __all__ = [
     "DecisionModel",
     "DecisionRequest",
     "EscalationPayload",
+    "ESTIMATED_INPUT_TOKENS_PER_CALL",
     "FakeDecisionModel",
     "JevDecisionModel",
     "KNOWN_MODES",
@@ -59,6 +68,7 @@ __all__ = [
     "StepOutcome",
     "TraceWriter",
     "UNKNOWN",
+    "USD_PER_MILLION_INPUT_TOKENS",
     "build_model",
     "classify",
     "extract",
