@@ -1,8 +1,8 @@
 ---
 title: "SRP Tier 1 — Data and Transport Host Decomposition"
 description: "Decompose the three largest well-covered god-classes (session repository, socket service, conversation cache store) into cohesive owners behind unchanged public facades, with zero behavior, protocol, API, UI, or localization change."
-status: port_in_review
-current_gate: T1-X4 (closed) — re-delivered on refactor/110-srp-port
+status: completed
+current_gate: T1-X4 (closed) — delivered on refactor/110-srp-port
 remaining_estimate: 0%
 base_commit: b02b9e62
 tier_branch: refactor/113a-srp-tier1-data-and-transport

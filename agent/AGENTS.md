@@ -107,4 +107,5 @@ This contract applies to `agent/`.
 - Relevant focused tests cover behavior and failure/recovery paths.
 - Analyzer and required test scope pass.
 - Full-suite and E2E results are reported only when required by the blast-radius rules above.
+- A new or grown non-generated `lib/` file stays inside the size ratchet: over 1000 lines it fails `test/guards/file_size_ratchet_guard_test.dart`, and an allowlisted file never exceeds its recorded count; split the file instead of raising the number.
 - Runtime-law changes update the nearest contract and active design documentation in the same session.

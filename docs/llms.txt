@@ -194,6 +194,8 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Execution Trust, Permission Authority, and Secret Isolation Plan](docs/plans/83-execution-trust-secret-isolation-and-permission-authority.md): Plan 83 umbrella with ported, reopened, and deferred task status.
 - [Windows-first Performance Plan](docs/plans/97-windows-first-agent-client-performance.md): Reviewed coordinated Windows-first Agent/Client responsiveness, recovery, request ownership, static activity UI, and final platform verification.
 - [Windows-first Performance QA](docs/qa_maintenance/windows_first_performance_qa.md): Before/after metrics, request-count and rendering regressions, test-cost budgets, and final interactive acceptance.
+- [Agent SRP Tier 2 Plan](docs/plans/tasks/138-agent-srp-tier2.md): Wave-by-wave Agent and scripts decomposition, the gateway contract amendment, Track S for `supervisor.mjs`, the size-ratchet allowlist, and the feature dependency gates for Task 54 and the two unwritten features.
+- [Client SRP Tier 2 Plan](docs/plans/tasks/113b-srp-tier2-client-presentation.md): Client presentation, transport, and cubit decomposition waves, key/semantics preservation, path-pinned test retargeting, the size ratchet, and the files Task 54 must wait for.
 - [Provider Composer Catalog Freshness QA](docs/qa_maintenance/provider_composer_catalog_freshness.md): Snapshot-generation authority, stale-response/clear-device races, composer label refresh and approval-gated live acceptance.
 - [Implementation Plans](docs/plans/): Architectural blueprints, milestones, and step-by-step implementation plans for project development phases.
 
