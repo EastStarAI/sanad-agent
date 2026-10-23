@@ -10,6 +10,7 @@ import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/auth/colocated_auth_coupling.dart';
 import 'package:sanad_agent/core/auth/device_authorization_client.dart';
+import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
@@ -330,6 +331,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       final stateMode = (getSanadStateHome() != getSanadHome())
           ? 'isolated'
           : 'default';
+      final vault = SecretVaults.current;
       await _writeJsonResponse(request.response, {
         'status': 'ok',
         'platform_id': platformId,
@@ -342,6 +344,12 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         'dev_runtime_nonce': Platform.environment['SANAD_DEV_RUNTIME_NONCE'],
         'state_mode': stateMode,
         'gateway_enabled': _config.enableGateway,
+        // The Agent vault is the OS credential vault. A closed vault means
+        // provider keys, MCP secrets, user secrets and the Device Credential
+        // cannot be read, so this reports it as a non-secret status instead of
+        // leaving it inside one log line.
+        'secret_vault': vault?.statusLabel ?? 'unavailable',
+        'secret_vault_reason': vault?.unavailableReason,
         'cloud_registered':
             getIt.isRegistered<ServerSanadGatewayPlatform>() &&
             getIt<ServerSanadGatewayPlatform>().isCloudRegistered,
