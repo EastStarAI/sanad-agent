@@ -1481,7 +1481,7 @@ Use the review skill.''',
   );
 
   test(
-    'GatewayManager should attach workspace context to session_created for pre-created sessions',
+    'session_created keeps an unregistered workspace path as its execution root without registering it',
     () async {
       when(mockSessionManager.getSession('workspace-thread')).thenReturn(null);
       when(
@@ -1529,8 +1529,11 @@ Use the review skill.''',
       final normalizedWorkspacePath = workspaceDir.resolveSymbolicLinksSync();
       expect(
         threadCreated.sessionPayload?['workspace_id'],
-        'workspace-${normalizedWorkspacePath.hashCode}',
+        'exec_root:$normalizedWorkspacePath',
       );
+      // A path lookup never registers a workspace: the session carries only an
+      // execution root.
+      expect(mockSessionDb.getStoredWorkspaces(), isEmpty);
       expect(
         threadCreated.sessionPayload?['workspace_name'],
         'workspace-thread',

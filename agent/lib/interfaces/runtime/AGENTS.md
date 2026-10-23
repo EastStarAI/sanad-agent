@@ -112,6 +112,10 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Steer-superseded thoughts, incomplete/failed/cancelled rows, and tool-call asks are not forkable targets.
 - The client sends source session and target identities only. The child starts idle with new message/turn identities.
 
+## Workspace Resolution
+- Path lookups never register a workspace: resolving an id or path returns the supplied id, the exact stored path, the innermost registered workspace whose root equals or contains that path, and otherwise that path's `exec_root:` identity. Only an explicit create registers a folder.
+- The resolution is one rule for every read caller (`describeWorkspace`, workspace policy queries, catalog and runtime-context resolution, session metadata, resume, and CLI lookups), so a session that carries only an execution root can never appear as a registered workspace.
+
 ## Workspace Filesystem Mutation
 - Resolve stable workspace UUIDs to their current daemon-owned path before filesystem, MCP, skill, or permission access; a missing path remains visible but fails execution until repaired.
 - Display-name rename never mutates the filesystem, and Change Path never rewrites session/work-item workspace ids.
