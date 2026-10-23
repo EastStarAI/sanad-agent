@@ -1191,7 +1191,10 @@ class WorkspaceCommandHandler {
 
   /// Resolves the policy key of a query: an explicit id, the registered
   /// workspace that owns a supplied path, or that path's `exec_root:` key.
-  /// The store validates the key; an invalid root reads clean defaults.
+  ///
+  /// This is a read: resolving a path never registers a workspace, so opening
+  /// a session that carries only an execution root cannot add one. The store
+  /// validates the key; an invalid root reads clean defaults.
   Future<String?> _policyWorkspaceId(Map<String, dynamic> payload) async {
     final id = (payload['workspace_id'] as String?)?.trim();
     if (id != null && id.isNotEmpty) return id;
