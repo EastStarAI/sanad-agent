@@ -10,6 +10,7 @@ import 'package:sanad_agent/evolution/scheduling/schedule_conversation_factory.d
 import 'package:sanad_agent/evolution/scheduling/schedule_model.dart';
 import 'package:sanad_agent/evolution/scheduling/schedule_run_recorder.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
@@ -629,7 +630,16 @@ class CronScheduler extends BasePlatform {
       runId: effectiveRunId,
       message: Message(role: MessageRole.user, content: task),
       metadata: {
-        'payload': {'request_id': effectiveRunId},
+        'payload': {
+          // The run identity is the turn's request identity, so the durable
+          // user message the turn commits is the run's history anchor (S9, S20).
+          'request_id': effectiveRunId,
+          // A schedule dispatch is always its own turn, never a steer: `queue`
+          // keeps the orchestrator from treating it as steerable input while a
+          // turn is active (it waits and runs afterwards) and still admits it
+          // immediately on an idle conversation (Task 139 Delta 1).
+          'delivery_intent': MessageDeliveryIntent.queue.name,
+        },
       },
     );
     if (!_controller.hasListener) {

@@ -2,8 +2,8 @@
 title: "Task 139 — Schedules Screen, Schedule Control, and Run History"
 description: "Give schedules a real product surface: a standalone Client list and detail page, a create/edit form that reuses the existing new-conversation widgets, pause/resume/run-now, a per-schedule conversation mode, a persisted run history anchored to the run's conversation, and one local/cloud protocol path, while the model stays owner-scoped and the device owner can control any schedule."
 status: in_progress
-current_gate: "139-01 merged (#312); 139-02 in review; 139-03 next"
-remaining_estimate: 75%
+current_gate: "139-01 merged (#312); 139-02 merged (#317); 139-03 in review; 139-04 next"
+remaining_estimate: 65%
 base_commit: 09d5c34a
 depends_on: "138-11 (schema modules), 138-08 (bridge translator), 138-09 (history projection host), 113b 113-02 (composer split) — see Work split"
 ---
@@ -136,6 +136,10 @@ Extend `CronScheduler` with three actions, each a thin delegate so the host does
 | `resumeSchedule(id, caller)` | set `enabled=1` and recompute the next instant from now (`OccurrenceCalculator.computeNextOccurrence`; interval anchors on the stored slot grid as today); a `once` whose instant has passed fails `schedule_expired` (D6) |
 | `runNowSchedule(id, caller)` | dispatch immediately, including while the schedule is paused (S21), record a `trigger='manual'` run row, and **not** touch `next_run_at`, `last_run_at`, `last_status`, or `enabled` (S14) |
 
+- A schedule dispatch is always its own turn (queued when busy), never a steer. The dispatch event
+  carries `delivery_intent='queue'` and the run id as its `request_id`, so an idle conversation admits
+  it as a turn immediately, a busy one queues it behind the active turn, and the turn's committed user
+  message is the run's history anchor in both cases (Delta 1; S9, S20).
 - Authority is one owner (`schedule_control.dart`): `owner_kind='user'` is mutable by user-authority
   callers only; `owner_kind='model'` is mutable by its owning conversation and by user-authority
   callers (S15). The model tool passes a model-authority caller and therefore keeps D6 exactly.
@@ -171,7 +175,9 @@ New table `scheduled_task_runs`, owned by `ScheduledTaskRunRepository`:
   never on read).
 - Every dispatch path writes the `running` row before the event leaves the scheduler: timer fire,
   recovery in-grace fire, manual run. The missed-beyond-grace path writes `skipped` directly and never
-  dispatches. At-most-once ordering (112b B-D1) covers the row write too.
+  dispatches. At-most-once ordering (112b B-D1) covers the row write too. The dispatched event is a
+  schedule dispatch, so it is always its own turn (queued when busy), never a steer; a steered event
+  commits no user message row, which would leave the run unanchored and never terminal (Delta 1).
 - The anchor is written by the owner that commits the run's user message: when that message persists,
   the recorder sets `message_id` on the `running` row, so no scheduler-side correlation is needed
   (S20). The terminal transition is a separate observation, written by the owner that observes the
@@ -549,7 +555,8 @@ exact commands and counts from that PR.
 | Item | PR | Status | Verification |
 |---|---|---|---|
 | 139-01 state: columns + `scheduled_task_runs` + repositories | #312 | merged | `fvm dart analyze` clean; `test/evolution/scheduled_tasks_migration_test.dart` 19 + `test/evolution/scheduled_task_runs_test.dart` 18; `test/evolution/` 450; `test/guards/` 11; schema snapshots regenerated for all four fixtures (runs table, its index, seven appended columns) with the pre-112 fixture group asserting the `model`/`continuous` backfill; full fast suite result posted on the PR. Ratchet: `schedule_model.dart` 1,264 → 1,143 (record moved to `scheduled_task_record.dart`, 241 lines, no entry). Review delta 1: the upsert is insert-only for the D1 columns and `updateScheduleSettings` is their single edit path |
-| 139-02 scheduler control + conversations + run recorder | #317 | in review | `cd agent && fvm dart analyze` clean (0 issues); `test/evolution/schedule_control_test.dart` (15 passed); `test/evolution/schedule_conversations_and_runs_test.dart` (18 passed); `test/guards/file_size_ratchet_guard_test.dart` (3 passed); full `agent/test/evolution/` suite passed; full Agent fast suite passed. Line counts: `cron_scheduler.dart` 836 lines, `session_manager.dart` 427 lines, `schedule_control.dart` 294 lines, `schedule_run_recorder.dart` 487 lines, `schedule_conversation_factory.dart` 167 lines (all ≤ 1000 ratchet limit). Q1/Q2 coordinator decisions implemented and tested. |
+| 139-02 scheduler control + conversations + run recorder | #317 | merged | `cd agent && fvm dart analyze` clean (0 issues); `test/evolution/schedule_control_test.dart` (15 passed); `test/evolution/schedule_conversations_and_runs_test.dart` (18 passed); `test/guards/file_size_ratchet_guard_test.dart` (3 passed); full `agent/test/evolution/` suite passed; full Agent fast suite passed. Line counts: `cron_scheduler.dart` 836 lines, `session_manager.dart` 427 lines, `schedule_control.dart` 294 lines, `schedule_run_recorder.dart` 487 lines, `schedule_conversation_factory.dart` 167 lines (all ≤ 1000 ratchet limit). Q1/Q2 coordinator decisions implemented and tested. |
+| 139-03 tool actions | #321 | in review | `cd agent && fvm dart analyze` clean (0 issues); `test/capabilities/schedule_task_tool_test.dart` 41 passed (22 pre-existing, 19 added); `test/capabilities/` 410 passed / 7 skipped; `test/evolution/` 489 passed; `test/interfaces/` 763 passed; `test/guards/` 18 passed, including `file_size_ratchet_guard_test.dart` (3); full Agent fast suite 3,900 passed / 16 skipped; `fvm dart run scripts/lint_wiki.dart` SUCCESS. `schedule_task_tool.dart` 647 lines, no ratchet entry. Actions `pause`, `resume`, `run_now` plus optional `name` all delegate to the 139-02 control layer with `ScheduleAuthority.model`. Decisions: the expired/orphaned conditions travel as the stable message prefixes `schedule_expired` / `schedule_orphaned` while `ToolResultErrorCode` stays transport-wide; a blank `name` is absent; `list` keeps its 50-row cap and adds owner/enabled/consecutive-failure lines. **Delta 1 (live check TH3):** a schedule dispatch is always its own turn (queued when busy), never a steer — `CronScheduler._emitEvent` now adds `delivery_intent='queue'` beside the run-id `request_id`, so the queued turn keeps the raw request id, commits the run's user message, and lets `ScheduleRunObserver` bind, anchor, and terminalize the run. `test/interfaces/runtime/schedule_dispatch_admission_test.dart` covers the busy queued path, model `run_now` during an active turn (with S21 invariants), and the unchanged idle path; the two busy tests fail without the payload key while the idle one still passes. `cron_scheduler.dart` 846 lines, under the ratchet with no entry. |
 | 139-05 shared new-conversation widgets | #322 | in review | 113-02 had landed, so this PR reuses `composer_model_chip.dart` and only adds `composer_workspace_chip.dart` (nothing added to the composer host). `cd client && fvm flutter analyze` clean (0 issues, after `fvm flutter gen-l10n`); focused `conversation_input_composer_toggle_test` + `composer_input_routing_and_paste_test` + `conversation_input_panel_rebuild_test` + new `composer_model_chip_test` (4) + `composer_workspace_chip_test` (10) + `composer_chip_surface_parity_test` (3) = 80 passed; `test/guards/` 3 passed; full Client fast suite 2,152 passed / 3 skipped. Both chips are now state-agnostic (caller state in, callbacks out); `ComposerModelChip.resolveProviderId/resolveModelId` own the route fallback and `_ComposerBoundModelChip` in `composer_container.dart` holds the composer binding. Provider-usage display names/progress and the picker's `modelRecentRecord` stay inside the model chip as device-scoped resources. Keys/semantics/tooltips/strings pinned against the pre-extraction surface. Ratchet: `conversation_context_chips.dart` 469 → 301; `conversation_input_composer.dart` stays 187 with no allowlist entry. |
 
 ## Out of scope

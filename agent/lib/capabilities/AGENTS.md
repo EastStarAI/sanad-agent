@@ -33,6 +33,16 @@ This contract applies to `agent/lib/capabilities/`.
 - `ToolContext` may carry `runId`, `generation`, and `RunCancellationScope`; cooperative cancellation is opt-in via `isCooperativelyCancellable`.
 - `shell_execute` owns its process tree through `ProcessTreeController` and must distinguish user cancellation from timeout in terminal output. On Windows, execution uses an ASCII start-gate wrapper with UTF-8 command payload to preserve non-ASCII arguments, and reports `exit_code` on natural completion. The wrapper invokes its helpers (`chcp.com`, `ping.exe`) by absolute path from `%SystemRoot%\System32\` so it does not depend on the child `PATH`, and resets `%errorlevel%` to 0 via `(call )` immediately before delegating to the payload so wrapper mechanics never leak into command exit status.
 
+## Schedule Tool Boundary
+
+- `schedule_task` is the only model surface over schedules. Its actions are `create`, `list`, `cancel`, `update`, `pause`, `resume`, and `run_now`; `create` and `update` accept an optional `name`, where a blank value means "absent".
+- The tool never writes a schedule row itself: pause, resume, and run-now delegate to `CronScheduler`'s control methods, and a settings edit reaches the repository only through `updateScheduleSettings`. An absent `name` forwards that method's omission sentinel, never `null`.
+- Control is always called with `ScheduleAuthority.model`, so a model turn may mutate only a `model`-owned row of its own conversation. A `user`-owned row, a foreign conversation's row, or an unknown id is rejected before anything mutates.
+- The owner kind belongs to the tool family, not the payload: a `user` value in the arguments has no reader, and only a device-owner command family produces `owner_kind='user'`.
+- `run_now` records `trigger='manual'` and leaves `next_run_at`, `last_run_at`, `last_status`, and `enabled` untouched. It never resumes a paused schedule.
+- `resume` of an expired `once`, and `resume` or `run_now` of a model-owned schedule whose owning conversation is gone, surface as the stable message prefixes `schedule_expired` and `schedule_orphaned`. `ToolResultErrorCode` is transport-wide and never gains schedule-specific members.
+- `list` is device-wide and shows each row's owner kind with its owning conversation or `device`, its `enabled` state, and its consecutive-failure count, bounded at `defaultListCap` with an explicit truncation note.
+
 ## Image Processing Boundary
 - `capabilities/image/image_policy.dart` is the sole owner of image byte, pixel, edge, base64, detail, timeout, concurrency, and encoder limits.
 - Accept image types from verified PNG/JPEG/WebP magic bytes and decoder metadata, never filenames or caller MIME claims; animated, multi-frame, corrupt, deceptive, and over-limit input fails closed.
