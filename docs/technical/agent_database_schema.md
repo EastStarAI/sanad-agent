@@ -19,7 +19,7 @@ To ensure complete user privacy and offline functionality, all conversation logs
 - **Default Windows:** `%USERPROFILE%\.sanad\state.db`
 - **Isolated `sanad-dev` runtime:** `$SANAD_HOME/state.db`. Each linked Git worktree receives one distinct Sanad Home containing both runtime state and identity/provider configuration; the primary checkout uses the ordinary home. External test harnesses may still redirect only state through `SANAD_STATE_HOME`.
 
-`state.db` is owned by a single [AgentStateDatabase](../../agent/lib/evolution/db/agent_state_database.dart) connection (registered as a lazy singleton in DI). It enables `PRAGMA foreign_keys = ON`, runs in WAL journal mode with a 5000ms `busy_timeout`, and creates **all** schema — sessions, messages, scheduled tasks, suspended checkpoints, Plan 29 provider tables (`provider_instances`, `provider_model_cache`, `recent_model_selections`), **and** `agent_maintenance_state`. Outer transactions, schema initialization, migrations, and database-wide `VACUUM` retry SQLite busy/locked contention up to 3 times with progressive backoff (50/100/200ms) and a structured warning per retry, rethrowing the underlying `SqliteException` when exhausted; WAL/SHM sidecars (`state.db-wal`, `state.db-shm`, `state.db-journal`) are secured owner-only by `SanadHomeBootstrap.secureDatabaseFilesSync`. `SessionDB`, `ProviderInstanceRepository`, and startup maintenance share this one connection and never open `state.db` a second time. There is no `providers.db`.
+`state.db` is owned by a single [AgentStateDatabase](../../agent/lib/evolution/db/agent_state_database.dart) connection (registered as a lazy singleton in DI). It enables `PRAGMA foreign_keys = ON`, runs in WAL journal mode with a 5000ms `busy_timeout`, and applies **all** schema — sessions, messages, scheduled tasks, suspended checkpoints, Plan 29 provider tables (`provider_instances`, `provider_model_cache`, `recent_model_selections`), **and** `agent_maintenance_state` — through one ordered list of per-domain modules under `agent/lib/evolution/db/schema/` (see §10). It also applies the in-place migrations: legacy workspace identity, the `sessions.last_user_message_at` and workspace-id backfill, Plan 53b compaction, and the Plan 83 workspace security policy table. Outer transactions, schema initialization, migrations, and database-wide `VACUUM` retry SQLite busy/locked contention up to 3 times with progressive backoff (50/100/200ms) and a structured warning per retry, rethrowing the underlying `SqliteException` when exhausted; WAL/SHM sidecars (`state.db-wal`, `state.db-shm`, `state.db-journal`) are secured owner-only by `SanadHomeBootstrap.secureDatabaseFilesSync`. `SessionDB`, `ProviderInstanceRepository`, and startup maintenance share this one connection and never open `state.db` a second time. There is no `providers.db`.
 
 When constructed without an injected `SessionManager`, suspended-checkpoint and resume collaborators acquire one only when a persistence or resume operation first needs session state. Constructing an unused standalone collaborator, including a test double that overrides its persistence methods, does not open or migrate `state.db`; production DI continues to inject the shared manager explicitly.
 
@@ -237,7 +237,7 @@ See `docs/technical/context_compaction.md` §8 for activation CAS and Task 51/52
 ### 3.3. `scheduled_tasks` Table
 Tracks automation tasks and scheduled recurring loops that the daemon runs asynchronously (Task 112a, Decision D8).
 
-Ownership: the table schema and its migration live in `AgentStateDatabase`; every read and write goes through `ScheduledTaskRepository` (`agent/lib/evolution/db/scheduled_task_repository.dart`) behind the `SessionDB` facade, and `CronScheduler` is the only caller that mutates rows. `sanad schedule list` reads the table through a separate read-only connection (`AgentStateDatabase.readOnlyAtPath`) and never migrates it; see `docs/technical/sanad_cli_architecture.md` §11.
+Ownership: the table schema and its migration live in `agent/lib/evolution/db/schema/scheduling_schema.dart`; every read and write goes through `ScheduledTaskRepository` (`agent/lib/evolution/db/scheduled_task_repository.dart`) behind the `SessionDB` facade, and `CronScheduler` is the only caller that mutates rows. `sanad schedule list` reads the table through a separate read-only connection (`AgentStateDatabase.readOnlyAtPath`) and never migrates it; see `docs/technical/sanad_cli_architecture.md` §11.
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
@@ -810,7 +810,20 @@ After readiness:
 
 ## 10. Schema Snapshot Characterization
 
-`AgentStateDatabase` owns the whole DDL block and every in-place migration, so its output shape is pinned by `agent/test/evolution/agent_state_schema_snapshot_test.dart`. The test records `sqlite_master` (tables, indexes, triggers, and their DDL text), `PRAGMA table_info`, `PRAGMA index_list` with `PRAGMA index_info`, and `PRAGMA foreign_key_list` for a fresh database and for three legacy fixtures.
+`AgentStateDatabase` owns the connection and the single ordered migration list; the DDL for each domain lives in one module under `agent/lib/evolution/db/schema/`. That split is move-only: the output shape is pinned by `agent/test/evolution/agent_state_schema_snapshot_test.dart`, which records `sqlite_master` (tables, indexes, triggers, and their DDL text), `PRAGMA table_info`, `PRAGMA index_list` with `PRAGMA index_info`, and `PRAGMA foreign_key_list` for a fresh database and for three legacy fixtures.
+
+| Schema module | Owns |
+|---|---|
+| `sessions_messages_schema.dart` | `sessions`, `messages`, their additive columns, ordering indexes, and the `last_user_message_at`/workspace-id backfill |
+| `attachments_schema.dart` | `user_attachments`, the v2 rebuild, and the message-ownership trigger |
+| `scheduling_schema.dart` | `scheduled_tasks` and the additive Task 112 recurrence migration |
+| `workspaces_schema.dart` | `workspaces`, plus the additively created `workspace_security_policies` table |
+| `runtime_work_schema.dart` | `suspended_checkpoints`, persisted runtime state, work items, pending steers, stop-recovery outcomes, execution snapshots, route transitions |
+| `provider_schema.dart` | `provider_instances`, `provider_model_cache`, `recent_model_selections` |
+| `compaction_schema.dart` | session projection revisions and `session_compaction_operations` |
+| `maintenance_schema.dart` | `agent_maintenance_state` |
+
+`migrations/workspace_identity_migration.dart` owns the legacy workspace-UUID migration (including orphaned absolute-path repair), and `schema/schema_migration_support.dart` owns the shared `safeAddColumn`/`tableExists`/`columnExists`/`isBusyOrLocked` helpers. Modules run in a fixed order that interleaves two of them, so `RuntimeWorkSchema.applySuspendedCheckpoints` and `WorkspacesSchema.applySecurityPolicies` exist as second entry points; the order in `_createSchemaAndMigrate` must not be rearranged.
 
 | Snapshot | Shape it represents |
 |---|---|
