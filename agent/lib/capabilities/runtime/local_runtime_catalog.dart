@@ -2,41 +2,37 @@ import 'dart:convert';
 
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
-import 'package:sanad_agent/capabilities/execution/execution_backend_resolver.dart';
 import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/secrets/user_secret_vault.dart';
 import 'package:sanad_agent/capabilities/tools/system/host_capability_discovery_tool.dart';
-import 'package:sanad_agent/capabilities/tools/system/secret_tools.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/runtime/spec_backed_tool.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
-import 'package:sanad_agent/capabilities/tools/system/shell_execute_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/screenshot_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/mouse_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/keyboard_tool.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
-import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 
 import 'interactive_user_input.dart';
+import 'tool_builders/ask_user_tool.dart';
+import 'tool_builders/platform_tool_specs.dart';
+import 'tool_builders/secret_tools.dart';
+import 'tool_builders/view_image_tool.dart';
+import 'tool_builders/web_tools.dart';
+import 'tool_builders/workspace_file_tools.dart';
 
 import 'web_search/web_fetch_service.dart';
 import 'web_search/web_search_service.dart';
 import 'workspace_path_resolver.dart';
-import 'workspace_tools/file_edit_handler.dart';
-import 'workspace_tools/file_read_handler.dart';
-import 'workspace_tools/file_write_handler.dart';
-import 'workspace_tools/search_glob_handler.dart';
-import 'workspace_tools/search_grep_handler.dart';
-import 'workspace_tools/view_image_handler.dart';
 
 typedef AdmittedAttachmentPathsResolver =
     Future<List<String>> Function(String sessionId);
@@ -119,22 +115,50 @@ class LocalRuntimeCatalog {
     final tools = <BaseTool>[
       // TEMPORARILY DISABLED: tool_search — paused for review.
       // _buildSearchTool(registry),
-      _buildWebSearchTool(),
-      _buildWebFetchTool(),
+      buildWebSearchTool(webSearchService: _webSearchService),
+      buildWebFetchTool(webFetchService: _webFetchService),
       _buildSkillLoadTool(workspacePath),
-      _buildAskUserTool(),
-      ..._buildSecretTools(request),
+      buildAskUserTool(userInput: _userInput),
+      ...buildSecretTools(
+        request: request,
+        userInput: _userInput,
+        userSecrets: _userSecrets,
+        permissionManager: _permissionManager,
+      ),
     ];
 
     if (workspacePath != null && workspacePath.isNotEmpty) {
-      tools.addAll(_buildWorkspaceTools(workspacePath, request));
+      tools.addAll(
+        buildWorkspaceFileTools(
+          workspacePath: workspacePath,
+          request: request,
+          pathResolver: _pathResolver,
+          permissionManager: _permissionManager,
+          workspacePolicyStore: _workspacePolicyStore,
+          userSecrets: _userSecrets,
+        ),
+      );
       final discovery = await _hostDiscoveryTool(request, workspacePath, tools);
       if (discovery != null) tools.add(discovery);
     }
     if ((workspacePath != null && workspacePath.isNotEmpty) ||
         admittedAttachmentPaths.isNotEmpty) {
       tools.add(
-        _buildViewImageTool(workspacePath, admittedAttachmentPaths, request),
+        buildViewImageTool(
+          pathResolver: _pathResolver,
+          workspacePath: workspacePath,
+          admittedAttachmentPaths: admittedAttachmentPaths,
+          authorizeExternal: (canonicalPath, originalArguments, toolContext) =>
+              authorizeExternalWorkspacePath(
+                pathResolver: _pathResolver,
+                permissionManager: _permissionManager,
+                toolName: 'view_image',
+                arguments: {...originalArguments, 'path': canonicalPath},
+                context: toolContext,
+                request: request,
+                workspacePath: workspacePath!,
+              ),
+        ),
       );
     }
 
@@ -144,7 +168,13 @@ class LocalRuntimeCatalog {
       tools.addAll([ScreenshotTool(), MouseTool(), KeyboardTool()]);
     }
 
-    tools.addAll(_buildPlatformTools(request));
+    tools.addAll(
+      buildPlatformTools(
+        request: request,
+        platformRuntimeBridge: _platformRuntimeBridge,
+        permissionManager: _permissionManager,
+      ),
+    );
 
     final mcpSpecs = await _mcpRuntimeManager.listToolSpecs(
       workspacePath: workspacePath,
@@ -190,53 +220,6 @@ class LocalRuntimeCatalog {
     }
 
     return tools;
-  }
-
-  List<BaseTool> _buildPlatformTools(AgentTurnRequest request) {
-    final hasConfig = getIt.isRegistered<Config>();
-    final computerUse = hasConfig && getIt<Config>().computerUse;
-    final excludedTools = {
-      'shell_execute',
-      if (computerUse) ...{
-        'system_screenshot',
-        'system_mouse',
-        'system_keyboard',
-      },
-    };
-
-    return request.platformTools
-        .map(_platformSpecFromPayload)
-        .whereType<LocalToolSpec>()
-        .where((spec) => !excludedTools.contains(spec.name))
-        .map(
-          (spec) => CallbackTool(
-            toolSpec: spec,
-            onExecute: (args, {context}) async {
-              final toolContext =
-                  context ??
-                  ToolContext(
-                    sessionId: request.sessionId,
-                    metadata: request.toMetadata(),
-                  );
-              await _permissionManager.ensureAuthorized(
-                tool: spec,
-                arguments: args,
-                context: toolContext,
-              );
-              return _platformRuntimeBridge.executePlatformTool(
-                sessionId: toolContext.sessionId,
-                payload: {
-                  'tool_name': spec.name,
-                  'tool_input': args,
-                  'tool': spec.toJson(),
-                  'workspace_id': request.effectiveWorkspaceId,
-                  'session_id': request.sessionId,
-                },
-              );
-            },
-          ),
-        )
-        .toList(growable: false);
   }
 
   Future<String?> _resolveTargetWorkspacePath(AgentTurnRequest request) async {
@@ -320,108 +303,6 @@ class LocalRuntimeCatalog {
     );
   }
 
-  BaseTool _buildWebSearchTool() {
-    return CallbackTool(
-      toolSpec: const LocalToolSpec(
-        name: 'web_search',
-        displayName: 'Web Search',
-        description:
-            'Search the web from the local runtime with optional domain filtering and result limits.',
-        inputSchema: {
-          'type': 'object',
-          'properties': {
-            'query': {'type': 'string'},
-            'allowed_domains': {
-              'type': 'array',
-              'items': {'type': 'string'},
-              'description':
-                  'Optional list of domains to restrict search results to (e.g. ["wikipedia.org"]).',
-            },
-            'limit': {
-              'type': 'integer',
-              'minimum': 1,
-              'maximum': 10,
-              'description':
-                  'Optional limit on the number of search hits returned.',
-            },
-          },
-          'required': ['query'],
-          'additionalProperties': false,
-        },
-        source: {'type': 'builtin_local', 'id': 'sanad-agent.web'},
-        category: 'web',
-        workspaceRequired: false,
-        approval: {'mode': 'default', 'sensitive': false},
-        execution: {'target': 'local_runtime', 'timeout_ms': 30000},
-        serverName: 'web',
-      ),
-      onExecute: (args, {context}) async {
-        final query = args['query']?.toString() ?? '';
-        final limit = args['limit'] is int ? args['limit'] as int : null;
-
-        final domainsRaw = args['allowed_domains'];
-        List<String>? allowedDomains;
-        if (domainsRaw is List) {
-          allowedDomains = domainsRaw.map((d) => d.toString()).toList();
-        }
-
-        return _webSearchService.search(
-          query,
-          allowedDomains: allowedDomains,
-          limit: limit,
-        );
-      },
-    );
-  }
-
-  BaseTool _buildWebFetchTool() {
-    return CallbackTool(
-      toolSpec: const LocalToolSpec(
-        name: 'web_fetch',
-        displayName: 'Web Fetch',
-        description:
-            'Fetch the content of specific URLs concurrently and summarize them.',
-        inputSchema: {
-          'type': 'object',
-          'properties': {
-            'urls': {
-              'type': 'array',
-              'items': {'type': 'string'},
-              'description': 'List of URLs to fetch content from (max 5 URLs).',
-            },
-            'prompt': {'type': 'string'},
-          },
-          'required': ['urls'],
-          'additionalProperties': false,
-        },
-        source: {'type': 'builtin_local', 'id': 'sanad-agent.web'},
-        category: 'web',
-        workspaceRequired: false,
-        approval: {'mode': 'default', 'sensitive': false},
-        execution: {'target': 'local_runtime', 'timeout_ms': 30000},
-        serverName: 'web',
-      ),
-      onExecute: (args, {context}) async {
-        final urlsRaw = args['urls'];
-        List<String> urls = [];
-        if (urlsRaw is List) {
-          urls = urlsRaw.map((u) => u.toString()).toList();
-        } else if (urlsRaw is String) {
-          urls = [urlsRaw];
-        }
-
-        final results = await _webFetchService.fetch(
-          urls,
-          prompt: args['prompt']?.toString() ?? '',
-        );
-        final jsonList = results.map((r) => r.toJson()).toList();
-        return const JsonEncoder.withIndent(
-          '  ',
-        ).convert({'results': jsonList});
-      },
-    );
-  }
-
   BaseTool _buildSkillLoadTool(String? workspacePath) {
     return CallbackTool(
       toolSpec: const LocalToolSpec(
@@ -451,68 +332,6 @@ class LocalRuntimeCatalog {
           workspacePath: workspacePath,
         );
       },
-    );
-  }
-
-  BaseTool _buildViewImageTool(
-    String? workspacePath,
-    List<String> admittedAttachmentPaths,
-    AgentTurnRequest request,
-  ) {
-    final hasWorkspace = workspacePath != null && workspacePath.isNotEmpty;
-    final spec = LocalToolSpec(
-      name: 'view_image',
-      displayName: 'View Image',
-      description:
-          'Inspect one local PNG, JPEG, or WebP image from the current workspace or admitted session attachments.',
-      inputSchema: const {
-        'type': 'object',
-        'properties': {
-          'path': {'type': 'string'},
-          'detail': {
-            'type': 'string',
-            'enum': ['low', 'auto', 'high', 'original'],
-            'default': 'auto',
-          },
-        },
-        'required': ['path'],
-        'additionalProperties': false,
-      },
-      source: hasWorkspace
-          ? const {'type': 'builtin_workspace', 'id': 'sanad-agent.workspace'}
-          : const {
-              'type': 'builtin_attachment',
-              'id': 'sanad-agent.attachments',
-            },
-      category: 'workspace_io',
-      workspaceRequired: hasWorkspace,
-      approval: const {'mode': 'workspace', 'sensitive': false},
-      execution: const {
-        'target': 'local_runtime',
-        'timeout_ms': 30000,
-        'restart_replay_safe': true,
-      },
-      serverName: hasWorkspace ? 'workspace' : 'attachments',
-    );
-    final handler = ViewImageHandler(_pathResolver);
-    return _ResultCallbackTool(
-      toolSpec: spec,
-      onExecuteResult: (args, {context}) => handler.executeResult(
-        args,
-        workspacePath: workspacePath,
-        admittedAttachmentPaths: admittedAttachmentPaths,
-        context: context,
-        authorizeExternal:
-            (canonicalPath, originalArguments, toolContext) async {
-              await _authorizeExternalWorkspacePath(
-                toolName: 'view_image',
-                arguments: {...originalArguments, 'path': canonicalPath},
-                context: toolContext,
-                request: request,
-                workspacePath: workspacePath!,
-              );
-            },
-      ),
     );
   }
 
@@ -547,525 +366,4 @@ class LocalRuntimeCatalog {
         ? HostCapabilityDiscoveryTool(environment: _hostEnvironment)
         : null;
   }
-
-  List<BaseTool> _buildWorkspaceTools(
-    String workspacePath,
-    AgentTurnRequest request,
-  ) {
-    return [
-      ShellExecuteTool(
-        workspacePath: workspacePath,
-        permissionManager: _permissionManager,
-        userSecrets: _userSecrets,
-        backendResolver: ExecutionBackendResolver(
-          policyStore: _workspacePolicyStore,
-        ),
-      ),
-      CallbackTool(
-        toolSpec: _workspaceSpec(
-          name: 'file_read',
-          displayName: 'Read File',
-          description:
-              'Read a file or list a directory. Paths inside the workspace execute directly; external paths require full access or user approval. Files return up to 2000 lines, with offset for later sections, and directories return paginated entries.',
-          inputSchema: const {
-            'type': 'object',
-            'properties': {
-              'path': {'type': 'string'},
-              'offset': {'type': 'integer', 'minimum': 0},
-              'limit': {'type': 'integer', 'minimum': 1, 'maximum': 2000},
-            },
-            'required': ['path'],
-            'additionalProperties': false,
-          },
-          category: 'workspace_io',
-          restartReplaySafe: true,
-        ),
-        onExecute: (args, {context}) async {
-          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
-            toolName: 'file_read',
-            arguments: args,
-            context: context,
-            request: request,
-            workspacePath: workspacePath,
-          );
-          return FileReadHandler(_pathResolver).execute(
-            args,
-            workspacePath,
-            authorizedExternalRoot: authorizedExternalRoot,
-          );
-        },
-      ),
-      CallbackTool(
-        toolSpec: _workspaceSpec(
-          name: 'file_write',
-          displayName: 'Write File',
-          description:
-              'Create or replace a text file inside the workspace or at an authorized external path.',
-          inputSchema: const {
-            'type': 'object',
-            'properties': {
-              'path': {'type': 'string'},
-              'content': {'type': 'string'},
-            },
-            'required': ['path', 'content'],
-            'additionalProperties': false,
-          },
-          category: 'workspace_io',
-        ),
-        onExecute: (args, {context}) async {
-          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
-            toolName: 'file_write',
-            arguments: args,
-            context: context,
-            request: request,
-            workspacePath: workspacePath,
-            allowMissing: true,
-          );
-          return FileWriteHandler(_pathResolver).execute(
-            args,
-            workspacePath,
-            authorizedExternalRoot: authorizedExternalRoot,
-          );
-        },
-      ),
-      CallbackTool(
-        toolSpec: _workspaceSpec(
-          name: 'file_edit',
-          displayName: 'Edit File',
-          description:
-              'Perform exact string replacements inside the workspace or in an authorized external file. Provide either old_string and new_string for a single replacement, or edits for multiple non-contiguous replacements in the same file. Each old_string must preserve indentation and must not include file_read line-number prefixes. Fails atomically if any match is missing or ambiguous unless replace_all is true, or if edits overlap.',
-          inputSchema: const {
-            'type': 'object',
-            'properties': {
-              'path': {'type': 'string'},
-              'old_string': {'type': 'string'},
-              'new_string': {'type': 'string'},
-              'replace_all': {'type': 'boolean'},
-              'edits': {
-                'type': 'array',
-                'description':
-                    'Optional list of edits to apply in one call. Each edit requires old_string and new_string.',
-                'items': {
-                  'type': 'object',
-                  'properties': {
-                    'old_string': {'type': 'string'},
-                    'new_string': {'type': 'string'},
-                    'replace_all': {'type': 'boolean'},
-                  },
-                  'required': ['old_string', 'new_string'],
-                  'additionalProperties': false,
-                },
-              },
-            },
-            'required': ['path'],
-            'additionalProperties': false,
-          },
-          category: 'workspace_io',
-        ),
-        onExecute: (args, {context}) async {
-          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
-            toolName: 'file_edit',
-            arguments: args,
-            context: context,
-            request: request,
-            workspacePath: workspacePath,
-          );
-          return FileEditHandler(_pathResolver).execute(
-            args,
-            workspacePath,
-            authorizedExternalRoot: authorizedExternalRoot,
-          );
-        },
-      ),
-      CallbackTool(
-        toolSpec: _workspaceSpec(
-          name: 'search_glob',
-          displayName: 'Glob Search',
-          description:
-              'Match file patterns in the workspace or an authorized external directory. Supports patterns like "**/*.dart" and returns matches sorted by modification time.',
-          inputSchema: const {
-            'type': 'object',
-            'properties': {
-              'pattern': {'type': 'string'},
-              'path': {'type': 'string'},
-            },
-            'required': ['pattern'],
-            'additionalProperties': false,
-          },
-          category: 'workspace_search',
-          restartReplaySafe: true,
-        ),
-        onExecute: (args, {context}) async {
-          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
-            toolName: 'search_glob',
-            arguments: args,
-            context: context,
-            request: request,
-            workspacePath: workspacePath,
-          );
-          return SearchGlobHandler(_pathResolver).execute(
-            args,
-            workspacePath,
-            authorizedExternalRoot: authorizedExternalRoot,
-          );
-        },
-      ),
-      CallbackTool(
-        toolSpec: _workspaceSpec(
-          name: 'search_grep',
-          displayName: 'Grep Search',
-          description:
-              'Search file contents in the workspace or an authorized external path using regular expressions, with optional glob filtering and line-numbered matches.',
-          inputSchema: const {
-            'type': 'object',
-            'properties': {
-              'pattern': {'type': 'string'},
-              'path': {'type': 'string'},
-              'glob': {'type': 'string'},
-              'line_numbers': {'type': 'boolean'},
-              'case_insensitive': {'type': 'boolean'},
-              'head_limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
-              'offset': {'type': 'integer', 'minimum': 0},
-              'before': {'type': 'integer', 'minimum': 0, 'maximum': 20},
-              'after': {'type': 'integer', 'minimum': 0, 'maximum': 20},
-              'context': {'type': 'integer', 'minimum': 0, 'maximum': 20},
-            },
-            'required': ['pattern'],
-            'additionalProperties': false,
-          },
-          category: 'workspace_search',
-          restartReplaySafe: true,
-        ),
-        onExecute: (args, {context}) async {
-          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
-            toolName: 'search_grep',
-            arguments: args,
-            context: context,
-            request: request,
-            workspacePath: workspacePath,
-          );
-          return SearchGrepHandler(_pathResolver).execute(
-            args,
-            workspacePath,
-            authorizedExternalRoot: authorizedExternalRoot,
-          );
-        },
-      ),
-    ];
-  }
-
-  Future<String?> _authorizeExternalWorkspacePath({
-    required String toolName,
-    required Map<String, dynamic> arguments,
-    required ToolContext? context,
-    required AgentTurnRequest request,
-    required String workspacePath,
-    bool allowMissing = false,
-  }) async {
-    final inputPath = arguments['path']?.toString().trim();
-    final effectivePath = inputPath == null || inputPath.isEmpty
-        ? '.'
-        : inputPath;
-    final resolution = allowMissing
-        ? await _pathResolver.classifyPathAllowMissingAsync(
-            workspaceRoot: workspacePath,
-            inputPath: effectivePath,
-          )
-        : await _pathResolver.classifyExistingPathAsync(
-            workspaceRoot: workspacePath,
-            inputPath: effectivePath,
-          );
-    if (!resolution.isExternal) {
-      return null;
-    }
-
-    final existingWorkspace = context?.metadata['workspace'] is Map
-        ? Map<String, dynamic>.from(context!.metadata['workspace'] as Map)
-        : <String, dynamic>{};
-    final toolContext = ToolContext(
-      sessionId: context?.sessionId ?? request.sessionId,
-      toolCallId: context?.toolCallId,
-      metadata: {
-        ...request.toMetadata(),
-        ...?context?.metadata,
-        'workspace': {
-          ...existingWorkspace,
-          'id': existingWorkspace['id'] ?? request.effectiveWorkspaceId,
-          'path': workspacePath,
-        },
-      },
-    );
-    final approvalSpec = _externalWorkspaceAccessSpec(toolName);
-    await _permissionManager.ensureAuthorized(
-      tool: approvalSpec,
-      arguments: arguments,
-      context: toolContext,
-      approvalKeyOverride:
-          'external_workspace_path::$toolName::${resolution.resolvedPath}',
-      permissionDisplayArguments: {
-        'action': toolName,
-        'path': resolution.resolvedPath,
-      },
-    );
-    return resolution.resolvedPath;
-  }
-
-  LocalToolSpec _externalWorkspaceAccessSpec(String toolName) {
-    return LocalToolSpec(
-      name: toolName,
-      displayName: toolName,
-      description: 'Access a canonical path outside the selected workspace.',
-      inputSchema: const {'type': 'object', 'additionalProperties': true},
-      source: const {
-        'type': 'builtin_workspace',
-        'id': 'sanad-agent.workspace',
-      },
-      category: 'workspace_io',
-      workspaceRequired: true,
-      approval: const {
-        'mode': 'ask',
-        'sensitive': true,
-        'scope': 'once',
-        'permission_class': 'external_workspace_path',
-      },
-      execution: const {'target': 'local_runtime', 'timeout_ms': 30000},
-      serverName: 'workspace',
-    );
-  }
-
-  LocalToolSpec _workspaceSpec({
-    required String name,
-    required String displayName,
-    required String description,
-    required Map<String, dynamic> inputSchema,
-    required String category,
-    bool restartReplaySafe = false,
-  }) {
-    return LocalToolSpec(
-      name: name,
-      displayName: displayName,
-      description: description,
-      inputSchema: inputSchema,
-      source: const {
-        'type': 'builtin_workspace',
-        'id': 'sanad-agent.workspace',
-      },
-      category: category,
-      workspaceRequired: true,
-      approval: const {'mode': 'workspace', 'sensitive': false},
-      execution: {
-        'target': 'local_runtime',
-        'timeout_ms': 30000,
-        'restart_replay_safe': restartReplaySafe,
-      },
-      serverName: 'workspace',
-    );
-  }
-
-  LocalToolSpec? _platformSpecFromPayload(Map<String, dynamic> payload) {
-    final name = payload['name']?.toString().trim();
-    if (name == null || name.isEmpty) {
-      return null;
-    }
-
-    final displayName =
-        payload['display_name']?.toString().trim().isNotEmpty == true
-        ? payload['display_name'].toString().trim()
-        : name;
-    final description =
-        payload['description']?.toString().trim().isNotEmpty == true
-        ? payload['description'].toString().trim()
-        : 'Platform-provided tool exposed by the connected client.';
-    final inputSchema = payload['input_schema'] is Map<String, dynamic>
-        ? Map<String, dynamic>.from(
-            payload['input_schema'] as Map<String, dynamic>,
-          )
-        : payload['input_schema'] is Map
-        ? Map<String, dynamic>.from(payload['input_schema'] as Map)
-        : const {
-            'type': 'object',
-            'properties': <String, dynamic>{},
-            'additionalProperties': true,
-          };
-    final approval = payload['approval'] is Map<String, dynamic>
-        ? Map<String, dynamic>.from(payload['approval'] as Map<String, dynamic>)
-        : payload['approval'] is Map
-        ? Map<String, dynamic>.from(payload['approval'] as Map)
-        : <String, dynamic>{};
-    final availability = payload['availability'] is Map<String, dynamic>
-        ? Map<String, dynamic>.from(
-            payload['availability'] as Map<String, dynamic>,
-          )
-        : payload['availability'] is Map
-        ? Map<String, dynamic>.from(payload['availability'] as Map)
-        : const {'status': 'available'};
-
-    return LocalToolSpec(
-      name: name,
-      displayName: displayName,
-      description: description,
-      inputSchema: inputSchema,
-      source: {
-        'type': 'platform',
-        'owner': 'platform',
-        'id': payload['platform_id']?.toString() ?? 'connected-client',
-      },
-      category: payload['category']?.toString() ?? 'platform',
-      workspaceRequired: payload['workspace_required'] == true,
-      approval: {
-        'mode': approval['mode']?.toString() ?? 'default',
-        'sensitive': approval['sensitive'] == true,
-        'scope': approval['scope']?.toString() ?? 'session',
-        'permission_class':
-            approval['permission_class']?.toString() ??
-            payload['permission_class']?.toString() ??
-            'platform',
-      },
-      execution: {
-        'target': 'platform',
-        if (payload['execution'] is Map)
-          ...Map<String, dynamic>.from(payload['execution'] as Map),
-      },
-      availability: availability,
-      serverName: payload['server_name']?.toString(),
-    );
-  }
-
-  BaseTool _buildAskUserTool() {
-    return CallbackTool(
-      toolSpec: const LocalToolSpec(
-        name: 'system_ask_user',
-        displayName: 'Ask Clarifying Questions',
-        description:
-            'Ask the user one or more clarifying questions (up to 5) to resolve design ambiguity, missing details, or decision-making. Halts session execution until the user responds. Each question must have exactly 3 options.',
-        inputSchema: {
-          'type': 'object',
-          'properties': {
-            'questions': {
-              'type': 'array',
-              'minItems': 1,
-              'maxItems': 5,
-              'items': {
-                'type': 'object',
-                'properties': {
-                  'question': {
-                    'type': 'string',
-                    'description': 'The clarifying question text.',
-                  },
-                  'options': {
-                    'type': 'array',
-                    'minItems': 3,
-                    'maxItems': 3,
-                    'items': {'type': 'string'},
-                    'description':
-                        'Exactly 3 predefined options for the user to choose from.',
-                  },
-                },
-                'required': ['question', 'options'],
-                'additionalProperties': false,
-              },
-            },
-          },
-          'required': ['questions'],
-          'additionalProperties': false,
-        },
-        source: {'type': 'builtin_local', 'id': 'sanad-agent.system'},
-        category: 'system',
-        workspaceRequired: false,
-        approval: {'mode': 'default', 'sensitive': false},
-        execution: {'target': 'local_runtime', 'timeout_ms': 3600000},
-        serverName: 'system',
-      ),
-      onExecute: (args, {context}) async {
-        final rawQuestions = args['questions'];
-        final List<Map<String, dynamic>> questionsList = [];
-
-        if (rawQuestions is List) {
-          for (final q in rawQuestions) {
-            if (q is Map) {
-              questionsList.add({
-                'question': q['question']?.toString() ?? '',
-                'options': List<String>.from(
-                  (q['options'] as List? ?? []).map((o) => o.toString()),
-                ),
-              });
-            }
-          }
-        } else {
-          // Backward compatibility for single 'question' parameter
-          final singleQuestion =
-              args['question']?.toString() ??
-              args['questions']?.toString() ??
-              '';
-          if (singleQuestion.isNotEmpty) {
-            questionsList.add({
-              'question': singleQuestion,
-              'options': <String>[],
-            });
-          }
-        }
-
-        final decision = await _userInput.request(
-          toolName: 'system_ask_user',
-          checkpointPrefix: 'ask',
-          context: context,
-          args: args,
-          fields: {'questions': questionsList},
-        );
-        final answer = decision['answer']?.toString().trim();
-        if (answer == null || answer.isEmpty) {
-          throw Exception(
-            'User clarification question was resolved without an answer.',
-          );
-        }
-        return answer;
-      },
-    );
-  }
-
-  /// Plan 84 secret tools, offered only on a turn with daemon-stamped owner
-  /// authority. Every authenticated client (local or cloud) is the owner.
-  List<BaseTool> _buildSecretTools(AgentTurnRequest request) {
-    final authority = CommandAuthority.fromStamped(
-      request.metadata[CommandAuthority.payloadKey],
-    );
-    if (!authority.isOwner) return const [];
-    return [
-      RequestSecretTool(userInput: _userInput, userSecrets: _userSecrets),
-      ListSecretsTool(userSecrets: _userSecrets),
-      DeleteSecretTool(
-        permissionManager: _permissionManager,
-        userSecrets: _userSecrets,
-      ),
-    ];
-  }
-}
-
-typedef _ResultExecutionCallback =
-    Future<ToolExecutionResult> Function(
-      Map<String, dynamic> args, {
-      ToolContext? context,
-    });
-
-final class _ResultCallbackTool extends SpecBackedTool {
-  _ResultCallbackTool({
-    required this.toolSpec,
-    required _ResultExecutionCallback onExecuteResult,
-  }) : _onExecuteResult = onExecuteResult;
-
-  @override
-  final LocalToolSpec toolSpec;
-  final _ResultExecutionCallback _onExecuteResult;
-
-  @override
-  Future<ToolExecutionResult> executeResult(
-    Map<String, dynamic> args, {
-    ToolContext? context,
-  }) => _onExecuteResult(args, context: context);
-
-  @override
-  Future<String> execute(
-    Map<String, dynamic> args, {
-    ToolContext? context,
-  }) async => (await executeResult(args, context: context)).displayText;
 }
