@@ -26,14 +26,11 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/engine/agent_runner.dart': 2025,
   'lib/engine/context/context_compaction_engine.dart': 2026,
   'lib/engine/runtime/tool_execution_coordinator.dart': 1116,
-  'lib/evolution/db/agent_state_database.dart': 1635,
   'lib/evolution/db/compaction_boundary_repository.dart': 1173,
   'lib/evolution/db/runtime/session_execution_state_coordinator.dart': 1227,
   'lib/evolution/scheduling/schedule_model.dart': 1264,
   'lib/interfaces/platforms/sanad_gateway/handlers/provider_command_handler.dart':
       1122,
-  'lib/interfaces/platforms/sanad_gateway/handlers/session_query_handler.dart':
-      1482,
   'lib/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart':
       1430,
   'lib/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart': 1327,

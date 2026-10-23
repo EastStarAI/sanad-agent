@@ -1,7 +1,3 @@
-import 'dart:convert';
-
-import 'package:sanad_agent/core/models/message.dart';
-import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_thinking/session_route_thinking_control.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
@@ -13,16 +9,12 @@ import 'package:sanad_agent/evolution/models/session_query.dart';
 import 'package:sanad_agent/evolution/models/session_search.dart';
 import 'package:sanad_agent/evolution/models/session_history_page.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
-import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
-import 'package:sanad_agent/evolution/db/terminal_assistant_classifier.dart';
 import 'package:sanad_agent/evolution/compaction/model_context_projection.dart';
 import 'package:sanad_agent/evolution/models/session_route_transition.dart';
-import 'package:sanad_agent/engine/compaction/compaction.dart';
-import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
 import 'package:sanad_agent/evolution/models/compaction_operation_record.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -32,6 +24,8 @@ import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 
 import '../sanad_protocol_bridge.dart';
+import 'session_history/history_row_placement.dart';
+import 'session_history/session_history_projector.dart';
 
 /// Handles session-level queries and lightweight mutations from the Sanad
 /// protocol: session history, session list, title updates, deletion, and
@@ -41,14 +35,6 @@ import '../sanad_protocol_bridge.dart';
 /// explicitly by the [SanadProtocolBridge] rather than resolved via the service
 /// locator, so the handler stays decoupled from other runtime owners.
 class SessionQueryHandler {
-  static String _visibleToolInput(String name, Map<String, dynamic> arguments) {
-    if (name != 'view_image') return jsonEncode(arguments);
-    return jsonEncode({
-      'path': '[local image path redacted]',
-      if (arguments['detail'] != null) 'detail': arguments['detail'],
-    });
-  }
-
   final SessionManager _sessionManager;
   final SanadProtocolBridge _bridge;
   final SessionRunOrchestrator? _orchestrator;
@@ -60,6 +46,7 @@ class SessionQueryHandler {
   final ThinkingRoutePreferenceStore? _thinkingPreferenceStore;
   final ThinkingRouteSessionSync? _thinkingRouteSessionSync;
   final CompactionBoundaryRepository? _compactionBoundaries;
+  final SessionHistoryProjector _historyProjector;
 
   SessionQueryHandler({
     required SessionManager sessionManager,
@@ -83,7 +70,10 @@ class SessionQueryHandler {
        _thinkingSelectionResolver = thinkingSelectionResolver,
        _thinkingPreferenceStore = thinkingPreferenceStore,
        _thinkingRouteSessionSync = thinkingRouteSessionSync,
-       _compactionBoundaries = compactionBoundaries;
+       _compactionBoundaries = compactionBoundaries,
+       _historyProjector = SessionHistoryProjector(
+         toolCallOriginLookup: sessionManager.db.findOriginatingToolCall,
+       );
 
   Map<String, dynamic> _sessionPayloadFor({
     required SessionState session,
@@ -185,9 +175,6 @@ class SessionQueryHandler {
             anchorRowId: anchorRowId,
           );
     final persistedMessages = page.messages;
-    final messages = persistedMessages
-        .map((entry) => entry.message)
-        .toList(growable: false);
     final pageKind = anchorRowId != null
         ? 'anchor'
         : cursor == null
@@ -197,469 +184,47 @@ class SessionQueryHandler {
         : 'older';
     final includesRuntimeState = cursor == null;
     final isTailPage = pageKind == 'tail';
-    final latestContextUsage = _latestContextUsage(sessionMetadata, messages);
     final requestId = event.payload['request_id'] as String?;
-
     final baseTime =
         session?.createdAt ??
-        DateTime.now().subtract(Duration(seconds: messages.length));
-    var index = 0;
+        DateTime.now().subtract(Duration(seconds: persistedMessages.length));
 
-    final historyMessages = <Map<String, dynamic>>[];
-    final historyStartByMessageRowId = <int, int>{};
-    final toolResultByCallId = <String, Message>{};
-    for (final pm in persistedMessages) {
-      final m = pm.message;
-      if (m.role == MessageRole.tool &&
-          m.toolCallId != null &&
-          m.toolCallId!.isNotEmpty) {
-        toolResultByCallId[m.toolCallId!] = m;
-      }
-    }
-    final activeItem = _persistedState?.findActiveWorkItem(sessionId);
-    final activeContinuation = activeItem?.continuationMetadata ?? const {};
-    final executingToolIds = List<String>.from(
-      activeContinuation['currently_executing_tools'] as List? ?? const [],
-    );
-    final activeToolStartedAt = Map<String, dynamic>.from(
-      activeContinuation['tool_started_at'] as Map? ?? const {},
-    );
-    for (
-      var messageIndex = 0;
-      messageIndex < persistedMessages.length;
-      messageIndex++
-    ) {
-      final persistedMessage = persistedMessages[messageIndex];
-      final message = persistedMessage.message;
-      historyStartByMessageRowId[persistedMessage.rowId] =
-          historyMessages.length;
-      final msgId = ++index;
-      final msgTime = baseTime.add(Duration(seconds: msgId)).toIso8601String();
-
-      if (message.role == MessageRole.user) {
-        final metadata = message.metadata;
-        historyMessages.add({
-          'id': msgId,
-          'sender': 'user',
-          'type': 'user_message',
-          'content': message.content ?? '',
-          if (message.attachments.isNotEmpty)
-            'attachments': UserAttachmentPolicy.publicProjection(
-              message.attachments,
-            ),
-          'created_at': metadata?['received_at'] ?? msgTime,
-          'session_id': sessionId,
-          ...MessageHistoryIdentity.wireFields(message),
-          ...?metadata == null
-              ? null
-              : {
-                  'metadata': metadata,
-                  if (metadata['request_id'] != null)
-                    'request_id': metadata['request_id'],
-                },
-        });
-        continue;
-      }
-
-      if (message.role == MessageRole.assistant &&
-          message.metadata?['superseded_by_steer'] == true) {
-        final content = _nonEmpty(message.content);
-        if (content != null) {
-          final runId = message.metadata?['run_id'];
-          final modelStepId = message.metadata?['model_step_id'];
-          historyMessages.add({
-            'id': msgId,
-            'sender': 'ai',
-            'type': 'thought',
-            'content': content,
-            'created_at': message.metadata?['received_at'] ?? msgTime,
-            'session_id': sessionId,
-            'run_id': ?runId,
-            'model_step_id': ?modelStepId,
-          });
-        }
-        continue;
-      }
-
-      if (message.role == MessageRole.assistant &&
-          message.toolCalls != null &&
-          message.toolCalls!.isNotEmpty) {
-        final runId = message.metadata?['run_id'];
-        final modelStepId = message.metadata?['model_step_id'];
-        final reasoningContent = _nonEmpty(message.reasoning);
-        final thoughtContent =
-            _nonEmpty(message.thought) ?? _nonEmpty(message.content);
-
-        if (reasoningContent != null) {
-          historyMessages.add({
-            'id': msgId,
-            'sender': 'ai',
-            'type': 'reasoning',
-            'content': reasoningContent,
-            'run_id': ?runId,
-            'model_step_id': ?modelStepId,
-            if (message.metadata?['context_usage'] != null)
-              'context_usage': message.metadata!['context_usage'],
-            'created_at': msgTime,
-            'session_id': sessionId,
-          });
-          index++;
-        }
-        if (thoughtContent != null && thoughtContent != reasoningContent) {
-          final thoughtId = reasoningContent == null ? msgId : index;
-          historyMessages.add({
-            'id': thoughtId,
-            'sender': 'ai',
-            'type': 'thought',
-            'content': thoughtContent,
-            'run_id': ?runId,
-            'model_step_id': ?modelStepId,
-            if (message.metadata?['context_usage'] != null)
-              'context_usage': message.metadata!['context_usage'],
-            'created_at': baseTime
-                .add(Duration(seconds: thoughtId))
-                .toIso8601String(),
-            'session_id': sessionId,
-          });
-          index++;
-        }
-
-        for (final toolCall in message.toolCalls!) {
-          final isExecuting = executingToolIds.contains(toolCall.id);
-          final matchingResult = toolResultByCallId[toolCall.id];
-          final startedAt =
-              matchingResult?.metadata?['started_at']?.toString() ??
-              activeToolStartedAt[toolCall.id]?.toString();
-          final toolCreatedAt =
-              startedAt ??
-              baseTime.add(Duration(seconds: index)).toIso8601String();
-          final matchingTerminalAt = matchingResult?.metadata?['terminal_at']
-              ?.toString();
-          final matchingRuntimeMs = matchingResult?.metadata?['runtime_ms'];
-
-          historyMessages.add({
-            'id': index,
-            'sender': 'ai',
-            'type': 'tool_use',
-            'tool': toolCall.name,
-            'input': _visibleToolInput(toolCall.name, toolCall.arguments),
-            'status': isExecuting ? 'running' : 'done',
-            'run_id': ?runId,
-            'model_step_id': ?modelStepId,
-            'tool_call_id': toolCall.id,
-            if (message.metadata?['context_usage'] != null)
-              'context_usage': message.metadata!['context_usage'],
-            'created_at': toolCreatedAt,
-            'started_at': ?startedAt,
-            'terminal_at': ?matchingTerminalAt,
-            'runtime_ms': ?matchingRuntimeMs,
-            'session_id': sessionId,
-          });
-          index++;
-        }
-        continue;
-      }
-
-      if (message.role == MessageRole.tool) {
-        final resolvedToolContext = _resolveToolContext(
-          messages,
-          message,
-          sessionId: sessionId,
-        );
-        final visibleContent =
-            message.metadata?['steer_original_content']?.toString() ??
-            message.content ??
-            '';
-        final isError =
-            message.metadata?['is_error'] == true ||
-            visibleContent.startsWith('Error:');
-        final media = ViewImageMediaProjection.project(
-          sessionId: sessionId,
-          toolName: resolvedToolContext.toolName,
-          toolCallId: resolvedToolContext.toolCallId,
-          result: message.toolResult,
-        );
-
-        final startedAt = message.metadata?['started_at']?.toString();
-        final terminalAt = message.metadata?['terminal_at']?.toString();
-        final runtimeMs = message.metadata?['runtime_ms'];
-        final resultCreatedAt = terminalAt ?? msgTime;
-
-        historyMessages.add({
-          'id': msgId,
-          'sender': 'ai',
-          'type': 'tool_result',
-          'tool': resolvedToolContext.toolName ?? 'Unknown Tool',
-          'output': visibleContent,
-          'isError': isError,
-          // Same key as the live tool_result: the typed outcome (for example
-          // permission_denied) so a reopened conversation shows "Not run".
-          'errorCode': ?message.toolResult?.errorCodeWire,
-          'status':
-              message.metadata?['status']?.toString() ??
-              (isError ? 'error' : 'done'),
-          if (media != null) 'media': media.toPublicJson(),
-          if (resolvedToolContext.runId != null)
-            'run_id': resolvedToolContext.runId,
-          if (resolvedToolContext.modelStepId != null)
-            'model_step_id': resolvedToolContext.modelStepId,
-          if (resolvedToolContext.toolCallId != null)
-            'tool_call_id': resolvedToolContext.toolCallId,
-          if (message.metadata?['generation'] != null)
-            'generation': message.metadata!['generation'],
-          if (message.metadata?['revision'] != null)
-            'revision': message.metadata!['revision'],
-          if (message.metadata?['reason'] != null)
-            'reason': message.metadata!['reason'],
-          'started_at': ?startedAt,
-          'terminal_at': ?terminalAt,
-          'runtime_ms': ?runtimeMs,
-          if (message.metadata?['cleanup_outcome'] != null)
-            'cleanup_outcome': message.metadata!['cleanup_outcome'],
-          'created_at': resultCreatedAt,
-          'session_id': sessionId,
-        });
-        final steerMessages = message.metadata?['steer_messages'];
-        if (steerMessages is List) {
-          for (final rawSteer in steerMessages) {
-            if (rawSteer is! Map) continue;
-            final steer = Map<String, dynamic>.from(rawSteer);
-            final text = steer['text']?.toString().trim();
-            if (text == null || text.isEmpty) continue;
-            final steerId = ++index;
-            final steerMessageId = steer['message_id']?.toString();
-            final steerMetadata = <String, dynamic>{
-              'steer': true,
-              'input_kind': MessageHistoryIdentity.steer,
-              'replay_eligible': false,
-              'message_id': ?steerMessageId,
-              'turn_id': ?steer['turn_id'],
-              'request_id': ?steer['request_id'],
-              'received_at': ?steer['received_at'],
-            };
-            historyMessages.add({
-              'id': steerMessageId ?? steerId,
-              'sender': 'user',
-              'type': 'user_message',
-              'content': text,
-              'created_at':
-                  steer['received_at'] ??
-                  baseTime.add(Duration(seconds: steerId)).toIso8601String(),
-              'session_id': sessionId,
-              'metadata': steerMetadata,
-              'input_kind': MessageHistoryIdentity.steer,
-              'replay_eligible': false,
-              'message_id': ?steerMessageId,
-              'turn_id': ?steer['turn_id'],
-              'request_id': ?steer['request_id'],
-            });
-          }
-        }
-        continue;
-      }
-
-      final meta = message.metadata;
-      final reasoning = _nonEmpty(message.reasoning);
-      final typedThought = _nonEmpty(message.thought);
-      final isTerminalAssistant = TerminalAssistantClassifier.isTerminal(
-        message,
-        next: messageIndex + 1 < persistedMessages.length
-            ? persistedMessages[messageIndex + 1].message
-            : page.followingMessage,
-      );
-      if (reasoning != null) {
-        historyMessages.add({
-          'id': msgId,
-          'sender': 'ai',
-          'type': 'reasoning',
-          'content': reasoning,
-          if (meta?['run_id'] != null) 'run_id': meta!['run_id'],
-          if (meta?['model_step_id'] != null)
-            'model_step_id': meta!['model_step_id'],
-          if (meta?['context_usage'] != null)
-            'context_usage': meta!['context_usage'],
-          'created_at': msgTime,
-          'session_id': sessionId,
-        });
-        index++;
-      }
-      if (typedThought != null && typedThought != reasoning) {
-        final thoughtId = reasoning == null ? msgId : index;
-        historyMessages.add({
-          'id': thoughtId,
-          'sender': 'ai',
-          'type': 'thought',
-          'content': typedThought,
-          if (meta?['run_id'] != null) 'run_id': meta!['run_id'],
-          if (meta?['model_step_id'] != null)
-            'model_step_id': meta!['model_step_id'],
-          if (meta?['context_usage'] != null)
-            'context_usage': meta!['context_usage'],
-          'created_at': baseTime
-              .add(Duration(seconds: thoughtId))
-              .toIso8601String(),
-          'session_id': sessionId,
-        });
-        index++;
-      }
-      if (!isTerminalAssistant) {
-        final thought = _nonEmpty(message.content);
-        if (thought != null &&
-            thought != reasoning &&
-            thought != typedThought) {
-          final thoughtId = reasoning == null && typedThought == null
-              ? msgId
-              : index;
-          historyMessages.add({
-            'id': thoughtId,
-            'sender': 'ai',
-            'type': 'thought',
-            'content': thought,
-            if (meta?['run_id'] != null) 'run_id': meta!['run_id'],
-            if (meta?['model_step_id'] != null)
-              'model_step_id': meta!['model_step_id'],
-            if (meta?['context_usage'] != null)
-              'context_usage': meta!['context_usage'],
-            'created_at': baseTime
-                .add(Duration(seconds: thoughtId))
-                .toIso8601String(),
-            'session_id': sessionId,
-          });
-        }
-        continue;
-      }
-      final finalAnswerId = reasoning == null && typedThought == null
-          ? msgId
-          : index;
-      historyMessages.add({
-        'id': finalAnswerId,
-        'sender': 'ai',
-        'type': 'final_answer',
-        'content': message.content ?? '',
-        'status': 'done',
-        'created_at': baseTime
-            .add(Duration(seconds: finalAnswerId))
-            .toIso8601String(),
-        'session_id': sessionId,
-        ...MessageHistoryIdentity.wireFields(message),
-        if (meta != null) ...{
-          if (meta['run_id'] != null) 'run_id': meta['run_id'],
-          if (meta['model_step_id'] != null)
-            'model_step_id': meta['model_step_id'],
-          if (meta['model'] != null) 'model': meta['model'],
-          if (meta['model_display'] != null)
-            'model_display': meta['model_display'],
-          if (meta['provider'] != null) 'provider': meta['provider'],
-          if (meta['context_tokens'] != null)
-            'context_tokens': meta['context_tokens'],
-          if (meta['runtime_ms'] != null) 'runtime_ms': meta['runtime_ms'],
-          if (meta['usage'] != null) 'usage': meta['usage'],
-          if (meta['context_usage'] != null)
-            'context_usage': meta['context_usage'],
-        },
-      });
-    }
-
-    _assignStableHistoryEventIds(
+    final projection = _historyProjector.project(
       sessionId: sessionId,
       persistedMessages: persistedMessages,
-      historyStartByMessageRowId: historyStartByMessageRowId,
-      historyMessages: historyMessages,
+      followingMessage: page.followingMessage,
+      baseTime: baseTime,
+      sessionMetadata: sessionMetadata,
+      activeContinuation:
+          _persistedState
+              ?.findActiveWorkItem(sessionId)
+              ?.continuationMetadata ??
+          const {},
     );
+    final historyMessages = projection.messages;
+    final latestContextUsage = projection.latestContextUsage;
 
-    if (latestContextUsage != null &&
-        !historyMessages.any((row) => row['context_usage'] != null)) {
-      for (final row in historyMessages.reversed) {
-        final type = row['type'];
-        if (type == 'final_answer' ||
-            type == 'tool_use' ||
-            type == 'thought' ||
-            type == 'reasoning') {
-          row['context_usage'] = latestContextUsage;
-          break;
-        }
-      }
-    }
-
-    final compactionInsertionAnchors = <int>[];
-    final firstPageRowId = persistedMessages.firstOrNull?.rowId;
-    final lastPageRowId = persistedMessages.lastOrNull?.rowId;
-    for (final operation
-        in _compactionBoundaries?.listLifecycleForSession(sessionId) ??
-            const <CompactionOperationRecord>[]) {
-      final tailEndRowId = _resolveCompactionHistoryAnchor(
-        operation,
-        persistedMessages,
-      );
-      if (firstPageRowId == null ||
-          lastPageRowId == null ||
-          tailEndRowId < firstPageRowId ||
-          tailEndRowId > lastPageRowId) {
-        continue;
-      }
-      final lifecycleRow = _compactionLifecycleHistoryRow(operation);
-      final firstPostBoundary = persistedMessages
-          .where((entry) => entry.rowId > tailEndRowId)
-          .firstOrNull;
-      final rawInsertionIndex = firstPostBoundary == null
-          ? historyMessages.length - compactionInsertionAnchors.length
-          : historyStartByMessageRowId[firstPostBoundary.rowId];
-      late int insertionIndex;
-      if (rawInsertionIndex != null) {
-        insertionIndex =
-            rawInsertionIndex +
-            compactionInsertionAnchors
-                .where((anchor) => anchor <= rawInsertionIndex)
-                .length;
-        compactionInsertionAnchors.add(rawInsertionIndex);
-      } else {
-        insertionIndex = historyMessages.indexWhere((row) {
-          final createdAt = DateTime.tryParse(
-            row['created_at']?.toString() ?? '',
-          );
-          return createdAt != null &&
-              createdAt.isAfter(operation.startedAt.toUtc());
-        });
-        if (insertionIndex == -1) {
-          insertionIndex = historyMessages.length;
-        }
-      }
-      historyMessages.insert(insertionIndex, lifecycleRow);
-    }
-
-    final pageRowIds = {for (final entry in persistedMessages) entry.rowId};
+    final placement = HistoryPagePlacement(
+      persistedMessages: persistedMessages,
+      historyMessages: historyMessages,
+      historyStartByMessageRowId: projection.historyStartByMessageRowId,
+      isTailPage: isTailPage,
+    );
+    placement.insertCompactionLifecycleRows(
+      _compactionBoundaries?.listLifecycleForSession(sessionId) ??
+          const <CompactionOperationRecord>[],
+    );
 
     if (session != null &&
         session.forkSequence > 0 &&
         session.forkedFromMessageId != null &&
         session.forkedFromTurnId != null) {
-      final insertionIndex = _forkMarkerInsertionIndex(
-        sessionId: sessionId,
-        pageRowIds: pageRowIds,
-        historyMessages: historyMessages,
-        isTailPage: isTailPage,
+      placement.insertForkMarker(
+        session,
+        copiedPrefixEndRowId: _sessionManager.lastActiveForkCopiedRowId(
+          sessionId,
+        ),
       );
-      if (insertionIndex != null) {
-        final eventId = 'fork_${session.sessionId}';
-        historyMessages.insert(insertionIndex, {
-          'id': eventId,
-          'event_id': eventId,
-          'sender': 'system',
-          'type': CanonicalEventTypes.sessionForked,
-          'content': 'Conversation forked',
-          'session_id': session.sessionId,
-          'created_at': session.createdAt.toUtc().toIso8601String(),
-          'metadata': {
-            'informational': true,
-            'informational_kind': 'session_fork',
-            'lineage_id': session.lineageId,
-            'parent_session_id': session.parentSessionId,
-            'forked_from_message_id': session.forkedFromMessageId,
-            'forked_from_turn_id': session.forkedFromTurnId,
-            'fork_sequence': session.forkSequence,
-          },
-        });
-      }
     }
 
     // Only automatic failover is rendered live (the Client turns
@@ -669,35 +234,10 @@ class SessionQueryHandler {
         in _routeTransitions?.findForSession(sessionId) ??
             const <SessionRouteTransition>[]) {
       if (transition.source != SessionRouteSource.autoFailover) continue;
-      final insertionIndex = _routeTransitionInsertionIndex(
+      placement.insertRouteTransitionNotice(
         transition,
-        sessionId: sessionId,
-        pageRowIds: pageRowIds,
-        historyMessages: historyMessages,
-        isTailPage: isTailPage,
+        anchorRowId: _routeNoticeAnchorRowId(sessionId, transition),
       );
-      if (insertionIndex == null) continue;
-      final previousProviderLabel =
-          transition.previousProviderDisplayName ??
-          transition.previousProviderInstanceId ??
-          'the previous provider';
-      final nextProviderLabel =
-          transition.providerDisplayName ?? transition.providerInstanceId;
-      final reasonText = transition.reason?.replaceAll('_', ' ');
-      historyMessages.insert(insertionIndex, {
-        'id': transition.eventId,
-        'event_id': transition.eventId,
-        'sender': 'system',
-        'type': 'session_route_transition',
-        'content':
-            'Switched automatically from '
-            '$previousProviderLabel '
-            'to $nextProviderLabel'
-            '${reasonText == null ? '' : ' because $reasonText'}. '
-            'Continuing with ${transition.model}.',
-        ...transition.toPayload(),
-        'created_at': transition.createdAt.toIso8601String(),
-      });
     }
 
     final inFlight = _sessionManager.getInFlightSnapshot(sessionId);
@@ -766,159 +306,25 @@ class SessionQueryHandler {
     );
   }
 
-  void _assignStableHistoryEventIds({
-    required String sessionId,
-    required List<PersistedMessage> persistedMessages,
-    required Map<int, int> historyStartByMessageRowId,
-    required List<Map<String, dynamic>> historyMessages,
-  }) {
-    for (
-      var messageIndex = 0;
-      messageIndex < persistedMessages.length;
-      messageIndex++
-    ) {
-      final persisted = persistedMessages[messageIndex];
-      final start = historyStartByMessageRowId[persisted.rowId];
-      if (start == null) continue;
-      final end = messageIndex + 1 < persistedMessages.length
-          ? historyStartByMessageRowId[persistedMessages[messageIndex + 1]
-                    .rowId] ??
-                historyMessages.length
-          : historyMessages.length;
-      final ordinals = <String, int>{};
-      for (var rowIndex = start; rowIndex < end; rowIndex++) {
-        final row = historyMessages[rowIndex];
-        final kind = row['type']?.toString() ?? 'event';
-        final ordinal = ordinals.update(
-          kind,
-          (value) => value + 1,
-          ifAbsent: () => 0,
-        );
-        final eventId = 'history:$sessionId:${persisted.rowId}:$kind:$ordinal';
-        row['id'] = eventId;
-        row['event_id'] = eventId;
-        row['source_message_row_id'] = persisted.rowId;
-      }
-    }
-  }
-
-  /// The fork marker follows the last row the fork copied, so it sits on the
-  /// one page holding that row whatever came after it. A legacy child whose
-  /// copied rows carry no `origin_message_id` keeps the old tail placement.
-  int? _forkMarkerInsertionIndex({
-    required String sessionId,
-    required Set<int> pageRowIds,
-    required List<Map<String, dynamic>> historyMessages,
-    required bool isTailPage,
-  }) {
-    final prefixEndRowId = _sessionManager.lastActiveForkCopiedRowId(
-      sessionId,
-    );
-    if (prefixEndRowId == null) {
-      return isTailPage ? historyMessages.length : null;
-    }
-    if (!pageRowIds.contains(prefixEndRowId)) return null;
-    return _historyIndexAfterRow(historyMessages, prefixEndRowId);
-  }
-
-  /// Places an automatic-failover notice where it appeared live: after the
-  /// last durable row at failover time (`anchor_message_id`). Legacy rows
-  /// without that anchor resolve, at session scope, to their request turn's
-  /// newest tool result finished by then (else its root user row). Either way
-  /// the notice belongs to the one page holding its anchor row; an
-  /// unresolvable notice stays tail-only.
-  int? _routeTransitionInsertionIndex(
-    SessionRouteTransition transition, {
-    required String sessionId,
-    required Set<int> pageRowIds,
-    required List<Map<String, dynamic>> historyMessages,
-    required bool isTailPage,
-  }) {
+  /// Resolves the durable row an automatic-failover notice follows: its
+  /// explicit `anchor_message_id`, else its request turn's newest tool result
+  /// finished by then (else the turn's root user row).
+  int? _routeNoticeAnchorRowId(
+    String sessionId,
+    SessionRouteTransition transition,
+  ) {
     final anchorMessageId = transition.anchorMessageId;
     final anchorRowId = anchorMessageId == null
         ? null
         : _sessionManager.activeRowIdForMessageId(sessionId, anchorMessageId);
-    if (anchorRowId != null) {
-      if (!pageRowIds.contains(anchorRowId)) return null;
-      return _indexAfterEarlierSyntheticRows(
-        historyMessages,
-        _historyIndexAfterRow(historyMessages, anchorRowId),
-        transition.createdAt,
-      );
-    }
-
+    if (anchorRowId != null) return anchorRowId;
     final requestId = transition.requestId;
-    final legacyAnchorRowId = requestId == null || requestId.isEmpty
-        ? null
-        : _sessionManager.legacyRouteNoticeAnchorRowId(
-            sessionId,
-            requestId,
-            transition.createdAt,
-          );
-    if (legacyAnchorRowId == null) {
-      return isTailPage ? historyMessages.length : null;
-    }
-    if (!pageRowIds.contains(legacyAnchorRowId)) return null;
-    return _indexAfterEarlierSyntheticRows(
-      historyMessages,
-      _historyIndexAfterRow(historyMessages, legacyAnchorRowId),
+    if (requestId == null || requestId.isEmpty) return null;
+    return _sessionManager.legacyRouteNoticeAnchorRowId(
+      sessionId,
+      requestId,
       transition.createdAt,
     );
-  }
-
-  /// Index just after every history row rendered from persisted rows up to
-  /// [rowId], so a row that renders nothing still resolves to its position.
-  int _historyIndexAfterRow(
-    List<Map<String, dynamic>> historyMessages,
-    int rowId,
-  ) {
-    var index = 0;
-    for (var i = 0; i < historyMessages.length; i++) {
-      final sourceRowId = historyMessages[i]['source_message_row_id'];
-      if (sourceRowId is int && sourceRowId <= rowId) index = i + 1;
-    }
-    return index;
-  }
-
-  /// Steps past derived rows (compaction lifecycle, earlier transitions, the
-  /// fork marker) at the same anchor that happened no later than [at].
-  int _indexAfterEarlierSyntheticRows(
-    List<Map<String, dynamic>> historyMessages,
-    int index,
-    DateTime at,
-  ) {
-    var cursor = index;
-    while (cursor < historyMessages.length) {
-      final row = historyMessages[cursor];
-      if (row['source_message_row_id'] != null) break;
-      final createdAt = DateTime.tryParse(row['created_at']?.toString() ?? '');
-      if (createdAt == null || createdAt.isAfter(at)) break;
-      cursor++;
-    }
-    return cursor;
-  }
-
-  int _resolveCompactionHistoryAnchor(
-    CompactionOperationRecord operation,
-    List<PersistedMessage> messages,
-  ) {
-    final originalRowId = operation.retainedTailRange.end.rowId;
-    if (messages.any((entry) => entry.rowId == originalRowId)) {
-      return originalRowId;
-    }
-    final fingerprint = operation.retainedTailEndFingerprint;
-    final occurrence = operation.retainedTailEndOccurrence;
-    if (fingerprint == null || occurrence == null) return originalRowId;
-
-    var seen = 0;
-    for (final entry in messages) {
-      if (CompactionMessageAnchor.fingerprint(entry.message) != fingerprint) {
-        continue;
-      }
-      seen++;
-      if (seen == occurrence) return entry.rowId;
-    }
-    return originalRowId;
   }
 
   Map<String, dynamic> buildThreadsEnvelope(CanonicalEvent event) {
@@ -1239,79 +645,6 @@ class SessionQueryHandler {
     );
   }
 
-  _ResolvedToolContext _resolveToolContext(
-    List<Message> messages,
-    Message message, {
-    String? sessionId,
-  }) {
-    var toolCallId =
-        message.toolCallId ?? message.metadata?['tool_call_id']?.toString();
-    String? toolName;
-    String? runId = message.metadata?['run_id']?.toString();
-    String? modelStepId = message.metadata?['model_step_id']?.toString();
-
-    if (toolCallId != null && toolCallId.isNotEmpty) {
-      for (final previous in messages) {
-        if (previous.role != MessageRole.assistant ||
-            previous.toolCalls == null) {
-          continue;
-        }
-        for (final toolCall in previous.toolCalls!) {
-          if (toolCall.id == toolCallId) {
-            toolName = toolCall.name;
-            runId ??= previous.metadata?['run_id']?.toString();
-            modelStepId ??= previous.metadata?['model_step_id']?.toString();
-            break;
-          }
-        }
-        if (toolName != null) {
-          break;
-        }
-      }
-      if (toolName == null && sessionId != null && sessionId.isNotEmpty) {
-        final origin = _sessionManager.db.findOriginatingToolCall(
-          sessionId,
-          toolCallId: toolCallId,
-          turnId: message.metadata?['turn_id']?.toString(),
-        );
-        if (origin != null) {
-          toolName = origin.toolCall.name;
-          runId ??= origin.runId;
-          modelStepId ??= origin.modelStepId;
-        }
-      }
-    } else {
-      final currentIndex = messages.indexOf(message);
-      if (currentIndex != -1) {
-        for (var idx = currentIndex - 1; idx >= 0; idx--) {
-          final previous = messages[idx];
-          if (previous.role == MessageRole.assistant &&
-              previous.toolCalls != null &&
-              previous.toolCalls!.isNotEmpty) {
-            final toolCall = previous.toolCalls!.first;
-            toolCallId = toolCall.id;
-            toolName = toolCall.name;
-            runId ??= previous.metadata?['run_id']?.toString();
-            modelStepId ??= previous.metadata?['model_step_id']?.toString();
-            break;
-          }
-        }
-      }
-    }
-
-    return _ResolvedToolContext(
-      toolCallId: toolCallId,
-      toolName: toolName,
-      runId: runId,
-      modelStepId: modelStepId,
-    );
-  }
-
-  static String? _nonEmpty(String? value) {
-    final normalized = value?.trim();
-    return normalized == null || normalized.isEmpty ? null : normalized;
-  }
-
   String? _queuedRequestIdFor(GatewayEvent event) {
     final turnRequestId = event.turnRequest?.requestId;
     if (turnRequestId != null && turnRequestId.isNotEmpty) {
@@ -1325,68 +658,6 @@ class SessionQueryHandler {
       }
     }
     return event.runId;
-  }
-
-  static Map<String, dynamic>? _latestContextUsage(
-    Map<String, dynamic>? sessionMetadata,
-    List<Message> messages,
-  ) {
-    final projected = sessionMetadata?['context_usage'];
-    if (projected is Map) {
-      return Map<String, dynamic>.from(projected);
-    }
-
-    for (final message in messages.reversed) {
-      if (message.role != MessageRole.assistant) continue;
-      final metadata = message.metadata;
-      final stored = metadata?['context_usage'];
-      if (stored is Map) return Map<String, dynamic>.from(stored);
-      final usage = metadata?['usage'];
-      if (usage is! Map) continue;
-
-      int? read(List<String> keys) {
-        for (final key in keys) {
-          final value = usage[key];
-          if (value is num && value >= 0) return value.toInt();
-        }
-        return null;
-      }
-
-      final inputTokens = read(const [
-        'input_tokens',
-        'prompt_tokens',
-        'input',
-      ]);
-      final outputTokens = read(const [
-        'output_tokens',
-        'completion_tokens',
-        'output',
-      ]);
-      final totalTokens = read(const ['total_tokens', 'total']);
-      final cachedTokens = read(const [
-        'cached_tokens',
-        'cache_read_input_tokens',
-        'cache_read',
-      ]);
-      final reasoningTokens = read(const ['reasoning_tokens']);
-      final snapshot = <String, dynamic>{
-        'input_tokens': ?inputTokens,
-        'output_tokens': ?outputTokens,
-        'total_tokens': ?totalTokens,
-        'cached_tokens': ?cachedTokens,
-        'reasoning_tokens': ?reasoningTokens,
-        if (metadata?['context_tokens'] is num)
-          'context_window_tokens': (metadata!['context_tokens'] as num).toInt(),
-        if (metadata?['model'] != null) 'model_id': metadata!['model'],
-        if (metadata?['provider'] != null)
-          'provider_instance_id': metadata!['provider'],
-        if (metadata?['run_id'] != null) 'run_id': metadata!['run_id'],
-        if (metadata?['model_step_id'] != null)
-          'model_step_id': metadata!['model_step_id'],
-      };
-      if (snapshot.isNotEmpty) return snapshot;
-    }
-    return null;
   }
 
   Map<String, dynamic>? _blockedPersistedNoticePayload(String sessionId) {
@@ -1409,74 +680,4 @@ class SessionQueryHandler {
     return _persistedState?.executionSnapshots.getSnapshot(sessionId) ??
         SessionExecutionSnapshot.virtualIdle(sessionId);
   }
-
-  Map<String, dynamic> _compactionLifecycleHistoryRow(
-    CompactionOperationRecord operation,
-  ) {
-    final wireType = switch (operation.status) {
-      CompactionStatus.started => CanonicalEventTypes.contextCompactionStarted,
-      CompactionStatus.completed =>
-        CanonicalEventTypes.contextCompactionCompleted,
-      CompactionStatus.failed => CanonicalEventTypes.contextCompactionFailed,
-    };
-    final metrics = operation.metrics;
-    final eventId = CompactionLifecycleEvent.eventIdFor(
-      operation.compactionId,
-      operation.status,
-    );
-    return {
-      'id': eventId,
-      'event_id': eventId,
-      'sender': 'system',
-      'type': wireType,
-      'session_id': operation.sessionId,
-      'compaction_id': operation.compactionId,
-      'trigger': operation.trigger.wireValue,
-      'status': operation.status.wireValue,
-      'provider_instance_id': operation.routeSignature.providerInstanceId,
-      'model_id': operation.routeSignature.modelId,
-      'started_at': operation.startedAt.toUtc().toIso8601String(),
-      if (operation.completedAt != null)
-        'completed_at': operation.completedAt!.toUtc().toIso8601String(),
-      if (metrics != null) ...{
-        'context_window_tokens': metrics.contextWindowTokens,
-        if (metrics.effectiveInputBudgetTokens != null)
-          'effective_input_budget_tokens': metrics.effectiveInputBudgetTokens,
-        if (metrics.autoThresholdTokens != null)
-          'auto_threshold_tokens': metrics.autoThresholdTokens,
-        'estimated_request_tokens_before': metrics.estimatedRequestTokensBefore,
-        'estimated_request_tokens_after': metrics.estimatedRequestTokensAfter,
-        'before_measurement_kind': metrics.beforeMeasurementKind.wireValue,
-        if (metrics.providerConfirmedRequestTokensAfter != null)
-          'provider_confirmed_request_tokens_after':
-              metrics.providerConfirmedRequestTokensAfter,
-        'retained_tail_tokens': metrics.retainedTailTokens,
-        if (metrics.duration != null)
-          'duration_ms': metrics.duration!.inMilliseconds,
-      },
-      if (operation.failureReason != null)
-        'failure_reason': operation.failureReason!.wireValue,
-      if (operation.failureStage != null)
-        'failure_stage': operation.failureStage,
-      if (operation.failureCause != null)
-        'failure_cause': operation.failureCause,
-      'created_at': (operation.completedAt ?? operation.startedAt)
-          .toUtc()
-          .toIso8601String(),
-    };
-  }
-}
-
-class _ResolvedToolContext {
-  final String? toolCallId;
-  final String? toolName;
-  final String? runId;
-  final String? modelStepId;
-
-  const _ResolvedToolContext({
-    required this.toolCallId,
-    required this.toolName,
-    required this.runId,
-    required this.modelStepId,
-  });
 }

@@ -21,7 +21,7 @@ without the model") and extends it to add and replace, which Task 84 deliberatel
 
 Scope: `agent/` (non-secret metadata, catalog, protocol) and `client/` (Settings destination, list,
 add/replace/delete dialogs, strings). No change to the vault backend, the `custom:` namespace, the
-injection rule, the echo redactor, or the existing model tools.
+injection rule, the echo redactor, the existing model tools, or the Full Access prompt rule (K8).
 
 ## Verified starting point (2026-10-23, `09d5c34a`)
 
@@ -55,6 +55,8 @@ Fixed by the product owner; not reopened here.
 | K5 | **Delete** is available with a confirmation. | accepted recommendation |
 | K6 | The list contains **only the user's own secrets** (`custom:`); provider and MCP credentials keep their own screens and never appear here. | accepted recommendation |
 | K7 | Both screens behave identically over local and cloud connections. No local-only restrictions. | U4 |
+| K8 | The Full Access rule for commands that name secrets is **unchanged**: a Full Access turn does not prompt for them (standing Plan 83/84 decision), and this page does not restate the policy. | owner decision 2026-10-23 |
+| K9 | Backend logging of `secret.set` is verified, with no block on this task: the private Backend logs the command name only, never the payload, and its socket.io server logger is disabled. | owner decision 2026-10-23 |
 
 ### Amendments this task records
 
@@ -215,6 +217,8 @@ or its length in characters.
   autocorrect, show/hide toggle, controllers cleared on submit and on cancel). If the card's field can
   be lifted into a shared `MaskedSecretField` without touching the timeline, do that; otherwise keep
   the new field local to the settings feature and leave the card alone.
+- No policy copy: the page states only what is stored and that values are write-only. It does not
+  restate the Full Access prompt rule, which is unchanged (K8).
 
 ### C3 — States
 
@@ -286,7 +290,9 @@ including web and mobile, which are cloud-only and therefore reach the same comm
    command to that device's live daemon connection. It **does not persist the payload and does not log
    it** (the existing rule for `device_command` in
    `docs/technical/remote_device_control_threat_model.md`); it records the command name and device id
-   only. Nothing about a secret becomes hosted settings.
+   only. `secret.set` is verified against that rule: the private Backend logs the command name only,
+   never the payload, and its socket.io server logger is disabled (K9). Nothing about a secret becomes
+   hosted settings.
 3. The daemon receives the command on the same handler the local route uses, validates it, and writes
    the value to the per-Home OS vault (`custom:`). The value is never written to the agent-state
    database, a workspace file, `.env`, or a dump.
@@ -299,7 +305,7 @@ If any step above cannot be honored, the item does not ship: the value direction
 
 | Surface | Guarantee |
 |---|---|
-| Gateway | payload not persisted, not logged |
+| Gateway | payload not persisted, not logged (verified for `secret.set`, K9) |
 | Agent logs | name and outcome only; `SecretsRedactor` for any free text |
 | Agent errors | typed code plus a message that never contains the value |
 | Request dumps / history / compaction | the value never enters a model request |
@@ -394,26 +400,14 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
 - If 113b 113-01 has already landed, `settings_pages/` exists and 140-04 only adds files plus the two
   navigation edits; if it has not, 140-04 waits — do not add a page to the 2,018-line host.
 
-## Open questions
-
-Not covered by U3/U4 or by the accepted recommendations. Do not decide them here.
-
-1. **Full Access and named secrets.** Task 84 left open whether a Full Access turn should still prompt
-   when a command names secrets (today it does not). Is the Privacy & Security page the place to state
-   that policy, and should it change?
-2. **Backend logging of `secret.set`.** Task 84 recorded that values already cross the Cloud Gateway
-   relay inside `tool_permission_response` and that the private Backend's logging of that command
-   should be confirmed. The same confirmation is owed for `secret.set`; if the Backend logs command
-   payloads, the fix is outside this repository and this task blocks on it.
-3. **Usage metadata.** Should the list show a last-used time and a "used by" hint (command or skill)?
-   No such tracking exists today, and it would add agent-side bookkeeping and a new write path.
-4. **Dependency warning on delete.** Should delete warn when a stored secret name appears in a saved
-   schedule prompt or a recent command? No dependency tracking exists today.
-
 ## Out of scope
 
 - Reveal, export, bulk import from dotenv text, rotation history, external secret managers, and a
   second "agent-readable environment" kind (a visible plaintext value) — none of these ship here.
+- Usage metadata in the list — a last-used time or a "used by" hint: no such tracking exists today, and
+  it would add agent-side bookkeeping and a new write path. Not in v1 (owner decision 2026-10-23).
+- A dependency warning on delete — a stored secret name appearing in a saved schedule prompt or a
+  recent command: no dependency tracking exists today. Not in v1 (owner decision 2026-10-23).
 - Provider, MCP, and Sanad credential management: they keep their own screens and never appear in this
   list (K6).
 - Any change to the vault backend, the `custom:` namespace, per-command injection, echo redaction, or
