@@ -1,9 +1,9 @@
 ---
 title: "Task 140 — Secrets Screen (Settings → Privacy & Security)"
 description: "Give user secrets a real surface: a Settings → Privacy & Security page that lists each stored name with non-secret metadata, adds a value, replaces a value without ever reading the old one, and deletes with confirmation, over one local/cloud protocol path whose every value direction is write-only, model-invisible, and absent from logs, caches, and error text."
-status: pending
-current_gate: "Wave 1 (metadata store) blocked on 138-11; Wave 2 (protocol) blocked on 138-08; Client page blocked on 113b 113-01"
-remaining_estimate: 100%
+status: in_progress
+current_gate: "140-01 (metadata store) complete pending PR merge; 140-02 (protocol) next and blocked on 138-08"
+remaining_estimate: 80%
 base_commit: 09d5c34a
 depends_on: "138-11 (schema modules), 138-08 (bridge translator), 113b 113-01 (settings pages split) — see Work split"
 ---
@@ -64,6 +64,9 @@ Fixed by the product owner; not reopened here.
 |---|---|---|
 | Task 84 §4 out-of-scope ("a Client Settings page to manage secrets — proposed, needs a scope decision") | out of scope | in scope (K1–K6) |
 | `docs/technical/execution_trust_and_permission_authority.md` §10 "Listing, deletion and revocation" | names only, delete through the model tool | additionally a user-authority list with non-secret metadata, plus user-authority add/replace/delete; the model's tools are unchanged |
+| A2, first bullet ("a name with no metadata row is returned with `description: null` and `updated_at: null`") | projected nulls for an unrepaired name | `updated_at` is NOT NULL, so a null could not also be repaired. Owner decision 2026-10-23: `list()` repairs in the same read — it inserts `source = agent_request`, `description = NULL`, `created_at = updated_at = now` — so a returned entry never carries a null timestamp. The repair records `agent_request` because that was the only arrival path before this screen existed, so it never claims the user typed the value |
+| A2, `set(name, value, description)` description semantics | unstated | the passed description is authoritative: `null` or a whitespace-only string clears the column. The Replace dialog always submits the full desired description |
+| 140-01 Work split file locks | owner classes and tests only | plus minimal wiring, owner decision 2026-10-23: `evolution/db/agent_state_database.dart` (one `UserSecretsSchema.apply` call at the pinned end position) and `core/di.dart` (repository and catalog registration, `SecretAcquisition` metadata injection). Wiring only, no logic |
 
 ### Design decisions taken to make the fixed decisions executable
 
@@ -398,6 +401,29 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
   **113b 113-01** (settings pages host) on the Client. No other SRP item owns a file this task needs.
 - 113b 113-01 has landed: `settings_pages/` exists, so 140-04 only adds files plus the two
   navigation edits. Never move the new page back into a shared page library or add a ratchet entry.
+
+## Gate progress
+
+### 140-01 — metadata table + repository + catalog + acquisition hook — implemented, in review
+
+- [x] A1 `user_secret_metadata` in `evolution/db/schema/user_secrets_schema.dart`, applied after every
+      pre-existing module; additive and idempotent for an existing Home.
+- [x] A1 `UserSecretMetadataRepository` owns every read and write of the table.
+- [x] A2 `UserSecretCatalog`: `list` (join, repair-on-read, prune), `set`, `delete`, and the value
+      rules; it never calls `UserSecretVault.resolve`.
+- [x] A3 `SecretAcquisition` records `source = agent_request` for every name a Task 84 card stored.
+- [x] A4 documentation: schema §3.6 and §10, trust/authority §10, product settings hub,
+      the capabilities and evolution-db contracts.
+- [x] Tests: migration (fresh, existing Home, three idempotent opens, no value-shaped column),
+      catalog (join/repair/prune, validation, M3 ordering, replace/delete, log and dump scans),
+      acquisition hook, and the value-read guard.
+- [x] Schema snapshots regenerated for all four fixtures: one new table each, no other movement.
+- [ ] Merge (blocked on CI and review).
+
+Verification at commit `234c770c` (PR #315): `fvm dart analyze` clean; 6 migration + 26 catalog +
+8 acquisition + 7 guard tests; `test/evolution/` 456 passed; guard suite 18 passed; Task 84
+regression 74 passed; full Agent fast suite 3848 passed / 16 pre-existing skips; `lint_wiki.dart`
+clean; `graphify update` run. All required CI checks pass.
 
 ## Out of scope
 

@@ -171,6 +171,16 @@ A name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and must not be a protected opera
 
 - `system_list_secrets` returns the sorted names in `custom:` only; it never lists `providers:` or `mcp:` entries.
 - `system_delete_secret` takes 1 to 16 names. It is sensitive (`permission_class: secret_management`) and asks the user every time, then reports `deleted` and `not_found`. Deletion removes the vault entry and its index id, so later calls naming it fail as `secret_not_found`. A command already running keeps the environment it started with.
+- Task 140 adds a **device-owner** list, add/replace, and delete authority beside the model's tools. Both surfaces act on the same `custom:` namespace; the model's tools are unchanged by it.
+
+### Device-owner listing and rotation (Task 140)
+
+- The owner lists stored secrets with non-secret metadata: name, a user-authored description (at most 256 characters), the arrival source (`agent_request` through an acquisition card, `user` through this path), and the created/updated instants. The metadata lives in `user_secret_metadata`, never in the vault; see [the agent database schema](agent_database_schema.md) §3.6.
+- Add and replace are one command. Replacing never shows the old value: the form starts empty and the write is a single verified vault write. There is **no reveal**, for the user, the model, or support.
+- A submitted value that is empty, longer than `UserSecretVault.maxValueLength`, or a redaction sentinel (`[REDACTED:<NAME>]`) is refused as `invalid_secret_value`, on both the Client and the Agent. The sentinel rule exists because a mask shown in a log, a tool result, or the timeline must never be written back as the secret itself.
+- Deletion requires an explicit confirmation and removes the vault entry and its metadata row together. A later command naming the deleted secret fails as `secret_not_found`.
+- A verified vault write is never reported as a failure because metadata could not be recorded; the metadata row is repaired by the next list read, with `source = agent_request`, so a repair never claims the owner typed a value in.
+- The list projection is structurally value-free: it has no value field, add and replace return metadata, delete returns an outcome, and no command, response, event, or error carries a stored value in either direction. The handler and the catalog log the name and the outcome only.
 
 ### Limits
 

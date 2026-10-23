@@ -10,6 +10,14 @@ This contract applies to `agent/lib/capabilities/`.
 - `ToolsRegistry` is both execution lookup and searchable catalog; do not maintain duplicate tool lists.
 - `AgentRunner` executes an assembled catalog but must not construct workspace, MCP, skill, web, or platform catalogs.
 
+## User Secrets Boundary
+
+- `UserSecretVault` is the only owner of the Agent vault's `custom:` namespace: `store` (read-back verified), `names`, `remove`, `available`, and `resolve`. `resolve` exists only for the shell backend that injects explicitly requested names into one child process; nothing model-visible returns a value.
+- `UserSecretCatalog` (`capabilities/secrets/user_secret_catalog.dart`) is the single read model behind the Settings → Privacy & Security page. It joins vault names with `user_secret_metadata`, and it **never calls `resolve`**: the page is write-only, so no reader of it can return a stored value. `agent/test/guards/secrets_value_read_guard_test.dart` fails if a value-reading call appears on that path.
+- The catalog validates the name (`UserSecretVault.nameRejection`), the value (non-empty, at most `maxValueLength`, not a `[REDACTED:…]` sentinel), and the description (at most 256 characters) before the first mutation. Vault unavailability is a typed failure, never a silent success.
+- Write ordering is vault first, metadata second: a verified vault write is never reported as a failure because metadata could not be written, and a refused vault write never gets a metadata row.
+- `SecretAcquisition` records `source = agent_request` for every name a Task 84 card stored, because that path is what arrived. It records a name and an outcome only, never a value.
+
 ## Catalog Boundary
 - `LocalRuntimeCatalog` owns per-turn assembly and rebuilds mutable workspace/MCP context each turn.
 - The catalog delegates tool families to focused builders under `capabilities/runtime/tool_builders/`; a builder returns tools to the catalog and never registers itself or becomes a second registry.
