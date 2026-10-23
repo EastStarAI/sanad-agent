@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert' hide json;
 
+import '../../../models/runtime_retry_state.dart';
 import 'session_subcommand_base.dart';
 
 class SessionShowCommand extends SessionSubcommandBase {
@@ -41,6 +42,31 @@ class SessionShowCommand extends SessionSubcommandBase {
         final rawResult = await client.getSessionHistory(sessionId: id);
         final payload = unwrapSessionPayload(rawResult);
 
+        // The daemon always projects a session's own identity when it knows the
+        // session (`buildSessionPayload` sets `title` and `created_at`
+        // unconditionally), and omits it entirely when it does not. Reporting
+        // the omitted case as `idle` with exit 0 made an unknown id
+        // indistinguishable from a stopped turn (Task 141).
+        final hasSessionIdentity =
+            payload['title'] != null || payload['created_at'] != null;
+        if (!hasSessionIdentity) {
+          stderrSink.writeln(
+            'Error: Session $id was not found. Check the id with: '
+            'sanad session list',
+          );
+          if (json) {
+            stdoutSink.writeln(
+              jsonEncode({
+                'session_id': id,
+                'exit_code': 1,
+                'error_code': 'session_not_found',
+                'error': 'Session $id was not found on this daemon.',
+              }),
+            );
+          }
+          return 1;
+        }
+
         final inFlight = payload['in_flight'] is Map
             ? Map<String, dynamic>.from(payload['in_flight'] as Map)
             : null;
@@ -52,6 +78,13 @@ class SessionShowCommand extends SessionSubcommandBase {
         final executionSnapshot = payload['execution_snapshot'] is Map
             ? Map<String, dynamic>.from(payload['execution_snapshot'] as Map)
             : null;
+        final notice = payload['runtime_notice'] is Map
+            ? Map<String, dynamic>.from(payload['runtime_notice'] as Map)
+            : null;
+        // The daemon owns recovery: its notice status, the failure's
+        // retryability, and the remaining budget decide whether the turn is
+        // being retried or is truly stopped. Prose never does (Task 141).
+        final retry = RuntimeRetryState.fromProjection(payload);
 
         final bool isAskUser =
             pending != null &&
@@ -59,10 +92,11 @@ class SessionShowCommand extends SessionSubcommandBase {
                 (pending['questions'] is List &&
                     (pending['questions'] as List).isNotEmpty));
 
-        // The in-flight projection is an in-memory partial-stream snapshot.
-        // A durable execution projection that is unowned (`idle`/`queued`)
-        // proves no run is publishing, so a leftover snapshot must not be
-        // reported as `running` (Task 134).
+        // The durable execution projection is the authoritative state: the
+        // daemon that owns the turn writes it. `in_flight` is only the in-memory
+        // partial-stream snapshot, and it is absent while a tool runs, which is
+        // why this projection used to answer `idle` for a session that was
+        // demonstrably executing (Task 141).
         final durableExecutionState = executionSnapshot?['state']?.toString();
         final durableIsIdle =
             durableExecutionState == 'idle' ||
@@ -72,6 +106,12 @@ class SessionShowCommand extends SessionSubcommandBase {
         final String status;
         if (pending != null) {
           status = isAskUser ? 'needs_input' : 'needs_permission';
+        } else if (retry.isAutoRetrying) {
+          // A scheduled resume (or budget left) outranks both `blocked` and a
+          // missing in-flight snapshot: the daemon will continue on its own.
+          status = 'retrying';
+        } else if (durableExecutionState != null && !durableIsIdle) {
+          status = durableExecutionState;
         } else if (hasRunningExecution) {
           status = 'running';
         } else {
@@ -111,12 +151,36 @@ class SessionShowCommand extends SessionSubcommandBase {
 
         final includeFullHistory = getFlag('include-messages');
 
+        // The recovery facts an observer needs to classify the turn without
+        // guessing: whether the daemon is retrying, the notice that says so, the
+        // attempt counters, and the remaining resume delay (Task 141).
+        final Map<String, dynamic>? retryFacts =
+            retry.isAutoRetrying || retry.isTrulyBlocked
+            ? <String, dynamic>{
+                'pending': retry.isAutoRetrying,
+                'stopped': retry.isTrulyBlocked,
+                if (retry.noticeStatus != null)
+                  'notice_status': retry.noticeStatus,
+                if (retry.reason != null) 'reason': retry.reason,
+                if (retry.attempt != null) 'attempt': retry.attempt,
+                if (retry.budget != null) 'budget': retry.budget,
+                if (retry.retryAfterMs != null)
+                  'resume_in_ms': retry.retryAfterMs,
+                'label': retry.isAutoRetrying
+                    ? retry.retryLabel
+                    : 'needs_intervention',
+              }
+            : null;
+
         final showResult = <String, dynamic>{
           'session_id': id,
           'status': status,
+          'execution_state': ?durableExecutionState,
           'identities': identities,
           'in_flight': inFlight,
           'pending_permission_request': pending,
+          'runtime_notice': ?notice,
+          'retry': ?retryFacts,
           'execution_snapshot': ?executionSnapshot,
           if (payload['model'] != null) 'model': payload['model'],
           if (payload['model_display'] != null)
@@ -151,6 +215,22 @@ class SessionShowCommand extends SessionSubcommandBase {
 
         stdoutSink.writeln('Session details for: $id');
         stdoutSink.writeln('Status: $status');
+        if (durableExecutionState != null) {
+          stdoutSink.writeln('Execution: $durableExecutionState');
+        }
+        if (retryFacts != null) {
+          final reason = retry.reason == null ? '' : ' (${retry.reason})';
+          final resume = retry.retryAfterMs == null || retry.retryAfterMs == 0
+              ? ''
+              : ' in ${(retry.retryAfterMs! / 1000).round()}s';
+          stdoutSink.writeln(
+            retry.isAutoRetrying
+                ? 'Recovery: ${retry.retryLabel}$resume$reason — the daemon '
+                      'continues this turn automatically'
+                : 'Recovery: needs_intervention$reason — the daemon will not '
+                      'continue without Retry, Change Provider or Stop',
+          );
+        }
         if (payload['model'] != null) {
           stdoutSink.writeln('Model: ${payload['model']}');
         }

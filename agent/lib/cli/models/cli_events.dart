@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'runtime_retry_state.dart';
+
 /// Base class for all events emitted by the CLI gateway client.
 sealed class CliEvent {
   final String type;
@@ -257,6 +259,7 @@ sealed class CliEvent {
               'runtime_notice',
           message: effMsg,
           status: payload['status']?.toString(),
+          retry: RuntimeRetryState.fromNotice(payload),
           sessionId: sessionId,
           runId: runId,
           eventId: eventId,
@@ -478,15 +481,26 @@ class CliRuntimeNoticeEvent extends CliEvent {
   final String message;
   final String? status;
 
+  /// The daemon's own retry classification for this notice: whether another
+  /// automatic attempt is scheduled, and which attempt it is (Task 141).
+  final RuntimeRetryState retry;
+
   CliRuntimeNoticeEvent({
     required this.code,
     required this.message,
     this.status,
+    RuntimeRetryState? retry,
     super.sessionId,
     super.runId,
     super.eventId,
     super.raw,
-  }) : super(type: 'runtime_notice');
+  }) : retry =
+           retry ??
+           RuntimeRetryState(
+             noticeStatus: status,
+             reason: code.isEmpty ? null : code,
+           ),
+       super(type: 'runtime_notice');
 
   /// Runtime states that can still continue under daemon ownership are
   /// advisory for an attached CLI, not terminal failures. `blocked` may await
@@ -497,9 +511,16 @@ class CliRuntimeNoticeEvent extends CliEvent {
       status == 'resuming' ||
       status == 'cleared';
 
-  /// Blocked work waits for an explicit Retry, Change Provider or Stop; a
+  /// Whether the daemon is retrying this failure on its own. Such a notice is
+  /// progress, not a verdict: the run keeps following it and reports
+  /// `retrying (n/N)`.
+  bool get isAutoRetrying => retry.isAutoRetrying;
+
+  /// Blocked work awaits an explicit Retry, Change Provider or Stop; a
   /// non-interactive one-shot run ends on it instead of waiting (Task 125).
-  bool get isBlocked => status == 'blocked';
+  /// A `blocked` notice that still promises an automatic attempt is excluded:
+  /// the daemon has already scheduled the resume (Task 141).
+  bool get isBlocked => status == 'blocked' && !isAutoRetrying;
 }
 
 /// Error received from gateway.

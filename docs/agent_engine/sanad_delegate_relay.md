@@ -153,7 +153,7 @@ A restart adds up to three non-terminal lifecycle records between `running` and 
 `sanad session stop <session_id>` is session-scoped and transport-confirmed: the daemon-backed CLI dispatches one `stop` immediately (naming the in-flight `run_id` when the session projection reports one), then keeps its Local Gateway connection open through ordered state reads and returns success only after the target is authoritatively idle. A matching `stopped` event is only a signal to re-read; it never counts as confirmation on its own, a stop event for another session cannot complete the command, and an unconfirmed active stop fails instead of reporting false success. The owning contract is [Sanad CLI Architecture § 9.3](../technical/sanad_cli_architecture.md).
 
 - **`0`**: Successful turn completion (`status: "completed"`).
-- **`1`**: Execution failure or prompt error (`status: "failed"`). Also returned at once when the daemon blocks the turn (`cause: "blocked"`, no Stop sent; the blocked work awaits Retry, Change Provider or `sanad session stop`) or refuses it with a typed `error_code` such as `turn_failed`.
+- **`1`**: Execution failure or prompt error (`status: "failed"`). Also returned at once when the daemon parks the turn with no scheduled retry (`cause: "blocked"`, no Stop sent; the parked work awaits Retry, Change Provider or `sanad session stop`) or refuses it with a typed `error_code` such as `turn_failed`. A retryable failure the daemon is still retrying is *not* this case: see §4.4.1.
 - **`2`**: Validation error (invalid arguments or missing paths).
 - **`3`**: Refused before dispatch because the target session's durable turn still owns it (`cause: "turn_in_flight"`). No `think` is sent and no turn is admitted; the refusal names the daemon's own `execution_snapshot.state`.
 - **`78`**: Configuration/ownership error. Returned when a `--standalone` run cannot confirm the Home's daemon endpoint, when a forced standalone run meets a healthy daemon, when the state-root lock is already owned, and when a reconnect discovers an endpoint serving a different Sanad Home (`cause: "home_identity_mismatch"`).
@@ -176,12 +176,27 @@ An attached `sanad run` treats a mid-turn gateway drop as a restart, not a failu
 
 | Snapshot state | Attached run behaviour |
 |---|---|
-| `running`, `resuming`, `waiting`, `queued`, `stopping` | Re-subscribe and keep following to the turn's own terminal outcome. |
-| `blocked` | Exit `1` with `cause: blocked`, unchanged from Task 125. The daemon schedules automatic resume only for `waiting`, so a blocked turn is parked, not transient. |
+| `running`, `resuming`, `waiting`, `retrying`, `queued`, `stopping` | Re-subscribe and keep following to the turn's own terminal outcome. |
+| `blocked` | Exit `1` with `cause: blocked`, unchanged from Task 125 — unless the projection's runtime notice still carries retry budget (§4.4.1). |
 | `idle` | Exit `0` when the last recorded assistant message is a result; otherwise exit `1` with `cause: turn_lost`. |
 | no snapshot | Keep following without claiming the turn was lost. |
 
 Re-dispatch onto a session whose durable turn is still in flight is refused with exit `3` (`turn_in_flight`) rather than attached: a non-interactive run cannot prove the caller still wants the in-flight turn's result, and silently attaching would drop the newly supplied brief. A queued or parked (blocked) turn does not own the session and is never refused.
+
+### 4.4.1. Retrying vs Truly Stopped
+
+A retryable failure is not a verdict. The daemon publishes it as `waiting` — with the attempt it just scheduled and the reason's budget (`retry_attempt`, `retry_budget`) — and resumes the same request on its own. Only a failure that is non-retryable, whose budget is spent, or whose resume was cancelled is `blocked`.
+
+`blocked` therefore means one thing to an observer: nothing will continue this turn without an operator. `waiting`, `resuming`, and a `blocked` notice that still carries budget left mean the opposite, and both observers classify on that evidence rather than on the word `blocked` in a message (2026-10-23: a provider timeout with a scheduled attempt was published as `blocked`, so `sanad run` exited `1` and the delegate supervisor recorded `failed` while the daemon resumed the same turn seconds later).
+
+| Daemon evidence | `sanad run` | Delegate supervisor |
+|---|---|---|
+| Notice `waiting`/`resuming`, or `retry_attempt < retry_budget` | Keep following; prints `retrying (n/N)` on stderr and records artifact `status: retrying` | Task stays live as `retrying` with `daemonRetry: {attempt, budget}` |
+| Notice `blocked` with the budget spent, notice `fatal`, or a non-retryable reason | Exit `1` with `cause: blocked` | Task `blocked`, then terminal `failed` with the block cause |
+| No notice, durable snapshot `waiting` (restored resume) | Keep following | Task stays live as `retrying` |
+| Notice `blocked`, durable snapshot `idle`, no answer | — | Task `failed` (`turn_interrupted` or the block cause) |
+
+`sanad session retry` still applies to `retrying` and `waiting`: a manual retry shortens a scheduled wait instead of starting a second turn. The supervisor's blocked-task auto-retry policy (§5.11) is unchanged — it keys off `blocked`, which now means exactly what it says.
 
 ---
 
@@ -239,7 +254,7 @@ For temporary execution without logical continuity, use `--execution-root <targe
 - When the worker process exits while the daemon still owns its turn, the task becomes `following` and the same journal events are produced from the durable session instead of from the stream (§5.12).
 - Terminal child process exit is authoritative and locks the final state (`completed`, `failed`, `timeout`, `interrupted`, `cancelled`) — unless the durable session still owns the turn, in which case the turn's own outcome is authoritative (§5.12). An operator cancellation is the one exception: once `cancel` is recorded, the terminal state is `cancelled` even if the signalled child publishes `interrupted` or exits non-zero.
 - A child exit is not a departure: every task is spawned in its own process group and the exit is only accepted after the group is verified empty (§5.13). A group that outlives its direct child journals an actionable `worker_group_alive`.
-- `watch-once` wakes by default on `needs_input`, `needs_permission`, `blocked`, `waiting`, `resuming`, `queued_stall`, `progress_stall`, or terminal states (including `follow_lost`). Routine `running` and `following` transitions still require `--all`.
+- `watch-once` wakes by default on `needs_input`, `needs_permission`, `blocked`, `waiting`, `retrying`, `resuming`, `queued_stall`, `progress_stall`, or terminal states (including `follow_lost`). Routine `running` and `following` transitions still require `--all`.
 - **Quiet watch continuity:** a caller tool timeout on `watch-once` ends only the caller's wait; the worker and supervised tasks keep running. Re-enter from the cursor (`--since <last returned seq>`, or read `seq` from a bounded `status --json`) and keep using bounded status/inspect reads. Never schedule polling or stop the worker because a watcher call timed out.
 
 ### 5.4. Queue Visibility, Stall Detection, and Cancellation
@@ -259,7 +274,7 @@ For temporary execution without logical continuity, use `--execution-root <targe
 - **Cursor:** `--cursor <file>` stores the last *handled* sequence per run (`{"version": "delegate-watch-cursor.v1", "runs": {"<run-dir>": {"seq": N}}}`). It is written atomically (temp file + rename) and **advanced only after the line it belongs to has been flushed**, so a watcher that dies mid-print replays that event instead of losing it.
 - **Replay:** on start, every journal record after the cursor is evaluated. Anything that happened while no watcher ran is therefore reported, and anything already handled is never printed twice.
 - **Modes:** `--once` prints the batch of new actionable events and exits (for an orchestrator that is re-invoked when the watcher exits); without `--once` the process streams exactly one line per actionable event. `--timeout-sec <n>` bounds a wait (exit code `4` with a stderr note, no partial line); `--all` also prints non-actionable records for debugging; `--json` emits one JSON object per line (`version: delegate-watch-event.v1`).
-- **Actionable** means: every terminal state (including `follow_lost`), `blocked`, `needs_input`/`needs_permission`, `queued_stall` (§5.4), `progress_stall` (§5.6), `worker_lost` (§5.6), `worker_group_alive` (§5.13), `supervisor_dead` (§5.6), and `retry_exhausted` (§5.11). Routine `running` and `following` transitions, tool progress, `progress_resumed`, `steer_sent`, `retry_sent`, `auto_retry`, `continue_requested`, and `launch_retry` are never wake-ups. The same set applies whether the task is attached to a worker or followed through its daemon session (§5.12). The vocabulary is shared with `watch-once` through `scripts/supervisor-events.mjs` so both readers cannot drift apart.
+- **Actionable** means: every terminal state (including `follow_lost`), `blocked`, `needs_input`/`needs_permission`, `queued_stall` (§5.4), `progress_stall` (§5.6), `worker_lost` (§5.6), `worker_group_alive` (§5.13), `supervisor_dead` (§5.6), and `retry_exhausted` (§5.11). Routine `running`, `following`, `waiting`, `retrying`, and `resuming` transitions, tool progress, `progress_resumed`, `steer_sent`, `retry_sent`, `auto_retry`, `continue_requested`, and `launch_retry` are never wake-ups. A `retrying` transition is a daemon-scheduled attempt, so it needs no coordinator decision — only a human watching the run sees it. The same set applies whether the task is attached to a worker or followed through its daemon session (§5.12). The vocabulary is shared with `watch-once` through `scripts/supervisor-events.mjs` so both readers cannot drift apart.
 - **Rich completion line (W7):** a terminal event carries the result status, the `result.json` path, and — when present in that file — `branch`, `head_sha`, `pr_url`, and the first line of the final summary, plus the elapsed time. The coordinator triages a completion from the line itself.
 - **Idle/ended runs:** a run whose manifest is `completed`, `stale`, or closed with every task terminal ends the watch instead of blocking forever. An open run with no pending actionable events blocks until one arrives — use `--timeout-sec` for a bounded wait, or `close` the run.
 
@@ -323,11 +338,13 @@ A worker the daemon leaves `blocked` cannot resume itself: the daemon spends its
 
 **Manual retry.** `retry --run <dir> --task <id> [--provider <instance-id>] [--model <model-id>] [--json]` resolves the task's recorded session id and sends `sanad session retry <session-id> [--provider <id>] [--model <id>] --json` through the same helper that builds `session stop` and `session steer`, so it reaches the same binary, source entry, `--home`, and `--gateway-url` the task spawned with (and `sanad-client -d <device> session retry …` for a relayed task). The command:
 
-- refuses a task that is not `blocked` or `waiting` (`retry` resumes a turn; it never starts one — a finished task is the `continue` path, §5.7), and refuses when no session id is known yet;
+- refuses a task that is not `blocked`, `waiting`, or `retrying` (`retry` resumes a turn; it never starts one — a finished task is the `continue` path, §5.7), and refuses when no session id is known yet. `retrying` is retryable on purpose: the daemon is waiting on its own resume timer, and a manual retry shortens that wait instead of starting a second turn;
 - reports the daemon's own verdict from the CLI exit code: `0` `retrying`, `1` `transport_error`, `3` `not_blocked` (nothing was sent), `4` `rejected`, `5` `unacknowledged`, `8` `state_unreadable`;
 - journals `retry_sent` with the session id, attempt number, provider/model, result, exit code, and the CLI's own request id when it printed one. `retry_sent` is never actionable: a coordinator is not woken by its own instruction.
 
 The worker repeats the `blocked`/`waiting` check authoritatively, so a raw control request cannot retry a healthy turn either.
+
+`blocked` here means the daemon is not retrying: it is non-retryable, its budget is spent, or its resume was cancelled. A retryable failure the daemon is still retrying never reaches this policy — it is `retrying` (§4.4.1, §5.12).
 
 **Automatic policy.** `--auto-retry` (or `"autoRetry": true` at spec level; a task may opt out with `"autoRetry": false`) retries a blocked task without a coordinator:
 
@@ -352,7 +369,7 @@ The supervisor therefore follows the durable session instead of trusting the wor
 
 **1. Enter the follow state.** After a local `sanad` worker exits with a non-zero terminal outcome (`failed`, `timeout`, `incomplete`, or `interrupted` — a transport ended by a signal writes its own `interrupted` artifact while the daemon still holds the turn and its pending question), is not cancelled, wrote no launch failure, and has a recorded session id, the supervisor probes `sanad session show <session-id> --json` once, immediately. The task is not settled and not journaled yet:
 
-- A readable answer that shows a live turn — a `running`, `resuming`, `blocked`, or `waiting` execution snapshot, or a pending `needs_input`/`needs_permission` request — promotes the task to `following` with a journaled record whose `reason` is `worker_exited_turn_in_flight` and whose `workerExit` carries the exit code, signal, status, and cause. The run's concurrency slot is released at exit, so a queued task starts while the turn is still followed. When the exit left members of the process group alive, the reason is `worker_exited_group_alive` instead: the transport exited, part of its tree did not (§5.13).
+- A readable answer that shows a live turn — a `running`, `resuming`, `retrying`, `blocked`, or `waiting` execution snapshot, or a pending `needs_input`/`needs_permission` request — promotes the task to `following` with a journaled record whose `reason` is `worker_exited_turn_in_flight` and whose `workerExit` carries the exit code, signal, status, and cause. The run's concurrency slot is released at exit, so a queued task starts while the turn is still followed. When the exit left members of the process group alive, the reason is `worker_exited_group_alive` instead: the transport exited, part of its tree did not (§5.13).
 - A readable answer that shows no in-flight turn leaves the worker's own verdict in place, unchanged from earlier behaviour, and records `follow.reason: turn_not_in_flight`.
 - An unreadable answer is retried up to `--follow-lost-polls` times; when it never succeeds the worker's verdict stands with `follow.reason: session_unreadable`. A follow is never claimed for a session that could not be observed.
 
@@ -364,12 +381,14 @@ The worker's `result.json` is archived to `<run>/follow/<task>/attempt-<n>/resul
 |---|---|
 | pending request, `status: needs_input` | `needs_input` with `request_id`, `tool_name`, and `questions` |
 | pending request, `status: needs_permission` | `needs_permission` with the same whitelisted fields |
-| `execution_snapshot.state: blocked` | `blocked` with its `cause` (and `retry_after_ms` when the notice carries one) |
-| `execution_snapshot.state: waiting` | `waiting` with its cause |
+| runtime notice `waiting`/`resuming`, snapshot `waiting`, or a `blocked` notice with `retry_attempt < retry_budget` | `retrying` with `daemonRetry: {attempt, budget}` and the notice reason — live progress, never a wake-up (Task 141) |
+| `execution_snapshot.state: blocked` with no scheduled retry | `blocked` with its `cause` (and `retry_after_ms` when the notice carries one) |
 | `execution_snapshot.state: resuming` | `resuming` |
 | `execution_snapshot.state: running` | stays `following` (a live turn with no worker); the poll refreshes `lastProgressAt` |
 | `execution_snapshot.state: stopping` | terminal, §3 below |
 | `execution_snapshot.state: idle`, no pending request | the turn ended, §3 below |
+
+The retry classification reads the daemon's own projection, which is why `session show --json` publishes `execution_state`, `runtime_notice`, and the derived `retry` facts ([Sanad CLI Architecture § 9.4](../technical/sanad_cli_architecture.md)). A `retrying` transition is journaled once per attempt: a repeated poll of the same attempt only refreshes `lastProgressAt`.
 
 Only the documented intervention fields are forwarded: a `tool_input`, an answer, a token, or a header is never journaled, exactly as on the attached path. The task status is the durable state, so `following` (never `running`) is what a live followed turn reports — no reader can mistake it for a worker that exists.
 
@@ -380,7 +399,7 @@ Only the documented intervention fields are forwarded: a `tool_input`, an answer
 | A terminal `result.json` written during the follow | that status | `worker_artifact` |
 | The session is `stopping` | `failed`, `cause: stopped` | `daemon_session` |
 | The turn ends while the last observed state was `blocked` | `failed`, `cause` = the block cause | `daemon_session` |
-| The turn ends after being observed live, resuming, waiting, or awaiting an answer **and** the durable messages prove a final assistant reply | `completed` | `daemon_session` |
+| The turn ends after being observed live, resuming, retrying, waiting, or awaiting an answer **and** the durable messages prove a final assistant reply | `completed` | `daemon_session` |
 | The turn ends after being observed live with no final assistant reply | `failed`, `cause: turn_interrupted` (or the daemon's own cause) | `daemon_session` |
 | `--follow-deadline-ms` (default the task's own `--timeout`, else `3600000`) expires while the turn is still in flight | `timeout`, `cause: follow_deadline` | `daemon_session` |
 | `--follow-lost-polls` (default `3`) consecutive unreadable reads after the follow was confirmed | `follow_lost`, `cause: session_unreadable` | `daemon_session` |
@@ -393,7 +412,7 @@ On 2026-10-23 the daemon session went `idle` at `04:28:27.96Z` holding `user`, t
 
 The follow never invents a turn the daemon has already dropped. A transport that dies before the turn reaches a suspendable state (a question, a permission request, a block) takes its turn with it; the probe then sees no in-flight turn and the task keeps the worker's own verdict with `follow.reason: turn_not_in_flight`. A turn that reached a pending request or a block survives its transport, and that is the case this window exists for.
 
-**4. Recovery keeps working.** A followed task is a normal task for every other policy: a transient `blocked` cause spends the same auto-retry budget with the same grace and backoff (§5.11), because the policy keys off the mirrored `blocked` state and the retry is sent to the recorded session. `resuming` and `following` are non-actionable progress; `needs_input`, `needs_permission`, `blocked`, `retry_exhausted`, `failed`, `follow_lost`, and `supervisor_dead` wake a watcher whether the task is attached or followed. `cancel` on a followed task stops the daemon session and settles it `cancelled` without waiting for a process that no longer exists; `continue` still needs a terminal task, so it applies after the follow ends. A supervisor that dies mid-follow is repaired on the next read as `failed`/`follow_abandoned`.
+**4. Recovery keeps working.** A followed task is a normal task for every other policy: a transient `blocked` cause spends the same auto-retry budget with the same grace and backoff (§5.11), because the policy keys off the mirrored `blocked` state and the retry is sent to the recorded session. `retrying` and `following` are non-actionable live progress; `resuming` is live progress too; `needs_input`, `needs_permission`, `blocked`, `retry_exhausted`, `failed`, `follow_lost`, and `supervisor_dead` wake a watcher whether the task is attached or followed. `cancel` on a followed task stops the daemon session and settles it `cancelled` without waiting for a process that no longer exists; `continue` still needs a terminal task, so it applies after the follow ends. A supervisor that dies mid-follow is repaired on the next read as `failed`/`follow_abandoned`.
 
 **5. Reading it.** `status` reports `following the daemon turn` or `follow lost` in the session footer, an observation source of `daemon session (followed, last poll <iso>)`, a dedicated **FOLLOW** section, and follow facts on `status --brief` (`followed since`, `polls`, `follow-deadline`, `result-source`) plus a `follow` object in `--json` (`active`, `reason`, `since`, `deadlineAt`, `pollMs`, `polls`, `lastPollAt`, `lastSnapshot`, `resultSource`, `note`, `evidence`). `tasks[<id>].follow` in the manifest carries the same facts, including `turnBaseline`, `preFollowResult`, the archived path, and `workerExit` (with `groupAlive` and `groupSurvivors` when the tree outlived the transport).
 

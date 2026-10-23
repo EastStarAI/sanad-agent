@@ -87,6 +87,11 @@ const RETRY_EXIT_OUTCOMES = new Map([
   [5, 'unacknowledged'],
   [8, 'state_unreadable'],
 ]);
+// Task states `retry` may resume. `retrying` is included because the daemon is
+// waiting on its own resume timer there: a manual retry shortens that wait
+// instead of starting a second turn (Task 141). `waiting` stays for rate-limit
+// waits and for tasks observed through an older worker artifact.
+const RETRYABLE_TASK_STATUSES = ['blocked', 'waiting', 'retrying'];
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const SHELL_META = /[|;&<>$`]/;
 const WINDOWS_BATCH_META = /[|;&<>$`%^!]/;
@@ -2033,6 +2038,26 @@ function workerCommand(options) {
           kind: type,
           stateSince: event.timestamp || null,
         });
+      } else if (type === 'retrying') {
+        // The daemon scheduled another attempt for a retryable failure. This is
+        // progress, not a verdict: the turn stays live and the attempt counters
+        // are recorded so a status line can say `retrying (n/N)`.
+        const attempt = Number(data.retry_attempt ?? data.retryAttempt);
+        const budget = Number(data.retry_budget ?? data.retryBudget);
+        const noticeIdentity = requestId || `${attempt ?? '?'}/${budget ?? '?'}`;
+        if (lastSeenType === type && lastSeenRequestId === noticeIdentity) return;
+        lastSeenType = type;
+        lastSeenRequestId = noticeIdentity;
+        transition(task, 'retrying', {
+          ...(sessionId ? { sessionId } : {}),
+          cause: data.cause || data.code || 'unknown',
+          daemonRetry: {
+            ...(Number.isInteger(attempt) ? { attempt } : {}),
+            ...(Number.isInteger(budget) ? { budget } : {}),
+          },
+          ...(retryAfterMs(data) ? { retryAfterMs: retryAfterMs(data) } : {}),
+          stateSince: event.timestamp || null,
+        });
       } else if (type === 'blocked' || type === 'waiting') {
         const cause = data.cause || data.code || 'unknown';
         const noticeIdentity = requestId || cause;
@@ -2473,6 +2498,33 @@ function workerCommand(options) {
     }
 
     follow.lastLive = snapshot.kind;
+    if (snapshot.kind === 'retrying') {
+      // The daemon scheduled another automatic attempt. The task stays live and
+      // says so, with the attempt counters, instead of parking as `blocked` and
+      // waiting for a retry an operator was never needed for (Task 141).
+      const cause = snapshot.cause ?? state.cause ?? 'unknown';
+      follow.lastCause = cause;
+      const daemonRetry = {
+        ...(typeof snapshot.retry?.attempt === 'number' ? { attempt: snapshot.retry.attempt } : {}),
+        ...(typeof snapshot.retry?.budget === 'number' ? { budget: snapshot.retry.budget } : {}),
+      };
+      const label = snapshot.retry?.label ?? 'retrying';
+      if (state.status !== 'retrying' || (state.cause ?? null) !== cause
+        || JSON.stringify(state.daemonRetry ?? null) !== JSON.stringify(daemonRetry)) {
+        transition(task, 'retrying', {
+          sessionId: state.sessionId ?? null,
+          cause,
+          daemonRetry,
+          retryLabel: label,
+          stateSince: observedAt,
+          ...(snapshot.retryAfterMs ? { retryAfterMs: snapshot.retryAfterMs } : {}),
+        });
+        return;
+      }
+      state.lastProgressAt = nowIso;
+      persist();
+      return;
+    }
     if (snapshot.kind === 'blocked' || snapshot.kind === 'waiting') {
       const cause = snapshot.cause ?? state.cause ?? 'unknown';
       follow.lastCause = cause;
@@ -3180,7 +3232,7 @@ function workerCommand(options) {
     const state = manifest.tasks[id];
     const task = taskMap.get(id);
     if (!state || !task) return { ok: false, error: `task not found: ${id}` };
-    if (!['blocked', 'waiting'].includes(state.status)) {
+    if (!RETRYABLE_TASK_STATUSES.includes(state.status)) {
       return {
         ok: false,
         error: `task ${id} is ${state.status}; retry needs a blocked or waiting task`,
@@ -4090,7 +4142,7 @@ async function retryCommand(options) {
   const state = requireTask(manifest, options.task);
   // A retry resumes an existing turn; it can never start one. A running task
   // has nothing to resume and a finished task is the `continue` path.
-  if (!['blocked', 'waiting'].includes(state.status)) {
+  if (!RETRYABLE_TASK_STATUSES.includes(state.status)) {
     fail(`task ${options.task} is ${state.status}; retry needs a blocked or waiting task (use continue for a finished one)`);
   }
   if (!state.sessionId) {
@@ -4649,6 +4701,14 @@ function resolveSessionDetails(task, manifest) {
     sessionState = 'waiting for permission';
   } else if (rawStatus === 'waiting') {
     sessionState = 'waiting';
+  } else if (rawStatus === 'retrying') {
+    // The daemon is retrying a retryable failure on its own: neither a stop nor
+    // an intervention, so the footer names the attempt and its budget.
+    const daemonRetry = task.daemonRetry ?? result?.daemonRetry ?? null;
+    const counters = daemonRetry && (daemonRetry.attempt != null || daemonRetry.budget != null)
+      ? ` (${daemonRetry.attempt ?? '?'}/${daemonRetry.budget ?? '?'})`
+      : '';
+    sessionState = `retrying${counters}`;
   } else if (rawStatus === 'blocked') {
     sessionState = 'blocked';
   } else if (rawStatus === 'resuming') {
@@ -5342,6 +5402,14 @@ function briefTaskLine(manifest, task) {
   if (retry.nextRetryAt) parts.push(`next-retry ${retry.nextRetryAt}`);
   if (retry.exhausted) parts.push('RETRY_EXHAUSTED');
   if (retry.launchAttempts > 0) parts.push(`launch-retries ${retry.launchAttempts}`);
+  // The daemon's own retry counters. While one is pending the task is live, so
+  // the line names the attempt the runtime is running instead of leaving a bare
+  // `retrying` status that a reader has to interpret (Task 141).
+  if (task.daemonRetry) {
+    parts.push(`daemon-retry ${task.daemonRetry.attempt ?? '?'}/${task.daemonRetry.budget ?? '?'}`);
+  } else if (task.status === 'retrying') {
+    parts.push('daemon-retry');
+  }
   const result = taskResultForView(task);
   if (TERMINAL_STATUSES.has(task.status) || result) {
     parts.push(`result ${result?.status ?? task.status}`);
@@ -5722,6 +5790,13 @@ function formatTimelineLine(line, receiptTime = null) {
     const code = event.code || event.data?.code || 'notice';
     const message = event.message || event.data?.message || '';
     return `${timeLabel}  notice:${code}  ${message}`.trimEnd();
+  }
+  if (type === 'retrying') {
+    const attempt = event.data?.retry_attempt ?? event.data?.retryAttempt;
+    const budget = event.data?.retry_budget ?? event.data?.retryBudget;
+    const counters = attempt == null && budget == null ? '' : ` (${attempt ?? '?'}/${budget ?? '?'})`;
+    const message = event.message || event.data?.message || '';
+    return `${timeLabel}  retrying${counters}  ${message}`.trimEnd();
   }
   if (type === 'blocked' || type === 'waiting') {
     const cause = event.cause || event.data?.cause || event.code || event.data?.code || 'unknown';

@@ -34,7 +34,11 @@ export const DEFAULT_FOLLOW_PROBE_TIMEOUT_MS = 20_000;
 export const IN_FLIGHT_SNAPSHOT_STATES = new Set(['running', 'queued', 'waiting', 'blocked', 'resuming']);
 
 // What the last live observation was, in the order the outcome rule reads it.
-export const LIVE_KINDS = new Set(['live', 'resuming', 'waiting', 'intervention', 'blocked', 'stopping']);
+export const LIVE_KINDS = new Set(['live', 'resuming', 'retrying', 'waiting', 'intervention', 'blocked', 'stopping']);
+
+// Notice statuses that themselves promise a resume: the daemon waits on a timer
+// and then continues the same request.
+export const AUTO_RESUME_NOTICE_STATUSES = new Set(['waiting', 'resuming']);
 
 // The durable session state that means "nothing is publishing this turn any
 // more". It says the turn stopped, never why, and never that it finished.
@@ -43,6 +47,58 @@ export const ENDED_SNAPSHOT_STATE = 'idle';
 function messageCount(value) {
   const number = Number(value);
   return Number.isInteger(number) && number >= 0 ? number : null;
+}
+
+function integerOrNull(value) {
+  const number = Number(value);
+  return Number.isInteger(number) ? number : null;
+}
+
+/**
+ * The daemon's retry classification for one durable session projection.
+ *
+ * `session show --json` publishes the active runtime notice next to the durable
+ * execution snapshot, and the notice carries `retry_attempt`/`retry_budget`
+ * whenever the runtime scheduled an automatic attempt. That is the authoritative
+ * evidence this function reads, so an observer never has to infer recovery from
+ * the word `blocked`:
+ *
+ * - a `waiting` notice or `waiting` snapshot waits on a resume timer;
+ * - a `blocked` notice whose attempt counter is still below its budget belongs
+ *   to a retry the runtime is already performing (the shape that made
+ *   `sanad run` exit 1 and this supervisor record `failed` on 2026-10-23);
+ * - anything else is parked and needs an operator.
+ *
+ * A `fatal` notice is never a retry: a permanently rejected request is not
+ * retried by definition, whatever counters its reason happens to carry.
+ */
+export function autoRetryFacts(notice, executionState = null) {
+  const map = notice && typeof notice === 'object' ? notice : null;
+  const noticeStatus = typeof map?.status === 'string' ? map.status : null;
+  const reason = typeof map?.reason === 'string' && map.reason ? map.reason : null;
+  const attempt = integerOrNull(map?.retry_attempt ?? map?.retryAttempt);
+  const budget = integerOrNull(map?.retry_budget ?? map?.retryBudget);
+  const budgetLeft = attempt != null && budget != null && budget > 0 && attempt < budget;
+  const noticeSchedules = noticeStatus === 'waiting';
+  const stateSchedules = executionState === 'waiting';
+  const retryableNotice = noticeStatus == null || noticeStatus === 'waiting' || noticeStatus === 'blocked';
+  const pending = noticeStatus === 'fatal'
+    ? false
+    : (noticeSchedules || stateSchedules || (retryableNotice && budgetLeft));
+  return {
+    pending,
+    noticeStatus,
+    // The structured reason (`timeout`, `auth`, …). Reporting only: the retry
+    // policy keeps its own transient-cause vocabulary, which the worker artifact
+    // already provides, so `cause` is never rewritten from a notice (Task 141).
+    reason,
+    attempt,
+    budget,
+    budgetLeft,
+    label: attempt == null || budget == null || budget <= 0
+      ? 'retrying'
+      : `retrying (${attempt}/${budget})`,
+  };
 }
 
 /**
@@ -267,6 +323,7 @@ export function interpretSessionSnapshot(payload) {
     requestId: null,
     intervention: null,
     retryAfterMs: null,
+    retry: null,
     updatedAt: null,
     executionState: null,
     evidence: null,
@@ -295,6 +352,9 @@ export function interpretSessionSnapshot(payload) {
   );
   const updatedAt = firstText(payload.updated_at, snapshot?.updated_at);
   const retryAfter = retryAfterMs(notice) ?? retryAfterMs(snapshot) ?? retryAfterMs(payload);
+  // The recovery owner's classification: a scheduled (or still budgeted) retry
+  // is progress, a park with no scheduled resume is a decision for a human.
+  const retry = autoRetryFacts(notice, executionState);
   // Every snapshot carries the durable completion evidence, so the outcome rule
   // reads the same numbers whether the turn ends on the first probe or later.
   const evidence = turnEvidence(payload);
@@ -324,30 +384,49 @@ export function interpretSessionSnapshot(payload) {
       updatedAt,
       executionState,
       evidence,
+      retry,
+    };
+  }
+
+  // An automatic retry outranks the raw snapshot state: `waiting` waits for the
+  // next attempt, and a `blocked` notice that still carries budget left belongs
+  // to an attempt the daemon has already scheduled.
+  if (retry.pending) {
+    return {
+      ...empty,
+      kind: 'retrying',
+      state: 'retrying',
+      status: 'retrying',
+      cause,
+      retryAfterMs: retryAfter,
+      updatedAt,
+      executionState,
+      evidence,
+      retry,
     };
   }
 
   switch (executionState) {
     case 'blocked':
-      return { ...empty, kind: 'blocked', state: 'blocked', status: 'blocked', cause, retryAfterMs: retryAfter, updatedAt, executionState, evidence };
+      return { ...empty, kind: 'blocked', state: 'blocked', status: 'blocked', cause, retryAfterMs: retryAfter, updatedAt, executionState, evidence, retry };
     case 'waiting':
-      return { ...empty, kind: 'waiting', state: 'waiting', status: 'waiting', cause, updatedAt, executionState, evidence };
+      return { ...empty, kind: 'waiting', state: 'waiting', status: 'waiting', cause, updatedAt, executionState, evidence, retry };
     case 'resuming':
-      return { ...empty, kind: 'resuming', state: 'resuming', status: 'resuming', cause, updatedAt, executionState, evidence };
+      return { ...empty, kind: 'resuming', state: 'resuming', status: 'resuming', cause, updatedAt, executionState, evidence, retry };
     case 'stopping':
-      return { ...empty, kind: 'stopping', state: 'stopping', status: 'stopping', cause: firstText(cause, 'stopped'), updatedAt, executionState, evidence };
+      return { ...empty, kind: 'stopping', state: 'stopping', status: 'stopping', cause: firstText(cause, 'stopped'), updatedAt, executionState, evidence, retry };
     case 'running':
     case 'queued':
-      return { ...empty, kind: 'live', state: 'running', status: 'running', cause, updatedAt, executionState, evidence };
+      return { ...empty, kind: 'live', state: 'running', status: 'running', cause, updatedAt, executionState, evidence, retry };
     case ENDED_SNAPSHOT_STATE:
-      return { ...empty, updatedAt, executionState, evidence };
+      return { ...empty, updatedAt, executionState, evidence, retry };
     default:
       break;
   }
   if (reportedStatus === 'running') {
-    return { ...empty, kind: 'live', state: 'running', status: 'running', cause, updatedAt, executionState, evidence };
+    return { ...empty, kind: 'live', state: 'running', status: 'running', cause, updatedAt, executionState, evidence, retry };
   }
-  return { ...empty, updatedAt, executionState, evidence };
+  return { ...empty, updatedAt, executionState, evidence, retry };
 }
 
 /**

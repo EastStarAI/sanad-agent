@@ -578,15 +578,17 @@ or model caches.
 
 | Event | Payload highlights | When |
 |---|---|---|
-| `session.runtime_notice` | `status` (`waiting` \| `blocked` \| `resuming` \| `cleared` \| `fatal`), `reason` (snake_case), `title`, `message`, `provider_instance_id?`, `resume_at?`, `retry_after_ms?`, `limit?`, `actions[]` | Recovery state active or transitioning. |
+| `session.runtime_notice` | `status` (`waiting` \| `blocked` \| `resuming` \| `cleared` \| `fatal`), `reason` (snake_case), `title`, `message`, `provider_instance_id?`, `resume_at?`, `retry_after_ms?`, `retry_attempt?`, `retry_budget?`, `limit?`, `actions[]` | Recovery state active or transitioning. |
 | `session.runtime_notice_cleared` | `session_id`, `status: cleared` | Recovery resolved (stop / cleared). |
 
 `status` meanings:
-- `waiting`: automatic resume at a known time (`resume_at` / `retry_after_ms`).
-- `blocked`: needs user action (`retry` / `change_provider` / `open_provider_settings`).
+- `waiting`: automatic resume at a known time (`resume_at` / `retry_after_ms`). A retryable failure the runtime is about to retry is published this way, with `retry_attempt`/`retry_budget` naming the scheduled attempt, so `blocked` never describes work that is already recovering.
+- `blocked`: nothing continues the turn without user action (`retry` / `change_provider` / `open_provider_settings`) — a non-retryable failure, an exhausted automatic-retry budget, or a cancelled resume.
 - `resuming`: recovery cleared, execution restarting (transient).
 - `cleared`: fully resolved.
 - `fatal`: not recoverable within the current session.
+
+`retry_attempt` (1-based) and `retry_budget` describe the automatic retry the runtime scheduled for a `waiting` notice, and the budget a `blocked` notice already spent. `retry_attempt < retry_budget` means another attempt is still coming, which is how a headless observer distinguishes a retrying turn from a stopped one.
 
 Client processing contract:
 - `blocked`, `waiting`, `fatal`, and `cleared` end the active in-flight turn from the conversation UI perspective; the composer must not remain in a perpetual "processing" state after these notices.

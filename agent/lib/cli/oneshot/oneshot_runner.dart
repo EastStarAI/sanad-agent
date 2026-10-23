@@ -15,6 +15,7 @@ import '../client/standalone_cli_turn_client.dart';
 import '../discovery/local_gateway_discovery.dart';
 import '../fallback/standalone_fallback_strategy.dart';
 import '../models/cli_events.dart';
+import '../models/durable_turn.dart';
 import '../models/model_provider_resolver.dart';
 import '../ui/cli_tool_formatter.dart';
 import '../workspace/cli_workspace_state.dart';
@@ -652,7 +653,7 @@ class OneshotRunner {
           _logger.warning('Failed to query session history on reconnect: $e');
         }
 
-        final durableTurn = _DurableTurn.fromPayload(
+        final durableTurn = DurableTurn.fromPayload(
           historyPayload ?? const <String, dynamic>{},
         );
         final sameLineage =
@@ -671,9 +672,9 @@ class OneshotRunner {
         }
 
         switch (durableTurn.follow) {
-          case _DurableFollow.following:
+          case DurableFollow.following:
             break;
-          case _DurableFollow.awaitingIntervention:
+          case DurableFollow.awaitingIntervention:
             hasError = true;
             wasBlocked = true;
             terminalCause = 'blocked';
@@ -687,7 +688,7 @@ class OneshotRunner {
             if (!json) err.writeln('Error: $errorMessage');
             if (!completer.isCompleted) completer.complete(1);
             return;
-          case _DurableFollow.finished:
+          case DurableFollow.finished:
             final recordedResult = _lastAssistantText(historyPayload);
             if (recordedResult.isNotEmpty) {
               if (assistantBuffer.isEmpty) {
@@ -713,7 +714,7 @@ class OneshotRunner {
             if (!json) err.writeln('Error: $errorMessage');
             if (!completer.isCompleted) completer.complete(1);
             return;
-          case _DurableFollow.unknown:
+          case DurableFollow.unknown:
             // No execution snapshot came back: the turn still may be alive, so
             // the run keeps following instead of claiming it was lost.
             _logger.warning(
@@ -991,12 +992,34 @@ class OneshotRunner {
               .listen((event) {
                 if (event.sessionId == null ||
                     event.sessionId == effectiveSessionId) {
+                  // The daemon is the owner of recovery: a retryable failure it
+                  // is still retrying (a scheduled resume, or budget left) is
+                  // progress, not a verdict. Reporting it as `blocked` here is
+                  // how a worker that the daemon resumed seconds later was
+                  // recorded `failed` (2026-10-23).
+                  if (event.isAutoRetrying) {
+                    if (completer.isCompleted) return;
+                    coordinator.recordRuntimeNotice(
+                      status: 'retrying',
+                      code: event.code,
+                      message: event.message,
+                      provider: finalProvider,
+                      model: finalModel,
+                      retryAttempt: event.retry.attempt,
+                      retryBudget: event.retry.budget,
+                    );
+                    if (!json && !quiet) {
+                      err.writeln(
+                        'Notice: ${event.retry.retryLabel} — ${event.message}',
+                      );
+                    }
+                    return;
+                  }
                   // A blocked turn awaits an intervention this non-interactive
                   // run cannot give: end now with one reason line instead of
-                  // waiting for --timeout. The daemon schedules an automatic
-                  // resume only for a `waiting` notice, so a blocked turn stays
-                  // daemon-owned for Retry, Change Provider or Stop and is never
-                  // followed as if recovery still owned it.
+                  // waiting for --timeout. This is the truly stopped case —
+                  // non-retryable, retry budget exhausted, or no scheduled
+                  // resume — so the daemon will not continue on its own.
                   if (event.isBlocked) {
                     if (completer.isCompleted) return;
                     hasError = true;
@@ -1190,7 +1213,7 @@ class OneshotRunner {
           final payload = history['payload'] is Map
               ? history['payload'] as Map<String, dynamic>
               : history;
-          final durableTurn = _DurableTurn.fromPayload(payload);
+          final durableTurn = DurableTurn.fromPayload(payload);
           if (durableTurn.blocksNewDispatch) {
             const code = 'turn_in_flight';
             final message =
@@ -1407,90 +1430,4 @@ class OneshotRunner {
         .replaceFirst(RegExp(r'[\s.]+$'), '');
     return withoutPrefix.isEmpty ? '' : '$withoutPrefix.';
   }
-}
-
-/// How a run must treat the durable turn a session-history payload reports.
-enum _DurableFollow {
-  /// The daemon still owns the turn and will drive it to a terminal outcome.
-  following,
-
-  /// A durable turn is parked on an intervention a non-interactive run cannot
-  /// give, with no automatic retry scheduled.
-  awaitingIntervention,
-
-  /// The session holds no turn.
-  finished,
-
-  /// The payload carried no execution snapshot, so the turn cannot be proven
-  /// either way. Never treated as proof that the turn was lost.
-  unknown,
-}
-
-/// The durable turn as reported by the daemon's session projection.
-///
-/// A reclaimed turn keeps its work item and `request_id` across a restart, so
-/// the dispatched request id is the identity check that separates "my turn was
-/// reclaimed" from "another turn now owns the session".
-class _DurableTurn {
-  final _DurableFollow follow;
-  final String? state;
-  final String? requestId;
-  final String noticeMessage;
-  final bool hasScheduledResume;
-
-  const _DurableTurn({
-    required this.follow,
-    required this.state,
-    required this.requestId,
-    required this.noticeMessage,
-    required this.hasScheduledResume,
-  });
-
-  factory _DurableTurn.fromPayload(Map<String, dynamic> payload) {
-    final snapshot = payload['execution_snapshot'];
-    final state = snapshot is Map ? snapshot['state']?.toString() : null;
-    final requestId = snapshot is Map ? snapshot['request_id']?.toString() : null;
-    final notice = payload['runtime_notice'];
-    final hasScheduledResume =
-        notice is Map &&
-        (notice['resume_at'] != null ||
-            (notice['retry_after_ms'] is num &&
-                (notice['retry_after_ms'] as num) > 0));
-    final noticeMessage = notice is Map
-        ? (notice['message']?.toString() ?? '')
-        : '';
-    final inFlight = payload['in_flight'];
-
-    final _DurableFollow follow;
-    if (state == null) {
-      follow = inFlight is Map && inFlight.isNotEmpty
-          ? _DurableFollow.following
-          : _DurableFollow.unknown;
-    } else {
-      follow = switch (state) {
-        'running' || 'resuming' || 'waiting' || 'stopping' || 'queued' =>
-          _DurableFollow.following,
-        // `blocked` is never transient: the daemon schedules an automatic
-        // resume only for a `waiting` notice, so a blocked turn waits for an
-        // intervention this non-interactive run cannot give.
-        'blocked' => _DurableFollow.awaitingIntervention,
-        'idle' => _DurableFollow.finished,
-        _ => _DurableFollow.unknown,
-      };
-    }
-
-    return _DurableTurn(
-      follow: follow,
-      state: state,
-      requestId: requestId,
-      noticeMessage: noticeMessage,
-      hasScheduledResume: hasScheduledResume,
-    );
-  }
-
-  /// Whether a turn is in flight for the session, so a new dispatch must be
-  /// refused. A queued turn is followable but does not own the session yet, so
-  /// it never blocks a new dispatch.
-  bool get blocksNewDispatch =>
-      follow == _DurableFollow.following && state != 'queued';
 }
