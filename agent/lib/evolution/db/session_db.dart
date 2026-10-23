@@ -7,12 +7,14 @@ import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
 import 'agent_state_database.dart';
 import 'scheduled_task_repository.dart';
+import 'scheduled_task_run_repository.dart';
 import 'session_fork_commit_repository.dart';
 import 'session_message_repository.dart';
 import 'session_repository.dart';
 import 'suspended_checkpoint_repository.dart';
 
 export 'scheduled_task_repository.dart';
+export 'scheduled_task_run_repository.dart';
 export 'session_fork_commit_repository.dart';
 export 'session_message_repository.dart';
 export 'session_repository.dart';
@@ -25,6 +27,7 @@ export 'suspended_checkpoint_repository.dart';
 /// - [SessionRepository]: session lifecycle, metadata, titles, and workspaces.
 /// - [SessionMessageRepository]: message append/read, history projection, tool results.
 /// - [ScheduledTaskRepository]: scheduled task persistence.
+/// - [ScheduledTaskRunRepository]: per-run history of a schedule.
 /// - [SuspendedCheckpointRepository]: suspended checkpoints and work-item state.
 /// - [SessionForkCommitRepository]: fork, soft-rewind, and root-user commit records.
 class SessionDB {
@@ -37,6 +40,7 @@ class SessionDB {
   final SessionRepository _sessionRepository;
   final SessionMessageRepository _messageRepository;
   final ScheduledTaskRepository _scheduledTaskRepository;
+  final ScheduledTaskRunRepository _scheduledTaskRunRepository;
   final SuspendedCheckpointRepository _suspendedCheckpointRepository;
   final SessionForkCommitRepository _forkCommitRepository;
 
@@ -81,6 +85,7 @@ class SessionDB {
           sessionRepository: sessions,
           messageRepository: messages,
           scheduledTaskRepository: ScheduledTaskRepository(state),
+          scheduledTaskRunRepository: ScheduledTaskRunRepository(state),
           suspendedCheckpointRepository: SuspendedCheckpointRepository(state),
           forkCommitRepository: SessionForkCommitRepository(
             state: state,
@@ -95,12 +100,14 @@ class SessionDB {
     required SessionRepository sessionRepository,
     required SessionMessageRepository messageRepository,
     required ScheduledTaskRepository scheduledTaskRepository,
+    required ScheduledTaskRunRepository scheduledTaskRunRepository,
     required SuspendedCheckpointRepository suspendedCheckpointRepository,
     required SessionForkCommitRepository forkCommitRepository,
   })  : _disposeOwnedState = disposeOwnedState,
         _sessionRepository = sessionRepository,
         _messageRepository = messageRepository,
         _scheduledTaskRepository = scheduledTaskRepository,
+        _scheduledTaskRunRepository = scheduledTaskRunRepository,
         _suspendedCheckpointRepository = suspendedCheckpointRepository,
         _forkCommitRepository = forkCommitRepository;
 
@@ -108,6 +115,8 @@ class SessionDB {
   SessionMessageRepository get messageRepository => _messageRepository;
   ScheduledTaskRepository get scheduledTaskRepository =>
       _scheduledTaskRepository;
+  ScheduledTaskRunRepository get scheduledTaskRunRepository =>
+      _scheduledTaskRunRepository;
   SuspendedCheckpointRepository get suspendedCheckpointRepository =>
       _suspendedCheckpointRepository;
   SessionForkCommitRepository get forkCommitRepository =>
@@ -116,6 +125,8 @@ class SessionDB {
   SessionRepository get sessions => _sessionRepository;
   SessionMessageRepository get messages => _messageRepository;
   ScheduledTaskRepository get scheduledTasks => _scheduledTaskRepository;
+  ScheduledTaskRunRepository get scheduledTaskRuns =>
+      _scheduledTaskRunRepository;
   SuspendedCheckpointRepository get suspendedCheckpoints =>
       _suspendedCheckpointRepository;
   SessionForkCommitRepository get forkCommits => _forkCommitRepository;
@@ -328,6 +339,13 @@ class SessionDB {
     DateTime? lastRunAt,
     String? lastStatus,
     bool enabled = true,
+    String? name,
+    String ownerKind = 'model',
+    String conversationMode = 'continuous',
+    String? runSessionId,
+    String? workspaceId,
+    String? providerInstanceId,
+    String? model,
   }) => _scheduledTaskRepository.saveScheduledTask(
     id,
     task,
@@ -343,10 +361,35 @@ class SessionDB {
     lastRunAt: lastRunAt,
     lastStatus: lastStatus,
     enabled: enabled,
+    name: name,
+    ownerKind: ownerKind,
+    conversationMode: conversationMode,
+    runSessionId: runSessionId,
+    workspaceId: workspaceId,
+    providerInstanceId: providerInstanceId,
+    model: model,
   );
 
   Map<String, dynamic>? getScheduledTask(String id) =>
       _scheduledTaskRepository.getScheduledTask(id);
+
+  bool updateScheduleSettings(
+    String id, {
+    Object? name = ScheduledTaskRepository.unset,
+    Object? conversationMode = ScheduledTaskRepository.unset,
+    Object? runSessionId = ScheduledTaskRepository.unset,
+    Object? workspaceId = ScheduledTaskRepository.unset,
+    Object? providerInstanceId = ScheduledTaskRepository.unset,
+    Object? model = ScheduledTaskRepository.unset,
+  }) => _scheduledTaskRepository.updateScheduleSettings(
+    id,
+    name: name,
+    conversationMode: conversationMode,
+    runSessionId: runSessionId,
+    workspaceId: workspaceId,
+    providerInstanceId: providerInstanceId,
+    model: model,
+  );
 
   List<Map<String, dynamic>> getAllScheduledTasks() =>
       _scheduledTaskRepository.getAllScheduledTasks();

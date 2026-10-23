@@ -22,10 +22,32 @@ enum ScheduledTaskTableShape {
 /// save and read only by the tolerant [inspectScheduledTasks] listing. The
 /// only mutation path above this repository is `CronScheduler` (single
 /// writer).
+///
+/// Two write paths exist and they are not interchangeable:
+///
+/// - [saveScheduledTask] writes the recurrence and lifecycle columns of the
+///   whole row and leaves the seven Task 139 columns alone on an existing row:
+///   `owner_kind`, `name`, `conversation_mode`, `run_session_id`,
+///   `workspace_id`, `provider_instance_id`, and `model` are **insert-only**.
+///   The scheduler re-saves a schedule after every run and every state change
+///   with only the legacy parameters, so a re-save must preserve them exactly.
+/// - [updateScheduleSettings] is the single edit path for those six editable
+///   settings; `owner_kind` has no writer after the insert.
+///
+/// An omitted Task 139 value on the first insert is stored as its column
+/// default (`model`-owned, one continuous conversation, no route), exactly
+/// like an omitted `kind` or `zone`.
 class ScheduledTaskRepository {
   final AgentStateDatabase _state;
 
   ScheduledTaskRepository(this._state);
+
+  /// Sentinel distinguishing "parameter omitted" from "clear this column" in
+  /// [updateScheduleSettings].
+  ///
+  /// Public so that a delegating facade can forward the same default; callers
+  /// never pass it explicitly.
+  static const Object unset = Object();
 
   Database get _db => _state.db;
 
@@ -44,16 +66,30 @@ class ScheduledTaskRepository {
     DateTime? lastRunAt,
     String? lastStatus,
     bool enabled = true,
+    String? name,
+    String ownerKind = 'model',
+    String conversationMode = 'continuous',
+    String? runSessionId,
+    String? workspaceId,
+    String? providerInstanceId,
+    String? model,
   }) {
     final now = DateTime.now();
     final nextRunAtValue = _normalizeDateTime(nextRunAt);
+    // The Task 139 columns appear in the INSERT and never in the ON CONFLICT
+    // update list: a re-save keeps them byte-for-byte, and `owner_kind` is
+    // written once at insert so no save can turn a user-owned schedule back
+    // into a model-owned one (Task 139 D5). `updateScheduleSettings` is the
+    // only writer after that.
     final stmt = _db.prepare('''
       INSERT INTO scheduled_tasks (
         id, task, session_id, kind, interval_minutes, at_time,
         weekdays, month_day, zone, next_run_at, run_at, created_at,
-        updated_at, last_run_at, last_status, enabled
+        updated_at, last_run_at, last_status, enabled, name, owner_kind,
+        conversation_mode, run_session_id, workspace_id,
+        provider_instance_id, model
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         task = excluded.task,
         session_id = excluded.session_id,
@@ -90,10 +126,73 @@ class ScheduledTaskRepository {
         lastRunAt != null ? _normalizeDateTime(lastRunAt) : null,
         lastStatus,
         enabled ? 1 : 0,
+        name,
+        ownerKind,
+        conversationMode,
+        runSessionId,
+        workspaceId,
+        providerInstanceId,
+        model,
       ]);
     } finally {
       stmt.dispose();
     }
+  }
+
+  /// Updates the editable settings of an existing schedule (Task 139).
+  ///
+  /// Only the parameters that are *passed* change: an omitted parameter keeps
+  /// its stored value, and an explicit `null` clears the column. The
+  /// omit-versus-clear distinction uses the same `Object?` sentinel convention
+  /// as `AgentTurnRequest.copyWith`.
+  ///
+  /// This is the single edit path for the six settings. `owner_kind` is not
+  /// among them and has no writer here: it is fixed at insert (D5), so no
+  /// update can turn a user-owned schedule into a model-owned one or the
+  /// reverse. Callers validate values before calling; this method stores what
+  /// it is given.
+  ///
+  /// Returns whether a row matched [id]; a call with no parameters writes
+  /// nothing (and therefore does not bump `updated_at`). Every real update
+  /// bumps `updated_at`.
+  bool updateScheduleSettings(
+    String id, {
+    Object? name = unset,
+    Object? conversationMode = unset,
+    Object? runSessionId = unset,
+    Object? workspaceId = unset,
+    Object? providerInstanceId = unset,
+    Object? model = unset,
+  }) {
+    final assignments = <String>[];
+    final parameters = <Object?>[];
+    void apply(String column, Object? value) {
+      if (identical(value, unset)) return;
+      if (value != null && value is! String) {
+        throw ArgumentError.value(value, column, 'must be a String or null');
+      }
+      assignments.add('$column = ?');
+      parameters.add(value);
+    }
+
+    apply('name', name);
+    apply('conversation_mode', conversationMode);
+    apply('run_session_id', runSessionId);
+    apply('workspace_id', workspaceId);
+    apply('provider_instance_id', providerInstanceId);
+    apply('model', model);
+
+    if (assignments.isEmpty) return false;
+    assignments.add('updated_at = ?');
+    parameters
+      ..add(_normalizeDateTime(DateTime.now()))
+      ..add(id);
+
+    _db.execute(
+      'UPDATE scheduled_tasks SET ${assignments.join(', ')} WHERE id = ?',
+      parameters,
+    );
+    return _db.updatedRows > 0;
   }
 
   Map<String, dynamic>? getScheduledTask(String id) {
@@ -173,6 +272,16 @@ class ScheduledTaskRepository {
     'last_run_at': row['last_run_at'],
     'last_status': row['last_status'],
     'enabled': row['enabled'],
+    // Task 139 columns. A pre-139 table reaches this decoder without them
+    // (read-only inspection never migrates), and a missing column reads as
+    // null, which is the "old row" default the record expects.
+    'name': row['name'],
+    'owner_kind': row['owner_kind'],
+    'conversation_mode': row['conversation_mode'],
+    'run_session_id': row['run_session_id'],
+    'workspace_id': row['workspace_id'],
+    'provider_instance_id': row['provider_instance_id'],
+    'model': row['model'],
   };
 
   static String _normalizeDateTime(DateTime value) =>
