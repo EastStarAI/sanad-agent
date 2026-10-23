@@ -15,6 +15,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/composer_paste_capture.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';

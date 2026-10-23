@@ -327,6 +327,7 @@ One row per item, appended by the orchestrator.
 | Item | PR | Status | Files locked | Verification |
 |---|---|---|---|---|
 | docs + guard (this PR) | | in progress | `AGENTS.md`, `agent/AGENTS.md`, `client/AGENTS.md`, `client/lib/features/AGENTS.md`, plans, `docs/llms.txt`, two guard tests | see PR |
+| 113-02 / R2 composer | (this PR) | done | `widgets/conversation_input/conversation_input_composer.dart` + 8 new `composer_*.dart`, `test/widget/composer_input_routing_and_paste_test.dart`, `test/guards/file_size_ratchet_guard_test.dart`, `lib/features/conversations/presentation/AGENTS.md`, `docs/qa_maintenance/task95-remaining-ui-strings.md` | analyze clean; focused `composer_input_routing_and_paste_test` + `conversation_input_composer_toggle_test` + `conversation_input_panel_rebuild_test` 63; `test/guards/` 3; full client fast suite; composer host 1,634 → 187 lines and removed from the allowlist |
 
 ## Definition of Done
 
