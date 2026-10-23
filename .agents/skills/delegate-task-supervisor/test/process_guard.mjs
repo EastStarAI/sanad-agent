@@ -39,6 +39,30 @@ export function processCommand(pid) {
   return result.status === 0 ? (result.stdout || '').trim() : '';
 }
 
+/**
+ * Every live member of one process group, with its command line.
+ *
+ * A process group is how the supervisor owns a whole tree, so a test needs to
+ * see the tree and not just its leader. Selection is by the group id recorded in
+ * the fixture manifest — never by a name or a pattern — and the command line is
+ * returned so ownership can still be proven before anything is signalled.
+ */
+export function groupMembers(pgid) {
+  if (process.platform === 'win32') return [];
+  if (!Number.isInteger(pgid) || pgid <= 1) return [];
+  const result = spawnSync('ps', ['-a', '-x', '-o', 'pid=,pgid=,command='], { encoding: 'utf8' });
+  if (result.status !== 0) return [];
+  const members = [];
+  for (const line of (result.stdout || '').split('\n')) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (Number(match[2]) !== pgid) continue;
+    members.push({ pid, pgid, command: match[3].trim() });
+  }
+  return members;
+}
+
 export function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -236,6 +260,40 @@ export function sweepOrphanedFixtures({ root = tmpdir(), prefix = 'delegate-', d
     }
     reaped.push({ pid, needle, dryRun: false });
   };
+  /**
+   * Kill one process group whose ownership is proven, member by member.
+   *
+   * Every member must name the fixture directory in its command line; a group
+   * with even one unproven member is left alone rather than taking a stranger's
+   * process down with it.
+   */
+  const sweepGroup = (pgid, needle, collected, isDryRun) => {
+    if (process.platform === 'win32') return;
+    if (!Number.isInteger(pgid) || pgid <= 1) return;
+    const members = groupMembers(pgid);
+    if (!members.length) return;
+    if (members.some((member) => !member.command.includes(needle))) return;
+    if (isDryRun) {
+      collected.push({ pid: pgid, needle, group: true, members: members.length, dryRun: true });
+      return;
+    }
+    const signalGroup = (signal) => {
+      try {
+        process.kill(-pgid, signal);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    signalGroup('SIGTERM');
+    const deadline = Date.now() + 1_500;
+    while (Date.now() < deadline) {
+      if (!groupMembers(pgid).length) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+    if (groupMembers(pgid).length) signalGroup('SIGKILL');
+    collected.push({ pid: pgid, needle, group: true, members: members.length, dryRun: false });
+  };
   let scanned = 0;
   for (const entry of candidates) {
     const directory = join(root, entry);
@@ -250,6 +308,11 @@ export function sweepOrphanedFixtures({ root = tmpdir(), prefix = 'delegate-', d
       sweep(manifest.supervisorPid, directory);
       for (const task of Object.values(manifest.tasks || {})) {
         sweep(task?.pid, directory);
+        // A task's group can outlive both the worker and the supervisor, which is
+        // exactly what this sweep must not leave behind. Ownership is proven the
+        // same way: the group is named by a manifest under this fixture, and every
+        // member's command line names the same directory.
+        sweepGroup(task?.pgid, directory, reaped, dryRun);
       }
     }
   }
