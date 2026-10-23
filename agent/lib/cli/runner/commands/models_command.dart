@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 
 import '../../models/provider_selector.dart';
@@ -95,8 +96,11 @@ class ModelsCommand extends SanadCommand {
       if (!quiet) {
         stdoutSink.writeln('Configured Providers & Available Models:');
       }
+      // A single-model inspection is the one place the authority provenance is
+      // worth printing: the caller asked about exactly one route.
+      final detail = modelQuery.isNotEmpty;
       for (final entry in filteredCatalog) {
-        _writeHumanBlock(entry);
+        _writeHumanBlock(entry, detail: detail);
       }
       return 0;
     } catch (e) {
@@ -204,7 +208,7 @@ class ModelsCommand extends SanadCommand {
     );
   }
 
-  void _writeHumanBlock(_ProviderCatalog entry) {
+  void _writeHumanBlock(_ProviderCatalog entry, {bool detail = false}) {
     final instance = entry.instance;
     final defaultBadge = instance.isDefault ? ' [DEFAULT]' : '';
     stdoutSink.writeln(
@@ -229,7 +233,65 @@ class ModelsCommand extends SanadCommand {
       } else {
         stdoutSink.writeln('    - ${model.value}$reasoning$active');
       }
+      final thinking = _thinkingSummary(model.thinkingControl);
+      if (thinking != null) {
+        stdoutSink.writeln('      $thinking');
+      }
+      if (detail) {
+        for (final line in _thinkingAuthorityLines(model.thinkingControl)) {
+          stdoutSink.writeln('      $line');
+        }
+      }
     }
+  }
+
+  /// One-line summary of the thinking levels this exact route admits.
+  ///
+  /// Returns `null` when the cached entry carries no descriptor at all, so a
+  /// catalog without capability data reads exactly as it did before. A route
+  /// that resolved to `unknown` or `unsupported` says so and never lists
+  /// levels it does not have.
+  String? _thinkingSummary(ThinkingControlDescriptor? control) {
+    if (control == null) return null;
+    switch (control.status) {
+      case ThinkingCapabilityStatus.supported:
+        if (control.options.isEmpty) {
+          return 'thinking: supported (no declared options)';
+        }
+        final levels = control.options.map((option) {
+          final badges = [
+            if (option.isOff) 'off',
+            // The effective default is whatever the descriptor names, so a
+            // lower layer that filled the default is marked exactly like a
+            // native one; the authority is disclosed separately.
+            if (option.isProviderDefault ||
+                option.id == control.defaultOptionId)
+              'default',
+          ];
+          final id = option.id;
+          return badges.isEmpty ? id : '$id [${badges.join(', ')}]';
+        }).join(', ');
+        final kind = control.kind == null ? '' : ' (${control.kind!.wireValue})';
+        return 'thinking: supported$kind — $levels';
+      case ThinkingCapabilityStatus.unsupported:
+        return 'thinking: unsupported';
+      case ThinkingCapabilityStatus.unknown:
+        return 'thinking: unknown — no declared levels for this route';
+    }
+  }
+
+  /// Authority provenance lines, only for a single-model inspection.
+  List<String> _thinkingAuthorityLines(ThinkingControlDescriptor? control) {
+    if (control == null) {
+      return ['thinking source: none recorded for this route'];
+    }
+    return [
+      'thinking source: ${control.source}',
+      if (control.defaultOptionId != null)
+        'thinking default: ${control.defaultOptionId} '
+            '(from ${control.defaultSource ?? control.source})',
+      'capability revision: ${control.capabilityRevision}',
+    ];
   }
 }
 
@@ -261,17 +323,25 @@ class _ProviderCatalog {
 }
 
 /// A single catalog entry, normalized from the cached provider payload.
+///
+/// The cached row already carries the thinking capability the daemon resolved
+/// for this exact route (five-layer authority, `provider_protocol.md` §2.3).
+/// This entry surfaces it instead of dropping it: [thinkingControl] is the
+/// stored descriptor, so the CLI reports the same record the Client snapshot
+/// does and never re-derives or re-orders any authority layer.
 class _ModelEntry {
   final String value;
   final String label;
   final bool supportsReasoning;
   final bool isDefault;
+  final ThinkingControlDescriptor? thinkingControl;
 
   const _ModelEntry({
     required this.value,
     required this.label,
     required this.supportsReasoning,
     required this.isDefault,
+    this.thinkingControl,
   });
 
   factory _ModelEntry.fromRaw(Object? raw, ProviderInstance instance) {
@@ -283,6 +353,7 @@ class _ModelEntry {
         label: label == value ? '' : label,
         supportsReasoning: raw['supports_reasoning'] == true,
         isDefault: value == instance.defaultModel,
+        thinkingControl: _parseThinkingControl(raw['thinking_control']),
       );
     }
     final value = raw?.toString() ?? '';
@@ -294,10 +365,27 @@ class _ModelEntry {
     );
   }
 
+  /// Parses a cached `thinking_control` member, tolerating a malformed record.
+  ///
+  /// A catalog read is an inspection path, so one unparsable descriptor must
+  /// not fail the whole listing; the entry then reports no control rather than
+  /// an invented one.
+  static ThinkingControlDescriptor? _parseThinkingControl(Object? raw) {
+    if (raw is! Map) return null;
+    try {
+      return ThinkingControlDescriptor.fromMap(
+        raw.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Map<String, dynamic> toJson() => {
     'value': value,
     'label': label,
     'supports_reasoning': supportsReasoning,
     'is_default': isDefault,
+    if (thinkingControl != null) 'thinking_control': thinkingControl!.toMap(),
   };
 }

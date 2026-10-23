@@ -711,18 +711,45 @@ Home's `state.db` without contacting any provider.
 - **Text output:** the human block format is unchanged — `• Provider: <display> (<template>)`
   with `[DEFAULT]`, `Default Model:`, and one `- <value> (<label>) [reasoning] (active default)`
   row per cached model. `--quiet` suppresses only the leading `Configured Providers & Available
-  Models:` header.
+  Models:` header. Under each model row the block adds one `thinking:` segment describing the
+  levels that exact route resolved (see below); when the cached entry carries no descriptor the
+  segment is absent and the row is byte-identical to the pre-Task-137 output.
+- **Thinking levels (Task 137):** the cached row already stores the capability the daemon
+  resolved for that exact route through the five-layer authority
+  ([provider_protocol.md](provider_protocol.md) §2.3). The command reports that stored record and
+  never re-derives it, refreshes it, or re-orders a layer. A `supported` route prints
+  `thinking: supported (<kind>) — <id> [off, default], …`, marking the genuine Off option and the
+  known native default. An `unsupported` route prints `thinking: unsupported`, and an `unknown`
+  route prints `thinking: unknown — no declared levels for this route`; neither invents a level.
+  A single-model inspection (`--model <id>`) additionally prints the authority provenance —
+  `thinking source:`, `thinking default: <id> (from <source>)`, and `capability revision:` — while
+  a full listing omits it to stay readable.
 - **JSON output (`--json`), stable shape:** one object
   `{"schema": "sanad.models.v1", "providers": [...]}` where each provider carries `id`,
   `template_id`, `display_name`, `default_model`, `is_default`, `status`, `catalog_source`,
   `catalog_fetched_at`, and `models` (each with `value`, `label`, `supports_reasoning`,
-  `is_default`). The cached catalog is reported as stored; this command never refreshes it, so a
-  provider that advertises a model it later rejects still appears here until the cache is refetched.
+  `is_default`, plus an optional `thinking_control` described next). The cached catalog is
+  reported as stored; this command never refreshes it, so a provider that advertises a model it
+  later rejects still appears here until the cache is refetched.
+- **`thinking_control` (additive, Task 137):** present only when the cached entry carries a
+  descriptor, and otherwise omitted so the documented four-key model entry is unchanged. Its shape
+  is exactly `ThinkingControlDescriptor.toMap()` — the same record the Client snapshot consumes:
+  `status` (`supported`/`unsupported`/`unknown`), optional `kind`, `options[]` (each `id`, `label`,
+  `is_off`, `is_provider_default`, and `budget_tokens` only for a genuine positive budget),
+  optional `default_option_id` and `default_source`, `capability_revision`, `source`, and
+  `observed_at`. Because it is the stored record, its `source` names the authority layer that
+  actually won for that route (`config_override`, `endpoint_declared`, `provider_reported`,
+  `shipped_default`, `models_dev`, `models_dev_canonical`), which is the one fact the CLI could not
+  report before this task.
 - **Why filtering is mandatory:** model ids are advertised per provider and overlap in name shape
   (for example several providers ship `glm-*`). Reporting the whole catalog for a filtered request
   made a single provider's catalog indistinguishable from another provider's, which is how a
   `tail`n unfiltered report was mistaken for an OpenCode Go inventory.
 - Coverage: `agent/test/cli/models_command_test.dart`.
+- **Reading a route's thinking levels without the database (Task 137):** before this change the
+  resolved capability was observable only through the Client snapshot or by reading
+  `provider_model_cache.models_json` in `state.db` by hand. `sanad models --provider <id> --model
+  <id>` now answers the same question from the CLI, including which authority layer won.
 
 ---
 
