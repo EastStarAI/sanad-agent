@@ -20,11 +20,19 @@ landed after the original attempt's baseline.
 
 | Host file | Baseline | Final | Reduction |
 |---|---:|---:|---:|
-| `agent/lib/engine/agent_runner.dart` | 3,021 | 1,711 | −43% |
-| `agent/lib/interfaces/runtime/session_run_orchestrator.dart` | 2,273 | 1,673 | −26% |
-| `agent/lib/interfaces/runtime/local_workspace_runtime_service.dart` | 1,734 | 784 | −55% |
-| `client/lib/features/conversations/presentation/bloc/session_messages_cubit.dart` | 2,050 | 1,444 | −30% |
-| **Total** | **9,078** | **5,612** | **−38%** |
+| `agent/lib/engine/agent_runner.dart` | 3,021 | 2,016 | −33% |
+| `agent/lib/interfaces/runtime/session_run_orchestrator.dart` | 2,273 | 1,767 | −22% |
+| `agent/lib/interfaces/runtime/local_workspace_runtime_service.dart` | 1,734 | 769 | −56% |
+| `client/lib/features/conversations/presentation/bloc/session_messages_cubit.dart` | 2,050 | 1,559 | −24% |
+| **Total** | **9,078** | **6,111** | **−33%** |
+
+> **Correction (2026-10-23):** the final column previously recorded 1,711 / 1,673 / 784 / 1,444 and a
+> −38% total. Those were not the sizes that merged. The numbers above are the real sizes at the #237
+> merge commit `adc128ec`, measured with `git show adc128ec:<path> | wc -l`. Hosts have regrown since
+> (`agent_runner` 2,025, `session_run_orchestrator` 1,847,
+> `local_workspace_runtime_service` 839, `session_messages_cubit` 1,571), which is why
+> [Plan 138](docs/plans/tasks/138-agent-srp-tier2.md) and
+> [Plan 113b](docs/plans/tasks/113b-srp-tier2-client-presentation.md) add the size ratchet.
 
 ## Motivation and Current Inventory
 
