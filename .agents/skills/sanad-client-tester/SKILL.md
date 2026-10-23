@@ -26,6 +26,16 @@ When a request fits `scripts/sanad_conversation_workflow.py` and supplies its re
 
 Escalate to runtime/UI references and diagnostic commands only after a structured runner failure or when the requested workflow is outside the runner contract. Never retry an ambiguous send during escalation.
 
+## Decision-layer routing rule
+
+Use the decision layer whenever a step's next action depends on the current screen but is chosen from a known, finite set. Keep the agent whenever the step needs judgment a candidate table cannot express.
+
+**USE the decision layer** — navigation between known destinations, picking one listed option (model, `ask_user` option, search result, settings tile), confirming a reversible dialog, waiting for a state, and fixed form flows. One such step is a single closed-choice call of roughly 0.3–1 s and about $0.00006.
+
+**KEEP the agent** — judging visual or semantic correctness, unknown or unclassifiable screens, authoring free text, diagnosing a failure, and any irreversible step the scenario has not explicitly pre-authorized. A guard refusal, a `model_unavailable` / `model_contradiction` escalation, an `unknown` mode, or an `abstain`/`reobserve` answer hands the step back to the agent; never answer an escalation by re-running the refused action.
+
+Load [`references/decision-layer-routing.md`](references/decision-layer-routing.md) for the cost comparison, the guard rules, how to read an escalation, and how to resume.
+
 ## Routing table
 
 Load only the references needed for the requested task:
@@ -38,6 +48,7 @@ Load only the references needed for the requested task:
 | Verify local-to-cloud connection switching | [`references/connection-switching.md`](references/connection-switching.md) |
 | Send and verify one conversation through deterministic orchestration plus Jev | [`references/jev-conversation-automation.md`](references/jev-conversation-automation.md) |
 | Test multi-question `system.ask_user` parsing and navigation | [`references/multi-question-ui.md`](references/multi-question-ui.md) |
+| Decide whether a step belongs to the decision layer or the agent | [`references/decision-layer-routing.md`](references/decision-layer-routing.md) |
 | Execute live acceptance or multi-phase turns against a background daemon via CLI | [`../sanad-agentic-developer/references/daemon-cli-live-acceptance.md`](../sanad-agentic-developer/references/daemon-cli-live-acceptance.md) |
 
 For manual or custom live UI work, load both `interactive-ui-testing.md` and `runtime-and-worktrees.md`. The canonical conversation fast path is the explicit exception: its bundled runner imports the reusable Jev layer programmatically, so loading the full Jev skill or manual UI/runtime references before execution is redundant. Load them only to design, modify, or diagnose custom automation.
@@ -54,5 +65,7 @@ For manual or custom live UI work, load both `interactive-ui-testing.md` and `ru
 
 - `scripts/sanad_conversation_workflow.py` — canonical parameterized conversation runner.
 - `scripts/dual_brain_sanad_ui.py` — thin exact-key `sanad-dev ui` adapter; it does not plan goals.
+- `scripts/decision_layer/` — guarded decision layer: deterministic mode classifier, mode-scoped extractor, precondition guard, provider-agnostic model interface, escalation payload, and JSONL trace. Run it with `python3 -m decision_layer decide|smoke`.
+- `tests/fixtures/` — 24 sanitized captured snapshots with labelled decisions: the offline evidence behind the routing rule.
 - `tests/test_sanad_conversation_workflow.py` — focused deterministic runner tests.
 - `evals/evals.json` — realistic routing scenarios for each specialized section.

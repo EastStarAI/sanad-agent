@@ -1,46 +1,295 @@
 ---
 title: "Jev Sanad UI Automation"
-description: "Usage and safety boundary for the tracked Jev Sanad conversation runner."
+description: "Hybrid contract for Jev-assisted Sanad Client automation: the conversation runner, the guarded decision layer, escalation, and the kill criteria."
 ---
 
 # Jev Sanad UI Automation
 
-## Scope
+## Scope and comparison baseline
 
-`.agents/skills/sanad-client-tester/scripts/sanad_conversation_workflow.py` is the canonical tracked runner for driving one managed, driver-enabled Sanad Client. It accepts an exact target device, either a new conversation or one visible existing conversation, an exact provider/model pair, and one message. It verifies a newly rendered response and can return to the conversation selected before execution. `temp/jev_sanad_conversation_runner.py` remains a thin compatibility forwarder for prior local invocations.
+Two tracked components drive a managed, driver-enabled Sanad Client with a fast
+decision model:
 
-The runner is intentionally hybrid:
+1. `.agents/skills/sanad-client-tester/scripts/sanad_conversation_workflow.py` — the
+   canonical one-message conversation runner.
+2. `.agents/skills/sanad-client-tester/scripts/decision_layer/` — the guarded
+   decision layer that routes a stretch of a scenario away from the testing agent.
 
-- deterministic code owns phases, exact selectors, one-shot conversation creation and send admission, event waiting, event-body verification, and return navigation; related actions in one phase use one Driver batch connection to avoid per-command VM reconnection delay;
-- Jev performs only a final semantic judgment that the newly rendered assistant response addresses the supplied message;
-- missing, duplicate, hidden, or mismatched selectors fail closed instead of being guessed.
+Compare the decision layer with **the agent that drives `sanad-dev ui`**, not with
+`sanad-dev ui` itself: the CLI is only the hands. Today every UI step costs a full
+agent turn — a snapshot read, a reasoning pass over tens of thousands of tokens, and
+another action call. The decision layer answers the same bounded step with one
+closed-choice judgment over roughly 450 tokens.
 
-## Execution modes
+`.agents/skills/sanad-client-tester/scripts/sanad_conversation_workflow.py` is the
+only tracked entry point for the runner. Any `temp/` wrapper is an untracked,
+environment-local convenience: it is not part of the repository contract, it does
+not exist in a fresh worktree or CI checkout, and nothing in this document depends
+on it.
 
-For a supported standard conversation request with all required inputs, the canonical runner is the fast path and should be the first execution command. Do not precede it with separate `sanad-dev status`, UI snapshot/find, log reads, `--help`, or manual Jev calls: runtime resolution, initial observation, selector admission, response evidence, semantic verification, and return checks already belong to that invocation.
+## Ownership
 
-Use manual runtime/UI diagnostics only after a runner failure or for a workflow outside its contract. Diagnose from the failed phase, load only the relevant focused reference, and never retry an ambiguous send.
+| Owner | Responsibilities |
+| --- | --- |
+| Deterministic code | Screen-mode classification, candidate extraction and scope, action semantics, preconditions, irreversibility authorization, thresholds, dispatch-time revalidation, the step trace |
+| Decision model (Jev or any other) | One narrow closed-choice judgment per step over the supplied candidate table |
+| Testing agent (System 2) | Authoring, diagnosis, semantic and visual judgment, unknown screens, and every escalation |
 
-## Input contract
+The model never selects a device, invents a key, produces a typed value, retries a
+send, authorizes an irreversible action, or decides that a task is complete.
 
-The canonical runner accepts an exact target device, exact provider and model, one message, and exactly one conversation mode: new conversation (optionally bound to one exact workspace), durable conversation id, or exact visible title. Workspace selection is rejected for existing conversations. Durable conversation id is preferred because rendered sidebar titles may be truncated or duplicated.
+## The conversation runner
 
-An exact origin device is required when return navigation is enabled. Return may be explicitly disabled. Return is otherwise strict: the runner captures the selected origin conversation key before any mutation and requires the supplied origin device because the current unkeyed device header does not expose a reliable active-device value through the driver snapshot. Use the canonical script's `--help` output as the argument reference; the retained `temp/` note documents compatibility examples.
+The runner accepts an exact target device, either a new conversation or one visible
+existing conversation, an exact provider/model pair, and one message. It verifies a
+newly rendered response and can return to the conversation selected before
+execution.
 
-## Verification and safety
+- deterministic code owns phases, exact selectors, one-shot conversation creation
+  and send admission, event waiting, event-body verification, and return
+  navigation; related actions in one phase use one Driver batch connection;
+- Jev performs only a final semantic judgment that the newly rendered assistant
+  response addresses the supplied message;
+- missing, duplicate, hidden, or mismatched selectors fail closed instead of being
+  guessed.
 
-The runner must:
+For a supported standard conversation request with all required inputs, the runner
+is the fast path and should be the first execution command. Do not precede it with
+separate `sanad-dev status`, UI snapshot/find, log reads, `--help`, or manual Jev
+calls. The runner requires:
 
-1. capture exactly one selected origin conversation before switching devices;
-2. resolve each device option by `sidebar_device_item_<exact name>`;
-3. for a workspace-bound new conversation, resolve one exact `workspace-group:<id>` and use `sidebar_new_conversation_btn:<id>`; skip that action only when no existing row is selected and `workspace_selector_btn` already shows the requested workspace;
-4. inspect the active `Provider | model` first and skip the picker when it already matches; otherwise verify availability by exact rendered `Provider / model` text before selecting it;
-5. refuse to overwrite a non-empty composer;
-6. reserve new-conversation creation and send as irreversible one-shot phases;
-7. wait on `stop_message_btn` lifecycle through `sanad-dev ui wait-for` rather than model or snapshot polling;
-8. require one new exact `user_message_body:<eventId>` and a new non-empty `assistant_message_body:<eventId>`;
-9. require Jev semantic probability of at least `0.75`;
-10. attempt origin restoration after success or failure, preserve the primary failure when restoration succeeds, and report both errors when restoration also fails;
-11. treat the successful same-connection exact-text wait as user-send evidence when the user message-body key is not mounted, while still requiring a new assistant body before success.
+1. exactly one selected origin conversation captured before switching devices;
+2. each device option resolved by `sidebar_device_item_<exact name>`;
+3. for a workspace-bound new conversation, one exact `workspace-group:<id>` and
+   `sidebar_new_conversation_btn:<id>`;
+4. the active `Provider | model` inspected first, skipping the picker when it
+   already matches;
+5. a refusal to overwrite a non-empty composer;
+6. new-conversation creation and send reserved as irreversible one-shot phases;
+7. a `stop_message_btn` lifecycle wait plus message-body evidence, never polling;
+8. one new exact `user_message_body:<eventId>` and a new non-empty
+   `assistant_message_body:<eventId>`;
+9. a Jev semantic probability of at least `0.75`;
+10. origin restoration after success or failure, with the primary error preserved.
 
-The script does not paginate hidden conversations, infer truncated titles, retry a possibly completed send, or use coordinates. Its implementation and focused tests are owned by Sanad Client Tester; the reusable Jev skill owns only the general judgment and workflow-safety primitives, and the compatibility entry point must remain behaviorally equivalent.
+## The decision layer
+
+The layer turns "what should I do on this screen" into a guarded, replayable step:
+
+```text
+snapshot ──► mode classifier ──► mode-scoped extractor ──► guard (pre)
+                                                             │
+                                          decision model ◄───┘
+                                                │
+                                    guard (post) ──► confidence filter ──► circuit breaker
+                                                │
+                                  admitted action / bounded escalation ──► JSONL trace
+```
+
+Module layout and the exact CLI invocations live in
+`.agents/skills/sanad-client-tester/references/decision-layer-routing.md`; that
+reference is also the agent-facing routing rule. This page owns the contract.
+
+### What the model may and may not see
+
+- Structured state with named fields: goal, phase, screen mode and detail, completed
+  phases, and recent actions.
+- The closed candidate table, carried exactly once, as the question's `criteria`.
+- Stable ids derived from widget keys, plus the descriptions extracted from the live
+  tree.
+- No entered text (only `[empty]`/`[filled]`), no secrets, no screenshots, and no
+  conversation transcript.
+- No control whose structural precondition already fails: a submit with an empty
+  field is not offered at all, so the model cannot pick it even if it would have.
+
+### Measured behaviour on this surface
+
+The P0 offline replay measured 24 captured states with 49 model calls:
+
+| Metric | Result |
+| --- | --- |
+| Answerable top-1 (17 decisions) | 100 % |
+| Trap decisions | 5 of 7 correct; **2 wrong** |
+| Wrong-pick confidence | **0.96–0.98**, above every correct answer in the 0.85–0.95 band |
+| Confidence saturation | 22 of 38 correct acting calls at exactly 1.00 |
+| A floor that separates wrong from right | **none** (`separating_floors: []` for 0.50–0.99) |
+| Latency | p50 342 ms, p95 957 ms (n = 48) |
+| Cost | ≈$0.00006 per call (1,501–1,735 input tokens at $0.042/M) |
+| Run-to-run stability | 24 of 24 decisions identical |
+
+A later end-to-end smoke over the curated fixtures (8 decisions, 8 calls, model
+`jev-1.14.0`) recorded **6 correct admissions, 0 wrong actions, 2 refusals by
+design** (the empty-field submit and an unauthorized account delete), p50 333 ms,
+p95 433 ms, ≈$0.000046 per decision over 8,825 input tokens. The same smoke is the
+only code path that spends real model calls; its budget is 20. That recording
+predates the structural pre-filter: the empty-field submit is now never offered, so a
+re-run of the same fixture is expected to answer `abstain` instead of escalating.
+
+**Consequence, and the central law of this contract: confidence does not bound
+correctness on this surface, so it can never be the last gate before an action.**
+The layer therefore puts a code-owned guard in front of the model's output, gates
+irreversible actions on an explicit per-phase authorization, and scopes the
+candidate table per screen mode.
+
+### Guard
+
+The guard runs before any action is dispatched and is re-run on a fresh snapshot at
+dispatch time. It refuses with a stable reason code instead of acting:
+
+| Reason code | Rule |
+| --- | --- |
+| `observation_not_ok` | snapshot status is not `ok` |
+| `not_settled` | the snapshot was captured while the tree was still changing |
+| `unknown_mode` | no declared mode matches the snapshot; never dispatch on a guess |
+| `dialog_blocking` | an overlay owns the screen while the phase expects another surface |
+| `mode_mismatch` | the phase's expected mode is not the live mode |
+| `empty_candidate_table` | the mode is known but no declared control is valid |
+| `phase_reentry` | the phase already completed an irreversible action and may not be decided again |
+| `model_unavailable` | the decision model could not answer: network, timeout, HTTP error, redirect, or an unusable body |
+| `model_contradiction` | the reply contradicted itself: probability keys, mass, or argmax disagree with the candidates |
+| `model_abstained` | the model chose `abstain` |
+| `model_reobserve` | the model asked for another observation |
+| `invalid_target` | the selected id is not in the current candidate table |
+| `target_absent` | the control is gone from the live snapshot |
+| `disabled_target` | the control reports `enabled: false` |
+| `unclassified_target` | the control has no declared action rule |
+| `precondition_failed` | a declared precondition failed (`field_filled:<key>`, `field_present:<key>`, `detail:<value>`, `mode:<value>`) |
+| `irreversible_not_authorized` | the action is irreversible and the phase did not pre-authorize that exact id |
+| `low_confidence` | the confidence/selected-probability threshold was not met |
+| `repeated_target` | the same target would be acted on a third time |
+| `oscillation` | four prospective actions alternate between two targets |
+| `no_transition` | the post-action fingerprint equals the pre-action fingerprint |
+| `stale_observation` | reserved for an admission whose screen changed before dispatch |
+
+Ordering is part of the contract: structural checks run first, the confidence filter
+last. A precondition failure on an empty text field is reported as
+`precondition_failed` even when the model returned 0.98, and even when the model was
+also uncertain.
+
+Two facts make that guarantee categorical rather than probabilistic:
+
+- the extractor drops a control whose structural precondition fails on the snapshot,
+  so the un-fillable submit is never a candidate; the guard re-checks the same
+  preconditions on the live snapshot, which is what still refuses a stale table;
+- the guard's checks depend on the screen, not on the reply's confidence.
+
+### Provider failures
+
+A model or provider failure never crashes a step. `DecisionLayer.decide` catches
+whatever the model raises - network failure, deadline, HTTP error status, redirect,
+malformed body, or a self-contradictory answer - and returns an escalation:
+
+| Reason code | Cause | Evidence |
+| --- | --- | --- |
+| `model_unavailable` | network, timeout, redirect, HTTP error status, unusable body | `error_class`, `error_code` (`network`, `timeout`, `http_error`, `redirect`, `malformed`), `status` when a response existed |
+| `model_contradiction` | the reply is internally inconsistent | `invariant`: `choice_in_criteria`, `choice_probability_key_set`, `choice_probability_value`, `choice_probability_range`, `choice_probability_sum`, `choice_is_argmax` |
+
+The evidence carries no response body and no header, so an escalation can be logged
+and handed to the agent without leaking provider detail. The client itself is typed:
+`JevClientError` keeps the cause code and the HTTP status, refuses to follow a
+redirect (a 3xx would send the bearer token to another origin), and rejects a choice
+whose probability keys do not match the candidates, whose mass is not 1 ± 0.01, or
+whose option is not the argmax.
+
+One decision also has a **4 s** default deadline (`DEFAULT_DECISION_TIMEOUT`), against
+P0's p50 342 ms and p95 957 ms. It is configurable per model, per client call, and
+per `decide --timeout` invocation.
+
+### Phase re-entry
+
+An irreversible phase is one-shot. Once an admitted irreversible action has been
+recorded as executed, requesting that phase again is refused with `phase_reentry`
+before any model call: the effect already happened, so nothing may re-authorize it. A
+completed **reversible** phase may repeat, which is how multi-step navigation works,
+and an irreversible phase that was decided but never recorded as executed does not
+burn the phase.
+
+### Irreversible actions
+
+Delete, send to an external party, permanent or "always" approvals, sign-out, and
+disruptive runtime operations (`device_restart_agent_button`,
+`device_apply_update_button`) are never executed on the model's decision alone. They
+require the phase to pre-authorize that exact candidate id; otherwise the guard
+refuses with `irreversible_not_authorized`. Authorization is per phase and is
+re-checked at dispatch.
+
+### Escalation and resume
+
+An escalation is a bounded payload with the reason code, goal, phase, screen mode
+and detail, the candidate ids that were available, the selected id with its
+confidence, the completed phases, the recent actions, and a snapshot reference
+(mode, generation, fingerprint, element count). It carries no secret and no entered
+value.
+
+Resume contract:
+
+1. Read `reason_code` and `guard` first; a precondition failure is a mechanical fact.
+2. A `model_unavailable` escalation means the provider failed and nothing was
+   dispatched: re-read `guard.status` and `guard.error_code`, then re-observe.
+3. Re-observe the screen and rebuild the candidate table; do not replay the refused
+   action.
+4. Preserve completed and irreversible-attempted phases; never clear history, and
+   never re-request a phase that a `phase_reentry` refusal named.
+5. Decide only the next safe, retryable step and re-apply the guard.
+6. A second escalation in the same phase ends the run deterministically.
+
+### Trace
+
+Every decided step appends one JSONL line: step index, timestamp, goal, phase,
+expected mode, classified mode with its evidence keys, the snapshot reference
+(generation, fingerprint, element count), the full candidate id set, the ids removed
+by the 32-item cap, the controls pruned by the structural pre-filter, the model name
+and latency, the selected id with confidence and selected probability, the verdict,
+the reason code when refused, and the admitted action. A trace is sufficient to
+re-judge every step without the model, and the skill tests assert its shape.
+
+## Deferred to P3
+
+Two review findings are deliberately **not** implemented in P1 and are carried into
+the first live scenario:
+
+- **Endpoint and model overrides.** `jev_client.py` still hardcodes
+  `https://api.typesafe.ai/v1/systemone` and `jev-latest`, so it cannot be pointed at
+  a local proxy, a gateway, or a compatible alternative provider without a source
+  edit. Tests that need another origin still patch the class attribute.
+- **Rate and cost brake.** `DecisionLayer` and `JevDecisionModel` have no requests-per-
+  minute or per-run USD ceiling; only the smoke command is budgeted (20 calls). A
+  multi-step live loop needs its own brake before it runs unattended.
+
+## Routing rule
+
+**Route to the decision layer** when the next action depends on the current screen
+but is chosen from a known, finite set: navigation between known destinations,
+picking one listed option, confirming a reversible dialog, waiting for a state, and
+fixed form flows.
+
+**Keep the agent** for visual or semantic judgment, unknown screens, free-text
+authoring, failure diagnosis, exploratory review, and any irreversible step the
+scenario has not pre-authorized.
+
+Cost and latency basis: a decision step is 0.3–1 s and ≈$0.00006 (P0, measured);
+an agent step is ≈11 s and carries 30–60 k tokens of context, composed from measured
+CLI bootstrap (4.5–5.5 s per invocation) and model-turn latency. The agent step is
+an estimate from measured components, not a direct measurement.
+
+## Kill criteria
+
+Stop the investment if, after the first live scenario, any of these holds:
+
+- ≥15 % of decisions escalate on the three scoped scenario families;
+- ≥1 wrong irreversible action above the floor in 20 runs;
+- measured per-decision wall clock > 6 s;
+- the trace cannot explain every escalation.
+
+State the numbers, then extend or stop explicitly.
+
+## Invariants
+
+- The guard, the extractor, and the mode classifier never import a provider.
+- The candidate table is closed, mode-scoped, capped at 32 including `abstain` and
+  `reobserve`, and built only from declared controls; an undeclared control is
+  invisible by design and fails closed as `unclassified_target`.
+- Entered values, obscured fields, authentication URLs, and unrelated UI content are
+  never sent to a model and never written to a trace.
+- An ambiguous irreversible result is escalated, never retried.
+- Wait on lifecycle or UI events; never poll the model or the snapshot.

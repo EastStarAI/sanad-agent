@@ -40,6 +40,12 @@
       "prompt": "Test a three-question system.ask_user card, including back navigation and preservation of prior answers.",
       "expected_reference": "references/multi-question-ui.md",
       "expected_output": "Verify root-level payload parsing, deterministic keys, sequential navigation, state preservation, and final submission."
+    },
+    {
+      "id": 7,
+      "prompt": "Drive a permission-approval card and a model picker in a live Client and decide which of those steps the fast decision layer may answer instead of me.",
+      "expected_reference": "references/decision-layer-routing.md",
+      "expected_output": "Route known finite-choice steps to the decision layer, keep semantic judgment, unknown screens, and un-authorized irreversible actions with the agent, and treat every guard refusal as an escalation to read rather than an action to retry."
     }
   ]
 }
