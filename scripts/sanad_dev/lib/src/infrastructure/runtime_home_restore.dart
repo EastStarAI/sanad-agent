@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import 'file_lock.dart';
 import 'path_equivalence.dart';
 import 'runtime_home_fixture.dart';
 
@@ -58,12 +60,14 @@ const _stagingHomeMarkerName = 'staging-home';
 /// [abortSwapAfterDisplacing] is a test seam: when it returns true for a group,
 /// that group's swap is reported as failed after its Home files were displaced,
 /// so the rollback contract can be exercised against a real Home without waiting
-/// for a filesystem failure.
+/// for a filesystem failure. Returning a pending future holds the swap open at
+/// that point, which is how a competing restore of the same Home is observed
+/// waiting for the per-Home lock.
 Future<HomeFixtureRestoreReport> restoreHomeFixture({
   required String workspaceRoot,
   required String homePath,
   required String name,
-  bool Function(String group)? abortSwapAfterDisplacing,
+  FutureOr<bool> Function(String group)? abortSwapAfterDisplacing,
 }) async {
   final manifest = await readHomeFixtureManifest(
     workspaceRoot: workspaceRoot,
@@ -135,6 +139,42 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
   }
 
   final stagingRoot = sanadDevFixtureStagingPath(canonicalHome);
+  // The whole restore of one Home is serialized: recovery, the staged writes, the
+  // swap, and any rollback. Without it, two restores of the same Home (two agent
+  // sessions, or a retried script) can interleave, and the second one's recovery
+  // adopts the first one's in-flight staging directory, renames its freshly placed
+  // files back over the originals, and deletes the only rollback copy. Holding the
+  // exclusive lock means any staging directory recovery can see was left by a
+  // process that already finished or died, never by a live one.
+  return sanadDevWithProcessLock(
+    'home-fixture-restore:${canonicalComparablePath(canonicalHome)}',
+    () => sanadDevWithFileLock(
+      File(sanadDevFixtureRestoreLockPath(canonicalHome)),
+      FileLock.exclusive,
+      () => _restoreUnderLock(
+        canonicalHome: canonicalHome,
+        name: name,
+        stagingRoot: stagingRoot,
+        entries: entries,
+        includeMcpConfig: includeMcpConfig,
+        abortSwapAfterDisplacing: abortSwapAfterDisplacing,
+      ),
+      timeoutMessage:
+          'Timed out waiting for another sanad-dev restore of '
+          '$canonicalHome to finish. No Home file was changed.',
+    ),
+  );
+}
+
+/// The Home-touching half of [restoreHomeFixture], run under the per-Home lock.
+Future<HomeFixtureRestoreReport> _restoreUnderLock({
+  required String canonicalHome,
+  required String name,
+  required String stagingRoot,
+  required List<_ValidatedEntry> entries,
+  required bool includeMcpConfig,
+  FutureOr<bool> Function(String group)? abortSwapAfterDisplacing,
+}) async {
   final stagedRoot = p.join(stagingRoot, 'new');
   final backupRoot = p.join(stagingRoot, 'backup');
   // A crashed restore leaves displaced originals in this Home's own staging
@@ -162,7 +202,7 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
     await sanadDevCreateOwnerOnlyDirectory(backupRoot);
     for (final entry in entries) {
       final staged = File(p.join(stagedRoot, entry.relativePath));
-      Directory(staged.parent.path).createSync(recursive: true);
+      await sanadDevCreateOwnerOnlyParents(staged.parent.path);
       staged.writeAsBytesSync(entry.bytes, flush: true);
       await sanadDevRestrictOwnerOnly(staged.path);
     }
@@ -216,11 +256,11 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
             );
           }
           final backup = p.join(backupRoot, relative);
-          Directory(p.dirname(backup)).createSync(recursive: true);
+          await sanadDevCreateOwnerOnlyParents(p.dirname(backup));
           File(current).renameSync(backup);
           record.displaced.add(relative);
         }
-        if (abortSwapAfterDisplacing?.call(group) ?? false) {
+        if (await (abortSwapAfterDisplacing?.call(group) ?? false)) {
           throw StateError(
             'the swap of "$group" was aborted after displacing its Home files',
           );
@@ -230,13 +270,13 @@ Future<HomeFixtureRestoreReport> restoreHomeFixture({
           final staged = p.join(stagedRoot, relative);
           if (!File(staged).existsSync()) continue;
           final destination = p.join(canonicalHome, relative);
-          Directory(p.dirname(destination)).createSync(recursive: true);
+          await sanadDevCreateOwnerOnlyParents(p.dirname(destination));
           File(staged).renameSync(destination);
           record.placed.add(relative);
         }
       }
     } on Object catch (error) {
-      final rollback = _rollback(
+      final rollback = await _rollback(
         journal: journal,
         canonicalHome: canonicalHome,
         backupRoot: backupRoot,
@@ -428,7 +468,7 @@ Future<void> _recoverLeftoverStaging({
       if (entity is! File) continue;
       final relative = p.relative(entity.path, from: backupRoot);
       final destination = p.join(canonicalHome, relative);
-      Directory(p.dirname(destination)).createSync(recursive: true);
+      await sanadDevCreateOwnerOnlyParents(p.dirname(destination));
       if (File(destination).existsSync()) {
         File(destination).deleteSync();
       }
@@ -459,11 +499,11 @@ String? _firstUnexpectedStagingPath({
 /// A rollback that cannot finish must not be reported as a success and must not
 /// take the surviving backups with it, so every step is attempted and every
 /// failure is returned to the caller.
-_RollbackOutcome _rollback({
+Future<_RollbackOutcome> _rollback({
   required List<_SwapRecord> journal,
   required String canonicalHome,
   required String backupRoot,
-}) {
+}) async {
   final failures = <String>[];
   for (final record in journal.reversed) {
     for (final relative in record.placed.reversed) {
@@ -481,7 +521,7 @@ _RollbackOutcome _rollback({
         final backup = p.join(backupRoot, relative);
         if (!File(backup).existsSync()) continue;
         final destination = p.join(canonicalHome, relative);
-        Directory(p.dirname(destination)).createSync(recursive: true);
+        await sanadDevCreateOwnerOnlyParents(p.dirname(destination));
         if (File(destination).existsSync()) {
           File(destination).deleteSync();
         }

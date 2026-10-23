@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -109,6 +110,91 @@ void main() {
 
     expect(File(p.join(homeA.path, 'state.db')).readAsStringSync(), 'db-a');
     expect(Directory(stagingA).existsSync(), isFalse);
+  });
+
+  test('two restores of one Home are serialized and never adopt staging', () async {
+    // A second `reset --fixture` for the same Home (two agent sessions, or a
+    // retried script) used to enter recovery while the first restore held
+    // displaced originals in its staging directory: it renamed them back over the
+    // files the first restore had just placed and then deleted the staging
+    // directory, destroying the only rollback copy.
+    await saveHomeFixture(
+      workspaceRoot: workspace.path,
+      homePath: home.path,
+      name: 'clean',
+    );
+    await writeHomeFile('state.db', 'database-v2');
+    await writeHomeFile('config.yaml', 'model: diverged');
+    final staging = sanadDevFixtureStagingPath(home.path);
+    final lockPath = sanadDevFixtureRestoreLockPath(home.path);
+    expect(
+      p.dirname(lockPath),
+      p.dirname(staging),
+      reason: 'the restore lock is per Home and sits beside its staging',
+    );
+    expect(
+      p.isWithin(home.path, lockPath),
+      isFalse,
+      reason: 'the restore lock is never written inside the Home',
+    );
+
+    final firstDisplaced = Completer<void>();
+    final releaseFirstSwap = Completer<void>();
+    var secondCompleted = false;
+    var firstPlacedWhileSecondWaited = false;
+
+    final first = restoreHomeFixture(
+      workspaceRoot: workspace.path,
+      homePath: home.path,
+      name: 'clean',
+      abortSwapAfterDisplacing: (group) async {
+        // Pause right after the database family was displaced, so the first
+        // restore is inside its swap with a live staging directory and the only
+        // copy of the Home's database in `backup/`.
+        if (group != 'state.db') return false;
+        firstDisplaced.complete();
+        await releaseFirstSwap.future;
+        firstPlacedWhileSecondWaited = true;
+        return false;
+      },
+    );
+    final second = () async {
+      await firstDisplaced.future;
+      await restoreHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+      secondCompleted = true;
+    }();
+
+    await firstDisplaced.future;
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(
+      secondCompleted,
+      isFalse,
+      reason: 'a second restore must wait for the first to release this Home',
+    );
+    expect(
+      File(p.join(staging, 'backup', 'state.db')).readAsStringSync(),
+      'database-v2',
+      reason: 'recovery must never adopt an in-flight staging directory',
+    );
+
+    releaseFirstSwap.complete();
+    final firstReport = await first;
+    await second;
+
+    expect(firstPlacedWhileSecondWaited, isTrue);
+    expect(secondCompleted, isTrue);
+    expect(firstReport.restoredFiles, greaterThan(0));
+    expect(File(p.join(home.path, 'state.db')).readAsStringSync(), 'database-v1');
+    expect(File(p.join(home.path, 'config.yaml')).readAsStringSync(), 'model: test');
+    expect(
+      Directory(staging).existsSync(),
+      isFalse,
+      reason: 'a completed restore leaves no staging behind',
+    );
   });
 
   test('refuses a staging directory that records another Home', () async {

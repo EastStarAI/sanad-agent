@@ -241,7 +241,13 @@ stdout/stderr without buffering, then report elapsed duration and success or
 failure. The idempotent dependency stamp binds `.fvmrc` plus all package
 lockfiles and package configs. A separate runtime fingerprint binds the
 standalone CLI's `lib/`, `pubspec.yaml`, and lockfile to a fingerprint-named
-native artifact. A changed source builds beside any still-running artifact.
+native artifact. That fingerprint covers the same transitive input closure the
+compiled-CLI component cache uses: the package `lib/`/`bin`/`hook` trees, both
+pubspecs, and every package reached through the `path:` dependency closure
+(`shared/**`, the Release Contract). Covering only `scripts/sanad_dev` would keep
+the recorded stamp matching after a `shared/` edit, and `run`, `reset`, `switch`,
+and `apply` would then execute the pre-edit binary with no message. A changed
+source builds beside any still-running artifact.
 Windows cleanup removes only stale artifacts that are no longer locked; POSIX
 retains prior cache artifacts because an active launcher may need its executable
 path for a later child spawn. Setup reuses an existing artifact whose filename
@@ -355,6 +361,12 @@ otherwise the explicit default, since a `reset` without a fixture restarts the
 pair and leaves the Home data alone. `--dry-run` prints the plan and touches
 nothing.
 
+`--client-instance <slot>` selects which same-device Client instance the restart
+brings back, and it is threaded through both halves of the launch: the flag is
+repeated on the child `run` command line that actually starts the Client, and the
+same slot is handed to the readiness probe. Dropping it restarted the default
+instance and verified the wrong component set while the operator watched slot `b`.
+
 The per-Home staging directory exists only while a restore runs, or after a
 restore crashed. A restore that succeeds deletes its staging directory and its
 backup, so a finished `reset` leaves nothing named
@@ -393,9 +405,10 @@ links are never followed. The fixture manifest (`fixture.json`, schema version 2
 records the creation time, source Home, whether MCP configuration was included,
 and the size plus SHA-256 of every file.
 
-Every captured file and directory is created owner-only (`0700` directories,
-`0600` files) both in the fixture and when restoring, so a fixture never widens
-the permissions of the Home.
+Every file and directory the capture or the restore creates is created
+owner-only (`0700` directories, `0600` files), including every nested level such
+as `memories/`, `skills/<name>/`, or `workspaces/<id>/`, both in the fixture and
+when restoring, so a fixture never widens the permissions of the Home.
 
 Restore validates before it writes anything. A manifest entry is rejected unless
 its recorded path is relative, contains no `.` or `..` segment, is not Windows
@@ -420,6 +433,17 @@ case-insensitively so a case-insensitive disk keeps the database and its
 WAL/SHM sidecars together — into place with same-filesystem renames. A group that
 fails mid-swap is restored from the retained original, and a crashed run is
 rolled back on the next attempt from the same staging directory.
+
+The whole Home-touching half of a restore — recovery, the staged writes, the swap,
+and any rollback — runs under one exclusive per-Home lock,
+`<staging path>.lock`, taken through the shared file-lock helper and held to the
+end. Two `reset --fixture` invocations for the same Home therefore take turns
+instead of interleaving: without the lock the second one's recovery adopts the
+first one's in-flight staging directory, renames its freshly placed files back
+over the originals, and deletes the only rollback copy. Because the lock is what
+serializes them, any staging directory recovery can see was left by a process that
+already finished or died, never by a live one. The lock file sits beside the
+staging directory, never inside the Home, and is never read as Home content.
 
 When the rollback itself fails, the staging directory is kept rather than deleted,
 and the message names its path together with what to move back by hand, so a
@@ -484,6 +508,13 @@ The snapshot advances only for the paths whose actions actually ran. An action
 skipped because its target — typically the Client — is not running stays
 unrecorded, keeps the older commit baseline, and is reported again by the next
 `apply`, which prints `Skipped …, start one, then rerun apply`.
+
+A rename counts on **both** sides, and both Git queries run with `--no-renames`, so
+a rename is inspected as a delete plus an add. A rename where only the destination
+were reported would be silently skipped in the one direction that matters: moving
+`agent/lib/x.dart` to `docs/x.md` yields only the destination, which is a
+non-runtime path, so `apply` printed `No runtime action is required.` while the
+running Agent still held the pre-rename build.
 
 ### `status` is read-only
 
@@ -662,8 +693,17 @@ running out the three-minute Agent window. Twice is the threshold because one
 restart is a child failure the supervisor can absorb. The failure reason in the
 startup record carries that signal plus the Agent's last output line that
 explains it: the exception's first line (`SqliteException(26): … file is not a
-database`), taken after the supervisor chatter and stack frames are dropped and
-after secret-shaped text is redacted, bounded to 300 characters. The launch
+database`), taken after the supervisor chatter and stack frames are dropped,
+after a continuation line is refused in favour of the line it continues, and after
+secret-shaped text is redacted, bounded to 300 characters. Refusing the
+continuation is what keeps the useful line: Dart prints the cause first and then
+indents the detail, so keeping the last line reported
+`last error: Causing statement: PRAGMA journal_mode = WAL` and hid the exception
+identity. Redaction is by *name* — every `name=value` and `name: value` pair whose
+name matches the shared secret-like fragments loses its value, and an
+`Authorization: Bearer …` credential keeps its own rule — so the header this tool
+actually handles, `x-sanad-gateway-token`, no longer reaches the readiness message
+or the persisted startup record verbatim. The launch
 keeps exit 1, and the background launcher and `status` report that stored reason,
 so `sanad-dev reset` names the child's error instead of only
 `agent readiness failed`. The paired Client readiness ends with the same signal,

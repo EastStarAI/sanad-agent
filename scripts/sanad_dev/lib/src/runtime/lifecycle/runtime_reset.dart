@@ -84,6 +84,7 @@ typedef SanadDevResetStarter =
       required String homePath,
       required bool driverMode,
       required String device,
+      String? clientInstanceSlot,
     });
 typedef SanadDevResetPortsFreeProbe =
     Future<bool> Function(
@@ -255,6 +256,7 @@ Future<void> handleRuntimeReset({
     homePath: home,
     driverMode: driverMode,
     device: device,
+    clientInstanceSlot: clientInstanceSlot,
   );
   if (!started) {
     logError(
@@ -282,24 +284,44 @@ Future<bool> _defaultResetStop(String homePath) async {
   return exitCode == 0;
 }
 
+/// The child command line `reset` launches to bring the runtime back.
+///
+/// The `--client-instance` slot has to appear here, not only in the readiness
+/// probe: the child process is what actually starts the Client, so dropping it
+/// restarted the default instance while the operator watched the one they asked
+/// for.
+List<String> sanadDevResetStartArguments({
+  required bool driverMode,
+  required String homePath,
+  required String device,
+  String? clientInstanceSlot,
+}) => [
+  'run',
+  if (driverMode) '--driver',
+  '--home',
+  homePath,
+  '--device',
+  device,
+  if (clientInstanceSlot != null) ...['--client-instance', clientInstanceSlot],
+];
+
 Future<bool> _defaultResetStart({
   required SanadDevRuntime runtime,
   required String homePath,
   required bool driverMode,
   required String device,
+  String? clientInstanceSlot,
 }) async {
   await handleBackgroundRun(
-    originalArguments: [
-      'run',
-      if (driverMode) '--driver',
-      '--home',
-      homePath,
-      '--device',
-      device,
-    ],
+    originalArguments: sanadDevResetStartArguments(
+      driverMode: driverMode,
+      homePath: homePath,
+      device: device,
+      clientInstanceSlot: clientInstanceSlot,
+    ),
     target: SanadDevComponentTarget.all,
     device: device,
-    clientInstanceSlot: null,
+    clientInstanceSlot: clientInstanceSlot,
     sanadHomePath: homePath,
   );
   return exitCode == 0;

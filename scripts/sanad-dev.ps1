@@ -218,15 +218,74 @@ function Ensure-Dependencies([string] $FvmPath) {
   Set-Content -NoNewline -Path $stamp -Value $fingerprint
 }
 
+# Every file of one package that can change the compiled runtime CLI.
+#
+# Mirrors CompiledCliCache._packageInputs in the Dart CLI: both pubspecs, the
+# lib/bin Dart trees, and every hook file, because a native build hook changes
+# the artifact without changing any Dart source.
+function Get-RuntimeCliPackageInputs([string] $PackageRoot) {
+  $inputs = @()
+  foreach ($name in @('pubspec.yaml', 'pubspec.lock')) {
+    $file = Join-Path $PackageRoot $name
+    if (Test-Path -PathType Leaf -Path $file) { $inputs += $file }
+  }
+  foreach ($name in @('lib', 'bin')) {
+    $directory = Join-Path $PackageRoot $name
+    if (Test-Path -PathType Container -Path $directory) {
+      $inputs += @(Get-ChildItem -File -Recurse -Path $directory -Filter '*.dart' | ForEach-Object { $_.FullName })
+    }
+  }
+  $hook = Join-Path $PackageRoot 'hook'
+  if (Test-Path -PathType Container -Path $hook) {
+    $inputs += @(Get-ChildItem -File -Recurse -Path $hook | ForEach-Object { $_.FullName })
+  }
+  return $inputs
+}
+
+function Get-RuntimeCliPathDependencies([string] $PackageRoot) {
+  $pubspec = Join-Path $PackageRoot 'pubspec.yaml'
+  if (-not (Test-Path -PathType Leaf -Path $pubspec)) { return @() }
+  return @(
+    Select-String -Path $pubspec -Pattern '^\s+path:\s*(\S+)\s*$' -AllMatches |
+      ForEach-Object { $_.Matches } |
+      ForEach-Object { $_.Groups[1].Value }
+  )
+}
+
+# The full input closure of the prepared runtime CLI.
+#
+# A path: dependency such as shared/windows_path is compiled into the CLI, so the
+# fingerprint must cover it. Hashing only scripts/sanad_dev would keep the recorded
+# stamp matching after a shared/ edit, and run, reset, switch, and apply would then
+# execute code the developer no longer has.
+function Get-RuntimeCliInputs([string] $Root) {
+  $queue = New-Object System.Collections.Queue
+  $queue.Enqueue($Root)
+  $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  [void]$visited.Add($Root)
+  $inputs = @()
+  while ($queue.Count -gt 0) {
+    $current = [string]$queue.Dequeue()
+    $inputs += Get-RuntimeCliPackageInputs $current
+    foreach ($dependency in (Get-RuntimeCliPathDependencies $current)) {
+      $resolved = [IO.Path]::GetFullPath((Join-Path $current $dependency))
+      if (-not (Test-Path -PathType Container -Path $resolved)) { continue }
+      if ($visited.Add($resolved)) { $queue.Enqueue($resolved) }
+    }
+  }
+  return @($inputs | Sort-Object -Unique)
+}
+
 function Get-RuntimeCliFingerprint {
   $packageRoot = Join-Path $ProjectDir 'scripts/sanad_dev'
-  $inputs = @(
-    (Join-Path $packageRoot 'pubspec.yaml'),
-    (Join-Path $packageRoot 'pubspec.lock')
-  ) + @(Get-ChildItem -File -Recurse (Join-Path $packageRoot 'lib') -Filter '*.dart' | Sort-Object FullName | ForEach-Object { $_.FullName })
-  $fingerprintText = ($inputs | ForEach-Object {
+  $relativeBase = $ProjectDir.TrimEnd([char[]]'\/')
+  $fingerprintText = (Get-RuntimeCliInputs $packageRoot | ForEach-Object {
     $path = [string]$_
-    $relative = $path.Substring($packageRoot.Length).TrimStart([char[]]'\/')
+    $relative = if ($path.StartsWith($relativeBase, [StringComparison]::OrdinalIgnoreCase)) {
+      $path.Substring($relativeBase.Length).TrimStart([char[]]'\/')
+    } else {
+      $path
+    }
     "${relative}:$((Get-FileHash -Algorithm SHA256 $path).Hash)"
   }) -join ':'
   $sha = [Security.Cryptography.SHA256]::Create()

@@ -128,8 +128,12 @@ void main() {
               required homePath,
               required driverMode,
               required device,
+              String? clientInstanceSlot,
             }) async {
               events.add('start:${runtime.worktreeId}:$driverMode:$device');
+              if (clientInstanceSlot != null) {
+                events.add('slot:$clientInstanceSlot');
+              }
               return !startFails;
             },
         printMessage: lines.add,
@@ -333,6 +337,64 @@ void main() {
       expect(parsed.saveFixtureName, 'before');
       expect(parsed.keepData, isTrue);
       expect(parsed.includeMcpConfig, isTrue);
+    });
+
+    test('a requested client instance reaches the restarted runtime', () async {
+      // `reset --client-instance b` used to be parsed and then dropped: the
+      // default client was restarted, and the readiness probe checked the wrong
+      // component set, while the operator believed slot `b` was reset.
+      final lines = <String>[];
+      String? forwardedSlot;
+      await sanad_dev.handleRuntimeReset(
+        keepData: true,
+        driverMode: true,
+        dryRun: false,
+        device: 'macos',
+        clientInstanceSlot: 'b',
+        environment: {'HOME': userHome.path},
+        runtimeProvider: ({sanadHomeOverride}) async => runtime,
+        portsFreeProbe:
+            (runtime, homePath, {agentPort}) async => true,
+        stopRuntime: (homePath) async => true,
+        startRuntime:
+            ({
+              required runtime,
+              required homePath,
+              required driverMode,
+              required device,
+              clientInstanceSlot,
+            }) async {
+              forwardedSlot = clientInstanceSlot;
+              return true;
+            },
+        printMessage: lines.add,
+        printError: lines.add,
+        setExitCode: exitCodes.add,
+      );
+
+      expect(forwardedSlot, 'b');
+      expect(exitCodes, isEmpty);
+    });
+
+    test('the restart command line carries the client instance flag', () {
+      final withSlot = sanad_dev.sanadDevResetStartArguments(
+        driverMode: true,
+        homePath: '/tmp/home',
+        device: 'macos',
+        clientInstanceSlot: 'b',
+      );
+
+      expect(withSlot, containsAllInOrder(['--client-instance', 'b']));
+      expect(withSlot.sublist(0, 2), ['run', '--driver']);
+
+      final withoutSlot = sanad_dev.sanadDevResetStartArguments(
+        driverMode: false,
+        homePath: '/tmp/home',
+        device: 'macos',
+      );
+
+      expect(withoutSlot, isNot(contains('--client-instance')));
+      expect(withoutSlot.first, 'run');
     });
   });
 

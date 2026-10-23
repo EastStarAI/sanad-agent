@@ -54,8 +54,19 @@ final _sanadDevSupervisorChatterPattern = RegExp(
 );
 
 /// Stack frames, which never explain a failure.
-final _sanadDevStackFramePattern = RegExp(
+final RegExp _sanadDevStackFramePattern = RegExp(
   r'^(#\d+\s|package:|dart:|org\.|at\s)',
+);
+
+/// Continuation lines of one exception message.
+///
+/// Dart prints the useful line first and then indents the detail, so a
+/// `SqliteException(26) … file is not a database` is followed by an indented
+/// `Causing statement: PRAGMA journal_mode = WAL`. Keeping the last line would
+/// report the SQL statement as the cause and hide the actual exception.
+final RegExp _sanadDevErrorContinuationPattern = RegExp(
+  r'^(causing statement|while executing|sql|parameters|stack trace)\s*:',
+  caseSensitive: false,
 );
 
 /// Number of supervisor auto-restarts that prove a crash loop.
@@ -142,6 +153,13 @@ class SanadDevAgentCrashLoopDetector {
     }
     if (_sanadDevSupervisorChatterPattern.hasMatch(trimmed)) return;
     if (_sanadDevStackFramePattern.hasMatch(trimmed)) return;
+    // The first line of an exception message names the cause; the indented lines
+    // that follow describe where it happened. Keeping the last line would report
+    // a `Causing statement:` instead of the exception itself.
+    final isContinuation =
+        (line.isNotEmpty && (line.startsWith(' ') || line.startsWith('\t'))) ||
+        _sanadDevErrorContinuationPattern.hasMatch(trimmed);
+    if (isContinuation && _errorLine != null) return;
     final redacted = redactComponentOutputText(trimmed);
     _errorLine = redacted.length <= sanadDevAgentErrorLineMaxLength
         ? redacted

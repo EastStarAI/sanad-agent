@@ -240,6 +240,83 @@ void main() {
 
       expect(directoryMode, '700');
       expect(fileMode, '600');
+
+      // Every level the capture created is owner-only, not just the root: a
+      // nested `memories/` or `skills/custom/` directory left at the process
+      // default would make a shared fixture tree world-traversable.
+      final directories = Directory(
+        root,
+      ).listSync(recursive: true).whereType<Directory>();
+      for (final directory in directories) {
+        expect(
+          (await Process.run('stat', [
+            '-f',
+            '%Lp',
+            directory.path,
+          ])).stdout.toString().trim(),
+          '700',
+          reason: '${p.relative(directory.path, from: root)} must be owner-only',
+        );
+      }
+      final files = Directory(
+        root,
+      ).listSync(recursive: true).whereType<File>();
+      for (final file in files) {
+        expect(
+          (await Process.run('stat', [
+            '-f',
+            '%Lp',
+            file.path,
+          ])).stdout.toString().trim(),
+          '600',
+          reason: '${p.relative(file.path, from: root)} must be owner-only',
+        );
+      }
+    });
+
+    test('a restore creates owner-only directories in the Home', () async {
+      if (Platform.isWindows) return;
+      await saveHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+      // Remove the nested directories so the restore has to create them.
+      for (final relative in const ['memories', 'skills']) {
+        Directory(p.join(home.path, relative)).deleteSync(recursive: true);
+      }
+
+      await restoreHomeFixture(
+        workspaceRoot: workspace.path,
+        homePath: home.path,
+        name: 'clean',
+      );
+
+      for (final relative in const ['memories', 'skills', 'skills/custom']) {
+        final directory = p.join(home.path, relative);
+        expect(
+          Directory(directory).existsSync(),
+          isTrue,
+          reason: '$relative must be restored',
+        );
+        expect(
+          (await Process.run('stat', [
+            '-f',
+            '%Lp',
+            directory,
+          ])).stdout.toString().trim(),
+          '700',
+          reason: 'a restore must never widen a Home directory to the default',
+        );
+      }
+      expect(
+        (await Process.run('stat', [
+          '-f',
+          '%Lp',
+          p.join(home.path, 'memories', 'notes.md'),
+        ])).stdout.toString().trim(),
+        '600',
+      );
     });
 
     test('restores the fixture and removes stale captured files', () async {

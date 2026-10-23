@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import 'file_lock.dart';
+
 /// Cache root name owned by `sanad-dev` inside the invoking worktree.
 const compiledCliCacheDirectoryName = '.sanad-dev';
 
@@ -162,8 +164,11 @@ class CompiledCliCache {
     // prune, so two `sanad-dev cli` calls for the same component never publish
     // over each other. POSIX record locks belong to the process, so an in-process
     // mutex is layered on top for two callers inside one isolate.
-    return _withProcessLock(_lockKey(component, cacheKey), () {
-      return _withFileLock(lockFile, FileLock.exclusive, () async {
+    return sanadDevWithProcessLock(_lockKey(component, cacheKey), () {
+      return sanadDevWithFileLock(
+        lockFile,
+        FileLock.exclusive,
+        () async {
       final fingerprint = await computeFingerprint(component);
       final executable = File(_executablePath(component, directory));
       final stamp = File(_stampPath(component, directory));
@@ -202,7 +207,12 @@ class CompiledCliCache {
         rebuilt: true,
         buildDuration: stopwatch.elapsed,
       );
-    });
+        },
+        timeout: compiledCliLockTimeout,
+        timeoutMessage:
+            'Timed out after ${compiledCliLockTimeout.inMinutes} minutes '
+            'waiting for the compiled CLI build lock.',
+      );
     });
   }
 
@@ -218,36 +228,22 @@ class CompiledCliCache {
     final cacheKey = await resolveCacheKey();
     final lockFile = File(_lockPath(component, p.join(cacheRoot, cacheKey)));
     if (!lockFile.existsSync()) return action();
-    return _withProcessLock(
+    return sanadDevWithProcessLock(
       _lockKey(component, cacheKey),
-      () => _withFileLock(lockFile, FileLock.shared, action),
+      () => sanadDevWithFileLock(
+        lockFile,
+        FileLock.shared,
+        action,
+        timeout: compiledCliLockTimeout,
+        timeoutMessage:
+            'Timed out after ${compiledCliLockTimeout.inMinutes} minutes '
+            'waiting for the compiled CLI build lock.',
+      ),
     );
   }
 
-  static final Map<String, Future<void>> _processLocks = {};
-
   String _lockKey(CompiledCliComponent component, String cacheKey) =>
       '$cacheRoot|$cacheKey|${component.name}';
-
-  /// Serializes callers inside this process before they touch the file lock.
-  ///
-  /// POSIX `fcntl` locks are held by the process rather than by an open file
-  /// description, so a second acquisition inside the same process succeeds
-  /// immediately. Chaining futures keeps two in-process callers ordered without
-  /// blocking the event loop.
-  Future<T> _withProcessLock<T>(String key, Future<T> Function() action) {
-    final previous = _processLocks[key] ?? Future<void>.value();
-    final gate = Completer<void>();
-    _processLocks[key] = gate.future;
-    return previous
-        .then((_) => action())
-        .whenComplete(() {
-          gate.complete();
-          if (identical(_processLocks[key], gate.future)) {
-            _processLocks.remove(key);
-          }
-        });
-  }
 
   /// Deletes cached commits beyond [compiledCliRetainedCommits] and the current
   /// cache key. Returns the removed directory names.
@@ -520,51 +516,6 @@ class CompiledCliCache {
       return '${result.stdout}${result.stderr}'.trim();
     } on Object {
       return 'unknown';
-    }
-  }
-}
-
-Future<T> _withFileLock<T>(
-  File lockFile,
-  FileLock mode,
-  Future<T> Function() action,
-) async {
-  await lockFile.create(recursive: true);
-  final randomAccess = await lockFile.open(
-    mode: mode == FileLock.shared ? FileMode.read : FileMode.append,
-  );
-  try {
-    await _acquireLock(randomAccess, mode);
-    return await action();
-  } finally {
-    try {
-      await randomAccess.unlock();
-    } on Object {
-      // The lock is released by closing the handle even if unlock fails.
-    }
-    await randomAccess.close();
-  }
-}
-
-/// Acquires [mode] without blocking the event loop.
-///
-/// The lock is retried instead of taken blocking, so a second `ensure` in the
-/// same process waits cooperatively rather than freezing the isolate that the
-/// first build needs in order to finish.
-Future<void> _acquireLock(RandomAccessFile handle, FileLock mode) async {
-  final deadline = DateTime.now().add(compiledCliLockTimeout);
-  while (true) {
-    try {
-      await handle.lock(mode);
-      return;
-    } on FileSystemException {
-      if (!DateTime.now().isBefore(deadline)) {
-        throw StateError(
-          'Timed out after ${compiledCliLockTimeout.inMinutes} minutes waiting '
-          'for the compiled CLI build lock.',
-        );
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 50));
     }
   }
 }

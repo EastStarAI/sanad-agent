@@ -29,10 +29,15 @@ Future<SanadDevChangedPaths> inspectChangedPaths({
   Map<String, String> appliedFingerprints = const {},
 }) async {
   final candidates = <String>{...appliedFingerprints.keys};
+  // `--no-renames` turns a rename into a delete plus an add, so both sides of it
+  // are candidates. Without it a `agent/lib/x.dart -> docs/x.md` rename reports
+  // only the destination, which is a non-runtime path, and `apply` would answer
+  // "no action" while the running Agent still holds the pre-rename build.
   final statusOutput = await _gitOutput(repositoryRoot, [
     'status',
     '--porcelain',
     '--untracked-files=all',
+    '--no-renames',
   ]);
   candidates.addAll(_porcelainPaths(statusOutput));
   if (startCommit != null && startCommit.trim().isNotEmpty) {
@@ -40,6 +45,7 @@ Future<SanadDevChangedPaths> inspectChangedPaths({
       await _gitChangedPaths(repositoryRoot, [
         'diff',
         '--name-only',
+        '--no-renames',
         startCommit.trim(),
       ]),
     );
@@ -69,10 +75,19 @@ List<String> _porcelainPaths(String output) {
     if (line.isEmpty) continue;
     final path = line.length > 3 ? line.substring(3).trim() : '';
     if (path.isEmpty) continue;
-    final renamed = path.contains(' -> ')
-        ? path.split(' -> ').last.trim()
-        : path;
-    paths.add(renamed.replaceAll('"', ''));
+    // A rename or copy record carries both sides, and both are changed paths:
+    // dropping the source side would hide a runtime file that moved out of the
+    // runtime tree. `--no-renames` keeps these records out of our own queries;
+    // this stays correct for any other caller or an older Git.
+    final status = line.length >= 2 ? line.substring(0, 2) : '';
+    if (status.contains('R') || status.contains('C')) {
+      for (final side in path.split(' -> ')) {
+        final trimmed = side.trim();
+        if (trimmed.isNotEmpty) paths.add(trimmed.replaceAll('"', ''));
+      }
+      continue;
+    }
+    paths.add(path.replaceAll('"', ''));
   }
   return paths;
 }

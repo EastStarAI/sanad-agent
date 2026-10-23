@@ -279,7 +279,7 @@ void main() {
       expect(changed.paths, ['new_file.dart']);
     });
 
-    test('unwraps porcelain rename entries', () async {
+    test('a rename reports both sides so apply never misses it', () async {
       await File(
         p.join(repository.path, 'old_name.dart'),
       ).writeAsString('content');
@@ -292,7 +292,42 @@ void main() {
         startCommit: 'HEAD',
       );
 
-      expect(changed.paths, ['new_name.dart']);
+      expect(
+        changed.paths,
+        ['new_name.dart', 'old_name.dart'],
+        reason: 'both sides of a rename are changed paths',
+      );
+    });
+
+    test('a runtime file renamed out of the runtime tree restarts the agent', () async {
+      // A committed `agent/lib/x.dart -> docs/x.md` rename used to report only
+      // `docs/x.md`, which is a non-runtime path, so `apply` answered "no runtime
+      // action is required" while the running Agent still held the pre-rename
+      // build of `agent/lib/x.dart`.
+      final agentSource = File(p.join(repository.path, 'agent/lib/x.dart'));
+      await agentSource.parent.create(recursive: true);
+      await agentSource.writeAsString('// agent source\n');
+      await git(['add', '.']);
+      await git(['commit', '-q', '-m', 'add agent source']);
+      final start = await head();
+      await Directory(p.join(repository.path, 'docs')).create(recursive: true);
+      await git(['mv', 'agent/lib/x.dart', 'docs/x.md']);
+
+      final changed = await sanad_dev.inspectChangedPaths(
+        repositoryRoot: repository.path,
+        startCommit: start,
+      );
+
+      expect(changed.paths, contains('agent/lib/x.dart'));
+      expect(changed.paths, contains('docs/x.md'));
+      final decision = sanad_dev.decideSanadDevApply(
+        changedPaths: changed.paths,
+      );
+      expect(
+        decision.actions,
+        [sanad_dev.SanadDevApplyAction.restartAgent],
+        reason: 'a rename out of the runtime tree must still restart the Agent',
+      );
     });
 
     test('a TRACKED edit that was applied is not reported again', () async {

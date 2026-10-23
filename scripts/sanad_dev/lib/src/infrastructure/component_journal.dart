@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'foreign_worktree_activity.dart';
 import 'secure_runtime_file.dart';
 
 const componentJournalSegmentBytes = 2 * 1024 * 1024;
@@ -198,20 +199,73 @@ List<int> redactComponentOutput(List<int> bytes) => utf8.encode(
   redactComponentOutputText(utf8.decode(bytes, allowMalformed: true)),
 );
 
+/// Matches one `name=value` or `name: value` name and its separator.
+///
+/// The value is matched separately, from the end of this match, because a single
+/// pattern pairing name and value consumes the *next* name: in
+/// `rejected: {x-sanad-gateway-token: 9f3c…}` the first match would be
+/// `rejected: {x-sanad-gateway-token` and the token would survive.
+final RegExp _secretAssignmentNamePattern = RegExp(
+  r'([A-Za-z0-9_][A-Za-z0-9_.-]*)(\s*[:=]\s*)',
+);
+
+/// The value that follows a name: quoted, or a bare run that stops at a
+/// delimiter so a trailing `,` or `}` stays in place.
+final RegExp _assignmentValuePattern = RegExp(
+  r'''("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,"'{}:]+)''',
+);
+
+/// Values that are a scheme keyword rather than a credential.
+final RegExp _credentialSchemePattern = RegExp(
+  r'^(?:bearer|basic|token|digest)$',
+  caseSensitive: false,
+);
+
+/// True when [name] carries a credential, by the shared fragment list.
+bool _isSecretLikeName(String name) {
+  final lower = name.replaceFirst(RegExp(r'^--?'), '').toLowerCase();
+  return secretLikeArgumentNameFragments.any(lower.contains);
+}
+
+/// Drops the value of every secret-like `name=value` or `name: value` pair.
+String _redactSecretAssignments(String text) {
+  final output = StringBuffer();
+  var cursor = 0;
+  for (final match in _secretAssignmentNamePattern.allMatches(text)) {
+    if (match.start < cursor) continue;
+    if (!_isSecretLikeName(match.group(1)!)) continue;
+    final valueStart = match.end;
+    if (valueStart >= text.length) continue;
+    final value = _assignmentValuePattern
+        .matchAsPrefix(text, valueStart)
+        ?.group(0);
+    if (value == null || value.isEmpty) continue;
+    // A scheme keyword is not the credential, and the bearer rule above has
+    // already replaced the token that followed it.
+    if (_credentialSchemePattern.hasMatch(value)) continue;
+    output
+      ..write(text.substring(cursor, valueStart))
+      ..write('[REDACTED]');
+    cursor = valueStart + value.length;
+  }
+  output.write(text.substring(cursor));
+  return output.toString();
+}
+
 /// Removes bearer credentials and secret-shaped assignments from [text].
+///
+/// Redaction is by *name*: any `name=value` or `name: value` pair whose name
+/// contains one of [secretLikeArgumentNameFragments] loses its value. The fixed
+/// four-name list this replaced missed the header this tool actually handles, so
+/// `x-sanad-gateway-token: …` reached the readiness message and the persisted
+/// startup record verbatim. A `Bearer` credential is still handled explicitly,
+/// because there the secret is the second token rather than the first.
 String redactComponentOutputText(String text) {
   text = text.replaceAllMapped(
     RegExp(r'(authorization\s*[:=]\s*bearer\s+)[^\s]+', caseSensitive: false),
     (match) => '${match.group(1)}[REDACTED]',
   );
-  text = text.replaceAllMapped(
-    RegExp(
-      r'''((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password)\s*[:=]\s*["']?)[^\s,"']+''',
-      caseSensitive: false,
-    ),
-    (match) => '${match.group(1)}[REDACTED]',
-  );
-  return text;
+  return _redactSecretAssignments(text);
 }
 
 Future<void> cleanupStaleComponentJournals(

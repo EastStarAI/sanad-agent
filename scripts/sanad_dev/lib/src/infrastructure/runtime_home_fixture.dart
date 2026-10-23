@@ -45,6 +45,15 @@ String sanadDevFixtureStagingPath(String homePath) {
   );
 }
 
+/// Exclusive lock that serializes every restore of exactly one Home.
+///
+/// It sits beside the staging directory, never inside the Home, and carries the
+/// same per-Home digest. Two restores of one Home take it in turn, so the second
+/// can never adopt the first's in-flight staging directory: recovery only ever
+/// sees staging left behind by a process that already finished or died.
+String sanadDevFixtureRestoreLockPath(String homePath) =>
+    '${sanadDevFixtureStagingPath(homePath)}.lock';
+
 /// Filesystem-safe, bounded label for a Home directory name.
 String _stagingHomeLabel(String homeName) {
   final sanitized = homeName
@@ -394,7 +403,9 @@ Future<HomeFixtureManifest> saveHomeFixture({
     final source = File(p.join(home.path, relative));
     final bytes = source.readAsBytesSync();
     final target = File(p.join(staging.path, relative));
-    Directory(target.parent.path).createSync(recursive: true);
+    // Every directory a capture creates is owner-only, so a shared fixture tree
+    // is never world-traversable.
+    await sanadDevCreateOwnerOnlyParents(target.parent.path);
     target.writeAsBytesSync(bytes, flush: true);
     await sanadDevRestrictOwnerOnly(target.path);
     entries.add(
@@ -429,8 +440,32 @@ Future<HomeFixtureManifest> saveHomeFixture({
 /// so it never inherits a permissive default mode.
 Future<void> sanadDevCreateOwnerOnlyDirectory(String path) async {
   final directory = Directory(path);
-  if (!directory.existsSync()) directory.createSync(recursive: true);
+  if (!directory.existsSync()) await sanadDevCreateOwnerOnlyParents(directory.path);
   await sanadDevRestrictOwnerOnly(path, directory: true);
+}
+
+/// Creates every missing ancestor of [path] with the owner-only mode.
+///
+/// `Directory.create(recursive: true)` gives each directory it creates the
+/// process default (`0777 & ~umask`, normally `0755`), so a nested fixture entry
+/// or a restored Home parent such as `memories/` or `workspaces/<id>/` would be
+/// world-traversable even though the files inside are `0600`. This walks the
+/// missing chain from the outermost ancestor inwards so every created level is
+/// `0700`.
+Future<void> sanadDevCreateOwnerOnlyParents(String path) async {
+  final missing = <String>[];
+  var current = Directory(path);
+  while (!current.existsSync()) {
+    missing.add(current.path);
+    final parent = current.parent;
+    if (parent.path == current.path) break;
+    current = parent;
+  }
+  for (final directory in missing.reversed) {
+    final created = Directory(directory);
+    if (!created.existsSync()) created.createSync(recursive: true);
+    await sanadDevRestrictOwnerOnly(directory, directory: true);
+  }
 }
 
 /// Applies the owner-only file mode (0600) to [path], best effort.
