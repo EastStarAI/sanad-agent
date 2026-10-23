@@ -158,6 +158,17 @@ server whose port is runtime configuration. Both use the same protocol bridge
 and preserve device, hardware, session, request, run, model-step, tool-call, and
 event identities.
 
+The local daemon adapter keeps the socket lifecycle, the authentication gate
+that every HTTP request and WebSocket upgrade passes before any route, response
+fan-out with delivery scopes, and voice. Its HTTP surface has two owners:
+`local_daemon/http_control_routes.dart` renders `/auth/logout`, `/auth/coupling`,
+`/health`, `/update`, `/logs`, `/restart`, `/shutdown`, `/stop`,
+`/authentication-exchange`, and `/capabilities`, and
+`local_daemon/local_media_stream_handler.dart` streams attachment and
+`view_image` media. Both receive their runtime owners as explicit constructor
+inputs, so a route body never resolves a runtime owner through the service
+locator and the platform never duplicates a route body.
+
 In the local daemon server adapter, `DeliveryScope.platformFamily` fan-out broadcasts
 gateway responses across connected local client sockets. When an envelope originated
 from a specific session client (such as a CLI execution carrying `cli_client`), that
