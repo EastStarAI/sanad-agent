@@ -81,6 +81,10 @@ class CanonicalCommandTranslator {
     CanonicalEventTypes.providerUsageGet,
     CanonicalEventTypes.providerUsageReset,
     CanonicalEventTypes.providerUsageSupport,
+    // Task 140: user secrets protocol.
+    CanonicalEventTypes.secretsList,
+    CanonicalEventTypes.secretSet,
+    CanonicalEventTypes.secretDelete,
   };
 
   /// Accepted commands that also bind the payload's `session_id` to the event.

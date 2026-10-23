@@ -1,25 +1,35 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
+import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/db/session_db.dart';
+import 'package:sanad_agent/evolution/scheduling/schedule_control.dart';
+import 'package:sanad_agent/evolution/scheduling/schedule_conversation_factory.dart';
 import 'package:sanad_agent/evolution/scheduling/schedule_model.dart';
+import 'package:sanad_agent/evolution/scheduling/schedule_run_recorder.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 
-class ScheduleNotFoundException implements Exception {
-  final String message;
-  const ScheduleNotFoundException(this.message);
-  @override
-  String toString() => message;
-}
+export 'scheduling/schedule_control.dart';
+export 'scheduling/schedule_conversation_factory.dart';
+export 'scheduling/schedule_run_recorder.dart';
+export 'scheduling/scheduled_task_record.dart';
 
-class SchedulePermissionException implements Exception {
-  final String message;
-  const SchedulePermissionException(this.message);
-  @override
-  String toString() => message;
+/// Result of a manual [CronScheduler.runNowSchedule] dispatch (Task 139 A2, S14).
+class ScheduledRunNowResult {
+  final String runId;
+  final String sessionId;
+  final DateTime acceptedAt;
+
+  const ScheduledRunNowResult({
+    required this.runId,
+    required this.sessionId,
+    required this.acceptedAt,
+  });
 }
 
 class CronScheduler extends BasePlatform {
@@ -38,56 +48,79 @@ class CronScheduler extends BasePlatform {
   late final StreamController<GatewayEvent> _controller =
       StreamController<GatewayEvent>.broadcast(onListen: _flushPendingEvents);
 
-  /// Events emitted before the first subscriber attached. `GatewayManager`
-  /// awaits [initialize] before it listens, and startup recovery dispatches a
-  /// due occurrence inside [initialize] after persisting it as fired (B-D1),
-  /// so a broadcast stream would otherwise drop that event silently (B-D2).
   final List<GatewayEvent> _pendingEvents = [];
 
   @override
   Stream<GatewayEvent> get eventStream => _controller.stream;
 
   final List<ScheduledTaskMetadata> _tasks = [];
-  final _sessionManager = SessionManager();
+  final SessionManager _sessionManager;
+  final SessionDB _db;
+  late final ScheduleRunRecorder _runRecorder;
+  late final ScheduleConversationFactory _conversationFactory;
+  ScheduleRunObserver? _runObserver;
+  final PersistedRuntimeStateRepository? _persistedState;
+
+  CronScheduler({
+    SessionManager? sessionManager,
+    SessionDB? db,
+    ScheduleRunRecorder? runRecorder,
+    ScheduleConversationFactory? conversationFactory,
+    ScheduleRunObserver? runObserver,
+    PersistedRuntimeStateRepository? persistedState,
+    DateTime Function()? clock,
+  }) : _sessionManager = sessionManager ?? SessionManager(),
+       _db = db ?? (sessionManager?.db ?? SessionDB()),
+       _persistedState = persistedState ??
+           (getIt.isRegistered<PersistedRuntimeStateRepository>()
+               ? getIt<PersistedRuntimeStateRepository>()
+               : null) {
+    _runRecorder = runRecorder ??
+        ScheduleRunRecorder(
+          db: _db,
+          clock: clock,
+        );
+    _conversationFactory = conversationFactory ??
+        ScheduleConversationFactory(
+          sessionManager: _sessionManager,
+          db: _db,
+        );
+    final persisted = _persistedState;
+    _runObserver = runObserver ??
+        (persisted != null
+            ? ScheduleRunObserver(
+                recorder: _runRecorder,
+                lookupOutcome: (sessionId, runId) =>
+                    ScheduleRunObserver.defaultLookupOutcome(
+                  persisted,
+                  sessionId,
+                  runId,
+                ),
+                lookupError: (sessionId, runId) {
+                  final notice = persisted.notices.findNotice(sessionId);
+                  if (notice != null &&
+                      (notice.requestId == runId || notice.runId == runId)) {
+                    return notice.message;
+                  }
+                  return null;
+                },
+              )
+            : null);
+  }
 
   List<ScheduledTaskMetadata> get activeTasks => List.unmodifiable(_tasks);
 
-  /// Creates and schedules a new task adhering to Decisions D2-D8.
-  ScheduledTaskRecord createSchedule({
-    required String task,
-    required String sessionId,
-    required ScheduleDefinition definition,
-    String? id,
-  }) {
-    if (sessionId.trim().isEmpty) {
-      throw const ScheduleValidationException(
-        'Cannot create a scheduled task without a session context.',
-      );
-    }
+  ScheduleRunRecorder get runRecorder => _runRecorder;
+  ScheduleConversationFactory get conversationFactory => _conversationFactory;
+  ScheduleRunObserver? get runObserver => _runObserver;
 
-    final taskId = id ?? 'task_${DateTime.now().microsecondsSinceEpoch}';
-    final now = DateTime.now().toUtc();
-    final nextRunAt = OccurrenceCalculator.computeNextOccurrence(
-      definition,
-      from: now,
-    );
+  int consecutiveFailures(String scheduleId) =>
+      _runRecorder.consecutiveFailures(scheduleId);
 
-    final record = ScheduledTaskRecord(
-      id: taskId,
-      task: task,
-      sessionId: sessionId,
-      kind: definition.kind,
-      intervalMinutes: definition.intervalMinutes,
-      atTime: definition.atTime,
-      weekdays: definition.weekdays?.join(','),
-      monthDay: definition.monthDay,
-      zone: definition.zone,
-      nextRunAt: nextRunAt,
-      createdAt: now,
-      updatedAt: now,
-      enabled: true,
-    );
+  bool suggestPause(String scheduleId) =>
+      _runRecorder.suggestPause(scheduleId);
 
+  void _saveRecord(ScheduledTaskRecord record) {
     _sessionManager.db.saveScheduledTask(
       record.id,
       record.task,
@@ -100,9 +133,72 @@ class CronScheduler extends BasePlatform {
       monthDay: record.monthDay,
       zone: record.zone,
       updatedAt: record.updatedAt,
+      lastRunAt: record.lastRunAt,
+      lastStatus: record.lastStatus,
       enabled: record.enabled,
+      name: record.name,
+      ownerKind: record.ownerKind.wireName,
+      conversationMode: record.conversationMode.wireName,
+      runSessionId: record.runSessionId,
+      workspaceId: record.workspaceId,
+      providerInstanceId: record.providerInstanceId,
+      model: record.model,
+    );
+  }
+
+  /// Creates and schedules a new task adhering to Decisions D2-D8 and Task 139 D1, D5.
+  ScheduledTaskRecord createSchedule({
+    required String task,
+    required ScheduleDefinition definition,
+    String? sessionId,
+    String? id,
+    String? name,
+    ScheduleOwnerKind ownerKind = ScheduleOwnerKind.model,
+    ScheduleConversationMode conversationMode = ScheduleConversationMode.continuous,
+    String? runSessionId,
+    String? workspaceId,
+    String? providerInstanceId,
+    String? model,
+  }) {
+    if (ownerKind == ScheduleOwnerKind.model) {
+      if (sessionId == null || sessionId.trim().isEmpty) {
+        throw const ScheduleValidationException(
+          'Cannot create a scheduled task without a session context.',
+        );
+      }
+    }
+
+    final taskId = id ?? 'task_${DateTime.now().microsecondsSinceEpoch}';
+    final now = DateTime.now().toUtc();
+    final nextRunAt = OccurrenceCalculator.computeNextOccurrence(
+      definition,
+      from: now,
     );
 
+    final record = ScheduledTaskRecord(
+      id: taskId,
+      task: task,
+      sessionId: sessionId ?? '',
+      kind: definition.kind,
+      intervalMinutes: definition.intervalMinutes,
+      atTime: definition.atTime,
+      weekdays: definition.weekdays?.join(','),
+      monthDay: definition.monthDay,
+      zone: definition.zone,
+      nextRunAt: nextRunAt,
+      createdAt: now,
+      updatedAt: now,
+      enabled: true,
+      name: name,
+      ownerKind: ownerKind,
+      conversationMode: conversationMode,
+      runSessionId: runSessionId ?? (ownerKind == ScheduleOwnerKind.model ? sessionId : null),
+      workspaceId: workspaceId,
+      providerInstanceId: providerInstanceId,
+      model: model,
+    );
+
+    _saveRecord(record);
     _scheduleInMemory(record);
     return record;
   }
@@ -119,15 +215,14 @@ class CronScheduler extends BasePlatform {
         'Cannot create a scheduled task without a session context.',
       );
     }
-    final definition = ScheduleDefinition(
-      kind: ScheduleKind.once,
-      zone: 'local',
-      onceAt: time.toUtc(),
-    );
     createSchedule(
       task: task,
       sessionId: sessionId,
-      definition: definition,
+      definition: ScheduleDefinition(
+        kind: ScheduleKind.once,
+        zone: 'local',
+        onceAt: time.toUtc(),
+      ),
       id: id,
     );
   }
@@ -144,42 +239,213 @@ class CronScheduler extends BasePlatform {
     return rows.map((r) => ScheduledTaskRecord.fromRow(r)).toList();
   }
 
-  /// Cancels a schedule owned by [callerSessionId] (Decisions D6, D7).
+  /// Cancels a schedule owned by [caller] (Decisions D6, D7, S10, S15).
   ScheduledTaskRecord cancelSchedule(
     String id, {
-    required String callerSessionId,
+    String? callerSessionId,
+    ScheduleCaller? caller,
   }) {
     final row = _sessionManager.db.getScheduledTask(id);
     if (row == null) {
       throw ScheduleNotFoundException('Schedule "$id" not found.');
     }
     final record = ScheduledTaskRecord.fromRow(row);
-    if (record.sessionId != callerSessionId) {
-      throw SchedulePermissionException(
-        'Schedule "$id" is owned by conversation "${record.sessionId}" and cannot be modified from conversation "$callerSessionId".',
-      );
-    }
+    final effectiveCaller = caller ??
+        (callerSessionId != null
+            ? ScheduleCaller.model(callerSessionId)
+            : const ScheduleCaller.user());
+    ScheduleControl.authorize(record, effectiveCaller);
 
     _cancelInMemory(id);
-    _sessionManager.db.deleteScheduledTask(id);
+    _sessionManager.db.state.transaction((_) {
+      _sessionManager.db.scheduledTaskRuns.deleteRunsForSchedule(id);
+      _sessionManager.db.deleteScheduledTask(id);
+    });
     return record;
   }
 
-  /// Updates a schedule owned by [callerSessionId] (Decisions D6, D7, D10).
+  /// Deletes a schedule owned by [caller] (Task 139 S10, D7).
+  ScheduledTaskRecord deleteSchedule(String id, ScheduleCaller caller) =>
+      cancelSchedule(id, caller: caller);
+
+  /// Pauses a schedule: sets `enabled=false`, cancels in-memory timer, and
+  /// keeps `next_run_at` and `last_*` unchanged (Task 139 A2, S13).
+  ScheduledTaskRecord pauseSchedule(String id, ScheduleCaller caller) {
+    final row = _sessionManager.db.getScheduledTask(id);
+    if (row == null) {
+      throw ScheduleNotFoundException('Schedule "$id" not found.');
+    }
+    final existing = ScheduledTaskRecord.fromRow(row);
+    ScheduleControl.authorize(existing, caller);
+
+    final now = DateTime.now().toUtc();
+    final updated = ScheduleControl.pauseRecord(existing, now: now);
+    _saveRecord(updated);
+    _cancelInMemory(id);
+    return updated;
+  }
+
+  /// Resumes a paused schedule: recomputes `next_run_at` from now, sets
+  /// `enabled=true`, and re-arms in memory (Task 139 A2, S13, D6).
+  ScheduledTaskRecord resumeSchedule(String id, ScheduleCaller caller) {
+    final row = _sessionManager.db.getScheduledTask(id);
+    if (row == null) {
+      throw ScheduleNotFoundException('Schedule "$id" not found.');
+    }
+    final existing = ScheduledTaskRecord.fromRow(row);
+    ScheduleControl.authorize(existing, caller);
+
+    final now = DateTime.now().toUtc();
+    ScheduleControl.requireResumable(
+      existing,
+      now: now,
+      sessionExists: (sid) => _sessionManager.getSessionRecord(sid) != null,
+    );
+
+    final nextRunAt = OccurrenceCalculator.computeNextOccurrence(
+      existing.toDefinition(),
+      from: now,
+      previousRunAt: existing.lastRunAt,
+    );
+
+    final updated = ScheduleControl.resumeRecord(existing, now: now, nextRunAt: nextRunAt);
+    _saveRecord(updated);
+    _cancelInMemory(id);
+    _scheduleInMemory(updated, now: now);
+    return updated;
+  }
+
+  /// Dispatches a schedule immediately without altering its `next_run_at`,
+  /// `last_run_at`, `last_status`, or `enabled` state (Task 139 A2, S14, S21).
+  ScheduledRunNowResult runNowSchedule(String id, ScheduleCaller caller) {
+    final row = _sessionManager.db.getScheduledTask(id);
+    if (row == null) {
+      throw ScheduleNotFoundException('Schedule "$id" not found.');
+    }
+    final record = ScheduledTaskRecord.fromRow(row);
+    ScheduleControl.authorize(record, caller);
+
+    ScheduleControl.requireDispatchTarget(
+      record,
+      sessionExists: (sid) => _sessionManager.getSessionRecord(sid) != null,
+    );
+
+    final targetSessionId = _conversationFactory.resolveDispatchSession(record);
+    final now = DateTime.now().toUtc();
+    final runId = _runRecorder.startRun(
+      scheduleId: record.id,
+      runAt: now,
+      trigger: ScheduledTaskRunTrigger.manual,
+    );
+
+    _runObserver?.track(
+      runId: runId,
+      sessionId: targetSessionId,
+      scheduleId: record.id,
+    );
+
+    try {
+      _emitEvent(record.task, targetSessionId, runId: runId);
+    } catch (e, stack) {
+      _logger.severe('Failed to dispatch manual run for ${record.id}: $e', e, stack);
+      _runRecorder.completeRun(
+        runId,
+        status: ScheduledTaskRunStatus.failed,
+        error: e.toString(),
+      );
+      rethrow;
+    }
+
+    return ScheduledRunNowResult(
+      runId: runId,
+      sessionId: targetSessionId,
+      acceptedAt: now,
+    );
+  }
+
+  /// Pauses schedules associated with a deleted session (Task 139 S23, A2, Q2).
+  ///
+  /// Applies only to the owning `session_id`, or to `run_session_id` when the
+  /// mode is `continuous`. Clears `run_session_id` on a user-owned continuous
+  /// row so its next run creates a new conversation.
+  int pauseForDeletedSession(String sessionId) {
+    if (sessionId.trim().isEmpty) return 0;
+    final now = DateTime.now().toUtc();
+    var pausedCount = 0;
+    final tasks = _sessionManager.db.getAllScheduledTasks();
+    for (final taskRow in tasks) {
+      final record = ScheduledTaskRecord.fromRow(taskRow);
+      final isOwningSession = record.sessionId == sessionId;
+      final isContinuousRunSession =
+          record.conversationMode == ScheduleConversationMode.continuous &&
+          record.runSessionId == sessionId;
+
+      if (!isOwningSession && !isContinuousRunSession) continue;
+
+      _cancelInMemory(record.id);
+      _saveRecord(ScheduleControl.pauseRecord(record, now: now));
+
+      if (record.ownerKind == ScheduleOwnerKind.user &&
+          record.conversationMode == ScheduleConversationMode.continuous) {
+        _sessionManager.db.updateScheduleSettings(
+          record.id,
+          runSessionId: null,
+        );
+      }
+      pausedCount++;
+    }
+    return pausedCount;
+  }
+
+  /// Updates a schedule owned by [caller] (Decisions D6, D7, D10, S24).
   ScheduledTaskRecord updateSchedule({
     required String id,
-    required String callerSessionId,
+    String? callerSessionId,
+    ScheduleCaller? caller,
     String? task,
     ScheduleDefinition? definition,
+    Object? name = ScheduledTaskRepository.unset,
+    Object? conversationMode = ScheduledTaskRepository.unset,
+    Object? workspaceId = ScheduledTaskRepository.unset,
+    Object? providerInstanceId = ScheduledTaskRepository.unset,
+    Object? model = ScheduledTaskRepository.unset,
   }) {
     final row = _sessionManager.db.getScheduledTask(id);
     if (row == null) {
       throw ScheduleNotFoundException('Schedule "$id" not found.');
     }
     final existing = ScheduledTaskRecord.fromRow(row);
-    if (existing.sessionId != callerSessionId) {
-      throw SchedulePermissionException(
-        'Schedule "$id" is owned by conversation "${existing.sessionId}" and cannot be modified from conversation "$callerSessionId".',
+    final effectiveCaller = caller ??
+        (callerSessionId != null
+            ? ScheduleCaller.model(callerSessionId)
+            : const ScheduleCaller.user());
+    ScheduleControl.authorize(existing, effectiveCaller);
+
+    ScheduleConversationMode? validatedMode;
+    if (!identical(conversationMode, ScheduledTaskRepository.unset)) {
+      if (conversationMode == null) {
+        throw const ScheduleValidationException(
+          'Conversation mode is required and cannot be null.',
+        );
+      }
+      validatedMode = ScheduleControl.parseConversationMode(conversationMode);
+    }
+
+    final hasSettingsUpdate =
+        !identical(name, ScheduledTaskRepository.unset) ||
+        !identical(conversationMode, ScheduledTaskRepository.unset) ||
+        !identical(workspaceId, ScheduledTaskRepository.unset) ||
+        !identical(providerInstanceId, ScheduledTaskRepository.unset) ||
+        !identical(model, ScheduledTaskRepository.unset);
+
+    if (hasSettingsUpdate) {
+      _sessionManager.db.updateScheduleSettings(
+        id,
+        name: name,
+        conversationMode: validatedMode?.wireName ?? ScheduledTaskRepository.unset,
+        workspaceId: workspaceId,
+        providerInstanceId: providerInstanceId,
+        model: model,
       );
     }
 
@@ -209,27 +475,28 @@ class CronScheduler extends BasePlatform {
       lastRunAt: existing.lastRunAt,
       lastStatus: existing.lastStatus,
       enabled: existing.enabled,
+      name: !identical(name, ScheduledTaskRepository.unset)
+          ? name as String?
+          : existing.name,
+      ownerKind: existing.ownerKind,
+      conversationMode: validatedMode ?? existing.conversationMode,
+      runSessionId: existing.runSessionId,
+      workspaceId: !identical(workspaceId, ScheduledTaskRepository.unset)
+          ? workspaceId as String?
+          : existing.workspaceId,
+      providerInstanceId: !identical(providerInstanceId, ScheduledTaskRepository.unset)
+          ? providerInstanceId as String?
+          : existing.providerInstanceId,
+      model: !identical(model, ScheduledTaskRepository.unset)
+          ? model as String?
+          : existing.model,
     );
 
-    _sessionManager.db.saveScheduledTask(
-      updated.id,
-      updated.task,
-      updated.nextRunAt,
-      updated.sessionId,
-      kind: updated.kind.name,
-      intervalMinutes: updated.intervalMinutes,
-      atTime: updated.atTime,
-      weekdays: updated.weekdays,
-      monthDay: updated.monthDay,
-      zone: updated.zone,
-      updatedAt: updated.updatedAt,
-      lastRunAt: updated.lastRunAt,
-      lastStatus: updated.lastStatus,
-      enabled: updated.enabled,
-    );
-
+    _saveRecord(updated);
     _cancelInMemory(id);
-    _scheduleInMemory(updated);
+    if (updated.enabled) {
+      _scheduleInMemory(updated, now: now);
+    }
     return updated;
   }
 
@@ -244,8 +511,7 @@ class CronScheduler extends BasePlatform {
     if (delay.isNegative) {
       if (record.kind == ScheduleKind.once) {
         _logger.warning('Task ${record.id} scheduled in the past. Executing immediately.');
-        _sessionManager.db.deleteScheduledTask(record.id);
-        _emitEvent(record.task, record.sessionId);
+        _executeTask(record);
         return;
       } else {
         restoreRecurringSchedule(record, now: effectiveNow);
@@ -276,17 +542,34 @@ class CronScheduler extends BasePlatform {
 
   void _executeTask(ScheduledTaskRecord record) {
     _logger.info('Executing scheduled task: "${record.task}" (id: ${record.id})');
+    final executionTime = DateTime.now().toUtc();
+    final targetSessionId = _conversationFactory.resolveDispatchSession(record);
+    final runId = _runRecorder.startRun(
+      scheduleId: record.id,
+      runAt: executionTime,
+      trigger: ScheduledTaskRunTrigger.scheduled,
+    );
+
+    _runObserver?.track(
+      runId: runId,
+      sessionId: targetSessionId,
+      scheduleId: record.id,
+    );
 
     if (record.kind == ScheduleKind.once) {
       _tasks.removeWhere((t) => t.id == record.id);
       _sessionManager.db.deleteScheduledTask(record.id);
       try {
-        _emitEvent(record.task, record.sessionId);
+        _emitEvent(record.task, targetSessionId, runId: runId);
       } catch (e, stack) {
         _logger.severe('Failed to dispatch once task ${record.id}: $e', e, stack);
+        _runRecorder.completeRun(
+          runId,
+          status: ScheduledTaskRunStatus.failed,
+          error: e.toString(),
+        );
       }
     } else {
-      final executionTime = DateTime.now().toUtc();
       final nextRunAt = OccurrenceCalculator.computeNextOccurrence(
         record.toDefinition(),
         from: executionTime,
@@ -295,66 +578,34 @@ class CronScheduler extends BasePlatform {
         previousRunAt: record.nextRunAt,
       );
 
-      final nextRecord = ScheduledTaskRecord(
-        id: record.id,
-        task: record.task,
-        sessionId: record.sessionId,
-        kind: record.kind,
-        intervalMinutes: record.intervalMinutes,
-        atTime: record.atTime,
-        weekdays: record.weekdays,
-        monthDay: record.monthDay,
-        zone: record.zone,
-        nextRunAt: nextRunAt,
-        createdAt: record.createdAt,
-        updatedAt: executionTime,
-        lastRunAt: executionTime,
+      final nextRecord = ScheduleControl.withStatus(
+        record,
         lastStatus: 'fired',
-        enabled: record.enabled,
+        lastRunAt: executionTime,
+        updatedAt: executionTime,
+        nextRunAt: nextRunAt,
       );
 
       // Persist advanced instant and last_status before emitting (B-D1)
-      _sessionManager.db.saveScheduledTask(
-        nextRecord.id,
-        nextRecord.task,
-        nextRecord.nextRunAt,
-        nextRecord.sessionId,
-        kind: nextRecord.kind.name,
-        intervalMinutes: nextRecord.intervalMinutes,
-        atTime: nextRecord.atTime,
-        weekdays: nextRecord.weekdays,
-        monthDay: nextRecord.monthDay,
-        zone: nextRecord.zone,
-        updatedAt: nextRecord.updatedAt,
-        lastRunAt: nextRecord.lastRunAt,
-        lastStatus: nextRecord.lastStatus,
-        enabled: nextRecord.enabled,
-      );
+      _saveRecord(nextRecord);
 
       _tasks.removeWhere((t) => t.id == record.id);
       _scheduleInMemory(nextRecord);
 
       try {
-        _emitEvent(record.task, record.sessionId);
+        _emitEvent(record.task, targetSessionId, runId: runId);
       } catch (e, stack) {
         _logger.severe('Failed to dispatch scheduled task ${record.id}: $e', e, stack);
-        // Record error status if dispatch failed (B-D6)
-        _sessionManager.db.saveScheduledTask(
-          nextRecord.id,
-          nextRecord.task,
-          nextRecord.nextRunAt,
-          nextRecord.sessionId,
-          kind: nextRecord.kind.name,
-          intervalMinutes: nextRecord.intervalMinutes,
-          atTime: nextRecord.atTime,
-          weekdays: nextRecord.weekdays,
-          monthDay: nextRecord.monthDay,
-          zone: nextRecord.zone,
-          updatedAt: DateTime.now().toUtc(),
-          lastRunAt: nextRecord.lastRunAt,
-          lastStatus: 'error',
-          enabled: nextRecord.enabled,
+        _runRecorder.completeRun(
+          runId,
+          status: ScheduledTaskRunStatus.failed,
+          error: e.toString(),
         );
+        _saveRecord(ScheduleControl.withStatus(
+          nextRecord,
+          lastStatus: 'error',
+          updatedAt: DateTime.now().toUtc(),
+        ));
       }
     }
   }
@@ -369,13 +620,17 @@ class CronScheduler extends BasePlatform {
     });
   }
 
-  void _emitEvent(String task, String sessionId) {
+  void _emitEvent(String task, String sessionId, {String? runId}) {
+    final effectiveRunId = runId ?? 'cron_${DateTime.now().millisecondsSinceEpoch}';
     final event = GatewayEvent(
       sessionId: sessionId,
       platformId: platformId,
       type: 'cron',
-      runId: 'cron_${DateTime.now().millisecondsSinceEpoch}',
+      runId: effectiveRunId,
       message: Message(role: MessageRole.user, content: task),
+      metadata: {
+        'payload': {'request_id': effectiveRunId},
+      },
     );
     if (!_controller.hasListener) {
       _pendingEvents.add(event);
@@ -408,6 +663,19 @@ class CronScheduler extends BasePlatform {
   Future<void> initialize({DateTime? now}) async {
     final effectiveNow = (now ?? DateTime.now()).toUtc();
     _logger.info('CronScheduler initializing from DB at $effectiveNow...');
+
+    final persisted = _persistedState;
+    if (_runObserver != null && !_runObserver!.isListening && persisted != null) {
+      _runObserver!.listen(persisted.executionState.changes);
+    }
+
+    _runRecorder.recoverInterruptedRuns(
+      isRunActive: (sessionId, runId) {
+        final item = _persistedState?.workItems.findActiveWorkItem(sessionId);
+        return item != null && item.requestId == runId;
+      },
+    );
+
     final dbTasks = _sessionManager.db.getAllScheduledTasks();
 
     for (var taskData in dbTasks) {
@@ -473,106 +741,65 @@ class CronScheduler extends BasePlatform {
         'Missed recurring task "${record.task}" (id: ${record.id}) at $mostRecentMissed is within grace window of ${graceMinutes}m (missed by $missedStr). Firing once and advancing to $nextFutureRunAt.',
       );
 
-      final advanced = ScheduledTaskRecord(
-        id: record.id,
-        task: record.task,
-        sessionId: record.sessionId,
-        kind: record.kind,
-        intervalMinutes: record.intervalMinutes,
-        atTime: record.atTime,
-        weekdays: record.weekdays,
-        monthDay: record.monthDay,
-        zone: record.zone,
-        nextRunAt: nextFutureRunAt,
-        createdAt: record.createdAt,
-        updatedAt: effectiveNow,
-        lastRunAt: effectiveNow,
+      final targetSessionId = _conversationFactory.resolveDispatchSession(record);
+      final runId = _runRecorder.startRun(
+        scheduleId: record.id,
+        runAt: mostRecentMissed,
+        trigger: ScheduledTaskRunTrigger.recovery,
+      );
+
+      _runObserver?.track(
+        runId: runId,
+        sessionId: targetSessionId,
+        scheduleId: record.id,
+      );
+
+      final advanced = ScheduleControl.withStatus(
+        record,
         lastStatus: 'fired',
-        enabled: record.enabled,
+        lastRunAt: effectiveNow,
+        updatedAt: effectiveNow,
+        nextRunAt: nextFutureRunAt,
       );
 
       // Persist BEFORE emitting (B-D1)
-      _sessionManager.db.saveScheduledTask(
-        advanced.id,
-        advanced.task,
-        advanced.nextRunAt,
-        advanced.sessionId,
-        kind: advanced.kind.name,
-        intervalMinutes: advanced.intervalMinutes,
-        atTime: advanced.atTime,
-        weekdays: advanced.weekdays,
-        monthDay: advanced.monthDay,
-        zone: advanced.zone,
-        updatedAt: advanced.updatedAt,
-        lastRunAt: advanced.lastRunAt,
-        lastStatus: advanced.lastStatus,
-        enabled: advanced.enabled,
-      );
-
+      _saveRecord(advanced);
       _scheduleInMemory(advanced, now: effectiveNow);
 
       try {
-        _emitEvent(record.task, record.sessionId);
+        _emitEvent(record.task, targetSessionId, runId: runId);
       } catch (e, stack) {
         _logger.severe('Failed to dispatch scheduled task ${record.id}: $e', e, stack);
-        _sessionManager.db.saveScheduledTask(
-          advanced.id,
-          advanced.task,
-          advanced.nextRunAt,
-          advanced.sessionId,
-          kind: advanced.kind.name,
-          intervalMinutes: advanced.intervalMinutes,
-          atTime: advanced.atTime,
-          weekdays: advanced.weekdays,
-          monthDay: advanced.monthDay,
-          zone: advanced.zone,
-          updatedAt: DateTime.now().toUtc(),
-          lastRunAt: advanced.lastRunAt,
-          lastStatus: 'error',
-          enabled: advanced.enabled,
+        _runRecorder.completeRun(
+          runId,
+          status: ScheduledTaskRunStatus.failed,
+          error: e.toString(),
         );
+        _saveRecord(ScheduleControl.withStatus(
+          advanced,
+          lastStatus: 'error',
+          updatedAt: DateTime.now().toUtc(),
+        ));
       }
     } else {
       _logger.warning(
         'Skipping missed scheduled task "${record.task}" (id: ${record.id}): missed occurrence at $mostRecentMissed exceeded grace window of ${graceMinutes}m (missed by $missedStr). Advancing to $nextFutureRunAt.',
       );
 
+      _runRecorder.recordSkipped(
+        scheduleId: record.id,
+        runAt: mostRecentMissed,
+      );
+
       // S2: On a skipped occurrence, preserve previous lastRunAt (or null) so listings never imply a run that was skipped.
-      final advanced = ScheduledTaskRecord(
-        id: record.id,
-        task: record.task,
-        sessionId: record.sessionId,
-        kind: record.kind,
-        intervalMinutes: record.intervalMinutes,
-        atTime: record.atTime,
-        weekdays: record.weekdays,
-        monthDay: record.monthDay,
-        zone: record.zone,
-        nextRunAt: nextFutureRunAt,
-        createdAt: record.createdAt,
-        updatedAt: effectiveNow,
-        lastRunAt: record.lastRunAt,
+      final advanced = ScheduleControl.withStatus(
+        record,
         lastStatus: 'skipped_missed',
-        enabled: record.enabled,
+        updatedAt: effectiveNow,
+        nextRunAt: nextFutureRunAt,
       );
 
-      _sessionManager.db.saveScheduledTask(
-        advanced.id,
-        advanced.task,
-        advanced.nextRunAt,
-        advanced.sessionId,
-        kind: advanced.kind.name,
-        intervalMinutes: advanced.intervalMinutes,
-        atTime: advanced.atTime,
-        weekdays: advanced.weekdays,
-        monthDay: advanced.monthDay,
-        zone: advanced.zone,
-        updatedAt: advanced.updatedAt,
-        lastRunAt: advanced.lastRunAt,
-        lastStatus: advanced.lastStatus,
-        enabled: advanced.enabled,
-      );
-
+      _saveRecord(advanced);
       _scheduleInMemory(advanced, now: effectiveNow);
     }
   }
@@ -584,6 +811,7 @@ class CronScheduler extends BasePlatform {
     }
     _tasks.clear();
     _pendingEvents.clear();
+    await _runObserver?.dispose();
     await _controller.close();
     _logger.info('CronScheduler disposed.');
   }
