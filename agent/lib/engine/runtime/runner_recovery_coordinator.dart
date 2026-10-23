@@ -148,6 +148,30 @@ class RunnerRecoveryCoordinator {
     return Duration(seconds: seconds);
   }
 
+  /// One sentence describing what the agent already did automatically.
+  ///
+  /// A blocked notice that says nothing about the automatic retry reads like a
+  /// first failure that is still being retried. That is how a headless worker
+  /// stayed blocked for ten minutes: its per-reason budget (one attempt for a
+  /// provider timeout) was already spent, so no further attempt was scheduled,
+  /// and nothing in the notice said so. The note is empty when the failure was
+  /// never eligible for an automatic retry.
+  String automaticRetryNote({
+    required int attempt,
+    required int budget,
+    required bool streamStarted,
+  }) {
+    if (budget <= 0) return '';
+    if (streamStarted) {
+      return '\n\nNo automatic retry: the response had already started '
+          'streaming.';
+    }
+    if (attempt < budget) return '';
+    return '\n\nAutomatic retry gave up after $budget '
+        '${budget == 1 ? 'attempt' : 'attempts'}; retry manually or choose '
+        'another provider.';
+  }
+
   String buildNoticeMessage(
     RuntimeFailureReason reason,
     String? providerBody,
@@ -597,13 +621,19 @@ class RunnerRecoveryCoordinator {
         exhaustedAutomaticRetries &&
         reason.decision().noticeStatus == RuntimeNoticeStatus.waiting;
     final displayName = recovery.providerDisplayName(providerInstanceId);
+    final retryNote = automaticRetryNote(
+      attempt: attempt,
+      budget: budget,
+      streamStarted: streamStarted,
+    );
     recovery.reportFailure(
       sessionId: host.sessionId,
       reason: reason,
       providerInstanceId: providerInstanceId,
       requestId: host.turnRoute.turnRequestId,
       retryAfter: budgetExhaustedWaiting ? null : retryAfter,
-      message: buildNoticeMessage(reason, providerBody, displayName),
+      message: '${buildNoticeMessage(reason, providerBody, displayName)}'
+          '$retryNote',
       forceBlocked: budgetExhaustedWaiting,
       runId: host.authoritativeRunId,
     );

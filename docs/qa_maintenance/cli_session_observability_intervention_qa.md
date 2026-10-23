@@ -1,6 +1,6 @@
 ---
 title: "CLI Session Observability & Safe Intervention QA Matrix"
-description: "QA validation matrix for daemon-backed CLI session observability, authoritative inspection, explicit question answering, ordinary tool permission decisions, cross-session safety, and scoped session termination."
+description: "QA validation matrix for daemon-backed CLI session observability, authoritative inspection, non-interactive live steering, runtime recovery retry, explicit question answering, ordinary tool permission decisions, cross-session safety, and scoped session termination."
 ---
 
 # CLI Session Observability & Safe Intervention QA Matrix
@@ -87,7 +87,95 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 ---
 
-## 7. Concurrency & Idempotency (First-Writer-Wins)
+## 7. Non-Interactive Live Steering (`session steer`)
+
+Contract owner: Section 9.5 of `docs/technical/sanad_cli_architecture.md`. A successful
+`session steer` proves the gateway acknowledged the text as a **pending steer** for the
+active turn; it never proves the instruction was applied, which happens at the next
+execution boundary. Every dispatch carries `steer_only: true`, so the daemon itself
+refuses a steer that has no live owner instead of turning it into a turn.
+
+| Scenario | CLI Command | Expected Runtime Behavior | Exit Code |
+|---|---|---|---|
+| Steer the active turn | `sanad session steer <session-id> --message "Add an audit trail"` | One `steer` dispatch; the daemon registers a pending steer for the owning run and publishes `session.pending_steer_changed` / `session.message_classified` with `classification: steer`. Plain output is `Steer sent to session <id> (request <reqId>).` | 0 |
+| Steer in JSON mode | `sanad session steer <session-id> --message "Add an audit trail" --json` | Outputs `{"session_id": "<id>", "request_id": "<req-id>", "status": "steer_sent"}` only after the gateway acknowledgement. | 0 |
+| Steer text from a file | `sanad session steer <session-id> --message-file steer.txt` | Reads the file as plain text, trims it, and dispatches the trimmed body. The path itself is used verbatim, never trimmed. | 0 |
+| No active turn (pre-check) | `sanad session steer <idle-session-id> --message "Add scope"` | Refused **before** dispatch with `error_code: no_active_turn`; nothing is dispatched, queued, or created. The daemon would also reject the same steer through `steer_only`, so the outcome does not depend on this read. | 3 |
+| No active turn (daemon guard) | a steer that races the turn's completion, so the pre-check passed and the run ended before admission | The daemon rejects it with one correlated `error` frame, `code: no_active_turn`; the text is **not** queued and **no** turn is started (the run's own turn is the only turn). | 3 |
+| Stale `in_flight` projection | `sanad session steer <stopped-session-id> --message "Add scope"` | A leftover in-memory partial-stream snapshot whose durable execution snapshot is not `running`/`resuming` is not read as an active turn; the command reports `no_active_turn` and dispatches nothing. | 3 |
+| Stop requested or draining | `sanad session steer <stopping-session-id> --message "Add scope"` | The durable `stopping` state (written before the run is cancelled) or an active runtime notice outside `resuming` is not steerable; nothing is dispatched. The projection carries no in-memory stop flag, so a stop that has not yet written `stopping` is refused by the daemon's own `steer_only` guard instead. | 3 |
+| Older daemon admitted a new turn | `sanad session steer <id> --message "..."` against a daemon that ignores `steer_only` | The daemon classifies the message `think`; the CLI reports `admitted_as_turn` and states that **a turn is now running**, never that the steer was applied. | 6 |
+| Older daemon queued the text | the same, while the session is busy with older work | The daemon classifies the message `queue`; the CLI reports `queued_as_turn` and states that **a turn is now queued**. | 7 |
+| Typed gateway rejection | `sanad session steer <id> --message "..." --json` | A matching `error` frame is reported with the gateway's own `error_code` and exit `4`. | 4 |
+| Dispatched but unacknowledged | `sanad session steer <id> --message "..." --timeout 5` | No acknowledgement within the bound (default 15 s) reports `steer_unacknowledged`, prints the request id, and advises `sanad session show <id>`; it is never reported as sent. | 5 |
+| Invalid invocation | `sanad session steer <id>` with neither message source, both sources (even when one is blank), an empty message, an unusable `--timeout` (0, negative, non-numeric, above 86400), or a missing/directory/unreadable/empty `--message-file` | `Error:` line plus usage on stderr, `error_code: invalid_arguments` in `--json` mode, and no dispatch. | 2 |
+| Session state unreadable | `sanad session steer <id> --message "..."` where the projection read returns a typed error | `session_state_unreadable` (exit `8`): the reason is reported as "could not read session state", distinct from any steer verdict, because no steer was sent. | 8 |
+| Daemon unreachable | `sanad session steer <id> --message "..."` with no daemon listening | Fails closed without dispatching the steer and reports the transport code (`connection_failed`/`disposed`/`not_connected`), never "Gateway rejected". | 1 |
+| Message body confidentiality | any failed steer | The steer body never appears on stdout, stderr, or in logs; only identities, codes, and lifecycle metadata are reported. | — |
+
+Automated coverage: `agent/test/cli/session_command_test.dart` (group `session steer`),
+`agent/test/cli/steer_acknowledgement_test.dart` (the real acknowledgement
+classification over a scripted socket), and
+`agent/test/interfaces/runtime/steer_only_admission_test.dart` (the daemon's
+`steer_only` rejection and the unchanged legacy admit-or-queue path), all daemon-free.
+
+For the two race rows ("No active turn (daemon guard)" and "Older daemon admitted a new
+turn") the observable outcome is not "nothing happens": the text is refused in the first
+case and becomes a turn in the second. Only the first is guaranteed to create nothing,
+because the daemon honours `steer_only`.
+
+### 7.1. Known Edge: A Steer That Outlives the Turn
+
+A steer delivered at the turn's final tool boundary, after which the run reaches no
+execution boundary to drain it, is neither applied nor reported to the already-finished
+command: `sanad session steer` exited `0` because its claim is acknowledgement as a
+pending steer, not application. On the next daemon restart the unresolved pending record
+becomes a durable **recovered draft** rather than a steer into the new generation, so the
+text reappears in the session history instead of being silently dropped.
+
+| Step | Command | Expected Observation |
+|---|---|---|
+| Steer at the final tool boundary | `sanad session steer <id> --message "Add scope"` while the turn's last tool result is being committed | Exit `0` with `steer_sent`; the text may never be applied. |
+| Evidence of non-application | `sanad session show <id> --json` | No assistant output contains the steer text; the pending-steer record is not `delivered`. |
+| Recovered draft after restart | restart the Agent, then `sanad session show <id> --json` | The unresolved text is present as recovered draft content, and no new turn was started by the steer. |
+
+This is a documented limitation, not a success path: a caller that must know whether the
+text took effect reads the history or the pending-steer lifecycle, never the exit code.
+
+---
+
+## 8. Runtime Recovery Retry (`session retry`)
+
+Contract owner: Section 9.6 of `docs/technical/sanad_cli_architecture.md`. A successful
+`session retry` proves the daemon's recovery projection moved the session to `resuming`; it
+never proves the resumed provider request succeeded. The command sends the same
+`session.runtime_retry` command the Sanad Client's Retry action sends, after proving the
+session is actually in a retryable recovery state.
+
+| Scenario | CLI Command | Expected Runtime Behavior | Exit Code |
+|---|---|---|---|
+| Retry a blocked session | `sanad session retry <blocked-session-id>` | One `session.runtime_retry` dispatch; the daemon claims the suspended request, publishes `session.runtime_notice` with `status: resuming` and reason `manual_retry`, and the CLI prints `Retry accepted for session <id> (request <reqId>)`. | 0 |
+| Retry in JSON mode | `sanad session retry <id> --json` | Outputs `{"session_id": "<id>", "request_id": "<req-id>", "status": "retrying", "notice_request_id": "<turn-req-id>"}` only after the `resuming` transition. | 0 |
+| Retry a waiting session | `sanad session retry <waiting-session-id>` | A `waiting` notice is retryable: the manual retry shortens the remaining cooldown and the daemon resumes immediately. | 0 |
+| Retry on another route | `sanad session retry <id> --provider <instance-id> --model <model-id>` | The payload carries `provider_instance_id`/`model_id`; the same suspended request resumes on that route with reason `manual_retry`. This is not the Change Provider action: that is `session.runtime_continue_with_provider` with reason `provider_changed`. | 0 |
+| Not blocked or waiting | `sanad session retry <idle-or-running-session-id>` | Refused **before** dispatch with `error_code: not_blocked`; nothing is sent, so a healthy session never gains a second turn. | 3 |
+| Typed rejection | `sanad session retry <id> --json` where the daemon answers with a correlated blocked notice (unsafe checkpoint, provider with no default model) | Reported with the gateway's own code, for example `retry_rejected` or `model_not_found`, and the notice title/message are quoted. | 4 |
+| Dispatched but unacknowledged | `sanad session retry <id> --timeout 5` while the session is busy with another resume | No correlated and no session `resuming` transition within the bound reports `retry_unacknowledged` with the request id and advises `sanad session show <id>`; it is never reported as accepted. | 5 |
+| Invalid invocation | `sanad session retry` with no session id, or `--timeout 0`/negative/non-numeric/above 86400 | `Error:` line plus usage on stderr, `error_code: invalid_arguments` in `--json` mode, and no dispatch. | 2 |
+| Session state unreadable | `sanad session retry <id>` where the projection read returns a typed error | `session_state_unreadable` (exit `8`): nothing was sent, so this is not a rejection. | 8 |
+| Daemon unreachable | `sanad session retry <id>` with no daemon listening | Fails closed without dispatching and reports the transport code, never "Gateway rejected". | 1 |
+| Exhausted automatic retry | a `provider_timeout` worker that already used its one automatic attempt | The blocked notice states `Automatic retry gave up after 1 attempt; retry manually or choose another provider.`; nothing resumes until this command (or the Client's Retry) is used. | — |
+| Streaming prevented a retry | a `provider_timeout` after output started streaming | The blocked notice states `No automatic retry: the response had already started streaming.` | — |
+
+Automated coverage: `agent/test/cli/session_command_test.dart` (group `session retry`),
+`agent/test/cli/retry_acknowledgement_test.dart` (payload shape, acceptance, rejection and
+timeout over a scripted socket), and
+`agent/test/engine/runtime/runner_recovery_coordinator_test.dart` (the exhausted-budget
+note), all daemon-free.
+
+---
+
+## 9. Concurrency & Idempotency (First-Writer-Wins)
 
 | Scenario | Initial State | Concurrency Trigger | Expected Result |
 |---|---|---|---|
@@ -97,7 +185,7 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 
 ---
 
-## 8. Automated One-Shot Intervention Readiness (In-Process Coverage)
+## 10. Automated One-Shot Intervention Readiness (In-Process Coverage)
 
 `agent/test/cli/run_delegation_test.dart` locks the Section 4 policy without a daemon. Turn events are emitted only after the run dispatched the turn (`await client.turnDispatched.future`), because the initial `running` artifact is recorded before the runner subscribes to the client's event streams. The readiness contract is owned by Section 8.1 of `docs/technical/sanad_cli_architecture.md`.
 

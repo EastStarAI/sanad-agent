@@ -105,4 +105,62 @@ void main() {
     expect(notice!.status, RuntimeNoticeStatus.blocked);
     expect(notice.title, 'Conversation history not supported by this model');
   });
+
+  group('automaticRetryNote', () {
+    late RunnerRecoveryCoordinator coordinator;
+
+    setUp(() => coordinator = RunnerRecoveryCoordinator(_Host()));
+
+    test('states that the automatic budget gave up', () {
+      final note = coordinator.automaticRetryNote(
+        attempt: 1,
+        budget: 1,
+        streamStarted: false,
+      );
+      expect(note, contains('gave up after 1 attempt'));
+      expect(note, contains('retry manually'));
+
+      expect(
+        coordinator.automaticRetryNote(
+          attempt: 3,
+          budget: 3,
+          streamStarted: false,
+        ),
+        contains('gave up after 3 attempts'),
+      );
+    });
+
+    test('states that streaming output blocked the automatic retry', () {
+      expect(
+        coordinator.automaticRetryNote(
+          attempt: 0,
+          budget: 1,
+          streamStarted: true,
+        ),
+        contains('already started streaming'),
+      );
+    });
+
+    test('stays silent for a retry that is still available or never eligible',
+        () {
+      expect(
+        coordinator.automaticRetryNote(
+          attempt: 0,
+          budget: 1,
+          streamStarted: false,
+        ),
+        isEmpty,
+        reason: 'a retry is still scheduled, so nothing is exhausted yet',
+      );
+      expect(
+        coordinator.automaticRetryNote(
+          attempt: 0,
+          budget: 0,
+          streamStarted: false,
+        ),
+        isEmpty,
+        reason: 'a failure that is never retried needs no explanation',
+      );
+    });
+  });
 }

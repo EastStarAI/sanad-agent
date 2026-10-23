@@ -8,68 +8,7 @@ import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import '../support/isolated_sanad_test_home.dart';
-
-/// In-memory mock WebSocket implementing the minimal interface required by LocalGatewayCliClient.
-class MockWebSocket implements WebSocket {
-  final _incomingController = StreamController<dynamic>();
-  final List<String> sentMessages = [];
-  bool _closed = false;
-  final Completer<void> _doneCompleter = Completer<void>();
-
-  void emitFromServer(dynamic data) {
-    if (!_closed) {
-      _incomingController.add(data);
-    }
-  }
-
-  void simulateClose([int? closeCode, String? closeReason]) {
-    if (!_closed) {
-      _closed = true;
-      _incomingController.close();
-      if (!_doneCompleter.isCompleted) {
-        _doneCompleter.complete();
-      }
-    }
-  }
-
-  void simulateError(Object error) {
-    if (!_closed) {
-      _incomingController.addError(error);
-    }
-  }
-
-  @override
-  void add(dynamic data) {
-    if (_closed) throw const SocketException('Socket closed');
-    sentMessages.add(data.toString());
-  }
-
-  @override
-  Future close([int? code, String? reason]) async {
-    simulateClose(code, reason);
-  }
-
-  @override
-  StreamSubscription<dynamic> listen(
-    void Function(dynamic event)? onData, {
-    Function? onError,
-    void Function()? onDone,
-    bool? cancelOnError,
-  }) {
-    return _incomingController.stream.listen(
-      onData,
-      onError: onError,
-      onDone: onDone,
-      cancelOnError: cancelOnError,
-    );
-  }
-
-  @override
-  Future get done => _doneCompleter.future;
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
+import '../support/mock_gateway_websocket.dart';
 
 void main() {
   useIsolatedSanadTestHome();
@@ -268,7 +207,7 @@ void main() {
   });
 
   group('LocalGatewayCliClient', () {
-    late MockWebSocket mockSocket;
+    late MockGatewayWebSocket mockSocket;
     late Map<String, dynamic> capturedHeaders;
     late Uri capturedUri;
     late Set<String> answeredHistoryIds;
@@ -280,7 +219,7 @@ void main() {
       Duration connectTimeout = const Duration(seconds: 2),
       Duration requestTimeout = const Duration(seconds: 2),
     }) {
-      mockSocket = MockWebSocket();
+      mockSocket = MockGatewayWebSocket();
       answeredHistoryIds = <String>{};
       return LocalGatewayCliClient(
         gatewayUri: uri ?? Uri.parse('ws://127.0.0.1:58085/gateway'),
@@ -869,6 +808,198 @@ void main() {
       expect(client.state, CliConnectionState.closed);
 
       await client.dispose();
+    });
+    group('steer acknowledgement', () {
+      /// Dispatching is fire-and-forget, so wait for the outbound envelope
+      /// instead of sleeping before the fake server answers it.
+      Future<String> awaitSentSteer() async {
+        while (sentCommands().isEmpty) {
+          await Future<void>.delayed(Duration.zero);
+        }
+        final command = sentCommands().single;
+        expect(command['type'], 'execute_command');
+        expect(command['command'], 'steer');
+        final payload = command['payload'] as Map<String, dynamic>;
+        expect(payload['session_id'], 'session-77');
+        expect(payload['message'], 'Add the audit trail');
+        expect(payload['request_id'], isNotEmpty);
+        expect(command['request_id'], payload['request_id']);
+        return payload['request_id'] as String;
+      }
+
+      test('dispatches the canonical steer envelope', () async {
+        final client = createClient();
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id':
+                  (sentCommands().single['payload'] as Map)['request_id'],
+              'classification': 'steer',
+            },
+          }),
+        );
+
+        final ack = await ackFuture;
+        expect(ack['session_id'], 'session-77');
+        expect(ack['classification'], 'steer');
+        expect(ack['event'], 'session.message_classified');
+        await client.dispose();
+      });
+
+      test('treats a pending-steer record as the acknowledgement', () async {
+        final client = createClient();
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        final requestId = await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.pending_steer_changed',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': requestId,
+              'state': 'pending',
+            },
+          }),
+        );
+
+        final ack = await ackFuture;
+        expect(ack['classification'], 'steer');
+        expect(ack['state'], 'pending');
+        expect(ack['request_id'], requestId);
+        await client.dispose();
+      });
+
+      test('ignores acks published for another request id', () async {
+        final client = createClient(requestTimeout: const Duration(seconds: 5));
+        await client.connect();
+
+        final ackFuture = client.steerAndAwaitAck(
+          sessionId: 'session-77',
+          message: 'Add the audit trail',
+        );
+        final requestId = await awaitSentSteer();
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': 'req-another-turn',
+              'classification': 'queue',
+            },
+          }),
+        );
+        await settle();
+
+        var resolved = false;
+        unawaited(ackFuture.then((_) => resolved = true));
+        await settle();
+        expect(
+          resolved,
+          isFalse,
+          reason: 'another turn classification must not answer this steer',
+        );
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'session.message_classified',
+            'session_id': 'session-77',
+            'payload': {
+              'session_id': 'session-77',
+              'request_id': requestId,
+              'classification': 'steer',
+            },
+          }),
+        );
+        final ack = await ackFuture;
+        expect(ack['classification'], 'steer');
+        await client.dispose();
+      });
+
+      test(
+        'surfaces a typed gateway rejection as a client exception',
+        () async {
+          final client = createClient();
+          await client.connect();
+
+          final ackFuture = client.steerAndAwaitAck(
+            sessionId: 'session-77',
+            message: 'Add the audit trail',
+          );
+          final requestId = await awaitSentSteer();
+
+          mockSocket.emitFromServer(
+            jsonEncode({
+              'type': 'error',
+              'request_id': requestId,
+              'payload': {
+                'request_id': requestId,
+                'code': 'invalid_request',
+                'message': 'steer target is not steerable',
+              },
+            }),
+          );
+
+          await expectLater(
+            ackFuture,
+            throwsA(
+              isA<CliClientException>()
+                  .having((e) => e.code, 'code', 'invalid_request')
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('not steerable'),
+                  ),
+            ),
+          );
+          await client.dispose();
+        },
+      );
+
+      test('raises steer_unacknowledged instead of reporting an unconfirmed '
+          'steer as sent', () async {
+        final client = createClient(
+          requestTimeout: const Duration(milliseconds: 20),
+        );
+        await client.connect();
+
+        await expectLater(
+          client.steerAndAwaitAck(
+            sessionId: 'session-77',
+            message: 'Add the audit trail',
+          ),
+          throwsA(
+            isA<CliClientException>().having(
+              (e) => e.code,
+              'code',
+              'steer_unacknowledged',
+            ),
+          ),
+        );
+        await client.dispose();
+      });
     });
   });
 

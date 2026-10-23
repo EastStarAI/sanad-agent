@@ -1,0 +1,153 @@
+{
+  "generated_by": "cd agent && fvm dart run tool/generate_cli_relay_grammar.dart",
+  "long_value_options": [
+    "account",
+    "answer",
+    "brief-file",
+    "comment",
+    "decision",
+    "execution-root",
+    "expected-version",
+    "file",
+    "gateway-url",
+    "health-timeout",
+    "home",
+    "max-entries",
+    "message",
+    "message-file",
+    "model",
+    "name",
+    "out-dir",
+    "path",
+    "prompt",
+    "provider",
+    "ref",
+    "request-id",
+    "scope",
+    "session",
+    "skill",
+    "sub",
+    "sub-path",
+    "thinking-mode",
+    "timeout",
+    "url",
+    "workspace"
+  ],
+  "long_flags": [
+    "allow",
+    "allow-all-tools",
+    "allow-flagged",
+    "cancel-pairing",
+    "child-process",
+    "deny",
+    "events",
+    "force",
+    "help",
+    "include-messages",
+    "json",
+    "no-stdin",
+    "portal",
+    "quiet",
+    "require-cloud",
+    "standalone",
+    "status",
+    "thinking",
+    "token-stdin",
+    "user-scope",
+    "version"
+  ],
+  "abbreviations": {
+    "a": {
+      "takes_value": true,
+      "names": [
+        "answer"
+      ]
+    },
+    "b": {
+      "takes_value": true,
+      "names": [
+        "brief-file"
+      ]
+    },
+    "c": {
+      "takes_value": true,
+      "names": [
+        "comment"
+      ]
+    },
+    "d": {
+      "takes_value": true,
+      "names": [
+        "decision"
+      ]
+    },
+    "f": {
+      "takes_value": true,
+      "names": [
+        "file",
+        "message-file"
+      ]
+    },
+    "h": {
+      "takes_value": false,
+      "names": [
+        "help"
+      ]
+    },
+    "m": {
+      "takes_value": true,
+      "names": [
+        "model"
+      ]
+    },
+    "n": {
+      "takes_value": true,
+      "names": [
+        "max-entries",
+        "name"
+      ]
+    },
+    "o": {
+      "takes_value": true,
+      "names": [
+        "out-dir"
+      ]
+    },
+    "p": {
+      "takes_value": true,
+      "names": [
+        "prompt"
+      ]
+    },
+    "q": {
+      "takes_value": false,
+      "names": [
+        "quiet"
+      ]
+    },
+    "r": {
+      "takes_value": true,
+      "names": [
+        "request-id"
+      ]
+    },
+    "s": {
+      "takes_value": true,
+      "names": [
+        "session"
+      ]
+    },
+    "v": {
+      "takes_value": false,
+      "names": [
+        "version"
+      ]
+    },
+    "w": {
+      "takes_value": true,
+      "names": [
+        "workspace"
+      ]
+    }
+  }
+}

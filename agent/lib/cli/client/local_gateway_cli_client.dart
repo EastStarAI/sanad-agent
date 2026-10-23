@@ -283,12 +283,18 @@ class LocalGatewayCliClient implements CliTurnClient {
   }
 
   /// Dispatches a `steer` command to guide active agent execution mid-turn.
+  ///
+  /// With [steerOnly] the payload carries `steer_only: true`, which binds the
+  /// daemon to reject the message with a typed `no_active_turn` error when no
+  /// run owns the session instead of admitting it as a turn or queuing it. A
+  /// caller that omits the flag keeps the legacy admit-or-queue behaviour.
   Future<String> steer({
     required String sessionId,
     required String message,
     String? workspaceId,
     String? model,
     String? requestId,
+    bool steerOnly = false,
   }) async {
     final reqId = requestId ?? _uuid.v4();
     final payload = <String, dynamic>{
@@ -297,10 +303,239 @@ class LocalGatewayCliClient implements CliTurnClient {
       'workspace_id': ?workspaceId,
       'model': ?model,
       'request_id': reqId,
+      if (steerOnly) 'steer_only': true,
     };
 
     await sendCommand(command: 'steer', payload: payload, requestId: reqId);
     return reqId;
+  }
+
+  /// Dispatches a `steer` command and waits for the gateway's own delivery
+  /// classification of that message id.
+  ///
+  /// The acknowledgement is the daemon's authoritative classification of the
+  /// dispatched message, never proof that the instruction was applied: a steer
+  /// takes effect at the next execution boundary. The normalized result is
+  /// either a `session.message_classified` frame (`classification` is `steer`
+  /// when the text was registered as a pending steer for the owning run,
+  /// `queue`/`think` when it was admitted some other way), a
+  /// `session.pending_steer_changed` record for the same request id, or a
+  /// `session.queued_message_steer_result`.
+  ///
+  /// A typed gateway rejection is thrown as [CliClientException] carrying the
+  /// gateway's own `code`. No acknowledgement within [requestTimeout] (or the
+  /// caller's [timeout]) raises [CliClientException] with code
+  /// `steer_unacknowledged` so a caller never reports an unconfirmed steer as
+  /// sent.
+  ///
+  /// [steerOnly] is forwarded to [steer], so a daemon that honours it answers
+  /// with a typed `no_active_turn` rejection rather than a `think`/`queue`
+  /// classification when no run owns the session.
+  Future<Map<String, dynamic>> steerAndAwaitAck({
+    required String sessionId,
+    required String message,
+    String? workspaceId,
+    String? model,
+    String? requestId,
+    bool steerOnly = false,
+    Duration? timeout,
+  }) async {
+    final reqId = requestId ?? _uuid.v4();
+    final completer = Completer<Map<String, dynamic>>();
+    final subscription = eventStream.listen((event) {
+      if (completer.isCompleted) return;
+      try {
+        final ack = _steerAckFor(event, reqId, sessionId);
+        if (ack != null) completer.complete(ack);
+      } on CliClientException catch (error) {
+        if (!completer.isCompleted) completer.completeError(error);
+      }
+    });
+    final effectiveTimeout = timeout ?? requestTimeout;
+    try {
+      await steer(
+        sessionId: sessionId,
+        message: message,
+        workspaceId: workspaceId,
+        model: model,
+        requestId: reqId,
+        steerOnly: steerOnly,
+      );
+      return await completer.future.timeout(
+        effectiveTimeout,
+        onTimeout: () => throw CliClientException(
+          'Gateway did not acknowledge the steer within '
+          '${effectiveTimeout.inSeconds}s; it may still be dispatched.',
+          code: 'steer_unacknowledged',
+        ),
+      );
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
+  /// Normalizes one inbound event into a steer acknowledgement for [requestId].
+  ///
+  /// Only frames the daemon publishes for exactly this message id qualify, so
+  /// a classification belonging to another turn can never be mistaken for this
+  /// steer's outcome.
+  Map<String, dynamic>? _steerAckFor(
+    CliEvent event,
+    String requestId,
+    String sessionId,
+  ) {
+    final rawPayload = event.raw['payload'];
+    final payload = rawPayload is Map
+        ? Map<String, dynamic>.from(rawPayload)
+        : const <String, dynamic>{};
+    final eventRequestId =
+        payload['request_id']?.toString() ??
+        payload['target_request_id']?.toString();
+    if (eventRequestId != requestId) return null;
+
+    if (event is CliErrorEvent) {
+      throw CliClientException(
+        event.message,
+        code: event.code.isEmpty ? 'gateway_error' : event.code,
+      );
+    }
+
+    final ack = <String, dynamic>{
+      'session_id': sessionId,
+      'request_id': requestId,
+      'event': event.type,
+    };
+    switch (event.type) {
+      case 'session.message_classified':
+        ack['classification'] = payload['classification']?.toString();
+      case 'session.pending_steer_changed':
+        // Only a record that is still pending (or already delivering/delivered)
+        // proves the text was registered as a steer. A cancelled or recovered
+        // record names the same request id but never became a steer, so it must
+        // not be reported as one.
+        final state = payload['state']?.toString();
+        ack['state'] = state;
+        ack['classification'] = switch (state) {
+          'pending' || 'delivering' || 'delivered' => 'steer',
+          _ => null,
+        };
+      case 'session.queued_message_steer_result':
+        ack['outcome'] = payload['outcome']?.toString();
+      default:
+        ack['classification'] = null;
+    }
+    return ack;
+  }
+
+  /// Dispatches `session.runtime_retry` and waits for the daemon's own
+  /// recovery transition for the session.
+  ///
+  /// The retry resumes the suspended request the session already owns, so the
+  /// acknowledgement is the daemon's recovery projection, not a reply to the
+  /// command: `session.runtime_notice` moving to `resuming` for [sessionId].
+  ///
+  /// * A `resuming` notice for the session is accepted even without a matching
+  ///   request id: the daemon resumes under the *turn's* request id, so a strict
+  ///   correlation would make every successful retry look unacknowledged. The
+  ///   caller's pre-check ensures the session was blocked or waiting first, so a
+  ///   `resuming` transition after the dispatch is the recovery it asked for.
+  /// * A typed rejection is a correlated `error` frame or a correlated
+  ///   `session.runtime_notice` whose status is `blocked`/`fatal`, and is thrown
+  ///   as [CliClientException] carrying the gateway's own code.
+  ///
+  /// No answer within [requestTimeout] (or the caller's [timeout]) raises
+  /// [CliClientException] with code `retry_unacknowledged`, so an unconfirmed
+  /// retry is never reported as accepted.
+  Future<Map<String, dynamic>> retryRuntimeAndAwaitAck({
+    required String sessionId,
+    String? requestId,
+    String? providerInstanceId,
+    String? modelId,
+    Duration? timeout,
+  }) async {
+    final reqId = requestId ?? _uuid.v4();
+    final completer = Completer<Map<String, dynamic>>();
+    final subscription = eventStream.listen((event) {
+      if (completer.isCompleted) return;
+      try {
+        final ack = _retryAckFor(event, reqId, sessionId);
+        if (ack != null) completer.complete(ack);
+      } on CliClientException catch (error) {
+        if (!completer.isCompleted) completer.completeError(error);
+      }
+    });
+    final effectiveTimeout = timeout ?? requestTimeout;
+    try {
+      await sendCommand(
+        command: 'session.runtime_retry',
+        payload: {
+          'session_id': sessionId,
+          'request_id': reqId,
+          'provider_instance_id': ?providerInstanceId,
+          'model_id': ?modelId,
+        },
+        requestId: reqId,
+      );
+      return await completer.future.timeout(
+        effectiveTimeout,
+        onTimeout: () => throw CliClientException(
+          'Gateway did not acknowledge the retry within '
+          '${effectiveTimeout.inSeconds}s; it may still be applied.',
+          code: 'retry_unacknowledged',
+        ),
+      );
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
+  /// Normalizes one inbound event into a retry acknowledgement for
+  /// [requestId] and [sessionId].
+  Map<String, dynamic>? _retryAckFor(
+    CliEvent event,
+    String requestId,
+    String sessionId,
+  ) {
+    final rawPayload = event.raw['payload'];
+    final payload = rawPayload is Map
+        ? Map<String, dynamic>.from(rawPayload)
+        : const <String, dynamic>{};
+    final eventRequestId = payload['request_id']?.toString();
+    final correlated = eventRequestId == requestId;
+    final payloadSessionId = payload['session_id']?.toString();
+    final forThisSession =
+        payloadSessionId == null || payloadSessionId == sessionId;
+
+    if (event is CliErrorEvent) {
+      if (!correlated) return null;
+      throw CliClientException(
+        event.message,
+        code: event.code.isEmpty ? 'gateway_error' : event.code,
+      );
+    }
+    if (event is! CliRuntimeNoticeEvent || !forThisSession) return null;
+
+    final status = payload['status']?.toString();
+    if (status == 'resuming') {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'event': event.type,
+        'status': status,
+        'reason': payload['reason']?.toString(),
+        'notice_request_id': eventRequestId,
+        'correlated': correlated,
+      };
+    }
+    if (correlated && (status == 'blocked' || status == 'fatal')) {
+      final title = payload['title']?.toString() ?? 'Retry rejected';
+      final message = payload['message']?.toString() ?? '';
+      throw CliClientException(
+        message.isEmpty ? title : '$title: $message',
+        code: 'retry_rejected',
+      );
+    }
+    return null;
   }
 
   /// Dispatches a `stop` command and waits for authoritative session state.
@@ -555,15 +790,21 @@ class LocalGatewayCliClient implements CliTurnClient {
   }
 
   /// Queries message history for a specific session.
+  ///
+  /// A typed `error` envelope is thrown as [CliClientException] carrying the
+  /// gateway's own code: an unreadable session projection is never returned as
+  /// if it were session state.
   Future<Map<String, dynamic>> getSessionHistory({
     required String sessionId,
     Duration? timeout,
   }) async {
-    return query(
+    final result = await query(
       command: 'get_session_history',
       payload: {'session_id': sessionId},
       timeout: timeout,
     );
+    _throwIfError(result);
+    return result;
   }
 
   /// Queries registered workspaces.
@@ -772,11 +1013,23 @@ class LocalGatewayCliClient implements CliTurnClient {
     return const [];
   }
 
+  /// Throws the gateway's typed error when [result] is an `error` frame.
+  ///
+  /// The daemon's bridge publishes canonical frames as
+  /// `{type: 'event', event: '<canonical type>', payload: {...}}`, while a
+  /// query handler may answer with a bare `{type: 'error', payload: {...}}`.
+  /// Both shapes are recognized, so a typed rejection is never returned to a
+  /// caller as if it were a successful payload.
   static void _throwIfError(Map<String, dynamic> result) {
-    final type =
-        result['message_type'] ?? result['type'] ?? result['event']?['type'];
+    final eventField = result['event'];
+    final type = eventField is String
+        ? eventField
+        : result['message_type'] ??
+              result['type'] ??
+              (eventField is Map ? eventField['type'] : null);
     if (type == 'error') {
-      final payload = result['payload'] ?? result['event']?['payload'];
+      final payload =
+          result['payload'] ?? (eventField is Map ? eventField['payload'] : null);
       final message = payload is Map ? payload['message']?.toString() : null;
       throw CliClientException(
         message ?? 'Gateway request failed with error.',
