@@ -11,6 +11,11 @@ Contract, inherited from the B10 replay and tightened by its own findings:
   chosen, and when it was the only correct action the honest answer is
   ``abstain``;
 * ``abstain`` and ``reobserve`` are always present and always reserved;
+* a control whose **structural** preconditions fail on this snapshot is dropped
+  before the model is asked: an un-fillable submit is not a candidate at all, so
+  the honest answer becomes ``abstain`` or "type first" instead of an escalation.
+  The guard still re-checks every precondition after the model answers, because a
+  table can go stale between extraction and dispatch;
 * free text longer than ``MAX_TEXT`` is replaced before the state can leave the
   machine, and a text field's value is never emitted - only ``[empty]`` or
   ``[filled]``, because emptiness is decision-relevant and the content is not;
@@ -26,11 +31,16 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from .actions import (
+    DETAIL_IS,
+    FIELD_FILLED,
+    FIELD_PRESENT,
+    MODE_IS,
     TIER_CHROME,
     ActionRule,
     rule_for,
 )
 from .modes import UNKNOWN
+from .observation import element_filled, resolve_key
 
 MAX_CANDIDATES = 32
 MAX_TEXT = 200
@@ -117,6 +127,7 @@ class CandidateTable:
     truncated: Tuple[str, ...]
     dropped: Mapping[str, int]
     element_count: int
+    pruned: Tuple[str, ...] = ()
 
     def row(self, candidate_id: str) -> Optional[Candidate]:
         for row in self.rows:
@@ -212,6 +223,30 @@ def _prune(
     return tuple(kept), tuple(truncated)
 
 
+def _structural_failure(
+    rule: ActionRule, elements: Sequence[Mapping[str, Any]]
+) -> Optional[str]:
+    """The first snapshot-derived precondition this control cannot satisfy.
+
+    Only preconditions that are facts about the snapshot are evaluated here:
+    ``field_filled`` and ``field_present``. ``mode`` and ``detail`` are already
+    enforced by the mode-scoped table, and the guard re-checks all four after the
+    model answers.
+    """
+    for precondition in rule.preconditions:
+        verb, _, argument = precondition.partition(":")
+        if verb == FIELD_FILLED:
+            resolved = resolve_key(elements, argument)
+            if resolved is None or not element_filled(resolved[1]):
+                return precondition
+        elif verb == FIELD_PRESENT:
+            if resolve_key(elements, argument) is None:
+                return precondition
+        elif verb not in (DETAIL_IS, MODE_IS):  # pragma: no cover - table is declared
+            return precondition
+    return None
+
+
 def extract(
     elements: Iterable[Mapping[str, Any]],
     mode: str,
@@ -221,11 +256,13 @@ def extract(
     """Build the closed candidate table for one screen mode."""
     materialized = tuple(elements)
     rows: list[Candidate] = []
+    pruned: list[str] = []
     dropped: Dict[str, int] = {
         "no-key": 0,
         "unclassified": 0,
         "out-of-scope": 0,
         "disabled": 0,
+        "precondition-failed": 0,
         "unknown-mode": 0,
     }
     seen: Dict[str, int] = {}
@@ -250,6 +287,10 @@ def extract(
             continue
         if element.get("enabled") is False:
             dropped["disabled"] += 1
+            continue
+        if _structural_failure(rule, materialized) is not None:
+            dropped["precondition-failed"] += 1
+            pruned.append(key)
             continue
         description, filled = _describe(element, rule)
         rows.append(
@@ -284,4 +325,5 @@ def extract(
         truncated=truncated,
         dropped=dropped,
         element_count=len(materialized),
+        pruned=tuple(pruned),
     )

@@ -22,6 +22,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+# One decision is a step in an interactive loop, not a batch job: P0 measured p50
+# 342 ms and p95 957 ms, so a four-second deadline is already three times the
+# slowest observed call and still short enough to hand the step back to the agent.
+# Override it per model (``JevDecisionModel(timeout=...)``) or from the CLI
+# (``decide --timeout``).
+DEFAULT_DECISION_TIMEOUT = 4.0
+
 
 @dataclass(frozen=True)
 class DecisionContext:
@@ -37,7 +44,11 @@ class DecisionContext:
     recent_actions: Tuple[Mapping[str, Any], ...] = ()
 
     def state(self) -> Dict[str, Any]:
-        """Structured state for a provider call."""
+        """Structured state for a provider call.
+
+        Candidates are *not* repeated here: ``question()["criteria"]`` is their only
+        carrier, so one decision payload describes each option exactly once.
+        """
         return {
             "goal": self.goal,
             "phase": self.phase,
@@ -46,7 +57,6 @@ class DecisionContext:
             "screen_detail": self.mode_detail,
             "completed_phases": list(self.completed_phases),
             "recent_actions": [dict(action) for action in self.recent_actions],
-            "candidates": dict(self.candidates),
         }
 
     def question(self) -> Dict[str, Any]:
@@ -180,7 +190,7 @@ class JevDecisionModel(DecisionModel):
         client: Any,
         *,
         model: Optional[str] = None,
-        timeout: float = 10.0,
+        timeout: float = DEFAULT_DECISION_TIMEOUT,
     ) -> None:
         self._client = client
         self._model = model or getattr(client, "model", "jev-latest")
@@ -190,9 +200,16 @@ class JevDecisionModel(DecisionModel):
     def from_environment(cls, **kwargs: Any) -> "JevDecisionModel":
         from .bridge import JevClient
 
-        return cls(JevClient(**{k: v for k, v in kwargs.items() if k == "model"}))
+        accepted = {key: kwargs[key] for key in ("model",) if key in kwargs}
+        return cls(
+            JevClient(**accepted),
+            timeout=kwargs.get("timeout", DEFAULT_DECISION_TIMEOUT),
+        )
 
     def choose(self, context: DecisionContext) -> ModelChoice:
+        # No try/except here on purpose: ``DecisionLayer.decide`` is the single place
+        # that turns a provider failure into an escalation, so every provider gets
+        # the same behaviour and this method keeps one job.
         response = self._client.ask(
             context.state(),
             {"target": context.question()},
@@ -220,7 +237,7 @@ class JevDecisionModel(DecisionModel):
         )
 
 
-def build_model(spec: str, *, timeout: float = 10.0) -> DecisionModel:
+def build_model(spec: str, *, timeout: float = DEFAULT_DECISION_TIMEOUT) -> DecisionModel:
     """Build a model from a compact CLI spec.
 
     ``fake:<id>:<confidence>`` and ``scripted:<phase>=<id>@<conf>,...`` need no
@@ -239,5 +256,5 @@ def build_model(spec: str, *, timeout: float = 10.0) -> DecisionModel:
             script[phase] = (choice, float(confidence or 1.0))
         return ScriptedDecisionModel(script)
     if spec == "jev":
-        return JevDecisionModel.from_environment()
+        return JevDecisionModel.from_environment(timeout=timeout)
     raise ValueError(f"unknown model spec {spec!r}")

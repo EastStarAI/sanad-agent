@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from .bridge import DecisionPolicy
 from .layer import DecisionLayer, DecisionRequest
-from .model import JevDecisionModel, build_model
+from .model import DEFAULT_DECISION_TIMEOUT, JevDecisionModel, build_model
 from .modes import (
     ASK_USER_CARD,
     CONVERSATION_IDLE,
@@ -43,9 +43,10 @@ USD_PER_MILLION_INPUT_TOKENS = 0.042
 
 DECLINE_CODES = frozenset({"model_abstained", "model_reobserve"})
 
-# Eight labelled decisions across seven modes. ``expect`` marks the two cases the
-# guard must refuse on purpose: the P0 empty-field trap and an irreversible
-# delete that the phase does not pre-authorize.
+# Eight labelled decisions across seven modes. ``expect`` marks the case the guard
+# must refuse on purpose: an irreversible delete the phase does not authorize.
+# ``forbid`` names an id that must never be admitted, whatever the model answers:
+# the P0 empty-field submit, which the extractor no longer even offers.
 SMOKE_PLAN: tuple = (
     {
         "fixture": "01-conversation-idle.json",
@@ -69,11 +70,12 @@ SMOKE_PLAN: tuple = (
         "expected_mode": ASK_USER_CARD,
     },
     {
+        # The empty field means the submit is not a candidate at all, so the honest
+        # answer is the label's ``abstain`` (or "type first"), never the trap id.
         "fixture": "17-ask-user-custom-input.json",
         "phase": "submit_custom_answer",
         "expected_mode": ASK_USER_CARD,
-        "expect": "escalated",
-        "expect_reason": "precondition_failed",
+        "forbid": ("submit_question_answer_btn",),
     },
     {
         "fixture": "18-ask-user-question2.json",
@@ -111,6 +113,8 @@ def _labels(path: Path) -> Dict[str, Dict[str, Any]]:
 
 def _status(outcome: Any, case: Dict[str, Any], label: Dict[str, Any], correct) -> str:
     if outcome.ok:
+        if outcome.admitted.candidate_id in set(case.get("forbid") or ()):
+            return "WRONG"
         return "right" if outcome.admitted.candidate_id in correct else "WRONG"
     code = outcome.escalation.reason_code
     expected = case.get("expect")
@@ -132,6 +136,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--trace", default=None, help="JSONL trace path")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--floor", type=float, default=DEFAULT_FLOOR)
+    parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--model", default=None, help="defaults to the real Jev model")
     args = parser.parse_args(argv)
 
@@ -145,7 +150,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.model and args.model != "jev":
         model = build_model(args.model)
     else:
-        model = JevDecisionModel.from_environment()
+        model = JevDecisionModel.from_environment(
+            timeout=args.timeout if args.timeout is not None else DEFAULT_DECISION_TIMEOUT
+        )
 
     trace = TraceWriter(Path(args.trace)) if args.trace else None
     layer = DecisionLayer(

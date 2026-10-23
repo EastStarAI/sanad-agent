@@ -24,7 +24,7 @@ from typing import Optional, Sequence
 from .bridge import DecisionPolicy
 from .candidates import extract
 from .layer import DEFAULT_MIN_CONFIDENCE, DecisionLayer, DecisionRequest
-from .model import build_model
+from .model import DEFAULT_DECISION_TIMEOUT, build_model
 from .modes import classify
 from .observation import Observation
 from .trace import TraceWriter
@@ -72,7 +72,7 @@ def _decide(args: argparse.Namespace) -> int:
     if args.explain:
         return _explain(observation, args.json)
 
-    model = build_model(args.model)
+    model = build_model(args.model, timeout=args.timeout)
 
     trace = TraceWriter(Path(args.trace)) if args.trace else None
     layer = DecisionLayer(
@@ -132,6 +132,8 @@ def _smoke(args: argparse.Namespace) -> int:
         forwarded += ["--limit", str(args.limit)]
     if args.floor is not None:
         forwarded += ["--floor", str(args.floor)]
+    if args.timeout is not None:
+        forwarded += ["--timeout", str(args.timeout)]
     if args.model:
         forwarded += ["--model", args.model]
     return smoke_main(forwarded)
@@ -162,6 +164,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="jev | fake:<candidate-id>:<confidence> | scripted:<phase>=<id>@<conf>",
     )
     decide.add_argument("--floor", type=float, default=None)
+    decide.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_DECISION_TIMEOUT,
+        help="per-decision deadline in seconds (default: %(default)s)",
+    )
     decide.add_argument("--trace", default=None)
     decide.add_argument("--explain", action="store_true", help="print mode+table only")
     decide.add_argument("--json", action="store_true")
@@ -174,6 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--trace", default=None)
     smoke.add_argument("--limit", type=int, default=None)
     smoke.add_argument("--floor", type=float, default=None)
+    smoke.add_argument("--timeout", type=float, default=None)
     smoke.add_argument("--model", default=None)
     smoke.set_defaults(func=_smoke)
     return parser

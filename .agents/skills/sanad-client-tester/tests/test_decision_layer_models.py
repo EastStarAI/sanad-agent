@@ -89,7 +89,9 @@ class ModelSwapTest(unittest.TestCase):
                 DecisionRequest(goal="g", phase="submit_custom_answer"),
             )
             self.assertFalse(outcome.ok, model.name)
-            self.assertEqual(outcome.escalation.reason_code, "precondition_failed")
+            # The empty-field submit is not in the table at all, so an id that was
+            # never offered is refused by structure, not by confidence.
+            self.assertEqual(outcome.escalation.reason_code, "invalid_target")
 
 
 class JevAdapterTest(unittest.TestCase):
@@ -152,14 +154,30 @@ class JevAdapterTest(unittest.TestCase):
         context = self._context()
         model.choose(context)
         state, questions, timeout = client.calls[0]
-        self.assertEqual(timeout, 10.0)
+        self.assertEqual(timeout, 4.0)
         self.assertEqual(state["screen_mode"], "settings")
         self.assertEqual(state["screen_detail"], "general")
         self.assertEqual(state["completed_phases"], ["open_settings"])
-        self.assertIn("nav_tile_profile", state["candidates"])
         self.assertEqual(questions["target"]["type"], "choice")
-        self.assertEqual(set(questions["target"]["criteria"]), set(state["candidates"]))
-        self.assertLessEqual(len(state["candidates"]), 32)
+        self.assertLessEqual(len(questions["target"]["criteria"]), 32)
+
+    def test_candidates_are_sent_once(self):
+        """F-08: ``question.criteria`` is the only carrier of the candidates."""
+        client = self._StubClient(self._response())
+        model = JevDecisionModel(client)
+        context = self._context()
+        model.choose(context)
+        state, questions, _timeout = client.calls[0]
+        self.assertNotIn("candidates", state)
+        self.assertIn("nav_tile_profile", questions["target"]["criteria"])
+        self.assertEqual(
+            json.dumps(state).count("nav_tile_profile"), 0, "state repeats a candidate"
+        )
+
+    def test_the_deadline_is_configurable(self):
+        client = self._StubClient(self._response())
+        JevDecisionModel(client, timeout=1.5).choose(self._context())
+        self.assertEqual(client.calls[0][2], 1.5)
 
 
 class BuildModelTest(unittest.TestCase):

@@ -68,7 +68,11 @@ class TraceRoundTripTest(unittest.TestCase):
         self.assertEqual(steps[0]["verdict"], "admitted")
         self.assertEqual(steps[0]["action"]["id"], "predefined_option_2")
         self.assertEqual(steps[1]["verdict"], "escalated")
-        self.assertEqual(steps[1]["reason_code"], "precondition_failed")
+        # The trap id is not in the table, so the trace names a target that was
+        # never offered and records what was pruned to keep it out.
+        self.assertEqual(steps[1]["reason_code"], "invalid_target")
+        records = load_trace(self.path)
+        self.assertEqual(records[1]["pruned_ids"], ["submit_question_answer_btn"])
         for step in steps:
             self.assertTrue(step["mode"])
             self.assertTrue(step["candidate_ids"])
@@ -83,6 +87,7 @@ class TraceRoundTripTest(unittest.TestCase):
             self.assertIn("generation", record["snapshot"])
             self.assertIn("fingerprint", record["snapshot"])
             self.assertIsInstance(record["truncated_ids"], list)
+            self.assertIsInstance(record["pruned_ids"], list)
             self.assertIn("dropped", record)
 
     def test_trace_never_contains_entered_values_or_secrets(self):

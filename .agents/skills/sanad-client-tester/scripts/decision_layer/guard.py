@@ -13,6 +13,12 @@ that gate. It runs twice:
 A refusal is always converted into an escalation by the caller. The guard never
 raises, never dispatches, and never reorders its checks: the first failing rule
 is the reported reason, which keeps escalation codes stable and reviewable.
+
+``candidates.extract`` also drops a control whose *snapshot-derived* preconditions
+fail, so the model is not offered an action it could not perform. That filter is a
+convenience in front of this gate, never a replacement for it: ``evaluate_post``
+re-checks every precondition on the live snapshot, and that check is what refuses a
+stale table.
 """
 
 from __future__ import annotations
@@ -33,6 +39,9 @@ UNKNOWN_MODE = "unknown_mode"
 MODE_MISMATCH = "mode_mismatch"
 DIALOG_BLOCKING = "dialog_blocking"
 EMPTY_CANDIDATE_TABLE = "empty_candidate_table"
+PHASE_REENTRY = "phase_reentry"
+MODEL_UNAVAILABLE = "model_unavailable"
+MODEL_CONTRADICTION = "model_contradiction"
 MODEL_ABSTAINED = "model_abstained"
 MODEL_REOBSERVE = "model_reobserve"
 INVALID_TARGET = "invalid_target"
@@ -54,6 +63,9 @@ REASON_CODES = (
     MODE_MISMATCH,
     DIALOG_BLOCKING,
     EMPTY_CANDIDATE_TABLE,
+    PHASE_REENTRY,
+    MODEL_UNAVAILABLE,
+    MODEL_CONTRADICTION,
     MODEL_ABSTAINED,
     MODEL_REOBSERVE,
     INVALID_TARGET,

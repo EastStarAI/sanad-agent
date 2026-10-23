@@ -17,6 +17,7 @@ from .escalation import RESUME_STEPS, EscalationPayload
 from .guard import REASON_CODES, Refusal
 from .layer import DEFAULT_MIN_CONFIDENCE, AdmittedAction, DecisionLayer, DecisionRequest, StepOutcome
 from .model import (
+    DEFAULT_DECISION_TIMEOUT,
     DecisionContext,
     DecisionModel,
     FakeDecisionModel,
@@ -35,6 +36,7 @@ __all__ = [
     "AdmittedAction",
     "Candidate",
     "CandidateTable",
+    "DEFAULT_DECISION_TIMEOUT",
     "DEFAULT_MIN_CONFIDENCE",
     "DecisionContext",
     "DecisionLayer",

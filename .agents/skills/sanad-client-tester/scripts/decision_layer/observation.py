@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional, Tuple
 
 TEXT_FIELD_TYPES = {"TextField", "TextFieldTapRegion"}
 
@@ -14,6 +14,37 @@ def _base_type(raw: Any) -> str:
     if not raw:
         return ""
     return str(raw).split("<", 1)[0].strip()
+
+
+def resolve_key(
+    elements: Iterable[Mapping[str, Any]], pattern: str
+) -> Optional[Tuple[str, Mapping[str, Any]]]:
+    """Resolve an exact key, or a ``prefix*`` key pattern, to one element.
+
+    The extractor filters candidates with the same resolution the guard uses, so a
+    precondition can never mean one thing before the model and another after it.
+    """
+    if pattern.endswith("*"):
+        prefix = pattern[:-1]
+        for element in elements:
+            key = element.get("key")
+            if isinstance(key, str) and key.startswith(prefix):
+                return key, element
+        return None
+    for element in elements:
+        if element.get("key") == pattern:
+            return pattern, element
+    return None
+
+
+def element_filled(element: Optional[Mapping[str, Any]]) -> Optional[bool]:
+    """Whether a text field holds content; ``None`` when it is not a text field."""
+    if element is None:
+        return None
+    if _base_type(element.get("type")) not in TEXT_FIELD_TYPES:
+        return None
+    text = " ".join(str(element.get("text") or "").split())
+    return bool(text)
 
 
 @dataclass(frozen=True)
@@ -50,26 +81,10 @@ class Observation:
 
     def resolve(self, pattern: str) -> Optional[Tuple[str, Mapping[str, Any]]]:
         """Resolve an exact key, or a ``prefix*`` key pattern, to one element."""
-        if pattern.endswith("*"):
-            prefix = pattern[:-1]
-            for element in self.elements:
-                key = element.get("key")
-                if isinstance(key, str) and key.startswith(prefix):
-                    return key, element
-            return None
-        element = self.keyed(pattern)
-        if element is None:
-            return None
-        return pattern, element
+        return resolve_key(self.elements, pattern)
 
     def is_filled(self, key: str) -> Optional[bool]:
-        element = self.keyed(key)
-        if element is None:
-            return None
-        if _base_type(element.get("type")) not in TEXT_FIELD_TYPES:
-            return None
-        text = " ".join(str(element.get("text") or "").split())
-        return bool(text)
+        return element_filled(self.keyed(key))
 
     def key_count(self) -> int:
         return len(self.elements)

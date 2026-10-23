@@ -65,13 +65,13 @@ chosen from a known, finite set:
 .agents/skills/sanad-client-tester/scripts/decision_layer/
   modes.py        deterministic screen-mode classifier + detail refinement
   actions.py      the action table: scope per mode, tap/type, preconditions, irreversibility
-  candidates.py   mode-scoped extractor: stable ids, enabled filter, cap 32, abstain/reobserve
+  candidates.py   mode-scoped extractor: stable ids, enabled filter, structural pre-filter, cap 32, abstain/reobserve
   observation.py  one immutable snapshot with generation/status/fingerprint provenance
   guard.py        the code-owned precondition guard and its stable reason codes
-  model.py        DecisionModel interface, DecisionContext/ModelChoice, fake, Jev
+  model.py        DecisionModel interface, DecisionContext/ModelChoice, fake, Jev, default deadline
   escalation.py   bounded escalation payload + resume contract
   trace.py        JSONL step trace, replay, summary
-  layer.py        the step pipeline and dispatch-time revalidation
+  layer.py        the step pipeline, phase re-entry, provider-failure isolation, dispatch-time revalidation
   cli.py          `decide` (with `--explain`) and `smoke`
   bridge.py       the only module that imports the Jev skill primitives
 tests/fixtures/   24 sanitized captured snapshots + labelled decisions
@@ -79,8 +79,7 @@ tests/fixtures/   24 sanitized captured snapshots + labelled decisions
 
 Only `model.py` knows what Jev is. `bridge.py` is the only module that imports the
 `jev-dual-brain-automation` primitives (`admit_choice`, `CircuitBreaker`,
-`EventWaiter`, `DecisionPolicy`); the guard, extractor, and classifier never see a
-provider.
+`DecisionPolicy`); the guard, extractor, and classifier never see a provider.
 
 ## Screen-mode keyset
 
@@ -104,6 +103,17 @@ options, and the model picker offers only picker controls. That is what makes a
 model list, a settings page, and a device page answerable at all; the screen-agnostic
 table used in P0 silently removed the correct control on 2 of 24 states.
 
+Two filters run before the model sees anything, and neither weakens the guard:
+
+- a control reporting `enabled: false` is dropped;
+- a control whose **structural** precondition fails on the snapshot is dropped and
+  recorded in the trace as `pruned_ids`. The empty-field submit is the case that
+  matters: with the field empty it is not a candidate at all, so the honest answers
+  are `abstain` or "type into the field" instead of an escalation.
+
+The guard still checks every precondition afterwards, on the live snapshot. The
+pre-filter is a convenience in front of that gate, never a replacement for it.
+
 ## Guard rules
 
 The guard runs **before any action is dispatched**, and again on a fresh snapshot at
@@ -118,6 +128,9 @@ first failing rule wins, in this order:
 | `dialog_blocking` | an overlay owns the screen while the phase expects another surface |
 | `mode_mismatch` | the phase's expected mode is not the live mode |
 | `empty_candidate_table` | the mode is known but no declared control is valid |
+| `phase_reentry` | the phase already completed an irreversible action and may not be decided again |
+| `model_unavailable` | the decision model could not answer: network, timeout, HTTP error, redirect, or an unusable body |
+| `model_contradiction` | the reply contradicted itself: probability keys, mass, or argmax disagree with the candidates |
 | `model_abstained` | the model chose `abstain` |
 | `model_reobserve` | the model asked for another observation |
 | `invalid_target` | the selected id is not in the current table |
@@ -138,6 +151,12 @@ empty), so confidence cannot bound correctness here: it is a stall filter, never
 the last gate. The field-state precondition is what makes that class of mistake
 impossible instead of merely unlikely.
 
+A provider failure is never an exception. `layer.decide` catches every failure the
+model raises - network, timeout, HTTP status, redirect, malformed body, or a
+self-contradictory reply - and returns an escalation instead. Its evidence carries
+only the error class, the typed cause code, the HTTP status when there was one, and
+the invariant a contradictory reply broke: never a response body and never a header.
+
 ## Irreversible actions
 
 Irreversible means the action cannot be undone and creates an effect outside the
@@ -154,6 +173,12 @@ app's own state. Declared irreversible in `actions.py`:
 Each requires the phase to pre-authorize **that exact candidate id**; otherwise the
 guard refuses with `irreversible_not_authorized`. Authorization is per phase, never
 global, and it never survives a re-observation.
+
+A phase that recorded an irreversible action is finished: requesting it again is
+refused with `phase_reentry` before any model call, because an irreversible effect
+that already happened cannot be re-authorized. A completed *reversible* phase may
+repeat freely - that is how a multi-step navigation works - and an irreversible
+phase that was decided but never recorded as executed does not burn the phase.
 
 Deliberately **not** irreversible: `permission_option_deny` and
 `permission_deny_submit_button`. Denial refuses a capability, cannot create an
@@ -185,6 +210,12 @@ PYTHONPATH=.agents/skills/sanad-client-tester/scripts \
 Exit code `0` means admitted, `3` means escalated. `smoke` replays the fixture set
 end to end with the real model and writes a trace plus a summary; it is budgeted to
 eight decisions (sixteen calls).
+
+One decision is bounded by a **4 s** default deadline (`DEFAULT_DECISION_TIMEOUT` in
+`model.py`, `DEFAULT_TIMEOUT` in `jev_client.py`). P0 measured p50 342 ms and p95
+957 ms, so four seconds is three times the slowest observed call and still short
+enough to hand the step back to the agent. Override it per model, per client call, or
+from the CLI with `decide --timeout <seconds>`; the smoke command accepts it too.
 
 ## Reading an escalation
 
@@ -218,12 +249,22 @@ Read it in this order:
 3. `selected` and `confidence` say what the model wanted; a high-confidence wrong
    answer is the case the guard exists for.
 4. `candidate_ids` say what was even available; if the right control is missing, fix
-   the action table or the fixture, not the model.
+   the action table or the fixture, not the model, and check `pruned_ids` in the
+   trace for a control the structural filter removed.
+
+A `model_unavailable` escalation means the provider failed, not the scenario: read
+`guard.status` (429 and 5xx are retryable later, 401/403 are configuration) and
+`guard.error_code` (`network`, `timeout`, `http_error`, `redirect`, `malformed`).
+Nothing was dispatched, so the step can be re-observed and decided again. A
+`model_contradiction` escalation names the invariant in `guard.invariant` and means
+the reply was internally inconsistent; do not retry it into an action, hand the step
+to the agent.
 
 ### Resume
 
 1. Re-observe the screen and rebuild the table; do not replay the refused action.
-2. Preserve completed and irreversible-attempted phases; never clear history.
+2. Preserve completed and irreversible-attempted phases; never clear history, and
+   never re-request a phase that a `phase_reentry` refusal named.
 3. Decide only the next safe, retryable step, and re-apply the guard.
 4. A second escalation in the same phase ends the run deterministically.
 

@@ -135,9 +135,14 @@ class ExtractorModeScopeTest(unittest.TestCase):
         )
 
     def test_ask_user_scope_is_the_card(self):
-        keys = {row.key for row in _table("17-ask-user-custom-input.json").rows}
+        table = _table("17-ask-user-custom-input.json")
+        keys = {row.key for row in table.rows}
         self.assertIn("clarifying_question_input", keys)
-        self.assertIn("submit_question_answer_btn", keys)
+        # The answer field is empty, so the submit cannot do anything useful and is
+        # dropped before any model sees the table (F-04).
+        self.assertNotIn("submit_question_answer_btn", keys)
+        self.assertIn("submit_question_answer_btn", table.pruned)
+        self.assertEqual(table.dropped["precondition-failed"], 1)
         self.assertNotIn("chat_input", keys)
 
     def test_model_picker_scope_is_the_picker(self):

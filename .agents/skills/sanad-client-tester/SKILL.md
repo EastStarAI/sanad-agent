@@ -32,7 +32,7 @@ Use the decision layer whenever a step's next action depends on the current scre
 
 **USE the decision layer** — navigation between known destinations, picking one listed option (model, `ask_user` option, search result, settings tile), confirming a reversible dialog, waiting for a state, and fixed form flows. One such step is a single closed-choice call of roughly 0.3–1 s and about $0.00006.
 
-**KEEP the agent** — judging visual or semantic correctness, unknown or unclassifiable screens, authoring free text, diagnosing a failure, and any irreversible step the scenario has not explicitly pre-authorized. A guard refusal, an `unknown` mode, or an `abstain`/`reobserve` answer hands the step back to the agent; never answer an escalation by re-running the refused action.
+**KEEP the agent** — judging visual or semantic correctness, unknown or unclassifiable screens, authoring free text, diagnosing a failure, and any irreversible step the scenario has not explicitly pre-authorized. A guard refusal, a `model_unavailable` / `model_contradiction` escalation, an `unknown` mode, or an `abstain`/`reobserve` answer hands the step back to the agent; never answer an escalation by re-running the refused action.
 
 Load [`references/decision-layer-routing.md`](references/decision-layer-routing.md) for the cost comparison, the guard rules, how to read an escalation, and how to resume.
 

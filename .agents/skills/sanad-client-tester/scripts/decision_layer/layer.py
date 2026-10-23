@@ -3,15 +3,20 @@
 Ownership at a glance:
 
 1. ``modes.classify`` names the surface, deterministically.
-2. ``candidates.extract`` builds the closed, mode-scoped table.
-3. ``guard.evaluate_pre`` refuses an unusable screen *before* any model call.
-4. ``DecisionModel.choose`` makes one closed-choice judgment.
-5. ``guard.evaluate_post`` enforces the selected action's own preconditions and
+2. ``candidates.extract`` builds the closed, mode-scoped table, and drops a control
+   whose structural preconditions fail before any model sees it.
+3. Phase re-entry is refused here: a completed **irreversible** phase may never be
+   decided again, so no provider is asked to re-authorize what already happened.
+4. ``guard.evaluate_pre`` refuses an unusable screen *before* any model call.
+5. ``DecisionModel.choose`` makes one closed-choice judgment, and any failure it
+   raises - network, timeout, HTTP error, malformed or contradictory reply - becomes
+   an escalation instead of an exception.
+6. ``guard.evaluate_post`` enforces the selected action's own preconditions and
    its irreversible-authorization boundary.
-6. ``admit_choice`` applies the confidence/selected-probability threshold last, as
+7. ``admit_choice`` applies the confidence/selected-probability threshold last, as
    a stall filter - never as the only gate.
-7. ``CircuitBreaker`` refuses a repeat or an oscillation before dispatch.
-8. The trace records the whole step so it can be replayed.
+8. ``CircuitBreaker`` refuses a repeat or an oscillation before dispatch.
+9. The trace records the whole step so it can be replayed.
 
 Execution is not owned here: the layer returns one admitted action and the caller
 performs exactly one driver action, then calls ``revalidate`` before dispatch and
@@ -22,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Set, Tuple
 
 from .bridge import (
     ActionRecord,
@@ -34,7 +39,15 @@ from .bridge import (
 )
 from .candidates import CandidateTable, extract
 from .escalation import EscalationPayload
-from .guard import Refusal, evaluate_post, evaluate_pre
+from .guard import (
+    MODEL_CONTRADICTION,
+    MODEL_UNAVAILABLE,
+    PHASE_REENTRY,
+    PRECONDITION_FAILED,
+    Refusal,
+    evaluate_post,
+    evaluate_pre,
+)
 from .model import DecisionContext, DecisionModel, ModelChoice
 from .modes import ModeEvidence, classify
 from .observation import Observation
@@ -129,6 +142,9 @@ class DecisionLayer:
         self.breaker = breaker or CircuitBreaker()
         self.completed_phases: Tuple[str, ...] = tuple(completed_phases)
         self.recent_actions: Tuple[Mapping[str, Any], ...] = ()
+        # Phases whose admitted action was irreversible and which were recorded as
+        # done. A completed irreversible phase is never decided twice.
+        self.irreversible_phases: Set[str] = set()
         self._step = 0
         self.outcomes: list = []
 
@@ -137,11 +153,37 @@ class DecisionLayer:
         self._step += 1
         mode_evidence = classify(observation.elements)
         table = extract(observation.elements, mode_evidence.mode, mode_evidence.detail)
+        if request.phase in self.irreversible_phases:
+            return self._escalate(
+                observation,
+                request,
+                mode_evidence,
+                table,
+                Refusal(
+                    PHASE_REENTRY,
+                    f"phase {request.phase!r} already completed an irreversible action",
+                    {
+                        "phase": request.phase,
+                        "irreversible_phases": sorted(self.irreversible_phases),
+                    },
+                ),
+                None,
+            )
         refusal = evaluate_pre(observation, request, mode_evidence, table)
         if refusal is not None:
             return self._escalate(observation, request, mode_evidence, table, refusal, None)
 
-        choice = self.model.choose(self._context(request, mode_evidence, table))
+        try:
+            choice = self.model.choose(self._context(request, mode_evidence, table))
+        except Exception as error:  # noqa: BLE001 - a provider failure must never crash a step
+            return self._escalate(
+                observation,
+                request,
+                mode_evidence,
+                table,
+                _refusal_from_error(error),
+                None,
+            )
         refusal = evaluate_post(
             observation, request, mode_evidence, table, choice.choice
         )
@@ -221,6 +263,15 @@ class DecisionLayer:
         mode_evidence = classify(observation.elements)
         table = extract(observation.elements, mode_evidence.mode, mode_evidence.detail)
         refusal = evaluate_pre(observation, request, mode_evidence, table)
+        if refusal is None and admitted.key in table.pruned:
+            # The control is still on the screen but its declared precondition no
+            # longer holds, so this is a precondition failure - not a vanished id.
+            # Reporting it precisely is what keeps the resume step honest.
+            refusal = Refusal(
+                PRECONDITION_FAILED,
+                f"{admitted.key} can no longer be {admitted.action}ed on this screen",
+                {"key": admitted.key, "pruned": True},
+            )
         if refusal is None:
             refusal = evaluate_post(
                 observation, request, mode_evidence, table, admitted.candidate_id
@@ -250,6 +301,9 @@ class DecisionLayer:
         self.recent_actions = history
         if phase not in self.completed_phases:
             self.completed_phases = self.completed_phases + (phase,)
+        if self._admitted_irreversible(candidate_id):
+            # The action ran: this phase can never be decided again.
+            self.irreversible_phases.add(phase)
         try:
             self.breaker.record(
                 ActionRecord(phase, candidate_id, before_fingerprint, after_fingerprint)
@@ -277,6 +331,13 @@ class DecisionLayer:
         return None
 
     # -- internals --------------------------------------------------------
+    def _admitted_irreversible(self, candidate_id: str) -> bool:
+        """Whether the most recent admission of this id was irreversible."""
+        for outcome in reversed(self.outcomes):
+            if outcome.admitted is not None and outcome.admitted.candidate_id == candidate_id:
+                return bool(outcome.admitted.irreversible)
+        return False
+
     def _context(
         self, request: DecisionRequest, mode_evidence: ModeEvidence, table: CandidateTable
     ) -> DecisionContext:
@@ -361,6 +422,7 @@ class DecisionLayer:
             "snapshot": observation.reference(),
             "candidate_ids": list(table.candidates),
             "truncated_ids": list(table.truncated),
+            "pruned_ids": list(table.pruned),
             "dropped": dict(table.dropped),
             "model": choice.model if choice is not None else self.model.name,
             "model_latency_ms": choice.latency_ms if choice is not None else None,
@@ -386,4 +448,31 @@ def _refusal_from(error: EscalationRequired) -> Refusal:
         _CODE_MAP.get(escalation.code, escalation.code.value),
         escalation.reason,
         dict(escalation.context or {}),
+    )
+
+
+def _refusal_from_error(error: BaseException) -> Refusal:
+    """Turn any provider failure into an escalation, carrying no body and no headers.
+
+    Only the error's class name, its typed cause code, its HTTP status, and the
+    consistency invariant it broke are reported; never ``str(error)``, because a
+    provider message can echo request content.
+    """
+    code = getattr(error, "code", None)
+    invariant = getattr(error, "invariant", None)
+    status = getattr(error, "status", None)
+    contradictory = code == "contradiction" or bool(invariant)
+    evidence: dict = {"error_class": type(error).__name__}
+    if isinstance(code, str):
+        evidence["error_code"] = code
+    if isinstance(status, int):
+        evidence["status"] = status
+    if isinstance(invariant, str):
+        evidence["invariant"] = invariant
+    return Refusal(
+        MODEL_CONTRADICTION if contradictory else MODEL_UNAVAILABLE,
+        "the decision model answered with a self-contradictory payload"
+        if contradictory
+        else "the decision model could not answer; no action was taken",
+        evidence,
     )

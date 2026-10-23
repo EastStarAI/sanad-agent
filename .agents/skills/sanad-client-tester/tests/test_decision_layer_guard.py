@@ -14,6 +14,7 @@ from decision_layer.guard import (  # noqa: E402
     IRREVERSIBLE_NOT_AUTHORIZED,
     MODEL_ABSTAINED,
     MODEL_REOBSERVE,
+    PHASE_REENTRY,
     PRECONDITION_FAILED,
     REPEATED_TARGET,
     TARGET_ABSENT,
@@ -21,7 +22,11 @@ from decision_layer.guard import (  # noqa: E402
     evaluate_post,
 )
 from decision_layer.layer import DecisionLayer, DecisionRequest  # noqa: E402
-from decision_layer.model import FakeDecisionModel  # noqa: E402
+from decision_layer.model import (  # noqa: E402
+    DecisionModel,
+    FakeDecisionModel,
+    ModelChoice,
+)
 from decision_layer.modes import classify  # noqa: E402
 from decision_layer.observation import Observation  # noqa: E402
 
@@ -50,10 +55,55 @@ def _decide(name: str, phase: str, choice: str, *, confidence=0.99, authorize=()
     return layer, outcome
 
 
-class P0TrapTest(unittest.TestCase):
-    """The measured P0 failure: submit selected at 0.98 with an empty field."""
+def _filled_trap_observation() -> Observation:
+    """Fixture 17 with the answer field filled, so the submit is admissible."""
+    payload = json.loads(
+        (FIXTURES / "17-ask-user-custom-input.json").read_text(encoding="utf-8")
+    )
+    elements = [
+        dict(element, text="app/")
+        if element.get("key") == "clarifying_question_input"
+        else element
+        for element in payload["elements"]
+    ]
+    return Observation.from_snapshot({"elements": elements})
 
-    def test_empty_field_submit_is_refused_even_at_099(self):
+
+class P0TrapTest(unittest.TestCase):
+    """The measured P0 failure: submit selected at 0.98 with an empty field.
+
+    Two independent refusals now cover it. The extractor never offers an
+    un-fillable submit, so the model cannot choose it at all; and the post-model
+    guard still refuses it whenever a stale table does contain it.
+    """
+
+    def test_the_trap_candidate_is_never_sent_to_the_model(self):
+        observation = _observation("17-ask-user-custom-input.json")
+        evidence = classify(observation.elements)
+        table = extract(observation.elements, evidence.mode, evidence.detail)
+        self.assertNotIn("submit_question_answer_btn", table.candidates)
+        self.assertIn("submit_question_answer_btn", table.pruned)
+        self.assertEqual(table.dropped["precondition-failed"], 1)
+        # The field itself stays available, so "type first" is still answerable.
+        self.assertIn("clarifying_question_input", table.candidates)
+
+    def test_the_model_receives_the_filtered_table_only(self):
+        seen = {}
+
+        class _CapturingModel(FakeDecisionModel):
+            def choose(self, context):
+                seen.update(context.candidates)
+                return super().choose(context)
+
+        layer = DecisionLayer(_CapturingModel("abstain", 0.99))
+        outcome = layer.decide(
+            _observation("17-ask-user-custom-input.json"),
+            DecisionRequest(goal="submit the typed answer", phase="submit_custom_answer"),
+        )
+        self.assertNotIn("submit_question_answer_btn", seen)
+        self.assertEqual(outcome.escalation.reason_code, MODEL_ABSTAINED)
+
+    def test_the_trap_id_is_still_refused_even_at_099(self):
         layer, outcome = _decide(
             "17-ask-user-custom-input.json",
             "submit_custom_answer",
@@ -61,34 +111,48 @@ class P0TrapTest(unittest.TestCase):
             confidence=0.99,
         )
         self.assertFalse(outcome.ok)
-        self.assertEqual(outcome.escalation.reason_code, PRECONDITION_FAILED)
+        self.assertEqual(outcome.escalation.reason_code, INVALID_TARGET)
         self.assertEqual(outcome.escalation.selected, "submit_question_answer_btn")
-        self.assertIn("clarifying_question_input", outcome.escalation.detail)
-        # The guard, not a pre-filter, did the work: the model was consulted.
+        # The model was consulted, and its high confidence bought nothing.
         self.assertEqual(layer.model.calls, ["submit_custom_answer"])
 
-    def test_structural_refusal_is_reported_before_low_confidence(self):
-        _layer, outcome = _decide(
-            "17-ask-user-custom-input.json",
-            "submit_custom_answer",
+    def test_the_post_model_guard_still_refuses_a_stale_table(self):
+        """The guard keeps its own check; the pre-filter is not a replacement."""
+        filled = _filled_trap_observation()
+        evidence = classify(filled.elements)
+        table = extract(filled.elements, evidence.mode, evidence.detail)
+        self.assertIn("submit_question_answer_btn", table.candidates)
+        # The screen then goes empty: exactly what a stale admission looks like.
+        refusal = evaluate_post(
+            _observation("17-ask-user-custom-input.json"),
+            DecisionRequest(goal="g", phase="submit_custom_answer"),
+            evidence,
+            table,
             "submit_question_answer_btn",
-            confidence=0.10,
         )
-        self.assertEqual(outcome.escalation.reason_code, PRECONDITION_FAILED)
+        self.assertEqual(refusal.code, PRECONDITION_FAILED)
+        self.assertIn("clarifying_question_input", refusal.detail)
+
+    def test_structural_refusal_is_reported_before_low_confidence(self):
+        filled = _filled_trap_observation()
+        evidence = classify(filled.elements)
+        table = extract(filled.elements, evidence.mode, evidence.detail)
+        for confidence in (0.10, 0.99):
+            refusal = evaluate_post(
+                _observation("17-ask-user-custom-input.json"),
+                DecisionRequest(goal="g", phase="submit_custom_answer"),
+                evidence,
+                table,
+                "submit_question_answer_btn",
+            )
+            self.assertEqual(refusal.code, PRECONDITION_FAILED, confidence)
 
     def test_a_filled_field_is_admitted(self):
-        payload = json.loads(
-            (FIXTURES / "17-ask-user-custom-input.json").read_text(encoding="utf-8")
-        )
-        elements = [
-            dict(element, text="app/") if element.get("key") == "clarifying_question_input" else element
-            for element in payload["elements"]
-        ]
         _layer, outcome = _decide(
             "17-ask-user-custom-input.json",
             "submit_custom_answer",
             "submit_question_answer_btn",
-            observation=Observation.from_snapshot({"elements": elements}),
+            observation=_filled_trap_observation(),
         )
         self.assertTrue(outcome.ok, outcome.escalation and outcome.escalation.to_dict())
         self.assertEqual(outcome.admitted.candidate_id, "submit_question_answer_btn")
@@ -236,6 +300,15 @@ class StructuralGuardTest(unittest.TestCase):
         self.assertEqual(refusal.code, UNCLASSIFIED_TARGET)
 
     def test_denial_submit_requires_the_deny_form(self):
+        """The extractor prunes this form; the guard still reports the reason.
+
+        The table is built from the complete screen and checked against the screen
+        that lost its deny-comment field: a stale table, which is the only way this
+        candidate can reach the guard any more.
+        """
+        complete = _observation("21-permission-deny-comment.json")
+        evidence = classify(complete.elements)
+        table = extract(complete.elements, evidence.mode, evidence.detail)
         payload = json.loads(
             (FIXTURES / "21-permission-deny-comment.json").read_text(encoding="utf-8")
         )
@@ -248,8 +321,6 @@ class StructuralGuardTest(unittest.TestCase):
                 ]
             }
         )
-        evidence = classify(observation.elements)
-        table = extract(observation.elements, evidence.mode, evidence.detail)
         refusal = evaluate_post(
             observation,
             DecisionRequest(goal="g", phase="p"),
@@ -259,6 +330,90 @@ class StructuralGuardTest(unittest.TestCase):
         )
         self.assertEqual(refusal.code, PRECONDITION_FAILED)
         self.assertIn("permission_deny_comment_input", refusal.detail)
+        # And on the complete screen the extractor keeps it, since the form exists.
+        stripped = extract(observation.elements, evidence.mode, evidence.detail)
+        self.assertIn("permission_deny_submit_button", stripped.pruned)
+
+
+class _RotatingModel(DecisionModel):
+    """One target per call, in order, so a phase can legitimately repeat."""
+
+    name = "rotating"
+
+    def __init__(self, choices) -> None:
+        self._choices = tuple(choices)
+        self.calls = []
+
+    def choose(self, context) -> ModelChoice:
+        self.calls.append(context.phase)
+        target = self._choices[(len(self.calls) - 1) % len(self._choices)]
+        return ModelChoice(
+            choice=target,
+            confidence=0.99,
+            probabilities={target: 0.99, "abstain": 0.01},
+            latency_ms=1,
+            model="rotating-1",
+        )
+
+
+class PhaseReentryTest(unittest.TestCase):
+    """F-03: a completed irreversible phase can never be decided again."""
+
+    def test_a_completed_irreversible_phase_is_refused_before_the_model(self):
+        layer = DecisionLayer(FakeDecisionModel("permission_option_once", 0.99))
+        request = DecisionRequest(
+            goal="allow this read once",
+            phase="approve_once",
+            authorizations=frozenset({"permission_option_once"}),
+        )
+        first = layer.decide(_observation("20-permission-card.json"), request)
+        self.assertTrue(first.ok)
+        self.assertIsNone(
+            layer.record_action("approve_once", first.admitted.candidate_id, "before", "after")
+        )
+        self.assertEqual(layer.irreversible_phases, {"approve_once"})
+        calls = list(layer.model.calls)
+
+        again = layer.decide(_observation("20-permission-card.json"), request)
+        self.assertFalse(again.ok)
+        self.assertEqual(again.escalation.reason_code, PHASE_REENTRY)
+        self.assertEqual(again.escalation.guard["phase"], "approve_once")
+        # The provider was never asked to re-authorize what already happened.
+        self.assertEqual(layer.model.calls, calls)
+
+    def test_an_unrecorded_irreversible_step_does_not_burn_the_phase(self):
+        layer = DecisionLayer(FakeDecisionModel("permission_option_once", 0.99))
+        request = DecisionRequest(
+            goal="allow this read once",
+            phase="approve_once",
+            authorizations=frozenset({"permission_option_once"}),
+        )
+        self.assertTrue(layer.decide(_observation("20-permission-card.json"), request).ok)
+        # The dispatch never happened, so the phase is still decidable.
+        self.assertEqual(layer.irreversible_phases, set())
+        self.assertTrue(layer.decide(_observation("20-permission-card.json"), request).ok)
+
+    def test_a_completed_reversible_phase_may_repeat(self):
+        layer = DecisionLayer(
+            _RotatingModel(("nav_tile_profile", "nav_tile_general", "nav_tile_overview"))
+        )
+        observation = _observation("08-settings-root.json")
+        for index in range(3):
+            outcome = layer.decide(
+                observation, DecisionRequest(goal="open a settings page", phase="navigate")
+            )
+            self.assertTrue(outcome.ok, index)
+            self.assertIsNone(
+                layer.record_action(
+                    "navigate",
+                    outcome.admitted.candidate_id,
+                    f"before{index}",
+                    f"after{index}",
+                )
+            )
+        self.assertEqual(layer.model.calls, ["navigate"] * 3)
+        self.assertEqual(layer.irreversible_phases, set())
+        self.assertEqual(layer.completed_phases, ("navigate",))
 
 
 class DispatchTimeRevalidationTest(unittest.TestCase):

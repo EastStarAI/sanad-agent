@@ -93,11 +93,14 @@ reference is also the agent-facing routing rule. This page owns the contract.
 ### What the model may and may not see
 
 - Structured state with named fields: goal, phase, screen mode and detail, completed
-  phases, recent actions, and the closed candidate table.
+  phases, and recent actions.
+- The closed candidate table, carried exactly once, as the question's `criteria`.
 - Stable ids derived from widget keys, plus the descriptions extracted from the live
   tree.
 - No entered text (only `[empty]`/`[filled]`), no secrets, no screenshots, and no
   conversation transcript.
+- No control whose structural precondition already fails: a submit with an empty
+  field is not offered at all, so the model cannot pick it even if it would have.
 
 ### Measured behaviour on this surface
 
@@ -118,7 +121,9 @@ A later end-to-end smoke over the curated fixtures (8 decisions, 8 calls, model
 `jev-1.14.0`) recorded **6 correct admissions, 0 wrong actions, 2 refusals by
 design** (the empty-field submit and an unauthorized account delete), p50 333 ms,
 p95 433 ms, ≈$0.000046 per decision over 8,825 input tokens. The same smoke is the
-only code path that spends real model calls; its budget is 20.
+only code path that spends real model calls; its budget is 20. That recording
+predates the structural pre-filter: the empty-field submit is now never offered, so a
+re-run of the same fixture is expected to answer `abstain` instead of escalating.
 
 **Consequence, and the central law of this contract: confidence does not bound
 correctness on this surface, so it can never be the last gate before an action.**
@@ -139,6 +144,9 @@ dispatch time. It refuses with a stable reason code instead of acting:
 | `dialog_blocking` | an overlay owns the screen while the phase expects another surface |
 | `mode_mismatch` | the phase's expected mode is not the live mode |
 | `empty_candidate_table` | the mode is known but no declared control is valid |
+| `phase_reentry` | the phase already completed an irreversible action and may not be decided again |
+| `model_unavailable` | the decision model could not answer: network, timeout, HTTP error, redirect, or an unusable body |
+| `model_contradiction` | the reply contradicted itself: probability keys, mass, or argmax disagree with the candidates |
 | `model_abstained` | the model chose `abstain` |
 | `model_reobserve` | the model asked for another observation |
 | `invalid_target` | the selected id is not in the current candidate table |
@@ -157,6 +165,44 @@ Ordering is part of the contract: structural checks run first, the confidence fi
 last. A precondition failure on an empty text field is reported as
 `precondition_failed` even when the model returned 0.98, and even when the model was
 also uncertain.
+
+Two facts make that guarantee categorical rather than probabilistic:
+
+- the extractor drops a control whose structural precondition fails on the snapshot,
+  so the un-fillable submit is never a candidate; the guard re-checks the same
+  preconditions on the live snapshot, which is what still refuses a stale table;
+- the guard's checks depend on the screen, not on the reply's confidence.
+
+### Provider failures
+
+A model or provider failure never crashes a step. `DecisionLayer.decide` catches
+whatever the model raises - network failure, deadline, HTTP error status, redirect,
+malformed body, or a self-contradictory answer - and returns an escalation:
+
+| Reason code | Cause | Evidence |
+| --- | --- | --- |
+| `model_unavailable` | network, timeout, redirect, HTTP error status, unusable body | `error_class`, `error_code` (`network`, `timeout`, `http_error`, `redirect`, `malformed`), `status` when a response existed |
+| `model_contradiction` | the reply is internally inconsistent | `invariant`: `choice_in_criteria`, `choice_probability_key_set`, `choice_probability_value`, `choice_probability_range`, `choice_probability_sum`, `choice_is_argmax` |
+
+The evidence carries no response body and no header, so an escalation can be logged
+and handed to the agent without leaking provider detail. The client itself is typed:
+`JevClientError` keeps the cause code and the HTTP status, refuses to follow a
+redirect (a 3xx would send the bearer token to another origin), and rejects a choice
+whose probability keys do not match the candidates, whose mass is not 1 ± 0.01, or
+whose option is not the argmax.
+
+One decision also has a **4 s** default deadline (`DEFAULT_DECISION_TIMEOUT`), against
+P0's p50 342 ms and p95 957 ms. It is configurable per model, per client call, and
+per `decide --timeout` invocation.
+
+### Phase re-entry
+
+An irreversible phase is one-shot. Once an admitted irreversible action has been
+recorded as executed, requesting that phase again is refused with `phase_reentry`
+before any model call: the effect already happened, so nothing may re-authorize it. A
+completed **reversible** phase may repeat, which is how multi-step navigation works,
+and an irreversible phase that was decided but never recorded as executed does not
+burn the phase.
 
 ### Irreversible actions
 
@@ -178,21 +224,37 @@ value.
 Resume contract:
 
 1. Read `reason_code` and `guard` first; a precondition failure is a mechanical fact.
-2. Re-observe the screen and rebuild the candidate table; do not replay the refused
+2. A `model_unavailable` escalation means the provider failed and nothing was
+   dispatched: re-read `guard.status` and `guard.error_code`, then re-observe.
+3. Re-observe the screen and rebuild the candidate table; do not replay the refused
    action.
-3. Preserve completed and irreversible-attempted phases; never clear history.
-4. Decide only the next safe, retryable step and re-apply the guard.
-5. A second escalation in the same phase ends the run deterministically.
+4. Preserve completed and irreversible-attempted phases; never clear history, and
+   never re-request a phase that a `phase_reentry` refusal named.
+5. Decide only the next safe, retryable step and re-apply the guard.
+6. A second escalation in the same phase ends the run deterministically.
 
 ### Trace
 
 Every decided step appends one JSONL line: step index, timestamp, goal, phase,
 expected mode, classified mode with its evidence keys, the snapshot reference
 (generation, fingerprint, element count), the full candidate id set, the ids removed
-by the 32-item cap, the model name and latency, the selected id with confidence and
-selected probability, the verdict, the reason code when refused, and the admitted
-action. A trace is sufficient to re-judge every step without the model, and the
-skill tests assert its shape.
+by the 32-item cap, the controls pruned by the structural pre-filter, the model name
+and latency, the selected id with confidence and selected probability, the verdict,
+the reason code when refused, and the admitted action. A trace is sufficient to
+re-judge every step without the model, and the skill tests assert its shape.
+
+## Deferred to P3
+
+Two review findings are deliberately **not** implemented in P1 and are carried into
+the first live scenario:
+
+- **Endpoint and model overrides.** `jev_client.py` still hardcodes
+  `https://api.typesafe.ai/v1/systemone` and `jev-latest`, so it cannot be pointed at
+  a local proxy, a gateway, or a compatible alternative provider without a source
+  edit. Tests that need another origin still patch the class attribute.
+- **Rate and cost brake.** `DecisionLayer` and `JevDecisionModel` have no requests-per-
+  minute or per-run USD ceiling; only the smoke command is budgeted (20 calls). A
+  multi-step live loop needs its own brake before it runs unattended.
 
 ## Routing rule
 
