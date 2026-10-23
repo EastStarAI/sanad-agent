@@ -42,6 +42,10 @@ export const ACTIONABLE_KINDS = new Set([
   'supervisor_dead',
   // The automatic recovery policy gave up; a coordinator must take over.
   'retry_exhausted',
+  // The direct child exited while members of its process group are still alive:
+  // the transport is gone but part of the tree is not, so nothing may describe
+  // the turn as unattended until a coordinator decides to signal that group.
+  'worker_group_alive',
 ]);
 
 // States an orchestrator must react to: terminal outcomes plus every stop that

@@ -8,8 +8,9 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 // The only sanctioned way for a test to signal a process, plus the ownership-
-// proven sweep used by the teardown below.
-import { sweepOrphanedFixtures } from './process_guard.mjs';
+// proven sweep used by the teardown below. `groupMembers` reads one process
+// group by the id a fixture manifest recorded, never by a name or a pattern.
+import { groupMembers, sweepOrphanedFixtures } from './process_guard.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = resolve(HERE, '..');
@@ -2711,11 +2712,21 @@ test('progress_stall is journaled once per stall and progress_resumed clears it'
   const stalls = journal.filter((event) => event.kind === 'progress_stall');
   const resumes = journal.filter((event) => event.kind === 'progress_resumed');
   // One stall before the progress burst, one after: never a stream of repeats.
-  assert.equal(stalls.length, 2);
+  // The count is only exact when a compressed 400 ms tick lands where the test
+  // expects, so the invariant is asserted instead: stalls and resumes alternate,
+  // a stall is never journaled twice for the same silence.
+  assert.ok(stalls.length >= 2, 'each silent stretch is reported');
   assert.ok(resumes.length >= 1);
   assert.equal(stalls[0].thresholdMs, 400);
   assert.ok(stalls[0].silentForMs >= 400);
   assert.equal(stalls[1].taskId, 'silent');
+  const stallKinds = journal
+    .filter((event) => ['progress_stall', 'progress_resumed'].includes(event.kind))
+    .map((event) => event.kind);
+  assert.equal(stallKinds[0], 'progress_stall');
+  for (let index = 1; index < stallKinds.length; index += 1) {
+    assert.notEqual(stallKinds[index], stallKinds[index - 1], 'a stall is never repeated before its resume');
+  }
 
   // A stall notice is actionable for a coordinator; the resume is not.
   const watchBatch = runNode(SUPERVISOR, [
@@ -3682,6 +3693,22 @@ function writeSessionState(path, payload) {
   writeFileSync(path, `${JSON.stringify(payload)}\n`, 'utf8');
 }
 
+// The durable completion evidence `sanad session show --json` exposes: the CLI
+// counts the persisted messages, so a turn that produced a final answer has one
+// more `final_answers` row than it had user turns. A turn interrupted after its
+// tool activity leaves `replies` at 0 — the 2026-10-23 shape.
+function sessionSummary({ users = 1, replies = 0, tools = 1 } = {}) {
+  return {
+    message_count: users + replies + (tools * 2) + 1,
+    user_messages: users,
+    final_answers: replies,
+    tool_calls: tools,
+    tool_results: tools,
+    reasoning_rows: 1,
+    thought_rows: 0,
+  };
+}
+
 function followEnv(root, extra = {}) {
   return {
     ...process.env,
@@ -3710,6 +3737,119 @@ function watchOnce(runDir, since, env) {
   return JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(since)], env));
 }
 
+// ---------------------------------------------------------------------------
+// A fake transport that behaves like `fvm` did on 2026-10-23.
+//
+// The wrapper is the direct child the supervisor spawns; the grandchild is the
+// real worker it represents. The grandchild ignores SIGTERM, so a signal that
+// reaches only the wrapper leaves it running — which is exactly how `kill <fvm
+// pid>` orphaned the `dartvm … sanad_agent.dart run` process while the session
+// stayed attached. `FAKE_WRAPPER_MODE` picks the shape:
+//
+// - `orphan`: the wrapper writes the timeline, its early result, exits 1, and
+//   leaves the grandchild behind (a transport that died mid-turn).
+// - `live`: the wrapper stays alive until it is signalled, forwards SIGTERM to
+//   the grandchild, and exits — the shape `cancel` has to handle.
+// ---------------------------------------------------------------------------
+function writeFakeWrapperFixture(root) {
+  const workerPath = join(root, 'fake_transport_child.mjs');
+  const wrapperPath = join(root, 'fake_transport_wrapper.mjs');
+  writeFileSync(workerPath, `
+    import {appendFileSync, writeFileSync} from 'node:fs';
+    const root = process.argv[2];
+    // A signal a wrapper forwards is ignored: only a group signal can stop this.
+    process.on('SIGTERM', () => { appendFileSync(root + '/child.log', 'sigterm-ignored ' + Date.now() + '\\n'); });
+    writeFileSync(root + '/child.pid', String(process.pid));
+    setInterval(() => appendFileSync(root + '/child.log', 'beat ' + Date.now() + '\\n'), 40);
+  `, 'utf8');
+  writeFileSync(wrapperPath, `
+    import {spawn} from 'node:child_process';
+    import {appendFileSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+    const args = process.argv.slice(2);
+    const root = process.env.FAKE_WRAPPER_ROOT;
+    const mode = process.env.FAKE_WRAPPER_MODE || 'orphan';
+    const readFlag = (flag) => { const i = args.indexOf(flag); return i === -1 ? null : args[i + 1]; };
+    // The follower observes the turn with 'sanad session show <id> --json' and a
+    // cancel stops it with 'sanad session stop <id>'; both must answer like the
+    // real CLI, and neither may start a transport.
+    if (args[0] === 'session' && args[1] === 'show') {
+      let body = null;
+      try { body = JSON.parse(readFileSync(process.env.MOCK_SESSION_FILE, 'utf8')); } catch {}
+      if (!body || body.__unreadable === true) { process.stderr.write('Error: session not found\\n'); process.exit(1); }
+      const payload = {...body};
+      delete payload.__unreadable;
+      const exitCode = Number(payload.__exit || 0);
+      delete payload.__exit;
+      process.stdout.write(JSON.stringify(payload) + '\\n');
+      process.exit(exitCode);
+    }
+    if (args[0] === 'session' && args[1] === 'stop') process.exit(0);
+    const child = spawn(process.execPath, [root + '/fake_transport_child.mjs', root], {stdio: 'ignore'});
+    writeFileSync(root + '/pids.json', JSON.stringify({wrapper: process.pid, child: child.pid}));
+    const outDir = readFlag('--out-dir');
+    const emit = (entry) => {
+      if (!outDir) return;
+      mkdirSync(outDir, {recursive: true});
+      appendFileSync(outDir + '/events.jsonl', JSON.stringify({timestamp: new Date().toISOString(), ...entry}) + '\\n');
+    };
+    emit({type: 'running', session_id: process.env.FAKE_SESSION || 'ses_mock_1'});
+    emit({type: 'tool_use', part: {type: 'tool', tool: 'read', state: {status: 'completed', input: {filePath: 'a'}}}});
+    process.on('SIGTERM', () => {
+      // A wrapper forwards the signal and exits; the tree is not its to end.
+      child.kill('SIGTERM');
+      appendFileSync(root + '/child.log', 'wrapper-forwarded ' + Date.now() + '\\n');
+      process.exit(0);
+    });
+    if (mode === 'orphan') {
+      if (outDir) {
+        writeFileSync(outDir + '/result.json', JSON.stringify({
+          status: 'failed',
+          exit_code: 1,
+          cause: 'provider_timeout',
+          started_at: new Date(Date.now() - 60000).toISOString(),
+          ended_at: new Date().toISOString(),
+          text: 'the wrapper exited before the turn finished.',
+        }));
+      }
+      emit({type: 'failed', data: {cause: 'provider_timeout'}});
+      setTimeout(() => process.exit(1), 30);
+    } else {
+      setInterval(() => {}, 1000);
+    }
+  `, 'utf8');
+  chmodSync(wrapperPath, 0o755);
+  // The spec validator only accepts a `sanad` (or `fvm … sanad_agent.dart`) entry,
+  // so the fixture is installed under that name and forwards to the fake wrapper.
+  return createNamedWrapper(root, 'sanad', wrapperPath);
+}
+
+function fakeWrapperTask(root, id, command, overrides = {}) {
+  const outDir = join(root, `out-${id}`);
+  return {
+    id,
+    implementer: 'sanad',
+    workspace: root,
+    command,
+    args: [
+      'run',
+      '--brief-file', writeBrief(root, 'brief-group.md', 'brief'),
+      '--workspace', 'ws-brief',
+      '--execution-root', root,
+      '--out-dir', outDir,
+      '--events',
+    ],
+    ...overrides,
+  };
+}
+
+function groupPids(root) {
+  try {
+    return JSON.parse(readFileSync(join(root, 'pids.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 test('a worker that exits while the daemon owns the turn is followed and its question is reported', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-input-test-')));
   const runDir = join(root, 'run');
@@ -3719,6 +3859,7 @@ test('a worker that exits while the daemon owns the turn is followed and its que
     session_id: 'ses_mock_1',
     status: 'running',
     execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
   });
   writeBrief(root, 'brief.md', 'brief');
   const specPath = writeSpec(root, [sanadTask(root, 'asking')], 'tasks-follow-input.json');
@@ -3756,6 +3897,7 @@ test('a worker that exits while the daemon owns the turn is followed and its que
     status: 'needs_input',
     updated_at: new Date().toISOString(),
     execution_snapshot: { state: 'waiting', updated_at: new Date().toISOString() },
+    summary: sessionSummary({ users: 1, replies: 0 }),
     pending_permission_request: {
       request_id: 'req-question-1',
       tool_name: 'system_ask_user',
@@ -3789,12 +3931,16 @@ test('a worker that exits while the daemon owns the turn is followed and its que
     session_id: 'ses_mock_1',
     status: 'running',
     execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
   });
   await waitForCondition(() => readJsonFile(manifestPath).tasks.asking?.status === 'following', 15_000);
   writeSessionState(sessionFile, {
     session_id: 'ses_mock_1',
     status: 'idle',
     execution_snapshot: { state: 'idle' },
+    // A final reply is the durable evidence the turn finished: without it an
+    // idle session is an interrupted turn, not a completion.
+    summary: sessionSummary({ users: 1, replies: 1 }),
   });
 
   const finished = await waitForCondition(() => {
@@ -3822,6 +3968,7 @@ test('a followed task blocked on a transient cause is auto-retried like an attac
     status: 'idle',
     execution_snapshot: { state: 'blocked', updated_at: new Date().toISOString() },
     runtime_notice: { cause: 'provider_timeout' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
   });
   writeBrief(root, 'brief.md', 'brief');
   const specPath = writeSpec(root, [sanadTask(root, 'blocked-follow')], 'tasks-follow-retry.json');
@@ -3866,6 +4013,7 @@ test('a followed task blocked on a transient cause is auto-retried like an attac
     session_id: 'ses_mock_1',
     status: 'running',
     execution_snapshot: { state: 'resuming' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
   });
   await waitForCondition(
     () => ['resuming', 'following'].includes(readJsonFile(manifestPath).tasks['blocked-follow']?.status),
@@ -3875,6 +4023,9 @@ test('a followed task blocked on a transient cause is auto-retried like an attac
     session_id: 'ses_mock_1',
     status: 'idle',
     execution_snapshot: { state: 'idle' },
+    // A final reply is the durable evidence the turn finished: without it an
+    // idle session is an interrupted turn, not a completion.
+    summary: sessionSummary({ users: 1, replies: 1 }),
   });
   const finished = await waitForCondition(() => {
     const state = readJsonFile(manifestPath).tasks['blocked-follow'];
@@ -3894,6 +4045,7 @@ test('a followed turn ends completed or failed from the durable result, never fr
     session_id: 'ses_mock_1',
     status: 'running',
     execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
   });
   writeBrief(completedRoot, 'brief.md', 'brief');
   startFollowedRun(
@@ -3907,6 +4059,9 @@ test('a followed turn ends completed or failed from the durable result, never fr
     session_id: 'ses_mock_1',
     status: 'idle',
     execution_snapshot: { state: 'idle' },
+    // A final reply is the durable evidence the turn finished: without it an
+    // idle session is an interrupted turn, not a completion.
+    summary: sessionSummary({ users: 1, replies: 1 }),
   });
   const completed = await waitForCondition(() => {
     const state = readJsonFile(completedManifest).tasks.done;
@@ -3927,6 +4082,7 @@ test('a followed turn ends completed or failed from the durable result, never fr
     session_id: 'ses_mock_1',
     status: 'running',
     execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
   });
   writeBrief(stoppedRoot, 'brief.md', 'brief');
   startFollowedRun(
@@ -3940,6 +4096,7 @@ test('a followed turn ends completed or failed from the durable result, never fr
     session_id: 'ses_mock_1',
     status: 'idle',
     execution_snapshot: { state: 'stopping' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
   });
   const stopped = await waitForCondition(() => {
     const state = readJsonFile(stoppedManifest).tasks.stopped;
@@ -4112,8 +4269,13 @@ test('following frees the worker slot, and cancelling a followed task stops its 
   const cancelled = JSON.parse(runNode(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'first', '--json'], env));
   assert.equal(cancelled.status, 'cancelled');
   assert.equal(cancelled.followed, true);
-  const stops = readFileSync(join(root, 'mock.log'), 'utf8').split(/\r?\n/).filter(Boolean)
-    .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'stop');
+  // The session stop is a separate CLI process, so it is awaited rather than
+  // assumed: the acknowledgement only proves the request was accepted.
+  const stops = await waitForCondition(() => {
+    const entries = readFileSync(join(root, 'mock.log'), 'utf8').split(/\r?\n/).filter(Boolean)
+      .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'stop');
+    return entries.length >= 1 ? entries : null;
+  }, 10_000);
   assert.equal(stops.length, 1);
   assert.equal(stops[0].argv.includes('ses_mock_1'), true);
 
@@ -4126,5 +4288,338 @@ test('following frees the worker slot, and cancelling a followed task stops its 
   const cancelEvents = readJournal(runDir).filter((event) => event.to === 'cancelled');
   assert.equal(cancelEvents.length, 1);
   assert.equal(isActionableEvent(cancelEvents[0]), true);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('an idle session with no final reply settles failed/turn_interrupted, not completed', async () => {
+  // The 2026-10-23 shape, exactly: the worker is killed, its turn resumed after an
+  // answered question, and the session goes idle holding user + thinking + the
+  // `system_ask_user` call + its result, with 0 replies.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-interrupted-test-')));
+  const runDir = join(root, 'run');
+  const env = followEnv(root);
+  const sessionFile = env.MOCK_SESSION_FILE;
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'interrupted')], 'tasks-follow-interrupted.json');
+  startFollowedRun(runDir, specPath, env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.interrupted?.follow?.confirmed === true, 15_000);
+
+  // The daemon asks its question, the operator answers it, and the turn resumes.
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'needs_input',
+    execution_snapshot: { state: 'waiting' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+    pending_permission_request: {
+      request_id: 'req-live-1',
+      tool_name: 'system_ask_user',
+      questions: [{ question: 'Pick one', options: ['alpha', 'beta'] }],
+    },
+  });
+  await waitForCondition(() => readJournal(runDir).some((event) => event.to === 'needs_input'), 15_000);
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.interrupted?.status === 'following', 15_000);
+
+  // Then the turn is interrupted: the session is idle, and it never answered.
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+
+  const finished = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.interrupted;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(finished.status, 'failed');
+  assert.equal(finished.cause, 'turn_interrupted');
+  assert.equal(finished.resultSource, 'daemon_session');
+  assert.match(finished.error, /without a final assistant reply/);
+  // The evidence is recorded, so a coordinator can see why this is not a success.
+  assert.equal(finished.follow.evidence.reason, 'no_final_reply');
+  assert.equal(finished.follow.evidence.finalAnswers, 0);
+  assert.equal(finished.follow.evidence.userMessages, 1);
+  const failedEvent = readJournal(runDir).find((event) => event.to === 'failed');
+  assert.equal(failedEvent.cause, 'turn_interrupted');
+  assert.equal(isActionableEvent(failedEvent), true, 'an interrupted turn needs a coordinator decision');
+
+  // ... and the brief line never claims a completion next to it.
+  const brief = runNode(SUPERVISOR, ['status', '--run', runDir, '--brief'], env);
+  assert.match(brief, /interrupted  failed/);
+  assert.match(brief, /result failed/);
+  assert.match(brief, /result-source daemon_session/);
+  assert.equal(/completed/.test(brief), false);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('the brief never prints a worker artifact next to a daemon-session verdict', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-verdict-test-')));
+  const runDir = join(root, 'run');
+  const env = followEnv(root);
+  // The turn's answer is already durable when the follow starts (the race the
+  // count rule exists for): the session reports one reply for one user turn, so
+  // the follow window adds no new reply and the counts themselves must decide.
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 1 }),
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  startFollowedRun(runDir, writeSpec(root, [sanadTask(root, 'verdict')], 'tasks-follow-verdict.json'), env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.verdict?.follow?.confirmed === true, 15_000);
+  // The turn finishes normally: a final answer for the one user turn.
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+    summary: sessionSummary({ users: 1, replies: 1 }),
+  });
+  const completed = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.verdict;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.resultSource, 'daemon_session');
+  assert.equal(completed.follow.evidence.reason, 'final_reply_for_last_turn');
+  // The daemon verdict is the task's visible result.
+  assert.equal(completed.result.status, 'completed');
+  assert.equal(completed.result.source, 'daemon_session');
+
+  // A killed transport can write its own `interrupted` artifact after the follow
+  // settled. It is triage evidence, never a second verdict on the status line.
+  const lateArtifact = join(root, 'out-verdict', 'result.json');
+  mkdirSync(dirname(lateArtifact), { recursive: true });
+  writeFileSync(lateArtifact, JSON.stringify({
+    status: 'interrupted',
+    exit_code: 143,
+    started_at: new Date(Date.now() - 120_000).toISOString(),
+    ended_at: new Date().toISOString(),
+    text: 'the transport was interrupted.',
+  }), 'utf8');
+
+  const brief = runNode(SUPERVISOR, ['status', '--run', runDir, '--brief'], env);
+  assert.match(brief, /verdict  completed/);
+  assert.match(brief, /result completed/);
+  assert.match(brief, /result-source daemon_session/);
+  assert.match(brief, /later-result interrupted/);
+  // `later-result interrupted` is triage; a `result interrupted` field next to a
+  // completed verdict is the defect.
+  assert.equal(/\sresult interrupted/.test(brief), false, 'a completed verdict never prints result interrupted');
+  const json = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--brief', '--json'], env));
+  assert.equal(json.runs[0].tasks[0].resultStatus, 'completed');
+  assert.equal(json.runs[0].tasks[0].laterResult?.status, 'interrupted');
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('cancel signals the process group, so a wrapper cannot orphan its worker', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-group-cancel-test-')));
+  const runDir = join(root, 'run');
+  const command = writeFakeWrapperFixture(root);
+  const env = {
+    ...process.env,
+    FAKE_WRAPPER_ROOT: root,
+    FAKE_WRAPPER_MODE: 'live',
+  };
+  const specPath = writeSpec(root, [fakeWrapperTask(root, 'tree', command)], 'tasks-group-cancel.json');
+  runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1', '--verify-ms', '0',
+    // A compressed grace window: the cancel SIGTERM is followed by the forced
+    // group SIGKILL, and the test must not wait the production ten seconds.
+    '--cancel-force-kill-ms', '400',
+  ], env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const running = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.tree;
+    return state?.status === 'running' && groupPids(root) ? state : null;
+  }, 15_000);
+  const pids = groupPids(root);
+  assert.ok(Number.isInteger(pids.wrapper));
+  assert.ok(Number.isInteger(pids.child));
+  // The group id is recorded, and it is the leader the supervisor spawned.
+  assert.equal(running.pgid, pids.wrapper);
+  assert.equal(running.pid, pids.wrapper);
+  // Both processes are in the same group: this is what a group signal owns.
+  assert.deepEqual(groupMembers(pids.wrapper).map((member) => member.pid).sort(), [pids.wrapper, pids.child].sort());
+
+  const cancelled = JSON.parse(runNode(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'tree', '--json'], env));
+  assert.equal(cancelled.signalled, 'SIGTERM');
+  assert.equal(cancelled.group, true, 'the cancel must name the group, not the wrapper');
+  assert.equal(cancelled.pgid, pids.wrapper);
+
+  // The wrapper forwards the signal and exits; the grandchild ignores it, so only
+  // the forced group kill can end the tree. No member may survive the cancel.
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.tree?.status === 'cancelled', 15_000);
+  const gone = await waitForCondition(() => (groupMembers(pids.wrapper).length === 0 ? true : null), 10_000);
+  assert.equal(gone, true, 'a cancelled task leaves no surviving grandchild');
+  assert.equal(processIsAlive(pids.child), false);
+  assert.equal(processIsAlive(pids.wrapper), false);
+
+  // The surviving tree was recorded at exit, and the cancellation is journaled as
+  // a group operation.
+  const settled = readJsonFile(manifestPath).tasks.tree;
+  assert.equal(settled.cause, 'cancelled');
+  assert.equal(settled.groupSurvivors.pgid, pids.wrapper);
+  // One verdict on the status line: the operator's, with the signalled child's
+  // own artifact kept as triage.
+  assert.equal(settled.result.status, 'cancelled');
+  const cancelBrief = runNode(SUPERVISOR, ['status', '--run', runDir, '--brief'], env);
+  assert.match(cancelBrief, /tree  cancelled/);
+  assert.match(cancelBrief, /result cancelled/);
+  assert.equal(/\sresult interrupted/.test(cancelBrief), false);
+  const cancelNotice = readJournal(runDir).find((event) => event.kind === 'cancel_requested');
+  assert.equal(cancelNotice.group, true);
+  assert.equal(cancelNotice.pgid, pids.wrapper);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a follow after exit is not claimed while a group member is still alive', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-group-follow-test-')));
+  const runDir = join(root, 'run');
+  const command = writeFakeWrapperFixture(root);
+  const env = {
+    ...process.env,
+    FAKE_WRAPPER_ROOT: root,
+    FAKE_WRAPPER_MODE: 'orphan',
+    MOCK_SESSION_FILE: join(root, 'session.json'),
+    MOCK_SESSION: 'ses_mock_1',
+  };
+  // The daemon still owns the turn the orphaned grandchild is driving.
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  const specPath = writeSpec(root, [fakeWrapperTask(root, 'orphan', command)], 'tasks-group-follow.json');
+  startFollowedRun(runDir, specPath, env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const following = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.orphan;
+    return state?.follow?.confirmed === true ? state : null;
+  }, 15_000);
+  const pids = groupPids(root);
+  assert.ok(processIsAlive(pids.child), 'the grandchild survives the wrapper, as fvm did');
+
+  // The exit is reported for what it is: a transport died while part of its tree
+  // is still alive. It is never described as a worker that exited and left a turn
+  // in flight.
+  const groupNotice = readJournal(runDir).find((event) => event.kind === 'worker_group_alive');
+  assert.ok(groupNotice, 'a surviving group is reported');
+  assert.equal(groupNotice.pgid, pids.wrapper);
+  assert.equal(groupNotice.exitCode, 1);
+  assert.equal(isActionableEvent(groupNotice), true, 'a surviving group needs a coordinator decision');
+  assert.equal(following.follow.workerExit.groupAlive, true);
+  assert.equal(following.follow.workerExit.groupSurvivors.pgid, pids.wrapper);
+  const followingEvent = readJournal(runDir).find((event) => event.to === 'following');
+  assert.equal(followingEvent.reason, 'worker_exited_group_alive');
+  assert.notEqual(followingEvent.reason, 'worker_exited_turn_in_flight');
+  assert.equal(following.status, 'following');
+
+  // A group member that outlives its supervisor is exactly what the ownership-
+  // proven sweep has to be able to clean up.
+  const dryRun = sweepOrphanedFixtures({ root: tmpdir(), prefix: basename(root), dryRun: true });
+  assert.equal(dryRun.reaped.some((entry) => entry.group === true && entry.pid === pids.wrapper), true);
+
+  // The operator signals the group; the turn then finishes on the daemon. Every
+  // member is proven to belong to this fixture before anything is signalled.
+  const members = groupMembers(pids.wrapper);
+  assert.ok(members.length >= 1);
+  assert.ok(members.every((member) => member.command.includes(root)), 'every group member names this fixture');
+  process.kill(-pids.wrapper, 'SIGKILL');
+  await waitForCondition(() => groupMembers(pids.wrapper).length === 0, 10_000);
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+    summary: sessionSummary({ users: 1, replies: 1 }),
+  });
+  const finished = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.orphan;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(finished.status, 'completed');
+  // The reply appeared inside the follow window, so the durable counts prove the
+  // turn finished after the wrapper died.
+  assert.equal(finished.follow.evidence.finished, true);
+  assert.equal(finished.follow.evidence.finalAnswers, 1);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('an interrupted transport is followed while the daemon still holds its turn', async () => {
+  // The live-check shape: SIGTERM ends the transport, which writes its own
+  // `interrupted` artifact, while the daemon still holds the turn and the pending
+  // question. Treating that exit as final is the same defect as settling a failed
+  // transport — the question would be answered into a session nobody watches.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-interrupted-exit-test-')));
+  const runDir = join(root, 'run');
+  const env = followEnv(root, {
+    MOCK_RUN_EARLY_STATUS: 'interrupted',
+    MOCK_RUN_EARLY_CAUSE: 'interrupted',
+  });
+  const sessionFile = env.MOCK_SESSION_FILE;
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'needs_input',
+    execution_snapshot: { state: 'waiting' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+    pending_permission_request: {
+      request_id: 'req-after-signal',
+      tool_name: 'system_ask_user',
+      questions: [{ question: 'Which option?', options: ['alpha', 'beta'] }],
+    },
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  startFollowedRun(runDir, writeSpec(root, [sanadTask(root, 'signalled')], 'tasks-signalled.json'), env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const following = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.signalled;
+    return state?.follow?.confirmed === true ? state : null;
+  }, 15_000);
+  assert.equal(following.status, 'needs_input', 'the pending question survived the signal');
+  assert.equal(following.follow.workerExit.status, 'interrupted');
+  assert.equal(following.follow.reason, 'worker_exited_turn_in_flight');
+  assert.equal(readJournal(runDir).some((event) => event.to === 'interrupted'), false);
+
+  // The operator answers, the daemon resumes, and the durable reply decides.
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.signalled?.status === 'following', 15_000);
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+    summary: sessionSummary({ users: 1, replies: 1 }),
+  });
+  const finished = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.signalled;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(finished.status, 'completed');
+  assert.equal(finished.resultSource, 'daemon_session');
+  assert.equal(finished.follow.evidence.finalAnswers, 1);
   runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
 });

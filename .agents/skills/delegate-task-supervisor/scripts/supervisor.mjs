@@ -117,10 +117,17 @@ const CURSOR_VERSION = 'delegate-watch-cursor.v1';
 // path. A child that ignores it is force-killed after this grace period so a
 // cancelled task can never block run completion.
 const CANCEL_FORCE_KILL_MS = 10_000;
+// Control requests are picked up by a watcher and, as a guarantee, by this
+// bounded rescan: a missed filesystem event must not strand a cancelled or
+// closed run until its deadline.
+const REQUEST_RESCAN_MS = 500;
+// A forced kill is verified after this delay: a process the kernel just SIGKILLed
+// is still visible until its parent reaps it, and that is not a survivor.
+const GROUP_KILL_VERIFY_MS = 250;
 const HELP = `delegate-task-supervisor
 
 Usage:
-  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--auto-retry] [--auto-retry-grace-ms <n>] [--auto-retry-backoff-ms <n>] [--auto-retry-max-attempts <n>] [--follow-poll-ms <n>] [--follow-deadline-ms <n>] [--follow-lost-polls <n>] [--close-when-idle]
+  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--auto-retry] [--auto-retry-grace-ms <n>] [--auto-retry-backoff-ms <n>] [--auto-retry-max-attempts <n>] [--follow-poll-ms <n>] [--follow-deadline-ms <n>] [--follow-lost-polls <n>] [--cancel-force-kill-ms <n>] [--close-when-idle]
   supervisor.mjs add --run <dir> --spec <tasks.json> [--json]
   supervisor.mjs enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--verify-sec <n>] [--json]
   supervisor.mjs cancel --run <dir> --task <id> [--json]
@@ -178,7 +185,17 @@ too. The follow window is the task's own --timeout, or --follow-deadline-ms
 (default ${DEFAULT_FOLLOW_DEADLINE_MS}ms). After --follow-lost-polls (default
 ${DEFAULT_FOLLOW_LOST_POLLS}) consecutive unreadable session reads the task ends
 \`follow_lost\` instead of blocking forever. Every attention state still wakes a
-watcher; \`following\` itself is progress, never a wake-up.
+watcher; \`following\` itself is progress, never a wake-up. A followed turn is
+\`completed\` only when its durable messages hold a final assistant reply; an
+idle session without one ends \`failed\` with cause \`turn_interrupted\`.
+
+\`process groups\`: every task is spawned as the leader of its own process group
+(POSIX) and the group id is recorded as \`pgid\`. Cancel, the forced kill after
+--cancel-force-kill-ms (default ${CANCEL_FORCE_KILL_MS}ms), and a graceful
+supervisor shutdown signal the group, and an exit is only treated as a departure
+after the group is verified empty. A group that outlives its direct child is
+journaled as \`worker_group_alive\` and the follow names it
+(\`worker_exited_group_alive\`) instead of claiming the turn lost its transport.
 `;
 
 function fail(message, code = 2) {
@@ -927,6 +944,87 @@ function resultBelongsToTask(task, digest) {
   return startedMs <= finishedMs;
 }
 
+/**
+ * The result a followed task publishes for its own verdict.
+ *
+ * A followed turn has no worker artifact of its own: its outcome comes from the
+ * durable session or from the operator, including the reason it is not a
+ * completion. Recording one result object keeps the status line, `status
+ * --json`, and the journal agreeing on the same status — a late worker artifact
+ * can never be printed next to it as if the two described the same thing.
+ */
+function followResultDigest(outcome, state, finishedAt) {
+  if (!outcome?.status) return null;
+  return {
+    status: outcome.status,
+    source: outcome.resultSource ?? 'daemon_session',
+    sessionId: state?.sessionId ?? null,
+    cause: outcome.cause ?? null,
+    error: outcome.error ?? null,
+    text: outcome.note ?? null,
+    endedAt: finishedAt,
+  };
+}
+
+/**
+ * The visible result of one task, and what a `result.json` on its path means for
+ * it.
+ *
+ * A terminal artifact belongs to the task when it was produced inside the
+ * task's own window. A followed task is the one exception: its verdict was read
+ * from the durable session, so an artifact written afterwards is triage evidence
+ * (`laterResult`) and never the task's result.
+ */
+function applyVisibleResult(task, artifact) {
+  if (!task) return 'none';
+  if (task.follow?.resultSource === 'daemon_session' && task.resultSource === 'daemon_session') {
+    if (artifact && artifact.status !== task.result?.status) {
+      const changed = task.laterResult?.status !== artifact.status;
+      task.laterResult = artifact;
+      return changed ? 'later' : 'none';
+    }
+    return 'none';
+  }
+  if (!artifact) {
+    // A resolved follow owns its visible result even when it has none to show.
+    return 'none';
+  }
+  if (!resultBelongsToTask(task, artifact)) {
+    task.laterResult = artifact;
+    if (task.result) delete task.result;
+    return 'later';
+  }
+  // An operator cancellation is authoritative, so a worker artifact that reports
+  // its own `interrupted`/`failed` exit is triage evidence, never the task's
+  // result: `cancelled` and `result interrupted` on one line is the same
+  // contradiction a followed completion must not show.
+  if (task.cancellationRequested === true && artifact.status !== task.status) {
+    task.laterResult = artifact;
+    return 'later';
+  }
+  if (TERMINAL_STATUSES.has(task.status) || task.recovered) {
+    task.result = artifact;
+    return 'adopted';
+  }
+  return 'none';
+}
+
+/**
+ * The result a reader should show for one task: the recorded one when the task
+ * has one (a follow verdict is one), else the artifact on its path when that
+ * artifact belongs to this attempt.
+ */
+function taskResultForView(task) {
+  const recorded = task && Object.hasOwn(task, 'result') ? task.result : null;
+  if (recorded) {
+    const digest = recorded;
+    return resultBelongsToTask(task, digest) ? digest : null;
+  }
+  const digest = readResultDigest(task?.resultPath);
+  if (!digest) return null;
+  return resultBelongsToTask(task, digest) ? digest : null;
+}
+
 // The delta brief replaces the task's declared brief input. Only documented
 // brief flags are rewritten so an arbitrary argument list is never guessed at.
 function replaceBriefArgument(args, briefPath) {
@@ -1064,7 +1162,7 @@ function launchThroughWindowsExplorer(scriptPath) {
   // The caller verifies the requested effect instead of trusting that status.
 }
 
-function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, follow, closeWhenIdle = false) {
+function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, follow, closeWhenIdle = false, cancelForceKillMs = CANCEL_FORCE_KILL_MS) {
   const workerPath = join(runDir, 'start-supervisor.cmd');
   const brokerPath = join(runDir, 'start-supervisor.vbs');
   const command = [
@@ -1077,6 +1175,7 @@ function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, 
     '--progress-stall-ms', String(progressStallMs),
     ...workerRetryArgs(autoRetry),
     ...workerFollowArgs(follow),
+    '--cancel-force-kill-ms', String(cancelForceKillMs),
     ...(closeWhenIdle ? ['--close-when-idle'] : []),
   ].map(windowsBatchQuote).join(' ');
   writeFileSync(
@@ -1170,6 +1269,10 @@ async function startCommand(options) {
     probeTimeoutMs: integerOption(options, 'follow-probe-timeout-ms', DEFAULT_FOLLOW_PROBE_TIMEOUT_MS, '--follow-probe-timeout-ms', 1),
   });
   const startedAt = new Date().toISOString();
+  // The grace window between the cancelling SIGTERM and the forced SIGKILL. It
+  // is reported by the handshake and passed to the worker, so a compressed value
+  // in a test or a diagnosis is the same value everywhere.
+  const cancelForceKillMs = integerOption(options, 'cancel-force-kill-ms', CANCEL_FORCE_KILL_MS, '--cancel-force-kill-ms', 1);
   writeJsonAtomic(paths.tasks, { version: 'delegate-task-spec.v1', tasks });
   writeJsonAtomic(paths.manifest, {
     version: 'delegate-supervisor.v1',
@@ -1186,6 +1289,7 @@ async function startCommand(options) {
     progressStallMs,
     autoRetry,
     follow,
+    cancelForceKillMs,
     closeWhenIdle,
     queueSeq: tasks.length,
     tasks: Object.fromEntries(tasks.map((task, index) => [task.id, {
@@ -1197,7 +1301,7 @@ async function startCommand(options) {
 
   if (process.platform === 'win32') {
     try {
-      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, follow, closeWhenIdle);
+      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, follow, closeWhenIdle, cancelForceKillMs);
       launchThroughWindowsExplorer(brokerPath);
       const running = waitForWindowsWorkerHandshake(paths);
       const verification = await observeLaunch(runDir, tasks.map((task) => task.id), { verifyMs });
@@ -1210,6 +1314,7 @@ async function startCommand(options) {
         progressStallMs,
         autoRetry,
         follow,
+        cancelForceKillMs,
         closeWhenIdle,
         tasks: tasks.length,
         verification,
@@ -1231,6 +1336,7 @@ async function startCommand(options) {
     '--progress-stall-ms', String(progressStallMs),
     ...workerRetryArgs(autoRetry),
     ...workerFollowArgs(follow),
+    '--cancel-force-kill-ms', String(cancelForceKillMs),
     ...(closeWhenIdle ? ['--close-when-idle'] : []),
   ], {
     detached: true,
@@ -1251,6 +1357,7 @@ async function startCommand(options) {
     progressStallMs,
     autoRetry,
     follow,
+    cancelForceKillMs,
     closeWhenIdle,
     tasks: tasks.length,
     verification,
@@ -1288,6 +1395,9 @@ function workerCommand(options) {
     fail('invalid internal worker invocation');
   }
   const closeWhenIdle = options['close-when-idle'] === true;
+  // The grace window the run was started with: cancel and the forced kill use it,
+  // so a compressed value never has to be re-derived in the worker.
+  const cancelForceKillMs = integerOption(options, 'cancel-force-kill-ms', CANCEL_FORCE_KILL_MS, '--cancel-force-kill-ms', 1);
   // The policy the run was started with. Every value is explicit here so the
   // worker never re-derives a default the handshake did not report.
   const autoRetry = retryPolicy({
@@ -1347,6 +1457,7 @@ function workerCommand(options) {
     progressStallMs,
     autoRetry,
     follow: followPolicyConfig,
+    cancelForceKillMs,
     closeWhenIdle,
     queueSeq,
     tasks: Object.fromEntries(initialTasks.map((task, index) => [task.id, {
@@ -1627,6 +1738,33 @@ function workerCommand(options) {
     launchRetryTimers.set(task.id, timer);
   };
 
+  // A cancelled group whose leader exited first still has to be forced: the
+  // wrapper is not the tree. The escalation is armed on the task rather than on a
+  // child handle, so it fires even though the task already settled, and it
+  // reports a group that survives its own SIGKILL instead of assuming it died.
+  const forceKillGroupLater = (task, graceMs) => {
+    const timer = setTimeout(() => {
+      forceKillTimers.delete(task.id);
+      const state = manifest.tasks[task.id] ?? null;
+      if (!state) return;
+      signalTaskProcess(state, null, 'SIGKILL');
+      const verify = setTimeout(() => {
+        const survivors = survivingGroupMembers(Number(state.pgid));
+        if (!survivors) return;
+        state.groupSurvivors = survivors;
+        notice(task, 'worker_group_alive', {
+          pgid: survivors.pgid,
+          aliveAfterMs: survivors.aliveAfterMs,
+          forced: true,
+          forcedAfterMs: graceMs,
+        });
+      }, GROUP_KILL_VERIFY_MS);
+      if (typeof verify.unref === 'function') verify.unref();
+    }, graceMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    forceKillTimers.set(task.id, timer);
+  };
+
   const finishTask = (task, code, signal, launchError = null) => {
     if (settled.has(task.id)) return;
     // Exit 78 is the CLI's daemon-health pre-check: the spawn never reached a
@@ -1660,6 +1798,35 @@ function workerCommand(options) {
     if (timelineWatchers.has(task.id)) {
       try { timelineWatchers.get(task.id).close(); } catch {}
       timelineWatchers.delete(task.id);
+    }
+
+    // An exit is not a departure. The direct child can exit while a member of its
+    // process group is still alive and still attached to the session — exactly
+    // the 2026-10-23 `fvm` wrapper case. Nothing is concluded from the exit
+    // before the group has been verified, and a surviving group is reported
+    // instead of being described as a transport that left.
+    const groupSurvivors = survivingGroupMembers(manifest.tasks[task.id]?.pgid);
+    if (groupSurvivors) {
+      // Always recorded, so a reader can see that the tree outlived the child.
+      Object.assign(manifest.tasks[task.id], { groupSurvivors });
+      // A cancelled task is already being killed as a group by the force-kill
+      // timer; the survivor there is expected, so only an exit nobody is chasing
+      // is worth a coordinator's attention.
+      if (launchState?.cancellationRequested !== true) {
+        notice(task, 'worker_group_alive', {
+          pgid: groupSurvivors.pgid,
+          pid: launchState?.pid ?? null,
+          exitCode: code,
+          signal,
+          aliveAfterMs: groupSurvivors.aliveAfterMs,
+        });
+      }
+    }
+    // The cancellation timer above was cleared with the child handle, so the
+    // forced kill is re-armed on the task: the wrapper exiting is not the group
+    // exiting, and a cancelled tree must still be brought down.
+    if (groupSurvivors && launchState?.cancellationRequested === true) {
+      forceKillGroupLater(task, cancelForceKillMs);
     }
 
     let result = null;
@@ -1711,12 +1878,18 @@ function workerCommand(options) {
     // reported as failed: that is exactly the case where the daemon later asked a
     // question nobody saw (run7, 2026-10-23). The probe below is what proves the
     // turn is still in flight; until it says otherwise the task stays live.
+    // `interrupted` belongs here too: a transport killed by a signal (the
+    // 2026-10-23 live check sent SIGTERM to the group) writes its own
+    // `interrupted` artifact while the daemon still holds the turn and its
+    // pending question. Treating it as final is the same defect as settling a
+    // failed transport: the daemon decides, and a turn that is really gone is
+    // still reported by `turn_not_in_flight`.
     const followCandidate = task.implementer === 'sanad'
       && !task.remote
       && !cancellationRequested
       && !launchError
       && Boolean(manifest.tasks[task.id]?.sessionId)
-      && ['failed', 'timeout', 'incomplete'].includes(status);
+      && ['failed', 'timeout', 'incomplete', 'interrupted'].includes(status);
     if (followCandidate) {
       // The turn is not final: this task is followed, not settled. The worker's
       // slot is released above, and the follow poll owns the task from here.
@@ -1732,6 +1905,9 @@ function workerCommand(options) {
         signal,
         status,
         cause: result?.cause ?? (status === 'timeout' ? 'timeout' : null),
+        // Recorded so the follow reports a surviving group instead of claiming
+        // the transport left the turn unattended.
+        groupSurvivors,
       });
       // The worker's slot is free even though the task is not finished, so a
       // queued task must be able to take it right away.
@@ -1746,7 +1922,22 @@ function workerCommand(options) {
       signal,
       reportedStatus,
       identity,
-      ...(cancellationRequested ? { cause: 'cancelled', cancelledAt: finishedAt } : {}),
+      // The status line shows one verdict. A cancellation is the operator's, so
+      // the signalled child's own `interrupted` artifact is reported as
+      // `later-result` instead of contradicting the task's status.
+      ...(cancellationRequested
+        ? {
+          cause: 'cancelled',
+          cancelledAt: finishedAt,
+          result: {
+            status: 'cancelled',
+            source: 'operator',
+            sessionId: manifest.tasks[task.id]?.sessionId ?? null,
+            cause: 'cancelled',
+            endedAt: finishedAt,
+          },
+        }
+        : {}),
       ...(task.remote ? { resultCaptured: result != null } : {}),
       ...(remoteExit && !cancellationRequested ? { cause: remoteExit.cause } : {}),
       ...(remoteCaptureMissing && !cancellationRequested ? { cause: 'missing_result_envelope' } : {}),
@@ -2197,8 +2388,14 @@ function workerCommand(options) {
     followInFlight.delete(task.id);
     settled.add(task.id);
     const finishedAt = new Date().toISOString();
+    // The verdict and the result shown for it are one fact. A followed turn's
+    // outcome comes from the durable session, so a worker artifact on the same
+    // path is triage evidence only: it is never printed as the task's result
+    // (2026-10-23: a killed worker wrote `interrupted` after the follow settled
+    // `completed`, and the status line showed both).
     const digest = outcome.resultDigest
-      ?? (outcome.resultSource === 'worker_artifact' ? readResultDigest(state.resultPath) : null);
+      ?? (outcome.resultSource === 'worker_artifact' ? readResultDigest(state.resultPath) : null)
+      ?? (outcome.resultSource === 'worker_artifact' ? null : followResultDigest(outcome, state, finishedAt));
     const follow = {
       ...(state.follow ?? {}),
       active: false,
@@ -2206,6 +2403,7 @@ function workerCommand(options) {
       reason: outcome.followReason ?? state.follow?.reason ?? null,
       resultSource: outcome.resultSource ?? 'daemon_session',
       outcome: outcome.status,
+      ...(outcome.evidence ? { evidence: outcome.evidence } : {}),
     };
     transition(task, outcome.status, {
       finishedAt,
@@ -2215,9 +2413,11 @@ function workerCommand(options) {
       resultSource: follow.resultSource,
       note: outcome.note ?? null,
       pid: null,
+      // Always written, so a stale artifact-based result can never survive a
+      // daemon-session verdict: the follow owns the visible result from here.
+      result: digest ?? null,
       requestId: null,
       intervention: null,
-      ...(digest ? { result: digest } : {}),
       error: outcome.error ?? null,
     });
     const attemptNumber = state.attempt ?? 1;
@@ -2257,6 +2457,10 @@ function workerCommand(options) {
         lastLive: follow.lastLive ?? null,
         cause: follow.lastCause ?? state.cause ?? null,
         artifact: resultWrittenDuringFollow(state),
+        // `idle` only says the session stopped publishing: the durable counts
+        // decide whether the turn actually finished.
+        evidence: snapshot.evidence ?? null,
+        baseline: follow.turnBaseline ?? null,
       }));
       return;
     }
@@ -2462,11 +2666,17 @@ function workerCommand(options) {
     if (!state || !isFollowing(state)) return;
     state.follow.confirmed = true;
     state.follow.confirmedAt = new Date().toISOString();
-    state.follow.reason = 'worker_exited_turn_in_flight';
+    // The durable counts at the moment the follow starts are the baseline a final
+    // reply has to beat: a reply that appears afterwards is this turn's own.
+    state.follow.turnBaseline = snapshot.evidence ?? null;
+    // A group that outlived the direct child is not a departed transport, and the
+    // reason says so instead of claiming the worker left a turn in flight.
+    const groupAlive = state.follow.workerExit?.groupAlive === true;
+    state.follow.reason = groupAlive ? 'worker_exited_group_alive' : 'worker_exited_turn_in_flight';
     transition(task, 'following', {
       pid: null,
       kind: 'following',
-      reason: 'worker_exited_turn_in_flight',
+      reason: state.follow.reason,
       cause: state.workerCause ?? state.follow.workerExit?.cause ?? null,
       workerExit: state.follow.workerExit,
       follow: state.follow,
@@ -2485,7 +2695,10 @@ function workerCommand(options) {
     const state = manifest.tasks[task.id];
     if (!state || settled.has(task.id)) return;
     const workerExit = state.follow?.workerExit ?? {};
-    const status = ['failed', 'timeout', 'incomplete'].includes(workerExit.status)
+    // The worker's own exit verdict is kept as-is when it is a real failure
+    // status; `interrupted` is one of them, and it is never upgraded to
+    // `completed` here.
+    const status = ['failed', 'timeout', 'incomplete', 'interrupted'].includes(workerExit.status)
       ? workerExit.status
       : 'failed';
     settleFollow(task, {
@@ -2550,6 +2763,10 @@ function workerCommand(options) {
         signal: exit.signal ?? null,
         status: exit.status ?? null,
         cause: exit.cause ?? null,
+        // A group that outlived the direct child: the transport exited, but a
+        // member of its tree is still alive and may still own the session.
+        groupAlive: Boolean(exit.groupSurvivors),
+        ...(exit.groupSurvivors ? { groupSurvivors: exit.groupSurvivors } : {}),
       },
     };
     persist();
@@ -2628,26 +2845,26 @@ function workerCommand(options) {
     const sessionId = state.sessionId ?? null;
     const sessionStop = requestSessionStop(task, sessionId);
     const child = children.get(id) ?? null;
-    let signalled = null;
-    if (child) {
-      try {
-        child.kill('SIGTERM');
-        signalled = 'SIGTERM';
-      } catch {
-        signalled = null;
-      }
-    }
+    // The signal goes to the worker's whole process group: a wrapper (`fvm`,
+    // `npm`, `cmd`) forwarding or ignoring a signal must never leave the real
+    // worker running after the cancel was reported as delivered.
+    const signalled = child ? signalTaskProcess(state, child, 'SIGTERM') : null;
     if (signalled) {
       const timer = setTimeout(() => {
         if (settled.has(id)) return;
-        try { child.kill('SIGKILL'); } catch {}
-      }, CANCEL_FORCE_KILL_MS);
+        const current = manifest.tasks[id] ?? null;
+        // Same target for the forced kill: the group, not the leader that may
+        // already be gone while its members ignore SIGTERM.
+        signalTaskProcess(current, children.get(id) ?? null, 'SIGKILL');
+      }, cancelForceKillMs);
       if (typeof timer.unref === 'function') timer.unref();
       forceKillTimers.set(id, timer);
     }
     notice(task, 'cancel_requested', {
       sessionId,
-      signalled,
+      signalled: signalled?.signal ?? null,
+      pgid: signalled?.pgid ?? null,
+      group: signalled?.group === true,
       sessionStop: sessionStop.requested === true,
       ...(sessionStop.reason ? { sessionStopReason: sessionStop.reason } : {}),
     });
@@ -2656,7 +2873,9 @@ function workerCommand(options) {
       taskId: id,
       from,
       status: 'cancelling',
-      signalled,
+      signalled: signalled?.signal ?? null,
+      pgid: signalled?.pgid ?? null,
+      group: signalled?.group === true,
       sessionId,
       sessionStop,
     };
@@ -3103,6 +3322,9 @@ function workerCommand(options) {
         cwd: task.spawnCwd || task.workspace,
         env: taskEnvironment(task, process.env),
         windowsHide: true,
+        // The worker leads its own process group so cancel, the forced kill, and
+        // shutdown can signal the whole tree instead of the wrapper only.
+        detached: GROUP_SIGNALS_SUPPORTED,
         stdio: streamRelay ? ['ignore', 'pipe', 'pipe'] : ['ignore', stdoutFd, stderrFd],
       };
       child = spawnCommand(task.command, effectiveArgs, spawnOptions);
@@ -3116,6 +3338,9 @@ function workerCommand(options) {
     const startedAt = new Date().toISOString();
     transition(task, 'running', {
       pid: child.pid,
+      // The group id is the leader's pid; it is recorded so every later signal
+      // and every repair read targets the same group the worker was spawned in.
+      pgid: GROUP_SIGNALS_SUPPORTED ? child.pid : null,
       startedAt,
       stateSince: startedAt,
       queueStall: null,
@@ -3399,8 +3624,59 @@ function workerCommand(options) {
     }
   }
 
+  // The watcher is the fast path; the rescan is the contract. A missed filesystem
+  // event (a dropped watch under load, a platform that coalesces them) must never
+  // leave a control request unanswered until its deadline, so the directory is
+  // re-read on a bounded interval as well.
   const reqWatcher = watch(paths.requests, () => processPendingRequests());
+  const reqRescan = setInterval(() => processPendingRequests(), REQUEST_RESCAN_MS);
+  if (typeof reqRescan.unref === 'function') reqRescan.unref();
   const keepAliveTimer = setInterval(() => {}, 30_000);
+
+  // A graceful stop is a group operation too: stopping this worker must not leave
+  // the trees it started running with nobody observing them. Every live task
+  // group is signalled, given the same grace window a cancel uses, and then
+  // force-killed. A worker killed outright (SIGKILL) cannot run this, which is
+  // exactly the case the repair path reports as an orphan.
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const live = [...children.keys()]
+      .map((id) => manifest.tasks[id])
+      .filter((state) => state && !TERMINAL_STATUSES.has(state.status));
+    const signalled = live
+      .map((state) => signalTaskProcess(state, children.get(state.id) ?? null, 'SIGTERM'))
+      .filter(Boolean);
+    if (!live.length) {
+      process.exit(0);
+      return;
+    }
+    notice(null, 'worker_shutdown', {
+      tasks: live.map((state) => state.id),
+      signalled: signalled.map((entry) => ({ signal: entry.signal, pgid: entry.pgid, group: entry.group })),
+      forceKillMs: cancelForceKillMs,
+    });
+    const force = () => {
+      for (const state of live) {
+        signalTaskProcess(manifest.tasks[state.id] ?? state, children.get(state.id) ?? null, 'SIGKILL');
+      }
+      process.exit(0);
+    };
+    const deadline = setTimeout(force, cancelForceKillMs);
+    if (typeof deadline.unref === 'function') deadline.unref();
+    const poll = setInterval(() => {
+      const stillRunning = live.some((state) => groupHasLiveMembers(Number(state.pgid))
+        || processIsAlive(manifest.tasks[state.id]?.pid));
+      if (stillRunning) return;
+      clearInterval(poll);
+      clearTimeout(deadline);
+      process.exit(0);
+    }, 50);
+    if (typeof poll.unref === 'function') poll.unref();
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 
   persist();
   // The monitor starts after every handler it calls is initialized, and its
@@ -3430,6 +3706,91 @@ function processIsAlive(pid) {
     return true;
   } catch {
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Process groups.
+//
+// A delegated task is spawned as the leader of its own process group, so the
+// whole tree behind a wrapper — `fvm` → `dart run`, `npm` → `node`, `cmd` →
+// anything — can be signalled and verified as one unit. Signalling only the
+// direct child is not enough, and 2026-10-23 proved it: `kill <fvm pid>` ended
+// the wrapper while the real `dartvm … sanad_agent.dart run` survived,
+// re-parented to pid 1 and still attached to the session. Cancel, the forced
+// kill after the grace period, and shutdown therefore all signal the group, and
+// an exit is not treated as a departure until the group is empty.
+//
+// Group signalling is a POSIX contract. Windows has no process groups, so the
+// direct child is signalled there and `pgid` is recorded as `null`.
+// ---------------------------------------------------------------------------
+const GROUP_SIGNALS_SUPPORTED = process.platform !== 'win32';
+
+// Bounded verification of a group after its leader exited. The `exit` event
+// means the direct child is reaped, not that the group is empty, so a member
+// still shutting down gets a few probes before it is reported as surviving.
+const GROUP_EXIT_PROBES = 3;
+const GROUP_EXIT_PROBE_MS = 40;
+
+/**
+ * Signal one process group. `pgid` is validated before it reaches the kernel:
+ * `-1` would address every process this user owns, so it is never allowed.
+ */
+function signalProcessGroup(pgid, signal) {
+  if (!GROUP_SIGNALS_SUPPORTED) return false;
+  if (!Number.isInteger(pgid) || pgid <= 1) return false;
+  if (pgid === process.pid) return false;
+  try {
+    process.kill(-pgid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function groupHasLiveMembers(pgid) {
+  if (!GROUP_SIGNALS_SUPPORTED) return false;
+  if (!Number.isInteger(pgid) || pgid <= 1) return false;
+  if (pgid === process.pid) return false;
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the group exists and is owned by someone else; anything else
+    // (ESRCH) means the last member is gone.
+    return error?.code === 'EPERM';
+  }
+}
+
+/**
+ * Members of a task's group that outlived the direct child, or `null` when the
+ * group is empty. Synchronous on purpose: it runs in the exit handler, and a
+ * bounded probe there is cheaper than a new asynchronous state.
+ */
+function survivingGroupMembers(pgid) {
+  const id = Number(pgid);
+  if (!GROUP_SIGNALS_SUPPORTED || !Number.isInteger(id) || id <= 1) return null;
+  for (let probe = 1; probe <= GROUP_EXIT_PROBES; probe += 1) {
+    if (!groupHasLiveMembers(id)) return null;
+    if (probe < GROUP_EXIT_PROBES) sleepSync(GROUP_EXIT_PROBE_MS);
+  }
+  return { pgid: id, aliveAfterMs: (GROUP_EXIT_PROBES - 1) * GROUP_EXIT_PROBE_MS, probes: GROUP_EXIT_PROBES };
+}
+
+/**
+ * Signal the whole group of one task, falling back to the direct child when the
+ * group is unavailable (Windows, or a group that is already empty).
+ */
+function signalTaskProcess(state, child, signal) {
+  const pgid = Number(state?.pgid);
+  if (signalProcessGroup(pgid, signal)) {
+    return { signal, pgid, group: true };
+  }
+  try {
+    child?.kill(signal);
+    return { signal, pgid: Number.isInteger(pgid) && pgid > 1 ? pgid : null, group: false };
+  } catch {
+    return null;
   }
 }
 
@@ -3782,6 +4143,10 @@ async function cancelCommand(options) {
         from: ack.from,
         status: ack.status,
         signalled: ack.signalled,
+        // The group is what was signalled, and the group id is what an operator
+        // (or a repair) has to address if the tree outlives the leader.
+        pgid: ack.pgid ?? null,
+        group: ack.group === true,
         sessionId: ack.sessionId ?? null,
         sessionStop: ack.sessionStop ?? null,
         followed: ack.followed === true,
@@ -3799,7 +4164,9 @@ async function cancelCommand(options) {
     }
     const signalText = ack.followed
       ? 'no worker process; the turn is followed through the daemon session'
-      : (ack.signalled ? `signalled ${ack.signalled}` : 'no live process to signal');
+      : (ack.signalled
+        ? `signalled ${ack.signalled}${ack.group === true ? ` to process group ${ack.pgid}` : ''}`
+        : 'no live process to signal');
     const sessionText = ack.sessionStop?.requested
       ? `session ${ack.sessionStop.sessionId} stop requested`
       : `daemon session stop not requested (${ack.sessionStop?.reason || 'unknown'})`;
@@ -3874,7 +4241,10 @@ function observeTaskState(runDir, id) {
   const queued = state.status === 'queued';
   const queue = queued ? describeQueuedTask(manifest, id) : null;
   const originalStatus = ['blocked', 'needs_input', 'needs_permission', 'waiting', 'resuming', 'following'].includes(state.status);
-  const settled = state.status === 'running'
+  // A `running` observation is only a launch once a pid exists: a spawn that is
+  // about to fail passes through `running` with no pid for one tick, and counting
+  // that as an observed launch reported a failed spawn as a success.
+  const settled = (state.status === 'running' && Number.isInteger(state.pid))
     || TERMINAL_STATUSES.has(state.status)
     || originalStatus
     || (queued && queue?.reason === 'awaiting_slot');
@@ -4026,7 +4396,22 @@ function waitForRunCompletion(runDir, timeoutMs = 60_000) {
         return;
       }
       if (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid)) {
+        // The worker writes its terminal state before it exits, so a reader can
+        // observe "running" from a read that happened just before that write and a
+        // dead pid from a check that happened just after the exit. The status is
+        // re-read before a death is concluded, because a completion that this
+        // window hides must never be reported as a lost supervisor.
+        let latest = null;
+        try {
+          latest = loadManifest(runDir);
+        } catch {
+          latest = null;
+        }
         cleanup();
+        if (latest && ['completed', 'stale'].includes(latest.status)) {
+          resolvePromise(latest);
+          return;
+        }
         reject(new Error('supervisor process died before the run completed'));
         return;
       }
@@ -4494,13 +4879,9 @@ function reconcileRun(runDir) {
         // A terminal task keeps its own outcome. If the artifact on its path was
         // produced after it settled (a later attempt reused the same --out-dir),
         // it is reported as `later-result` for triage instead of being adopted or
-        // printed as this task's result.
-        const own = readResultDigest(task.resultPath);
-        if (own && !resultBelongsToTask(task, own)) {
-          task.laterResult = own;
-          if (task.result) delete task.result;
-          changed = true;
-        }
+        // printed as this task's result. A followed task is the same case with a
+        // stronger reason: its verdict came from the durable session.
+        if (applyVisibleResult(task, readResultDigest(task.resultPath)) === 'later') changed = true;
       }
       continue;
     }
@@ -4627,14 +5008,6 @@ function reconcileRun(runDir) {
   }
   outcome.changed = changed;
   return outcome;
-}
-
-// The result a reader should show for one task: the artifact on its path when it
-// belongs to this attempt, and nothing when it was produced by a later one.
-function taskResultForView(task) {
-  const digest = task?.result ?? readResultDigest(task?.resultPath);
-  if (!digest) return null;
-  return resultBelongsToTask(task, digest) ? digest : null;
 }
 
 /**
@@ -4890,13 +5263,11 @@ function statusSnapshot(runDir) {
     // Progress age is recomputed on read: a caller that never watched still
     // sees a silent turn instead of an apparently busy one.
     task.progress = describeProgress(manifest, task);
-    const result = readResultDigest(task.resultPath);
-    if (result && !resultBelongsToTask(task, result)) {
-      task.laterResult = result;
-      delete task.result;
-    } else if (result && (TERMINAL_STATUSES.has(task.status) || task.recovered)) {
-      task.result = result;
-    }
+    // The visible result of this task, decided once for every reader: a followed
+    // task keeps the verdict it earned from the durable session, and a worker
+    // artifact that disagrees with it is reported as `later-result` instead of
+    // replacing it.
+    applyVisibleResult(task, readResultDigest(task.resultPath));
   }
   manifest.active = snapshot.active;
   manifest.queuedStallMs = queuedStallThreshold(manifest);

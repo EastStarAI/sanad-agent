@@ -36,6 +36,113 @@ export const IN_FLIGHT_SNAPSHOT_STATES = new Set(['running', 'queued', 'waiting'
 // What the last live observation was, in the order the outcome rule reads it.
 export const LIVE_KINDS = new Set(['live', 'resuming', 'waiting', 'intervention', 'blocked', 'stopping']);
 
+// The durable session state that means "nothing is publishing this turn any
+// more". It says the turn stopped, never why, and never that it finished.
+export const ENDED_SNAPSHOT_STATE = 'idle';
+
+function messageCount(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : null;
+}
+
+/**
+ * The durable completion evidence a `sanad session show --json` projection
+ * carries.
+ *
+ * `session show --json` exposes no terminal turn record: `execution_snapshot`
+ * holds `state`, `revision`, `updated_at`, and `turn_started_at` only, and no
+ * field of the projection states a per-turn verdict. So the evidence used here
+ * is the durable message accounting in `summary`, which the CLI derives from the
+ * persisted messages themselves:
+ *
+ * - `summary.final_answers` counts the `final_answer` rows (the assistant's
+ *   finished replies) the daemon wrote for the session;
+ * - `summary.user_messages` counts the turns a caller sent to it.
+ *
+ * A turn that finished normally leaves a final answer behind. A turn that was
+ * stopped, cancelled, or lost mid-flight leaves its user message plus whatever
+ * tool activity it produced, and no final answer — exactly the 2026-10-23 shape
+ * (`user`, `thinking`, `system_ask_user`, tool result, 0 replies) that was
+ * reported as `completed`.
+ *
+ * Returns `null` when the projection carries no counts at all, so "unknown" is
+ * never mistaken for "unfinished".
+ */
+export function turnEvidence(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const summary = payload.summary && typeof payload.summary === 'object' ? payload.summary : null;
+  if (!summary) return null;
+  const finalAnswers = messageCount(summary.final_answers);
+  const userMessages = messageCount(summary.user_messages);
+  if (finalAnswers == null && userMessages == null) return null;
+  const toolResults = messageCount(summary.tool_results);
+  return {
+    source: 'summary',
+    finalAnswers: finalAnswers ?? 0,
+    userMessages: userMessages ?? 0,
+    ...(toolResults == null ? {} : { toolResults }),
+    messageCount: messageCount(payload.message_count) ?? messageCount(summary.message_count),
+  };
+}
+
+/**
+ * Whether the durable counts prove the followed turn finished normally.
+ *
+ * The rule is the message-based one, because it is the only one the durable
+ * state supports:
+ *
+ * 1. A final answer that appeared *during* the follow window is the turn's own
+ *    written reply, whatever else the session holds (a steered turn also adds a
+ *    user message, so the plain count comparison alone would misread it).
+ * 2. Otherwise the session must hold at least one final answer for every user
+ *    turn it received: the last user turn then has its reply, and an
+ *    interrupted turn can never satisfy that.
+ *
+ * Anything else is an unfinished turn, never a completion.
+ */
+export function finalReplyEvidence(evidence, baseline = null) {
+  if (!evidence) {
+    return {
+      finished: false,
+      reason: 'no_completion_evidence',
+      finalAnswers: null,
+      userMessages: null,
+      baselineFinalAnswers: null,
+      detail: 'the session projection carried no message accounting',
+    };
+  }
+  const baselineAnswers = messageCount(baseline?.finalAnswers);
+  const counts = `${evidence.finalAnswers} final answer(s) for ${evidence.userMessages} user message(s)`;
+  if (baselineAnswers != null && evidence.finalAnswers > baselineAnswers) {
+    return {
+      finished: true,
+      reason: 'final_reply_during_follow',
+      finalAnswers: evidence.finalAnswers,
+      userMessages: evidence.userMessages,
+      baselineFinalAnswers: baselineAnswers,
+      detail: `a final answer appeared after the worker exited (${counts}, ${baselineAnswers} when the follow started)`,
+    };
+  }
+  if (evidence.finalAnswers >= 1 && evidence.finalAnswers >= evidence.userMessages) {
+    return {
+      finished: true,
+      reason: 'final_reply_for_last_turn',
+      finalAnswers: evidence.finalAnswers,
+      userMessages: evidence.userMessages,
+      baselineFinalAnswers: baselineAnswers,
+      detail: `the session holds a final answer for every user turn (${counts})`,
+    };
+  }
+  return {
+    finished: false,
+    reason: 'no_final_reply',
+    finalAnswers: evidence.finalAnswers,
+    userMessages: evidence.userMessages,
+    baselineFinalAnswers: baselineAnswers,
+    detail: counts,
+  };
+}
+
 /**
  * The run's follow policy, with every value explicit so the manifest and the
  * handshake never depend on a hidden default.
@@ -162,6 +269,7 @@ export function interpretSessionSnapshot(payload) {
     retryAfterMs: null,
     updatedAt: null,
     executionState: null,
+    evidence: null,
   };
   if (!payload || typeof payload !== 'object') return empty;
 
@@ -187,6 +295,9 @@ export function interpretSessionSnapshot(payload) {
   );
   const updatedAt = firstText(payload.updated_at, snapshot?.updated_at);
   const retryAfter = retryAfterMs(notice) ?? retryAfterMs(snapshot) ?? retryAfterMs(payload);
+  // Every snapshot carries the durable completion evidence, so the outcome rule
+  // reads the same numbers whether the turn ends on the first probe or later.
+  const evidence = turnEvidence(payload);
 
   if (pending) {
     const requestId = firstText(pending.request_id, pending.requestId);
@@ -212,30 +323,31 @@ export function interpretSessionSnapshot(payload) {
       retryAfterMs: retryAfter,
       updatedAt,
       executionState,
+      evidence,
     };
   }
 
   switch (executionState) {
     case 'blocked':
-      return { ...empty, kind: 'blocked', state: 'blocked', status: 'blocked', cause, retryAfterMs: retryAfter, updatedAt, executionState };
+      return { ...empty, kind: 'blocked', state: 'blocked', status: 'blocked', cause, retryAfterMs: retryAfter, updatedAt, executionState, evidence };
     case 'waiting':
-      return { ...empty, kind: 'waiting', state: 'waiting', status: 'waiting', cause, updatedAt, executionState };
+      return { ...empty, kind: 'waiting', state: 'waiting', status: 'waiting', cause, updatedAt, executionState, evidence };
     case 'resuming':
-      return { ...empty, kind: 'resuming', state: 'resuming', status: 'resuming', cause, updatedAt, executionState };
+      return { ...empty, kind: 'resuming', state: 'resuming', status: 'resuming', cause, updatedAt, executionState, evidence };
     case 'stopping':
-      return { ...empty, kind: 'stopping', state: 'stopping', status: 'stopping', cause: firstText(cause, 'stopped'), updatedAt, executionState };
+      return { ...empty, kind: 'stopping', state: 'stopping', status: 'stopping', cause: firstText(cause, 'stopped'), updatedAt, executionState, evidence };
     case 'running':
     case 'queued':
-      return { ...empty, kind: 'live', state: 'running', status: 'running', cause, updatedAt, executionState };
-    case 'idle':
-      return { ...empty, updatedAt, executionState };
+      return { ...empty, kind: 'live', state: 'running', status: 'running', cause, updatedAt, executionState, evidence };
+    case ENDED_SNAPSHOT_STATE:
+      return { ...empty, updatedAt, executionState, evidence };
     default:
       break;
   }
   if (reportedStatus === 'running') {
-    return { ...empty, kind: 'live', state: 'running', status: 'running', cause, updatedAt, executionState };
+    return { ...empty, kind: 'live', state: 'running', status: 'running', cause, updatedAt, executionState, evidence };
   }
-  return { ...empty, updatedAt, executionState };
+  return { ...empty, updatedAt, executionState, evidence };
 }
 
 /**
@@ -247,8 +359,22 @@ export function interpretSessionSnapshot(payload) {
  * (run7's early `failed` was exactly that trap). A turn that ended before the
  * first probe produced no evidence at all, so it is reported as `incomplete`
  * instead of a guess.
+ *
+ * `idle` is not a verdict. It only says the session stopped publishing, so a
+ * turn that ended after being observed live is `completed` only when the durable
+ * counts prove it finished (`finalReplyEvidence`). Otherwise it is `failed` with
+ * cause `turn_interrupted` — or the daemon's own cause — because the alternative
+ * is telling a coordinator that work finished when nothing was ever answered
+ * (2026-10-23: a killed transport, `idle` at 04:28:27.96Z, 0 replies, reported
+ * `completed`).
  */
-export function followOutcome({ lastLive = null, cause = null, artifact = null } = {}) {
+export function followOutcome({
+  lastLive = null,
+  cause = null,
+  artifact = null,
+  evidence = null,
+  baseline = null,
+} = {}) {
   if (artifact?.status && TERMINAL_STATUSES.has(artifact.status)) {
     return {
       status: artifact.status,
@@ -277,12 +403,24 @@ export function followOutcome({ lastLive = null, cause = null, artifact = null }
     };
   }
   if (lastLive && LIVE_KINDS.has(lastLive)) {
+    const verdict = finalReplyEvidence(evidence, baseline);
+    if (verdict.finished) {
+      return {
+        status: 'completed',
+        cause: null,
+        resultSource: 'daemon_session',
+        note: `the outcome comes from the daemon session, not from a worker artifact: ${verdict.detail}`,
+        evidence: verdict,
+        error: null,
+      };
+    }
     return {
-      status: 'completed',
-      cause: null,
+      status: 'failed',
+      cause: cause ?? 'turn_interrupted',
       resultSource: 'daemon_session',
-      note: 'the outcome comes from the daemon session, not from a worker artifact',
-      error: null,
+      note: 'the durable session stopped publishing without a final assistant reply, so the turn did not finish',
+      evidence: verdict,
+      error: `the daemon turn ended without a final assistant reply (${verdict.detail}); it was interrupted or cancelled`,
     };
   }
   return {
