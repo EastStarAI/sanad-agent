@@ -104,7 +104,7 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
       }
     }
     ```
-  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, `session.stop_recovery_ack`, `device.update.check`, `device.update.apply`, `device.runtime.restart`, `device.cli.execute`, and `device.cli.cancel`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
+  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, `session.stop_recovery_ack`, `device.update.check`, `device.update.apply`, `device.runtime.restart`, `device.cli.execute`, `device.cli.cancel`, `secrets.list`, `secret.set`, and `secret.delete`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
   - Every routed command has a canonical `request_id`. The gateway records a
     short-lived private route from that identifier to the originating app
     socket before dispatching the command. It does not broadcast a generic
@@ -190,6 +190,25 @@ payload: see [Execution Trust and Permission Authority](execution_trust_and_perm
 - **Command: `device.cli.cancel`**
   - Aborts an in-flight CLI execution identified by `target_request_id` without stopping unrelated sessions.
   - Complete specification: see [Remote CLI Relay Protocol](remote_cli_relay_protocol.md).
+
+#### B.3. User Secret Management Commands (Task 140)
+Device-owner commands for listing, adding/replacing, and deleting user credentials used by Agent tools (Settings → Privacy & Security). Values travel strictly inbound into the OS vault and are never returned, echoed, logged, or exposed to the model. Complete specification: see [User Secret Management Protocol](secret_management_protocol.md).
+
+- **Command: `secrets.list`**
+  - Reads non-secret metadata for stored user secrets.
+  - Response Event: `secrets.list_result` (`{"secrets": [{"name", "description", "source", "created_at", "updated_at"}], "truncated": false}`).
+
+- **Command: `secret.set`**
+  - Adds a new secret or replaces an existing value (write-only rotation).
+  - Request Payload: `{"name": "VAR_NAME", "value": "val", "description": "optional"}`.
+  - Response Event: `secret.saved` (`{"name", "description", "source", "created_at", "updated_at"}`).
+  - Emits family broadcast `secrets.changed` (`{"name": "VAR_NAME", "change": "set"}`).
+
+- **Command: `secret.delete`**
+  - Permanently deletes a secret from vault and metadata.
+  - Request Payload: `{"name": "VAR_NAME", "confirm": true}`.
+  - Response Event: `secret.deleted` (`{"name": "VAR_NAME", "status": "deleted"|"not_found"}`).
+  - Emits family broadcast `secrets.changed` (`{"name": "VAR_NAME", "change": "deleted"}`) on successful deletion.
 
 #### C. Reverse Tool Result
 - **Event: `tool_result` (Client → Backend)**
