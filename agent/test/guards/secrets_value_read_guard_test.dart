@@ -27,6 +27,7 @@ const List<String> metadataPathFiles = <String>[
   'lib/capabilities/secrets/user_secret_catalog.dart',
   'lib/evolution/db/user_secret_metadata_repository.dart',
   'lib/evolution/db/schema/user_secrets_schema.dart',
+  'lib/interfaces/platforms/sanad_gateway/handlers/secret_command_handler.dart',
 ];
 
 /// Every value-returning member of the vault and its namespace.
@@ -93,6 +94,15 @@ void main() {
       ]) {
         expect(code, isNot(contains(forbidden)), reason: forbidden);
       }
+    });
+
+    test('the protocol handler module references resolve nowhere', () {
+      final code = _codeOnly(
+        File(
+          '${packageRoot.path}/lib/interfaces/platforms/sanad_gateway/handlers/secret_command_handler.dart',
+        ).readAsStringSync(),
+      );
+      expect(code, isNot(contains('resolve')));
     });
   });
 

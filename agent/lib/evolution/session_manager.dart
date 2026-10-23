@@ -6,6 +6,7 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:uuid/uuid.dart';
 
 import 'attachments/attachment_store.dart';
+import 'cron_scheduler.dart';
 import 'db/agent_state_database.dart';
 import 'db/session_db.dart';
 import 'models/session_query.dart';
@@ -149,8 +150,12 @@ class SessionManager {
   }
 
   void deleteSession(String sessionId) {
+    if (getIt.isRegistered<CronScheduler>()) {
+      getIt<CronScheduler>().pauseForDeletedSession(sessionId);
+    }
     if (getIt.isRegistered<AttachmentStore>()) {
       getIt<AttachmentStore>().deleteSessionSync(sessionId);
+      _historySnapshots.remove(sessionId);
       return;
     }
     _db.deleteSession(sessionId);
