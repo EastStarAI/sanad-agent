@@ -1,17 +1,80 @@
-"""Minimal typed client for the TypeSafe System One HTTP API."""
+"""Minimal typed client for the TypeSafe System One HTTP API.
+
+Four properties are load-bearing for a live decision loop, and each one is
+checked here rather than at a caller:
+
+* **no redirects** - a 3xx would carry the bearer token to another origin, so a
+  redirect is an error and never a hop (``_NoRedirect``);
+* **a typed failure** - a network, timeout, or HTTP failure raises
+  ``JevClientError`` with its cause code and the HTTP status, never a generic
+  ``RuntimeError``, and never a response body or a header;
+* **a short deadline** - one decision is worth a few hundred milliseconds, so the
+  default is ``DEFAULT_TIMEOUT`` seconds and every entry point accepts another;
+* **a self-consistent answer** - choice probabilities must cover exactly the
+  offered candidates, sum to one, and rank the chosen option first; a reply that
+  contradicts itself is refused instead of being acted on.
+"""
 
 from __future__ import annotations
 
+import http.client
 import json
+import math
 import os
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 JsonValue = Union[str, int, float, bool, None, Dict[str, Any], list[Any]]
+
+# One fast decision, not a batch job: a hung call blocks an interactive step.
+DEFAULT_TIMEOUT = 4.0
+# Jev prints probabilities to two decimals; this band absorbs that rounding and
+# still refuses an answer whose mass is genuinely elsewhere.
+PROBABILITY_SUM_TOLERANCE = 0.01 + 1e-12
+ARGMAX_TOLERANCE = 1e-9
+
+
+class JevClientError(RuntimeError):
+    """A request that produced no usable answer, typed by cause.
+
+    ``code`` is one of ``network``, ``timeout``, ``http_error``, ``redirect``,
+    ``malformed``, or ``contradiction``; ``status`` is the HTTP status when a
+    response existed at all; ``invariant`` names the consistency rule a
+    contradictory reply broke. The message is built here, so it never carries a
+    provider body or a header and is safe to escalate.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        detail: str = "",
+        status: Optional[int] = None,
+        invariant: Optional[str] = None,
+    ) -> None:
+        super().__init__(f"{code}: {detail}" if detail else code)
+        self.code = code
+        self.detail = detail
+        self.status = status
+        self.invariant = invariant
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: this client has exactly one origin.
+
+    ``redirect_request`` returning ``None`` makes urllib raise ``HTTPError`` for
+    the 3xx instead of replaying the request - and its ``Authorization`` header -
+    against the redirect target.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def load_typesafe_key() -> Optional[str]:
@@ -119,9 +182,14 @@ class JevClient:
         self,
         state: JsonValue,
         questions: Mapping[str, Mapping[str, Any]],
-        timeout: float = 15,
+        timeout: float = DEFAULT_TIMEOUT,
     ) -> JevResponse:
-        """Evaluate independent typed questions against one structured state."""
+        """Evaluate independent typed questions against one structured state.
+
+        Raises ``JevClientError`` for anything that means "do not use this result":
+        an unreachable origin, a deadline, a redirect, an HTTP error status, a body
+        that is not the documented shape, or an answer that contradicts itself.
+        """
         if not questions:
             raise ValueError("At least one System One question is required")
         payload = {"state": state, "model": self.model, "questions": questions}
@@ -135,30 +203,148 @@ class JevClient:
             method="POST",
         )
         started = time.monotonic()
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                raw = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError) as error:
-            raise RuntimeError("System One request failed") from error
+        raw = self._post(request, timeout)
         latency_ms = round((time.monotonic() - started) * 1000)
 
         raw_answers = raw.get("answers")
         if not isinstance(raw_answers, Mapping):
-            raise ValueError("System One response has no answers object")
+            raise JevClientError(
+                "malformed", "System One response has no answers object"
+            )
         answers = {
             str(question_id): JevAnswer.from_payload(answer)
             for question_id, answer in raw_answers.items()
             if isinstance(answer, Mapping)
         }
         if len(answers) != len(raw_answers):
-            raise ValueError("System One response contains a malformed answer")
+            raise JevClientError(
+                "malformed", "System One response contains a malformed answer"
+            )
+        self._validate_answers(questions, answers)
         return JevResponse(answers=answers, latency_ms=latency_ms, raw=raw)
+
+    # -- transport --------------------------------------------------------
+    def _post(self, request: urllib.request.Request, timeout: float) -> Dict[str, Any]:
+        """One POST with no redirect and no retry; failures stay typed."""
+        try:
+            with _OPENER.open(request, timeout=timeout) as response:
+                body = response.read()
+        except urllib.error.HTTPError as error:
+            status = int(error.code)
+            code = "redirect" if 300 <= status < 400 else "http_error"
+            raise JevClientError(
+                code, f"System One returned HTTP {status}", status=status
+            ) from None
+        except TimeoutError:
+            raise JevClientError(
+                "timeout", "System One did not answer before the deadline"
+            ) from None
+        except urllib.error.URLError as error:
+            timed_out = isinstance(getattr(error, "reason", None), TimeoutError)
+            raise JevClientError(
+                "timeout" if timed_out else "network",
+                "System One did not answer before the deadline"
+                if timed_out
+                else "System One could not be reached",
+            ) from None
+        except (http.client.HTTPException, OSError):
+            raise JevClientError(
+                "network", "the System One connection failed"
+            ) from None
+        try:
+            raw = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise JevClientError(
+                "malformed", "System One returned a body that is not JSON"
+            ) from None
+        if not isinstance(raw, Mapping):
+            raise JevClientError(
+                "malformed", "System One returned a body that is not an object"
+            )
+        return dict(raw)
+
+    # -- answer integrity -------------------------------------------------
+    def _validate_answers(
+        self,
+        questions: Mapping[str, Mapping[str, Any]],
+        answers: Mapping[str, JevAnswer],
+    ) -> None:
+        """Refuse a reply that contradicts the question that produced it."""
+        for name, question in questions.items():
+            answer = answers.get(str(name))
+            if answer is None or answer.kind != "choice":
+                continue
+            criteria = question.get("criteria")
+            if not isinstance(criteria, Mapping) or not criteria:
+                continue
+            self._validate_choice(str(name), answer, tuple(str(key) for key in criteria))
+
+    @staticmethod
+    def _validate_choice(
+        name: str, answer: JevAnswer, options: Sequence[str]
+    ) -> None:
+        chosen = answer.choice
+        if chosen is None or chosen not in options:
+            raise JevClientError(
+                "contradiction",
+                f"{name}: the answer chose an option that was not offered",
+                invariant="choice_in_criteria",
+            )
+        probabilities = answer.probabilities
+        if not isinstance(probabilities, Mapping):
+            raise JevClientError(
+                "contradiction",
+                f"{name}: the answer carries no probability distribution",
+                invariant="choice_probability_key_set",
+            )
+        found = {str(key) for key in probabilities}
+        expected = set(options)
+        if found != expected:
+            missing = sorted(expected - found)
+            extra = sorted(found - expected)
+            raise JevClientError(
+                "contradiction",
+                f"{name}: probabilities do not cover the candidates "
+                f"(missing {missing or 'none'}, unexpected {extra or 'none'})",
+                invariant="choice_probability_key_set",
+            )
+        values: Dict[str, float] = {}
+        for option in options:
+            value = probabilities[option]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise JevClientError(
+                    "contradiction",
+                    f"{name}: probability for {option} is not numeric",
+                    invariant="choice_probability_value",
+                )
+            number = float(value)
+            if not math.isfinite(number) or not -1e-6 <= number <= 1 + 1e-6:
+                raise JevClientError(
+                    "contradiction",
+                    f"{name}: probability for {option} is outside 0..1",
+                    invariant="choice_probability_range",
+                )
+            values[option] = number
+        total = sum(values.values())
+        if abs(total - 1.0) > PROBABILITY_SUM_TOLERANCE:
+            raise JevClientError(
+                "contradiction",
+                f"{name}: probabilities sum to {round(total, 4)}",
+                invariant="choice_probability_sum",
+            )
+        top = max(values.values())
+        if values[chosen] < top - ARGMAX_TOLERANCE:
+            raise JevClientError(
+                "contradiction",
+                f"{name}: the chosen option is not the most probable",
+                invariant="choice_is_argmax",
+            )
 
     def query(
         self,
         state: JsonValue,
         questions: Mapping[str, Mapping[str, Any]],
-        timeout: float = 15,
+        timeout: float = DEFAULT_TIMEOUT,
     ) -> Tuple[Dict[str, Any], int]:
         """Compatibility wrapper that still preserves the complete raw response."""
         response = self.ask(state, questions, timeout)
