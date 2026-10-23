@@ -1,6 +1,6 @@
 ---
 title: "sanad-dev Runtime Ownership QA"
-description: "Regression matrix for managed launcher ownership, reconciliation, clone isolation, and continuous source handoff."
+description: "Regression matrix for managed launcher ownership, reconciliation, clone isolation, continuous source handoff, the read-only inventory projection, and the reset, apply, refresh, cli, status, and doctor runtime tooling."
 ---
 
 # sanad-dev Runtime Ownership QA
@@ -210,15 +210,51 @@ macOS, Linux, and Windows. It resolves package dependencies but does not launch 
 cloud-connected runtime or send credentials/fixtures to Production. Live
 Production cloud smoke remains manual and optional.
 
+## Inventory matrix
+
+`sanad-dev inventory` is the read-only projection used by the coordinator and
+testers instead of rebuilding worktree, port, and orphan state by hand.
+
+| Scenario | Expected result |
+|---|---|
+| Run `inventory` twice while another agent edits a worktree | Output changes only with real runtime state; no process is started or stopped and no file, lease, journal, or Home entry is created, modified, or deleted. |
+| Inspect `~/.sanad/dev/runtimes` after any `inventory` run | Every record still exists; inventory reports orphaned records with the exact `rm -rf` command and never runs it. |
+| Git not installed, or a directory that is not a Git repository | The command exits `1` with a clear message and prints no stack trace. |
+| Primary checkout plus linked, detached, locked, and pruned worktrees | Every worktree is listed once with its branch (or `detached`), short HEAD, dirty count, `ahead`/`behind` of `origin/main`, derived worktree id, derived and recorded Home, and lock/prunable reason under `--all`. |
+| A worktree directory was deleted but Git still lists it | The row reports `missing`, prints no dirty or tracking value, and no Git status child runs for it. |
+| `~/.sanad` runtime on port 58085 plus a linked-worktree runtime | Only the `~/.sanad` row is marked `primary`; both are reported read-only with the same rows. |
+| Live Agent with a live launcher lease | Class `managed`, Agent port, Agent PID with `live`, VM-service port, source commit, attached Client count and devices, lease owner and status. |
+| Live Agent or Client with a stale launcher lease | Class `manual`, and the stale lease PID is named in `--all`. |
+| No live Agent and no live Client | Class `stopped`, and the runtime row is omitted from the default table. |
+| Lease records a Client PID that is dead while a Client with the same launcher id and nonce is alive | The Client is still attributed to its registered worktree id and is marked `lease-pid-drift`; it never disappears from the report or moves to another worktree. |
+| Client without a lease | Attributed through the live Agent workspace hash or its source path, marked `unmanaged`. |
+| Dev Home under `~/.sanad/dev/homes` with no matching worktree id | Reported as a `dev_home` orphan with `rm -rf <home>`; a Home whose lease is still live is never reported. |
+| Runtime record for a deleted worktree | Reported as a `runtime_record` orphan with `rm -rf <record>`; a runtime that is still live for it is reported as a runtime row instead of being hidden. |
+| Runtime record for another branch of an existing worktree | One runtime row for the worktree; the extra record is a stale record, never a second runtime. |
+| Runtime record for a live worktree whose lease launcher is dead | Reported as `dead launcher pid <pid>` with the record path and a `sanad-dev doctor --fix` note; no process is signaled. |
+| Stale `.local_gateway_endpoint.json` naming a dead PID | Reported as an `endpoint_record` orphan with `rm -f <home>/.local_gateway_endpoint.json`; a live one is never reported and its credential is never printed. |
+| Worktree whose Home is an absolute `~/.sanad-test` / `~/.sanad-test-2` / `~/.sanad-test-3` path | A Test Home slot with the recorded Agent port and `running`/`stopped` state; a deleted worktree's Test Home record appears once as an orphan and never as a slot. |
+| `inventory --json` twice on unchanged state | The document keys, `class`/`state`/`kind` values, and `summary` counters match the documented schema; only `generated_at` and live values change. |
+| `inventory --json` output inspected for secrets | No token, credential header, `.env` value, or process argument vector appears; Client VM tokens are never part of the document. |
+| `inventory` with no live runtime, no Clients, and no orphans | Only the worktree and runtime sections print; empty sections are hidden. |
+| `inventory --all` | Every row is followed by its detail lines (full HEAD, path, tracking, Homes, lease identity, source commit, Client source, orphan target/detail/cleanup). |
+| A hung or filtered Agent port | The probe ends at its deadline, the command completes, and `agent_probe_timed_out` is reported instead of blocking; runtime classes then reflect only observed evidence. |
+| `inventory` on a machine with about ten worktrees and forty records | Completes well under two seconds using the prepared runtime CLI; Git and Home reads are bounded, and only loopback `/health` is contacted. |
+| `inventory` run while no prepared runtime CLI exists | Fails with the standard `sanad-dev setup` recovery command and never bootstraps implicitly. |
+
 ## Hermetic test boundary
 
 Ownership tests construct fake agents, clients, launch profiles, Homes, paths,
 lease records, process identities, and endpoint numbers. Stop behavior receives
 an injected launcher-request transport; target cleanup receives an injected
 terminator. Tests assert fake calls and never invoke real process termination
-or a user-owned endpoint. SQLite-backed Agent tests persist a deferred
-descriptor, resolve a terminal manifest once, and verify the completed original
-tool result is reused.
+or a user-owned endpoint. Inventory tests build their fake Git output, Home
+trees, runtime records, and leases under `test/support/` and inject liveness and
+probe seams, so no test reads the developer's own Home, binds a port, or starts a
+runtime; one suite runs real `git worktree list --porcelain` against a throwaway
+repository to keep the parser honest. SQLite-backed Agent tests persist a
+deferred descriptor, resolve a terminal manifest once, and verify the completed
+original tool result is reused.
 
 Daemon-backed handoff tests must allocate a temporary Home and non-primary
 ports. They cover one successful target start and one forced target failure

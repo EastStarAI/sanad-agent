@@ -112,10 +112,8 @@ Future<SanadDevRuntime> discoverSanadDevRuntime({
 
   final repositoryRoot = resolveRepositoryRoot(workspaceRoot);
   final worktreeId = deriveWorktreeId(workspaceRoot, branch);
-  final home = _userHome(env);
-  final runtimeRoot = env['SANAD_DEV_RUNTIME_ROOT']?.trim().isNotEmpty == true
-      ? env['SANAD_DEV_RUNTIME_ROOT']!.trim()
-      : _join(home, '.sanad', 'dev', 'runtimes');
+  final home = resolveUserHomeDirectory(env);
+  final runtimeRoot = resolveSanadDevRuntimeRoot(env);
   final sanadHome = resolveSanadDevHome(
     isLinkedWorktree: isLinkedWorktree,
     userHome: home,
@@ -198,11 +196,18 @@ String deriveWorktreeId(String workspaceRoot, String branch) {
       .where((part) => part.isNotEmpty)
       .last;
   final readable = sanitizeRuntimeId(branch == 'HEAD' ? leaf : branch);
-  final suffix = stableHash(
-    _canonicalPath(workspaceRoot),
-  ).toRadixString(16).padLeft(8, '0').substring(0, 8);
+  final suffix = worktreeHashSuffix(workspaceRoot);
   return '$readable-$suffix';
 }
+
+/// The eight-hex-character workspace hash suffix of one worktree id.
+///
+/// It is derived from the canonical worktree path alone, so a runtime record or
+/// a daemon `/health` answer can be correlated back to its worktree without
+/// knowing the branch.
+String worktreeHashSuffix(String workspaceRoot) => stableHash(
+  _canonicalPath(workspaceRoot),
+).toRadixString(16).padLeft(8, '0').substring(0, 8);
 
 String sanitizeRuntimeId(String value) {
   final normalized = value
@@ -241,6 +246,20 @@ String resolveSanadDevPreferencesPrefix({
 
 String resolveDefaultUserSanadHome(Map<String, String> environment) {
   return _join(_userHome(environment), '.sanad');
+}
+
+/// The invoking user's home directory, from the platform-specific variable.
+String resolveUserHomeDirectory(Map<String, String> environment) =>
+    _userHome(environment);
+
+/// Root directory that holds one diagnostics record per worktree id.
+///
+/// `SANAD_DEV_RUNTIME_ROOT` remains an explicit test/external override; the
+/// default stays below the primary Sanad Home.
+String resolveSanadDevRuntimeRoot(Map<String, String> environment) {
+  final configured = environment['SANAD_DEV_RUNTIME_ROOT']?.trim();
+  if (configured != null && configured.isNotEmpty) return configured;
+  return _join(_userHome(environment), '.sanad', 'dev', 'runtimes');
 }
 
 String deriveSanadDevPreferencesPrefix(String sanadHome) {

@@ -23,6 +23,7 @@ Future<List<AgentInstance>> discoverAgentInstances({
   String? sanadHomeOverride,
   SanadDevRuntime? runtime,
   Iterable<int>? candidatePorts,
+  Iterable<String> additionalHomes = const [],
 }) async {
   final client = HttpClient();
   client.connectionTimeout = const Duration(milliseconds: 150);
@@ -36,6 +37,7 @@ Future<List<AgentInstance>> discoverAgentInstances({
   final candidateHomes = await discoverLocalGatewayCandidateHomes(
     activeRuntime,
     sanadHomeOverride: sanadHomeOverride,
+    additionalHomes: additionalHomes,
   );
   final credentials = <({String home, String value})>[];
   for (final home in candidateHomes) {
@@ -128,6 +130,7 @@ Future<String?> inferPostLaunchSanadHome(SanadDevRuntime runtime) async {
 Future<Set<String>> discoverLocalGatewayCandidateHomes(
   SanadDevRuntime runtime, {
   String? sanadHomeOverride,
+  Iterable<String> additionalHomes = const [],
 }) async {
   final explicitHome = sanadHomeOverride?.trim();
   if (explicitHome != null && explicitHome.isNotEmpty) {
@@ -136,6 +139,12 @@ Future<Set<String>> discoverLocalGatewayCandidateHomes(
 
   final primaryHome = resolveDefaultUserSanadHome(Platform.environment);
   final homes = <String>{runtime.sanadHome, primaryHome};
+  for (final home in additionalHomes) {
+    final trimmed = home.trim();
+    if (trimmed.isNotEmpty && isAbsoluteFileSystemPath(trimmed)) {
+      homes.add(trimmed);
+    }
+  }
   final inferredHome = await inferPostLaunchSanadHome(runtime);
   if (inferredHome != null) homes.add(inferredHome);
 

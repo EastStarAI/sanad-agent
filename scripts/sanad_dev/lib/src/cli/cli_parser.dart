@@ -28,6 +28,8 @@ class SanadDevCliInvocation {
     required this.keepData,
     this.includeMcpConfig = false,
     this.refreshAt,
+    this.showAll = false,
+    this.jsonOutput = false,
   });
 
   final String command;
@@ -58,6 +60,12 @@ class SanadDevCliInvocation {
   /// Capture `mcp_config.json` in a fixture (opt-in; it can carry secrets).
   final bool includeMcpConfig;
   final String? refreshAt;
+
+  /// Expand `inventory` details instead of the compact table.
+  final bool showAll;
+
+  /// Print the stable machine-readable `inventory` document.
+  final bool jsonOutput;
 }
 
 SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
@@ -101,6 +109,8 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
   bool keepData = false;
   bool includeMcpConfig = false;
   String? refreshAt;
+  bool showAll = false;
+  bool jsonOutput = false;
 
   for (int i = 0; i < args.length; i++) {
     final arg = args[i];
@@ -168,6 +178,10 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
       keepData = true;
     } else if (arg == '--include-mcp-config') {
       includeMcpConfig = true;
+    } else if (arg == '--all') {
+      showAll = true;
+    } else if (arg == '--json') {
+      jsonOutput = true;
     } else if (arg == '--at' && i + 1 < args.length) {
       refreshAt = args[i + 1];
     } else if (arg.startsWith('--at=')) {
@@ -206,5 +220,7 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
     keepData: keepData,
     includeMcpConfig: includeMcpConfig,
     refreshAt: refreshAt,
+    showAll: showAll,
+    jsonOutput: jsonOutput,
   );
 }

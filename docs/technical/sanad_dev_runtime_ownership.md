@@ -1,6 +1,6 @@
 ---
 title: "sanad-dev Runtime Ownership"
-description: "Managed launcher leases, workspace/client ownership, clone isolation, continuous source handoff, and the reset, apply, refresh, `cli`, status, and doctor runtime tooling."
+description: "Managed launcher leases, workspace/client ownership, clone isolation, continuous source handoff, the reset, apply, refresh, `cli`, status, and doctor runtime tooling, and the read-only `inventory` projection."
 ---
 
 # sanad-dev Runtime Ownership
@@ -17,9 +17,10 @@ responsibility:
   authenticated Agents, infers the active Home, and performs exact selection;
 - `runtime/ownership/` projects process state and validates managed launcher
   ownership;
-- `runtime/lifecycle/` owns run, readiness, status, reset with Home fixtures,
-  apply, refresh, the compiled-CLI runner, the restart build guard, component
-  stop/control, doctor, orphan cleanup, takeover, and bounded wait orchestration;
+- `runtime/lifecycle/` owns run, readiness, status, the read-only `inventory`
+  projection, reset with Home fixtures, apply, refresh, the compiled-CLI runner,
+  the restart build guard, component stop/control, doctor, orphan cleanup,
+  takeover, and bounded wait orchestration;
 - `runtime/switch/` owns source-handoff admission, process waits, transaction
   control, target launch, rollback, and terminal result persistence;
 - `developer/` owns bounded journals, Client reload/restart/DevTools actions,
@@ -535,6 +536,117 @@ product version (`Runtime version:`) from the Client pubspec. When the launcher
 lease records a commit that value wins; a lease that predates the field, or no
 lease at all, falls back to the worktree `HEAD`, so the line always names a commit
 instead of a placeholder.
+
+### `sanad-dev inventory` is one read-only view
+
+`status` answers "what is this worktree running". `inventory` answers the wider
+question the coordinator and testers used to rebuild by hand every round —
+`git worktree list`, one `lsof` per port, `sanad-dev status` per worktree, and a
+hand-kept list of runtimes that goes stale — in one command:
+
+```bash
+sanad-dev inventory            # compact table, one line per item
+sanad-dev inventory --all      # expands every row with its detail
+sanad-dev inventory --json     # stable machine-readable document
+```
+
+`inventory` is strictly read-only: it never starts, stops, restarts, repairs,
+deletes, or rewrites runtime state, and it prints the cleanup command for every
+orphan instead of running it. Pruning stays a separate, human-owned decision.
+
+**Sources.** `git worktree list --porcelain` (identity, branch, HEAD, lock,
+prunable), one `git --no-optional-locks status --porcelain` and one
+`git rev-list --left-right --count origin/main...HEAD` per worktree, the
+deterministic Home derivation, every launcher lease under each known Home
+(`readRuntimeLauncherRecord`, a plain read with no permission repair), every
+`~/.sanad/dev/runtimes/<worktree id>/startup-attempt.json` locator, every
+`~/.sanad-test*` Home, and each Home's `.local_gateway_endpoint.json`.
+
+**Sections.** Empty sections are hidden.
+
+| Section | One line per item |
+| --- | --- |
+| Worktrees | worktree id, branch, short HEAD, `dirty=`, `ahead=`, `behind=` of `origin/main`, Home, runtime class |
+| Runtimes | live and leased runtime groups: class, Agent port, Agent PID with liveness, VM-service port, source commit, attached Client count and devices, lease owner and status, Home, `primary` marker |
+| Clients | every discovered Client attributed to the worktree id it is registered under: device, VM-service port, PID, gateway port, lease ownership, `lease-pid-drift` |
+| Test Homes | worktrees whose Home is an absolute `~/.sanad-test*` path, with the recorded port and running/stopped state |
+| Orphans | each record that belongs to nothing, with its kind, reason, and the exact cleanup command |
+
+`--all` adds the full HEAD, the absolute path, the lock/prunable reason, the
+derived and recorded Home, the lease identity and liveness, the full source
+commit, Client source and Home, and each orphan's absolute target, detail, and
+cleanup command.
+
+**Runtime classes.** `managed` requires a live launcher lease whose status is
+`running`, `agent-only`, `client-only`, or `switching`; `manual` means live
+evidence without that lease; `stopped` means no live Agent and no live Client.
+The Agent PID comes from the Home's `.local_gateway_endpoint.json` because
+`/health` does not report a process id; when that record is absent the PID stays
+unknown rather than guessed. Agent and Client liveness always comes from the
+live `/health` probe and the OS process table, never from a cached record:
+`runtime.json` contributes configuration (Home, recorded ports) only.
+
+**Primary runtime.** The canonical `~/.sanad` runtime on port `58085` is marked
+`primary` and reported with the same read-only rows as any other runtime.
+
+**Client attribution.** A Client is attributed to the worktree id it is
+registered under, in this order: the live launcher lease that records its PID,
+the lease whose launcher id and runtime nonce match its own launch profile, the
+live Agent's workspace hash mapped back to a runtime record or a worktree id, and
+finally its source path. A Client whose live PID differs from the PID the lease
+recorded still resolves to its worktree and reports `lease_pid_drift`, because a
+stale PID in the lease must never hide a running Client from the operator.
+
+**Orphans.** Three kinds, each with a reason and the exact removal command:
+
+| Kind | Reason | Cleanup command printed |
+| --- | --- | --- |
+| `dev_home` | `no matching worktree` | `rm -rf '<home>'` |
+| `runtime_record` | `no matching worktree` | `rm -rf '<runtime record dir>'` |
+| `runtime_record` | `dead launcher pid <pid>` | `rm -rf '<runtime record dir>'` (a live worktree's record names `sanad-dev doctor --fix` first) |
+| `endpoint_record` | `dead endpoint pid <pid>` | `rm -f '<home>/.local_gateway_endpoint.json'` |
+
+A Home whose leases are still live is never reported as an orphan, and a runtime
+record for another branch of an existing worktree (same path hash) is a stale
+record rather than a second runtime. Windows prints `Remove-Item` instead of
+`rm`. A Test Home slot is reported only for a worktree that still exists, or for
+a runtime that is still running; a deleted worktree's Test Home record appears
+once as an orphan.
+
+**`--json` schema.** `schema` is `1`. Top level:
+`schema`, `generated_at`, `user_home`, `primary_home`, `repository_root`,
+`caller_worktree_id`, `agent_probe_timed_out`, `client_probe_timed_out`,
+`summary` (`worktrees`, `runtimes`, `live_runtimes`, `clients`, `test_homes`,
+`orphans`), `worktrees`, `runtimes`, `clients`, `test_homes`, `orphans`.
+
+| Array | Keys |
+| --- | --- |
+| `worktrees` | `path`, `branch`, `detached`, `head`, `short_head`, `locked`, `lock_reason`, `prunable`, `prunable_reason`, `missing`, `is_linked`, `primary_checkout`, `dirty_count`, `ahead`, `behind`, `worktree_id`, `home`, `recorded_home` |
+| `runtimes` | `worktree_id`, `worktree_path`, `home`, `primary`, `class`, `agent_port`, `agent_pid`, `agent_alive`, `vm_service_port`, `source_commit`, `lease_owner`, `lease_status`, `lease_pid`, `lease_alive`, `detail`, `clients` |
+| `clients` | `worktree_id`, `source`, `device`, `vm_service_port`, `pid`, `gateway_port`, `home`, `managed`, `lease_pid_mismatch` |
+| `test_homes` | `worktree_id`, `home`, `agent_port`, `state` |
+| `orphans` | `kind`, `target`, `reason`, `cleanup_command`, `detail` |
+
+The document is stable: a key is added rather than renamed or removed, and the
+`class`, `state`, and `kind` values are the lowercase names used by the text
+table. `worktree_id` and `branch` are `null` when Git reports no branch
+(detached) and when no lease, record, or source path identifies the worktree.
+
+**Performance.** The report must stay under two seconds for about ten worktrees
+and forty records. Git children and Home reads run through one bounded pool,
+only ports named by a lease or a record are probed (capped at
+`inventoryMaxProbePorts`), and no request leaves loopback: the only network
+traffic is the existing authenticated `GET /health` on each candidate port. The
+Agent probe and the Client process scan each carry a deadline
+(`inventoryAgentProbeTimeout`), so a hung port is abandoned and reported
+(`agent_probe_timed_out` / `client_probe_timed_out`) instead of blocking the
+command. Neither probe mutates state, and inventory never binds a port of its
+own: the runtime it builds for credential discovery carries zero ports.
+
+Discovery accepts additional Homes (`additionalHomes`) so inventory can read the
+Test Home and recorded Homes a worktree-scoped command would never consider;
+the credential candidate set stays read-only evidence, and no ownership rule is
+relaxed.
 
 ### `doctor` driver-host checks
 

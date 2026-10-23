@@ -11,6 +11,9 @@ void printUsage() {
     '  status                    Show the runtime source and all attached clients.',
   );
   print(
+    '  inventory [--all] [--json] Show every worktree, runtime, client and orphaned record (read-only).',
+  );
+  print(
     '  stop [all|agent|client]   Stop all components (default) or one component.',
   );
   print(
@@ -68,6 +71,10 @@ void printUsage() {
   print(
     '  -p, --port <port>         Target a specific running instance by its port.',
   );
+  print(
+    '  --all                     Expand every inventory row with its full detail.',
+  );
+  print('  --json                    Print the stable inventory JSON document.');
   print('  --runtime current         Select the requester runtime for switch.');
   print('  --driver                  Run client/lib/driver_main.dart.');
   print(
@@ -117,6 +124,9 @@ void printUsage() {
   print('Examples:');
   print('  sanad-dev run');
   print('  sanad-dev run --background');
+  print('  sanad-dev inventory');
+  print('  sanad-dev inventory --all');
+  print('  sanad-dev inventory --json');
   print('  sanad-dev run agent');
   print('  sanad-dev run client -d macos');
   print('  sanad-dev stop client -d macos');
