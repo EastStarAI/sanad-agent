@@ -22,7 +22,7 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/cli/oneshot/oneshot_runner.dart': 1496,
   'lib/core/setup/linux_service_manager.dart': 1079,
   'lib/engine/adapters/base_anthropic_adapter.dart': 1260,
-  'lib/engine/adapters/base_openai_adapter.dart': 2016,
+  'lib/engine/adapters/base_openai_adapter.dart': 1515,
   'lib/engine/agent_runner.dart': 2025,
   'lib/engine/context/context_compaction_engine.dart': 2026,
   'lib/engine/runtime/tool_execution_coordinator.dart': 1116,
