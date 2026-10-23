@@ -49,8 +49,8 @@ export const ACTIONABLE_KINDS = new Set([
 ]);
 
 // States an orchestrator must react to: terminal outcomes plus every stop that
-// asks for input or permission. `running`, `resuming`, `following`, `queued`,
-// `held`, `waiting`, and plain progress are not actionable.
+// asks for input or permission. `running`, `resuming`, `retrying`, `following`,
+// `queued`, `held`, `waiting`, and plain progress are not actionable.
 //
 // A followed task mirrors its durable state into these same statuses, so a
 // question, a permission request, a block, or a failure reaches a coordinator
@@ -70,6 +70,7 @@ export const ACTIONABLE_STATUSES = new Set([
 export const WATCH_STATUSES = new Set([
   ...ACTIONABLE_STATUSES,
   'waiting',
+  'retrying',
   'resuming',
   'queued_stall',
   'supervisor_dead',

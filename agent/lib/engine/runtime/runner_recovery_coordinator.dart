@@ -172,6 +172,22 @@ class RunnerRecoveryCoordinator {
         'another provider.';
   }
 
+  /// One sentence stating that the request will run again automatically, and
+  /// which attempt this is.
+  ///
+  /// This is what makes a retry notice self-describing: without it the banner
+  /// reads like a first failure waiting for a human, which is exactly how a
+  /// headless worker was reported `failed` while the daemon was retrying it.
+  String automaticRetryScheduleNote({
+    required int attempt,
+    required int budget,
+    required Duration delay,
+  }) {
+    final seconds = (delay.inMilliseconds / 1000).round();
+    final wait = seconds <= 0 ? 'now' : 'in ${seconds}s';
+    return '\n\nRetrying automatically $wait (attempt $attempt of $budget).';
+  }
+
   String buildNoticeMessage(
     RuntimeFailureReason reason,
     String? providerBody,
@@ -546,6 +562,11 @@ class RunnerRecoveryCoordinator {
     }
 
     if (!streamStarted && budget > 0 && !exhaustedAutomaticRetries) {
+      final scheduleNote = automaticRetryScheduleNote(
+        attempt: attempt + 1,
+        budget: budget,
+        delay: retryAfter,
+      );
       recovery.reportFailure(
         sessionId: host.sessionId,
         reason: reason,
@@ -553,6 +574,14 @@ class RunnerRecoveryCoordinator {
         requestId: host.turnRoute.turnRequestId,
         retryAfter: retryAfter,
         runId: host.authoritativeRunId,
+        // The attempt is scheduled, so the canonical state is `waiting` with
+        // the attempt counters a reader needs to tell it apart from a stop.
+        automaticRetryScheduled: true,
+        retryAttempt: attempt + 1,
+        retryBudget: budget,
+        message:
+            '${buildNoticeMessage(reason, providerBody, recovery.providerDisplayName(providerInstanceId))}'
+            '$scheduleNote',
       );
       final resumed = await recovery.waitForRetry(
         host.sessionId,
@@ -636,6 +665,12 @@ class RunnerRecoveryCoordinator {
           '$retryNote',
       forceBlocked: budgetExhaustedWaiting,
       runId: host.authoritativeRunId,
+      // The terminal notice names the budget the run already spent, so a reader
+      // sees an exhausted retry instead of guessing from prose. Counters are
+      // published only when the loop actually ran and gave up: a failure that
+      // was never eligible must not look like one with budget left.
+      retryAttempt: budget > 0 && !streamStarted ? attempt : null,
+      retryBudget: budget > 0 && !streamStarted ? budget : null,
     );
     throw RuntimeRecoveryRequired(host.sessionId, reason);
   }
