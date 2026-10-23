@@ -32,8 +32,9 @@ keeping labels, identities, and final-only actions distinct.
 
 `AgentToCanonical` classifies reasoning only from a non-empty
 `Message.reasoning`. Missing or empty ordinary content never implies reasoning.
-`SessionTurnExecutor` sends reasoning callbacks through that field while answer
-chunks remain in `Message.content`. OpenAI-compatible, Anthropic Messages,
+`SessionTurnExecutor` routes reasoning callbacks to `TurnEventPublisher`, which
+publishes them through that field while answer chunks remain in
+`Message.content`. OpenAI-compatible, Anthropic Messages,
 Ollama Chat, and Codex Responses adapters all normalize visible reasoning to
 this same contract; provider-specific structured fields, codecs, and SSE
 accumulators never reach the interface layer.
@@ -79,8 +80,8 @@ contiguous. This prevents adjacent bold summaries from producing malformed
 
 ### In-flight snapshots
 
-The in-flight projection stores one active text stream per session. The
-`SessionTurnExecutor` updates this projection once at the stream source, before
+The in-flight projection stores one active text stream per session.
+`TurnEventPublisher` updates this projection once at the stream source, before
 `GatewayManager` fans the immutable response out to local and cloud platforms.
 Protocol translation is side-effect free, so adding another transport cannot
 append a chunk again. Chunks append only when canonical event type, run id, and

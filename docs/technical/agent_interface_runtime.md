@@ -27,7 +27,10 @@ owns admission and restart recovery.
 
 `SessionQueueCoordinator` manages FIFO and route rewrites.
 `SessionTurnExecutor` binds stream callbacks to an active run and delegates model
-execution to `AgentRunner`. `SessionRecoveryRestorer` reconstructs queued,
+execution to `AgentRunner`; its `TurnEventPublisher` publishes that run's live
+tool, thought, reasoning, in-flight-snapshot, and pre-steer segment events behind
+the executor's own ownership check, and its `SessionTitleRefresher` owns the
+post-terminal intelligent title. `SessionRecoveryRestorer` reconstructs queued,
 waiting, blocked, and interrupted work after daemon startup. Shared request and
 route helpers remain stateless so collaborators do not depend back on the
 orchestrator.
