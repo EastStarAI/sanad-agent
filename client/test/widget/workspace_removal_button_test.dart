@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sanad_client/features/settings/presentation/widgets/settings_pages.dart';
+import 'package:sanad_client/features/settings/presentation/widgets/settings_pages/workspace_page.dart';
 
 void main() {
   testWidgets('confirms record-only workspace removal before invoking mutation', (

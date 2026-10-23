@@ -327,7 +327,8 @@ One row per item, appended by the orchestrator.
 | Item | PR | Status | Files locked | Verification |
 |---|---|---|---|---|
 | docs + guard (this PR) | | in progress | `AGENTS.md`, `agent/AGENTS.md`, `client/AGENTS.md`, `client/lib/features/AGENTS.md`, plans, `docs/llms.txt`, two guard tests | see PR |
-| 113-03 / R3 | | in review | `client/lib/features/conversations/presentation/widgets/tools/file_tool_tile.dart`, `…/widgets/tools/code_highlighting.dart`, `…/widgets/tools/diff/`, `client/test/unit/presentation/unified_diff_parser_test.dart`, `client/test/guards/file_size_ratchet_guard_test.dart` | `fvm flutter analyze` clean; 19 focused tests (13 parser + 6 tile) pass; `test/guards/` 3 pass; full fast suite 2,135 pass / 3 skipped; `file_tool_tile` ratchet entry removed |
+| 113-01 / R1 — settings pages split | #306 | PR open | `client/lib/features/settings/presentation/widgets/settings_pages/**`, `settings_screen.dart`, `file_size_ratchet_guard_test.dart`, `settings_update_contract_test.dart`, `profile_page_test.dart`, `agent_restart_confirmation_dialog_test.dart`, `device_name_editor_test.dart`, `workspace_removal_button_test.dart`, `appearance_widgets_test.dart` | `fvm flutter analyze` clean; focused widget suites + `settings_update_contract_test`; `test/guards/`; one full Client fast suite; ratchet at 12 entries with `settings_pages.dart` removed |
+| 113-03 / R3 | #309 | in review | `client/lib/features/conversations/presentation/widgets/tools/file_tool_tile.dart`, `…/widgets/tools/code_highlighting.dart`, `…/widgets/tools/diff/`, `client/test/unit/presentation/unified_diff_parser_test.dart`, `client/test/guards/file_size_ratchet_guard_test.dart` | `fvm flutter analyze` clean; 19 focused tests (13 parser + 6 tile) pass; `test/guards/` 3 pass; full fast suite 2,135 pass / 3 skipped; `file_tool_tile` ratchet entry removed |
 
 ## Definition of Done
 
