@@ -274,6 +274,13 @@ the running spend, the reason code when refused, and the admitted action. A trac
 sufficient to re-judge every step without the model, and the skill tests assert its
 shape.
 
+The writer truncates its file when it is constructed - `TraceWriter.__init__` calls
+`path.write_text("")` - so that append cadence holds only within one process: a runner
+that decides one step per process keeps just the last line. A loop runner must decide
+in one process or append through a subclass. The P3 live pass rebuilt its eleven lines
+by replaying the recorded answers through the same layer code on the saved snapshots,
+which reproduced every decision identically at no cost.
+
 ## P3 findings (implemented)
 
 Both findings from the P1 review are closed by Task 141:
@@ -294,12 +301,26 @@ Both findings from the P1 review are closed by Task 141:
   documented estimate instead of nothing. The knobs and evidence are listed under
   *Budget brake* above.
 
-Live evidence from the first scenario (Task 141 G4/G5) is still outstanding and is
-not claimed here:
+### Live evidence (Task 141 G4/G5)
 
-- [ ] Decisions attempted, admitted, and escalated, with their reason codes and rate.
-- [ ] Per-decision wall clock and estimated spend at or below US$1.00, from the trace.
-- [ ] The kill-criteria numbers and a continue or stop recommendation.
+One scenario on the isolated Test Home, candidate `e5d7be44`, one pass, no retries.
+Runtime ownership, the declared phases, and the full per-step table are recorded in
+[the Task 141 record](../plans/tasks/done/141-jev-p3-live-scenario.md).
+
+- [x] **Decisions attempted, admitted, escalated.** 11 attempted, 11 admitted,
+  0 escalated (0.0 %), and no reason codes to report.
+- [x] **Per-decision wall clock and spend.** p50 728 ms, p95 906 ms, max 918 ms;
+  US$0.00053798 of the US$1.00 ceiling, from 12,809 input tokens and 0 estimated
+  calls.
+- [x] **Kill criteria and recommendation.** **Continue**: 0 wrong actions, 0
+  circuit-breaker trips, one pre-authorized irreversible action executed exactly
+  once, model latency p50 348 ms / p95 449 ms.
+
+Confidence ranged 0.90–0.99 with no floor trip, so this run is also evidence that the
+guard, not the confidence score, is what bounded the actions. Two statistics stay
+owed by P4 because one scenario cannot produce them: the 20-run irreversible-action
+statistic, and the three-family escalation rate, since this run exercised settings
+navigation, picker selection, the device switch, and send only.
 
 ## Routing rule
 
@@ -329,7 +350,10 @@ Stop the investment if, after the first live scenario, any of these holds:
 - measured per-decision wall clock > 6 s;
 - the trace cannot explain every escalation.
 
-State the numbers, then extend or stop explicitly.
+State the numbers, then extend or stop explicitly. The first scenario measured a
+0.0 % escalation rate and a 0.918 s maximum decision wall clock and recorded no wrong
+irreversible action in its single run: the numbers and the verdict are under *Live
+evidence* above, and the two criteria one scenario cannot reach stay with P4.
 
 ## Invariants
 

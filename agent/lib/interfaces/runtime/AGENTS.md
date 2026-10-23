@@ -21,7 +21,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 
 ## Runtime Collaborators
 - `SessionQueueCoordinator` owns queue projection, FIFO drain, and non-terminal route rewrites.
-- `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, tool event emission, exception routing, and post-terminal title scheduling. Normal and resumed tool-completion publication preserves the engine-authored byte-free media descriptor without reconstructing it from text or re-reading paths.
+- `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, exception routing, the durable pending-steer delivery commit, and the per-session in-flight title guard. `TurnEventPublisher` publishes the turn's live events — tool lifecycle, thought and reasoning deltas, the in-flight snapshot projection, and the completed pre-steer segment — only behind that executor's run-ownership check, so it never admits or owns a run itself. `SessionTitleRefresher` decides and publishes the post-terminal intelligent title. Normal and resumed tool-completion publication preserves the engine-authored byte-free media descriptor without reconstructing it from text or re-reading paths.
 - `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work. Recovery queries join live sessions so legacy orphan work is ignored without a startup delete pass; the restorer must not run general `state.db` maintenance or retention deletes.
 - Shared request-id and route helpers remain stateless and must not import the orchestrator.
 - `DeviceCommandAdmission` owns device-control admission: correlation against
