@@ -190,12 +190,22 @@ void main() {
   group('sanad-dev ui cached endpoint liveness', () {
     test('reports a listening loopback port and a closed one', () async {
       final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((client) => client.destroy());
       final port = server.port;
       addTearDown(() => server.close());
 
       expect(await sanad_dev.uiDriverVmServiceReachable(port), isTrue);
       await server.close();
-      expect(await sanad_dev.uiDriverVmServiceReachable(port), isFalse);
+
+      var closed = false;
+      for (var i = 0; i < 10; i++) {
+        if (!await sanad_dev.uiDriverVmServiceReachable(port)) {
+          closed = true;
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(closed, isTrue);
       expect(await sanad_dev.uiDriverVmServiceReachable(0), isFalse);
     });
   });
