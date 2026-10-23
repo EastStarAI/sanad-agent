@@ -420,6 +420,11 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
 - [x] Schema snapshots regenerated for all four fixtures: one new table each, no other movement.
 - [ ] Merge (blocked on CI and review).
 
+Verification at commit `234c770c` (PR #315): `fvm dart analyze` clean; 6 migration + 26 catalog +
+8 acquisition + 7 guard tests; `test/evolution/` 456 passed; guard suite 18 passed; Task 84
+regression 74 passed; full Agent fast suite 3848 passed / 16 pre-existing skips; `lint_wiki.dart`
+clean; `graphify update` run. All required CI checks pass.
+
 ## Out of scope
 
 - Reveal, export, bulk import from dotenv text, rotation history, external secret managers, and a
