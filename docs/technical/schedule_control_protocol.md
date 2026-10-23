@@ -433,3 +433,29 @@ derived from the same `schedule.list` snapshot. The sidebar marker and the conve
 Both are declared ahead of `AppRoutes.session`, because `/conversations/:deviceId/schedules` and a session
 path have three segments and the router matches in declaration order. `AppRoutes.schedulesLocation` and
 `AppRoutes.scheduleDetailLocation` are the only path builders.
+
+### 9.8. Presentation owners
+
+The Client renders this protocol through one device-scoped cubit and a small set of presentation owners,
+none of which holds protocol knowledge of its own:
+
+| Owner | Responsibility |
+|---|---|
+| `presentation/schedules_chrome_scope.dart` (`SchedulesChromeScope`, `SchedulesScope`) | Owns **one** `SchedulesCubit` for the chrome's active device, drops its snapshot when the device goes offline, re-reads when it returns, and forwards `schedule.run_failed` as a localized non-modal notice. |
+| `presentation/screens/schedules_screen.dart` | The list: the five C4 states, one row per schedule, and the create entry. |
+| `presentation/screens/schedule_detail_screen.dart` | The detail with the **Details** and **Run history** tabs. |
+| `presentation/widgets/schedule_editor_sheet.dart` (+ `schedule_recurrence_fields.dart`) | The create/edit form: one definition per kind, the debounced `schedule.preview`, the shared workspace and model chips, and the conversation-mode switch. |
+| `presentation/widgets/schedule_format.dart`, `schedule_failure_text.dart` | The Client-owned copy: the localized recurrence summary, instant-in-zone rendering, status labels, and the total `ScheduleErrorCode` → copy mapping. |
+
+Rules these owners share:
+
+- The sidebar marker and the conversation delete warning read `conversationIdsWithSchedules` from that one
+  snapshot, so neither adds a command. Deleting a conversation never deletes its schedules: the Agent
+  pauses them, and the confirmation says so (S23).
+- Run now stays enabled on a paused row and never resumes it (S21); an orphaned model-owned row offers
+  edit and delete only (S23, D10); every action is disabled while the device cannot answer (S18).
+- The recurrence sentence, every status and trigger label, and every refusal are Client copy. The Agent
+  `message` is never rendered, and an unknown code degrades to a generic sentence.
+- The form reuses the new-conversation widgets (`ComposerWorkspaceChip`, `ComposerModelChip`, and the
+  `ModelPickerDialog` that chip opens); a second picker implementation under `features/schedules/` is a
+  guard failure.

@@ -55,6 +55,31 @@ This contract applies to `client/lib/features/schedules/`.
 ## Routes and Screens
 - `AppRoutes.schedules` and `AppRoutes.scheduleDetail` are declared before `AppRoutes.session` so
   `schedules` is never captured as a session id.
-- The two screens are thin shells: they create the cubit from DI for the route device, call `load()` once
-  from `initState`, and own no list, form, or dialog state. Feature UI beyond the shells belongs to the
-  task that adds it.
+- Both routes render inside the real device chrome: `AppRouter` builds `HomeScreen(deviceContent:
+  SchedulesRouteSurface(...))`, and `SchedulesRouteSurface` resolves the chrome's cubit and renders
+  `SchedulesScreen` or `ScheduleDetailScreen` in the content slot. The routes stay device-scoped and align
+  the active device with the route device; conversation routing does not run while a device content
+  surface owns the slot.
+- `SchedulesChromeScope` (mounted by `HomeScreen`) owns **one** device-scoped `SchedulesCubit` for the
+  chrome's active device and exposes it through `SchedulesScope`. The sidebar marker, the conversation
+  delete warning (S23), the run-failure notice, and both routes read that one snapshot, so the marker
+  costs no extra command. The scope drops the snapshot when the device goes offline and re-reads when it
+  returns. A page pumped without the scope creates its own cubit, so a focused test never needs the
+  chrome.
+- One cubit for the feature: helpers are coordinators with typed callbacks, never a second cubit. A
+  surface calls `load()` from its own lifecycle and from Retry, never from `build`.
+- Screens own presentation state only: the editor's draft, the open tab, and the hover state. They never
+  compute an occurrence (the preview is the Agent's answer), never parse a cursor, and never branch on
+  local/cloud transport.
+- Availability is decided by the row's own derived facts, not by the surface: run now stays enabled on a
+  paused row and never resumes it (S21), an orphaned model-owned row offers edit and delete only
+  (S23, D10), and every action is disabled while the device cannot accept it (S18).
+- The recurrence summary and every status label are composed Client-side from the structured row fields
+  and `AppLocalizations`. No Agent sentence becomes UI copy; the Agent `message` is never rendered.
+- The form reuses the shared new-conversation widgets — `ComposerWorkspaceChip`, `ComposerModelChip`, and
+  the `ModelPickerDialog` that chip opens. A second picker implementation under this feature is a guard
+  failure (`client/test/guards/schedules_model_picker_guard_test.dart`); the primary action sits outside
+  the scrolling body so a long form never hides it.
+- A failed run reaches the user as the chrome's non-modal notice: localized, naming the schedule, with
+  the pause suggestion only when `suggest_pause` is true, and carrying no error text. The bounded failure
+  text lives in the run history row and nothing is persisted from the live event.

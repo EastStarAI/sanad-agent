@@ -34,6 +34,102 @@ void main() {
     });
   });
 
+  group('schedules screen strings', () {
+    // Task 139 C5: every key the task names is authored in both locales.
+    const required = <String>{
+      'schedules',
+      'newSchedule',
+      'scheduleName',
+      'scheduleNameOptional',
+      'scheduleTask',
+      'scheduleTaskHint',
+      'scheduleRecurrence',
+      'scheduleRecurrenceOnce',
+      'scheduleRecurrenceInterval',
+      'scheduleRecurrenceDaily',
+      'scheduleRecurrenceWeekly',
+      'scheduleRecurrenceMonthly',
+      'scheduleTime',
+      'scheduleWeekdays',
+      'scheduleDayOfMonth',
+      'scheduleInterval',
+      'scheduleZone',
+      'scheduleWorkspace',
+      'scheduleModel',
+      'scheduleConversationMode',
+      'scheduleModeContinuous',
+      'scheduleModeNewEachRun',
+      'scheduleNextRunPreview',
+      'schedulePaused',
+      'pauseSchedule',
+      'resumeSchedule',
+      'runNow',
+      'deleteSchedule',
+      'deleteScheduleConfirm',
+      'scheduleDetails',
+      'scheduleRunHistory',
+      'scheduleRunStatusRunning',
+      'scheduleRunStatusSucceeded',
+      'scheduleRunStatusFailed',
+      'scheduleRunStatusSkipped',
+      'scheduleRunTriggerManual',
+      'scheduleDuration',
+      'scheduleOpenConversation',
+      'scheduleEmpty',
+      'scheduleUnavailable',
+      'scheduleLoadFailed',
+      'scheduleSaveFailed',
+      'scheduleExpired',
+      'scheduleFailureSuggestion',
+      'scheduleOwnedByConversation',
+      'scheduleOwnedByDevice',
+      'scheduleHasSchedules',
+      'scheduleConversationDeleteWarning',
+      'scheduleFailureNotice',
+      'scheduleInvalidZone',
+      'schedulePreviewInvalid',
+      'scheduleNoRuns',
+      'scheduleLoadRunsFailed',
+      'scheduleErrorInvalidRequest',
+      'scheduleErrorInvalidSchedule',
+      'scheduleErrorNotFound',
+      'scheduleErrorOrphaned',
+      'scheduleErrorPermissionDenied',
+      'scheduleErrorInternal',
+    };
+
+    test('every Schedules screen key exists in en and ar', () {
+      for (final path in ['lib/l10n/app_en.arb', 'lib/l10n/app_ar.arb']) {
+        expect(
+          required.difference(_keys(path)),
+          isEmpty,
+          reason: '$path is missing Schedules screen keys',
+        );
+      }
+    });
+
+    test('every schedule error code has its own copy in both locales', () {
+      // A total mapping over ScheduleErrorCode is C4's typed-copy rule; the
+      // unknown code deliberately renders a generic sentence instead.
+      const codes = <String>[
+        'scheduleErrorInvalidRequest',
+        'scheduleErrorInvalidSchedule',
+        'scheduleErrorNotFound',
+        'scheduleExpired',
+        'scheduleErrorOrphaned',
+        'scheduleErrorPermissionDenied',
+        'scheduleErrorInternal',
+        'scheduleUnavailableHint',
+      ];
+      for (final path in ['lib/l10n/app_en.arb', 'lib/l10n/app_ar.arb']) {
+        final keys = _keys(path);
+        for (final code in codes) {
+          expect(keys, contains(code), reason: '$path is missing $code');
+        }
+      }
+    });
+  });
+
   group('secrets screen strings', () {
     // Task 140 C4: every key the task names is authored in both locales.
     const required = <String>{

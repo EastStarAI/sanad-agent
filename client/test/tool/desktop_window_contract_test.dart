@@ -161,10 +161,18 @@ void main() {
     final homeScreen = File(
       'lib/features/home/presentation/screens/home_screen.dart',
     ).readAsStringSync();
+    final drawer = File(
+      'lib/features/home/presentation/widgets/sidebar_drawer.dart',
+    ).readAsStringSync();
 
-    expect(homeScreen, contains('_SidebarDrawer'));
-    expect(homeScreen, isNot(contains('_onCompactMenuButtonEnter')));
-    expect(homeScreen, isNot(contains('Key(\'compact_sidebar_hover_region\')')));
+    // The compact drawer moved into its own library so the home screen stays
+    // inside the Client size ratchet while it hosts device surfaces (Task 139).
+    expect(homeScreen, contains('SidebarDrawer'));
+    expect(drawer, contains('class SidebarDrawer'));
+    for (final source in [homeScreen, drawer]) {
+      expect(source, isNot(contains('_onCompactMenuButtonEnter')));
+      expect(source, isNot(contains('Key(\'compact_sidebar_hover_region\')')));
+    }
   });
 
   test('custom caption tracks maximize and full-screen lifecycle events', () {

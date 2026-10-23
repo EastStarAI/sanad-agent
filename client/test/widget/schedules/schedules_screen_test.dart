@@ -15,6 +15,7 @@ import 'package:sanad_client/features/schedules/presentation/screens/schedule_de
 import 'package:sanad_client/features/schedules/presentation/screens/schedules_screen.dart';
 
 import '../../helpers/fake_device_repository.dart';
+import '../../helpers/pump_app.dart';
 
 class _ScriptedClient implements SchedulesClient {
   final listCalls = <String>[];
@@ -76,7 +77,9 @@ void main() {
   });
 
   Future<void> pumpScreen(WidgetTester tester, Widget screen) async {
-    await tester.pumpWidget(MaterialApp(home: screen));
+    // The surfaces are localized (Task 139 C5), so they are pumped with the app's
+    // delegates and a Scaffold, exactly as the device chrome renders them.
+    await pumpTestApp(tester, child: screen);
     await tester.pumpAndSettle();
   }
 
