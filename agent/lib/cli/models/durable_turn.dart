@@ -30,7 +30,7 @@ enum DurableFollow {
 /// The follow decision reads the daemon's recovery state first: a retryable
 /// failure the runtime is still retrying (`waiting`, `resuming`, or a `blocked`
 /// notice with budget left) is followed, and only a turn with no scheduled
-/// resume is parked for an operator (Task 141).
+/// resume is parked for an operator.
 class DurableTurn {
   final DurableFollow follow;
   final String? state;

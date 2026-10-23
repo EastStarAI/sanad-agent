@@ -381,12 +381,12 @@ The worker's `result.json` is archived to `<run>/follow/<task>/attempt-<n>/resul
 |---|---|
 | pending request, `status: needs_input` | `needs_input` with `request_id`, `tool_name`, and `questions` |
 | pending request, `status: needs_permission` | `needs_permission` with the same whitelisted fields |
-| runtime notice `waiting`/`resuming`, snapshot `waiting`, or a `blocked` notice with `retry_attempt < retry_budget` | `retrying` with `daemonRetry: {attempt, budget}` and the notice reason — live progress, never a wake-up (Task 141) |
+| runtime notice `waiting`/`resuming`, snapshot `waiting`, or a `blocked` notice with `retry_attempt < retry_budget` | `retrying` with `daemonRetry: {attempt, budget}` and the notice reason — live progress, never a wake-up (classification owned by `docs/technical/sanad_cli_architecture.md` "Recovery state") |
 | `execution_snapshot.state: blocked` with no scheduled retry | `blocked` with its `cause` (and `retry_after_ms` when the notice carries one) |
 | `execution_snapshot.state: resuming` | `resuming` |
 | `execution_snapshot.state: running` | stays `following` (a live turn with no worker); the poll refreshes `lastProgressAt` |
 | `execution_snapshot.state: stopping` | terminal, §3 below |
-| `execution_snapshot.state: idle`, no pending request | the turn ended, §3 below |
+| `execution_snapshot.state: idle`, no pending request | the turn ended, §3 below — a notice it left behind is never read as `retrying` |
 
 The retry classification reads the daemon's own projection, which is why `session show --json` publishes `execution_state`, `runtime_notice`, and the derived `retry` facts ([Sanad CLI Architecture § 9.4](../technical/sanad_cli_architecture.md)). A `retrying` transition is journaled once per attempt: a repeated poll of the same attempt only refreshes `lastProgressAt`.
 

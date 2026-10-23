@@ -89,7 +89,7 @@ const RETRY_EXIT_OUTCOMES = new Map([
 ]);
 // Task states `retry` may resume. `retrying` is included because the daemon is
 // waiting on its own resume timer there: a manual retry shortens that wait
-// instead of starting a second turn (Task 141). `waiting` stays for rate-limit
+// instead of starting a second turn. `waiting` stays for rate-limit
 // waits and for tasks observed through an older worker artifact.
 const RETRYABLE_TASK_STATUSES = ['blocked', 'waiting', 'retrying'];
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
@@ -2501,7 +2501,7 @@ function workerCommand(options) {
     if (snapshot.kind === 'retrying') {
       // The daemon scheduled another automatic attempt. The task stays live and
       // says so, with the attempt counters, instead of parking as `blocked` and
-      // waiting for a retry an operator was never needed for (Task 141).
+      // waiting for a retry an operator was never needed for.
       const cause = snapshot.cause ?? state.cause ?? 'unknown';
       follow.lastCause = cause;
       const daemonRetry = {
@@ -5404,7 +5404,7 @@ function briefTaskLine(manifest, task) {
   if (retry.launchAttempts > 0) parts.push(`launch-retries ${retry.launchAttempts}`);
   // The daemon's own retry counters. While one is pending the task is live, so
   // the line names the attempt the runtime is running instead of leaving a bare
-  // `retrying` status that a reader has to interpret (Task 141).
+  // `retrying` status that a reader has to interpret.
   if (task.daemonRetry) {
     parts.push(`daemon-retry ${task.daemonRetry.attempt ?? '?'}/${task.daemonRetry.budget ?? '?'}`);
   } else if (task.status === 'retrying') {

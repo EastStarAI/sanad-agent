@@ -71,6 +71,11 @@ function integerOrNull(value) {
  *
  * A `fatal` notice is never a retry: a permanently rejected request is not
  * retried by definition, whatever counters its reason happens to carry.
+ *
+ * An ended snapshot outranks the notice for the same reason. A projection can
+ * still carry the notice of a turn that already finished, and `idle` says the
+ * daemon stopped publishing that turn, so a leftover `waiting` notice must not
+ * keep the follower in `retrying` forever.
  */
 export function autoRetryFacts(notice, executionState = null) {
   const map = notice && typeof notice === 'object' ? notice : null;
@@ -82,7 +87,10 @@ export function autoRetryFacts(notice, executionState = null) {
   const noticeSchedules = noticeStatus === 'waiting';
   const stateSchedules = executionState === 'waiting';
   const retryableNotice = noticeStatus == null || noticeStatus === 'waiting' || noticeStatus === 'blocked';
-  const pending = noticeStatus === 'fatal'
+  // `idle` means the turn ended: a notice it left behind cannot schedule an
+  // attempt, so the follower settles instead of reporting `retrying` forever.
+  const ended = executionState === ENDED_SNAPSHOT_STATE;
+  const pending = noticeStatus === 'fatal' || ended
     ? false
     : (noticeSchedules || stateSchedules || (retryableNotice && budgetLeft));
   return {
@@ -90,7 +98,7 @@ export function autoRetryFacts(notice, executionState = null) {
     noticeStatus,
     // The structured reason (`timeout`, `auth`, …). Reporting only: the retry
     // policy keeps its own transient-cause vocabulary, which the worker artifact
-    // already provides, so `cause` is never rewritten from a notice (Task 141).
+    // already provides, so `cause` is never rewritten from a notice.
     reason,
     attempt,
     budget,

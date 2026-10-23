@@ -94,6 +94,25 @@ test('a durable waiting state with no notice is still an automatic retry', () =>
   assert.equal(facts.label, 'retrying');
 });
 
+test('an ended snapshot is not retrying, even with a leftover waiting notice', () => {
+  // The projection can keep the notice of a turn that already finished. `idle`
+  // is the daemon saying it stopped publishing that turn, so the follower must
+  // settle instead of following a retry that will never arrive.
+  const facts = autoRetryFacts(timeoutNotice(), 'idle');
+  assert.equal(facts.pending, false);
+
+  const snapshot = interpretSessionSnapshot({
+    session_id: 'sess-1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+    runtime_notice: timeoutNotice(),
+    summary: summary({ replies: 1 }),
+  });
+  assert.equal(snapshot.kind, 'ended');
+  assert.equal(snapshot.status, 'idle');
+  assert.equal(snapshot.retry.pending, false);
+});
+
 test('the snapshot of a retrying turn is a live retry, not a block', () => {
   const snapshot = interpretSessionSnapshot({
     session_id: 'sess-1',

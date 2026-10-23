@@ -482,7 +482,7 @@ class CliRuntimeNoticeEvent extends CliEvent {
   final String? status;
 
   /// The daemon's own retry classification for this notice: whether another
-  /// automatic attempt is scheduled, and which attempt it is (Task 141).
+  /// automatic attempt is scheduled, and which attempt it is.
   final RuntimeRetryState retry;
 
   CliRuntimeNoticeEvent({
@@ -519,7 +519,7 @@ class CliRuntimeNoticeEvent extends CliEvent {
   /// Blocked work awaits an explicit Retry, Change Provider or Stop; a
   /// non-interactive one-shot run ends on it instead of waiting (Task 125).
   /// A `blocked` notice that still promises an automatic attempt is excluded:
-  /// the daemon has already scheduled the resume (Task 141).
+  /// the daemon has already scheduled the resume.
   bool get isBlocked => status == 'blocked' && !isAutoRetrying;
 }
 

@@ -1,5 +1,5 @@
 /// The daemon's own recovery classification for a failed turn, as a CLI
-/// observer reads it (Task 141).
+/// observer reads it.
 ///
 /// The daemon is the single owner of recovery state: it decides whether a
 /// failure is retried automatically, how many attempts the reason's budget
@@ -18,6 +18,12 @@
 ///   `retry_budget`, `retry_after_ms`);
 /// * a `session show` / session-history projection (`runtime_notice` plus the
 ///   durable `execution_snapshot.state`).
+///
+/// The durable snapshot outranks the notice. A notice lingers in the projection
+/// after the turn it described has ended, so `execution_snapshot.state == idle`
+/// is read as "the daemon stopped publishing this turn": nothing is retrying
+/// and nothing is parked. A `fatal` notice is never a retry either, whatever
+/// counters its reason happens to carry.
 class RuntimeRetryState {
   /// Notice lifecycle status: `waiting`, `blocked`, `resuming`, `fatal`, or
   /// `cleared`. Null when the daemon published no notice.
@@ -82,12 +88,17 @@ class RuntimeRetryState {
     );
   }
 
+  /// The durable state that means the daemon stopped publishing this turn.
+  static const String _endedState = 'idle';
+
   /// Whether the recovery state itself promises a resume.
   bool get schedulesResume =>
       noticeStatus == 'waiting' || noticeStatus == 'resuming';
 
-  /// Whether another automatic attempt is still inside the budget.
+  /// Whether another automatic attempt is still inside the budget. A `fatal`
+  /// notice is never retried, so its counters cannot promise an attempt.
   bool get hasRetryBudgetLeft {
+    if (noticeStatus == 'fatal') return false;
     final attemptValue = attempt;
     final budgetValue = budget;
     return attemptValue != null &&
@@ -99,7 +110,11 @@ class RuntimeRetryState {
   /// Whether the daemon will continue this turn without an operator: a
   /// scheduled resume, a retryable failure with budget left, or a durable
   /// `waiting` state whose notice was not projected.
+  ///
+  /// A durable `idle` snapshot ends the turn, so a notice left over from it
+  /// never makes the turn look like it is still retrying.
   bool get isAutoRetrying {
+    if (executionState == _endedState) return false;
     if (schedulesResume || hasRetryBudgetLeft) return true;
     return noticeStatus == null && executionState == 'waiting';
   }
@@ -107,6 +122,7 @@ class RuntimeRetryState {
   /// Whether the turn is parked with no scheduled resume, so only an operator
   /// (Retry, Change Provider, Stop) can move it.
   bool get isTrulyBlocked {
+    if (executionState == _endedState) return false;
     if (isAutoRetrying) return false;
     return noticeStatus == 'blocked' ||
         noticeStatus == 'fatal' ||

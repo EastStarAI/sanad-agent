@@ -782,7 +782,7 @@ void main() {
       test('an unknown session id is a not-found error, never idle', () async {
         // The daemon omits the session's own identity fields when it does not
         // know the id; reporting that projection as `idle` with exit 0 made an
-        // unknown id indistinguishable from a stopped turn (Task 141).
+        // unknown id indistinguishable from a stopped turn.
         client.historyToReturn = {
           'payload': {
             'session_id': 'sess-missing',

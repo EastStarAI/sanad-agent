@@ -107,7 +107,7 @@ void main() {
       () {
         // `timeout` presents as blocked by default, but the runtime has already
         // scheduled attempt 1 of 1. `blocked` would tell every observer to give
-        // up on a turn the daemon is about to continue (Task 141).
+        // up on a turn the daemon is about to continue.
         recovery.reportFailure(
           sessionId: 's1',
           reason: RuntimeFailureReason.timeout,

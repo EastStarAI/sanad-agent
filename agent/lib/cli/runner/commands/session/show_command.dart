@@ -46,7 +46,7 @@ class SessionShowCommand extends SessionSubcommandBase {
         // session (`buildSessionPayload` sets `title` and `created_at`
         // unconditionally), and omits it entirely when it does not. Reporting
         // the omitted case as `idle` with exit 0 made an unknown id
-        // indistinguishable from a stopped turn (Task 141).
+        // indistinguishable from a stopped turn.
         final hasSessionIdentity =
             payload['title'] != null || payload['created_at'] != null;
         if (!hasSessionIdentity) {
@@ -83,7 +83,7 @@ class SessionShowCommand extends SessionSubcommandBase {
             : null;
         // The daemon owns recovery: its notice status, the failure's
         // retryability, and the remaining budget decide whether the turn is
-        // being retried or is truly stopped. Prose never does (Task 141).
+        // being retried or is truly stopped. Prose never does.
         final retry = RuntimeRetryState.fromProjection(payload);
 
         final bool isAskUser =
@@ -96,7 +96,7 @@ class SessionShowCommand extends SessionSubcommandBase {
         // daemon that owns the turn writes it. `in_flight` is only the in-memory
         // partial-stream snapshot, and it is absent while a tool runs, which is
         // why this projection used to answer `idle` for a session that was
-        // demonstrably executing (Task 141).
+        // demonstrably executing.
         final durableExecutionState = executionSnapshot?['state']?.toString();
         final durableIsIdle =
             durableExecutionState == 'idle' ||
@@ -153,7 +153,7 @@ class SessionShowCommand extends SessionSubcommandBase {
 
         // The recovery facts an observer needs to classify the turn without
         // guessing: whether the daemon is retrying, the notice that says so, the
-        // attempt counters, and the remaining resume delay (Task 141).
+        // attempt counters, and the remaining resume delay.
         final Map<String, dynamic>? retryFacts =
             retry.isAutoRetrying || retry.isTrulyBlocked
             ? <String, dynamic>{

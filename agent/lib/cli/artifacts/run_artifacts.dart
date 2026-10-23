@@ -114,7 +114,7 @@ class RunResultArtifact {
   bool get isWaiting => status == 'waiting';
   bool get isResuming => status == 'resuming';
 
-  /// The daemon is retrying this failure on its own (Task 141). Like `waiting`
+  /// The daemon is retrying this failure on its own. Like `waiting`
   /// and `resuming` it is progress, never a verdict.
   bool get isRetrying => status == 'retrying';
 
