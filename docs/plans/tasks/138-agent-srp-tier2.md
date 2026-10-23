@@ -412,6 +412,7 @@ One row per item, appended by the orchestrator. Only the orchestrator edits this
 |---|---|---|---|---|
 | docs + guard (this PR) | | in progress | `AGENTS.md`, `agent/AGENTS.md`, `client/AGENTS.md`, plans, `docs/llms.txt`, two guard tests | see PR |
 | 138-02 / R4 | #285 | in review (Draft PR) | `agent/lib/cli/runner/commands/session_command.dart`, `agent/lib/cli/runner/commands/session/`, `agent/test/guards/file_size_ratchet_guard_test.dart`, `agent/AGENTS.md`, `docs/technical/sanad_cli_architecture.md`, this plan | analyzer clean; 94 + 7 + 7 focused, 11 guard tests, full fast suite, relay grammar `--check` green with an unchanged fixture; host ratchet entry removed (1,853 → 129 lines, 23 entries) |
+| 138-05 / R7a | this PR | in review | `agent/test/evolution/agent_state_schema_snapshot_test.dart`, `agent/test/evolution/fixtures/agent_state/`, `docs/technical/agent_database_schema.md`, `.gitattributes`, this plan | analyzer clean; 11 characterization tests green on three consecutive runs; 11 guard tests; full fast suite 3,706 passed / 16 skipped |
 
 ## Definition of Done
 
