@@ -2,7 +2,6 @@
 // supplies the state and receives the pick, so the schedule form reuses it
 // instead of forking the model selector.
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/di/injection.dart';
