@@ -2,8 +2,8 @@
 title: "Task 139 — Schedules Screen, Schedule Control, and Run History"
 description: "Give schedules a real product surface: a standalone Client list and detail page, a create/edit form that reuses the existing new-conversation widgets, pause/resume/run-now, a per-schedule conversation mode, a persisted run history anchored to the run's conversation, and one local/cloud protocol path, while the model stays owner-scoped and the device owner can control any schedule."
 status: in_progress
-current_gate: "139-01 (agent state, migrations, repositories) in review; 139-02 next, 139-04 still blocked on 138-08"
-remaining_estimate: 88%
+current_gate: "139-01 merged (#312); 139-02 in review; 139-03 next"
+remaining_estimate: 75%
 base_commit: 09d5c34a
 depends_on: "138-11 (schema modules), 138-08 (bridge translator), 138-09 (history projection host), 113b 113-02 (composer split) — see Work split"
 ---
@@ -90,6 +90,7 @@ Fixed by the product owner; not reopened here.
 | 139-01 scope: `agent/lib/evolution/db/session_db.dart` was not in the item's file lock | 139-02 would have had to extend the facade to write the new columns, and 139-02 does not lock it either | 139-01 takes the delegation-only change (seven forwarding parameters plus one repository getter and export, no logic) and discloses it in the PR |
 | 139-01 scope: `schedule_model.dart` may add record fields but had to stay within 1,264 lines | exactly 1,264 lines, zero headroom | `ScheduledTaskRecord` moves verbatim to the companion `evolution/scheduling/scheduled_task_record.dart` (re-exported from `schedule_model.dart`, so no importer changes), gains the seven Task 139 fields there, and the ratchet entry drops to the file's new count |
 | 139-01 write rules for the D1 columns | `saveScheduledTask`'s upsert overwrote all seven new columns on conflict, and every `CronScheduler` re-save passes legacy parameters only | the upsert is insert-only for the D1 columns; `owner_kind` is immutable after insert; `ScheduledTaskRepository.updateScheduleSettings` (omit keeps, `null` clears, never touches `owner_kind`, bumps `updated_at`) is the single edit path for the other six, exposed through `SessionDB` as delegation only |
+| 139-02 scope: conversation-delete pause scope (coordinator decision Q2) | S23 said deleting a conversation pauses schedules that dispatch into it | the delete-pause hook applies only to the owning `session_id`, or to `run_session_id` when the mode is `continuous`; past runs in a deleted session for `new_each_run` do not pause the schedule |
 
 ### Design decisions taken to make the fixed decisions executable
 
@@ -547,7 +548,8 @@ exact commands and counts from that PR.
 
 | Item | PR | Status | Verification |
 |---|---|---|---|
-| 139-01 state: columns + `scheduled_task_runs` + repositories | see PR | in review | `fvm dart analyze` clean; `test/evolution/scheduled_tasks_migration_test.dart` 19 + `test/evolution/scheduled_task_runs_test.dart` 18; `test/evolution/` 450; `test/guards/` 11; schema snapshots regenerated for all four fixtures (runs table, its index, seven appended columns) with the pre-112 fixture group asserting the `model`/`continuous` backfill; full fast suite result posted on the PR. Ratchet: `schedule_model.dart` 1,264 → 1,143 (record moved to `scheduled_task_record.dart`, 241 lines, no entry). Review delta 1: the upsert is insert-only for the D1 columns and `updateScheduleSettings` is their single edit path |
+| 139-01 state: columns + `scheduled_task_runs` + repositories | #312 | merged | `fvm dart analyze` clean; `test/evolution/scheduled_tasks_migration_test.dart` 19 + `test/evolution/scheduled_task_runs_test.dart` 18; `test/evolution/` 450; `test/guards/` 11; schema snapshots regenerated for all four fixtures (runs table, its index, seven appended columns) with the pre-112 fixture group asserting the `model`/`continuous` backfill; full fast suite result posted on the PR. Ratchet: `schedule_model.dart` 1,264 → 1,143 (record moved to `scheduled_task_record.dart`, 241 lines, no entry). Review delta 1: the upsert is insert-only for the D1 columns and `updateScheduleSettings` is their single edit path |
+| 139-02 scheduler control + conversations + run recorder | #317 | in review | `cd agent && fvm dart analyze` clean (0 issues); `test/evolution/schedule_control_test.dart` (15 passed); `test/evolution/schedule_conversations_and_runs_test.dart` (18 passed); `test/guards/file_size_ratchet_guard_test.dart` (3 passed); full `agent/test/evolution/` suite passed; full Agent fast suite passed. Line counts: `cron_scheduler.dart` 836 lines, `session_manager.dart` 427 lines, `schedule_control.dart` 294 lines, `schedule_run_recorder.dart` 487 lines, `schedule_conversation_factory.dart` 167 lines (all ≤ 1000 ratchet limit). Q1/Q2 coordinator decisions implemented and tested. |
 
 ## Out of scope
 
