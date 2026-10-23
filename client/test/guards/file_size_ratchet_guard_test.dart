@@ -25,9 +25,6 @@ const Map<String, int> allowlistedFiles = <String, int>{
       1571,
   'lib/features/conversations/presentation/screens/brain_activity_view.dart':
       1687,
-  'lib/features/mcp/presentation/screens/add_mcp_server_screen.dart': 1178,
-  'lib/features/mcp/presentation/screens/mcp_server_management_screen.dart':
-      1055,
   'lib/features/provider_setup/presentation/bloc/provider_setup_cubit.dart':
       1119,
 };
