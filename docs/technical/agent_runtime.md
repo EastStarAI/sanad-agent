@@ -462,7 +462,9 @@ Collaborators read live state through `CheckpointContext` and mutate history via
 |---|---|---|
 | `SessionQueueCoordinator` | in-memory `_pendingEvents`, SQLite queue persistence + route overrides on queued/non-terminal work | ~163 |
 | `SessionRecoveryRestorer` | daemon startup recovery, crash classification (re-queue vs block by `tool_replay_safety`), timer/notice rehydration, queue-only bootstrap | ~371 |
-| `SessionTurnExecutor` | single turn execution, listener subscriptions via `ActiveRun`, tool-event emission, exception routing, title-update delegation | ~483 |
+| `SessionTurnExecutor` | single turn execution, listener subscriptions via `ActiveRun`, exception routing, durable pending-steer delivery commit, per-session in-flight title guard | 1004 |
+| `TurnEventPublisher` | live tool lifecycle, thought and reasoning deltas, in-flight snapshot projection, completed pre-steer segment — always behind the executor's run-ownership check | 254 |
+| `SessionTitleRefresher` | post-terminal intelligent title decision and publication | 88 |
 | `SessionStopCoordinator` | per-session stop, cancellation, tool terminalization, stop-draft recovery, queue draining, and preserving an interactive user-input wait across a managed daemon stop | ~382 |
 | `SessionRestartCheckpointManager` | controlled-restart draining, safe checkpoint polling, interrupted provider-request cancellation | ~291 |
 | `SessionMetadataResolver` | session title, workspace association, and metadata resolution from inbound gateway events | ~128 |
@@ -492,7 +494,7 @@ Each provider invocation within that turn receives a fresh `model_step_id` befor
 
 Automatic failover retains the same run owner but must atomically claim the durable waiting work as resuming before calling the replacement provider. Terminal output still follows the normal owned `resuming -> completed` commit.
 
-The same ownership rule applies to a bounded automatic retry on the current route. After a transient failure moves durable work to `waiting` or `blocked`, the retry validates the exact work item, run, generation, and request before committing `resuming`. A stale or lost owner cannot call the provider again. The recovery notice remains `resuming` until the first real provider event (including reasoning or metadata) or terminal completion; it is not cleared merely because the retry timer elapsed. This keeps the execution snapshot, terminal commit, composer, and sidebar attention icon aligned.
+The same ownership rule applies to a bounded automatic retry on the current route. A retryable failure that still has budget is published as `waiting` with the scheduled `retry_attempt`/`retry_budget` and moves durable work to `waiting`; only an exhausted budget or a non-retryable reason becomes `blocked`. The retry then validates the exact work item, run, generation, and request before committing `resuming`. A stale or lost owner cannot call the provider again. The recovery notice remains `resuming` until the first real provider event (including reasoning or metadata) or terminal completion; it is not cleared merely because the retry timer elapsed. This keeps the execution snapshot, terminal commit, composer, and sidebar attention icon aligned, and it is why no observer has to read `blocked` as anything but a stopped turn.
 
 ## Diagnostic Request Dumps
 

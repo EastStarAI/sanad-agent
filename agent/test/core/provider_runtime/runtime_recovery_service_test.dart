@@ -102,6 +102,52 @@ void main() {
       expect(emitted.single['status'], equals('fatal'));
     });
 
+    test(
+      'a scheduled automatic retry is a waiting notice, never blocked',
+      () {
+        // `timeout` presents as blocked by default, but the runtime has already
+        // scheduled attempt 1 of 1. `blocked` would tell every observer to give
+        // up on a turn the daemon is about to continue.
+        recovery.reportFailure(
+          sessionId: 's1',
+          reason: RuntimeFailureReason.timeout,
+          providerInstanceId: 'p1',
+          retryAfter: const Duration(seconds: 2),
+          automaticRetryScheduled: true,
+          retryAttempt: 1,
+          retryBudget: 1,
+        );
+        final payload = emitted.single;
+        expect(payload['status'], equals('waiting'));
+        expect(payload['reason'], equals('timeout'));
+        expect(payload['retry_attempt'], equals(1));
+        expect(payload['retry_budget'], equals(1));
+        expect(payload['resume_at'], isNotNull);
+        expect(payload['actions'], contains('stop'));
+        expect(
+          payload['actions'],
+          isNot(contains('retry')),
+          reason: 'a manual retry has nothing to resume: the attempt is '
+              'already scheduled',
+        );
+      },
+    );
+
+    test('an exhausted retry budget is a blocked notice with no budget left', () {
+      recovery.reportFailure(
+        sessionId: 's1',
+        reason: RuntimeFailureReason.timeout,
+        providerInstanceId: 'p1',
+        retryAttempt: 1,
+        retryBudget: 1,
+      );
+      final payload = emitted.single;
+      expect(payload['status'], equals('blocked'));
+      expect(payload['retry_attempt'], equals(1));
+      expect(payload['retry_budget'], equals(1));
+      expect(payload['resume_at'], isNull);
+    });
+
     test('clear emits a cleared notice and removes active state', () {
       recovery.reportRateLimitWait(
         sessionId: 's1',
@@ -163,6 +209,41 @@ void main() {
       expect(
         persisted.executionSnapshots.getSnapshot(sessionId).state,
         SessionExecutionState.waiting,
+      );
+    });
+
+    test('a scheduled automatic retry projects durable execution as waiting', () {
+      const sessionId = 's-timeout-retrying';
+      seedSession(sessionId);
+      final persisted = PersistedRuntimeStateRepository.fromState(state);
+      recovery.attachPersistedState(persisted);
+      persisted.executionState.enqueueWorkItem(
+        workItemId: 'work-timeout-retrying',
+        sessionId: sessionId,
+        requestId: 'request-timeout-retrying',
+        state: SessionWorkState.running,
+      );
+
+      recovery.reportFailure(
+        sessionId: sessionId,
+        reason: RuntimeFailureReason.timeout,
+        requestId: 'request-timeout-retrying',
+        providerInstanceId: 'provider-a',
+        retryAfter: const Duration(seconds: 2),
+        automaticRetryScheduled: true,
+        retryAttempt: 1,
+        retryBudget: 1,
+      );
+
+      expect(
+        persisted.findActiveWorkItem(sessionId)?.state,
+        SessionWorkState.waiting,
+      );
+      expect(
+        persisted.executionSnapshots.getSnapshot(sessionId).state,
+        SessionExecutionState.waiting,
+        reason:
+            'a session show reader must see the retry in progress, not a stop',
       );
     });
 

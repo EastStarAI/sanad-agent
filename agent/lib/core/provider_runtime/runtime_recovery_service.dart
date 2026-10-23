@@ -83,6 +83,8 @@ class RuntimeRecoveryService {
         providerDisplayName: existing.providerDisplayName,
         resumeAt: existing.resumeAt,
         limit: existing.limit,
+        retryAttempt: existing.retryAttempt,
+        retryBudget: existing.retryBudget,
         actions: existing.actions,
         createdAt: existing.createdAt,
         updatedAt: existing.updatedAt,
@@ -187,6 +189,9 @@ class RuntimeRecoveryService {
 
         final effectiveActions = actionsList;
 
+        // A restored notice carries no retry counters: the persisted row does
+        // not store them, and the restored resume timer is itself the proof that
+        // another attempt is scheduled.
         final restoredNotice = RuntimeNotice(
           sessionId: sessionId,
           requestId: notice.requestId,
@@ -394,6 +399,15 @@ class RuntimeRecoveryService {
     // waiting. This converts a waiting-with-no-timer into a proper blocked
     // notice with Stop / Retry / Change Provider actions.
     bool forceBlocked = false,
+    // When true the runtime has already scheduled another attempt for this
+    // failure. A retryable failure that is about to be retried is `waiting`,
+    // never `blocked`: `blocked` means nothing will resume the turn without an
+    // operator (2026-10-23 — a provider timeout with a retry still pending was
+    // published as `blocked`, so `sanad run` exited 1 and the supervisor
+    // recorded `failed` while the daemon resumed the same turn seconds later).
+    bool automaticRetryScheduled = false,
+    int? retryAttempt,
+    int? retryBudget,
   }) {
     final decision = reason.decision();
     if (!_acceptsRun(sessionId, runId)) return decision;
@@ -408,28 +422,50 @@ class RuntimeRecoveryService {
     }
     final now = DateTime.now();
     final resumeAt = retryAfter == null ? null : now.add(retryAfter);
+    final baseStatus = effectiveDecision.noticeStatus;
+    // A scheduled attempt outranks the reason's default presentation: the
+    // request is going to run again, so the canonical state is `waiting`.
+    final waitingForAutomaticRetry =
+        automaticRetryScheduled &&
+        retryAfter != null &&
+        baseStatus != RuntimeNoticeStatus.cleared &&
+        baseStatus != RuntimeNoticeStatus.fatal;
     // Override: waiting + budget exhausted → show as blocked so the client
     // displays Stop / Retry / Change Provider instead of a waiting spinner
     // with no countdown (Plan 30 Phase H §5 P1).
-    final effectiveStatus =
-        forceBlocked &&
-            effectiveDecision.noticeStatus == RuntimeNoticeStatus.waiting
-        ? RuntimeNoticeStatus.blocked
-        : effectiveDecision.noticeStatus;
-    final effectiveSeverity =
-        forceBlocked &&
-            effectiveDecision.noticeStatus == RuntimeNoticeStatus.waiting
-        ? RuntimeNoticeSeverity.error
-        : effectiveDecision.severity;
+    final forceBlockedWaiting =
+        forceBlocked && baseStatus == RuntimeNoticeStatus.waiting;
+    final effectiveStatus = waitingForAutomaticRetry
+        ? RuntimeNoticeStatus.waiting
+        : (forceBlockedWaiting
+              ? RuntimeNoticeStatus.blocked
+              : baseStatus);
+    final effectiveSeverity = waitingForAutomaticRetry
+        ? RuntimeNoticeSeverity.warning
+        : (forceBlockedWaiting
+              ? RuntimeNoticeSeverity.error
+              : effectiveDecision.severity);
+    final List<RuntimeNoticeAction> baseActions;
+    if (waitingForAutomaticRetry &&
+        baseStatus == RuntimeNoticeStatus.blocked) {
+      // The next attempt is already scheduled, so the actionable choices are
+      // Stop and Change Provider: a manual Retry would target a request that is
+      // about to run again on its own.
+      baseActions = const [
+        RuntimeNoticeAction.stop,
+        RuntimeNoticeAction.changeProvider,
+      ];
+    } else if (forceBlockedWaiting) {
+      baseActions = const [
+        RuntimeNoticeAction.stop,
+        RuntimeNoticeAction.retry,
+        RuntimeNoticeAction.changeProvider,
+      ];
+    } else {
+      baseActions = effectiveDecision.uiActions;
+    }
     final effectiveActions = _normalizeActions(
-      forceBlocked &&
-              effectiveDecision.noticeStatus == RuntimeNoticeStatus.waiting
-          ? const [
-              RuntimeNoticeAction.stop,
-              RuntimeNoticeAction.retry,
-              RuntimeNoticeAction.changeProvider,
-            ]
-          : effectiveDecision.uiActions,
+      baseActions,
       status: effectiveStatus,
     );
     final notice = RuntimeNotice(
@@ -445,6 +481,8 @@ class RuntimeRecoveryService {
       providerDisplayName: resolvedProviderDisplayName,
       resumeAt: resumeAt,
       limit: limit,
+      retryAttempt: retryAttempt,
+      retryBudget: retryBudget,
       actions: effectiveActions,
       createdAt: now,
       updatedAt: now,

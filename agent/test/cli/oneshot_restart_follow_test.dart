@@ -418,6 +418,150 @@ void main() {
     );
 
     test(
+      'a retryable timeout with budget left keeps following and says retrying',
+      () async {
+        final mockSocket = MockWebSocket();
+        final client = LocalGatewayCliClient(
+          gatewayUri: Uri.parse('ws://127.0.0.1:58085/gateway'),
+          token: 'test-token',
+          autoReconnect: false,
+          connector: (uri, {headers, timeout}) async => mockSocket,
+        );
+        await client.connect();
+
+        final runner = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = runner.run(
+          prompt: 'Survive a retryable provider timeout',
+          session: 'sess-retrying-turn',
+          client: client,
+          timeout: const Duration(seconds: 5),
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+        );
+
+        final thinkRaw = await mockSocket.nextSentMessage();
+        expect(
+          (jsonDecode(thinkRaw) as Map<String, dynamic>)['command'],
+          'think',
+        );
+
+        var settled = false;
+        unawaited(runFuture.then((_) => settled = true));
+
+        // The daemon published the retryable failure it is already retrying:
+        // attempt 1 of 1 is scheduled, so the run keeps following instead of
+        // exiting as a failed/blocked turn (2026-10-23).
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': 'sess-retrying-turn',
+            'event': {
+              'type': 'session.runtime_notice',
+              'session_id': 'sess-retrying-turn',
+              'payload': {
+                'session_id': 'sess-retrying-turn',
+                'status': 'waiting',
+                'reason': 'timeout',
+                'title': 'Request timed out',
+                'message': 'The request took too long to complete. Retrying '
+                    'automatically in 2s (attempt 1 of 1).',
+                'retry_attempt': 1,
+                'retry_budget': 1,
+                'retry_after_ms': 2000,
+              },
+            },
+          }),
+        );
+
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(
+          settled,
+          isFalse,
+          reason: 'a scheduled retry is not a verdict: the run keeps following',
+        );
+        expect(stderrBuffer.toString(), contains('retrying (1/1)'));
+        expect(
+          stderrBuffer.toString(),
+          isNot(contains('Error:')),
+          reason: 'a retry in progress is never an error line',
+        );
+
+        // The retried attempt finishes normally.
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': 'sess-retrying-turn',
+            'event': {
+              'type': 'turn_complete',
+              'session_id': 'sess-retrying-turn',
+              'payload': {'text': 'Retried request completed.'},
+            },
+          }),
+        );
+
+        expect(await runFuture, 0);
+        expect(stdoutBuffer.toString(), contains('Retried request completed.'));
+      },
+    );
+
+    test(
+      'an exhausted retry budget ends the run blocked',
+      () async {
+        final mockSocket = MockWebSocket();
+        final client = LocalGatewayCliClient(
+          gatewayUri: Uri.parse('ws://127.0.0.1:58085/gateway'),
+          token: 'test-token',
+          autoReconnect: false,
+          connector: (uri, {headers, timeout}) async => mockSocket,
+        );
+        await client.connect();
+
+        final runner = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = runner.run(
+          prompt: 'Fail after the retry budget',
+          session: 'sess-exhausted-turn',
+          timeout: const Duration(seconds: 5),
+          client: client,
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+        );
+
+        final thinkRaw = await mockSocket.nextSentMessage();
+        expect(
+          (jsonDecode(thinkRaw) as Map<String, dynamic>)['command'],
+          'think',
+        );
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': 'sess-exhausted-turn',
+            'event': {
+              'type': 'session.runtime_notice',
+              'session_id': 'sess-exhausted-turn',
+              'payload': {
+                'session_id': 'sess-exhausted-turn',
+                'status': 'blocked',
+                'reason': 'timeout',
+                'title': 'Request timed out',
+                'message': 'The request took too long to complete. Automatic '
+                    'retry gave up after 1 attempt; retry manually or choose '
+                    'another provider.',
+                'retry_attempt': 1,
+                'retry_budget': 1,
+              },
+            },
+          }),
+        );
+
+        expect(await runFuture, 1);
+        expect(stderrBuffer.toString(), contains('blocked: Request timed out'));
+      },
+    );
+
+    test(
       'a really blocked session does not refuse a new dispatch as in-flight',
       () async {
         final mockSocket = MockWebSocket();

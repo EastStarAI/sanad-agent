@@ -4112,6 +4112,133 @@ test('a followed turn ends completed or failed from the durable result, never fr
   runNode(SUPERVISOR, ['close', '--run', stoppedRun, '--wait'], stoppedEnv);
 });
 
+test('a followed turn the daemon is retrying reports retrying, never failed', async () => {
+  // The 2026-10-23 defect: a retryable provider timeout with an attempt still
+  // scheduled was published as `blocked`, so this supervisor recorded `failed`
+  // while the daemon resumed the same turn seconds later. The correct reading is
+  // `retrying (n/N)`: live, non-actionable progress.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-retrying-test-')));
+  const runDir = join(root, 'run');
+  const env = followEnv(root);
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'retrying',
+    execution_snapshot: { state: 'waiting' },
+    runtime_notice: {
+      session_id: 'ses_mock_1',
+      status: 'waiting',
+      reason: 'timeout',
+      title: 'Request timed out',
+      message: 'The request took too long to complete. Retrying automatically in 2s (attempt 1 of 1).',
+      retry_attempt: 1,
+      retry_budget: 1,
+      retry_after_ms: 2000,
+    },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  startFollowedRun(runDir, writeSpec(root, [sanadTask(root, 'retrying')], 'tasks-follow-retrying.json'), env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const retrying = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.retrying;
+    return state?.status === 'retrying' ? state : null;
+  }, 15_000);
+  assert.equal(retrying.follow.active, true, 'the task is still live');
+  assert.deepEqual(retrying.daemonRetry, { attempt: 1, budget: 1 });
+  // The cause stays the worker's own transient classification: the retry
+  // policy keys off it and a notice reason never rewrites it.
+  assert.equal(retrying.cause, 'provider_timeout');
+
+  const retryEvent = readJournal(runDir).find((event) => event.to === 'retrying');
+  assert.equal(retryEvent.daemonRetry.attempt, 1);
+  assert.equal(retryEvent.daemonRetry.budget, 1);
+  // A scheduled retry needs no coordinator: it is progress, not a decision.
+  assert.equal(isActionableEvent(retryEvent), false);
+
+  const brief = runNode(SUPERVISOR, ['status', '--run', runDir, '--brief'], env);
+  assert.match(brief, /retrying .*daemon-retry 1\/1/);
+
+  // The retried attempt answers, so the turn completes from the durable counts.
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+    summary: sessionSummary({ users: 1, replies: 1 }),
+  });
+  const completed = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.retrying;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.resultSource, 'daemon_session');
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a followed turn whose retry budget is exhausted ends blocked', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-exhausted-test-')));
+  const runDir = join(root, 'run');
+  const env = followEnv(root);
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  startFollowedRun(runDir, writeSpec(root, [sanadTask(root, 'exhausted')], 'tasks-follow-exhausted.json'), env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.exhausted?.follow?.confirmed === true, 15_000);
+
+  // The daemon spent its budget: attempt 1 of 1 is already done and no resume is
+  // scheduled, so the turn is genuinely parked on an operator decision.
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'blocked',
+    execution_snapshot: { state: 'blocked' },
+    runtime_notice: {
+      session_id: 'ses_mock_1',
+      status: 'blocked',
+      reason: 'timeout',
+      title: 'Request timed out',
+      message: 'The request took too long to complete. Automatic retry gave up after 1 attempt; retry manually or choose another provider.',
+      retry_attempt: 1,
+      retry_budget: 1,
+    },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  const blocked = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.exhausted;
+    return state?.status === 'blocked' ? state : null;
+  }, 15_000);
+  assert.equal(blocked.cause, 'provider_timeout');
+  const blockedEvent = readJournal(runDir).find((event) => event.to === 'blocked');
+  assert.equal(isActionableEvent(blockedEvent), true, 'an exhausted retry needs a coordinator');
+
+  // The turn ends there: no final reply, so the verdict is a failure with the
+  // daemon's own cause rather than a guessed completion.
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+    summary: sessionSummary({ users: 1, replies: 0 }),
+  });
+  const settled = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.exhausted;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(settled.status, 'failed');
+  assert.equal(settled.cause, 'provider_timeout');
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
 test('a followed session that becomes unreadable ends follow_lost instead of blocking forever', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-lost-test-')));
   const runDir = join(root, 'run');

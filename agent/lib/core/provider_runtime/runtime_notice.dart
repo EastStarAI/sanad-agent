@@ -52,6 +52,16 @@ class RuntimeNotice {
   /// Active rate-limit value, when relevant.
   final int? limit;
 
+  /// 1-based automatic-retry attempt this notice describes, when the runtime
+  /// scheduled one. Null for a notice that describes no scheduled retry.
+  final int? retryAttempt;
+
+  /// Automatic-retry budget for this failure's reason. With [retryAttempt] it
+  /// is what makes a notice self-describing: `retryAttempt < retryBudget` means
+  /// the runtime will resume the request on its own, so no observer may report
+  /// the turn as stopped.
+  final int? retryBudget;
+
   /// UI actions allowed for this notice (Plan 30 §5.2 `actions[]`).
   final List<RuntimeNoticeAction> actions;
 
@@ -71,10 +81,35 @@ class RuntimeNotice {
     this.providerDisplayName,
     this.resumeAt,
     this.limit,
+    this.retryAttempt,
+    this.retryBudget,
     this.actions = const [],
     required this.createdAt,
     required this.updatedAt,
   });
+
+  /// Whether the recovery state itself promises a resume: `waiting` waits on a
+  /// resume timer and `resuming` is already restarting execution.
+  bool get schedulesResume =>
+      status == RuntimeNoticeStatus.waiting ||
+      status == RuntimeNoticeStatus.resuming;
+
+  /// Whether another automatic attempt is still inside the retry budget.
+  bool get hasRetryBudgetLeft {
+    final attempt = retryAttempt;
+    final budget = retryBudget;
+    return attempt != null && budget != null && budget > 0 && attempt < budget;
+  }
+
+  /// Whether the runtime will continue this turn without an operator: a
+  /// scheduled resume, or a retryable failure with budget left.
+  bool get isAutomaticRetryPending => schedulesResume || hasRetryBudgetLeft;
+
+  /// Whether the turn is parked on an intervention with no scheduled resume.
+  bool get awaitsIntervention =>
+      !isAutomaticRetryPending &&
+      (status == RuntimeNoticeStatus.blocked ||
+          status == RuntimeNoticeStatus.fatal);
 
   /// Transport-safe payload for `session.runtime_notice`.
   Map<String, dynamic> toPayload() => {
@@ -92,6 +127,8 @@ class RuntimeNotice {
     if (resumeAt != null) 'retry_after_ms': retryAfterMs,
     if (resumeAt != null) 'resume_at': resumeAt!.toUtc().toIso8601String(),
     if (limit != null) 'limit': {'requests_per_minute': limit},
+    if (retryAttempt != null) 'retry_attempt': retryAttempt,
+    if (retryBudget != null) 'retry_budget': retryBudget,
     'actions': actions.map((a) => _snakeCase(a.name)).toList(),
   };
 }

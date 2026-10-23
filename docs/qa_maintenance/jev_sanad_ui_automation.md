@@ -145,6 +145,8 @@ dispatch time. It refuses with a stable reason code instead of acting:
 | `mode_mismatch` | the phase's expected mode is not the live mode |
 | `empty_candidate_table` | the mode is known but no declared control is valid |
 | `phase_reentry` | the phase already completed an irreversible action and may not be decided again |
+| `rate_limited` | the requests-per-minute limit is already spent; the brake refuses instead of sleeping |
+| `cost_ceiling_reached` | the next decision would cross the per-run USD ceiling |
 | `model_unavailable` | the decision model could not answer: network, timeout, HTTP error, redirect, or an unusable body |
 | `model_contradiction` | the reply contradicted itself: probability keys, mass, or argmax disagree with the candidates |
 | `model_abstained` | the model chose `abstain` |
@@ -195,6 +197,34 @@ One decision also has a **4 s** default deadline (`DEFAULT_DECISION_TIMEOUT`), a
 P0's p50 342 ms and p95 957 ms. It is configurable per model, per client call, and
 per `decide --timeout` invocation.
 
+### Budget brake
+
+A live loop spends real quota and real money, so one object owns both limits and
+refuses instead of waiting:
+
+| Knob | Default | Effect |
+| --- | --- | --- |
+| `BudgetBrake(requests_per_minute=...)` | unset (unlimited) | counts admitted calls in a sliding 60 s window; one more is refused with `rate_limited` |
+| `BudgetBrake(max_usd=...)` | unset (unlimited) | refuses a call that would cross the per-run ceiling with `cost_ceiling_reached` |
+| `USD_PER_MILLION_INPUT_TOKENS` | `0.042` (one definition, in `brake.py`) | the documented list price that `smoke` also imports |
+| `ESTIMATED_INPUT_TOKENS_PER_CALL` | `2_000` | the charge for a reply that reports no usage, above the 1,735-token payload p95 on this surface, so an omitted field cannot buy budget |
+
+Wiring is one keyword: `DecisionLayer(model, brake=BudgetBrake(requests_per_minute=30, max_usd=1.0))`.
+The brake runs after the screen guard and before the model call, so an unusable screen
+costs nothing and a tripped limit spends nothing. Either trip is an escalation whose
+evidence carries the limit, the observed value, the spend, and the remaining budget:
+
+| Reason code | Evidence |
+| --- | --- |
+| `rate_limited` | `requests_per_minute`, `observed`, `window_seconds`, `spend_usd`, `remaining_usd` |
+| `cost_ceiling_reached` | `max_usd`, `spend_usd`, `remaining_usd`, `next_call_usd`, `estimated_input_tokens` |
+
+Spend is charged from `ModelChoice.input_tokens`, which `JevDecisionModel` fills from
+the reply's own `usage.input_tokens`; a reply without usage is charged the estimate
+and marked estimated. An admitted call is counted and charged even when the guard
+refuses its answer afterwards, because the provider was already paid. Every trace
+line records the running `spend_usd`.
+
 ### Phase re-entry
 
 An irreversible phase is one-shot. Once an admitted irreversible action has been
@@ -240,23 +270,62 @@ expected mode, classified mode with its evidence keys, the snapshot reference
 (generation, fingerprint, element count), the full candidate id set, the ids removed
 by the 32-item cap, the controls pruned by the structural pre-filter, the model name
 and latency, the selected id with confidence and selected probability, the verdict,
-the reason code when refused, and the admitted action. A trace is sufficient to
-re-judge every step without the model, and the skill tests assert its shape.
+the running spend, the reason code when refused, and the admitted action. A trace is
+sufficient to re-judge every step without the model, and the skill tests assert its
+shape.
 
-## Deferred to P3
+The writer truncates its file when it is constructed - `TraceWriter.__init__` calls
+`path.write_text("")` - so that append cadence holds only within one process: a runner
+that decides one step per process keeps just the last line. A loop runner must decide
+in one process or append through a subclass. The P3 live pass rebuilt its eleven lines
+by replaying the recorded answers through the same layer code on the saved snapshots,
+which reproduced every decision identically at no cost.
 
-Two review findings are deliberately **not** implemented in P1 and are carried into
-the first live scenario:
+## P3 findings (implemented)
 
-- **Endpoint and model overrides.** `jev_client.py` still hardcodes
-  `https://api.typesafe.ai/v1/systemone` and `jev-latest`, so it cannot be pointed at
-  a local proxy, a gateway, or a compatible alternative provider without a source
-  edit. Tests that need another origin still patch the class attribute.
-- **Rate and cost brake.** `DecisionLayer` and `JevDecisionModel` have no requests-per-
-  minute or per-run USD ceiling; only the smoke command is budgeted (20 calls). A
-  multi-step live loop needs its own brake before it runs unattended.
+Both findings from the P1 review are closed by Task 141:
+
+- **Endpoint and model overrides.** `JevClient` resolves its origin and model from an
+  explicit argument, then `TYPESAFE_API_URL` / `TYPESAFE_MODEL`, then
+  `https://api.typesafe.ai/v1/systemone` and `jev-latest`.
+  `JevDecisionModel.from_environment` forwards both, so `build_model("jev")` and every
+  scenario need no edit; the `JevClient.API_URL` attribute override keeps working, and
+  a redirect from an overridden origin is still refused before the bearer token can
+  leave it.
+- **Rate and cost brake.** `brake.BudgetBrake` is the single owner of the
+  requests-per-minute window and the per-run USD ceiling, wired into
+  `DecisionLayer.decide` after the screen guard and before the model call. Either trip
+  returns `rate_limited` or `cost_ceiling_reached` with its limit, observed value,
+  spend, and remaining budget; nothing reaches the model afterwards. The duplicated
+  price constant now has one definition, and a reply without usage is charged the
+  documented estimate instead of nothing. The knobs and evidence are listed under
+  *Budget brake* above.
+
+### Live evidence (Task 141 G4/G5)
+
+One scenario on the isolated Test Home, candidate `e5d7be44`, one pass, no retries.
+Runtime ownership, the declared phases, and the full per-step table are recorded in
+[the Task 141 record](../plans/tasks/done/141-jev-p3-live-scenario.md).
+
+- [x] **Decisions attempted, admitted, escalated.** 11 attempted, 11 admitted,
+  0 escalated (0.0 %), and no reason codes to report.
+- [x] **Per-decision wall clock and spend.** p50 728 ms, p95 906 ms, max 918 ms;
+  US$0.00053798 of the US$1.00 ceiling, from 12,809 input tokens and 0 estimated
+  calls.
+- [x] **Kill criteria and recommendation.** **Continue**: 0 wrong actions, 0
+  circuit-breaker trips, one pre-authorized irreversible action executed exactly
+  once, model latency p50 348 ms / p95 449 ms.
+
+Confidence ranged 0.90–0.99 with no floor trip, so this run is also evidence that the
+guard, not the confidence score, is what bounded the actions. Two statistics stay
+owed by P4 because one scenario cannot produce them: the 20-run irreversible-action
+statistic, and the three-family escalation rate, since this run exercised settings
+navigation, picker selection, the device switch, and send only.
 
 ## Routing rule
+
+The rule: if a step can be done by the decision model, route it there directly,
+without LLM thinking. Everything below says what that excludes.
 
 **Route to the decision layer** when the next action depends on the current screen
 but is chosen from a known, finite set: navigation between known destinations,
@@ -281,7 +350,10 @@ Stop the investment if, after the first live scenario, any of these holds:
 - measured per-decision wall clock > 6 s;
 - the trace cannot explain every escalation.
 
-State the numbers, then extend or stop explicitly.
+State the numbers, then extend or stop explicitly. The first scenario measured a
+0.0 % escalation rate and a 0.918 s maximum decision wall clock and recorded no wrong
+irreversible action in its single run: the numbers and the verdict are under *Live
+evidence* above, and the two criteria one scenario cannot reach stay with P4.
 
 ## Invariants
 
