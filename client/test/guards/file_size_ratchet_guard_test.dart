@@ -19,7 +19,7 @@ const int productionLineLimit = 1000;
 /// loses its entry.
 const Map<String, int> allowlistedFiles = <String, int>{
   'lib/driver_main.dart': 1035,
-  'lib/features/conversations/data/transport/conversation_commands.dart': 1420,
+  'lib/features/conversations/data/transport/conversation_commands.dart': 1106,
   'lib/features/conversations/domain/stores/device_conversation_store.dart':
       1058,
   'lib/features/conversations/presentation/bloc/session_cubit.dart': 1227,
