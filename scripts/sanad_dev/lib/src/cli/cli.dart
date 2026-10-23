@@ -96,6 +96,16 @@ void main(List<String> args) async {
     return;
   }
 
+  // `inventory` reports every worktree and runtime, so it is not scoped to one
+  // resolved Home and must not pay for the workspace-scoped Home inference.
+  if (command == 'inventory') {
+    await handleSanadDevInventory(
+      showAll: parsed.showAll,
+      json: parsed.jsonOutput,
+    );
+    return;
+  }
+
   if (command != 'switch' && sanadHomePath == null) {
     sanadHomePath = await _inferredPostLaunchSanadHome();
   }

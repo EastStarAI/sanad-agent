@@ -78,6 +78,7 @@ const Set<String> clientCliRelayLongValueOptions = {
   'path',
   'prompt',
   'provider',
+  'reconnect-timeout',
   'ref',
   'request-id',
   'scope',

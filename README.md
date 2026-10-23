@@ -174,6 +174,13 @@ Agent, and Client dependencies when stale, then starts the complete managed
 pair. Installation and setup stream their real process output and require no
 administrator access.
 
+When several worktrees and runtimes are in play, `sanad-dev inventory` prints one
+read-only view of all of them — worktrees and their Homes, each runtime's Agent
+port, PID, source commit, and attached Clients, the `~/.sanad-test*` Home slots,
+and every orphaned record with the exact cleanup command (it reports them and
+never prunes them). `--all` adds detail and `--json` prints a stable document for
+tooling.
+
 This source-development path is independent from the release installer above
 and does not require a pairing token.
 
