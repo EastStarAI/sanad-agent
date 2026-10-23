@@ -46,6 +46,21 @@ import {
   retryAfterMs,
   retryPolicy,
 } from './supervisor-retry.mjs';
+// Follow decisions (deadline, snapshot interpretation, durable outcome) are pure
+// for the same reason: a worker exits while its turn is still in flight, and the
+// rule that keeps the task non-terminal must be testable without a daemon.
+import {
+  DEFAULT_FOLLOW_DEADLINE_MS,
+  DEFAULT_FOLLOW_LOST_POLLS,
+  DEFAULT_FOLLOW_POLL_MS,
+  DEFAULT_FOLLOW_PROBE_TIMEOUT_MS,
+  followDeadlineMsFor,
+  followOutcome,
+  followPolicy,
+  followPollMsFor,
+  interpretSessionSnapshot,
+  parseSessionShowOutput,
+} from './supervisor-follow.mjs';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SUPPORTED_IMPLEMENTERS = new Set(['opencode', 'agy', 'antigravity', 'sanad']);
@@ -91,8 +106,9 @@ const DEFAULT_PROGRESS_STALL_MS = 900_000;
 // the queue instead of reporting an optimistic launch.
 const DEFAULT_VERIFY_MS = 15_000;
 const VERIFY_MIN_INTERVAL_MS = 50;
-// A steering message or a retry is relayed to a live daemon session; a hung CLI
-// must not hold the supervisor's control-request path open indefinitely.
+// A steering message, a retry, or a follow probe is relayed to a live daemon
+// session; a hung CLI must not hold the supervisor's control-request path open
+// indefinitely.
 const STEER_TIMEOUT_MS = 30_000;
 const RETRY_TIMEOUT_MS = 45_000;
 const WATCH_EVENT_VERSION = 'delegate-watch-event.v1';
@@ -104,7 +120,7 @@ const CANCEL_FORCE_KILL_MS = 10_000;
 const HELP = `delegate-task-supervisor
 
 Usage:
-  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--auto-retry] [--auto-retry-grace-ms <n>] [--auto-retry-backoff-ms <n>] [--auto-retry-max-attempts <n>] [--close-when-idle]
+  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--auto-retry] [--auto-retry-grace-ms <n>] [--auto-retry-backoff-ms <n>] [--auto-retry-max-attempts <n>] [--follow-poll-ms <n>] [--follow-deadline-ms <n>] [--follow-lost-polls <n>] [--close-when-idle]
   supervisor.mjs add --run <dir> --spec <tasks.json> [--json]
   supervisor.mjs enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--verify-sec <n>] [--json]
   supervisor.mjs cancel --run <dir> --task <id> [--json]
@@ -151,6 +167,18 @@ needs_permission are never retried automatically. A spawn that exits
 ${LAUNCH_RETRY_EXIT_CODE} within seconds of launch is a launch race, not a task
 failure, so it is relaunched up to ${DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS} times
 with backoff before it counts as failed.
+
+\`follow\`: when a Sanad worker exits while the daemon still owns its turn, the
+task becomes \`following\` instead of \`failed\`. The worker polls
+\`sanad session show <id> --json\` every --follow-poll-ms (default
+${DEFAULT_FOLLOW_POLL_MS}ms) and journals the same transitions an attached
+worker produces (needs_input, needs_permission, blocked, waiting, resuming,
+completed, failed), so the automatic retry policy applies to a followed task
+too. The follow window is the task's own --timeout, or --follow-deadline-ms
+(default ${DEFAULT_FOLLOW_DEADLINE_MS}ms). After --follow-lost-polls (default
+${DEFAULT_FOLLOW_LOST_POLLS}) consecutive unreadable session reads the task ends
+\`follow_lost\` instead of blocking forever. Every attention state still wakes a
+watcher; \`following\` itself is progress, never a wake-up.
 `;
 
 function fail(message, code = 2) {
@@ -236,6 +264,18 @@ function workerRetryArgs(policy) {
     '--auto-retry-max-attempts', String(policy.maxAttempts),
     '--launch-retry-backoff-ms', String(policy.launchBackoffMs),
     '--launch-retry-max-attempts', String(policy.launchMaxAttempts),
+  ];
+}
+
+// The follow policy travels with the worker for the same reason: the worker is
+// the only process that can poll a session it owns, and it must never re-derive
+// a default the handshake did not report.
+function workerFollowArgs(policy) {
+  return [
+    '--follow-poll-ms', String(policy.pollMs),
+    '--follow-deadline-ms', String(policy.deadlineMs),
+    '--follow-lost-polls', String(policy.lostAfterPolls),
+    '--follow-probe-timeout-ms', String(policy.probeTimeoutMs),
   ];
 }
 
@@ -860,6 +900,10 @@ function readResultDigest(resultPath) {
     exitCode: typeof result.exit_code === 'number'
       ? result.exit_code
       : (typeof result.exitCode === 'number' ? result.exitCode : null),
+    // A worker that exits without writing a verdict still leaves its cause, and a
+    // followed turn reuses it when the durable session does not report one.
+    cause: pick('cause', 'error_cause', 'block_cause'),
+    error: pick('error', 'error_message'),
   };
 }
 
@@ -1020,7 +1064,7 @@ function launchThroughWindowsExplorer(scriptPath) {
   // The caller verifies the requested effect instead of trusting that status.
 }
 
-function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, closeWhenIdle = false) {
+function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, follow, closeWhenIdle = false) {
   const workerPath = join(runDir, 'start-supervisor.cmd');
   const brokerPath = join(runDir, 'start-supervisor.vbs');
   const command = [
@@ -1032,6 +1076,7 @@ function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, 
     '--queued-stall-ms', String(queuedStallMs),
     '--progress-stall-ms', String(progressStallMs),
     ...workerRetryArgs(autoRetry),
+    ...workerFollowArgs(follow),
     ...(closeWhenIdle ? ['--close-when-idle'] : []),
   ].map(windowsBatchQuote).join(' ');
   writeFileSync(
@@ -1116,6 +1161,14 @@ async function startCommand(options) {
     launchMaxAttempts: integerOption(options, 'launch-retry-max-attempts', DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS, '--launch-retry-max-attempts', 0),
     launchBackoffMs: integerOption(options, 'launch-retry-backoff-ms', DEFAULT_LAUNCH_RETRY_BACKOFF_MS, '--launch-retry-backoff-ms', 1),
   });
+  // Following a daemon-owned turn is part of the run's contract, so its window
+  // and cadence are reported by the handshake instead of living in the worker.
+  const follow = followPolicy({
+    pollMs: integerOption(options, 'follow-poll-ms', DEFAULT_FOLLOW_POLL_MS, '--follow-poll-ms', 1),
+    deadlineMs: integerOption(options, 'follow-deadline-ms', DEFAULT_FOLLOW_DEADLINE_MS, '--follow-deadline-ms', 1),
+    lostAfterPolls: integerOption(options, 'follow-lost-polls', DEFAULT_FOLLOW_LOST_POLLS, '--follow-lost-polls', 1),
+    probeTimeoutMs: integerOption(options, 'follow-probe-timeout-ms', DEFAULT_FOLLOW_PROBE_TIMEOUT_MS, '--follow-probe-timeout-ms', 1),
+  });
   const startedAt = new Date().toISOString();
   writeJsonAtomic(paths.tasks, { version: 'delegate-task-spec.v1', tasks });
   writeJsonAtomic(paths.manifest, {
@@ -1132,6 +1185,7 @@ async function startCommand(options) {
     queuedStallMs,
     progressStallMs,
     autoRetry,
+    follow,
     closeWhenIdle,
     queueSeq: tasks.length,
     tasks: Object.fromEntries(tasks.map((task, index) => [task.id, {
@@ -1143,7 +1197,7 @@ async function startCommand(options) {
 
   if (process.platform === 'win32') {
     try {
-      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, closeWhenIdle);
+      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, follow, closeWhenIdle);
       launchThroughWindowsExplorer(brokerPath);
       const running = waitForWindowsWorkerHandshake(paths);
       const verification = await observeLaunch(runDir, tasks.map((task) => task.id), { verifyMs });
@@ -1155,6 +1209,7 @@ async function startCommand(options) {
         queuedStallMs,
         progressStallMs,
         autoRetry,
+        follow,
         closeWhenIdle,
         tasks: tasks.length,
         verification,
@@ -1175,6 +1230,7 @@ async function startCommand(options) {
     '--queued-stall-ms', String(queuedStallMs),
     '--progress-stall-ms', String(progressStallMs),
     ...workerRetryArgs(autoRetry),
+    ...workerFollowArgs(follow),
     ...(closeWhenIdle ? ['--close-when-idle'] : []),
   ], {
     detached: true,
@@ -1194,6 +1250,7 @@ async function startCommand(options) {
     queuedStallMs,
     progressStallMs,
     autoRetry,
+    follow,
     closeWhenIdle,
     tasks: tasks.length,
     verification,
@@ -1241,6 +1298,14 @@ function workerCommand(options) {
     launchMaxAttempts: integerOption(options, 'launch-retry-max-attempts', DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS, '--launch-retry-max-attempts', 0),
     launchBackoffMs: integerOption(options, 'launch-retry-backoff-ms', DEFAULT_LAUNCH_RETRY_BACKOFF_MS, '--launch-retry-backoff-ms', 1),
   });
+  // The follow policy the run was started with. A task whose worker exits while
+  // its daemon turn is still in flight is followed with exactly these bounds.
+  const followPolicyConfig = followPolicy({
+    pollMs: integerOption(options, 'follow-poll-ms', DEFAULT_FOLLOW_POLL_MS, '--follow-poll-ms', 1),
+    deadlineMs: integerOption(options, 'follow-deadline-ms', DEFAULT_FOLLOW_DEADLINE_MS, '--follow-deadline-ms', 1),
+    lostAfterPolls: integerOption(options, 'follow-lost-polls', DEFAULT_FOLLOW_LOST_POLLS, '--follow-lost-polls', 1),
+    probeTimeoutMs: integerOption(options, 'follow-probe-timeout-ms', DEFAULT_FOLLOW_PROBE_TIMEOUT_MS, '--follow-probe-timeout-ms', 1),
+  });
   const paths = runPaths(runDir);
   mkdirSync(paths.requests, { recursive: true });
   const initialTasks = readJson(paths.tasks, 'normalized tasks').tasks
@@ -1261,6 +1326,10 @@ function workerCommand(options) {
   const pendingSessionStops = new Map();
   const retryInFlight = new Set();
   const launchRetryTimers = new Map();
+  // Followed tasks: the interval that polls a daemon-owned turn after the worker
+  // that started it is gone, and the guard that keeps one probe in flight.
+  const followTimers = new Map();
+  const followInFlight = new Set();
 
   const workerStartedAt = new Date().toISOString();
   const manifest = {
@@ -1277,6 +1346,7 @@ function workerCommand(options) {
     queuedStallMs,
     progressStallMs,
     autoRetry,
+    follow: followPolicyConfig,
     closeWhenIdle,
     queueSeq,
     tasks: Object.fromEntries(initialTasks.map((task, index) => [task.id, {
@@ -1427,6 +1497,9 @@ function workerCommand(options) {
     for (const [id, state] of Object.entries(manifest.tasks)) {
       if (settled.has(id)) continue;
       if (!state || ['queued', 'held'].includes(state.status)) continue;
+      // A followed task has no worker on purpose: its daemon turn is observed by
+      // the follow poll, not by a process this supervisor owns.
+      if (isFollowing(state)) continue;
       if (children.has(id)) continue;
       if (!processIsAlive(state.pid)) markWorkerLost(id);
     }
@@ -1633,6 +1706,38 @@ function workerCommand(options) {
     };
     if (result) recordIdentity(task, result);
     const finishedAt = new Date().toISOString();
+    // A Sanad worker is only the transport for one daemon turn. When it exits
+    // while the daemon still owns the turn, the task is followed instead of being
+    // reported as failed: that is exactly the case where the daemon later asked a
+    // question nobody saw (run7, 2026-10-23). The probe below is what proves the
+    // turn is still in flight; until it says otherwise the task stays live.
+    const followCandidate = task.implementer === 'sanad'
+      && !task.remote
+      && !cancellationRequested
+      && !launchError
+      && Boolean(manifest.tasks[task.id]?.sessionId)
+      && ['failed', 'timeout', 'incomplete'].includes(status);
+    if (followCandidate) {
+      // The turn is not final: this task is followed, not settled. The worker's
+      // slot is released above, and the follow poll owns the task from here.
+      settled.delete(task.id);
+      Object.assign(manifest.tasks[task.id], {
+        exitCode: code,
+        signal,
+        reportedStatus,
+        workerCause: result?.cause ?? null,
+      });
+      beginFollow(task, {
+        exitCode: code,
+        signal,
+        status,
+        cause: result?.cause ?? (status === 'timeout' ? 'timeout' : null),
+      });
+      // The worker's slot is free even though the task is not finished, so a
+      // queued task must be able to take it right away.
+      launchAvailable();
+      return;
+    }
     transition(task, status, {
       pid: manifest.tasks[task.id]?.pid ?? null,
       finishedAt,
@@ -1923,6 +2028,15 @@ function workerCommand(options) {
     return sessionInvocation(task, ['session', 'stop', sessionId]);
   };
 
+  // The read side of the same binding: `sanad session show <id> --json` is how a
+  // follower observes a turn whose worker is gone. It inherits the task's own
+  // Home, gateway, and invocation form, so the poll always reads the session the
+  // worker created.
+  const sessionShowInvocation = (task, sessionId) => {
+    if (!sessionId) return { reason: 'no_session_id' };
+    return sessionInvocation(task, ['session', 'show', sessionId, '--json']);
+  };
+
   const requestSessionStop = (task, sessionId) => {
     const invocation = sessionStopInvocation(task, sessionId);
     if (!invocation.command) {
@@ -2028,6 +2142,424 @@ function workerCommand(options) {
     child.once('exit', complete);
   });
 
+  // -------------------------------------------------------------------------
+  // Following a daemon-owned turn after its worker exited
+  // -------------------------------------------------------------------------
+  // `sanad run` is only the transport for one daemon turn; the turn itself is
+  // owned and persisted by the daemon. A worker that exits early — a transient
+  // provider timeout, a daemon restart that reclaims the turn — therefore does
+  // not end the work. Reporting it `failed` is exactly what left a real session
+  // parked in `needs_input` with nobody watching (2026-10-23, run7).
+  //
+  // `following` keeps the task non-terminal and the poll below mirrors the
+  // durable state into the very transitions an attached worker produces, so the
+  // retry policy, the stall notices, and every watcher keep working unchanged.
+  const isFollowing = (state) => state?.follow?.active === true;
+
+  const stopFollowTimer = (id) => {
+    const timer = followTimers.get(id);
+    if (!timer) return;
+    clearInterval(timer);
+    followTimers.delete(id);
+  };
+
+  // The worker's own `result.json` can hold an early verdict the daemon later
+  // contradicted. It is archived, never deleted, so a followed turn can never be
+  // reported through it and the evidence stays available for triage.
+  const archivePreFollowResult = (state) => {
+    if (!state.resultPath || !existsSync(state.resultPath)) return [];
+    const dir = join(runDir, 'follow', state.id, `attempt-${state.attempt ?? 1}`);
+    mkdirSync(dir, { recursive: true });
+    const target = join(dir, basename(state.resultPath));
+    try {
+      renameSync(state.resultPath, target);
+      return [target];
+    } catch {
+      return [];
+    }
+  };
+
+  // An artifact is the followed turn's own verdict only when it was produced
+  // inside the follow window.
+  const resultWrittenDuringFollow = (state) => {
+    const digest = readResultDigest(state.resultPath);
+    if (!digest) return null;
+    const startedMs = parseIsoMillis(digest.startedAt);
+    const followMs = parseIsoMillis(state.follow?.since);
+    if (startedMs == null || followMs == null || startedMs < followMs) return null;
+    return digest;
+  };
+
+  const settleFollow = (task, outcome) => {
+    const state = manifest.tasks[task.id];
+    if (!state || settled.has(task.id)) return;
+    stopFollowTimer(task.id);
+    followInFlight.delete(task.id);
+    settled.add(task.id);
+    const finishedAt = new Date().toISOString();
+    const digest = outcome.resultDigest
+      ?? (outcome.resultSource === 'worker_artifact' ? readResultDigest(state.resultPath) : null);
+    const follow = {
+      ...(state.follow ?? {}),
+      active: false,
+      endedAt: finishedAt,
+      reason: outcome.followReason ?? state.follow?.reason ?? null,
+      resultSource: outcome.resultSource ?? 'daemon_session',
+      outcome: outcome.status,
+    };
+    transition(task, outcome.status, {
+      finishedAt,
+      stateSince: finishedAt,
+      cause: outcome.cause ?? null,
+      follow,
+      resultSource: follow.resultSource,
+      note: outcome.note ?? null,
+      pid: null,
+      requestId: null,
+      intervention: null,
+      ...(digest ? { result: digest } : {}),
+      error: outcome.error ?? null,
+    });
+    const attemptNumber = state.attempt ?? 1;
+    state.attempts = [
+      ...(state.attempts ?? []).filter((entry) => entry.attempt !== attemptNumber),
+      {
+        attempt: attemptNumber,
+        startedAt: state.startedAt ?? null,
+        finishedAt,
+        status: outcome.status,
+        exitCode: state.exitCode ?? null,
+        signal: state.signal ?? null,
+        cause: outcome.cause ?? null,
+        sessionId: state.sessionId ?? null,
+        result: digest,
+        resultSource: follow.resultSource,
+        followed: true,
+      },
+    ];
+    persist();
+    checkRunCompletion();
+    launchAvailable();
+  };
+
+  // One readable snapshot, applied exactly like the attached timeline handler:
+  // the durable state becomes the task state, and only real transitions are
+  // journaled. Polling the same block every interval writes nothing.
+  const applyFollowSnapshot = (task, snapshot) => {
+    const state = manifest.tasks[task.id];
+    if (!state || !isFollowing(state)) return;
+    const follow = state.follow;
+    const nowIso = new Date().toISOString();
+    const observedAt = snapshot.updatedAt ?? nowIso;
+
+    if (snapshot.kind === 'ended') {
+      settleFollow(task, followOutcome({
+        lastLive: follow.lastLive ?? null,
+        cause: follow.lastCause ?? state.cause ?? null,
+        artifact: resultWrittenDuringFollow(state),
+      }));
+      return;
+    }
+    if (snapshot.kind === 'stopping') {
+      settleFollow(task, followOutcome({
+        lastLive: 'stopping',
+        cause: snapshot.cause ?? follow.lastCause ?? state.cause ?? null,
+      }));
+      return;
+    }
+
+    follow.lastLive = snapshot.kind;
+    if (snapshot.kind === 'blocked' || snapshot.kind === 'waiting') {
+      const cause = snapshot.cause ?? state.cause ?? 'unknown';
+      follow.lastCause = cause;
+      if (state.status === snapshot.status && (state.cause ?? null) === cause) {
+        // The same block, still in flight: no transition to report.
+        state.lastProgressAt = nowIso;
+        persist();
+        return;
+      }
+      transition(task, snapshot.status, {
+        sessionId: state.sessionId ?? null,
+        cause,
+        stateSince: observedAt,
+        ...(snapshot.retryAfterMs ? { retryAfterMs: snapshot.retryAfterMs } : {}),
+      });
+      return;
+    }
+    if (snapshot.kind === 'resuming') {
+      if (state.status !== 'resuming') {
+        transition(task, 'resuming', {
+          sessionId: state.sessionId ?? null,
+          requestId: null,
+          intervention: null,
+          cause: null,
+          stateSince: observedAt,
+        });
+      }
+      state.lastProgressAt = nowIso;
+      persist();
+      return;
+    }
+    if (snapshot.kind === 'intervention') {
+      const changed = state.status !== snapshot.status
+        || (state.requestId ?? null) !== (snapshot.requestId ?? null);
+      if (changed) {
+        // The same whitelisted intervention payload the attached path forwards:
+        // kind, request id, tool name, and questions. A tool input, an answer, or
+        // a credential is never journaled.
+        transition(task, snapshot.status, {
+          sessionId: state.sessionId ?? null,
+          requestId: snapshot.requestId,
+          intervention: snapshot.intervention,
+          kind: snapshot.status,
+          stateSince: observedAt,
+        });
+      } else {
+        state.lastProgressAt = nowIso;
+        persist();
+      }
+      return;
+    }
+
+    // A live turn. The durable projection is the only progress evidence a
+    // followed task can offer, so a readable live poll refreshes it. The task
+    // stays `following` — the honest state for a turn with no worker — instead
+    // of claiming a process that does not exist.
+    if (state.status !== 'following') {
+      transition(task, 'following', {
+        kind: 'following',
+        reason: 'turn_resumed_without_worker',
+        sessionId: state.sessionId ?? null,
+        requestId: null,
+        intervention: null,
+        cause: null,
+        stateSince: observedAt,
+      });
+    }
+    state.lastProgressAt = nowIso;
+    persist();
+  };
+
+  const settleFollowLost = (task, reason, detail) => {
+    settleFollow(task, {
+      status: 'follow_lost',
+      cause: reason,
+      resultSource: 'daemon_session',
+      note: 'the durable session could not be read any more; the turn may still be running on the daemon',
+      error: detail,
+    });
+    const state = manifest.tasks[task.id];
+    if (state) state.follow = { ...state.follow, active: false, lostReason: reason };
+  };
+
+  const pollFollow = async (task) => {
+    const initial = manifest.tasks[task.id];
+    if (!task || !initial || settled.has(task.id) || !isFollowing(initial)) return;
+    if (followInFlight.has(task.id)) return;
+    const deadlineMs = parseIsoMillis(initial.follow.deadlineAt);
+    if (deadlineMs != null && Date.now() >= deadlineMs) {
+      settleFollow(task, {
+        status: 'timeout',
+        cause: 'follow_deadline',
+        resultSource: 'daemon_session',
+        note: `the follow window of ${formatShortDuration(initial.follow.deadlineMs)} after the worker exited expired`,
+        error: 'the daemon turn was still in flight when the follow window expired',
+      });
+      return;
+    }
+    const invocation = sessionShowInvocation(task, initial.sessionId);
+    if (!invocation.command) {
+      settleWorkerVerdict(task, 'follow_unsupported');
+      return;
+    }
+    const probeTimeoutMs = initial.follow.probeTimeoutMs ?? followPolicyConfig.probeTimeoutMs;
+    const lostAfterPolls = initial.follow.lostAfterPolls ?? followPolicyConfig.lostAfterPolls;
+    followInFlight.add(task.id);
+    try {
+      const probe = await runAuxiliaryCommand(invocation, task, probeTimeoutMs);
+      const current = manifest.tasks[task.id];
+      if (!current || !isFollowing(current)) return;
+      const parsed = probe.ok
+        ? parseSessionShowOutput(probe.stdout)
+        : {
+          ok: false,
+          error: probe.error ?? `session show exited ${probe.exitCode ?? 'unknown'}`,
+        };
+      current.follow.lastPollAt = new Date().toISOString();
+      if (!parsed.ok) {
+        current.follow.unreadablePolls = (current.follow.unreadablePolls ?? 0) + 1;
+        current.follow.lastError = String(parsed.error ?? 'session show failed').slice(0, 400);
+        if (current.follow.unreadablePolls >= lostAfterPolls) {
+          // Before the turn was confirmed in flight the worker's own verdict is
+          // the honest answer; afterwards the follow itself is what was lost.
+          if (current.follow.confirmed === true) {
+            settleFollowLost(
+              task,
+              'session_unreadable',
+              `${current.follow.unreadablePolls} consecutive session reads failed: ${current.follow.lastError}`,
+            );
+          } else {
+            settleWorkerVerdict(task, 'session_unreadable');
+          }
+          return;
+        }
+        persist();
+        return;
+      }
+      current.follow.unreadablePolls = 0;
+      current.follow.lastError = null;
+      current.follow.polls = (current.follow.polls ?? 0) + 1;
+      const snapshot = interpretSessionSnapshot(parsed.payload);
+      current.follow.lastSnapshot = {
+        kind: snapshot.kind,
+        state: snapshot.state,
+        requestId: snapshot.requestId,
+        cause: snapshot.cause,
+        updatedAt: snapshot.updatedAt,
+      };
+      if (current.follow.confirmed !== true) {
+        // The first readable answer decides whether there is anything to follow
+        // at all: a session that already reports no in-flight turn leaves the
+        // worker verdict untouched.
+        if (snapshot.kind === 'ended') {
+          settleWorkerVerdict(task, 'turn_not_in_flight');
+          return;
+        }
+        confirmFollow(task, snapshot);
+        return;
+      }
+      applyFollowSnapshot(task, snapshot);
+    } catch (error) {
+      const current = manifest.tasks[task.id];
+      if (!current || !isFollowing(current)) return;
+      current.follow.unreadablePolls = (current.follow.unreadablePolls ?? 0) + 1;
+      current.follow.lastError = String(error?.message ?? error).slice(0, 400);
+      current.follow.lastPollAt = new Date().toISOString();
+      if (current.follow.unreadablePolls >= lostAfterPolls) {
+        if (current.follow.confirmed === true) {
+          settleFollowLost(
+            task,
+            'session_unreadable',
+            `${current.follow.unreadablePolls} consecutive session reads failed: ${current.follow.lastError}`,
+          );
+        } else {
+          settleWorkerVerdict(task, 'session_unreadable');
+        }
+        return;
+      }
+      persist();
+    } finally {
+      followInFlight.delete(task.id);
+    }
+  };
+
+  // The first readable snapshot that still shows a live turn is what promotes
+  // the task to `following`: a worker that exits after a turn genuinely ended is
+  // still reported with its own verdict, and only a turn nothing has finished is
+  // followed.
+  const confirmFollow = (task, snapshot) => {
+    const state = manifest.tasks[task.id];
+    if (!state || !isFollowing(state)) return;
+    state.follow.confirmed = true;
+    state.follow.confirmedAt = new Date().toISOString();
+    state.follow.reason = 'worker_exited_turn_in_flight';
+    transition(task, 'following', {
+      pid: null,
+      kind: 'following',
+      reason: 'worker_exited_turn_in_flight',
+      cause: state.workerCause ?? state.follow.workerExit?.cause ?? null,
+      workerExit: state.follow.workerExit,
+      follow: state.follow,
+      lastProgressAt: state.follow.confirmedAt,
+      requestId: null,
+      intervention: null,
+    });
+    applyFollowSnapshot(task, snapshot);
+    startFollowTimer(task);
+  };
+
+  // The turn is not observable at all, so the worker's own terminal verdict is
+  // what the task is left with; nothing is invented from a session that could not
+  // be read.
+  const settleWorkerVerdict = (task, reason) => {
+    const state = manifest.tasks[task.id];
+    if (!state || settled.has(task.id)) return;
+    const workerExit = state.follow?.workerExit ?? {};
+    const status = ['failed', 'timeout', 'incomplete'].includes(workerExit.status)
+      ? workerExit.status
+      : 'failed';
+    settleFollow(task, {
+      status,
+      cause: state.workerCause ?? workerExit.cause ?? (status === 'timeout' ? 'timeout' : null),
+      resultSource: 'worker_artifact',
+      resultDigest: state.preFollowResult ?? null,
+      followReason: reason,
+      note: reason === 'session_unreadable'
+        ? 'the daemon session could not be read, so the worker verdict stands'
+        : 'the daemon session reported no in-flight turn, so the worker verdict stands',
+      error: reason === 'session_unreadable'
+        ? 'the daemon session could not be read after the worker exited'
+        : null,
+    });
+  };
+
+  const startFollowTimer = (task) => {
+    const state = manifest.tasks[task.id];
+    if (!state || !isFollowing(state)) return;
+    stopFollowTimer(task.id);
+    const timer = setInterval(() => {
+      pollFollow(task).catch((error) => {
+        notice(task, 'follow_poll_error', { error: String(error?.message ?? error).slice(0, 400) });
+      });
+    }, state.follow.pollMs ?? followPolicyConfig.pollMs);
+    followTimers.set(task.id, timer);
+  };
+
+  // A worker exit that may leave a live turn behind: record the exit, archive the
+  // early artifact, and probe the durable session before anything is journaled.
+  const beginFollow = (task, exit) => {
+    const state = manifest.tasks[task.id];
+    if (!state) return;
+    const since = new Date().toISOString();
+    const deadlineMs = followDeadlineMsFor(task, followPolicyConfig.deadlineMs);
+    const pollMs = followPollMsFor(task, followPolicyConfig.pollMs);
+    const preFollow = readResultDigest(state.resultPath);
+    const archived = archivePreFollowResult(state);
+    if (preFollow && archived.length > 0) preFollow.path = archived[0];
+    state.preFollowResult = preFollow;
+    state.follow = {
+      active: true,
+      confirmed: false,
+      reason: 'probing_turn',
+      since,
+      deadlineAt: new Date(Date.now() + deadlineMs).toISOString(),
+      deadlineMs,
+      pollMs,
+      lostAfterPolls: followPolicyConfig.lostAfterPolls,
+      probeTimeoutMs: followPolicyConfig.probeTimeoutMs,
+      polls: 0,
+      unreadablePolls: 0,
+      lastPollAt: null,
+      lastSnapshot: null,
+      lastLive: null,
+      lastCause: null,
+      archived,
+      workerExit: {
+        at: since,
+        exitCode: exit.exitCode ?? null,
+        signal: exit.signal ?? null,
+        status: exit.status ?? null,
+        cause: exit.cause ?? null,
+      },
+    };
+    persist();
+    // The first probe is immediate: the turn may already be over, and making the
+    // operator wait a whole interval for a fact already available helps nobody.
+    pollFollow(task).catch((error) => {
+      notice(task, 'follow_poll_error', { error: String(error?.message ?? error).slice(0, 400) });
+    });
+  };
+
   const cancelTask = (id) => {
     const state = manifest.tasks[id];
     if (!state) return { ok: false, error: `task not found: ${id}` };
@@ -2059,6 +2591,38 @@ function workerCommand(options) {
       // A repeated cancel must not signal twice or spawn a second session stop;
       // the first request is already waiting for the child to settle.
       return { ok: true, taskId: id, from, status: 'cancelling', signalled: null, sessionStop: null, alreadyRequested: true };
+    }
+    // A followed task has no child process to signal: the turn belongs to the
+    // daemon, so the stop is sent to the session and the task settles here
+    // instead of waiting for an exit that already happened.
+    if (isFollowing(state)) {
+      state.cancellationRequested = true;
+      const sessionId = state.sessionId ?? null;
+      const sessionStop = requestSessionStop(task, sessionId);
+      notice(task, 'cancel_requested', {
+        sessionId,
+        followed: true,
+        signalled: null,
+        sessionStop: sessionStop.requested === true,
+        ...(sessionStop.reason ? { sessionStopReason: sessionStop.reason } : {}),
+      });
+      settleFollow(task, {
+        status: 'cancelled',
+        cause: 'cancelled',
+        resultSource: 'operator',
+        note: 'cancelled while following the daemon session',
+        error: 'the turn was cancelled by the operator',
+      });
+      return {
+        ok: true,
+        taskId: id,
+        from,
+        status: 'cancelled',
+        signalled: null,
+        sessionId,
+        sessionStop,
+        followed: true,
+      };
     }
     state.cancellationRequested = true;
     const sessionId = state.sessionId ?? null;
@@ -3220,6 +3784,7 @@ async function cancelCommand(options) {
         signalled: ack.signalled,
         sessionId: ack.sessionId ?? null,
         sessionStop: ack.sessionStop ?? null,
+        followed: ack.followed === true,
         alreadyRequested: ack.alreadyRequested === true,
       }, null, 2)}\n`);
       return;
@@ -3232,7 +3797,9 @@ async function cancelCommand(options) {
       process.stdout.write(`Cancelled task ${ack.taskId} (${ack.from} -> aborted); it will never start.\n`);
       return;
     }
-    const signalText = ack.signalled ? `signalled ${ack.signalled}` : 'no live process to signal';
+    const signalText = ack.followed
+      ? 'no worker process; the turn is followed through the daemon session'
+      : (ack.signalled ? `signalled ${ack.signalled}` : 'no live process to signal');
     const sessionText = ack.sessionStop?.requested
       ? `session ${ack.sessionStop.sessionId} stop requested`
       : `daemon session stop not requested (${ack.sessionStop?.reason || 'unknown'})`;
@@ -3306,10 +3873,11 @@ function observeTaskState(runDir, id) {
   const snapshot = queueSnapshot(manifest);
   const queued = state.status === 'queued';
   const queue = queued ? describeQueuedTask(manifest, id) : null;
+  const originalStatus = ['blocked', 'needs_input', 'needs_permission', 'waiting', 'resuming', 'following'].includes(state.status);
   const settled = state.status === 'running'
     || TERMINAL_STATUSES.has(state.status)
-    || (queued && queue?.reason === 'awaiting_slot')
-    || ['blocked', 'needs_input', 'needs_permission', 'waiting', 'resuming'].includes(state.status);
+    || originalStatus
+    || (queued && queue?.reason === 'awaiting_slot');
   const observation = {
     id,
     status: state.status,
@@ -3353,6 +3921,9 @@ function formatObservationLine(observation) {
   }
   if (observation.status === 'unknown') {
     return `${observation.id}: not present in the run manifest`;
+  }
+  if (observation.status === 'following') {
+    return `${observation.id}: following the daemon turn — the worker exited, the session is still in flight`;
   }
   return `${observation.id}: ${observation.status}${observation.error ? ` — ${observation.error}` : ''}`;
 }
@@ -3664,7 +4235,7 @@ function resolveSessionDetails(task, manifest) {
 
   const pid = task.pid ?? manifest?.tasks?.[task.id]?.pid ?? null;
   const isAlive = pid ? processIsAlive(pid) : false;
-  const terminalStates = new Set(['completed', 'failed', 'timeout', 'cancelled', 'aborted', 'interrupted', 'incomplete', 'needs_review']);
+  const terminalStates = new Set(['completed', 'failed', 'timeout', 'cancelled', 'aborted', 'interrupted', 'incomplete', 'needs_review', 'follow_lost']);
   // Once the supervisor observes process exit, its terminal transition wins
   // over a stale nonterminal result artifact.
   const rawStatus = terminalStates.has(task.status)
@@ -3697,6 +4268,12 @@ function resolveSessionDetails(task, manifest) {
     sessionState = 'blocked';
   } else if (rawStatus === 'resuming') {
     sessionState = 'resuming';
+  } else if (rawStatus === 'following') {
+    // The worker is gone but the daemon still owns the turn: walking away here is
+    // exactly the failure this state was added to prevent.
+    sessionState = 'following the daemon turn';
+  } else if (rawStatus === 'follow_lost') {
+    sessionState = 'follow lost';
   } else if (rawStatus === 'running') {
     // PID liveness proves only that a process exists. Report working only when
     // the runtime or supervisor recorded actual progress.
@@ -3721,7 +4298,13 @@ function resolveSessionDetails(task, manifest) {
     : (startTime != null && endTime != null ? Math.max(0, endTime - startTime) : null);
 
   let observationSource = result ? 'result.json' : 'manifest';
-  if (pid) observationSource += isAlive ? ` (process alive: ${pid})` : ' (process not running)';
+  if (task.follow) {
+    // A followed task is observed through the daemon, not through a process: say
+    // so instead of implying that a pid proves the turn is working.
+    observationSource = `daemon session (followed, ${task.follow.lastPollAt ? `last poll ${task.follow.lastPollAt}` : 'no poll yet'})`;
+  } else if (pid) {
+    observationSource += isAlive ? ` (process alive: ${pid})` : ' (process not running)';
+  }
 
   const formatIso = (value, fallback) => {
     if (!value) return fallback;
@@ -3738,6 +4321,19 @@ function resolveSessionDetails(task, manifest) {
     elapsed: formatDuration(elapsedMs),
     elapsedMs,
     observationSource,
+    // Follow facts ride with the observation instead of being inferred by a
+    // reader from a pid that no longer exists.
+    follow: task.follow
+      ? {
+        active: task.follow.active === true,
+        reason: task.follow.reason ?? null,
+        since: formatIso(task.follow.since, '[unknown time]'),
+        deadlineAt: formatIso(task.follow.deadlineAt, '-'),
+        lastPollAt: formatIso(task.follow.lastPollAt, 'never'),
+        polls: Number(task.follow.polls) || 0,
+        resultSource: task.follow.resultSource ?? null,
+      }
+      : null,
     currentTime: new Date().toISOString(),
   };
 }
@@ -3752,6 +4348,14 @@ function formatSessionFooter(details) {
     `Last Progress:      ${details.lastProgressAt}`,
     `Elapsed:            ${details.elapsed}`,
     `Observation Source: ${details.observationSource}`,
+    ...(details.follow
+      ? [`Follow:             ${details.follow.active ? 'active' : 'ended'}`
+        + ` since ${details.follow.since}`
+        + `, deadline ${details.follow.deadlineAt}`
+        + `, polls ${details.follow.polls}`
+        + `, last poll ${details.follow.lastPollAt}`
+        + `${details.follow.resultSource ? `, result from ${details.follow.resultSource}` : ''}`]
+      : []),
     `Current Time:       ${details.currentTime}`,
     '-----------------------------',
   ].join('\n');
@@ -3902,6 +4506,46 @@ function reconcileRun(runDir) {
     }
     if (['queued', 'held'].includes(task.status)) continue;
     const from = task.status;
+    // A followed task has no worker to lose: the supervisor died while polling a
+    // daemon-owned turn, so nothing here can observe that turn again. A terminal
+    // artifact written during the follow is still adopted; otherwise the honest
+    // report is that the outcome is unknown, not that the worker vanished.
+    if (task.follow?.active === true) {
+      const lateFollow = readResultDigest(task.resultPath);
+      const adoptFollow = lateFollow?.status && TERMINAL_STATUSES.has(lateFollow.status)
+        && resultBelongsToTask(task, lateFollow);
+      const followStatus = adoptFollow ? lateFollow.status : 'failed';
+      const followFinishedAt = new Date().toISOString();
+      Object.assign(task, {
+        status: followStatus,
+        finishedAt: followFinishedAt,
+        stateSince: followFinishedAt,
+        cause: adoptFollow ? 'result_recorded_after_exit' : 'follow_abandoned',
+        recovered: true,
+        follow: { ...task.follow, active: false, endedAt: followFinishedAt },
+        ...(adoptFollow ? { result: lateFollow } : {}),
+      });
+      if (!adoptFollow) {
+        task.error = 'the supervisor died while following the daemon session; the turn outcome is unknown';
+      }
+      seq += 1;
+      records.push({
+        seq,
+        taskId: id,
+        implementer: task.implementer ?? null,
+        workspace: task.workspace ?? null,
+        from,
+        to: followStatus,
+        at: followFinishedAt,
+        kind: adoptFollow ? 'recovered' : 'follow_abandoned',
+        cause: task.cause,
+        recovered: true,
+      });
+      if (adoptFollow) outcome.recovered.push(id);
+      else outcome.lost.push(id);
+      changed = true;
+      continue;
+    }
     // A process that is still alive is still running, even though its
     // supervisor is gone. Failing it would be as wrong as claiming it is
     // healthy, so the run reports it as orphaned and journals that once; the
@@ -4267,9 +4911,14 @@ function statusSnapshot(runDir) {
   };
   // A run whose supervisor is alive but has nothing left to run is idle, not
   // running: the distinction is what tells a coordinator no progress is coming.
+  // A followed task is still in flight even though it holds no worker slot, so a
+  // run that only follows is never reported as idle.
+  const following = Object.values(manifest.tasks || {})
+    .some((task) => task?.follow?.active === true);
   manifest.idle = manifest.status === 'running'
     && snapshot.active === 0
     && snapshot.queued.length === 0
+    && !following
     && !manifest.closed;
   return manifest;
 }
@@ -4330,6 +4979,14 @@ function briefTaskLine(manifest, task) {
     if (result?.branch) parts.push(`branch ${result.branch}`);
     if (result?.summary) parts.push(`summary ${result.summary}`);
   }
+  // A followed task reads like any other live task, so the line says where the
+  // observation comes from and when the next probe is due.
+  if (task.follow) {
+    parts.push(`followed ${task.follow.active ? 'since' : 'until'} ${task.follow.since ?? '-'}`);
+    parts.push(`polls ${Number(task.follow.polls) || 0}`);
+    if (task.follow.active && task.follow.deadlineAt) parts.push(`follow-deadline ${task.follow.deadlineAt}`);
+    if (task.follow.resultSource) parts.push(`result-source ${task.follow.resultSource}`);
+  }
   if (task.laterResult) parts.push(`later-result ${task.laterResult.status}`);
   if (task.error) parts.push(`error ${String(task.error).slice(0, 160)}`);
   return `  ${parts.join('  ')}`;
@@ -4377,6 +5034,20 @@ function briefView(runDir, manifest) {
         headSha: result?.headSha ?? null,
         prUrl: result?.prUrl ?? null,
         summary: result?.summary ?? null,
+        follow: task.follow
+          ? {
+            active: task.follow.active === true,
+            reason: task.follow.reason ?? null,
+            since: task.follow.since ?? null,
+            deadlineAt: task.follow.deadlineAt ?? null,
+            pollMs: task.follow.pollMs ?? null,
+            polls: Number(task.follow.polls) || 0,
+            lastPollAt: task.follow.lastPollAt ?? null,
+            lastSnapshot: task.follow.lastSnapshot ?? null,
+            resultSource: task.follow.resultSource ?? null,
+            note: task.note ?? null,
+          }
+          : null,
         retry: retryFacts(manifest, task),
         laterResult: task.laterResult
           ? { status: task.laterResult.status, path: task.laterResult.path, startedAt: task.laterResult.startedAt ?? null }
@@ -4469,6 +5140,26 @@ function printVerboseStatus(manifest, options, runCount = 1) {
       process.stdout.write(
         `  ${task.id}\tno progress for ${formatShortDuration(task.progress.silentForMs)}`
         + `\t(last: ${task.progress.lastProgressAt ?? 'unknown'})\n`,
+      );
+    }
+  }
+
+  // Severed transport is its own section: a task whose worker exited is still
+  // in flight, and an operator reading status must not mistake the missing pid
+  // for a missing turn.
+  const followed = Object.values(manifest.tasks).filter((task) => task.follow);
+  if (followed.length > 0) {
+    process.stdout.write('\nFOLLOW (worker exited, daemon turn in flight):\n');
+    for (const task of followed) {
+      const follow = task.follow;
+      process.stdout.write(
+        `  ${task.id}\t${follow.active ? 'following' : 'ended'}`
+        + `\tsince ${follow.since ?? '-'}`
+        + `\tdeadline ${follow.active ? follow.deadlineAt ?? '-' : '-'}`
+        + `\tpolls ${Number(follow.polls) || 0}`
+        + `\tlast poll ${follow.lastPollAt ?? 'never'}`
+        + `${follow.resultSource ? `\tresult from ${follow.resultSource}` : ''}`
+        + `${follow.lastSnapshot ? `\tlast seen ${follow.lastSnapshot.kind}` : ''}\n`,
       );
     }
   }

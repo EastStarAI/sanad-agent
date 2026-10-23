@@ -17,7 +17,7 @@ const SUPERVISOR = join(SKILL, 'scripts', 'supervisor.mjs');
 const WATCH_ONCE = join(SKILL, 'scripts', 'watch-once.mjs');
 // The shared journal vocabulary is the same module the scripts use, so a test can
 // assert what a coordinator would consider actionable.
-const { isActionableEvent } = await import(join(SKILL, 'scripts', 'supervisor-events.mjs'));
+const { isActionableEvent, TERMINAL_STATUSES } = await import(join(SKILL, 'scripts', 'supervisor-events.mjs'));
 
 // ---------------------------------------------------------------------------
 // Bounded teardown (W10).
@@ -2363,6 +2363,32 @@ function writeSanadMock(root) {
       process.exit(Number(process.env.MOCK_RETRY_EXIT || 0));
     }
 
+    if (args[0] === 'session' && args[1] === 'show') {
+      // 'sanad session show <id> --json' is how a supervisor observes a turn whose
+      // worker is gone. The fixture's answer is a file the test rewrites, so a
+      // follow poll can walk through running -> needs_input -> idle.
+      const sessionFile = process.env.MOCK_SESSION_FILE;
+      record({
+        kind: 'show',
+        argv: args,
+        session: args[2],
+        home: readFlag('--home'),
+        gateway: readFlag('--gateway-url'),
+      });
+      let body = null;
+      try { body = JSON.parse(readFileSync(sessionFile, 'utf8')); } catch {}
+      if (!body || body.__unreadable === true) {
+        process.stderr.write('Error: Failed to show session: session not found\\n');
+        process.exit(Number(process.env.MOCK_SHOW_EXIT || 1));
+      }
+      const payload = {...body};
+      delete payload.__unreadable;
+      const exitCode = Number(payload.__exit || 0);
+      delete payload.__exit;
+      process.stdout.write(JSON.stringify(payload) + '\\n');
+      process.exit(exitCode);
+    }
+
     const outDir = readFlag('--out-dir');
     const brief = readFlag('--brief-file');
     // How many spawns already ran: exit 78 is the daemon-health pre-check, and a
@@ -2389,11 +2415,32 @@ function writeSanadMock(root) {
     emit({type: 'running', session_id: sessionId});
     emit({type: 'tool_use', part: {type: 'tool', tool: 'read', state: {status: 'completed', input: {filePath: 'a'}}}});
 
+    // A worker that exits while the daemon still owns its turn. Only the durable
+    // session can report the turn afterwards, so the fixture writes the early
+    // verdict run7 produced (a contradictory 'failed') and then dies.
+    const earlyBrief = brief ? readFileSync(brief, 'utf8').trim() : '';
+    const runExit = process.env.MOCK_RUN_EXIT
+      ? Number(process.env.MOCK_RUN_EXIT)
+      : (earlyBrief === 'exit1' ? 1 : null);
     // A task that the daemon leaves blocked: the process stays alive (like a real
     // 'sanad run' waiting for a recovery command), so only an external retry can
     // resume it. MOCK_BLOCK_MS bounds the block so a test can end cleanly.
     const blockCause = process.env.MOCK_BLOCK_CAUSE;
-    if (blockCause) {
+    if (runExit != null) {
+      if (process.env.MOCK_RUN_EARLY_RESULT === '1') {
+        writeFileSync(outDir + '/result.json', JSON.stringify({
+          status: process.env.MOCK_RUN_EARLY_STATUS || 'failed',
+          exit_code: runExit,
+          cause: process.env.MOCK_RUN_EARLY_CAUSE || 'provider_timeout',
+          started_at: new Date(Date.now() - 60000).toISOString(),
+          ended_at: new Date().toISOString(),
+          text: 'the worker exited before the turn finished.',
+        }));
+      }
+      emit({type: 'failed', data: {cause: process.env.MOCK_RUN_EARLY_CAUSE || 'provider_timeout'}});
+      setTimeout(() => process.exit(runExit), Number(process.env.MOCK_RUN_EXIT_DELAY_MS || 25));
+      setInterval(() => {}, 1000);
+    } else if (blockCause) {
       const blockMs = Number(process.env.MOCK_BLOCK_MS || 3000);
       const retryAfter = process.env.MOCK_RETRY_AFTER ? Number(process.env.MOCK_RETRY_AFTER) : null;
       setTimeout(() => emit({
@@ -2644,7 +2691,13 @@ test('progress_stall is journaled once per stall and progress_resumed clears it'
     () => readJournal(runDir).some((event) => event.kind === 'progress_stall'),
     8_000,
   );
-  const midStatus = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  // One read is not enough under load: the 900 ms progress burst can land
+  // between the stall notice and the read, so the observation is retried inside a
+  // bounded window instead of asserting on a single racing snapshot.
+  const midStatus = await waitForCondition(() => {
+    const snapshot = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+    return snapshot.tasks.silent.progress.stalled ? snapshot : null;
+  }, 3_000);
   assert.equal(midStatus.tasks.silent.progress.stalled, true);
   assert.equal(midStatus.tasks.silent.progress.thresholdMs, 400);
   assert.ok(midStatus.tasks.silent.progressStall !== null);
@@ -3615,4 +3668,463 @@ test('a run with no live tasks reports idle and can close itself when idle', asy
   const json = JSON.parse(runNode(SUPERVISOR, ['status', '--run', openRun, '--brief', '--json'], env));
   assert.equal(json.runs[0].idle, true);
   runNode(SUPERVISOR, ['close', '--run', openRun, '--wait'], env);
+});
+
+// ---------------------------------------------------------------------------
+// Following a daemon-owned turn after its worker exits (B16).
+//
+// The fixtures below reuse the Sanad mock: `MOCK_RUN_EXIT` makes the worker die
+// while the turn is still live and write the contradictory early verdict run7
+// produced, and `MOCK_SESSION_FILE` is the durable projection the follow poll
+// reads, rewritten between polls exactly like the daemon would.
+// ---------------------------------------------------------------------------
+function writeSessionState(path, payload) {
+  writeFileSync(path, `${JSON.stringify(payload)}\n`, 'utf8');
+}
+
+function followEnv(root, extra = {}) {
+  return {
+    ...process.env,
+    MOCK_LOG: join(root, 'mock.log'),
+    MOCK_SESSION_FILE: join(root, 'session.json'),
+    MOCK_RUN_EXIT: '1',
+    MOCK_RUN_EARLY_RESULT: '1',
+    MOCK_RUN_EARLY_CAUSE: 'provider_timeout',
+    ...extra,
+  };
+}
+
+function startFollowedRun(runDir, specPath, env, extraArgs = []) {
+  return JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1',
+    '--verify-ms', '0', '--follow-poll-ms', '100', '--follow-probe-timeout-ms', '5000',
+    ...extraArgs,
+  ], env));
+}
+
+function sleep(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+function watchOnce(runDir, since, env) {
+  return JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(since)], env));
+}
+
+test('a worker that exits while the daemon owns the turn is followed and its question is reported', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-input-test-')));
+  const runDir = join(root, 'run');
+  const env = followEnv(root);
+  const sessionFile = env.MOCK_SESSION_FILE;
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'asking')], 'tasks-follow-input.json');
+
+  const started = startFollowedRun(runDir, specPath, env);
+  // The follow policy is part of the handshake, never a hidden default.
+  assert.deepEqual(started.follow, {
+    pollMs: 100,
+    deadlineMs: 3_600_000,
+    lostAfterPolls: 3,
+    probeTimeoutMs: 5_000,
+  });
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const following = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.asking;
+    return state?.follow?.confirmed === true ? state : null;
+  }, 15_000);
+  assert.equal(following.status, 'following');
+
+  const followEvent = readJournal(runDir).find((event) => event.to === 'following');
+  assert.equal(followEvent.reason, 'worker_exited_turn_in_flight');
+  assert.equal(followEvent.workerExit.exitCode, 1);
+  // Keeping the task non-terminal is not a decision for anyone else.
+  assert.equal(isActionableEvent(followEvent), false);
+
+  // The worker's early verdict is archived, never adopted as this turn's result.
+  assert.equal(existsSync(join(root, 'out-asking', 'result.json')), false);
+  assert.ok(following.follow.archived.length > 0);
+  assert.equal(following.follow.lastSnapshot.kind, 'live');
+
+  // The daemon asks its question after the worker is already gone.
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'needs_input',
+    updated_at: new Date().toISOString(),
+    execution_snapshot: { state: 'waiting', updated_at: new Date().toISOString() },
+    pending_permission_request: {
+      request_id: 'req-question-1',
+      tool_name: 'system_ask_user',
+      tool_input: { secret: 'never-journaled' },
+      questions: [{ question: 'Which provider should this run use?', options: ['alpha', 'beta'] }],
+    },
+  });
+
+  const asked = await waitForCondition(
+    () => readJournal(runDir).find((event) => event.to === 'needs_input'),
+    15_000,
+  );
+  assert.equal(asked.kind, 'needs_input');
+  assert.equal(asked.intervention.kind, 'needs_input');
+  assert.equal(asked.intervention.request_id, 'req-question-1');
+  assert.equal(asked.intervention.tool_name, 'system_ask_user');
+  assert.deepEqual(asked.intervention.questions, [
+    { question: 'Which provider should this run use?', options: ['alpha', 'beta'] },
+  ]);
+  // A tool input can carry a secret; the attached path never journals one either.
+  assert.equal(asked.intervention.tool_input, undefined);
+  assert.equal(JSON.stringify(asked).includes('never-journaled'), false);
+  assert.equal(isActionableEvent(asked), true);
+
+  const once = watchOnce(runDir, 0, env);
+  assert.equal(once.to, 'needs_input');
+  assert.equal(once.intervention.request_id, 'req-question-1');
+
+  // The operator answers through the session CLI; the turn resumes and finishes.
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+  });
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.asking?.status === 'following', 15_000);
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+  });
+
+  const finished = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.asking;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(finished.status, 'completed');
+  // The outcome came from the durable session, not from the worker artifact.
+  assert.equal(finished.resultSource, 'daemon_session');
+  assert.match(finished.note, /daemon session/);
+  assert.equal(finished.follow.active, false);
+  assert.equal(readJournal(runDir).some((event) => event.to === 'failed'), false);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a followed task blocked on a transient cause is auto-retried like an attached one', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-retry-test-')));
+  const runDir = join(root, 'run');
+  const env = followEnv(root);
+  const sessionFile = env.MOCK_SESSION_FILE;
+  // The durable session publishes the block the daemon leaves behind after its
+  // own retry budget is spent.
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'blocked', updated_at: new Date().toISOString() },
+    runtime_notice: { cause: 'provider_timeout' },
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'blocked-follow')], 'tasks-follow-retry.json');
+  startFollowedRun(runDir, specPath, env, [
+    '--auto-retry',
+    '--auto-retry-grace-ms', '200',
+    '--auto-retry-backoff-ms', '200',
+    '--auto-retry-max-attempts', '2',
+  ]);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const blocked = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks['blocked-follow'];
+    return state?.status === 'blocked' ? state : null;
+  }, 15_000);
+  assert.equal(blocked.cause, 'provider_timeout');
+  const blockedEvent = readJournal(runDir).find((event) => event.to === 'blocked');
+  assert.equal(blockedEvent.cause, 'provider_timeout');
+  assert.equal(isActionableEvent(blockedEvent), true);
+
+  const retried = await waitForCondition(
+    () => readJournal(runDir).find((entry) => entry.kind === 'auto_retry'),
+    15_000,
+  );
+  assert.equal(retried.automatic, true);
+  assert.equal(retried.attempt, 1);
+  assert.equal(retried.cause, 'provider_timeout');
+  assert.equal(retried.result, 'retrying');
+  assert.equal(retried.sent, true);
+  assert.equal(isActionableEvent(retried), false, 'a sent retry is never a wake-up');
+
+  // The retry went to the same session the worker used, through the same
+  // invocation form.
+  const retryCalls = readFileSync(join(root, 'mock.log'), 'utf8')
+    .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
+    .filter((entry) => entry.kind === 'retry');
+  assert.ok(retryCalls.length >= 1);
+  assert.equal(retryCalls[0].session, 'ses_mock_1');
+
+  // The daemon resumes the turn and finishes it.
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'resuming' },
+  });
+  await waitForCondition(
+    () => ['resuming', 'following'].includes(readJsonFile(manifestPath).tasks['blocked-follow']?.status),
+    15_000,
+  );
+  writeSessionState(sessionFile, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+  });
+  const finished = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks['blocked-follow'];
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(finished.status, 'completed');
+  assert.equal(finished.resultSource, 'daemon_session');
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a followed turn ends completed or failed from the durable result, never from the worker artifact', async () => {
+  // (a) The durable turn completes after the worker is gone.
+  const completedRoot = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-completed-test-')));
+  const completedRun = join(completedRoot, 'run');
+  const completedEnv = followEnv(completedRoot);
+  writeSessionState(completedEnv.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+  });
+  writeBrief(completedRoot, 'brief.md', 'brief');
+  startFollowedRun(
+    completedRun,
+    writeSpec(completedRoot, [sanadTask(completedRoot, 'done')], 'tasks-follow-done.json'),
+    completedEnv,
+  );
+  const completedManifest = join(completedRun, 'manifest.json');
+  await waitForCondition(() => readJsonFile(completedManifest).tasks.done?.follow?.confirmed === true, 15_000);
+  writeSessionState(completedEnv.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'idle' },
+  });
+  const completed = await waitForCondition(() => {
+    const state = readJsonFile(completedManifest).tasks.done;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.resultSource, 'daemon_session');
+  assert.equal(completed.cause, null);
+  // The worker's contradictory `failed` never reaches the journal.
+  assert.equal(readJournal(completedRun).some((event) => event.to === 'failed'), false);
+  runNode(SUPERVISOR, ['close', '--run', completedRun, '--wait'], completedEnv);
+
+  // (b) The durable session stops the turn instead of finishing it.
+  const stoppedRoot = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-stopped-test-')));
+  const stoppedRun = join(stoppedRoot, 'run');
+  const stoppedEnv = followEnv(stoppedRoot);
+  writeSessionState(stoppedEnv.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+  });
+  writeBrief(stoppedRoot, 'brief.md', 'brief');
+  startFollowedRun(
+    stoppedRun,
+    writeSpec(stoppedRoot, [sanadTask(stoppedRoot, 'stopped')], 'tasks-follow-stopped.json'),
+    stoppedEnv,
+  );
+  const stoppedManifest = join(stoppedRun, 'manifest.json');
+  await waitForCondition(() => readJsonFile(stoppedManifest).tasks.stopped?.follow?.confirmed === true, 15_000);
+  writeSessionState(stoppedEnv.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'stopping' },
+  });
+  const stopped = await waitForCondition(() => {
+    const state = readJsonFile(stoppedManifest).tasks.stopped;
+    return TERMINAL_STATUSES.has(state?.status) ? state : null;
+  }, 15_000);
+  assert.equal(stopped.status, 'failed');
+  assert.equal(stopped.cause, 'stopped');
+  assert.equal(stopped.resultSource, 'daemon_session');
+  assert.match(stopped.error, /stopping/);
+  const failedEvent = readJournal(stoppedRun).find((event) => event.to === 'failed');
+  assert.equal(failedEvent.cause, 'stopped');
+  assert.equal(isActionableEvent(failedEvent), true);
+  runNode(SUPERVISOR, ['close', '--run', stoppedRun, '--wait'], stoppedEnv);
+});
+
+test('a followed session that becomes unreadable ends follow_lost instead of blocking forever', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-lost-test-')));
+  const runDir = join(root, 'run');
+  const env = followEnv(root);
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  startFollowedRun(runDir, writeSpec(root, [sanadTask(root, 'lost')], 'tasks-follow-lost.json'), env, [
+    '--follow-lost-polls', '2',
+  ]);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.lost?.follow?.confirmed === true, 15_000);
+  // The session disappears (a deleted session, a Home switch, an unreachable
+  // daemon). It is not the worker's failure, and it is not an infinite wait.
+  writeSessionState(env.MOCK_SESSION_FILE, { __unreadable: true });
+  const lost = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.lost;
+    return state?.status === 'follow_lost' ? state : null;
+  }, 15_000);
+  assert.equal(lost.cause, 'session_unreadable');
+  assert.equal(lost.follow.active, false);
+  assert.match(lost.error, /2 consecutive session reads failed/);
+  const lostEvent = readJournal(runDir).find((event) => event.to === 'follow_lost');
+  assert.equal(isActionableEvent(lostEvent), true, 'a lost follow needs a coordinator decision');
+  const brief = runNode(SUPERVISOR, ['status', '--run', runDir, '--brief'], env);
+  assert.match(brief, /lost  follow_lost/);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('watch-once wakes on attention states for attached and followed tasks and stays quiet on progress', async () => {
+  // --- followed: plain progress is not a wake-up ---------------------------
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-watch-test-')));
+  const followRun = join(root, 'run-follow');
+  const followEnvVars = followEnv(root);
+  writeSessionState(followEnvVars.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+  });
+  writeBrief(root, 'brief.md', 'brief');
+  startFollowedRun(followRun, writeSpec(root, [sanadTask(root, 'followed')], 'tasks-watch-follow.json'), followEnvVars);
+  const followManifest = join(followRun, 'manifest.json');
+  await waitForCondition(() => readJsonFile(followManifest).tasks.followed?.follow?.confirmed === true, 15_000);
+
+  let woke = false;
+  const quietWatcher = spawn(process.execPath, [WATCH_ONCE, '--run', followRun, '--since', '0'], { env: followEnvVars });
+  quietWatcher.once('exit', () => { woke = true; });
+  await sleep(1_200);
+  assert.equal(woke, false, 'following a live turn is progress, not a wake-up');
+  quietWatcher.kill('SIGTERM');
+  await collectProcess(quietWatcher);
+
+  // A permission request in the followed turn wakes the watcher it was waiting on.
+  const waitingWatcher = spawn(process.execPath, [WATCH_ONCE, '--run', followRun, '--since', '0'], { env: followEnvVars });
+  const waitingExit = collectProcess(waitingWatcher);
+  await sleep(300);
+  writeSessionState(followEnvVars.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'needs_permission',
+    execution_snapshot: { state: 'waiting' },
+    pending_permission_request: { request_id: 'req-perm-1', tool_name: 'shell_execute' },
+  });
+  const permissionEvent = JSON.parse((await waitingExit).stdout.trim());
+  assert.equal(permissionEvent.to, 'needs_permission');
+  assert.equal(permissionEvent.intervention.request_id, 'req-perm-1');
+  assert.equal(permissionEvent.intervention.tool_name, 'shell_execute');
+  assert.equal(isActionableEvent(permissionEvent), true);
+
+  // ... and a stopped followed turn reports a failure the same way.
+  writeSessionState(followEnvVars.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'idle',
+    execution_snapshot: { state: 'stopping' },
+  });
+  const followFailed = watchOnce(followRun, permissionEvent.seq, followEnvVars);
+  assert.equal(followFailed.to, 'failed');
+  assert.equal(followFailed.cause, 'stopped');
+  runNode(SUPERVISOR, ['close', '--run', followRun, '--wait'], followEnvVars);
+
+  // --- attached: a block wakes, plain running does not ---------------------
+  const attachedRun = join(root, 'run-attached');
+  const attachedEnv = {
+    ...process.env,
+    MOCK_LOG: join(root, 'attached.log'),
+    MOCK_BLOCK_CAUSE: 'provider_timeout',
+    MOCK_BLOCK_MS: '3000',
+  };
+  writeBrief(root, 'brief-attached.md', 'brief');
+  const attachedSpec = writeSpec(root, [sanadTask(root, 'attached', { briefFile: join(root, 'brief-attached.md') })], 'tasks-watch-attached.json');
+  runNode(SUPERVISOR, [
+    'start', '--spec', attachedSpec, '--run-dir', attachedRun, '--max-concurrency', '1', '--verify-ms', '0',
+  ], attachedEnv);
+  const attachedBlocked = watchOnce(attachedRun, 0, attachedEnv);
+  assert.equal(attachedBlocked.to, 'blocked');
+  assert.equal(attachedBlocked.taskId, 'attached');
+  assert.equal(isActionableEvent(attachedBlocked), true);
+  runNode(SUPERVISOR, ['close', '--run', attachedRun, '--wait'], attachedEnv);
+
+  // An attached failure with no session to follow still reports `failed`.
+  const failedRun = join(root, 'run-failed');
+  const failedEnv = {
+    ...process.env,
+    MOCK_LOG: join(root, 'failed.log'),
+    MOCK_SESSION: '',
+    MOCK_RUN_EXIT: '1',
+  };
+  writeBrief(root, 'brief-failed.md', 'brief');
+  runNode(SUPERVISOR, [
+    'start', '--spec', writeSpec(root, [sanadTask(root, 'failed', { briefFile: join(root, 'brief-failed.md') })], 'tasks-watch-failed.json'),
+    '--run-dir', failedRun, '--max-concurrency', '1', '--verify-ms', '0',
+  ], failedEnv);
+  const attachedFailed = watchOnce(failedRun, 0, failedEnv);
+  assert.equal(attachedFailed.to, 'failed');
+  assert.equal(isActionableEvent(attachedFailed), true);
+  runNode(SUPERVISOR, ['close', '--run', failedRun, '--wait'], failedEnv);
+});
+
+test('following frees the worker slot, and cancelling a followed task stops its session', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-slot-test-')));
+  const runDir = join(root, 'run');
+  // One shared session file, two tasks: the first exits while its turn is live
+  // and is followed, the second is a normal short turn that must still get the
+  // slot the first task released.
+  const env = {
+    ...process.env,
+    MOCK_LOG: join(root, 'mock.log'),
+    MOCK_SESSION_FILE: join(root, 'session.json'),
+    MOCK_RUN_EARLY_RESULT: '1',
+  };
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'running',
+    execution_snapshot: { state: 'running' },
+  });
+  const specPath = writeSpec(root, [
+    sanadTask(root, 'first', { briefFile: writeBrief(root, 'first.md', 'exit1') }),
+    sanadTask(root, 'second', { briefFile: writeBrief(root, 'second.md', '300') }),
+  ], 'tasks-follow-slot.json');
+  startFollowedRun(runDir, specPath, env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => readJsonFile(manifestPath).tasks.first?.follow?.confirmed === true, 15_000);
+  const afterSecond = await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.tasks.second?.status === 'completed' ? manifest : null;
+  }, 15_000);
+  assert.equal(afterSecond.tasks.first.status, 'following', 'the followed task stays live');
+
+  // Cancelling a followed task cannot signal a process that no longer exists:
+  // the daemon session is stopped and the task settles cancelled.
+  const cancelled = JSON.parse(runNode(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'first', '--json'], env));
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.followed, true);
+  const stops = readFileSync(join(root, 'mock.log'), 'utf8').split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'stop');
+  assert.equal(stops.length, 1);
+  assert.equal(stops[0].argv.includes('ses_mock_1'), true);
+
+  const finished = await waitForCondition(() => {
+    const state = readJsonFile(manifestPath).tasks.first;
+    return state?.status === 'cancelled' ? state : null;
+  }, 15_000);
+  assert.equal(finished.cause, 'cancelled');
+  assert.equal(finished.resultSource, 'operator');
+  const cancelEvents = readJournal(runDir).filter((event) => event.to === 'cancelled');
+  assert.equal(cancelEvents.length, 1);
+  assert.equal(isActionableEvent(cancelEvents[0]), true);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
 });
