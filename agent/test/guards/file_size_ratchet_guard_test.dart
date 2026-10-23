@@ -32,8 +32,6 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/evolution/scheduling/schedule_model.dart': 1264,
   'lib/interfaces/platforms/sanad_gateway/handlers/provider_command_handler.dart':
       1122,
-  'lib/interfaces/platforms/sanad_gateway/handlers/session_query_handler.dart':
-      1482,
   'lib/interfaces/platforms/sanad_gateway/handlers/workspace_command_handler.dart':
       1225,
   'lib/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart':
