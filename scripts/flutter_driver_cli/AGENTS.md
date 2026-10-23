@@ -2,7 +2,7 @@
 
 ## Scope
 
-This contract governs `scripts/flutter_driver_cli/` and complements the repository-wide contract. The entry point at `scripts/flutter_driver_cli.dart`, the driver instrumentation at `client/lib/driver_main.dart`, and the `sanad-dev ui` adapter must remain compatible with this contract even though they are owned by their nearest directory contracts.
+This contract governs `scripts/flutter_driver_cli/` and complements the repository-wide contract. The entry point at `scripts/flutter_driver_cli.dart`, the driver instrumentation at `client/lib/driver_main.dart` (and its modular extensions in `client/lib/driver/`), and the `sanad-dev ui` adapter must remain compatible with this contract even though they are owned by their nearest directory contracts.
 
 ## Mission
 

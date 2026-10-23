@@ -42,6 +42,8 @@ Do not introduce convenience code that weakens these boundaries.
 ### Platform Boundaries
 - `AppPlatform` (`client/lib/utils/app_platform.dart`) is the canonical platform discriminator. Shared startup (bootstrap, dependency registration, provider mounting) must never execute a native `dart:io` platform API; native implementations stay behind desktop-only registration and consumption boundaries.
 - Client CLI is desktop-only: Web and mobile never register, construct, or read its host, settings cubit, ownership record, or Sanad Home.
+- `client/lib/driver_main.dart` is the canonical test-driver entry point (`-t lib/driver_main.dart`). It enables Flutter Driver with operating system text-entry emulation preserved and registers all development VM service extensions in documented order: `auth_url`, `inspect_ui`, `enter_text`, `scroll`, `tap`, and `reveal`.
+- Modular driver capabilities reside in `client/lib/driver/`: `driver_widget_filters.dart` (layout noise and key filtering, scope root resolution), `inspect_ui_extension.dart` (interactive UI tree snapshots and bounded type census), `interaction_extensions.dart` (gestures, tap target location, scrolling, text entry, element reveal), `ui_inspection_state.dart` (widget enabled resolution), `ui_inspection_text.dart` (rendered text extraction), and `ui_type_census.dart` (bounded type walks).
 
 ### Conversation Ownership
 - `ConversationCacheStore` is the single client-side owner of conversation cache, device destinations, drafts, pagination resources, and workspace expansion.
