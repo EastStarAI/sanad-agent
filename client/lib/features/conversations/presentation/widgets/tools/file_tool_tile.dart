@@ -4,20 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
-import 'package:re_highlight/re_highlight.dart';
-import 'package:re_highlight/languages/dart.dart';
-import 'package:re_highlight/languages/json.dart';
-import 'package:re_highlight/languages/yaml.dart';
-import 'package:re_highlight/languages/python.dart';
-import 'package:re_highlight/languages/xml.dart';
-import 'package:re_highlight/languages/bash.dart';
-import 'package:re_highlight/styles/github.dart';
-import 'package:re_highlight/styles/github-dark.dart';
-import 'package:diff_match_patch/diff_match_patch.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/code_highlighting.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/diff/diff_block_view.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/diff/unified_diff_parser.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/utils/link_utils.dart';
 
@@ -38,20 +31,11 @@ class FileToolTile extends StatefulWidget {
 class _FileToolTileState extends State<FileToolTile> {
   static const double _readViewportHeight = 350;
 
-  static final Highlight _highlight = Highlight()
-    ..registerLanguage('dart', langDart)
-    ..registerLanguage('json', langJson)
-    ..registerLanguage('yaml', langYaml)
-    ..registerLanguage('python', langPython)
-    ..registerLanguage('xml', langXml)
-    ..registerLanguage('bash', langBash);
-
   CanonicalEvent get event => widget.event;
 
   // Cached syntax highlighting results
   bool? _lastIsDark;
-  TextSpan? _cachedCodeBlockSpan;
-  final Map<String, List<TextSpan>> _highlightCache = {};
+  final CodeHighlightCache _highlightCache = CodeHighlightCache();
   bool _showMarkdown = true;
 
   @override
@@ -78,7 +62,6 @@ class _FileToolTileState extends State<FileToolTile> {
   }
 
   void _clearCache() {
-    _cachedCodeBlockSpan = null;
     _highlightCache.clear();
   }
 
@@ -489,25 +472,12 @@ class _FileToolTileState extends State<FileToolTile> {
       );
     }
 
-    if (_cachedCodeBlockSpan == null) {
-      final langName = _getLanguageName(filePath);
-      final theme = isDark ? githubDarkTheme : githubTheme;
-
-      HighlightResult result;
-      try {
-        if (langName != null) {
-          result = _highlight.highlight(code: code, language: langName);
-        } else {
-          result = _highlight.highlightAuto(code);
-        }
-      } catch (_) {
-        result = _highlight.highlightAuto(code);
-      }
-
-      final renderer = TextSpanRenderer(defaultStyle, theme);
-      result.render(renderer);
-      _cachedCodeBlockSpan = renderer.span ?? TextSpan(text: code, style: defaultStyle);
-    }
+    final codeBlockSpan = _highlightCache.codeBlockSpan(
+      code,
+      filePath,
+      baseStyle: defaultStyle,
+      isDark: isDark,
+    );
 
     final lineCount = '\n'.allMatches(code).length + 1;
     final lineNumbers = List.generate(lineCount, (i) => '${startLine + i}').join('\n');
@@ -547,7 +517,7 @@ class _FileToolTileState extends State<FileToolTile> {
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: SelectableText.rich(
-                    _cachedCodeBlockSpan!,
+                    codeBlockSpan,
                   ),
                 ),
               ),
@@ -584,11 +554,12 @@ class _FileToolTileState extends State<FileToolTile> {
             ),
           ),
           const SizedBox(height: 4),
-          _buildDiffBlock(
-            context,
-            patch,
+          DiffBlockView(
+            patch: patch,
             filePath: path.toString(),
             startLine: 1,
+            isFullyExpanded: widget.isFullyExpanded,
+            highlightCache: _highlightCache,
           ),
         ] else if (mapInput['content'] != null) ...[
           Text(
@@ -627,7 +598,7 @@ class _FileToolTileState extends State<FileToolTile> {
     final newString = mapInput['new_string']?.toString();
     final rawEdits = mapInput['edits'];
     final startLine = parsedOutput != null ? parsedOutput['startLine'] as int? : null;
-    final editStartLines = _parseEditStartLines(parsedOutput);
+    final editStartLines = parseEditStartLines(parsedOutput);
 
     String? fallbackPatch;
     if (rawEdits is List && rawEdits.isNotEmpty) {
@@ -684,12 +655,13 @@ class _FileToolTileState extends State<FileToolTile> {
             ),
           ),
           const SizedBox(height: 4),
-          _buildDiffBlock(
-            context,
-            displayPatch,
+          DiffBlockView(
+            patch: displayPatch,
             filePath: path.toString(),
             startLine: startLine,
             editStartLines: editStartLines,
+            isFullyExpanded: widget.isFullyExpanded,
+            highlightCache: _highlightCache,
           ),
         ] else ...[
           _buildFallback(context, input, rawOutput),
@@ -893,171 +865,6 @@ class _FileToolTileState extends State<FileToolTile> {
     );
   }
 
-  Widget _buildDiffBlock(
-    BuildContext context,
-    String patch, {
-    required String filePath,
-    int? startLine,
-    List<int>? editStartLines,
-  }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    // Soft, transparent background colors to support both light and dark themes beautifully
-    final redBgColor = Colors.red.withValues(alpha: isDark ? 0.12 : 0.06);
-    final greenBgColor = Colors.green.withValues(alpha: isDark ? 0.12 : 0.06);
-
-    // Highlight colors for word-level differences
-    final redHighlightColor = Colors.red.withValues(alpha: isDark ? 0.35 : 0.2);
-    final greenHighlightColor = Colors.green.withValues(alpha: isDark ? 0.35 : 0.2);
-
-    // High-contrast text colors
-    final redTextColor = isDark ? Colors.red.shade300 : Colors.red.shade900;
-    final greenTextColor = isDark ? Colors.green.shade300 : Colors.green.shade900;
-
-    final parsedLines = parseAndPairDiff(patch, startLine: startLine, editStartLines: editStartLines);
-    final widgets = <Widget>[];
-
-    for (final line in parsedLines) {
-      if (line.isHeader) {
-        widgets.add(
-          Container(
-            width: double.infinity,
-            color: isDark
-                ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.12)
-                : Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.2),
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.unfold_more,
-                  size: 13,
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.7),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  line.content,
-                  style: GoogleFonts.firaCode(
-                    fontSize: 11,
-                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-        continue;
-      }
-
-      final isAddition = line.prefix == '+';
-      final isDeletion = line.prefix == '-';
-
-      Color? bgColor;
-      Color prefixColor = Colors.grey;
-
-      if (isAddition) {
-        bgColor = greenBgColor;
-        prefixColor = greenTextColor;
-      } else if (isDeletion) {
-        bgColor = redBgColor;
-        prefixColor = redTextColor;
-      }
-
-      // Build the codeSpan
-      TextSpan codeSpan;
-      if (isAddition && line.pairedContent != null) {
-        // Paired addition: do word-level diffing
-        final defaultStyle = GoogleFonts.firaCode(
-          fontSize: 11,
-          color: Theme.of(context).colorScheme.onSurface,
-          height: 1.5,
-        );
-        codeSpan = TextSpan(
-          children: _buildWordDiffSpans(
-            line.pairedContent!,
-            line.content,
-            isAddition: true,
-            baseStyle: defaultStyle,
-            highlightColor: greenHighlightColor,
-          ),
-        );
-      } else if (isDeletion && line.pairedContent != null) {
-        // Paired deletion: do word-level diffing
-        final defaultStyle = GoogleFonts.firaCode(
-          fontSize: 11,
-          color: Theme.of(context).colorScheme.onSurface,
-          height: 1.5,
-        );
-        codeSpan = TextSpan(
-          children: _buildWordDiffSpans(
-            line.content,
-            line.pairedContent!,
-            isAddition: false,
-            baseStyle: defaultStyle,
-            highlightColor: redHighlightColor,
-          ),
-        );
-      } else {
-        // Unpaired deletion/addition or unchanged line: do normal highlighting
-        final highlightedSpans = _highlightToLines(line.content, filePath, context);
-        codeSpan = highlightedSpans.isNotEmpty ? highlightedSpans.first : TextSpan(text: line.content);
-      }
-
-      widgets.add(
-        _buildDiffLine(
-          context,
-          oldLineNumber: line.oldLineNumber,
-          newLineNumber: line.newLineNumber,
-          prefix: line.prefix,
-          codeSpan: codeSpan,
-          bgColor: bgColor,
-          prefixColor: prefixColor,
-          showLineNumbers: true,
-        ),
-      );
-    }
-
-    return SelectionArea(
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.05),
-          ),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 350),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  scrollDirection: Axis.vertical,
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minWidth: constraints.maxWidth,
-                      ),
-                      child: IntrinsicWidth(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: widgets,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildFallback(BuildContext context, dynamic input, dynamic output) {
     final prettyValue = _formatValue(output);
     return Column(
@@ -1110,360 +917,4 @@ class _FileToolTileState extends State<FileToolTile> {
       return value.toString();
     }
   }
-
-  String? _getLanguageName(String filePath) {
-    final ext = filePath.split('.').last.toLowerCase();
-    switch (ext) {
-      case 'dart':
-        return 'dart';
-      case 'json':
-        return 'json';
-      case 'yaml':
-      case 'yml':
-        return 'yaml';
-      case 'py':
-        return 'python';
-      case 'html':
-      case 'xml':
-        return 'xml';
-      case 'sh':
-      case 'bash':
-        return 'bash';
-      default:
-        return null;
-    }
-  }
-
-  List<TextSpan> _highlightToLines(String code, String filePath, BuildContext context) {
-    if (!widget.isFullyExpanded) {
-      final defaultStyle = GoogleFonts.firaCode(
-        fontSize: 11,
-        color: Theme.of(context).colorScheme.onSurface,
-        height: 1.5,
-      );
-      return splitSpanIntoLines(TextSpan(text: code, style: defaultStyle));
-    }
-
-    final cacheKey = '$filePath:$code';
-    if (_highlightCache.containsKey(cacheKey)) {
-      return _highlightCache[cacheKey]!;
-    }
-
-    final langName = _getLanguageName(filePath);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final theme = isDark ? githubDarkTheme : githubTheme;
-
-    HighlightResult result;
-    try {
-      if (langName != null) {
-        result = _highlight.highlight(code: code, language: langName);
-      } else {
-        result = _highlight.highlightAuto(code);
-      }
-    } catch (_) {
-      result = _highlight.highlightAuto(code);
-    }
-
-    final defaultStyle = GoogleFonts.firaCode(
-      fontSize: 11,
-      color: Theme.of(context).colorScheme.onSurface,
-      height: 1.5,
-    );
-
-    final renderer = TextSpanRenderer(defaultStyle, theme);
-    result.render(renderer);
-
-    final rootSpan = renderer.span ?? TextSpan(text: code, style: defaultStyle);
-    final lines = splitSpanIntoLines(rootSpan);
-    _highlightCache[cacheKey] = lines;
-    return lines;
-  }
-
-  Widget _buildDiffLine(
-    BuildContext context, {
-    required int? oldLineNumber,
-    required int? newLineNumber,
-    required String prefix,
-    required TextSpan codeSpan,
-    required Color? bgColor,
-    required Color prefixColor,
-    bool showLineNumbers = true,
-  }) {
-    final lineNumbersStyle = GoogleFonts.firaCode(
-      fontSize: 11,
-      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
-      height: 1.5,
-    );
-
-    final defaultStyle = GoogleFonts.firaCode(
-      fontSize: 11,
-      color: Theme.of(context).colorScheme.onSurface,
-      height: 1.5,
-    );
-
-    final lineNumber = prefix == '-' ? oldLineNumber : newLineNumber;
-
-    return Container(
-      color: bgColor,
-      padding: const EdgeInsets.symmetric(vertical: 1, horizontal: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showLineNumbers) ...[
-            SelectionContainer.disabled(
-              child: SizedBox(
-                width: 36,
-                child: Text(
-                  lineNumber != null ? '$lineNumber' : '',
-                  style: lineNumbersStyle,
-                  textAlign: TextAlign.right,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-          ],
-          SelectionContainer.disabled(
-            child: SizedBox(
-              width: 10,
-              child: Text(
-                prefix,
-                style: GoogleFonts.firaCode(
-                  fontSize: 11,
-                  color: prefixColor,
-                  fontWeight: FontWeight.bold,
-                  height: 1.5,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text.rich(
-            TextSpan(
-              style: defaultStyle,
-              children: [codeSpan],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  List<TextSpan> splitSpanIntoLines(TextSpan span) {
-    final List<List<TextSpan>> lines = [[]];
-
-    void traverse(TextSpan node, TextStyle? parentStyle) {
-      final currentStyle = node.style != null
-          ? (parentStyle != null ? parentStyle.merge(node.style) : node.style)
-          : parentStyle;
-
-      if (node.text != null && node.text!.isNotEmpty) {
-        final textLines = node.text!.split('\n');
-        for (int i = 0; i < textLines.length; i++) {
-          if (i > 0) {
-            lines.add([]);
-          }
-          if (textLines[i].isNotEmpty) {
-            lines.last.add(TextSpan(text: textLines[i], style: currentStyle));
-          }
-        }
-      }
-
-      if (node.children != null) {
-        for (final child in node.children!) {
-          if (child is TextSpan) {
-            traverse(child, currentStyle);
-          }
-        }
-      }
-    }
-
-    traverse(span, span.style);
-
-    return lines.map((lineChildren) {
-      return TextSpan(children: lineChildren);
-    }).toList();
-  }
-
-  List<TextSpan> _buildWordDiffSpans(
-    String oldText,
-    String newText, {
-    required bool isAddition,
-    required TextStyle baseStyle,
-    required Color highlightColor,
-  }) {
-    final diffs = diff(oldText, newText);
-    cleanupSemantic(diffs);
-
-    final spans = <TextSpan>[];
-    for (final diff in diffs) {
-      if (isAddition) {
-        if (diff.operation == DIFF_EQUAL) {
-          spans.add(TextSpan(text: diff.text, style: baseStyle));
-        } else if (diff.operation == DIFF_INSERT) {
-          spans.add(
-            TextSpan(
-              text: diff.text,
-              style: baseStyle.copyWith(
-                backgroundColor: highlightColor,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          );
-        }
-      } else {
-        if (diff.operation == DIFF_EQUAL) {
-          spans.add(TextSpan(text: diff.text, style: baseStyle));
-        } else if (diff.operation == DIFF_DELETE) {
-          spans.add(
-            TextSpan(
-              text: diff.text,
-              style: baseStyle.copyWith(
-                backgroundColor: highlightColor,
-                decoration: TextDecoration.lineThrough,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          );
-        }
-      }
-    }
-    return spans;
-  }
-
-  List<int>? _parseEditStartLines(Map<String, dynamic>? parsedOutput) {
-    final raw = parsedOutput?['editStartLines'];
-    if (raw is! List) return null;
-    final lines = <int>[];
-    for (final item in raw) {
-      if (item is num) {
-        lines.add(item.toInt());
-      } else {
-        final parsed = int.tryParse(item?.toString() ?? '');
-        if (parsed == null) return null;
-        lines.add(parsed);
-      }
-    }
-    return lines;
-  }
-
-  List<ParsedDiffLine> parseAndPairDiff(String patch, {int? startLine, List<int>? editStartLines}) {
-    final List<ParsedDiffLine> tempLines = [];
-    final lines = const LineSplitter().convert(patch);
-
-    int? oldLineCounter = startLine;
-    int? newLineCounter = startLine;
-    var hunkIndex = 0;
-
-    for (final line in lines) {
-      if (line == '---') {
-        // Multi-chunk hunk separator: reposition counters at the next chunk's start.
-        hunkIndex++;
-        if (editStartLines != null && hunkIndex < editStartLines.length) {
-          oldLineCounter = editStartLines[hunkIndex];
-          newLineCounter = editStartLines[hunkIndex];
-        }
-        continue;
-      }
-      if (line.startsWith('+')) {
-        tempLines.add(
-          ParsedDiffLine(
-            oldLineNumber: null,
-            newLineNumber: newLineCounter,
-            prefix: '+',
-            content: line.substring(1),
-          ),
-        );
-        if (newLineCounter != null) newLineCounter++;
-      } else if (line.startsWith('-')) {
-        tempLines.add(
-          ParsedDiffLine(
-            oldLineNumber: oldLineCounter,
-            newLineNumber: null,
-            prefix: '-',
-            content: line.substring(1),
-          ),
-        );
-        if (oldLineCounter != null) oldLineCounter++;
-      } else {
-        final content = line.startsWith(' ') ? line.substring(1) : line;
-        tempLines.add(
-          ParsedDiffLine(
-            oldLineNumber: oldLineCounter,
-            newLineNumber: newLineCounter,
-            prefix: ' ',
-            content: content,
-          ),
-        );
-        if (oldLineCounter != null) oldLineCounter++;
-        if (newLineCounter != null) newLineCounter++;
-      }
-    }
-
-    final List<ParsedDiffLine> finalLines = [];
-    int i = 0;
-    while (i < tempLines.length) {
-      if (tempLines[i].prefix == '-') {
-        final List<ParsedDiffLine> deletions = [];
-        while (i < tempLines.length && tempLines[i].prefix == '-') {
-          deletions.add(tempLines[i]);
-          i++;
-        }
-        final List<ParsedDiffLine> additions = [];
-        while (i < tempLines.length && tempLines[i].prefix == '+') {
-          additions.add(tempLines[i]);
-          i++;
-        }
-
-        final int commonCount = deletions.length < additions.length ? deletions.length : additions.length;
-        for (int k = 0; k < deletions.length; k++) {
-          finalLines.add(
-            ParsedDiffLine(
-              oldLineNumber: deletions[k].oldLineNumber,
-              newLineNumber: deletions[k].newLineNumber,
-              prefix: deletions[k].prefix,
-              content: deletions[k].content,
-              isHeader: deletions[k].isHeader,
-              pairedContent: k < commonCount ? additions[k].content : null,
-            ),
-          );
-        }
-        for (int k = 0; k < additions.length; k++) {
-          finalLines.add(
-            ParsedDiffLine(
-              oldLineNumber: additions[k].oldLineNumber,
-              newLineNumber: additions[k].newLineNumber,
-              prefix: additions[k].prefix,
-              content: additions[k].content,
-              isHeader: additions[k].isHeader,
-              pairedContent: k < commonCount ? deletions[k].content : null,
-            ),
-          );
-        }
-      } else {
-        finalLines.add(tempLines[i]);
-        i++;
-      }
-    }
-
-    return finalLines;
-  }
-}
-
-class ParsedDiffLine {
-  final int? oldLineNumber;
-  final int? newLineNumber;
-  final String prefix;
-  final String content;
-  final bool isHeader;
-  final String? pairedContent;
-
-  ParsedDiffLine({
-    this.oldLineNumber,
-    this.newLineNumber,
-    required this.prefix,
-    required this.content,
-    this.isHeader = false,
-    this.pairedContent,
-  });
 }
