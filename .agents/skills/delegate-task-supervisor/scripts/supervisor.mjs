@@ -30,6 +30,22 @@ import {
   TERMINAL_STATUSES,
   isActionableEvent,
 } from './supervisor-events.mjs';
+// Retry decisions (blocked-session retry and exit-78 launch relaunch) are pure
+// and clock-injected, so grace, backoff, and exhaustion are testable without
+// sleeping and both the CLI and the worker share one rule set.
+import {
+  DEFAULT_AUTO_RETRY_BACKOFF_MS,
+  DEFAULT_AUTO_RETRY_GRACE_MS,
+  DEFAULT_AUTO_RETRY_MAX_ATTEMPTS,
+  DEFAULT_LAUNCH_RETRY_BACKOFF_MS,
+  DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS,
+  LAUNCH_RETRY_EXIT_CODE,
+  attemptsForEpisode,
+  planAutoRetry,
+  planLaunchRetry,
+  retryAfterMs,
+  retryPolicy,
+} from './supervisor-retry.mjs';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SUPPORTED_IMPLEMENTERS = new Set(['opencode', 'agy', 'antigravity', 'sanad']);
@@ -45,6 +61,17 @@ const REMOTE_EXIT_STATUSES = new Map([
   [77, { status: 'blocked', cause: 'client_cli_disabled' }],
 ]);
 const SANAD_CLIENT_COMMAND = /^sanad-client(\.(exe|cmd|bat))?$/;
+// `sanad session retry` exit codes (B5 contract). The supervisor reports the
+// daemon's own verdict instead of inventing one: `retrying` means the recovery
+// transition was acknowledged, `not_blocked` means nothing was sent.
+const RETRY_EXIT_OUTCOMES = new Map([
+  [0, 'retrying'],
+  [1, 'transport_error'],
+  [3, 'not_blocked'],
+  [4, 'rejected'],
+  [5, 'unacknowledged'],
+  [8, 'state_unreadable'],
+]);
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const SHELL_META = /[|;&<>$`]/;
 const WINDOWS_BATCH_META = /[|;&<>$`%^!]/;
@@ -64,9 +91,10 @@ const DEFAULT_PROGRESS_STALL_MS = 900_000;
 // the queue instead of reporting an optimistic launch.
 const DEFAULT_VERIFY_MS = 15_000;
 const VERIFY_MIN_INTERVAL_MS = 50;
-// A steering message is relayed to a live daemon session; a hung CLI must not
-// hold the supervisor's control-request path open indefinitely.
+// A steering message or a retry is relayed to a live daemon session; a hung CLI
+// must not hold the supervisor's control-request path open indefinitely.
 const STEER_TIMEOUT_MS = 30_000;
+const RETRY_TIMEOUT_MS = 45_000;
 const WATCH_EVENT_VERSION = 'delegate-watch-event.v1';
 const CURSOR_VERSION = 'delegate-watch-cursor.v1';
 // Cancellation is cooperative first: SIGTERM follows the relay's own timeout
@@ -76,12 +104,13 @@ const CANCEL_FORCE_KILL_MS = 10_000;
 const HELP = `delegate-task-supervisor
 
 Usage:
-  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--close-when-idle]
+  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--auto-retry] [--auto-retry-grace-ms <n>] [--auto-retry-backoff-ms <n>] [--auto-retry-max-attempts <n>] [--close-when-idle]
   supervisor.mjs add --run <dir> --spec <tasks.json> [--json]
   supervisor.mjs enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--verify-sec <n>] [--json]
   supervisor.mjs cancel --run <dir> --task <id> [--json]
   supervisor.mjs continue --run <dir> --task <id> --brief-file <path> [--new-session] [--verify-sec <n>] [--json]
   supervisor.mjs steer --run <dir> --task <id> (--message <text> | --message-file <path>) [--json]
+  supervisor.mjs retry --run <dir> --task <id> [--provider <instance-id>] [--model <model-id>] [--json]
   supervisor.mjs set-concurrency --run <dir> --max <n> [--json]
   supervisor.mjs close --run <dir> [--abort-queued] [--wait] [--json]
   supervisor.mjs status (--run <dir> [--run <dir> ...]) [--brief] [--json] [--task <id>]
@@ -110,6 +139,18 @@ re-invoked when the watcher exits.
 stopping it; \`continue\` re-dispatches a finished task as a numbered new attempt
 with a delta brief. Both are journaled, and steering never records the message
 body.
+
+\`retry\` resumes a task the daemon left \`blocked\` or \`waiting\` by sending\n\`sanad session retry <session-id>\`, so a headless worker recovers the same way
+the Client's Retry action does. With --auto-retry (or a per-task \"autoRetry\"
+spec field) the supervisor applies the policy itself: a transient cause
+(provider_timeout, network_error, rate_limit) blocked for longer than the grace
+period (default ${DEFAULT_AUTO_RETRY_GRACE_MS}ms) is retried with exponential
+backoff up to ${DEFAULT_AUTO_RETRY_MAX_ATTEMPTS} attempts, then reported as an
+actionable \`retry_exhausted\`. auth_error, provider_quota, needs_input, and
+needs_permission are never retried automatically. A spawn that exits
+${LAUNCH_RETRY_EXIT_CODE} within seconds of launch is a launch race, not a task
+failure, so it is relaunched up to ${DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS} times
+with backoff before it counts as failed.
 `;
 
 function fail(message, code = 2) {
@@ -127,6 +168,7 @@ const BOOLEAN_FLAGS = new Set([
   'all',
   'close-when-idle',
   'new-session',
+  'auto-retry',
 ]);
 
 function parseOptions(argv) {
@@ -171,6 +213,30 @@ function secondsOption(options, key, defaultMs, label) {
   const seconds = Number(options[key]);
   if (!Number.isFinite(seconds) || seconds < 0) fail(`${label} must be a non-negative number`);
   return Math.round(seconds * 1000);
+}
+
+// Compressed-time switches take milliseconds directly so a test can exercise a
+// three-minute grace period in a fraction of a second.
+function integerOption(options, key, defaultValue, label, minimum = 0) {
+  if (options[key] == null) return defaultValue;
+  const value = Number(options[key]);
+  if (!Number.isInteger(value) || value < minimum) {
+    fail(`${label} must be an integer >= ${minimum}`);
+  }
+  return value;
+}
+
+// One translation of the retry policy into worker arguments, shared by the
+// POSIX spawn and the Windows broker so both start the same worker.
+function workerRetryArgs(policy) {
+  return [
+    ...(policy.enabled ? ['--auto-retry'] : []),
+    '--auto-retry-grace-ms', String(policy.graceMs),
+    '--auto-retry-backoff-ms', String(policy.backoffMs),
+    '--auto-retry-max-attempts', String(policy.maxAttempts),
+    '--launch-retry-backoff-ms', String(policy.launchBackoffMs),
+    '--launch-retry-max-attempts', String(policy.launchMaxAttempts),
+  ];
 }
 
 function readJson(path, label = path) {
@@ -332,6 +398,14 @@ function validateTask(item, existingIds = new Set()) {
     return resolve(value);
   };
   let spawnCwd = workspace;
+
+  // Per-task opt-in/opt-out of the run's automatic retry policy. A task that
+  // says nothing inherits the run default; `null` is what records that.
+  let autoRetry = null;
+  if (item.autoRetry != null) {
+    if (typeof item.autoRetry !== 'boolean') fail(`task ${item.id} autoRetry must be a boolean`);
+    autoRetry = item.autoRetry;
+  }
 
   // `sourceRoot` is the Sanad source/spawn-root contract: it separates the
   // source checkout that provides the development CLI from the delegated
@@ -584,6 +658,9 @@ function validateTask(item, existingIds = new Set()) {
     // is accepted directly so compressed-time tests do not need fractional
     // seconds.
     progressStallMs,
+    // `null` inherits the run's auto-retry default; `false` opts one task out
+    // of a run that enabled it.
+    autoRetry,
     // Remote `sanad-client` tasks capture their result envelope from the relayed
     // stdout and derive both artifact paths inside the run directory.
     remote: remoteDevice != null,
@@ -708,6 +785,39 @@ function firstNonEmptyLine(value) {
   return null;
 }
 
+function lastNonEmptyLine(value) {
+  if (typeof value !== 'string') return null;
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.length ? lines.at(-1) : null;
+}
+
+// A provider instance id or model id is passed through verbatim; only an empty
+// or non-string value is dropped, so a blank flag never becomes `--provider ""`.
+function normalizeRetryRoute(value) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text.length ? text : null;
+}
+
+// A CLI command prints one `--json` envelope as the last stdout line; reading a
+// field from it keeps the supervisor's journal correlated with the CLI's own
+// request id instead of the supervisor's guess.
+function lastJsonField(stdout, keys) {
+  const last = lastNonEmptyLine(stdout);
+  if (!last || !last.startsWith('{')) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(last);
+  } catch {
+    return null;
+  }
+  for (const key of keys) {
+    const value = parsed?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
 /**
  * The coordinator's triage view of one task's `result.json`.
  *
@@ -743,11 +853,34 @@ function readResultDigest(resultPath) {
     headSha: pick('head_sha', 'headSha', 'sha'),
     prUrl: pick('pr_url', 'prUrl', 'pull_request_url'),
     summary,
+    // The attempt window is what tells a result of *this* task from a later
+    // attempt that reused the same `--out-dir`.
+    startedAt: pick('started_at', 'startedAt'),
+    endedAt: pick('ended_at', 'endedAt'),
+    exitCode: typeof result.exit_code === 'number'
+      ? result.exit_code
+      : (typeof result.exitCode === 'number' ? result.exitCode : null),
   };
 }
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/**
+ * Whether a `result.json` artifact belongs to this task's attempt.
+ *
+ * `continue` archives an attempt's artifacts, but two tasks may also be declared
+ * with the same `--out-dir` (the live run4 evidence did exactly that). An
+ * artifact that started after the task settled was produced by a later attempt,
+ * so it is neither adopted as this task's outcome nor printed as its result.
+ */
+function resultBelongsToTask(task, digest) {
+  if (!digest) return false;
+  const startedMs = parseIsoMillis(digest.startedAt);
+  const finishedMs = parseIsoMillis(task?.finishedAt);
+  if (startedMs == null || finishedMs == null) return true;
+  return startedMs <= finishedMs;
 }
 
 // The delta brief replaces the task's declared brief input. Only documented
@@ -844,6 +977,14 @@ function publicTask(task, runDir, initialStatus = 'queued') {
     // entry here and archives the previous attempt's artifacts.
     attempt: 1,
     attempts: [],
+    // Retry bookkeeping: `retryEpisode` numbers each distinct block so a retry
+    // that recovers the turn does not leave the next block with no budget.
+    retryEpisode: 0,
+    retryAttempts: [],
+    launchRetries: [],
+    nextRetryAt: null,
+    retryExhaustedAt: null,
+    autoRetry: task.autoRetry ?? null,
     sessionId: null,
     lastProgressAt: null,
     progressStall: null,
@@ -879,7 +1020,7 @@ function launchThroughWindowsExplorer(scriptPath) {
   // The caller verifies the requested effect instead of trusting that status.
 }
 
-function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, closeWhenIdle = false) {
+function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, closeWhenIdle = false) {
   const workerPath = join(runDir, 'start-supervisor.cmd');
   const brokerPath = join(runDir, 'start-supervisor.vbs');
   const command = [
@@ -890,6 +1031,7 @@ function writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, 
     '--max-concurrency', String(maxConcurrency),
     '--queued-stall-ms', String(queuedStallMs),
     '--progress-stall-ms', String(progressStallMs),
+    ...workerRetryArgs(autoRetry),
     ...(closeWhenIdle ? ['--close-when-idle'] : []),
   ].map(windowsBatchQuote).join(' ');
   writeFileSync(
@@ -937,7 +1079,8 @@ async function startCommand(options) {
   if (existsSync(paths.manifest) || existsSync(paths.journal)) {
     fail(`run directory already contains supervisor state: ${runDir}`);
   }
-  const tasks = validateSpec(readJson(resolve(options.spec), 'task spec'));
+  const spec = readJson(resolve(options.spec), 'task spec');
+  const tasks = validateSpec(spec);
   // Concurrency is never a hidden default: the effective value is validated,
   // persisted, and printed by `start`. Omitting the flag means one slot per spec
   // task, so a fresh run never silently queues behind a single slot.
@@ -963,6 +1106,16 @@ async function startCommand(options) {
   }
   const verifyMs = verifyOption(options);
   const closeWhenIdle = options['close-when-idle'] === true;
+  // `--auto-retry` enables the policy for the whole run; a spec may enable or
+  // disable it per task, and only an enabling default is inherited.
+  const autoRetry = retryPolicy({
+    enabled: options['auto-retry'] === true || spec.autoRetry === true,
+    graceMs: integerOption(options, 'auto-retry-grace-ms', DEFAULT_AUTO_RETRY_GRACE_MS, '--auto-retry-grace-ms', 1),
+    maxAttempts: integerOption(options, 'auto-retry-max-attempts', DEFAULT_AUTO_RETRY_MAX_ATTEMPTS, '--auto-retry-max-attempts', 1),
+    backoffMs: integerOption(options, 'auto-retry-backoff-ms', DEFAULT_AUTO_RETRY_BACKOFF_MS, '--auto-retry-backoff-ms', 1),
+    launchMaxAttempts: integerOption(options, 'launch-retry-max-attempts', DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS, '--launch-retry-max-attempts', 0),
+    launchBackoffMs: integerOption(options, 'launch-retry-backoff-ms', DEFAULT_LAUNCH_RETRY_BACKOFF_MS, '--launch-retry-backoff-ms', 1),
+  });
   const startedAt = new Date().toISOString();
   writeJsonAtomic(paths.tasks, { version: 'delegate-task-spec.v1', tasks });
   writeJsonAtomic(paths.manifest, {
@@ -978,6 +1131,7 @@ async function startCommand(options) {
     active: 0,
     queuedStallMs,
     progressStallMs,
+    autoRetry,
     closeWhenIdle,
     queueSeq: tasks.length,
     tasks: Object.fromEntries(tasks.map((task, index) => [task.id, {
@@ -989,7 +1143,7 @@ async function startCommand(options) {
 
   if (process.platform === 'win32') {
     try {
-      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, closeWhenIdle);
+      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency, queuedStallMs, progressStallMs, autoRetry, closeWhenIdle);
       launchThroughWindowsExplorer(brokerPath);
       const running = waitForWindowsWorkerHandshake(paths);
       const verification = await observeLaunch(runDir, tasks.map((task) => task.id), { verifyMs });
@@ -1000,6 +1154,7 @@ async function startCommand(options) {
         maxConcurrency,
         queuedStallMs,
         progressStallMs,
+        autoRetry,
         closeWhenIdle,
         tasks: tasks.length,
         verification,
@@ -1019,6 +1174,7 @@ async function startCommand(options) {
     '--max-concurrency', String(maxConcurrency),
     '--queued-stall-ms', String(queuedStallMs),
     '--progress-stall-ms', String(progressStallMs),
+    ...workerRetryArgs(autoRetry),
     ...(closeWhenIdle ? ['--close-when-idle'] : []),
   ], {
     detached: true,
@@ -1037,6 +1193,7 @@ async function startCommand(options) {
     maxConcurrency,
     queuedStallMs,
     progressStallMs,
+    autoRetry,
     closeWhenIdle,
     tasks: tasks.length,
     verification,
@@ -1074,6 +1231,16 @@ function workerCommand(options) {
     fail('invalid internal worker invocation');
   }
   const closeWhenIdle = options['close-when-idle'] === true;
+  // The policy the run was started with. Every value is explicit here so the
+  // worker never re-derives a default the handshake did not report.
+  const autoRetry = retryPolicy({
+    enabled: options['auto-retry'] === true,
+    graceMs: integerOption(options, 'auto-retry-grace-ms', DEFAULT_AUTO_RETRY_GRACE_MS, '--auto-retry-grace-ms', 1),
+    maxAttempts: integerOption(options, 'auto-retry-max-attempts', DEFAULT_AUTO_RETRY_MAX_ATTEMPTS, '--auto-retry-max-attempts', 1),
+    backoffMs: integerOption(options, 'auto-retry-backoff-ms', DEFAULT_AUTO_RETRY_BACKOFF_MS, '--auto-retry-backoff-ms', 1),
+    launchMaxAttempts: integerOption(options, 'launch-retry-max-attempts', DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS, '--launch-retry-max-attempts', 0),
+    launchBackoffMs: integerOption(options, 'launch-retry-backoff-ms', DEFAULT_LAUNCH_RETRY_BACKOFF_MS, '--launch-retry-backoff-ms', 1),
+  });
   const paths = runPaths(runDir);
   mkdirSync(paths.requests, { recursive: true });
   const initialTasks = readJson(paths.tasks, 'normalized tasks').tasks
@@ -1088,9 +1255,12 @@ function workerCommand(options) {
   const timelineWatchers = new Map();
   const children = new Map();
   const forceKillTimers = new Map();
-  // Session stops in flight: `continue` must not re-dispatch a task while its
-  // previous daemon session is still being torn down (one session per task).
+  // Session stops and retries in flight: `continue` must not re-dispatch a task
+  // while its previous daemon session is still being torn down (one session per
+  // task), and the retry policy must never send two retries for one block.
   const pendingSessionStops = new Map();
+  const retryInFlight = new Set();
+  const launchRetryTimers = new Map();
 
   const workerStartedAt = new Date().toISOString();
   const manifest = {
@@ -1106,6 +1276,7 @@ function workerCommand(options) {
     active,
     queuedStallMs,
     progressStallMs,
+    autoRetry,
     closeWhenIdle,
     queueSeq,
     tasks: Object.fromEntries(initialTasks.map((task, index) => [task.id, {
@@ -1145,7 +1316,18 @@ function workerCommand(options) {
     const queueFields = to === 'queued'
       ? { queuedAt: new Date().toISOString(), queuedSeq: ++queueSeq, queueStall: null }
       : (to === 'running' ? { queueStall: null } : {});
-    Object.assign(state, queueFields, extra, { status: to });
+    // Every block is its own retry episode: recovery through a retry must not
+    // leave the next block with an exhausted budget, and the receipt time is a
+    // fallback clock for a notice that carried no timestamp.
+    const retryFields = to === 'blocked'
+      ? {
+        retryEpisode: (state.retryEpisode ?? 0) + 1,
+        blockedAt: new Date().toISOString(),
+        nextRetryAt: null,
+        retryExhaustedAt: null,
+      }
+      : {};
+    Object.assign(state, queueFields, retryFields, extra, { status: to });
     manifest.seq = ++seq;
     const event = {
       seq,
@@ -1289,6 +1471,12 @@ function workerCommand(options) {
   // tick because a later `enqueue` can add an even shorter override.
   const monitorTickMs = () => {
     const thresholds = [queuedStallMs, progressStallMs];
+    // A retry due time is a deadline like any stall threshold: the tick has to
+    // be fine enough to honour a compressed grace or backoff window. A task may
+    // opt in on its own, so the run flag is not the only source of urgency.
+    if (autoRetry.enabled || taskList.some((task) => task.autoRetry === true)) {
+      thresholds.push(autoRetry.graceMs, autoRetry.backoffMs);
+    }
     for (const state of Object.values(manifest.tasks)) {
       const own = Number(state?.progressStallMs);
       if (Number.isInteger(own) && own > 0) thresholds.push(own);
@@ -1306,6 +1494,7 @@ function workerCommand(options) {
       if (state.status === 'queued' && !state.queueStall) flagQueueStall(id);
     }
     for (const id of Object.keys(manifest.tasks)) flagProgressStall(id);
+    for (const id of Object.keys(manifest.tasks)) maybeAutoRetry(id);
     reapLostWorkers();
     armMonitor();
   };
@@ -1316,10 +1505,76 @@ function workerCommand(options) {
     monitorIntervalMs = next;
     monitorTimer = setInterval(monitorTick, next);
   };
-  armMonitor();
+
+  // A relaunch is scheduled, not immediate: the daemon that just failed its
+  // health check needs a moment, and the attempt history must survive. The task
+  // returns to `queued` so concurrency accounting stays honest, and
+  // `launchAvailable` refuses to start it before `launchRetryAt`.
+  const scheduleLaunchRetry = (task, code, signal, plan) => {
+    const state = manifest.tasks[task.id];
+    if (!state) return;
+    active = Math.max(0, active - 1);
+    children.delete(task.id);
+    const forceKillTimer = forceKillTimers.get(task.id);
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+      forceKillTimers.delete(task.id);
+    }
+    if (timelineWatchers.has(task.id)) {
+      try { timelineWatchers.get(task.id).close(); } catch {}
+      timelineWatchers.delete(task.id);
+    }
+    const startedAtMs = parseIsoMillis(state.startedAt);
+    const attempt = {
+      attempt: plan.attempt,
+      at: new Date().toISOString(),
+      exitCode: code,
+      signal,
+      elapsedMs: startedAtMs == null ? null : Math.max(0, Date.now() - startedAtMs),
+      backoffMs: plan.delayMs,
+      cause: 'daemon_unavailable',
+    };
+    state.launchRetries = [...(state.launchRetries ?? []), attempt];
+    notice(task, 'launch_retry', { ...attempt, maxAttempts: plan.maxAttempts });
+    const resumeAt = new Date(Date.now() + plan.delayMs).toISOString();
+    transition(task, 'queued', {
+      pid: null,
+      cause: 'daemon_unavailable',
+      launchRetryAt: resumeAt,
+      launchRetries: state.launchRetries,
+      error: `spawn exited ${code} before a healthy daemon answered; relaunch`
+        + ` ${plan.attempt}/${plan.maxAttempts} in ${plan.delayMs}ms`,
+    });
+    const timer = setTimeout(() => {
+      launchRetryTimers.delete(task.id);
+      if (settled.has(task.id)) return;
+      if (manifest.tasks[task.id]?.status !== 'queued') return;
+      launchAvailable();
+    }, plan.delayMs);
+    launchRetryTimers.set(task.id, timer);
+  };
 
   const finishTask = (task, code, signal, launchError = null) => {
     if (settled.has(task.id)) return;
+    // Exit 78 is the CLI's daemon-health pre-check: the spawn never reached a
+    // turn, so relaunching it is a launch repair instead of a task failure. The
+    // attempt is recorded and journaled, and the task returns to the queue for
+    // its backoff window rather than settling as failed.
+    const launchState = manifest.tasks[task.id];
+    const launchPlan = launchError || !launchState
+      ? { action: 'none' }
+      : planLaunchRetry({
+        exitCode: code,
+        startedAtMs: parseIsoMillis(launchState.startedAt),
+        endedAtMs: Date.now(),
+        attempts: (launchState.launchRetries ?? []).length,
+        maxAttempts: autoRetry.launchMaxAttempts,
+        backoffMs: autoRetry.launchBackoffMs,
+      });
+    if (launchPlan.action === 'retry' && launchState.cancellationRequested !== true) {
+      scheduleLaunchRetry(task, code, signal, launchPlan);
+      return;
+    }
     settled.add(task.id);
     active -= 1;
     children.delete(task.id);
@@ -1488,16 +1743,22 @@ function workerCommand(options) {
         if (lastSeenType === type && lastSeenRequestId === noticeIdentity) return;
         lastSeenType = type;
         lastSeenRequestId = noticeIdentity;
+        // A rate-limit notice may publish its own retry-after; the policy waits
+        // for it instead of retrying into a guaranteed rejection.
+        const retryAfter = retryAfterMs(data);
         transition(task, type, {
-          sessionId,
+          // An event without a session id must never erase the one already
+          // recorded: cancel, steer, and retry all depend on it.
+          ...(sessionId ? { sessionId } : {}),
           cause,
+          ...(retryAfter ? { retryAfterMs: retryAfter } : {}),
           stateSince: event.timestamp || null,
         });
       } else if (type === 'resumed') {
         if (manifest.tasks[task.id]?.status === 'running') return;
         lastSeenType = 'resumed';
         transition(task, 'resuming', {
-          sessionId,
+          ...(sessionId ? { sessionId } : {}),
           requestId: null,
           intervention: null,
           cause: null,
@@ -1507,7 +1768,7 @@ function workerCommand(options) {
         if (manifest.tasks[task.id]?.status === 'running') return;
         lastSeenType = 'running';
         transition(task, 'running', {
-          sessionId,
+          ...(sessionId ? { sessionId } : {}),
           requestId: null,
           intervention: null,
           cause: null,
@@ -1621,26 +1882,45 @@ function workerCommand(options) {
     });
   };
 
-  // Cancelling a Sanad task must also stop its daemon session: SIGTERM can land
-  // after the CLI already published a session id, and a lost signal would leave
-  // the daemon turn running. The stop command mirrors the task's own invocation
-  // form so it targets the same binary, source entry, and Home as the task did.
+  // Every auxiliary CLI call that targets a task's daemon session (stop, steer,
+  // retry) is built here: it mirrors the task's own invocation form and pins, so
+  // the call reaches the same binary, source entry, Home, and gateway the task
+  // spawned with. One helper means the three commands cannot drift apart.
+  const sessionInvocation = (task, sessionArgs) => {
+    const pinned = [...sessionArgs];
+    const gateway = getArgValue(task.args, task.id, '--gateway-url');
+    if (gateway) pinned.push('--gateway-url', gateway);
+    if (task.home) pinned.push('--home', task.home);
+    const base = basename(task.command).toLowerCase();
+    if (task.remote) {
+      if (!SANAD_CLIENT_COMMAND.test(base)) return { reason: 'unsupported_remote_invocation' };
+      if (!task.remoteDevice) return { reason: 'no_remote_device' };
+      return {
+        command: task.command,
+        args: ['-d', task.remoteDevice, ...pinned],
+        cwd: task.spawnCwd || task.workspace,
+      };
+    }
+    if (task.implementer !== 'sanad') return { reason: 'not_a_sanad_task' };
+    if (/^sanad(\.(exe|cmd|bat))?$/.test(base)) {
+      return { command: task.command, args: pinned, cwd: task.spawnCwd || task.workspace };
+    }
+    if (/^fvm(\.(exe|cmd|bat))?$/.test(base)
+      && task.args[0] === 'dart' && task.args[1] === 'run') {
+      return {
+        command: task.command,
+        args: ['dart', 'run', task.args[2], ...pinned],
+        cwd: task.spawnCwd || task.workspace,
+      };
+    }
+    return { reason: 'unsupported_invocation' };
+  };
+
   const sessionStopInvocation = (task, sessionId) => {
     if (!sessionId) return { reason: 'no_session_id' };
     if (task.remote) return { reason: 'remote_session' };
     if (task.implementer !== 'sanad') return { reason: 'not_a_sanad_task' };
-    const base = basename(task.command).toLowerCase();
-    let args;
-    if (/^sanad(\.(exe|cmd|bat))?$/.test(base)) {
-      args = ['session', 'stop', sessionId];
-    } else if (/^fvm(\.(exe|cmd|bat))?$/.test(base)
-      && task.args[0] === 'dart' && task.args[1] === 'run') {
-      args = ['dart', 'run', task.args[2], 'session', 'stop', sessionId];
-    } else {
-      return { reason: 'unsupported_invocation' };
-    }
-    if (task.home) args.push('--home', task.home);
-    return { command: task.command, args, cwd: task.spawnCwd || task.workspace };
+    return sessionInvocation(task, ['session', 'stop', sessionId]);
   };
 
   const requestSessionStop = (task, sessionId) => {
@@ -1684,43 +1964,23 @@ function workerCommand(options) {
   // applies the message at the next execution boundary, so the task keeps its
   // session and its progress instead of being cancelled and re-dispatched.
   // `sessionSteerInvocation` is the single binding to the CLI contract
-  // (`sanad session steer --session <id> --message-file <path> [--json]`),
-  // mirroring the task's own invocation form and Home pin.
+  // (`sanad session steer --session <id> --message-file <path> [--json]`).
   const sessionSteerInvocation = (task, sessionId, messageFile) => {
     if (!sessionId) return { reason: 'no_session_id' };
-    const steerArgs = ['session', 'steer', '--session', sessionId, '--message-file', messageFile, '--json'];
-    const withPins = (args, extra = []) => {
-      const pinned = [...args];
-      // Mirror the endpoint pin the task spawned with, if any, so steering
-      // reaches the same gateway instead of the default one.
-      const gateway = getArgValue(task.args, task.id, '--gateway-url');
-      if (gateway) pinned.push('--gateway-url', gateway);
-      pinned.push(...extra);
-      return pinned;
-    };
-    const base = basename(task.command).toLowerCase();
-    if (task.remote) {
-      if (!SANAD_CLIENT_COMMAND.test(base)) return { reason: 'unsupported_remote_invocation' };
-      if (!task.remoteDevice) return { reason: 'no_remote_device' };
-      return {
-        command: task.command,
-        args: withPins(['-d', task.remoteDevice, ...steerArgs]),
-        cwd: task.spawnCwd || task.workspace,
-      };
-    }
-    if (task.implementer !== 'sanad') return { reason: 'not_a_sanad_task' };
-    if (/^sanad(\.(exe|cmd|bat))?$/.test(base)) {
-      return { command: task.command, args: withPins(steerArgs, task.home ? ['--home', task.home] : []), cwd: task.spawnCwd || task.workspace };
-    }
-    if (/^fvm(\.(exe|cmd|bat))?$/.test(base)
-      && task.args[0] === 'dart' && task.args[1] === 'run') {
-      return {
-        command: task.command,
-        args: withPins(['dart', 'run', task.args[2], ...steerArgs], task.home ? ['--home', task.home] : []),
-        cwd: task.spawnCwd || task.workspace,
-      };
-    }
-    return { reason: 'unsupported_invocation' };
+    return sessionInvocation(task, ['session', 'steer', '--session', sessionId, '--message-file', messageFile, '--json']);
+  };
+
+  // The recovery counterpart of steer: a turn the daemon left `blocked` has no
+  // live owner to resume it, and a headless worker has no Client to press
+  // Retry. `sanad session retry <id> [--provider <id>] [--model <id>] [--json]`
+  // sends the same `session.runtime_retry` command the Client does.
+  const sessionRetryInvocation = (task, sessionId, { provider = null, model = null } = {}) => {
+    if (!sessionId) return { reason: 'no_session_id' };
+    const args = ['session', 'retry', sessionId];
+    if (provider) args.push('--provider', provider);
+    if (model) args.push('--model', model);
+    args.push('--json');
+    return sessionInvocation(task, args);
   };
 
   // Bounded capture of one auxiliary CLI call (steer). The supervisor never
@@ -1990,21 +2250,10 @@ function workerCommand(options) {
         };
       }
       const result = await runAuxiliaryCommand(invocation, task);
-      const cliRequestId = (() => {
-        const last = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
-        if (!last || !last.startsWith('{')) return null;
-        try {
-          const parsed = JSON.parse(last);
-          return parsed.request_id ?? parsed.requestId ?? null;
-        } catch {
-          return null;
-        }
-      })();
+      const cliRequestId = lastJsonField(result.stdout, ['request_id', 'requestId']);
       const diagnostic = result.ok
         ? null
-        : (result.stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1)
-          ?? result.error
-          ?? 'steer command failed');
+        : (lastNonEmptyLine(result.stderr) ?? result.error ?? 'steer command failed');
       const event = notice(task, 'steer_sent', {
         sessionId,
         // The supervisor's own control-request id, plus the CLI's request id
@@ -2046,6 +2295,199 @@ function workerCommand(options) {
       if (temporaryFile) {
         try { unlinkSync(temporaryFile); } catch {}
       }
+    }
+  };
+
+  // One retry send, shared by the manual `retry` command and the automatic
+  // policy. Only the journal kind differs (`retry_sent` vs `auto_retry`) so a
+  // coordinator can tell its own instruction from the supervisor's budget;
+  // neither is a wake-up. The daemon's verdict is reported, not invented, and a
+  // refused retry (`not_blocked`) is not silently counted as a success.
+  const retrySession = async (task, state, options) => {
+    const {
+      kind,
+      provider = null,
+      model = null,
+      automatic = false,
+      attempt = null,
+      maxAttempts = null,
+      delayMs = null,
+    } = options;
+    const sessionId = state.sessionId ?? null;
+    const requestedAt = new Date().toISOString();
+    const episode = state.retryEpisode ?? 0;
+    const invocation = sessionRetryInvocation(task, sessionId, { provider, model });
+    if (!invocation.command) {
+      const unsupported = notice(task, kind, {
+        sessionId,
+        automatic,
+        result: 'unsupported',
+        reason: invocation.reason,
+      });
+      return {
+        ok: false,
+        error: `cannot retry task ${task.id}: ${invocation.reason}`,
+        reason: invocation.reason,
+        journalSeq: unsupported.seq,
+      };
+    }
+    const result = await runAuxiliaryCommand(invocation, task, RETRY_TIMEOUT_MS);
+    const outcome = result.exitCode == null
+      ? 'failed'
+      : RETRY_EXIT_OUTCOMES.get(result.exitCode) ?? 'failed';
+    const cliRequestId = lastJsonField(result.stdout, ['request_id', 'requestId', 'notice_request_id']);
+    const diagnostic = result.ok
+      ? null
+      : (lastNonEmptyLine(result.stderr) ?? result.error ?? 'retry command failed');
+    // The attempt is recorded against the block that caused it, with the send
+    // time (not the completion time) so backoff is measured from the request.
+    const entry = {
+      attempt: attempt ?? attemptsForEpisode(state, episode).length + 1,
+      at: requestedAt,
+      episode,
+      automatic: automatic === true,
+      cause: state.cause ?? null,
+      provider,
+      model,
+      exitCode: result.exitCode,
+      result: outcome,
+      ...(delayMs != null ? { backoffMs: delayMs } : {}),
+    };
+    state.retryAttempts = [...(state.retryAttempts ?? []), entry];
+    state.nextRetryAt = null;
+    persist();
+    const event = notice(task, kind, {
+      sessionId,
+      automatic: automatic === true,
+      attempt: entry.attempt,
+      ...(maxAttempts != null ? { maxAttempts } : {}),
+      cause: entry.cause,
+      provider,
+      model,
+      requestedAt,
+      ...(cliRequestId ? { cliRequestId } : {}),
+      result: outcome,
+      sent: result.exitCode === 0,
+      exitCode: result.exitCode,
+      signal: result.signal,
+      ...(delayMs != null ? { backoffMs: delayMs } : {}),
+      ...(diagnostic ? { error: String(diagnostic).slice(0, 400) } : {}),
+    });
+    const ok = result.exitCode === 0;
+    return {
+      ok,
+      taskId: task.id,
+      sessionId,
+      attempt: entry.attempt,
+      ...(maxAttempts != null ? { maxAttempts } : {}),
+      result: outcome,
+      exitCode: result.exitCode,
+      signal: result.signal,
+      cliRequestId,
+      journalSeq: event.seq,
+      ...(ok ? {} : { error: `retry ${outcome} for task ${task.id}${diagnostic ? `: ${diagnostic}` : ''}` }),
+    };
+  };
+
+  // `retry` is the manual recovery path for a blocked or waiting task. It is
+  // refused for a task that is running (nothing to resume) or finished (the
+  // `continue` path), and the worker repeats that check authoritatively.
+  const retryTask = async (req) => {
+    const id = req.taskId;
+    const state = manifest.tasks[id];
+    const task = taskMap.get(id);
+    if (!state || !task) return { ok: false, error: `task not found: ${id}` };
+    if (!['blocked', 'waiting'].includes(state.status)) {
+      return {
+        ok: false,
+        error: `task ${id} is ${state.status}; retry needs a blocked or waiting task`,
+      };
+    }
+    if (!state.sessionId) {
+      return { ok: false, error: `task ${id} has no recorded session id yet; nothing to retry` };
+    }
+    if (retryInFlight.has(id)) {
+      return { ok: false, error: `a retry for task ${id} is already in flight` };
+    }
+    retryInFlight.add(id);
+    try {
+      return await retrySession(task, state, {
+        kind: 'retry_sent',
+        provider: normalizeRetryRoute(req.provider),
+        model: normalizeRetryRoute(req.model),
+      });
+    } finally {
+      retryInFlight.delete(id);
+    }
+  };
+
+  // A run-level `--auto-retry` is the default; a task's own spec flag wins, so a
+  // single task can opt in without enabling the whole run.
+  const taskAutoRetry = (task) => (task.autoRetry == null ? autoRetry.enabled : task.autoRetry === true);
+
+  // The automatic budget. The daemon spends its own automatic retry before it
+  // publishes `blocked`, so a blocked worker stays blocked until something
+  // outside resumes it; this is that "something", journaled attempt by attempt.
+  const maybeAutoRetry = (id) => {
+    const task = taskMap.get(id);
+    const state = manifest.tasks[id];
+    if (!task || !state || settled.has(id) || state.cancellationRequested) return;
+    if (!taskAutoRetry(task)) return;
+    if (retryInFlight.has(id)) return;
+    const episode = state.retryEpisode ?? 0;
+    const attempts = attemptsForEpisode(state, episode);
+    const plan = planAutoRetry({
+      status: state.status,
+      cause: state.cause,
+      blockedAtMs: parseIsoMillis(state.stateSince) ?? parseIsoMillis(state.blockedAt),
+      lastRetryAtMs: attempts.length ? parseIsoMillis(attempts.at(-1).at) : null,
+      attempts: attempts.length,
+      nowMs: Date.now(),
+      graceMs: autoRetry.graceMs,
+      maxAttempts: autoRetry.maxAttempts,
+      backoffMs: autoRetry.backoffMs,
+      retryAfterMs: state.retryAfterMs ?? null,
+    });
+    if (plan.action === 'wait') {
+      const dueAt = new Date(plan.dueAtMs).toISOString();
+      if (state.nextRetryAt !== dueAt) {
+        state.nextRetryAt = dueAt;
+        persist();
+      }
+      return;
+    }
+    if (plan.action === 'retry') {
+      retryInFlight.add(id);
+      retrySession(task, state, {
+        kind: 'auto_retry',
+        automatic: true,
+        attempt: plan.attempt,
+        maxAttempts: plan.maxAttempts,
+        delayMs: plan.delayMs,
+      }).catch((error) => {
+        notice(task, 'auto_retry', {
+          automatic: true,
+          attempt: plan.attempt,
+          result: 'error',
+          error: String(error?.message ?? error).slice(0, 400),
+        });
+      }).finally(() => retryInFlight.delete(id));
+      return;
+    }
+    if (plan.reason === 'attempts_exhausted' && !state.retryExhaustedAt) {
+      // Actionable: the policy is done trying, so the next decision is a
+      // coordinator's (switch provider, continue with a new brief, cancel).
+      state.retryExhaustedAt = new Date().toISOString();
+      const last = attempts.at(-1) ?? null;
+      notice(task, 'retry_exhausted', {
+        attempts: plan.attempts,
+        maxAttempts: plan.maxAttempts,
+        cause: state.cause ?? null,
+        blockedSince: state.stateSince ?? null,
+        lastRetryAt: last?.at ?? null,
+        lastResult: last?.result ?? null,
+        lastExitCode: last?.exitCode ?? null,
+      });
     }
   };
 
@@ -2115,6 +2557,7 @@ function workerCommand(options) {
       queueStall: null,
       progressStall: null,
       lastProgressAt: startedAt,
+      launchRetryAt: null,
       cancellationRequested: false,
     });
 
@@ -2145,6 +2588,10 @@ function workerCommand(options) {
       if (active >= maxConcurrency) break;
       const taskState = manifest.tasks[task.id];
       if (taskState && taskState.status === 'queued' && !settled.has(task.id)) {
+        // A task waiting out its launch backoff is not ready yet; starting it
+        // early would turn every other settlement into a retry bypass.
+        const retryAt = parseIsoMillis(taskState.launchRetryAt);
+        if (retryAt != null && retryAt > Date.now()) continue;
         launchTask(task);
       }
     }
@@ -2283,6 +2730,10 @@ function workerCommand(options) {
       return steerTask(req);
     }
 
+    if (req.type === 'retry') {
+      return retryTask(req);
+    }
+
     if (req.type === 'set-concurrency') {
       const requested = Number(req.maxConcurrency);
       if (!Number.isInteger(requested) || requested < 1) {
@@ -2388,6 +2839,9 @@ function workerCommand(options) {
   const keepAliveTimer = setInterval(() => {}, 30_000);
 
   persist();
+  // The monitor starts after every handler it calls is initialized, and its
+  // first tick is what evaluates retry deadlines.
+  armMonitor();
   launchAvailable();
   checkRunCompletion();
   processPendingRequests();
@@ -2693,6 +3147,58 @@ async function steerCommand(options) {
       `Steered task ${ack.taskId} (session ${ack.sessionId}): request ${ack.requestId}`
       + ` journaled at seq ${ack.journalSeq}; message sha256 ${String(ack.messageSha256).slice(0, 12)}…`
       + ` (${ack.messageLength} bytes, body not journaled).\n`,
+    );
+  } catch (error) {
+    fail(error.message, 1);
+  }
+}
+
+async function retryCommand(options) {
+  const runDir = singleRun(options, 'retry');
+  if (!options.task) fail('retry requires --task <id>');
+  const provider = normalizeRetryRoute(options.provider);
+  const model = normalizeRetryRoute(options.model);
+  if (options.provider != null && !provider) fail('--provider must not be empty');
+  if (options.model != null && !model) fail('--model must not be empty');
+
+  const manifest = loadManifest(runDir);
+  const state = requireTask(manifest, options.task);
+  // A retry resumes an existing turn; it can never start one. A running task
+  // has nothing to resume and a finished task is the `continue` path.
+  if (!['blocked', 'waiting'].includes(state.status)) {
+    fail(`task ${options.task} is ${state.status}; retry needs a blocked or waiting task (use continue for a finished one)`);
+  }
+  if (!state.sessionId) {
+    fail(`task ${options.task} has no recorded session id yet; wait until the session is observable, then retry`);
+  }
+
+  try {
+    const ack = await sendControlRequest(runDir, {
+      type: 'retry',
+      taskId: options.task,
+      provider,
+      model,
+    }, RETRY_TIMEOUT_MS + 15_000);
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        retried: ack.ok === true,
+        taskId: ack.taskId,
+        sessionId: ack.sessionId,
+        attempt: ack.attempt ?? null,
+        result: ack.result ?? null,
+        exitCode: ack.exitCode ?? null,
+        cliRequestId: ack.cliRequestId ?? null,
+        journalSeq: ack.journalSeq ?? null,
+        provider,
+        model,
+      }, null, 2)}\n`);
+      return;
+    }
+    process.stdout.write(
+      `Retried task ${ack.taskId} (session ${ack.sessionId}): ${ack.result ?? 'sent'}`
+      + ` attempt ${ack.attempt ?? '?'} journaled at seq ${ack.journalSeq ?? '?'}`
+      + `${ack.cliRequestId ? ` (cli request ${ack.cliRequestId})` : ''}.\n`,
     );
   } catch (error) {
     fail(error.message, 1);
@@ -3312,9 +3818,12 @@ function reconcileRun(runDir) {
   const manifest = readManifestQuiet(runDir);
   if (!manifest) return { runDir, manifest: null, changed: false, lost: [], recovered: [], orphaned: [] };
   let changed = false;
+  let supervisorDied = false;
   if (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid)) {
+    supervisorDied = true;
     manifest.status = 'stale';
     manifest.staleReason = 'Supervisor process is not running.';
+    manifest.supervisorDeadAt = new Date().toISOString();
     changed = true;
   }
   const outcome = { runDir, manifest, changed, lost: [], recovered: [], orphaned: [] };
@@ -3322,6 +3831,31 @@ function reconcileRun(runDir) {
 
   let seq = Number.isInteger(manifest.seq) ? manifest.seq : 0;
   const records = [];
+  // A dead supervisor with work still non-terminal is its own, actionable fact:
+  // nothing will ever advance those tasks again. It is reported once, at the
+  // moment the run is repaired, and it is deliberately not a `progress_stall` —
+  // that one only says a single task went quiet while its supervisor is alive.
+  if (supervisorDied && manifest.supervisorDeadNoticed !== true) {
+    const nonTerminal = Object.entries(manifest.tasks || {})
+      .filter(([, task]) => task && !TERMINAL_STATUSES.has(task.status))
+      .map(([id]) => id);
+    if (nonTerminal.length > 0) {
+      seq += 1;
+      records.push({
+        seq,
+        taskId: null,
+        implementer: null,
+        workspace: null,
+        from: 'running',
+        to: 'supervisor_dead',
+        at: manifest.supervisorDeadAt,
+        kind: 'supervisor_dead',
+        supervisorPid: manifest.supervisorPid ?? null,
+        nonTerminal,
+      });
+      manifest.supervisorDeadNoticed = true;
+    }
+  }
   for (const [id, task] of Object.entries(manifest.tasks || {})) {
     if (!task) continue;
     if (TERMINAL_STATUSES.has(task.status)) {
@@ -3330,12 +3864,13 @@ function reconcileRun(runDir) {
       // task's own terminal artifact instead of staying wrong forever.
       if (task.cause === 'worker_lost') {
         const late = readResultDigest(task.resultPath);
-        if (late?.status && TERMINAL_STATUSES.has(late.status)) {
+        if (late?.status && TERMINAL_STATUSES.has(late.status) && resultBelongsToTask(task, late)) {
           seq += 1;
           task.status = late.status;
           task.cause = 'result_recorded_after_exit';
           task.error = null;
           task.result = late;
+          task.laterResult = null;
           records.push({
             seq,
             taskId: id,
@@ -3349,6 +3884,17 @@ function reconcileRun(runDir) {
             recovered: true,
           });
           outcome.recovered.push(id);
+          changed = true;
+        }
+      } else {
+        // A terminal task keeps its own outcome. If the artifact on its path was
+        // produced after it settled (a later attempt reused the same --out-dir),
+        // it is reported as `later-result` for triage instead of being adopted or
+        // printed as this task's result.
+        const own = readResultDigest(task.resultPath);
+        if (own && !resultBelongsToTask(task, own)) {
+          task.laterResult = own;
+          if (task.result) delete task.result;
           changed = true;
         }
       }
@@ -3389,7 +3935,8 @@ function reconcileRun(runDir) {
       continue;
     }
     const digest = readResultDigest(task.resultPath);
-    const terminalFromResult = digest?.status && TERMINAL_STATUSES.has(digest.status);
+    const terminalFromResult = digest?.status && TERMINAL_STATUSES.has(digest.status)
+      && resultBelongsToTask(task, digest);
     const status = terminalFromResult ? digest.status : 'failed';
     const cause = terminalFromResult ? 'result_recorded_after_exit' : 'worker_lost';
     const finishedAt = new Date().toISOString();
@@ -3438,8 +3985,12 @@ function reconcileRun(runDir) {
   return outcome;
 }
 
-function readResultForTask(task) {
-  return readResultDigest(task?.resultPath);
+// The result a reader should show for one task: the artifact on its path when it
+// belongs to this attempt, and nothing when it was produced by a later one.
+function taskResultForView(task) {
+  const digest = task?.result ?? readResultDigest(task?.resultPath);
+  if (!digest) return null;
+  return resultBelongsToTask(task, digest) ? digest : null;
 }
 
 /**
@@ -3459,7 +4010,13 @@ function enrichWatchEvent(runDir, event) {
     actionable,
   };
   if (!event.taskId) {
-    enriched.line = `${at ?? '[unknown time]'}  RUN ${event.to}${event.cause ? ` (${event.cause})` : ''}`;
+    // A dead supervisor is a run-level fact, so the line names the lost pid and
+    // the tasks it left non-terminal instead of pretending a task stalled.
+    const detail = event.kind === 'supervisor_dead'
+      ? ` (supervisor pid ${event.supervisorPid ?? '?'} is gone;`
+        + ` ${(event.nonTerminal ?? []).length} non-terminal task(s): ${(event.nonTerminal ?? []).join(', ')})`
+      : (event.cause ? ` (${event.cause})` : '');
+    enriched.line = `${at ?? '[unknown time]'}  RUN ${event.to}${detail}`;
     return enriched;
   }
   const terminal = TERMINAL_STATUSES.has(event.to);
@@ -3468,7 +4025,7 @@ function enrichWatchEvent(runDir, event) {
   const elapsedMs = startedAt
     ? Math.max(0, (parseIsoMillis(finishedAt) ?? Date.now()) - (parseIsoMillis(startedAt) ?? 0))
     : null;
-  const result = terminal ? readResultForTask(task) : null;
+  const result = terminal ? taskResultForView(task) : null;
   enriched.elapsedMs = elapsedMs;
   enriched.elapsed = elapsedMs == null ? null : formatDuration(elapsedMs);
   enriched.attempt = task?.attempt ?? 1;
@@ -3690,7 +4247,12 @@ function statusSnapshot(runDir) {
     // sees a silent turn instead of an apparently busy one.
     task.progress = describeProgress(manifest, task);
     const result = readResultDigest(task.resultPath);
-    if (result && (TERMINAL_STATUSES.has(task.status) || task.recovered)) task.result = result;
+    if (result && !resultBelongsToTask(task, result)) {
+      task.laterResult = result;
+      delete task.result;
+    } else if (result && (TERMINAL_STATUSES.has(task.status) || task.recovered)) {
+      task.result = result;
+    }
   }
   manifest.active = snapshot.active;
   manifest.queuedStallMs = queuedStallThreshold(manifest);
@@ -3712,6 +4274,31 @@ function statusSnapshot(runDir) {
   return manifest;
 }
 
+/**
+ * Retry facts for one task, computed the same way the worker does so a caller
+ * that only reads the manifest sees the budget, the attempts already spent on
+ * the current block, and the next deadline.
+ */
+function retryFacts(manifest, task) {
+  const policy = manifest?.autoRetry ?? {};
+  const episode = Number.isInteger(task?.retryEpisode) ? task.retryEpisode : 0;
+  const entries = Array.isArray(task?.retryAttempts) ? task.retryAttempts : [];
+  const attempts = entries.filter((entry) => entry && entry.episode === episode);
+  return {
+    enabled: task?.autoRetry == null ? policy.enabled === true : task.autoRetry === true,
+    attempts: attempts.length,
+    maxAttempts: Number.isInteger(policy.maxAttempts) ? policy.maxAttempts : DEFAULT_AUTO_RETRY_MAX_ATTEMPTS,
+    nextRetryAt: task?.nextRetryAt ?? null,
+    exhausted: Boolean(task?.retryExhaustedAt),
+    lastResult: attempts.at(-1)?.result ?? null,
+    lastExitCode: attempts.at(-1)?.exitCode ?? null,
+    launchAttempts: Array.isArray(task?.launchRetries) ? task.launchRetries.length : 0,
+    launchMaxAttempts: Number.isInteger(policy.launchMaxAttempts)
+      ? policy.launchMaxAttempts
+      : DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS,
+  };
+}
+
 function briefTaskLine(manifest, task) {
   const details = resolveSessionDetails(task, manifest);
   const progress = task.progress ?? describeProgress(manifest, task);
@@ -3728,7 +4315,14 @@ function briefTaskLine(manifest, task) {
   if (progress.stalled) parts.push('PROGRESS_STALL');
   if (task.queueStall) parts.push('QUEUED_STALL');
   if ((task.attempt ?? 1) > 1) parts.push(`attempt ${task.attempt}`);
-  const result = task.result ?? readResultDigest(task.resultPath);
+  // Retry facts belong on the task line: a blocked task without them looks like
+  // a permanent stop, and an exhausted one looks identical to a fresh block.
+  const retry = retryFacts(manifest, task);
+  if (retry.attempts > 0) parts.push(`retries ${retry.attempts}/${retry.maxAttempts}`);
+  if (retry.nextRetryAt) parts.push(`next-retry ${retry.nextRetryAt}`);
+  if (retry.exhausted) parts.push('RETRY_EXHAUSTED');
+  if (retry.launchAttempts > 0) parts.push(`launch-retries ${retry.launchAttempts}`);
+  const result = taskResultForView(task);
   if (TERMINAL_STATUSES.has(task.status) || result) {
     parts.push(`result ${result?.status ?? task.status}`);
     if (result?.prUrl) parts.push(`pr ${result.prUrl}`);
@@ -3736,6 +4330,7 @@ function briefTaskLine(manifest, task) {
     if (result?.branch) parts.push(`branch ${result.branch}`);
     if (result?.summary) parts.push(`summary ${result.summary}`);
   }
+  if (task.laterResult) parts.push(`later-result ${task.laterResult.status}`);
   if (task.error) parts.push(`error ${String(task.error).slice(0, 160)}`);
   return `  ${parts.join('  ')}`;
 }
@@ -3765,7 +4360,7 @@ function briefView(runDir, manifest) {
     tasks: Object.values(manifest.tasks || {}).map((task) => {
       const details = resolveSessionDetails(task, manifest);
       const progress = task.progress ?? describeProgress(manifest, task);
-      const result = task.result ?? readResultDigest(task.resultPath);
+      const result = taskResultForView(task);
       return {
         id: task.id,
         status: task.status,
@@ -3782,6 +4377,10 @@ function briefView(runDir, manifest) {
         headSha: result?.headSha ?? null,
         prUrl: result?.prUrl ?? null,
         summary: result?.summary ?? null,
+        retry: retryFacts(manifest, task),
+        laterResult: task.laterResult
+          ? { status: task.laterResult.status, path: task.laterResult.path, startedAt: task.laterResult.startedAt ?? null }
+          : null,
         error: task.error ?? null,
       };
     }),
@@ -4221,6 +4820,7 @@ async function main() {
     case 'cancel': await cancelCommand(options); break;
     case 'continue': await continueCommand(options); break;
     case 'steer': await steerCommand(options); break;
+    case 'retry': await retryCommand(options); break;
     case 'watch': await watchCommand(options); break;
     case 'set-concurrency': await setConcurrencyCommand(options); break;
     case 'close': await closeCommand(options); break;

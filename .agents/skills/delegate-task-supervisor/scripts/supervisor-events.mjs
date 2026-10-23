@@ -21,14 +21,22 @@ export const TERMINAL_STATUSES = new Set([
 ]);
 
 // Non-state notices that still need a human or coordinator decision: a stall
-// means nothing is moving, and `worker_lost` means the last runner vanished.
-// `progress_resumed` is deliberately absent: recovery needs no intervention.
+// means nothing is moving, `worker_lost` means the last runner vanished, and
+// `retry_exhausted` means recovery was already attempted and failed.
+// `progress_resumed`, `auto_retry`, and `retry_sent` are deliberately absent:
+// recovery needs no intervention and a sent retry is the caller's own action.
 export const ACTIONABLE_KINDS = new Set([
   'queued_stall',
   'progress_stall',
   // A task whose process outlived its supervisor is still running, but nothing
   // owns it any more: the coordinator must decide to wait for it or to stop it.
   'worker_orphaned',
+  // The run's supervisor is gone while work is still non-terminal: no further
+  // progress is possible without a new decision. Distinct from a stale progress
+  // notice, which only says one task went quiet.
+  'supervisor_dead',
+  // The automatic recovery policy gave up; a coordinator must take over.
+  'retry_exhausted',
 ]);
 
 // States an orchestrator must react to: terminal outcomes plus every stop that
@@ -43,12 +51,15 @@ export const ACTIONABLE_STATUSES = new Set([
 
 // `watch-once` keeps its wider legacy wake set (it also surfaces `waiting` and
 // `resuming`, which are useful for a single blocked waiter but noisy in a
-// coordinator stream).
+// coordinator stream). Run-level notices are matched on `to` because that is
+// where the supervisor journal repeats their kind.
 export const WATCH_STATUSES = new Set([
   ...ACTIONABLE_STATUSES,
   'waiting',
   'resuming',
   'queued_stall',
+  'supervisor_dead',
+  'retry_exhausted',
 ]);
 
 /**

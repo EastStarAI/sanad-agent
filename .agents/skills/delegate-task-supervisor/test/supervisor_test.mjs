@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+// The only sanctioned way for a test to signal a process, plus the ownership-
+// proven sweep used by the teardown below.
+import { sweepOrphanedFixtures } from './process_guard.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = resolve(HERE, '..');
@@ -20,88 +24,18 @@ const { isActionableEvent } = await import(join(SKILL, 'scripts', 'supervisor-ev
 //
 // A supervisor worker is detached on purpose: it must outlive the CLI call that
 // started it. That also means a test that fails before `close` leaves the worker
-// (and its children) behind forever. The teardown below finds every supervisor
-// manifest under the test temp root, confirms the pid still belongs to *this* run
-// (never kill a reused pid), and terminates it with a bounded grace period.
-// ---------------------------------------------------------------------------
-function processCommand(pid) {
-  if (process.platform === 'win32') return '';
-  const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
-  return result.status === 0 ? (result.stdout || '').trim() : '';
-}
-
-function terminateIfOwned(pid, needle) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  const command = processCommand(pid);
-  if (!command || !command.includes(needle)) return false;
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch {
-    return false;
-  }
-  const deadline = Date.now() + 1_500;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return true;
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
-  }
-  try {
-    process.kill(pid, 'SIGKILL');
-  } catch {
-    // Already gone.
-  }
-  return true;
-}
-
-function collectManifests(directory, depth = 0) {
-  const found = [];
-  let entries;
-  try {
-    entries = readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return found;
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const child = join(directory, entry.name);
-    const manifestPath = join(child, 'manifest.json');
-    if (existsSync(manifestPath)) found.push(manifestPath);
-    if (depth < 2) found.push(...collectManifests(child, depth + 1));
-  }
-  return found;
-}
-
+// (and its children) behind. The sweep below lives in `process_guard.mjs`, which
+// also owns the only allowed way to signal a process: a pid this test spawned,
+// proven by its command line naming this fixture. A kill selected by pattern or
+// name is never allowed here, because it reaches the coordinator's live
+// supervisors.
+// -------------------------------------------------------------------------
 test.after(() => {
-  const root = tmpdir();
-  let candidates = [];
-  try {
-    candidates = readdirSync(root).filter((entry) => entry.startsWith('delegate-'));
-  } catch {
-    return;
+  const { reaped } = sweepOrphanedFixtures({ root: tmpdir(), prefix: 'delegate-' });
+  if (reaped.length > 0) {
+    const detail = reaped.map((entry) => `${entry.pid}@${basename(entry.needle)}`).join(', ');
+    process.stderr.write(`[teardown] reaped ${reaped.length} leftover supervisor process(es): ${detail}\n`);
   }
-  let reaped = 0;
-  for (const entry of candidates) {
-    const directory = join(root, entry);
-    for (const manifestPath of collectManifests(directory)) {
-      let manifest;
-      try {
-        manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-      } catch {
-        continue;
-      }
-      // Ownership is proven by the command line naming this temp tree: a
-      // supervisor worker names its `--run <dir>` and a task names its fixture
-      // paths. A reused pid that happens to match is never killed blindly.
-      if (terminateIfOwned(manifest.supervisorPid, directory)) reaped += 1;
-      for (const task of Object.values(manifest.tasks || {})) {
-        if (terminateIfOwned(task?.pid, directory)) reaped += 1;
-      }
-    }
-  }
-  if (reaped > 0) process.stderr.write(`[teardown] reaped ${reaped} leftover supervisor process(es)\n`);
 });
 
 function waitForFileChange(directory, predicate, timeoutMs = 8_000) {
@@ -2389,7 +2323,7 @@ function writeSanadMock(root) {
     import {appendFileSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
     const args = process.argv.slice(2);
     const log = process.env.MOCK_LOG;
-    const record = (entry) => { if (log) appendFileSync(log, JSON.stringify(entry) + '\\n'); };
+    const record = (entry) => { if (log) appendFileSync(log, JSON.stringify({...entry, time: Date.now()}) + '\\n'); };
     const readFlag = (flag) => { const i = args.indexOf(flag); return i === -1 ? null : args[i + 1]; };
 
     if (args[0] === 'session' && args[1] === 'steer') {
@@ -2409,9 +2343,37 @@ function writeSanadMock(root) {
       record({kind: 'stop', argv: args});
       process.exit(0);
     }
+    // 'sanad session retry <id> [--provider <id>] [--model <id>] [--json]' is the
+    // recovery command a blocked headless worker needs. The mock answers like the
+    // real CLI: 'retrying' with a request id, or the configured failure code.
+    if (args[0] === 'session' && args[1] === 'retry') {
+      record({
+        kind: 'retry',
+        argv: args,
+        session: args[2],
+        provider: readFlag('--provider'),
+        model: readFlag('--model'),
+        home: readFlag('--home'),
+        gateway: readFlag('--gateway-url'),
+      });
+      if (args.includes('--json')) {
+        process.stdout.write(JSON.stringify({status: 'retrying', request_id: 'req_cli_retry_' + args[2]}) + '\\n');
+      }
+      if (process.env.MOCK_RETRY_STDERR) process.stderr.write(process.env.MOCK_RETRY_STDERR + '\\n');
+      process.exit(Number(process.env.MOCK_RETRY_EXIT || 0));
+    }
 
     const outDir = readFlag('--out-dir');
     const brief = readFlag('--brief-file');
+    // How many spawns already ran: exit 78 is the daemon-health pre-check, and a
+    // relaunch is only observable if the fixture can fail the first N times.
+    const priorRuns = (() => {
+      if (!log) return 0;
+      try {
+        return readFileSync(log, 'utf8').split('\\n').filter(Boolean)
+          .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'run').length;
+      } catch { return 0; }
+    })();
     record({
       kind: 'run',
       argv: args,
@@ -2419,12 +2381,44 @@ function writeSanadMock(root) {
       briefBody: brief ? readFileSync(brief, 'utf8') : null,
     });
     mkdirSync(outDir, {recursive: true});
+    if (priorRuns < Number(process.env.MOCK_78_TIMES || 0)) process.exit(78);
     const timeline = outDir + '/events.jsonl';
     const emit = (entry) => appendFileSync(timeline, JSON.stringify({timestamp: new Date().toISOString(), ...entry}) + '\\n');
 
     const sessionId = process.env.MOCK_SESSION === '' ? null : (process.env.MOCK_SESSION || 'ses_mock_1');
     emit({type: 'running', session_id: sessionId});
     emit({type: 'tool_use', part: {type: 'tool', tool: 'read', state: {status: 'completed', input: {filePath: 'a'}}}});
+
+    // A task that the daemon leaves blocked: the process stays alive (like a real
+    // 'sanad run' waiting for a recovery command), so only an external retry can
+    // resume it. MOCK_BLOCK_MS bounds the block so a test can end cleanly.
+    const blockCause = process.env.MOCK_BLOCK_CAUSE;
+    if (blockCause) {
+      const blockMs = Number(process.env.MOCK_BLOCK_MS || 3000);
+      const retryAfter = process.env.MOCK_RETRY_AFTER ? Number(process.env.MOCK_RETRY_AFTER) : null;
+      setTimeout(() => emit({
+        type: 'blocked',
+        data: {cause: blockCause, ...(retryAfter ? {retry_after: retryAfter} : {})},
+      }), Number(process.env.MOCK_BLOCK_AT || 20));
+      if (process.env.MOCK_BLOCK_NEVER === '1') {
+        setInterval(() => {}, 1000);
+      } else {
+        setTimeout(() => {
+          emit({type: 'resumed', session_id: sessionId});
+          setTimeout(() => {
+            writeFileSync(outDir + '/result.json', JSON.stringify({
+              status: 'completed',
+              exit_code: 0,
+              started_at: new Date(Date.now() - blockMs).toISOString(),
+              ended_at: new Date().toISOString(),
+              text: 'recovered after the block.',
+            }));
+            emit({type: 'completed'});
+            process.exit(0);
+          }, 30);
+        }, blockMs);
+      }
+    } else {
 
     const progressAt = Number(process.env.MOCK_PROGRESS_AT || 0);
     if (progressAt > 0) {
@@ -2451,6 +2445,7 @@ function writeSanadMock(root) {
       emit({type: 'completed'});
       process.exit(0);
     }, runMs);
+    }
   `, 'utf8');
   return createSanadWrapper(root, scriptPath);
 }
@@ -2720,8 +2715,17 @@ test('a task left running by a dead supervisor is repaired to failed/worker_lost
     const orphanWatch = JSON.parse(runNode(SUPERVISOR, [
       'watch', '--run', runDir, '--cursor', join(root, 'cursor-orphan.json'), '--once', '--json', '--timeout-sec', '5',
     ], env).trim().split('\n').filter(Boolean)[0]);
-    assert.equal(orphanWatch.kind, 'worker_orphaned');
+    // The supervisor's death is the first actionable fact, and it is distinct
+    // from the per-task orphan notice that follows it.
+    assert.equal(orphanWatch.kind, 'supervisor_dead');
     assert.equal(orphanWatch.actionable, true);
+    assert.deepEqual(orphanWatch.nonTerminal, ['stuck']);
+    assert.match(orphanWatch.line, /supervisor_dead/);
+    const orphanEvents = runNode(SUPERVISOR, [
+      'watch', '--run', runDir, '--cursor', join(root, 'cursor-orphan-all.json'), '--once', '--json', '--timeout-sec', '5',
+    ], env).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.deepEqual(orphanEvents.map((entry) => entry.kind), ['supervisor_dead', 'worker_orphaned']);
+    assert.equal(readJournal(runDir).filter((event) => event.kind === 'supervisor_dead').length, 1);
     // A second read must not repeat the notice.
     runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env);
     assert.equal(readJournal(runDir).filter((event) => event.kind === 'worker_orphaned').length, 1);
@@ -2746,9 +2750,10 @@ test('a task left running by a dead supervisor is repaired to failed/worker_lost
     const repairBatch = runNode(SUPERVISOR, [
       'watch', '--run', runDir, '--cursor', join(root, 'cursor.json'), '--once', '--json', '--timeout-sec', '5',
     ], env).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
-    assert.deepEqual(repairBatch.map((entry) => entry.kind), ['worker_orphaned', 'worker_lost']);
-    assert.ok(repairBatch.every((entry) => entry.actionable === true && entry.taskId === 'stuck'));
-    const watched = repairBatch[1];
+    assert.deepEqual(repairBatch.map((entry) => entry.kind), ['supervisor_dead', 'worker_orphaned', 'worker_lost']);
+    assert.ok(repairBatch.every((entry) => entry.actionable === true));
+    assert.ok(repairBatch.slice(1).every((entry) => entry.taskId === 'stuck'));
+    const watched = repairBatch[2];
     assert.equal(watched.to, 'failed');
 
     // A completion that lands after the supervisor died is still adopted: a
@@ -3031,6 +3036,555 @@ test('steer relays a mid-turn message through the CLI contract and journals only
   ], env);
   assert.match(finished, /steer needs a running task/);
   runNode(SUPERVISOR, ['close', '--run', noSessionRun, '--abort-queued', '--wait'], noSessionEnv);
+});
+
+// ---------------------------------------------------------------------------
+// Retry of blocked work (round 2).
+// ---------------------------------------------------------------------------
+
+// A pid that is provably gone: a child this test spawned and reaped. Used as a
+// fixture's `supervisorPid` so the repair path sees a dead supervisor without
+// signalling anything.
+async function reapedPid() {
+  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  const pid = child.pid;
+  await new Promise((resolvePromise) => child.once('exit', resolvePromise));
+  return pid;
+}
+
+// A run that a dead supervisor left behind, with the manifest shape the worker
+// writes. `supervisorDeadNoticed` keeps the supervisor_dead notice out of the way
+// when a test is only interested in task-level repair.
+function writeStaleRunFixture(runDir, tasks, { supervisorDeadNoticed = true } = {}) {
+  mkdirSync(runDir, { recursive: true });
+  const manifest = {
+    version: 'delegate-supervisor.v1',
+    runDir,
+    supervisorPid: 1,
+    status: 'stale',
+    staleReason: 'fixture',
+    closed: false,
+    seq: 3,
+    startedAt: '2026-10-22T10:00:00.000Z',
+    finishedAt: null,
+    maxConcurrency: 2,
+    active: 1,
+    queuedStallMs: 120_000,
+    progressStallMs: 900_000,
+    closeWhenIdle: false,
+    queueSeq: 2,
+    autoRetry: {
+      enabled: true,
+      graceMs: 180_000,
+      maxAttempts: 3,
+      backoffMs: 30_000,
+      launchMaxAttempts: 3,
+      launchBackoffMs: 2_000,
+    },
+    ...(supervisorDeadNoticed ? { supervisorDeadNoticed: true } : {}),
+    tasks,
+  };
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  writeFileSync(join(runDir, 'events.jsonl'), '');
+  return manifest;
+}
+
+function fixtureTask(id, overrides = {}) {
+  return {
+    id,
+    implementer: 'sanad',
+    workspace: `/tmp/fixture-${id}`,
+    status: 'running',
+    pid: null,
+    startedAt: '2026-10-22T10:00:00.000Z',
+    finishedAt: null,
+    exitCode: null,
+    signal: null,
+    resultPath: null,
+    timelinePath: null,
+    timelineFormat: 'jsonl',
+    stdoutPath: null,
+    stderrPath: null,
+    identity: null,
+    attempt: 1,
+    attempts: [],
+    retryEpisode: 0,
+    retryAttempts: [],
+    launchRetries: [],
+    nextRetryAt: null,
+    retryExhaustedAt: null,
+    autoRetry: null,
+    sessionId: 'ses_fixture',
+    lastProgressAt: null,
+    progressStall: null,
+    progressStallMs: null,
+    ...overrides,
+  };
+}
+
+test('retry resumes a blocked task through the CLI contract and journals only its verdict', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-retry-manual-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const homeDir = join(root, 'home');
+  mkdirSync(homeDir, { recursive: true });
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_BLOCK_CAUSE: 'provider_timeout',
+    MOCK_BLOCK_MS: '1500',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+  const task = sanadTask(root, 'blocked-task', { task: { home: homeDir } });
+  // The endpoint pin must be repeated by the retry, like it is by steer.
+  task.args.push('--gateway-url', 'http://127.0.0.1:6553');
+  const specPath = writeSpec(root, [task], 'tasks-retry.json');
+  runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1', '--verify-ms', '0',
+  ], env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const blocked = await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.tasks['blocked-task']?.status === 'blocked' ? manifest : null;
+  });
+  assert.equal(blocked.tasks['blocked-task'].cause, 'provider_timeout');
+  assert.equal(blocked.tasks['blocked-task'].sessionId, 'ses_mock_1');
+
+  const retried = JSON.parse(runNode(SUPERVISOR, [
+    'retry', '--run', runDir, '--task', 'blocked-task',
+    '--provider', 'inst-1', '--model', 'model-9', '--json',
+  ], env));
+  assert.equal(retried.retried, true);
+  assert.equal(retried.result, 'retrying');
+  assert.equal(retried.attempt, 1);
+  assert.equal(retried.exitCode, 0);
+  assert.equal(retried.sessionId, 'ses_mock_1');
+  assert.equal(retried.cliRequestId, 'req_cli_retry_ses_mock_1');
+
+  const retryCall = readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line)).find((entry) => entry.kind === 'retry');
+  assert.deepEqual(retryCall.argv.slice(0, 3), ['session', 'retry', 'ses_mock_1']);
+  assert.equal(retryCall.provider, 'inst-1');
+  assert.equal(retryCall.model, 'model-9');
+  // One helper builds stop, steer, and retry, so the pins are the task's own.
+  assert.equal(retryCall.home, homeDir);
+  assert.equal(retryCall.gateway, 'http://127.0.0.1:6553');
+
+  const journal = readJournal(runDir);
+  const sentEvents = journal.filter((event) => event.kind === 'retry_sent');
+  assert.equal(sentEvents.length, 1);
+  assert.equal(sentEvents[0].sent, true);
+  assert.equal(sentEvents[0].result, 'retrying');
+  assert.equal(sentEvents[0].attempt, 1);
+  assert.equal(sentEvents[0].automatic, false);
+  // A retry is the caller's own action, never a wake-up.
+  assert.equal(isActionableEvent(sentEvents[0]), false);
+
+  const allEvents = runNode(SUPERVISOR, [
+    'watch', '--run', runDir, '--cursor', join(root, 'cursor-all.json'), '--once', '--all', '--json', '--timeout-sec', '5',
+  ], env).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const watchedRetry = allEvents.find((entry) => entry.kind === 'retry_sent');
+  assert.ok(watchedRetry, 'retry_sent must be visible with --all');
+  assert.equal(watchedRetry.actionable, false);
+
+  // The fixture resumes on its own after the block, so the run can close cleanly.
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+  const finishedManifest = readJsonFile(manifestPath);
+  assert.equal(finishedManifest.tasks['blocked-task'].status, 'completed');
+});
+
+test('the spec field opts one task in and another out without a run flag', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-auto-retry-spec-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_BLOCK_CAUSE: 'network_error',
+    MOCK_BLOCK_MS: '1600',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [
+    { ...sanadTask(root, 'opted-in'), autoRetry: true },
+    { ...sanadTask(root, 'opted-out'), autoRetry: false },
+  ], 'tasks-spec-retry.json');
+  // No --auto-retry: the task-level field is the only source of the policy.
+  const started = JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '2',
+    '--auto-retry-grace-ms', '250',
+    '--auto-retry-backoff-ms', '250',
+    '--auto-retry-max-attempts', '1',
+    '--verify-ms', '0',
+  ], env));
+  assert.equal(started.autoRetry.enabled, false);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    const tasks = Object.values(manifest.tasks || {});
+    return tasks.length === 2 && tasks.every((task) => task.status === 'completed') ? manifest : null;
+  }, 20_000);
+
+  const retries = readJournal(runDir).filter((event) => event.kind === 'auto_retry');
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].taskId, 'opted-in');
+  // A task with a reporting-only block is left alone, even in a retrying run.
+  assert.equal(readJournal(runDir).some((event) => event.kind === 'auto_retry' && event.taskId === 'opted-out'), false);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a retry the daemon refuses is reported and journaled as not sent', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-retry-refused-by-daemon-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_BLOCK_CAUSE: 'provider_timeout',
+    MOCK_BLOCK_MS: '1500',
+    // `sanad session retry` exits 3 when the session is not retryable.
+    MOCK_RETRY_EXIT: '3',
+    MOCK_RETRY_STDERR: 'session is not blocked',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'blocked-task')], 'tasks-refused-daemon.json');
+  runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1', '--verify-ms', '0',
+  ], env);
+  await waitForCondition(() => readJsonFile(join(runDir, 'manifest.json')).tasks['blocked-task']?.status === 'blocked');
+
+  const output = runNodeThrows(SUPERVISOR, ['retry', '--run', runDir, '--task', 'blocked-task'], env);
+  assert.match(output, /retry not_blocked/);
+  assert.match(output, /session is not blocked/);
+
+  const sent = readJournal(runDir).find((event) => event.kind === 'retry_sent');
+  assert.ok(sent);
+  assert.equal(sent.sent, false);
+  assert.equal(sent.result, 'not_blocked');
+  assert.equal(sent.exitCode, 3);
+  assert.equal(isActionableEvent(sent), false);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('retry is refused for a task that is not blocked or waiting, in the CLI and in the worker', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-retry-refused-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '4000' };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'running-task')], 'tasks-refused.json');
+  runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1', '--verify-ms', '0',
+  ], env);
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => readJsonFile(manifestPath).tasks['running-task']?.status === 'running');
+
+  const refused = runNodeThrows(SUPERVISOR, ['retry', '--run', runDir, '--task', 'running-task'], env);
+  assert.match(refused, /retry needs a blocked or waiting task/);
+
+  // The worker repeats the check authoritatively, so a raw control request (a
+  // caller that skipped the CLI) cannot retry a healthy turn either.
+  const requests = join(runDir, 'requests');
+  mkdirSync(requests, { recursive: true });
+  const requestId = 'req-retry-refused';
+  writeFileSync(join(requests, `${requestId}.req.json`), JSON.stringify({
+    id: requestId,
+    type: 'retry',
+    taskId: 'running-task',
+    provider: null,
+    model: null,
+  }), 'utf8');
+  const ack = await waitForCondition(() => {
+    const ackPath = join(requests, `${requestId}.ack.json`);
+    return existsSync(ackPath) ? readJsonFile(ackPath) : null;
+  });
+  assert.equal(ack.ok, false);
+  assert.match(ack.error, /retry needs a blocked or waiting task/);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+  const afterFinish = runNodeThrows(SUPERVISOR, ['retry', '--run', runDir, '--task', 'running-task'], env);
+  assert.match(afterFinish, /retry needs a blocked or waiting task \(use continue for a finished one\)/);
+
+  // No retry ever reached the CLI.
+  const attempts = existsSync(logPath)
+    ? readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean)
+      .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'retry')
+    : [];
+  assert.equal(attempts.length, 0);
+});
+
+test('the automatic policy retries a transient block with backoff and then reports exhaustion', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-auto-retry-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_BLOCK_CAUSE: 'provider_timeout',
+    MOCK_BLOCK_MS: '2600',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'blocked-task')], 'tasks-auto.json');
+  const started = JSON.parse(runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1',
+    '--auto-retry',
+    '--auto-retry-grace-ms', '300',
+    '--auto-retry-backoff-ms', '300',
+    '--auto-retry-max-attempts', '2',
+    '--verify-ms', '0',
+  ], env));
+  // The policy is part of the handshake, never a hidden default.
+  assert.deepEqual(started.autoRetry, {
+    enabled: true,
+    graceMs: 300,
+    maxAttempts: 2,
+    backoffMs: 300,
+    launchMaxAttempts: 3,
+    launchBackoffMs: 2_000,
+  });
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.tasks['blocked-task']?.status === 'completed' ? manifest : null;
+  }, 20_000);
+
+  const events = readJournal(runDir);
+  const retries = events.filter((event) => event.kind === 'auto_retry');
+  assert.equal(retries.length, 2);
+  assert.deepEqual(retries.map((event) => event.attempt), [1, 2]);
+  assert.ok(retries.every((event) => event.automatic === true));
+  assert.ok(retries.every((event) => event.result === 'retrying'));
+  assert.ok(retries.every((event) => isActionableEvent(event) === false));
+  // Exponential backoff between the two sends (300ms base, so 600ms before the
+  // second attempt), measured on the fixture's own clock.
+  const retryCalls = readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'retry');
+  assert.equal(retryCalls.length, 2);
+  assert.ok(retryCalls[1].time - retryCalls[0].time >= 500, 'the second retry must wait for its backoff');
+
+  const exhausted = events.filter((event) => event.kind === 'retry_exhausted');
+  assert.equal(exhausted.length, 1);
+  assert.equal(exhausted[0].attempts, 2);
+  assert.equal(exhausted[0].maxAttempts, 2);
+  assert.equal(exhausted[0].cause, 'provider_timeout');
+  // Exhaustion is the coordinator's cue: it is actionable.
+  assert.equal(isActionableEvent(exhausted[0]), true);
+
+  const mention = runNode(SUPERVISOR, [
+    'watch', '--run', runDir, '--cursor', join(root, 'cursor.json'), '--once', '--json', '--timeout-sec', '5',
+  ], env).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const woke = mention.find((entry) => entry.kind === 'retry_exhausted');
+  assert.ok(woke, 'a watcher must be woken by retry_exhausted');
+  assert.equal(woke.actionable, true);
+
+  const brief = runNode(SUPERVISOR, ['status', '--run', runDir, '--brief'], env);
+  assert.match(brief, /retries 2\/2/);
+  assert.match(brief, /RETRY_EXHAUSTED/);
+  const briefJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--brief', '--json'], env));
+  const facts = briefJson.runs[0].tasks.find((entry) => entry.id === 'blocked-task');
+  assert.equal(facts.retry.attempts, 2);
+  assert.equal(facts.retry.maxAttempts, 2);
+  assert.equal(facts.retry.exhausted, true);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a non-transient block is never auto-retried', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-auto-retry-auth-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_BLOCK_CAUSE: 'auth_error',
+    MOCK_BLOCK_MS: '1200',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'blocked-task')], 'tasks-auth.json');
+  runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1',
+    '--auto-retry',
+    '--auto-retry-grace-ms', '200',
+    '--auto-retry-backoff-ms', '200',
+    '--auto-retry-max-attempts', '3',
+    '--verify-ms', '0',
+  ], env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.tasks['blocked-task']?.status === 'completed' ? manifest : null;
+  }, 20_000);
+
+  const kinds = readJournal(runDir).map((event) => event.kind);
+  assert.equal(kinds.includes('auto_retry'), false);
+  assert.equal(kinds.includes('retry_exhausted'), false);
+  assert.equal(readFileSync(logPath, 'utf8').includes('"kind":"retry"'), false);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a spawn that exits 78 before a healthy daemon is relaunched and recorded', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-launch-retry-test-')));
+  const runDir = join(root, 'run');
+  const logPath = join(root, 'mock.log');
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_RUN_MS: '300',
+    MOCK_78_TIMES: '2',
+  };
+  writeBrief(root, 'brief.md', 'brief');
+  const specPath = writeSpec(root, [sanadTask(root, 'flaky')], 'tasks-78.json');
+  runNode(SUPERVISOR, [
+    'start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1',
+    '--launch-retry-backoff-ms', '150',
+    '--verify-ms', '0',
+  ], env);
+
+  const manifestPath = join(runDir, 'manifest.json');
+  const finished = await waitForCondition(() => {
+    const manifest = readJsonFile(manifestPath);
+    return manifest.tasks.flaky?.status === 'completed' ? manifest : null;
+  }, 20_000);
+
+  const events = readJournal(runDir);
+  const relaunches = events.filter((event) => event.kind === 'launch_retry');
+  assert.equal(relaunches.length, 2);
+  assert.deepEqual(relaunches.map((event) => event.attempt), [1, 2]);
+  assert.ok(relaunches.every((event) => event.exitCode === 78));
+  assert.ok(relaunches.every((event) => isActionableEvent(event) === false));
+  assert.equal(events.some((event) => event.to === 'failed'), false);
+
+  const state = finished.tasks.flaky;
+  assert.equal(state.launchRetries.length, 2);
+  assert.deepEqual(state.launchRetries.map((entry) => entry.exitCode), [78, 78]);
+  assert.equal(state.attempt, 1, 'a relaunch is the same attempt, not a new one');
+  assert.match(runNode(SUPERVISOR, ['status', '--run', runDir, '--brief'], env), /launch-retries 2/);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a supervisor death with non-terminal work is actionable, and a settled run is not', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-supervisor-dead-test-')));
+  const deadPid = await reapedPid();
+
+  // Non-terminal work: the run is repaired and the death is journaled once as an
+  // actionable run-level event.
+  const liveRun = join(root, 'run-live');
+  mkdirSync(liveRun, { recursive: true });
+  writeFileSync(join(liveRun, 'manifest.json'), JSON.stringify({
+    version: 'delegate-supervisor.v1',
+    runDir: liveRun,
+    supervisorPid: deadPid,
+    status: 'running',
+    closed: false,
+    seq: 4,
+    active: 1,
+    maxConcurrency: 2,
+    tasks: {
+      stuck: fixtureTask('stuck', { status: 'running' }),
+      quiet: fixtureTask('quiet', { status: 'blocked', cause: 'provider_timeout' }),
+    },
+  }, null, 2));
+  writeFileSync(join(liveRun, 'events.jsonl'), '');
+
+  const repair = JSON.parse(runNode(SUPERVISOR, ['status', '--run', liveRun, '--json']));
+  assert.equal(repair.status, 'stale');
+  const dead = readJournal(liveRun).find((event) => event.kind === 'supervisor_dead');
+  assert.ok(dead, 'supervisor_dead must be journaled');
+  assert.deepEqual(dead.nonTerminal, ['stuck', 'quiet']);
+  assert.equal(dead.supervisorPid, deadPid);
+  assert.equal(isActionableEvent(dead), true);
+
+  const watched = runNode(SUPERVISOR, [
+    'watch', '--run', liveRun, '--cursor', join(root, 'cursor-dead.json'), '--once', '--json', '--timeout-sec', '5',
+  ], process.env).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const deadEvent = watched.find((entry) => entry.kind === 'supervisor_dead');
+  assert.ok(deadEvent, 'watch must report the death');
+  assert.equal(deadEvent.actionable, true);
+  assert.match(deadEvent.line, /non-terminal task\(s\): stuck, quiet/);
+
+  // watch-once, the single-run primitive, reports the same fact instead of
+  // blocking on a run nothing will ever advance.
+  const once = JSON.parse(runNode(WATCH_ONCE, ['--run', liveRun, '--since', '0'], process.env));
+  assert.equal(once.kind, 'supervisor_dead');
+  assert.deepEqual(once.nonTerminal, ['stuck', 'quiet']);
+
+  // A read must not repeat the notice.
+  runNode(SUPERVISOR, ['status', '--run', liveRun, '--json'], process.env);
+  assert.equal(readJournal(liveRun).filter((event) => event.kind === 'supervisor_dead').length, 1);
+
+  // Every task terminal: nothing can be advanced, so no death event is invented.
+  const settledRun = join(root, 'run-settled');
+  mkdirSync(settledRun, { recursive: true });
+  writeFileSync(join(settledRun, 'manifest.json'), JSON.stringify({
+    version: 'delegate-supervisor.v1',
+    runDir: settledRun,
+    supervisorPid: deadPid,
+    status: 'running',
+    closed: false,
+    seq: 6,
+    active: 0,
+    maxConcurrency: 1,
+    tasks: {
+      done: fixtureTask('done', { status: 'completed', finishedAt: '2026-10-22T11:00:00.000Z' }),
+    },
+  }, null, 2));
+  writeFileSync(join(settledRun, 'events.jsonl'), '');
+  runNode(SUPERVISOR, ['status', '--run', settledRun, '--json'], process.env);
+  assert.equal(readJournal(settledRun).filter((event) => event.kind === 'supervisor_dead').length, 0);
+});
+
+test('a late terminal result is adopted, and a later attempt\'s artifact never is', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-late-result-test-')));
+  const runDir = join(root, 'run');
+  const lateResult = join(root, 'late.result.json');
+  const foreignResult = join(root, 'foreign.result.json');
+  // `late` published its own terminal artifact while the supervisor was already
+  // dead: its status is adopted instead of reported as a failure.
+  writeFileSync(lateResult, JSON.stringify({
+    status: 'completed',
+    exit_code: 0,
+    started_at: '2026-10-22T10:05:00.000Z',
+    ended_at: '2026-10-22T10:20:00.000Z',
+    text: 'finished after the supervisor died',
+  }), 'utf8');
+  // `foreign` failed on exit 78 at 10:10 and the *next* attempt reused the same
+  // --out-dir; the artifact is newer than the task, so it belongs to the retry.
+  writeFileSync(foreignResult, JSON.stringify({
+    status: 'completed',
+    exit_code: 0,
+    started_at: '2026-10-22T10:20:00.000Z',
+    ended_at: '2026-10-22T11:40:00.000Z',
+    text: 'the continuation attempt',
+  }), 'utf8');
+
+  writeStaleRunFixture(runDir, {
+    late: fixtureTask('late', { status: 'resuming', resultPath: lateResult }),
+    foreign: fixtureTask('foreign', {
+      status: 'failed',
+      exitCode: 78,
+      finishedAt: '2026-10-22T10:10:00.000Z',
+      cause: null,
+      resultPath: foreignResult,
+    }),
+  });
+
+  const repaired = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json']));
+  assert.equal(repaired.tasks.late.status, 'completed');
+  assert.equal(repaired.tasks.late.cause, 'result_recorded_after_exit');
+  // The failed attempt keeps its own outcome and reports the other artifact.
+  assert.equal(repaired.tasks.foreign.status, 'failed');
+  assert.equal(repaired.tasks.foreign.result, undefined);
+  assert.equal(repaired.tasks.foreign.laterResult.status, 'completed');
+  assert.equal(readJournal(runDir).filter((event) => event.kind === 'recovered').length, 1);
+
+  const brief = runNode(SUPERVISOR, ['status', '--run', runDir, '--brief'], process.env);
+  assert.match(brief, /foreign {2}failed .*result failed/);
+  assert.match(brief, /later-result completed/);
 });
 
 test('a run with no live tasks reports idle and can close itself when idle', async () => {

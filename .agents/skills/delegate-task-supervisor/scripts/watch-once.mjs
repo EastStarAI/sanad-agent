@@ -7,7 +7,7 @@ import { basename, dirname, resolve } from 'node:path';
 // which journal records matter. Note that `queued_stall` and `progress_stall`
 // are notices, not state changes, but they are exactly the "nothing is
 // happening" signal an orchestrator waits for.
-import { WATCH_STATUSES } from './supervisor-events.mjs';
+import { WATCH_STATUSES, TERMINAL_STATUSES } from './supervisor-events.mjs';
 
 const HELP = `watch-once
 
@@ -100,14 +100,33 @@ function staleSupervisorEvent() {
       // fall through to the synthesized event
     }
   }
+  const nonTerminal = Object.entries(manifest.tasks || {})
+    .filter(([, task]) => task && !TERMINAL_STATUSES.has(task.status))
+    .map(([id]) => id);
+  const from = alreadyStale ? 'stale' : 'running';
+  // Work is still non-terminal and nobody can advance it: this is the
+  // actionable `supervisor_dead` wake-up, not a stale-progress notice. A run whose
+  // tasks all settled is only informational.
+  if (nonTerminal.length > 0) {
+    return {
+      seq: manifest.seq,
+      timestamp: new Date().toISOString(),
+      taskId: null,
+      from,
+      to: 'supervisor_dead',
+      kind: 'supervisor_dead',
+      supervisorPid: manifest.supervisorPid ?? null,
+      nonTerminal,
+    };
+  }
   return {
     seq: manifest.seq,
     timestamp: new Date().toISOString(),
     taskId: null,
-    from: alreadyStale ? 'stale' : 'running',
+    from,
     to: 'stale',
     kind: 'supervisor_stale',
-    supervisorPid: manifest.supervisorPid,
+    supervisorPid: manifest.supervisorPid ?? null,
   };
 }
 

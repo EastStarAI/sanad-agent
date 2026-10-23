@@ -182,10 +182,12 @@ The `delegate-task-supervisor` skill natively supports `implementer: "sanad"` by
 
 For source development, `delegate-task-supervisor` spawns `fvm dart run <entry>/sanad_agent.dart run` from the declared `sourceRoot` (or task workspace when both coincide) with the task's brief, targeting, and `home` flags. A Sanad task may declare `"home": "<absolute-custom-sanad-home>"`; the supervisor validates the path (absolute, existing directory) and injects `--home` so a detached worker never falls back to a different default Home (observed standalone/exit 78). Declaring `--home` inside `args` is ambiguous and fails closed; `home` is valid only for Sanad tasks, and credentials never belong in it.
 
+A task may also declare `"autoRetry": true|false` to opt into or out of the run's automatic retry policy (§5.11); omitting the field inherits the run default.
+
 For temporary execution without logical continuity, use `--execution-root <target-worktree-path>` alone. For delegated work tied to an existing logical workspace, supply both `--workspace <logical-workspace-id>` and `--execution-root <target-worktree-path>`; the latter must match the supervisor task's filesystem `workspace` and remains the tool/context boundary.
 
 ### 5.2. Long-Lived Dynamic Run Lifecycle
-1. **`start --spec <tasks.json> --run-dir <dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--close-when-idle]`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open. Concurrency is never a hidden default: the handshake prints the effective `maxConcurrency`, `queuedStallMs`, `progressStallMs`, `closeWhenIdle`, and `tasks` count, and omitting `--max-concurrency` means one slot per spec task (no artificial queueing). `--verify-sec` (default `15`) makes the launch observed rather than assumed (§5.6).
+1. **`start --spec <tasks.json> --run-dir <dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--auto-retry] [--close-when-idle]`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open. Concurrency is never a hidden default: the handshake prints the effective `maxConcurrency`, `queuedStallMs`, `progressStallMs`, `autoRetry`, `closeWhenIdle`, and `tasks` count, and omitting `--max-concurrency` means one slot per spec task (no artificial queueing). `--verify-sec` (default `15`) makes the launch observed rather than assumed (§5.6). `--auto-retry` enables the blocked-task recovery policy for the run (§5.11); `--auto-retry-grace-ms`, `--auto-retry-backoff-ms`, `--auto-retry-max-attempts`, `--launch-retry-backoff-ms`, and `--launch-retry-max-attempts` override its documented defaults for compressed-time diagnosis.
 2. **`add --run <dir> --spec <tasks.json>`:** Registers additional tasks in `held` state without immediate execution, and reports each added task as `held` with the live active/max counts.
 3. **`enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--verify-sec <n>]`:** Transitions held tasks to `queued` or appends and queues a new spec in one operation, launching available tasks up to `--max-concurrency`. Every enqueued task is reported individually as `started` or `queued at position N of M`, with the reason it is waiting and the active/max counts (text and `--json`), and the observation is re-verified like `start`.
 4. **`cancel --run <dir> --task <id>`:** Cancels one task without closing the run. A `queued` or `held` task becomes `aborted` and never starts; an in-flight task is signalled and recorded as `cancelled` (see §5.4).
@@ -193,7 +195,8 @@ For temporary execution without logical continuity, use `--execution-root <targe
 6. **`close --run <dir> [--abort-queued]`:** Explicitly closes the run, disallowing further task registrations and draining in-flight/queued tasks before the supervisor process terminates. `--abort-queued` additionally aborts every `queued` task (held tasks are always aborted on close) so a run can finish without waiting for work that has not started.
 7. **`continue --run <dir> --task <id> --brief-file <path> [--new-session] [--verify-sec <n>]`:** Re-dispatches a task that already finished as a numbered new attempt of the same task id, in the same workspace, with a delta brief (§5.7).
 8. **`steer --run <dir> --task <id> (--message <text> | --message-file <path>)`:** Sends a mid-turn message to a running task's live daemon session without stopping it (§5.8).
-9. **`watch --run <dir> [--run <dir> ...] --cursor <file> [--once] [--timeout-sec <n>] [--all] [--json]`:** The multi-run coordinator interface with a durable cursor (§5.5).
+9. **`retry --run <dir> --task <id> [--provider <instance-id>] [--model <model-id>]`:** Resumes a `blocked` or `waiting` task by sending `sanad session retry` to its recorded session (§5.11).
+10. **`watch --run <dir> [--run <dir> ...] --cursor <file> [--once] [--timeout-sec <n>] [--all] [--json]`:** The multi-run coordinator interface with a durable cursor (§5.5).
 
 ### 5.3. Event-First Intervention & Timeline Observation
 - The supervisor monitors child `events.jsonl` files event-first via directory watchers with race-closing rescans.
@@ -220,7 +223,7 @@ For temporary execution without logical continuity, use `--execution-root <targe
 - **Cursor:** `--cursor <file>` stores the last *handled* sequence per run (`{"version": "delegate-watch-cursor.v1", "runs": {"<run-dir>": {"seq": N}}}`). It is written atomically (temp file + rename) and **advanced only after the line it belongs to has been flushed**, so a watcher that dies mid-print replays that event instead of losing it.
 - **Replay:** on start, every journal record after the cursor is evaluated. Anything that happened while no watcher ran is therefore reported, and anything already handled is never printed twice.
 - **Modes:** `--once` prints the batch of new actionable events and exits (for an orchestrator that is re-invoked when the watcher exits); without `--once` the process streams exactly one line per actionable event. `--timeout-sec <n>` bounds a wait (exit code `4` with a stderr note, no partial line); `--all` also prints non-actionable records for debugging; `--json` emits one JSON object per line (`version: delegate-watch-event.v1`).
-- **Actionable** means: every terminal state, `blocked`, `needs_input`/`needs_permission`, `queued_stall` (§5.4), `progress_stall` (§5.6), and `worker_lost` (§5.6). Routine `running` transitions, tool progress, `progress_resumed`, `steer_sent`, and `continue_requested` are never wake-ups. The vocabulary is shared with `watch-once` through `scripts/supervisor-events.mjs` so both readers cannot drift apart.
+- **Actionable** means: every terminal state, `blocked`, `needs_input`/`needs_permission`, `queued_stall` (§5.4), `progress_stall` (§5.6), `worker_lost` (§5.6), `supervisor_dead` (§5.6), and `retry_exhausted` (§5.11). Routine `running` transitions, tool progress, `progress_resumed`, `steer_sent`, `retry_sent`, `auto_retry`, `continue_requested`, and `launch_retry` are never wake-ups. The vocabulary is shared with `watch-once` through `scripts/supervisor-events.mjs` so both readers cannot drift apart.
 - **Rich completion line (W7):** a terminal event carries the result status, the `result.json` path, and — when present in that file — `branch`, `head_sha`, `pr_url`, and the first line of the final summary, plus the elapsed time. The coordinator triages a completion from the line itself.
 - **Idle/ended runs:** a run whose manifest is `completed`, `stale`, or closed with every task terminal ends the watch instead of blocking forever. An open run with no pending actionable events blocks until one arrives — use `--timeout-sec` for a bounded wait, or `close` the run.
 
@@ -232,9 +235,12 @@ For temporary execution without logical continuity, use `--execution-root <targe
 
 - While the supervisor is alive, a task whose process is gone, whose handle is lost, and whose `result.json` is not terminal transitions to `failed` with `cause: "worker_lost"` and a journaled `worker_lost` record.
 - When the supervisor itself is gone, the run is marked `stale` and `status`/`watch` repair it — they are the only writers left. Each non-terminal, non-queued task with no terminal artifact becomes `failed`/`worker_lost` (the journaled record is what wakes a coordinator), while a task whose `result.json` *is* terminal is adopted with `cause: "result_recorded_after_exit"` instead, so a completion that landed after the supervisor died is never reported as a failure. A repair also recomputes `active` and keeps the orphan pid (`orphanPid`) for the operator when the task process outlived its supervisor.
-- A late terminal artifact for a task already repaired to `failed`/`worker_lost` upgrades the task on the next read and journals a `recovered` record.
+- A late terminal artifact for a task already repaired to `failed`/`worker_lost` upgrades the task on the next read and journals a `recovered` record. An artifact is only adopted when it belongs to *this* attempt: if its `started_at` is later than the task's `finishedAt`, it was produced by a later attempt that reused the same `--out-dir`, so the task keeps its own outcome and the other artifact is reported as `later-result` for triage instead.
+- **Supervisor death.** When the manifest's `supervisorPid` is gone while any task is still non-terminal, the repair journals exactly one run-level `supervisor_dead` record (carrying the lost pid and the non-terminal task ids), which is actionable: nothing will ever advance those tasks again. `watch` prints it as `RUN supervisor_dead (...)`, and `watch-once` reports the same fact instead of blocking. It is deliberately distinct from `progress_stall`, which only says one task went quiet under a live supervisor. A run whose tasks all settled emits nothing, because no decision is left.
 
 **Launch verification (W5).** `start`, `enqueue`, and `continue` wait up to `--verify-sec` (default `15`) and print the observed state of every submitted task: `running`, `queued` with its position and reason, or `failed to spawn` with the spawn diagnostic. A task that is merely `launch_pending` is not accepted as resolved — that state is exactly what produced a launch report that never ran. The command exits non-zero when a task failed to spawn (`cause: "spawn_failed"`).
+
+**Launch retry (W11).** A spawn that exits `78` (`Could not confirm a healthy Sanad daemon`) within `60 s` of launch never reached a turn: it is a launch race, not a task failure. The worker journals `launch_retry` (attempt, exit code, elapsed time, backoff), records the attempt under `tasks[<id>].launchRetries`, returns the task to `queued` with `cause: "daemon_unavailable"` and a `launchRetryAt` deadline, and relaunches it after an exponential backoff (`2 s` base, capped at `30 s`) up to `3` times. Any other exit code, or a `78` produced after the window, keeps the normal failure path. A relaunch is the same attempt (`attempt` is unchanged); the run's `active` count stays honest while the task waits out its backoff.
 
 **Idle runs (W8).** `status` reports a live run with no active or queued tasks as `idle` (text and `run.idle` in JSON), and `start --close-when-idle` closes the run automatically once every task is terminal and nothing is queued.
 
@@ -263,13 +269,41 @@ For temporary execution without logical continuity, use `--execution-root <targe
 `status` accepts several `--run` flags and a `--brief` mode:
 
 - `status --run <dir> [--run <dir> ...]` reads each run in one call; `--json` keeps the single-run manifest shape for one run and returns `{version: "delegate-status.v1", runs: [...]}` for several.
-- `status --brief` prints one line per task: id, status, elapsed, progress age, queue position/reason, attempt number, and — when terminal — the result status plus PR URL, head SHA, branch, and the first summary line. `status --brief --json` returns the same facts as `delegate-status-brief.v1`.
+- `status --brief` prints one line per task: id, status, elapsed, progress age, queue position/reason, attempt number, retry facts (`retries <used>/<max>`, `next-retry <iso>`, `RETRY_EXHAUSTED`, `launch-retries <n>`), and — when terminal — the result status plus PR URL, head SHA, branch, and the first summary line. A foreign artifact is printed as `later-result <status>` instead of as the task's result. `status --brief --json` returns the same facts as `delegate-status-brief.v1`, with a `retry` object per task.
 - The verbose output remains the default, so existing callers are unaffected.
 - `status` is read-only for a live run and repairs a run whose supervisor is gone (§5.6): that repair is the only write it performs, and it is journaled like any worker transition.
 
 ### 5.10. Supervisor Tooling Notes
 
-- `scripts/supervisor-events.mjs` owns the shared journal vocabulary (terminal states, actionable notices, the `watch-once` wake set). Both readers import it; no script keeps a private copy.
-- `watch-once.mjs` stays the single-run primitive. A run already marked `stale` is reported by `watch-once` instead of blocking, exactly like a run whose supervisor just died.
-- Compressed-time switches (`--queued-stall-ms`, `--progress-stall-ms`, `--verify-ms`, plus fractional `--*-sec` values) exist so the same code paths can be exercised in milliseconds by tests; production callers use the documented second-based flags.
-- The supervisor test suite reaps leftover detached workers in a bounded teardown: it walks the test temp root, verifies by command line that a pid still belongs to that run, and terminates it. A failing test can therefore no longer leak a worker.
+- `scripts/supervisor-events.mjs` owns the shared journal vocabulary (terminal states, actionable notices, the `watch-once` wake set). `scripts/supervisor-retry.mjs` owns the retry policy. Both readers import them; no script keeps a private copy.
+- `watch-once.mjs` stays the single-run primitive. A run already marked `stale` is reported by `watch-once` instead of blocking, exactly like a run whose supervisor just died; with non-terminal work it reports `supervisor_dead`.
+- Compressed-time switches (`--queued-stall-ms`, `--progress-stall-ms`, `--verify-ms`, `--auto-retry-grace-ms`, `--auto-retry-backoff-ms`, `--launch-retry-backoff-ms`, plus fractional `--*-sec` values) exist so the same code paths can be exercised in milliseconds by tests; production callers use the documented second-based flags and defaults.
+- **Never kill supervisor processes by pattern or name.** `pkill -f supervisor.mjs`, `killall node`, and `taskkill /IM node.exe` match every run on the machine, including a coordinator's live supervisors; doing exactly that during the 2026-10-22 live round froze four runs' bookkeeping for about an hour. To stop a run, use the owned control path: `close --run <dir> [--wait]`, or `cancel --run <dir> --task <id>`. To stop a worker whose supervisor is already gone, address it by the pid recorded in that run's `manifest.json`/`task.pid` after confirming the command line names that run directory.
+- Tests may only signal a process they spawned: `test/process_guard.mjs` keeps a pid registry, refuses any pid it did not spawn, refuses a pid whose command line no longer names its fixture (pid reuse), and refuses pattern kills outright. Its `sweepOrphanedFixtures()` repairs a fixture whose test process died, proving ownership from the command line and the manifest instead of from a process name. A failing test can therefore not leak a worker or reach someone else's.
+
+### 5.11. Retrying Blocked Work (B4 round 2)
+
+A worker the daemon leaves `blocked` cannot resume itself: the daemon spends its own automatic retry budget before it publishes `blocked`, and a headless `sanad run` has no Client to press Retry. The supervisor closes that gap in two ways.
+
+**Manual retry.** `retry --run <dir> --task <id> [--provider <instance-id>] [--model <model-id>] [--json]` resolves the task's recorded session id and sends `sanad session retry <session-id> [--provider <id>] [--model <id>] --json` through the same helper that builds `session stop` and `session steer`, so it reaches the same binary, source entry, `--home`, and `--gateway-url` the task spawned with (and `sanad-client -d <device> session retry …` for a relayed task). The command:
+
+- refuses a task that is not `blocked` or `waiting` (`retry` resumes a turn; it never starts one — a finished task is the `continue` path, §5.7), and refuses when no session id is known yet;
+- reports the daemon's own verdict from the CLI exit code: `0` `retrying`, `1` `transport_error`, `3` `not_blocked` (nothing was sent), `4` `rejected`, `5` `unacknowledged`, `8` `state_unreadable`;
+- journals `retry_sent` with the session id, attempt number, provider/model, result, exit code, and the CLI's own request id when it printed one. `retry_sent` is never actionable: a coordinator is not woken by its own instruction.
+
+The worker repeats the `blocked`/`waiting` check authoritatively, so a raw control request cannot retry a healthy turn either.
+
+**Automatic policy.** `--auto-retry` (or `"autoRetry": true` at spec level; a task may opt out with `"autoRetry": false`) retries a blocked task without a coordinator:
+
+| Rule | Value |
+|---|---|
+| Transient causes | `provider_timeout`, `network_error`, `rate_limit` (plus the runtime spellings `networkError`, `rateLimit`, `upstream_rate_limit`, `overloaded`) |
+| Grace before the first retry | `180000 ms` (`--auto-retry-grace-ms`) |
+| Backoff between attempts | `30000 ms` doubling per attempt, capped at `300000 ms` (`--auto-retry-backoff-ms`) |
+| Attempts per block | `3` (`--auto-retry-max-attempts`) |
+| Never retried | `auth_error`, `provider_quota`, `needs_input`, `needs_permission`, and any unknown cause |
+
+- A rate-limit notice that carries `retry_after` is not retried before that deadline; the grace period is the larger of the two.
+- Each block is its own episode (`retryEpisode`), so a retry that recovers the turn restores the full budget for the next block; attempts are counted per episode in `retryAttempts`.
+- Every send journals `auto_retry` (attempt, max, cause, backoff, provider/model, result, exit code, CLI request id) — never actionable — and `status --brief` shows `retries <used>/<max>`, `next-retry <iso>` while a backoff is pending.
+- When the budget is spent and the task is still blocked, the worker journals one **actionable** `retry_exhausted` with the attempts, the cause, and the last result, and stops: the next decision (switch provider, `continue` with a delta brief, or `cancel`) belongs to a coordinator.
