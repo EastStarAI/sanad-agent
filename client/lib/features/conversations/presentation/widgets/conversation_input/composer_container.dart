@@ -1,15 +1,22 @@
+import 'dart:async';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/domain/models/llm_usage_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
+import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/composer_slash_commands_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/composer_slash_commands_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/composer_input_router.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
@@ -238,7 +245,7 @@ class ComposerContainer extends StatelessWidget {
     final hasPendingRequest = inputSlice.pendingSuspendedRequest != null;
 
     final modelChip = !hasPendingRequest && capabilities.supportsModelChange
-        ? ComposerModelChip(
+        ? _ComposerBoundModelChip(
             agentSlice: agentSlice,
             inputSlice: inputSlice,
             capabilities: capabilities,
@@ -402,6 +409,61 @@ class ComposerContainer extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Binds the composer's conversation state to the reusable
+/// [ComposerModelChip]: it resolves the effective route, supplies the live
+/// context usage, and forwards a pick to the composer's input cubit.
+class _ComposerBoundModelChip extends StatelessWidget {
+  final ConversationInputAgentSlice agentSlice;
+  final ConversationInputSlice inputSlice;
+  final Capability capabilities;
+  final Color dimTextColor;
+  final Color chipBgColor;
+  final Color borderColor;
+
+  const _ComposerBoundModelChip({
+    required this.agentSlice,
+    required this.inputSlice,
+    required this.capabilities,
+    required this.dimTextColor,
+    required this.chipBgColor,
+    required this.borderColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedSession = context.select<SessionCubit, Session?>((cubit) => cubit.state.selectedSession);
+    final contextUsage = context.select<SessionMessagesCubit, LlmUsageSnapshot?>(
+      (cubit) => latestContextUsage(cubit.state.messages),
+    );
+
+    return ComposerModelChip(
+      activeAgent: agentSlice.activeAgent,
+      providerId: ComposerModelChip.resolveProviderId(
+        nextMessageProviderId: inputSlice.nextMessageProviderId,
+        session: selectedSession,
+      ),
+      modelId: ComposerModelChip.resolveModelId(
+        nextMessageModel: inputSlice.nextMessageModel,
+        session: selectedSession,
+      ),
+      contextUsage: contextUsage,
+      session: selectedSession,
+      dimTextColor: dimTextColor,
+      chipBgColor: chipBgColor,
+      borderColor: borderColor,
+      onModelSelected: (providerId, modelId) {
+        unawaited(
+          context.read<ConversationInputCubit>().selectModel(
+            scope: capabilities.modelSelectionScope,
+            providerId: providerId,
+            model: modelId,
+          ),
+        );
+      },
     );
   }
 }
