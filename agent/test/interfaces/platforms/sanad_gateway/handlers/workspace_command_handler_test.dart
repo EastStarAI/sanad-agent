@@ -481,6 +481,46 @@ void main() {
       expect(payloadOf(envelope)['code'], 'workspace_not_found');
     });
 
+    test(
+      'get_policy resolves an execution root without registering a workspace',
+      () async {
+        final execRoot = Directory('${tempDir.path}/exec-root-only')
+          ..createSync();
+        final canonicalRoot = execRoot.resolveSymbolicLinksSync();
+        final before = (await runtime.listWorkspaces()).map((w) => w['id']);
+
+        final envelope = await handler.buildWorkspaceGetPolicyEnvelope(
+          CanonicalEvent(
+            type: CanonicalEventTypes.workspaceGetPolicy,
+            payload: {
+              'request_id': 'req-get-exec-root',
+              'workspace_path': execRoot.path,
+              CommandAuthority.payloadKey: CommandAuthority.unverified.value,
+            },
+          ),
+        );
+
+        final payload = payloadOf(envelope);
+        expect(payload['workspaceId'], 'exec_root:$canonicalRoot');
+        expect(payload['permissionMode'], 'default');
+        expect(payload['revision'], 0);
+        expect(payload['canWiden'], isFalse);
+        // The query is a read: no workspace row is created for the execution
+        // root, so the client never shows an empty workspace for the session.
+        final after = await runtime.listWorkspaces();
+        expect(after.map((w) => w['id']), before);
+        expect(after.map((w) => w['path']), isNot(contains(canonicalRoot)));
+        expect(
+          runtime.stateDatabase.db.select(
+            "SELECT source, path FROM workspaces "
+            "WHERE source = 'legacy_path_request' OR path = ?",
+            [canonicalRoot],
+          ),
+          isEmpty,
+        );
+      },
+    );
+
     test('get_policy ignores a forged workspace settings file', () async {
       final settings = File('$workspacePath/.sanad/settings.json')
         ..createSync(recursive: true)

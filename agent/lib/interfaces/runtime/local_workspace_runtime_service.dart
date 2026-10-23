@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_security_policy_repository.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_oauth_service.dart';
@@ -183,10 +184,15 @@ class LocalWorkspaceRuntimeService {
     return _workspacePayload(stored);
   }
 
+  /// Describes the workspace a supplied id or path denotes, read-only.
+  ///
+  /// A path resolves to the registered workspace that equals or contains it,
+  /// and otherwise to that path's `exec_root:` identity. Reading never
+  /// registers a workspace; only an explicit create does.
   Future<Map<String, dynamic>?> describeWorkspace(
     String workspaceIdOrPath,
   ) async {
-    final workspace = _workspaceRecord(workspaceIdOrPath);
+    final workspace = await _workspaceRecord(workspaceIdOrPath);
     return workspace == null ? null : _workspacePayload(workspace);
   }
 
@@ -561,21 +567,65 @@ class LocalWorkspaceRuntimeService {
     return _db.getStoredWorkspaces();
   }
 
-  Map<String, dynamic>? _workspaceRecord(String workspaceIdOrPath) {
+  /// Resolves a workspace id or path to the workspace that owns it.
+  ///
+  /// The resolution is read-only by contract: a path never registers a
+  /// workspace, because clients ask about execution roots, worktrees, and
+  /// working directories far more often than they register one. The order is
+  /// the supplied id, the exact stored path, the innermost registered
+  /// workspace whose root contains the path, and finally the path's
+  /// `exec_root:` identity.
+  Future<Map<String, dynamic>?> _workspaceRecord(
+    String workspaceIdOrPath,
+  ) async {
     final trimmed = workspaceIdOrPath.trim();
     if (trimmed.isEmpty) return null;
     final byId = _db.getWorkspaceById(trimmed);
     if (byId != null) return byId;
     final normalizedPath = _normalizePath(trimmed);
-    final byPath = _db.getWorkspaceByPath(normalizedPath);
+    final byPath =
+        _db.getWorkspaceByPath(trimmed) ??
+        _db.getWorkspaceByPath(normalizedPath);
     if (byPath != null) return byPath;
-    if (Directory(normalizedPath).existsSync()) {
-      return _db.createOrGetWorkspace(
-        path: normalizedPath,
-        source: 'legacy_path_request',
-      );
+    // Only an existing absolute directory is a path here; anything else is an
+    // unknown id and must not resolve through the caller's own directory.
+    if (!p.isAbsolute(trimmed)) return null;
+    if (FileSystemEntity.typeSync(trimmed, followLinks: true) !=
+        FileSystemEntityType.directory) {
+      return null;
     }
-    return null;
+    return await _containingWorkspace(normalizedPath) ??
+        _executionRootRecord(normalizedPath);
+  }
+
+  /// The innermost registered workspace that equals or contains [path].
+  Future<Map<String, dynamic>?> _containingWorkspace(String path) async {
+    Map<String, dynamic>? owner;
+    var ownerDepth = -1;
+    for (final workspace in await _readStoredWorkspaces()) {
+      final root = workspace['path'] as String?;
+      if (root == null || root.isEmpty) continue;
+      final normalizedRoot = _normalizePath(root);
+      final contains =
+          path == normalizedRoot || p.isWithin(normalizedRoot, path);
+      if (contains && normalizedRoot.length > ownerDepth) {
+        owner = workspace;
+        ownerDepth = normalizedRoot.length;
+      }
+    }
+    return owner;
+  }
+
+  /// The unregistered execution-root identity of [path], shaped like a stored
+  /// workspace so every read caller projects it the same way.
+  Map<String, dynamic> _executionRootRecord(String path) {
+    final basename = p.basename(path).trim();
+    return {
+      'id': '${WorkspacePolicyStore.execRootPrefix}$path',
+      'display_name': basename.isEmpty ? path : basename,
+      'path': path,
+      'source': 'exec_root',
+    };
   }
 
   Map<String, dynamic>? _workspaceRecordById(String workspaceId) {
@@ -600,7 +650,7 @@ class LocalWorkspaceRuntimeService {
   }
 
   Future<String?> _resolveWorkspacePath(String workspaceIdOrPath) async {
-    final workspace = _workspaceRecord(workspaceIdOrPath);
+    final workspace = await _workspaceRecord(workspaceIdOrPath);
     if (workspace == null) return null;
     final path = workspace['path'] as String;
     return await Directory(path).exists() ? path : null;
