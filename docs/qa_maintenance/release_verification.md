@@ -237,6 +237,18 @@ selector: Web, updates, and installer jobs must catch that command result,
 invoke rollback, verify the preceding public bytes, and only then report the
 failed deployment.
 
+The asset deployment jobs are strictly serialized in the order `updates` →
+`web` → `installers` via workflow `needs:` dependencies. This prevents parallel
+container restarts on the shared Production host from colliding with health check
+sweeps. Downstream jobs require all upstream jobs to have completed with either
+`success` or `skipped`, ensuring that skipped surfaces allow remaining surfaces
+to deploy while any failure stops subsequent jobs fail-closed. Furthermore, both
+activation verification and rollback verification across all three surfaces use a
+unified bounded retry policy (12 attempts, 5-second sleep, 60-second deadline per
+endpoint). This tolerates transient container startup latency without triggering
+unwarranted rollbacks, while ensuring that any persistent failure aborts and fails
+closed after the deadline.
+
 ### Live Stable asset rehearsal — 2026-08-10
 
 After the one-time Production static-root migration, public workflow run
