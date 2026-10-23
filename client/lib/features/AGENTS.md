@@ -34,7 +34,8 @@ Dependencies must follow:
 - Never spread one cubit's state across several cubits: extract helper coordinators that receive typed callbacks from the host cubit (Task 110 precedent).
 - A high-fan-in transport, repository, or cubit file keeps its path as a façade that re-exports its owners; a low-fan-in UI file is deleted and every importer is updated in the same change.
 - Keys and semantics are protocol: every `Key`/`ValueKey` string, `Semantics` label/flag, and tooltip stays byte-identical across a move, and a test that reads a source file by path is retargeted in the same change as that move.
-- Diff parsing and diff rendering stay Client-local under `widgets/tools/diff/`; the parser is pure Dart with its own unit tests.
+- Diff parsing and diff rendering stay Client-local under `widgets/tools/diff/`: `unified_diff_parser.dart` is pure Dart with its own unit tests, and `diff_block_view.dart` renders only the rows it is handed.
+- Syntax highlighting has one Client-local owner, `widgets/tools/code_highlighting.dart`. The hosting widget `State` owns the cache instance and decides when it is stale (theme, event, or expansion change); renderers share that one cache instead of holding highlight state of their own.
 
 ## Cross-Feature Laws
 - The Dart daemon is authoritative for runtime execution, delivery classification, provider state, session recovery, and agent-owned catalogs. The client projects that authority and must not reconstruct it from presentation state.

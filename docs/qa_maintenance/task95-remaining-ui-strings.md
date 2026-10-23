@@ -8,7 +8,7 @@ description: "Living inventory of remaining hard-coded English UI literals in Cl
 Scan of string literals inside `presentation/` and `screens/` files only.
 Bloc/data/daemon/auth-infrastructure literals are protocol, logging, or debug text and are excluded deliberately.
 
-Total affected UI files: 80
+Total affected UI files: 83
 
 Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker) and removed its entry.
 
@@ -347,16 +347,21 @@ Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker)
   - `Select the default model for $displayName.`
   - `Use Model`
 
-- `lib/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart` (15 strings)
+- `lib/features/conversations/presentation/widgets/conversation_input/composer_container.dart` (1 string)
   - `Ask Sanad anything`
-  - `Default`
-  - `Full Access`
-  - `Loading...`
-  - `Press Enter to steer • Ctrl/Cmd+Enter to queue`
-  - `Select Permission Mode`
-  - `Select Thinking Mode`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/composer_workspace_warning.dart` (1 string)
   - `Select a workspace before your first Sanad Agent message.`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/composer_model_chip.dart` (1 string)
   - `Select model`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/composer_permission_mode_chip.dart` (2 strings)
+  - `Loading...`
+  - `Select Permission Mode`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/composer_send_stop_button.dart` (8 strings)
+  - `Press Enter to steer • Ctrl/Cmd+Enter to queue`
   - `Send message`
   - `Start voice session`
   - `Stop response`

@@ -294,6 +294,24 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 
 ## Included scripts
 
+- `scripts/supervisor.mjs` — the CLI entrypoint (flags, `HELP`, `main`), `start`, and the composition root for `__worker`; every command it dispatches lives in the module that owns that responsibility.
+- `scripts/supervisor-spec.mjs` — `validateTask`/`validateSpec`: the only place a submitted spec is accepted.
+- `scripts/supervisor-core.mjs` — the shared primitives every other script imports: fail-fast errors and option helpers, run paths and the run manifest, `publicTask`, atomic JSON, time parsing, and the `result.json` digest a terminal task is reported from.
+- `scripts/supervisor-registry.mjs` — run identity and the workspace registry: the project/session remembered per workspace, keyed by the canonical workspace path.
+- `scripts/supervisor-windows.mjs` — the Windows broker, its handshake, and the batch quoting both launch paths share.
+- `scripts/supervisor-control.mjs` — `sendControlRequest` and the commands that change a live run: `add`, `enqueue`, `continue`, `steer`, `retry`, `cancel`, `set-concurrency`, `close`, plus the launch verification they report.
+- `scripts/supervisor-views.mjs` — the read-only surfaces (`status` verbose/`--brief`/`--json`, `inspect`, `timeline`, `logs`, `view`) and the queue/progress formatting they quote.
+- `scripts/supervisor-watch.mjs` — the durable `watch` loop with its cursor, the actionable-event enrichment every wake-up goes through, and `reconcileRun`, which turns a dead worker or a settled session into manifest state (`status` imports it too, so both surfaces repair the same way).
+- `scripts/supervisor-worker/context.mjs` — `createWorkerContext`: run configuration, mutable worker state, and the four journal writers (`persist`, `persistTasks`, `transition`, `notice`).
+- `scripts/supervisor-worker/child-process.mjs` — process spawning, task environment composition, process-group signalling, and group-survival probes.
+- `scripts/supervisor-worker/reconcile.mjs` — `createReconciler`: queue stall, progress stall, and lost-worker detection.
+- `scripts/supervisor-worker/scheduler.mjs` — `createScheduler`: monitor tick, run completion checks, request watcher/rescan, signal handling, and worker startup (`runWorker`).
+- `scripts/supervisor-worker/launcher.mjs` — `createLauncher`: slot concurrency, launch backoff, process exit handling (`finishTask`), and task launching.
+- `scripts/supervisor-worker/timeline.mjs` — `createTimelineObserver`: timeline file and relay stream observation, session id extraction.
+- `scripts/supervisor-worker/follower.mjs` — `createFollower`: background turn follow loop, probe polling, and follow settlement.
+- `scripts/supervisor-worker/session.mjs` — `createSessionSupport`: auxiliary CLI command invocation (`show`, `stop`, `steer`, `retry`).
+- `scripts/supervisor-worker/requests.mjs` — `createRequestHandler`: control request processing (`cancel`, `continue`, `steer`, `retry`, `add`, `enqueue`, `set-concurrency`, `close`) and auto-retry evaluation.
 - `scripts/bootstrap.mjs` — discover and check delegate skills or implementer CLIs (`opencode`, `agy`, `sanad`).
-- `scripts/supervisor.mjs` — launch runs, dynamically add/enqueue tasks, explicitly close runs, persist state and workspace identity, follow a Sanad turn whose worker exited, inspect logs/timelines, and open a viewer terminal.
 - `scripts/watch-once.mjs` — race-safe event-driven wait for intervention (`needs_input`, `needs_permission`) or terminal transitions.
+
+The pure policy modules `scripts/supervisor-events.mjs`, `scripts/supervisor-retry.mjs`, and `scripts/supervisor-follow.mjs` are imported by these owners as well; none of the scripts keeps a private copy of their rules.

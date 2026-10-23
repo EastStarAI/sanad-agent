@@ -24,6 +24,9 @@ import 'package:sanad_agent/capabilities/runtime/web_search/web_fetch_service.da
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import 'package:sanad_agent/capabilities/secrets/secret_acquisition.dart';
+import 'package:sanad_agent/capabilities/secrets/user_secret_catalog.dart';
+import 'package:sanad_agent/capabilities/secrets/user_secret_vault.dart';
 import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -39,6 +42,7 @@ import 'package:sanad_agent/engine/context/context.dart';
 import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
 import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:sanad_agent/evolution/db/session_projection_revision_repository.dart';
+import 'package:sanad_agent/evolution/db/user_secret_metadata_repository.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_boundary_change.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
@@ -446,8 +450,24 @@ void setupDI() {
   getIt.registerLazySingleton<RuntimeContextBuilder>(
     () => RuntimeContextBuilder(skillRegistry: getIt<SkillRegistry>()),
   );
+  // Task 140 A1-A3: the non-secret metadata of a user secret, its single read
+  // model, and the acquisition hook that records `source = agent_request` when
+  // a value arrives through the composer card. Wiring only.
+  getIt.registerLazySingleton<UserSecretMetadataRepository>(
+    () => UserSecretMetadataRepository(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<UserSecretCatalog>(
+    () => UserSecretCatalog(
+      vault: UserSecretVault(),
+      metadata: getIt<UserSecretMetadataRepository>(),
+    ),
+  );
   getIt.registerLazySingleton<PlatformRuntimeBridge>(
-    () => PlatformRuntimeBridge(),
+    () => PlatformRuntimeBridge(
+      secretAcquisition: SecretAcquisition(
+        metadata: getIt<UserSecretMetadataRepository>(),
+      ),
+    ),
   );
   getIt.registerLazySingleton<SuspendedCheckpointStore>(
     () => SuspendedCheckpointStore(sessionManager: getIt<SessionManager>()),

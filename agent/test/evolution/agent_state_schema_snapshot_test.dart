@@ -353,6 +353,15 @@ void main() {
         expect(row['month_day'], isNull);
         expect(row['last_run_at'], isNull);
         expect(row['last_status'], isNull);
+        // Task 139: every existing row stays model-owned with one continuous
+        // conversation and no dispatch route.
+        expect(row['owner_kind'], 'model');
+        expect(row['conversation_mode'], 'continuous');
+        expect(row['name'], isNull);
+        expect(row['run_session_id'], isNull);
+        expect(row['workspace_id'], isNull);
+        expect(row['provider_instance_id'], isNull);
+        expect(row['model'], isNull);
       }
 
       final runAtColumn = state.db
@@ -369,6 +378,21 @@ void main() {
           .map((row) => row['name'])
           .toList();
       expect(indexNames, contains('idx_scheduled_tasks_next_run'));
+
+      // Task 139 adds the run history table beside the schedules it belongs to.
+      expect(
+        state.db.select(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+          "AND name = 'scheduled_task_runs'",
+        ),
+        isNotEmpty,
+      );
+      expect(
+        state.db
+            .select('PRAGMA index_list(scheduled_task_runs)')
+            .map((row) => row['name']),
+        contains('idx_scheduled_task_runs_schedule_run_at'),
+      );
     });
   });
 
