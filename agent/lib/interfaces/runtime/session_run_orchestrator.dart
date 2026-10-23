@@ -26,7 +26,6 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 
 import 'session_queue_coordinator.dart';
-import 'local_runtime_orchestrator.dart';
 import 'session_turn_executor.dart';
 import 'session_recovery_restorer.dart';
 import 'session_turn_request_helpers.dart';
@@ -34,18 +33,14 @@ import 'suspended_checkpoint_store.dart';
 import 'session_restart_checkpoint_manager.dart';
 import 'session_stop_coordinator.dart';
 import 'session_metadata_resolver.dart';
+import 'session_command_outcome_publisher.dart';
+import 'session_compact_admission.dart';
+import 'session_input_classifier.dart';
 
 export 'session_restart_checkpoint_manager.dart'
     show ControlledRestartBlocker, ControlledRestartCheckpointResult;
 export 'session_stop_coordinator.dart' show SessionStopCoordinator;
 export 'session_metadata_resolver.dart' show SessionMetadataResolver;
-
-import 'package:sanad_agent/engine/compaction/compaction.dart';
-import 'package:sanad_agent/engine/context/context_compaction_engine.dart';
-import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
-import 'package:sanad_agent/engine/runtime/compaction_request_factory.dart';
-import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
-import 'package:uuid/uuid.dart';
 
 class SuspendedRun {
   final GatewayEvent event;
@@ -97,6 +92,17 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   late final SessionStopCoordinator _stopCoordinator;
   final SessionMetadataResolver _metadataResolver =
       const SessionMetadataResolver();
+  final SessionInputClassifier _inputClassifier =
+      const SessionInputClassifier();
+  late final SessionCommandOutcomePublisher _outcomePublisher =
+      SessionCommandOutcomePublisher(emit: _emitResponse);
+  late final SessionCompactAdmission _compactAdmission =
+      SessionCompactAdmission(
+        isSessionBusy: isSessionBusy,
+        isSessionCompacting: isSessionCompacting,
+        beginCompaction: _beginCompaction,
+        releaseCompaction: _releaseCompaction,
+      );
 
   /// Optional durable store for suspended runs and queued messages. Wired by
   /// DI when `PersistedRuntimeStateRepository` is registered; null in tests
@@ -168,13 +174,13 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         mutation.outcome == PendingSteerCancelOutcome.alreadyCancelled) {
       activeRun?.agentRunner.cancelBufferedPendingSteer(targetRequestId);
     }
-    _emitPendingSteerChanged(null, mutation.record);
-    _emitCommandOutcome(
+    _outcomePublisher.pendingSteerChanged(null, mutation.record);
+    _outcomePublisher.commandOutcome(
       sessionId: sessionId,
       type: 'session.pending_steer_cancel_result',
       targetRequestId: targetRequestId,
       commandRequestId: commandRequestId,
-      outcome: _wireName(mutation.outcome.name),
+      outcome: SessionCommandOutcomePublisher.wireName(mutation.outcome.name),
     );
   }
 
@@ -194,12 +200,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         result.outcome == QueueMutationOutcome.alreadyRemoved) {
       _queueCoordinator.removeQueuedRunByRequestId(sessionId, targetRequestId);
     }
-    _emitCommandOutcome(
+    _outcomePublisher.commandOutcome(
       sessionId: sessionId,
       type: 'session.queued_message_delete_result',
       targetRequestId: targetRequestId,
       commandRequestId: commandRequestId,
-      outcome: _wireName(result.outcome.name),
+      outcome: SessionCommandOutcomePublisher.wireName(result.outcome.name),
     );
   }
 
@@ -586,281 +592,30 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     _responseController.add(response);
   }
 
-  void _emitMessageClassification(
-    GatewayEvent event, {
-    required String requestId,
-    required String classification,
-    DateTime? receivedAt,
-  }) {
-    _emitResponse(
-      GatewayResponse(
-        sessionId: event.sessionId,
-        platformId: event.platformId,
-        message: Message(
-          role: MessageRole.system,
-          metadata: {
-            'canonical_event_type': 'session.message_classified',
-            'canonical_payload': {
-              'session_id': event.sessionId,
-              'request_id': requestId,
-              'classification': classification,
-              if (receivedAt != null)
-                'received_at': receivedAt.toUtc().toIso8601String(),
-            },
-          },
-        ),
-        isComplete: true,
-        runId: event.runId,
-      ),
-    );
+  void _beginCompaction(String sessionId, String compactionId) {
+    _compactingSessionOwners[sessionId] = compactionId;
   }
 
-  void _emitPendingSteerChanged(
-    String? platformId,
-    PendingSteerRecord? record,
-  ) {
-    if (record == null) return;
-    _emitResponse(
-      GatewayResponse(
-        sessionId: record.sessionId,
-        platformId: platformId,
-        message: Message(
-          role: MessageRole.system,
-          metadata: {
-            'canonical_event_type': 'session.pending_steer_changed',
-            'canonical_payload': record.toPayload(),
-          },
-        ),
-        isComplete: true,
-        runId: record.runId,
-      ),
-    );
-  }
-
-  /// Emits the typed rejection for a `steer_only` command that found no live
-  /// owner.
+  /// Releases the compaction barrier for one admitted compaction only.
   ///
-  /// A `steer_only` steer exists so a non-interactive caller can never turn a
-  /// correction into a fresh turn or a queued turn. The rejection is correlated
-  /// by the command's own `request_id` and names `no_active_turn`, the same code
-  /// the CLI already reports for its own pre-check, so one code means one
-  /// condition for every caller.
-  void _emitSteerRejected({
-    required GatewayEvent event,
-    required String? requestId,
-    required String code,
-    required String message,
-  }) {
-    // The rejection is always published, even when the steer carries no request
-    // id to correlate it with. A silent rejection would leave a caller waiting
-    // for an answer that cannot arrive, and the text is still neither queued nor
-    // admitted, so the outcome must be observable either way.
-    _emitResponse(
-      GatewayResponse(
-        sessionId: event.sessionId,
-        platformId: event.platformId,
-        message: Message(
-          role: MessageRole.system,
-          metadata: {
-            'canonical_event_type': 'error',
-            'canonical_payload': {
-              'session_id': event.sessionId,
-              'request_id': ?requestId,
-              'code': code,
-              'message': message,
-              'is_fatal': false,
-            },
-          },
-        ),
-        isComplete: true,
-        runId: event.runId,
-      ),
-    );
-  }
-
-  void _emitCommandOutcome({
-    required String sessionId,
-    required String type,
-    required String targetRequestId,
-    required String commandRequestId,
-    required String outcome,
-  }) {
-    _emitResponse(
-      GatewayResponse(
-        sessionId: sessionId,
-        message: Message(
-          role: MessageRole.system,
-          metadata: {
-            'canonical_event_type': type,
-            'canonical_payload': {
-              'session_id': sessionId,
-              'target_request_id': targetRequestId,
-              'command_request_id': commandRequestId,
-              'outcome': outcome,
-            },
-          },
-        ),
-        isComplete: true,
-      ),
-    );
-  }
-
-  static String _wireName(String value) {
-    return value.replaceAllMapped(
-      RegExp(r'[A-Z]'),
-      (match) => '_${match.group(0)!.toLowerCase()}',
-    );
+  /// A later compaction that already claimed the barrier keeps it, so draining
+  /// queued work never races a newer owner.
+  void _releaseCompaction(String sessionId, String compactionId) {
+    if (_compactingSessionOwners[sessionId] == compactionId) {
+      _compactingSessionOwners.remove(sessionId);
+      _drainNextQueuedEvent(sessionId);
+    }
   }
 
   /// Plan 53d — manual `/compact` admission when the session is idle.
+  ///
+  /// [SessionCompactAdmission] owns the admission ordering and the typed
+  /// outcome; the orchestrator keeps the busy, compaction-barrier, and queue
+  /// projections that admission reads and drives.
   Future<Map<String, dynamic>> handleCompactCommand({
     required String sessionId,
     required String requestId,
-  }) async {
-    if (isSessionBusy(sessionId)) {
-      return {
-        'session_id': sessionId,
-        'request_id': requestId,
-        'outcome': CompactionFailureReason.sessionBusy.wireValue,
-        'failure_reason': CompactionFailureReason.sessionBusy.wireValue,
-        'failure_stage': CompactionFailureStage.preparation,
-        'failure_cause': CompactionFailureCause.sessionBusy,
-      };
-    }
-    if (isSessionCompacting(sessionId)) {
-      return {
-        'session_id': sessionId,
-        'request_id': requestId,
-        'outcome': CompactionFailureReason.compactionInProgress.wireValue,
-        'failure_reason': CompactionFailureReason.compactionInProgress.wireValue,
-        'failure_stage': CompactionFailureStage.preparation,
-        'failure_cause': CompactionFailureCause.compactionInProgress,
-      };
-    }
-    if (getIt.isRegistered<CompactionBoundaryRepository>()) {
-      final started = getIt<CompactionBoundaryRepository>()
-          .findStartedForSession(sessionId);
-      if (started != null) {
-        return {
-          'session_id': sessionId,
-          'request_id': requestId,
-          'outcome': CompactionFailureReason.compactionInProgress.wireValue,
-          'failure_reason': CompactionFailureReason.compactionInProgress.wireValue,
-          'failure_stage': CompactionFailureStage.preparation,
-          'failure_cause': CompactionFailureCause.compactionInProgress,
-        };
-      }
-    }
-    if (!getIt.isRegistered<CompactionCoordinator>() ||
-        !getIt.isRegistered<CompactionBoundaryRepository>()) {
-      return {
-        'session_id': sessionId,
-        'request_id': requestId,
-        'outcome': 'unavailable',
-        'failure_reason': 'unavailable',
-        'failure_stage': CompactionFailureStage.preparation,
-        'failure_cause': CompactionFailureCause.unavailable,
-      };
-    }
-
-    final compactionId = const Uuid().v4();
-    final CompactionEngineRequest? engineRequest;
-    try {
-      final compactionRunner = getIt<AgentRunner>(param1: sessionId);
-      // Task 118b: the seed carries the per-turn tools and runtime context of
-      // the next ordinary request, so its fixed overhead is what that request
-      // will transmit and the summary pass keeps the ordinary tool list.
-      final runtimeSystemPrompt =
-          getIt.isRegistered<LocalRuntimeOrchestrator>()
-          ? await getIt<LocalRuntimeOrchestrator>().prepareIdleRequest(
-              agentRunner: compactionRunner,
-              sessionId: sessionId,
-            )
-          : null;
-      final providerSeed = await compactionRunner.prepareCompactionProviderSeed(
-        runtimeSystemPrompt: runtimeSystemPrompt,
-      );
-      engineRequest = await CompactionRequestFactory.forSession(
-        sessionId: sessionId,
-        trigger: CompactionTrigger.manual,
-        compactionId: compactionId,
-        providerProjection: providerSeed.projection,
-        providerTools: providerSeed.tools,
-        providerRequestOptions: providerSeed.options,
-      );
-    } catch (error) {
-      final diagnostics = CompactionDiagnostics.classify(
-        error,
-        stageHint: CompactionFailureStage.preparation,
-      );
-      return {
-        'session_id': sessionId,
-        'request_id': requestId,
-        'outcome': 'failed',
-        'failure_reason': diagnostics.failureReason.wireValue,
-        'failure_stage': diagnostics.stage,
-        'failure_cause': diagnostics.cause,
-      };
-    }
-    if (engineRequest == null) {
-      return {
-        'session_id': sessionId,
-        'request_id': requestId,
-        'outcome': 'invalid_request',
-        'failure_reason': 'invalid_request',
-        'failure_stage': CompactionFailureStage.preparation,
-        'failure_cause': CompactionFailureCause.invalidRequest,
-      };
-    }
-
-    _compactingSessionOwners[sessionId] = compactionId;
-    try {
-      final outcome = await getIt<CompactionCoordinator>().runCompaction(
-        request: engineRequest,
-        force: true,
-      );
-      if (outcome == null) {
-        return {
-          'session_id': sessionId,
-          'request_id': requestId,
-          'outcome': 'no_op',
-        };
-      }
-      if (outcome.status == CompactionStatus.completed) {
-        return {
-          'session_id': sessionId,
-          'request_id': requestId,
-          'outcome': 'accepted',
-          'compaction_id': outcome.compactionId,
-        };
-      }
-      return {
-        'session_id': sessionId,
-        'request_id': requestId,
-        'outcome': 'failed',
-        'failure_reason': outcome.failureReason?.wireValue,
-        'compaction_id': outcome.compactionId,
-        if (outcome.failureStage != null) 'failure_stage': outcome.failureStage,
-        if (outcome.failureCause != null) 'failure_cause': outcome.failureCause,
-      };
-    } catch (error) {
-      final diagnostics = CompactionDiagnostics.classify(error);
-      return {
-        'session_id': sessionId,
-        'request_id': requestId,
-        'outcome': 'failed',
-        'failure_reason': diagnostics.failureReason.wireValue,
-        'compaction_id': compactionId,
-        'failure_stage': diagnostics.stage,
-        'failure_cause': diagnostics.cause,
-      };
-    } finally {
-      if (_compactingSessionOwners[sessionId] == compactionId) {
-        _compactingSessionOwners.remove(sessionId);
-        _drainNextQueuedEvent(sessionId);
-      }
-    }
-  }
+  }) => _compactAdmission.admit(sessionId: sessionId, requestId: requestId);
 
   Future<void> handleEvent(GatewayEvent event) async {
     _logger.info('Incoming session event');
@@ -916,29 +671,32 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       final activeRecoveryNotice = getIt.isRegistered<RuntimeRecoveryService>()
           ? getIt<RuntimeRecoveryService>().activeNotice(event.sessionId)
           : null;
-      final canSteer =
-          !_controlledRestartDraining &&
-          turnRequest.deliveryIntent == MessageDeliveryIntent.auto &&
-          activeRun != null &&
-          _turnExecutor.ownsRun(activeRun) &&
-          !activeRun.stopRequested &&
-          (durableActiveWork == null ||
-              durableActiveWork.state == SessionWorkState.running ||
-              durableActiveWork.state == SessionWorkState.resuming) &&
-          (activeRecoveryNotice == null ||
-              activeRecoveryNotice.status == RuntimeNoticeStatus.resuming);
-      // A `steer_only` command may never become a turn: without a live owner the
-      // message is rejected instead of falling through to the ordinary
-      // admission path, so the text is neither queued nor admitted as a new
-      // turn (and an unknown session id is never created by a steer). Clients
-      // that omit the flag keep the legacy admit-or-queue behaviour.
-      final steerOnly =
-          event.type == 'steer' &&
-          (event.metadata['payload'] as Map?)?['steer_only'] == true;
-      if (steerOnly && !canSteer) {
-        _emitSteerRejected(
+      // The classifier decides only the disposition; every projection,
+      // publication, reservation, and queue mutation below stays here.
+      final steerRequestId = turnRequest.requestId ?? requestIdForEvent(event);
+      final steerText = event.message.content?.trim() ?? '';
+      final disposition = _inputClassifier.classify(
+        controlledRestartDraining: _controlledRestartDraining,
+        deliveryIntent: turnRequest.deliveryIntent,
+        activeRun: activeRun,
+        ownsRun: _turnExecutor.ownsRun,
+        durableActiveWork: durableActiveWork,
+        activeRecoveryNotice: activeRecoveryNotice,
+        steerOnlyRequested:
+            event.type == 'steer' &&
+            (event.metadata['payload'] as Map?)?['steer_only'] == true,
+        isQueuePromotionCommand: isQueuePromotionCommand,
+        steerActionable: steerRequestId != null && steerText.isNotEmpty,
+        hasOlderWork: () =>
+            _controlledRestartDraining ||
+            isSessionBusy(event.sessionId) ||
+            isSessionCompacting(event.sessionId) ||
+            _queueCoordinator.hasQueuedEvents(event.sessionId),
+      );
+      if (disposition == SessionInputDisposition.rejectSteerOnly) {
+        _outcomePublisher.steerRejected(
           event: event,
-          requestId: turnRequest.requestId ?? requestIdForEvent(event),
+          requestId: steerRequestId,
           code: 'no_active_turn',
           message:
               'No run currently owns session ${event.sessionId}, so the '
@@ -947,26 +705,27 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         );
         return;
       }
-      if (!canSteer && isQueuePromotionCommand) {
+      if (disposition == SessionInputDisposition.staleQueuePromotion &&
+          rawCommandRequestId != null) {
         final targetRequestId =
             turnRequest.requestId ?? requestIdForEvent(event) ?? '';
-        _emitCommandOutcome(
+        _outcomePublisher.commandOutcome(
           sessionId: event.sessionId,
           type: 'session.queued_message_steer_result',
           targetRequestId: targetRequestId,
           commandRequestId: rawCommandRequestId,
           outcome: 'stale_owner',
         );
-        _emitMessageClassification(
+        _outcomePublisher.messageClassified(
           event,
           requestId: targetRequestId,
           classification: 'queue',
         );
         return;
       }
-      if (canSteer) {
-        final requestId = turnRequest.requestId ?? requestIdForEvent(event);
-        final text = event.message.content?.trim() ?? '';
+      if (disposition == SessionInputDisposition.steer && activeRun != null) {
+        final requestId = steerRequestId;
+        final text = steerText;
         if (requestId != null && text.isNotEmpty) {
           final receivedAt = DateTime.now().toUtc();
           final store = persistedState;
@@ -987,14 +746,16 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               receivedAt: receivedAt,
             );
             if (promoted.outcome != QueueMutationOutcome.promoted) {
-              _emitCommandOutcome(
+              _outcomePublisher.commandOutcome(
                 sessionId: event.sessionId,
                 type: 'session.queued_message_steer_result',
                 targetRequestId: requestId,
                 commandRequestId: commandRequestId,
-                outcome: _wireName(promoted.outcome.name),
+                outcome: SessionCommandOutcomePublisher.wireName(
+                  promoted.outcome.name,
+                ),
               );
-              _emitMessageClassification(
+              _outcomePublisher.messageClassified(
                 event,
                 requestId: requestId,
                 classification: 'queue',
@@ -1007,7 +768,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               requestId,
             );
           } else if (existingWork != null) {
-            _emitMessageClassification(
+            _outcomePublisher.messageClassified(
               event,
               requestId: requestId,
               classification: existingWork.state == SessionWorkState.completed
@@ -1042,14 +803,14 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               pending.runId != activeRun.runId ||
               pending.generation != activeRun.generation ||
               pending.state.name != 'pending') {
-            _emitPendingSteerChanged(event.platformId, pending);
+            _outcomePublisher.pendingSteerChanged(event.platformId, pending);
             return;
           }
           if (store != null) {
             activeRun.agentRunner.configurePendingSteerLifecycle(
               runId: activeRun.runId,
               generation: activeRun.generation,
-              onChanged: (record) => _emitPendingSteerChanged(null, record),
+              onChanged: (record) => _outcomePublisher.pendingSteerChanged(null, record),
               onCommitDelivery: (history, placements) =>
                   _turnExecutor.commitPendingSteerDelivery(
                     owner: activeRun,
@@ -1067,9 +828,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             event.sessionId,
             receivedAt,
           );
-          _emitPendingSteerChanged(event.platformId, pending);
+          _outcomePublisher.pendingSteerChanged(event.platformId, pending);
           if (isQueuePromotion) {
-            _emitCommandOutcome(
+            _outcomePublisher.commandOutcome(
               sessionId: event.sessionId,
               type: 'session.queued_message_steer_result',
               targetRequestId: requestId,
@@ -1077,7 +838,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               outcome: 'promoted',
             );
           }
-          _emitMessageClassification(
+          _outcomePublisher.messageClassified(
             event,
             requestId: requestId,
             classification: 'steer',
@@ -1086,12 +847,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         }
       }
 
-      final hasOlderWork =
-          _controlledRestartDraining ||
-          isSessionBusy(event.sessionId) ||
-          isSessionCompacting(event.sessionId) ||
-          _queueCoordinator.hasQueuedEvents(event.sessionId);
-      if (hasOlderWork) {
+      if (disposition == SessionInputDisposition.queue) {
         _logger.info('Session ${event.sessionId} is busy. Queuing message.');
         final receivedAt = DateTime.now();
         final queuedTurnRequest = turnRequest.copyWith(
@@ -1107,7 +863,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
                 turnRequest.requestId!,
               );
         if (existingWork != null) {
-          _emitMessageClassification(
+          _outcomePublisher.messageClassified(
             event,
             requestId: turnRequest.requestId!,
             classification: existingWork.state == SessionWorkState.queued
@@ -1150,7 +906,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           ),
         );
         if (requestId != null) {
-          _emitMessageClassification(
+          _outcomePublisher.messageClassified(
             event,
             requestId: requestId,
             classification: 'queue',
@@ -1254,7 +1010,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         return;
       }
       if (turnRequest.requestId != null) {
-        _emitMessageClassification(
+        _outcomePublisher.messageClassified(
           event,
           requestId: turnRequest.requestId!,
           classification: 'think',
