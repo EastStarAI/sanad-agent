@@ -66,7 +66,29 @@ void main() {
         instanceId: openCode.id,
         cacheKey: 'models',
         models: [
-          {'value': 'deepseek-v4.1-flash', 'label': 'Deepseek V4.1 Flash'},
+          {
+            'value': 'deepseek-v4.1-flash',
+            'label': 'Deepseek V4.1 Flash',
+            'supports_reasoning': true,
+            'thinking_control': {
+              'status': 'supported',
+              'kind': 'effort',
+              'options': [
+                {'id': 'off', 'label': 'Off', 'is_off': true},
+                {'id': 'low', 'label': 'Low'},
+                {'id': 'high', 'label': 'High'},
+                {
+                  'id': 'max',
+                  'label': 'Max',
+                  'is_provider_default': true,
+                },
+              ],
+              'default_option_id': 'max',
+              'default_source': 'config_override',
+              'capability_revision': '1:2:override_abc:deepseek-v4.1-flash',
+              'source': 'config_override',
+            },
+          },
           {'value': 'kimi-k3', 'label': 'Kimi K3', 'supports_reasoning': true},
         ],
         fetchedAt: DateTime.utc(2026, 10, 22),
@@ -79,7 +101,16 @@ void main() {
         cacheKey: 'models',
         models: [
           {'value': 'glm-5.2', 'label': 'Glm 5.2'},
-          {'value': 'glm-5.3', 'label': 'Glm 5.3'},
+          {
+            'value': 'glm-5.3',
+            'label': 'Glm 5.3',
+            'thinking_control': {
+              'status': 'unknown',
+              'options': [],
+              'capability_revision': '1:2:unknown:glm-5.3',
+              'source': 'unconfigured',
+            },
+          },
         ],
         fetchedAt: DateTime.utc(2026, 10, 22),
         source: 'live',
@@ -179,6 +210,100 @@ void main() {
       expect(await runModels(['--provider', 'opencode-go', '--model', 'glm-5.3']), 2);
       expect(out.toString(), isEmpty);
       expect(err.toString(), contains('is not in the cached catalog'));
+    });
+  });
+
+  group('sanad models thinking capability', () {
+    test('--json carries the resolved thinking levels per route', () async {
+      expect(
+        await runModels([
+          '--provider',
+          'opencode-go',
+          '--model',
+          'deepseek-v4.1-flash',
+          '--json',
+        ]),
+        0,
+      );
+      final decoded = jsonDecode(out.toString()) as Map<String, dynamic>;
+      final models =
+          (decoded['providers'] as List<dynamic>).single['models']
+              as List<dynamic>;
+      final control =
+          (models.single as Map<String, dynamic>)['thinking_control']
+              as Map<String, dynamic>;
+      expect(control['status'], 'supported');
+      expect(control['kind'], 'effort');
+      expect(
+        (control['options'] as List<dynamic>)
+            .map((option) => (option as Map<String, dynamic>)['id']),
+        ['off', 'low', 'high', 'max'],
+      );
+      expect(control['default_option_id'], 'max');
+      expect(control['default_source'], 'config_override');
+      expect(control['source'], 'config_override');
+    });
+
+    test('a model without a descriptor keeps the documented shape', () async {
+      expect(
+        await runModels([
+          '--provider',
+          'opencode-go',
+          '--model',
+          'kimi-k3',
+          '--json',
+        ]),
+        0,
+      );
+      final decoded = jsonDecode(out.toString()) as Map<String, dynamic>;
+      final models =
+          (decoded['providers'] as List<dynamic>).single['models']
+              as List<dynamic>;
+      final entry = models.single as Map<String, dynamic>;
+      expect(entry.containsKey('thinking_control'), isFalse);
+      expect(entry.keys, ['value', 'label', 'supports_reasoning', 'is_default']);
+    });
+
+    test('an unknown descriptor is shown honestly with no invented levels', () async {
+      expect(
+        await runModels(['--provider', 'zai-coding', '--model', 'glm-5.3']),
+        0,
+      );
+      final text = out.toString();
+      expect(text, contains('thinking: unknown'));
+      expect(text, isNot(contains('thinking: supported')));
+    });
+
+    test('the human block lists the levels and marks off and the default', () async {
+      expect(
+        await runModels(['--provider', 'opencode-go', '--model', 'deepseek-v4.1-flash']),
+        0,
+      );
+      final text = out.toString();
+      expect(text, contains('thinking: supported (effort)'));
+      expect(text, contains('off [off]'));
+      expect(text, contains('max [default]'));
+    });
+
+    test('a single-model inspection reports the authority provenance', () async {
+      expect(
+        await runModels(['--provider', 'opencode-go', '--model', 'deepseek-v4.1-flash']),
+        0,
+      );
+      final text = out.toString();
+      expect(text, contains('thinking source: config_override'));
+      expect(text, contains('thinking default: max (from config_override)'));
+      expect(
+        text,
+        contains('capability revision: 1:2:override_abc:deepseek-v4.1-flash'),
+      );
+    });
+
+    test('a full listing omits the per-model authority provenance', () async {
+      expect(await runModels(['--provider', 'opencode-go']), 0);
+      final text = out.toString();
+      expect(text, contains('thinking: supported (effort)'));
+      expect(text, isNot(contains('capability revision:')));
     });
   });
 
