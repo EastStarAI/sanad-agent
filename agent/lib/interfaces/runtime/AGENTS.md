@@ -12,6 +12,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 
 ## Admission and FIFO
 - Durable active work owns admission; in-memory busy, suspended, and queue maps are projections only.
+- Admission classification is a pure decision owned by `SessionInputClassifier`; only the orchestrator may act on it, and every projection, publication, durable reservation, route rewrite, and queue mutation stays in the orchestrator.
 - Read active work and insert running-or-queued work atomically.
 - Preserve strict FIFO for queued input and immediately drain queue-only sessions restored without a recovery notice.
 - Queue promotion, deletion, route rewrite, and execution-snapshot recomputation commit through the execution aggregate owner.
@@ -21,6 +22,9 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 
 ## Runtime Collaborators
 - `SessionQueueCoordinator` owns queue projection, FIFO drain, and non-terminal route rewrites.
+- `SessionInputClassifier` owns the pure admission decision only: reject a `steer_only` command with no live owner, report a stale queue promotion, steer, queue, or admit immediately. It holds no state and performs no mutation, projection, publication, reservation, or queue change; the orchestrator keeps sole admission and active-run authority and performs every one of those. Steerability is decided there from the active run, durable work, and recovery-notice projections plus owner callbacks, and the older-work projection is read only on the paths that need it.
+- `SessionCommandOutcomePublisher` owns command-outcome event shape only — `session.message_classified`, `session.pending_steer_changed`, the typed `error` rejection for a refused steer, the `*_result` command outcomes, and their wire naming. It publishes through the orchestrator's single response sink and never decides whether an outcome is published.
+- `SessionCompactAdmission` owns manual `/compact` admission ordering and the typed outcome. It receives the busy and compaction projections plus the compaction-owner barrier entry/release as typed callbacks, so admission cannot be bypassed and the barrier stays owned by the orchestrator.
 - `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, exception routing, the durable pending-steer delivery commit, and the per-session in-flight title guard. `TurnEventPublisher` publishes the turn's live events — tool lifecycle, thought and reasoning deltas, the in-flight snapshot projection, and the completed pre-steer segment — only behind that executor's run-ownership check, so it never admits or owns a run itself. `SessionTitleRefresher` decides and publishes the post-terminal intelligent title. Normal and resumed tool-completion publication preserves the engine-authored byte-free media descriptor without reconstructing it from text or re-reading paths.
 - `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work. Recovery queries join live sessions so legacy orphan work is ignored without a startup delete pass; the restorer must not run general `state.db` maintenance or retention deletes.
 - Shared request-id and route helpers remain stateless and must not import the orchestrator.

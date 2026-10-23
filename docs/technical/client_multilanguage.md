@@ -16,7 +16,7 @@ The Sanad Client renders its interface in the user's chosen language. Launch loc
 - **English source of truth:** every key is authored in `app_en.arb` first. `app_ar.arb` mirrors it 1:1. A test locks parity by inspecting the `.arb` files directly (see `client/test/core/locale_cubit_test.dart`).
 - **Locale state:** `LocaleCubit` (`client/lib/core/presentation/bloc/locale/locale_cubit.dart`) owns the runtime locale.
   - Persistence key: SharedPreferences `app_locale` (inside the home-derived preference isolation boundary).
-  - Unknown stored codes silently reset to `en` — one applicative crash may not come back from locale parsing (`settings_pages.dart` runs the same silent-fallback rule as the rest of the app).
+  - Unknown stored codes silently reset to `en` — one applicative crash may not come back from locale parsing (`settings_pages/general_page.dart` runs the same silent-fallback rule as the rest of the app).
   - `supportedLocales = [en, ar]`; `MaterialApp.router` receives `localizationsDelegates` + the cubit's locale and rebuilds on change (hot switch, no restart).
 - **Language switch UI:** Settings → General → "Language" segmented button (`key: language_selector`). Arabic has a native label (العربية) so the option is readable in both directions; RTL flip comes free from `Directionality`.
 - **Time strings:** `formatCompactRelativeTime` accepts `localeOverride` when a `BuildContext` is available (`Localizations.maybeLocaleOf(context)`); contextless callers resolve the app locale via the shared binding.

@@ -7,7 +7,7 @@ import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/settings/data/account_lifecycle_repository.dart';
 import 'package:sanad_client/features/settings/domain/account_lifecycle.dart';
-import 'package:sanad_client/features/settings/presentation/widgets/settings_pages.dart';
+import 'package:sanad_client/features/settings/presentation/widgets/settings_pages/profile_page.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
 class _FakeAuthRepository implements IAuthRepository {

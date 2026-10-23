@@ -14,7 +14,7 @@ Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker)
 
 ## Files
 
-- `lib/features/settings/presentation/widgets/settings_pages.dart` (90 strings)
+- `lib/features/settings/presentation/widgets/settings_pages/` (90 strings; split out of the former `settings_pages.dart` by Plan 113b 113-01)
   - `Accessibility and screen-recording permissions are required.`
   - `Accessibility or screen-recording permission was not granted.`
   - `Active`
