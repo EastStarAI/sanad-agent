@@ -8,10 +8,11 @@ import 'package:sanad_client/features/conversations/domain/models/device_workspa
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
-import 'package:sanad_client/features/conversations/domain/models/workspace_command_failure.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/data/mappers/device_event_mapper.dart';
+import 'package:sanad_client/features/conversations/data/transport/command_response_errors.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_command_gateway.dart';
+import 'package:sanad_client/features/conversations/data/transport/workspace_commands.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
 import 'package:sanad_client/features/conversations/domain/stores/canonical_timeline_reconciler.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
@@ -29,6 +30,7 @@ class ConversationCommands {
   final ConversationCommandGateway _gateway;
   final DeviceConversationStore _conversationStore;
   final DeviceEventMapper _mapper;
+  final WorkspaceCommands _workspace;
   int _historyHydrationGeneration = 0;
   Future<List<CanonicalEvent>>? _olderHistoryLoad;
   String? _olderHistoryCursor;
@@ -55,6 +57,7 @@ class ConversationCommands {
   }) : _gateway = gateway,
        _conversationStore = conversationStore,
        _mapper = mapper,
+       _workspace = WorkspaceCommands(gateway: gateway),
        _compactAcknowledgementTimeout = compactAcknowledgementTimeout,
        _compactSettlementWindow = compactSettlementWindow;
 
@@ -257,7 +260,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
-    _throwIfErrorResponse(result, 'Failed to create session');
+    throwIfErrorResponse(result, 'Failed to create session');
     if (result != null) {
       final payload = Map<String, dynamic>.from(
         result['payload'] as Map? ?? result,
@@ -426,37 +429,7 @@ class ConversationCommands {
       );
     }
     lateResult.cancel();
-    return SessionCompactResult.fromJson(_responsePayload(result));
-  }
-
-  static Map<String, dynamic> _responsePayload(Map<String, dynamic> response) =>
-      Map<String, dynamic>.from(response['payload'] as Map? ?? response);
-
-  /// The rejection carried by a correlated reply, or `null` for a success.
-  ///
-  /// The Gateway completes a request with any event that repeats its
-  /// `request_id`, so a correlated `error` event (an admission or relay
-  /// rejection) and an Agent reply whose payload holds an `error` object are
-  /// both failures, never an empty success.
-  static ({String? code, String? message})? _responseError(Map<String, dynamic>? result) {
-    if (result == null) return null;
-    final payload = _responsePayload(result);
-    final nested = payload['error'];
-    if (nested is Map) {
-      return (code: nested['code']?.toString(), message: nested['message']?.toString());
-    }
-    if (result['event']?.toString() == 'error') {
-      return (code: payload['code']?.toString(), message: payload['message']?.toString());
-    }
-    return null;
-  }
-
-  /// Throws a [StateError] when [result] is a correlated rejection.
-  static void _throwIfErrorResponse(Map<String, dynamic>? result, String fallbackMessage) {
-    final error = _responseError(result);
-    if (error == null) return;
-    final message = error.message ?? fallbackMessage;
-    throw StateError(error.code == null ? message : '${error.code}: $message');
+    return SessionCompactResult.fromJson(responsePayload(result));
   }
 
   Future<SessionForkResult> forkSession({
@@ -565,7 +538,7 @@ class ConversationCommands {
     if (result == null) {
       throw StateError('Failed to update session preferences');
     }
-    _throwIfErrorResponse(result, 'Failed to update session preferences');
+    throwIfErrorResponse(result, 'Failed to update session preferences');
   }
 
   Future<SessionQueryResult> getSessions({SessionQueryRequest? query}) async {
@@ -576,7 +549,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
-    final error = _responseError(result);
+    final error = responseError(result);
     if (result != null && error == null) {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       final sessions = payload['sessions'] as List? ?? [];
@@ -632,8 +605,8 @@ class ConversationCommands {
         'Conversation search is unavailable.',
       );
     }
-    final payload = _responsePayload(result);
-    final error = _responseError(result);
+    final payload = responsePayload(result);
+    final error = responseError(result);
     if (error != null) {
       throw SessionSearchException(
         error.code ?? 'session_search_failed',
@@ -657,342 +630,55 @@ class ConversationCommands {
     );
   }
 
-  Future<List<DeviceWorkspace>> getWorkspaces() async {
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'list_workspaces',
-      payload: {'request_id': requestId},
-      requestId: requestId,
-    );
-
-    _throwIfErrorResponse(result, 'Failed to get workspaces');
-    if (result != null) {
-      final payload = result['payload'] as Map<String, dynamic>? ?? result;
-      final workspaces = payload['workspaces'] as List? ?? [];
-      return workspaces
-          .map(
-            (workspace) => DeviceWorkspace.fromJson(
-              Map<String, dynamic>.from(workspace as Map),
-            ),
-          )
-          .toList();
-    }
-
-    throw StateError('Failed to get workspaces');
-  }
+  Future<List<DeviceWorkspace>> getWorkspaces() => _workspace.getWorkspaces();
 
   Future<List<SlashCommandEntry>> searchSlashCommands({
     String? query,
     String? workspaceId,
-  }) async {
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'search_slash_commands',
-      payload: {
-        'request_id': requestId,
-        if (query != null && query.trim().isNotEmpty) 'query': query.trim(),
-        if (workspaceId != null && workspaceId.trim().isNotEmpty) 'workspace_id': workspaceId.trim(),
-      },
-      requestId: requestId,
-    );
-
-    _throwIfErrorResponse(result, 'Failed to search slash commands');
-    if (result != null) {
-      final payload = result['payload'] as Map<String, dynamic>? ?? result;
-      final commands = payload['commands'] as List? ?? [];
-      return commands
-          .whereType<Map>()
-          .map((command) {
-            final type = switch (command['type']?.toString()) {
-              'runtime_action' => SlashCommandType.runtimeAction,
-              'skill' => SlashCommandType.skill,
-              _ => null,
-            };
-            if (type == null) return null;
-            return SlashCommandEntry(
-              sourceId: command['source']?.toString() ?? 'runtime',
-              command: command['command']?.toString() ?? '',
-              insertText: command['command']?.toString() ?? '',
-              description: command['description']?.toString(),
-              type: type,
-            );
-          })
-          .whereType<SlashCommandEntry>()
-          .where((entry) => entry.command.trim().isNotEmpty)
-          .toList(growable: false);
-    }
-
-    throw StateError('Failed to search slash commands');
-  }
+  }) => _workspace.searchSlashCommands(query: query, workspaceId: workspaceId);
 
   Future<WorkspaceTreeSnapshot> browseWorkspaceTree({
     String? workspaceId,
     String? path,
-  }) async {
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'browse_workspace_tree',
-      payload: {
-        'request_id': requestId,
-        if (workspaceId != null && workspaceId.trim().isNotEmpty) 'workspace_id': workspaceId.trim(),
-        if (path != null && path.trim().isNotEmpty) 'path': path.trim(),
-      },
-      requestId: requestId,
-    );
-
-    _throwIfWorkspaceError(result, 'Failed to browse workspace tree');
-    if (result != null) {
-      final payload = result['payload'] as Map<String, dynamic>? ?? result;
-      return WorkspaceTreeSnapshot.fromJson(payload);
-    }
-
-    throw StateError('Failed to browse workspace tree');
-  }
+  }) => _workspace.browseWorkspaceTree(workspaceId: workspaceId, path: path);
 
   Future<DeviceWorkspace> createWorkspace({
     String? path,
     String? name,
     String? description,
-  }) async {
-    final trimmedPath = path?.trim() ?? '';
-    final trimmedName = name?.trim() ?? '';
-    final trimmedDescription = description?.trim() ?? '';
-    if (trimmedPath.isEmpty && trimmedName.isEmpty) {
-      throw StateError('Workspace name or path is required');
-    }
-
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'create_workspace',
-      payload: {
-        'request_id': requestId,
-        if (trimmedPath.isNotEmpty) 'path': trimmedPath,
-        if (trimmedName.isNotEmpty) 'name': trimmedName,
-        if (trimmedDescription.isNotEmpty) 'description': trimmedDescription,
-      },
-      requestId: requestId,
-    );
-
-    _throwIfWorkspaceError(result, 'Failed to create workspace');
-    if (result != null) {
-      final payload = result['payload'] as Map<String, dynamic>? ?? result;
-      final workspace = payload['workspace'];
-      if (workspace is Map) {
-        return DeviceWorkspace.fromJson(Map<String, dynamic>.from(workspace));
-      }
-    }
-
-    throw StateError('Failed to create workspace');
-  }
+  }) => _workspace.createWorkspace(
+    path: path,
+    name: name,
+    description: description,
+  );
 
   Future<DeviceWorkspace> renameWorkspace({
     required String workspaceId,
     required String displayName,
-  }) {
-    return _mutateWorkspace(
-      command: 'workspace.rename',
-      payload: {
-        'workspace_id': workspaceId.trim(),
-        'display_name': displayName.trim(),
-      },
-    );
-  }
+  }) => _workspace.renameWorkspace(
+    workspaceId: workspaceId,
+    displayName: displayName,
+  );
 
-  Future<void> removeWorkspace({required String workspaceId}) async {
-    final normalizedId = workspaceId.trim();
-    if (normalizedId.isEmpty) {
-      throw StateError('Workspace id is required');
-    }
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'workspace.remove',
-      payload: {'request_id': requestId, 'workspace_id': normalizedId},
-      requestId: requestId,
-    );
-    final payload = result?['payload'] as Map<String, dynamic>? ?? result;
-    if (result?['event'] == 'workspace.removed' && payload?['workspace_id']?.toString() == normalizedId) {
-      return;
-    }
-    if (result?['event'] == 'error') {
-      throw StateError(
-        payload?['message']?.toString() ?? 'Failed to remove workspace',
-      );
-    }
-    throw StateError('Failed to remove workspace');
-  }
+  Future<void> removeWorkspace({required String workspaceId}) =>
+      _workspace.removeWorkspace(workspaceId: workspaceId);
 
   Future<DeviceWorkspace> relocateWorkspace({
     required String workspaceId,
     required String newPath,
-  }) {
-    return _mutateWorkspace(
-      command: 'workspace.relocate',
-      payload: {'workspace_id': workspaceId.trim(), 'new_path': newPath.trim()},
-      previewEvent: 'workspace.relocate.preview',
-    );
-  }
+  }) => _workspace.relocateWorkspace(
+    workspaceId: workspaceId,
+    newPath: newPath,
+  );
 
-  Future<DeviceWorkspace> _mutateWorkspace({
-    required String command,
-    required Map<String, dynamic> payload,
-    String? previewEvent,
-  }) async {
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: command,
-      payload: {'request_id': requestId, ...payload},
-      requestId: requestId,
-    );
-    if (previewEvent != null && result?['event'] == previewEvent) {
-      final preview = result?['payload'] as Map<String, dynamic>? ?? result;
-      final token = preview?['confirmation_token']?.toString() ?? '';
-      final fingerprint = preview?['confirmation_fingerprint']?.toString() ?? '';
-      if (token.isEmpty || fingerprint.isEmpty) {
-        throw StateError('Failed to update workspace');
-      }
-      return _mutateWorkspace(
-        command: command,
-        payload: {
-          ...payload,
-          'confirmation_token': token,
-          'confirmation_fingerprint': fingerprint,
-        },
-      );
-    }
-    final response = result == null ? null : (result['payload'] as Map<String, dynamic>? ?? result);
-    _throwIfWorkspaceError(result, 'Failed to update workspace');
-    final workspace = response?['workspace'];
-    if (workspace is Map) {
-      return DeviceWorkspace.fromJson(Map<String, dynamic>.from(workspace));
-    }
-    throw StateError('Failed to update workspace');
-  }
+  Future<void> createFolder({required String parentPath, required String name}) =>
+      _workspace.createFolder(parentPath: parentPath, name: name);
 
-  Future<void> createFolder({
-    required String parentPath,
-    required String name,
-  }) async {
-    final trimmedParentPath = parentPath.trim();
-    final trimmedName = name.trim();
-    if (trimmedParentPath.isEmpty || trimmedName.isEmpty) {
-      throw StateError('Parent path and folder name are required');
-    }
+  Future<void> renameFolder({required String path, required String newName}) =>
+      _workspace.renameFolder(path: path, newName: newName);
 
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'workspace.create_folder',
-      payload: {
-        'request_id': requestId,
-        'parent_path': trimmedParentPath,
-        'name': trimmedName,
-      },
-      requestId: requestId,
-    );
-    _requireFolderMutationAcknowledgment(
-      result,
-      expectedEvent: 'workspace.folder_created',
-      fallbackMessage: 'Failed to create folder',
-    );
-  }
-
-  Future<void> renameFolder({
-    required String path,
-    required String newName,
-  }) async {
-    final trimmedPath = path.trim();
-    final trimmedNewName = newName.trim();
-    if (trimmedPath.isEmpty || trimmedNewName.isEmpty) {
-      throw StateError('Folder path and new name are required');
-    }
-
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'workspace.rename_folder',
-      payload: {
-        'request_id': requestId,
-        'path': trimmedPath,
-        'new_name': trimmedNewName,
-      },
-      requestId: requestId,
-    );
-    _requireFolderMutationAcknowledgment(
-      result,
-      expectedEvent: 'workspace.folder_renamed',
-      fallbackMessage: 'Failed to rename folder',
-    );
-  }
-
-  Future<void> deleteFolder({required String path}) async {
-    final trimmedPath = path.trim();
-    if (trimmedPath.isEmpty) {
-      throw StateError('Folder path is required');
-    }
-
-    final requestId = generateConversationRequestId();
-    final result = await _gateway.request(
-      command: 'workspace.delete_folder',
-      payload: {'request_id': requestId, 'path': trimmedPath},
-      requestId: requestId,
-    );
-    if (result?['event']?.toString() == 'workspace.delete_folder.preview') {
-      final payload = result?['payload'] as Map<String, dynamic>? ?? result;
-      final token = payload?['confirmation_token']?.toString() ?? '';
-      final fingerprint = payload?['confirmation_fingerprint']?.toString() ?? '';
-      if (token.isEmpty || fingerprint.isEmpty) {
-        throw StateError('Failed to delete folder');
-      }
-      final confirmId = generateConversationRequestId();
-      final confirmed = await _gateway.request(
-        command: 'workspace.delete_folder',
-        payload: {
-          'request_id': confirmId,
-          'path': trimmedPath,
-          'confirmation_token': token,
-          'confirmation_fingerprint': fingerprint,
-        },
-        requestId: confirmId,
-      );
-      _requireFolderMutationAcknowledgment(
-        confirmed,
-        expectedEvent: 'workspace.folder_deleted',
-        fallbackMessage: 'Failed to delete folder',
-      );
-      return;
-    }
-    _requireFolderMutationAcknowledgment(
-      result,
-      expectedEvent: 'workspace.folder_deleted',
-      fallbackMessage: 'Failed to delete folder',
-    );
-  }
-
-  void _requireFolderMutationAcknowledgment(
-    Map<String, dynamic>? result, {
-    required String expectedEvent,
-    required String fallbackMessage,
-  }) {
-    final event = result?['event']?.toString();
-    if (event == expectedEvent) {
-      return;
-    }
-    _throwIfWorkspaceError(result, fallbackMessage);
-    final payload = result?['payload'];
-    final message = payload is Map ? payload['message'] : null;
-    throw StateError(message?.toString() ?? fallbackMessage);
-  }
-  /// Throws a coded [WorkspaceCommandFailure] when [result] is an Agent
-  /// `error` response, so presentation can localize the rejection.
-  void _throwIfWorkspaceError(
-    Map<String, dynamic>? result,
-    String fallbackMessage,
-  ) {
-    final failure = WorkspaceCommandFailure.fromErrorResponse(
-      result,
-      fallbackMessage: fallbackMessage,
-    );
-    if (failure != null) throw failure;
-  }
-
+  Future<void> deleteFolder({required String path}) =>
+      _workspace.deleteFolder(path: path);
 
   Future<List<CanonicalEvent>> loadSessionHistory(
     String sessionId, {
@@ -1260,7 +946,7 @@ class ConversationCommands {
   }
 
   void _throwHistoryError(Map<String, dynamic> result) {
-    final error = _responseError(result);
+    final error = responseError(result);
     if (error == null) return;
     throw StateError('${error.code ?? 'history_failed'}: ${error.message ?? 'Session history request failed'}');
   }
@@ -1310,7 +996,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
-    if (result != null && _responseError(result) == null) {
+    if (result != null && responseError(result) == null) {
       _logger.info(
         '✅ [ConversationCommands] Session title updated: $sessionId',
       );
@@ -1327,7 +1013,7 @@ class ConversationCommands {
       requestId: requestId,
     );
 
-    if (result != null && _responseError(result) == null) {
+    if (result != null && responseError(result) == null) {
       _logger.info('✅ [ConversationCommands] Session deleted: $sessionId');
     } else {
       _logger.severe('❌ [ConversationCommands] Failed to delete session');
@@ -1391,7 +1077,7 @@ class _CompactSettlement {
   Future<SessionCompactResult> get future => _completer.future;
 
   void _onEvent(Map<String, dynamic> event) {
-    final payload = ConversationCommands._responsePayload(event);
+    final payload = responsePayload(event);
     final type = event['event'] as String? ?? payload['type'] as String?;
     if (type != _resultEvent) return;
     final requestId = event['request_id'] ?? payload['request_id'];
