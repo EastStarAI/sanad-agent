@@ -50,7 +50,7 @@ adapter بحالة جلسة.
 | Codex Responses | reasoning summary items والدلالات commentary/analysis | ليس مطلوبًا | codec/accumulator يصدران reasoning delta مستقلًا |
 
 كل adapter يعيد التفكير المرئي في `Message.reasoning` فقط. يستهلك
-`AgentRunner` العقد نفسه دون branch حسب المزود، ثم يحوله `SessionTurnExecutor`
+`AgentRunner` العقد نفسه دون branch حسب المزود، ثم يحوله `TurnEventPublisher`
 إلى استجابة reasoning مستقلة ويصدر protocol translator نوع
 `reasoning_stream`. wrappers مثل rate limiting تمرر `AgentResponse` دون تعديل.
 

@@ -5,20 +5,14 @@ import 'dart:io';
 
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:logging/logging.dart';
-import 'package:sanad_release_contract/release_contract.dart';
-import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/auth/colocated_auth_coupling.dart';
-import 'package:sanad_agent/core/auth/device_authorization_client.dart';
-import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
-import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
-import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'package:sanad_agent/core/utils/logger.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -29,10 +23,11 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_sec
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
-import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 
 import 'capabilities_loader.dart';
 import 'delivery_presence_controller.dart';
+import 'local_daemon/http_control_routes.dart';
+import 'local_daemon/local_media_stream_handler.dart';
 import 'sanad_protocol_bridge.dart';
 import 'protocol/authenticated_command_origin.dart';
 import 'protocol/canonical_events.dart';
@@ -49,7 +44,10 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   /// otherwise initialization loads the owner-only local credential before
   /// the server binds. There is no tokenless fallback.
   LocalGatewaySecurity? _security;
-  ColocatedAuthCoupling? _authCoupling;
+
+  /// Injected co-located enrollment coupling. The HTTP control routes own it
+  /// once they serve `/auth/coupling`.
+  final ColocatedAuthCoupling? _injectedAuthCoupling;
   final Future<void> Function()? beforeUpgradeAuthentication;
   final DeliveryPresenceController? deliveryPresence;
   final ViewImageMediaHistoryLoader? viewImageMediaHistoryLoader;
@@ -129,6 +127,34 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       Platform.environment['SANAD_E2E_TEST_MODE']?.trim().toLowerCase() ==
       'true';
 
+  bool _cloudRegistered() =>
+      getIt.isRegistered<ServerSanadGatewayPlatform>() &&
+      getIt<ServerSanadGatewayPlatform>().isCloudRegistered;
+
+  /// HTTP control surface: `/auth/*`, `/health`, `/update`, `/logs`,
+  /// `/restart`, `/shutdown`, `/stop`, `/authentication-exchange`, and
+  /// `/capabilities`.
+  late final LocalDaemonHttpControlRoutes _controlRoutes =
+      LocalDaemonHttpControlRoutes(
+        config: _config,
+        platformId: platformId,
+        logger: _logger,
+        authManager: () => getIt<AuthManager>(),
+        restartCoordinator: () => getIt<DaemonRestartCoordinator>(),
+        cloudRegistered: _cloudRegistered,
+        homeId: () => _homeId,
+        writeJsonResponse: _writeJsonResponse,
+        authCoupling: _injectedAuthCoupling,
+      );
+
+  /// Attachment and `view_image` streaming for the authenticated media routes.
+  late final LocalMediaStreamHandler _mediaStreamHandler =
+      LocalMediaStreamHandler(
+        localDeviceId: () => _localDeviceId,
+        attachmentStore: () => getIt<AttachmentStore>(),
+        viewImageMediaHistoryLoader: viewImageMediaHistoryLoader,
+      );
+
   LocalDaemonServerPlatform({
     LocalGatewaySecurity? security,
     ColocatedAuthCoupling? authCoupling,
@@ -137,7 +163,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     this.viewImageMediaHistoryLoader,
     PlatformRuntimeBridge? platformRuntimeBridge,
   }) : _security = security,
-       _authCoupling = authCoupling,
+       _injectedAuthCoupling = authCoupling,
        _injectedPlatformRuntimeBridge = platformRuntimeBridge;
 
   @override
@@ -262,315 +288,12 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       return;
     }
 
-    if (request.uri.path == '/auth/logout') {
-      final hasBody =
-          request.headers.contentLength > 0 ||
-          request.headers.value(HttpHeaders.transferEncodingHeader) != null;
-      if (request.method != 'POST' || request.uri.hasQuery || hasBody) {
-        await _writeJsonResponse(request.response, const {
-          'status': 'invalid_request',
-        }, statusCode: HttpStatus.badRequest);
-        return;
-      }
-      await getIt<AuthManager>().logout();
-      await _writeJsonResponse(request.response, const {
-        'status': 'logged_out',
-      });
+    // The control routes and the media routes match disjoint paths, so neither
+    // owner can shadow the other.
+    if (await _controlRoutes.handle(request)) {
       return;
     }
-
-    if (request.uri.path == '/auth/coupling') {
-      final hasBody =
-          request.headers.contentLength > 0 ||
-          request.headers.value(HttpHeaders.transferEncodingHeader) != null;
-      if (request.uri.hasQuery ||
-          hasBody ||
-          (request.method != 'GET' &&
-              request.method != 'POST' &&
-              request.method != 'DELETE')) {
-        await _writeJsonResponse(request.response, {
-          'status': 'invalid_request',
-        }, statusCode: HttpStatus.badRequest);
-        return;
-      }
-      final coupling = _authCoupling ??= ColocatedAuthCoupling(
-        authManager: getIt<AuthManager>(),
-        authorizationClient: DeviceAuthorizationClient(
-          portalUrl: _config.portalUrl,
-          authManager: getIt<AuthManager>(),
-        ),
-      );
-      if (request.method == 'DELETE') {
-        await coupling.cancel();
-        await _writeJsonResponse(request.response, const {
-          'status': 'cancelled',
-        });
-        return;
-      }
-      final snapshot = request.method == 'POST'
-          ? await coupling.start()
-          : coupling.snapshot;
-      await _writeJsonResponse(request.response, snapshot.toJson());
-      return;
-    }
-
-    if (request.uri.pathSegments.length == 3 &&
-        request.uri.pathSegments[0] == 'media' &&
-        request.uri.pathSegments[1] == 'view-image') {
-      await _handleViewImageMedia(request, request.uri.pathSegments[2]);
-      return;
-    }
-    if (request.uri.pathSegments.length == 3 &&
-        request.uri.pathSegments[0] == 'media' &&
-        request.uri.pathSegments[1] == 'attachment') {
-      await _handleAttachmentMedia(request, request.uri.pathSegments[2]);
-      return;
-    }
-
-    if (request.uri.path == '/health') {
-      final stateMode = (getSanadStateHome() != getSanadHome())
-          ? 'isolated'
-          : 'default';
-      final vault = SecretVaults.current;
-      await _writeJsonResponse(request.response, {
-        'status': 'ok',
-        'platform_id': platformId,
-        'url': _config.localGatewayUrl,
-        'version': _config.version,
-        'is_source': AppConfig.isSourceRun,
-        'home_id': _homeId ?? sanadHomeIdentity(getSanadHome()),
-        'workspace_hash': _workspaceHash(),
-        'dev_launcher_id': Platform.environment['SANAD_DEV_LAUNCHER_ID'],
-        'dev_runtime_nonce': Platform.environment['SANAD_DEV_RUNTIME_NONCE'],
-        'state_mode': stateMode,
-        'gateway_enabled': _config.enableGateway,
-        // The Agent vault is the OS credential vault. A closed vault means
-        // provider keys, MCP secrets, user secrets and the Device Credential
-        // cannot be read, so this reports it as a non-secret status instead of
-        // leaving it inside one log line.
-        'secret_vault': vault?.statusLabel ?? 'unavailable',
-        'secret_vault_reason': vault?.unavailableReason,
-        'cloud_registered':
-            getIt.isRegistered<ServerSanadGatewayPlatform>() &&
-            getIt<ServerSanadGatewayPlatform>().isCloudRegistered,
-      });
-      return;
-    }
-
-    if (request.uri.path == '/update' && request.method == 'POST') {
-      String? targetVersion;
-      try {
-        targetVersion = request.uri.queryParameters['target_version']?.trim();
-        if (targetVersion == null || targetVersion.isEmpty) {
-          throw const FormatException('target_version is required.');
-        }
-        ReleaseVersion.parse(targetVersion);
-      } on FormatException catch (error) {
-        await _writeJsonResponse(request.response, {
-          'success': false,
-          'status': 'target_mismatch',
-          'message': error.message,
-        }, statusCode: HttpStatus.badRequest);
-        return;
-      }
-      final updater = AgentUpdateService(
-        currentVersion: _config.version,
-        executablePath: Platform.resolvedExecutable,
-        isSourceManaged: AppConfig.isSourceRun,
-      );
-      var result = await updater.update(targetVersion: targetVersion);
-      if (Platform.isWindows && result.stagedPath != null) {
-        final scheduled = await updater.scheduleWindowsReplacement(result);
-        if (!scheduled) {
-          result = result.copyWith(
-            status: AgentUpdateStatus.scheduleFailed,
-            message:
-                'Verified replacement could not be scheduled; the running agent was kept.',
-          );
-        }
-      }
-      await _writeJsonResponse(
-        request.response,
-        result.toJson(),
-        statusCode: result.isSuccess
-            ? HttpStatus.ok
-            : HttpStatus.unprocessableEntity,
-      );
-      if (result.status == AgentUpdateStatus.restartRequired) {
-        unawaited(
-          Platform.isWindows
-              ? getIt<DaemonRestartCoordinator>().stop()
-              : getIt<DaemonRestartCoordinator>().restart(),
-        );
-      }
-      return;
-    }
-
-    if (request.uri.path == '/logs' && request.method == 'GET') {
-      await _writeJsonResponse(request.response, {'logs': agentLogs});
-      return;
-    }
-
-    if (request.uri.path == '/restart' && request.method == 'POST') {
-      final forceRaw = request.uri.queryParameters['force'];
-      if (forceRaw != null && forceRaw != 'true' && forceRaw != 'false') {
-        await _writeJsonResponse(request.response, {
-          'success': false,
-          'outcome': 'invalid_force',
-          'message': 'force must be true or false.',
-        }, statusCode: HttpStatus.badRequest);
-        return;
-      }
-      final force = forceRaw == 'true';
-      final permanentRaw = request.uri.queryParameters['permanent'];
-      if (permanentRaw != null &&
-          permanentRaw != 'true' &&
-          permanentRaw != 'false') {
-        await _writeJsonResponse(request.response, {
-          'success': false,
-          'outcome': 'invalid_permanent',
-          'message': 'permanent must be true or false.',
-        }, statusCode: HttpStatus.badRequest);
-        return;
-      }
-      final permanent = permanentRaw == 'true';
-      final timeoutRaw = request.uri.queryParameters['timeout_seconds'];
-      final timeoutSeconds = timeoutRaw == null
-          ? null
-          : int.tryParse(timeoutRaw);
-      if (timeoutRaw != null &&
-          (timeoutSeconds == null ||
-              timeoutSeconds < 1 ||
-              timeoutSeconds > 3600)) {
-        await _writeJsonResponse(request.response, {
-          'success': false,
-          'outcome': 'invalid_timeout',
-          'message': 'timeout_seconds must be between 1 and 3600.',
-        }, statusCode: HttpStatus.badRequest);
-        return;
-      }
-      final coordinator = getIt<DaemonRestartCoordinator>();
-      final preparation = await coordinator.prepareRestart(
-        force: force,
-        timeout: Duration(
-          seconds:
-              timeoutSeconds ??
-              SessionRunOrchestrator
-                  .controlledRestartCheckpointTimeout
-                  .inSeconds,
-        ),
-        requesterSessionId: request.headers.value(
-          'x-sanad-requester-session-id',
-        ),
-        requesterToolCallId: request.headers.value(
-          'x-sanad-requester-tool-call-id',
-        ),
-      );
-      try {
-        await _writeJsonResponse(
-          request.response,
-          preparation.toJson(),
-          statusCode: preparation.accepted
-              ? HttpStatus.ok
-              : preparation.outcome == 'internal_error'
-              ? HttpStatus.internalServerError
-              : HttpStatus.conflict,
-        );
-      } on Object catch (error) {
-        coordinator.abandonPreparedRestart(preparation);
-        _logger.warning(
-          'Restart response could not be flushed; restart was cancelled: '
-          '$error',
-        );
-        return;
-      }
-      unawaited(
-        permanent
-            ? coordinator.completePreparedStop(preparation)
-            : coordinator.completePreparedRestart(preparation),
-      );
-      return;
-    }
-
-    if (request.uri.path == '/shutdown' && request.method == 'POST') {
-      final mode = request.uri.queryParameters['mode'] ?? 'pause';
-      if (mode != 'pause' && mode != 'cancel') {
-        await _writeJsonResponse(request.response, {
-          'success': false,
-          'outcome': 'invalid_mode',
-          'message': 'mode must be pause or cancel.',
-        }, statusCode: HttpStatus.badRequest);
-        return;
-      }
-      final coordinator = getIt<DaemonRestartCoordinator>();
-      if (mode == 'cancel') {
-        await _writeJsonResponse(request.response, {
-          'success': true,
-          'outcome': 'cancelled',
-          'message': 'Daemon work cancelled; shutting down permanently.',
-        });
-        unawaited(coordinator.stop());
-        return;
-      }
-
-      final timeoutRaw = request.uri.queryParameters['timeout_seconds'];
-      final timeoutSeconds = timeoutRaw == null
-          ? SessionRunOrchestrator.controlledRestartCheckpointTimeout.inSeconds
-          : int.tryParse(timeoutRaw);
-      if (timeoutSeconds == null ||
-          timeoutSeconds < 1 ||
-          timeoutSeconds > 3600) {
-        await _writeJsonResponse(request.response, {
-          'success': false,
-          'outcome': 'invalid_timeout',
-          'message': 'timeout_seconds must be between 1 and 3600.',
-        }, statusCode: HttpStatus.badRequest);
-        return;
-      }
-      final preparation = await coordinator.prepareRestart(
-        timeout: Duration(seconds: timeoutSeconds),
-      );
-      try {
-        await _writeJsonResponse(
-          request.response,
-          preparation.toJson(),
-          statusCode: preparation.accepted
-              ? HttpStatus.ok
-              : preparation.outcome == 'internal_error'
-              ? HttpStatus.internalServerError
-              : HttpStatus.conflict,
-        );
-      } on Object catch (error) {
-        coordinator.abandonPreparedRestart(preparation);
-        _logger.warning(
-          'Pause response could not be flushed; shutdown was cancelled: $error',
-        );
-        return;
-      }
-      unawaited(coordinator.completePreparedPause(preparation));
-      return;
-    }
-
-    if (request.uri.path == '/stop' && request.method == 'POST') {
-      _logger.info('Received stop request from client. Exiting permanently...');
-      await _writeJsonResponse(request.response, {
-        'success': true,
-        'message': 'Daemon exiting permanently...',
-      });
-      unawaited(getIt<DaemonRestartCoordinator>().stop());
-      return;
-    }
-
-    if (request.uri.path == '/authentication-exchange' &&
-        request.method == 'POST') {
-      await getIt<AuthManager>().reload(notifyIfChanged: true);
-      await _writeJsonResponse(request.response, const {'success': true});
-      return;
-    }
-
-    if (request.uri.path == '/capabilities') {
-      final capabilities = await loadSanadCapabilities();
-      await _writeJsonResponse(request.response, capabilities.toJson());
+    if (await _mediaStreamHandler.handle(request)) {
       return;
     }
 
@@ -918,190 +641,6 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     }
   }
 
-  Future<void> _handleAttachmentMedia(
-    HttpRequest request,
-    String mediaId,
-  ) async {
-    final hasBody =
-        request.headers.contentLength > 0 ||
-        request.headers.value(HttpHeaders.transferEncodingHeader) != null;
-    final query = request.uri.queryParameters;
-    final sessionId = query['session_id']?.trim();
-    final deviceId = query['device_id']?.trim();
-    final validMediaId = RegExp(r'^[A-Za-z0-9_-]{1,200}$').hasMatch(mediaId);
-    if (request.method != 'GET' ||
-        hasBody ||
-        query.length != 2 ||
-        sessionId == null ||
-        sessionId.isEmpty ||
-        deviceId == null ||
-        deviceId.isEmpty ||
-        !validMediaId) {
-      request.response.statusCode = HttpStatus.badRequest;
-      await request.response.close();
-      return;
-    }
-    if (deviceId != _localDeviceId) {
-      request.response.statusCode = HttpStatus.forbidden;
-      await request.response.close();
-      return;
-    }
-
-    UserAttachment? attachment;
-    try {
-      for (final message
-          in viewImageMediaHistoryLoader?.call(sessionId) ?? const []) {
-        for (final candidate in message.attachments) {
-          if (candidate.mediaId == mediaId) {
-            attachment = candidate;
-            break;
-          }
-        }
-        if (attachment != null) break;
-      }
-    } on Object {
-      attachment = null;
-    }
-    if (attachment == null ||
-        attachment.status != UserAttachmentStatus.available ||
-        attachment.agentLocalReference.trim().isEmpty) {
-      request.response.statusCode = HttpStatus.notFound;
-      await request.response.close();
-      return;
-    }
-
-    List<int>? bytes;
-    try {
-      bytes = await getIt<AttachmentStore>().readVerifiedAttachment(attachment);
-    } on Object {
-      bytes = null;
-    }
-    if (bytes == null) {
-      request.response.statusCode = HttpStatus.notFound;
-      await request.response.close();
-      return;
-    }
-
-    final disposition = attachment.kind == UserAttachmentKind.image
-        ? 'inline'
-        : 'attachment';
-    request.response.headers
-      ..contentType = ContentType.parse(attachment.mimeType)
-      ..set(HttpHeaders.cacheControlHeader, 'private, no-store')
-      ..set('X-Content-Type-Options', 'nosniff')
-      ..set(
-        'content-disposition',
-        '$disposition; filename="${_safeAttachmentDownloadName(attachment.safeName)}"',
-      )
-      ..contentLength = bytes.length;
-    request.response.add(bytes);
-    await request.response.close();
-  }
-
-  String _safeAttachmentDownloadName(String safeName) {
-    final extension = RegExp(
-      r'\.([A-Za-z0-9]{1,10})$',
-    ).firstMatch(safeName)?.group(1);
-    return extension == null
-        ? 'attachment'
-        : 'attachment.${extension.toLowerCase()}';
-  }
-
-  Future<void> _handleViewImageMedia(
-    HttpRequest request,
-    String mediaId,
-  ) async {
-    final hasBody =
-        request.headers.contentLength > 0 ||
-        request.headers.value(HttpHeaders.transferEncodingHeader) != null;
-    final query = request.uri.queryParameters;
-    final sessionId = query['session_id']?.trim();
-    final deviceId = query['device_id']?.trim();
-    final validMediaId = RegExp(r'^[a-f0-9]{64}$').hasMatch(mediaId);
-    if (request.method != 'GET' ||
-        hasBody ||
-        query.length != 2 ||
-        sessionId == null ||
-        sessionId.isEmpty ||
-        deviceId == null ||
-        deviceId.isEmpty ||
-        !validMediaId) {
-      request.response.statusCode = HttpStatus.badRequest;
-      await request.response.close();
-      return;
-    }
-    if (deviceId != _localDeviceId) {
-      request.response.statusCode = HttpStatus.forbidden;
-      await request.response.close();
-      return;
-    }
-
-    CanonicalViewImageMedia? media;
-    try {
-      final loader = viewImageMediaHistoryLoader;
-      if (loader != null) {
-        media = ViewImageMediaProjection.resolve(
-          sessionId: sessionId,
-          mediaId: mediaId,
-          messages: loader(sessionId),
-        );
-      }
-    } on Object {
-      media = null;
-    }
-    final bytes = media?.bytes;
-    if (media == null ||
-        media.availability != CanonicalMediaAvailability.available ||
-        bytes == null) {
-      request.response.statusCode = HttpStatus.notFound;
-      await request.response.close();
-      return;
-    }
-
-    var start = 0;
-    var end = bytes.length - 1;
-    final range = request.headers.value(HttpHeaders.rangeHeader);
-    if (range != null) {
-      final match = RegExp(r'^bytes=([0-9]+)-([0-9]*)$').firstMatch(range);
-      final requestedStart = match == null
-          ? null
-          : int.tryParse(match.group(1)!);
-      final requestedEnd = match == null || match.group(2)!.isEmpty
-          ? bytes.length - 1
-          : int.tryParse(match.group(2)!);
-      if (requestedStart == null ||
-          requestedEnd == null ||
-          requestedStart < 0 ||
-          requestedStart >= bytes.length ||
-          requestedEnd < requestedStart) {
-        request.response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
-        request.response.headers.set(
-          HttpHeaders.contentRangeHeader,
-          'bytes */${bytes.length}',
-        );
-        await request.response.close();
-        return;
-      }
-      start = requestedStart;
-      end = requestedEnd.clamp(start, bytes.length - 1);
-      request.response.statusCode = HttpStatus.partialContent;
-      request.response.headers.set(
-        HttpHeaders.contentRangeHeader,
-        'bytes $start-$end/${bytes.length}',
-      );
-    }
-
-    request.response.headers
-      ..contentType = ContentType.parse(media.mimeType)
-      ..set(HttpHeaders.acceptRangesHeader, 'bytes')
-      ..set(HttpHeaders.cacheControlHeader, 'private, no-store')
-      ..set('X-Content-Type-Options', 'nosniff')
-      ..set('content-disposition', 'inline; filename="${media.safeName}"')
-      ..contentLength = end - start + 1;
-    request.response.add(bytes.sublist(start, end + 1));
-    await request.response.close();
-  }
-
   Future<void> _writeJsonResponse(
     HttpResponse response,
     Map<String, dynamic> data, {
@@ -1379,52 +918,5 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       next['hardware_id'] = hardwareId;
     }
     return next;
-  }
-
-  String? _findGitTopLevel(String startPath) {
-    var dir = Directory(startPath);
-    while (true) {
-      final gitEntity = Directory('${dir.path}${Platform.pathSeparator}.git');
-      final gitFile = File('${dir.path}${Platform.pathSeparator}.git');
-      if (gitEntity.existsSync() || gitFile.existsSync()) {
-        return dir.absolute.path;
-      }
-      final parent = dir.parent;
-      if (parent.path == dir.path) break;
-      dir = parent;
-    }
-    return null;
-  }
-
-  String _canonicalPath(String path) {
-    String resolved;
-    try {
-      resolved = Directory(path).resolveSymbolicLinksSync();
-    } catch (_) {
-      resolved = Directory(path).absolute.path;
-    }
-    if (Platform.isWindows && resolved.length >= 2 && resolved[1] == ':') {
-      return '${resolved[0].toLowerCase()}${resolved.substring(1)}';
-    }
-    return resolved;
-  }
-
-  int _stableHash(String value) {
-    var hash = 0x811c9dc5;
-    for (final byte in utf8.encode(value)) {
-      hash ^= byte;
-      hash = (hash * 0x01000193) & 0x7fffffff;
-    }
-    return hash;
-  }
-
-  String _workspaceHash() {
-    final envHash = Platform.environment['SANAD_DEV_WORKSPACE_HASH'];
-    if (envHash != null && envHash.isNotEmpty) return envHash;
-    final gitTop = _findGitTopLevel(Directory.current.absolute.path);
-    if (gitTop == null) return 'unknown';
-    return _stableHash(
-      _canonicalPath(gitTop),
-    ).toRadixString(16).padLeft(8, '0').substring(0, 8);
   }
 }

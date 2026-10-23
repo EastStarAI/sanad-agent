@@ -27,7 +27,10 @@ owns admission and restart recovery.
 
 `SessionQueueCoordinator` manages FIFO and route rewrites.
 `SessionTurnExecutor` binds stream callbacks to an active run and delegates model
-execution to `AgentRunner`. `SessionRecoveryRestorer` reconstructs queued,
+execution to `AgentRunner`; its `TurnEventPublisher` publishes that run's live
+tool, thought, reasoning, in-flight-snapshot, and pre-steer segment events behind
+the executor's own ownership check, and its `SessionTitleRefresher` owns the
+post-terminal intelligent title. `SessionRecoveryRestorer` reconstructs queued,
 waiting, blocked, and interrupted work after daemon startup. Shared request and
 route helpers remain stateless so collaborators do not depend back on the
 orchestrator.
@@ -157,6 +160,17 @@ advertisement. The local daemon adapter is an inbound loopback HTTP/WebSocket
 server whose port is runtime configuration. Both use the same protocol bridge
 and preserve device, hardware, session, request, run, model-step, tool-call, and
 event identities.
+
+The local daemon adapter keeps the socket lifecycle, the authentication gate
+that every HTTP request and WebSocket upgrade passes before any route, response
+fan-out with delivery scopes, and voice. Its HTTP surface has two owners:
+`local_daemon/http_control_routes.dart` renders `/auth/logout`, `/auth/coupling`,
+`/health`, `/update`, `/logs`, `/restart`, `/shutdown`, `/stop`,
+`/authentication-exchange`, and `/capabilities`, and
+`local_daemon/local_media_stream_handler.dart` streams attachment and
+`view_image` media. Both receive their runtime owners as explicit constructor
+inputs, so a route body never resolves a runtime owner through the service
+locator and the platform never duplicates a route body.
 
 In the local daemon server adapter, `DeliveryScope.platformFamily` fan-out broadcasts
 gateway responses across connected local client sockets. When an envelope originated
