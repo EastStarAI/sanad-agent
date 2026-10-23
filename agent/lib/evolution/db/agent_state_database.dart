@@ -21,6 +21,7 @@ import 'schema/runtime_work_schema.dart';
 import 'schema/scheduling_schema.dart';
 import 'schema/schema_migration_support.dart';
 import 'schema/sessions_messages_schema.dart';
+import 'schema/user_secrets_schema.dart';
 import 'schema/workspaces_schema.dart';
 
 /// Single owner of the agent's local SQLite connection (`state.db`).
@@ -327,6 +328,10 @@ class AgentStateDatabase {
     SessionsMessagesSchema.migrateLastUserMessageAt(db);
     CompactionSchema.apply(db);
     WorkspacesSchema.applySecurityPolicies(db);
+    // Task 140 A1: appended last so every pre-existing module keeps the
+    // position the 138-05 snapshots pinned. One additive table, no migration
+    // of any earlier table.
+    UserSecretsSchema.apply(db);
   }
 
   /// Forwarder kept for the migration suites that migrate a bare legacy
