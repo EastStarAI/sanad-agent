@@ -621,6 +621,16 @@ non-interactive equivalent of that action.
 8. **Logging.** The command reports identities, codes, and lifecycle metadata only; it
    never prints provider bodies or session content.
 
+### 9.7. Session Projection as a Following Channel (B16)
+
+The bounded projection is also the contract a supervisor uses to observe a delegated turn whose `sanad run` worker has exited. The delegate supervisor keeps such a task non-terminal (`following`) and polls `sanad session show <session-id> --json`, so these fields are a machine contract, not decoration:
+
+- `status` (`needs_input`, `needs_permission`, `running`, `idle`) decides whether a request awaits a human. The pending payload supplies `request_id`, `tool_name`, and `questions` for `needs_input`; answers are never read back.
+- `execution_snapshot.state` (`running`, `queued`, `waiting`, `blocked`, `resuming`, `stopping`, `idle`) decides whether the turn is still owned by the daemon, is blocked, is resuming, is stopping, or has ended. A published block outranks the top-level `status`, because `status` reports `idle` once nothing is publishing.
+- `updated_at` and the snapshot's `updated_at` date the observation; `identities.pending_request_id` and `identities.request_id` correlate it.
+
+When a build also projects the durable cause (a `runtime_notice.cause` or a snapshot-level `cause`), the supervisor forwards it with a `blocked` transition and can auto-retry a transient cause. Without one it records the block with an unknown cause and never invents a recovery decision. Answers and permissions continue to travel through §9.2, so the projection stays read-only.
+
 ---
 
 ## 10. Remote CLI Relay Architecture & Execution Seam (Plan 102)

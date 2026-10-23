@@ -1,10 +1,10 @@
 ---
 name: delegate-task-supervisor
-description: Bootstrap and orchestrate one or many delegated coding-agent CLI tasks through installed delegate-skills, preserve workspace/project/session identity, expose live task timelines, and wait event-first for the next meaningful transition. Use whenever work is handed to OpenCode, Antigravity/agy, or Sanad Agent either locally or remotely through `sanad-client`, especially for parallel, long-running, resumable, or human-observable delegation. Do not replace the implementer-specific delegate skill; load and follow it.
+description: Bootstrap and orchestrate one or many delegated coding-agent CLI tasks through installed delegate-skills, preserve workspace/project/session identity, expose live task timelines, follow a Sanad daemon session after its worker process exits, and wait event-first for the next meaningful transition. Use whenever work is handed to OpenCode, Antigravity/agy, or Sanad Agent either locally or remotely through `sanad-client`, especially for parallel, long-running, resumable, or human-observable delegation. Do not replace the implementer-specific delegate skill; load and follow it.
 license: MIT
 compatibility: Requires Node.js 18+ and git. The bootstrap helper can install delegate-skills and supported implementer CLIs with explicit approval. Runtime scripts use Node built-ins only and support macOS, Linux, and Windows.
 metadata:
-  version: 0.3.0
+  version: 0.4.0
 ---
 
 # Delegate Task Supervisor
@@ -215,11 +215,43 @@ node "<skill-dir>/scripts/watch-once.mjs" \
   --since <last-sequence>
 ```
 
-This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`, `incomplete`, `needs_review`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed. It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a one-second bounded liveness fallback so callers cannot block forever on stale state. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
+This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`, `incomplete`, `needs_review`, `follow_lost`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed. It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a one-second bounded liveness fallback so callers cannot block forever on stale state. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
 
 A watcher can be interrupted and restarted without stopping workers or losing already-journaled events.
 
 **Caller timeout does not mean worker failure.** If an agent tool call that blocks on `watch-once` times out, the worker and the supervised tasks keep running; a watcher timeout only ends the caller's wait. Re-enter with the cursor from the last returned event (or `supervisor status --run <dir> --json` to read the current `seq`), then resume with `--since <seq>`. Use only bounded `status`/`inspect` reads between waits; never schedule polling or stop the worker because a watcher call timed out.
+
+### 5.1. Keep watching after a worker exits
+
+A `sanad run` process is only the transport for one daemon turn. When it exits while the daemon still owns that turn — a transient provider timeout, a daemon restart that reclaims the turn, or a signal that ended the transport — the supervisor keeps the task non-terminal as `following` and polls `sanad session show <session-id> --json` instead of reporting a failure. Nothing is required in the specification: the behaviour is on by default for every Sanad task whose session id is known.
+
+The poll journals the same events an attached worker produces: `needs_input` and `needs_permission` (with request id, tool name, and questions), `blocked` and `waiting` (with their cause), `resuming`, and the terminal outcome. `watch-once` wakes on every attention state exactly as it does for an attached task, and the automatic retry policy applies to a followed block with the same grace, attempts, and transient-cause set. `following` itself is progress, never a wake-up.
+
+| Control | Default | Meaning |
+|---|---|---|
+| `--follow-poll-ms` | `30000` | How often the durable session is read |
+| `--follow-deadline-ms` | `3600000`, or the task's own `--timeout` | How long a followed turn may stay in flight before the task ends `timeout` |
+| `--follow-lost-polls` | `3` | Consecutive unreadable reads after which the task ends `follow_lost` |
+| `--cancel-force-kill-ms` | `10000` | Grace between the cancelling `SIGTERM` and the forced `SIGKILL`, both sent to the process group |
+
+Start the run with `--follow-poll-ms 5000` when a question must reach a human quickly, and set the task's `--timeout` when the work has a known bound: that timeout becomes the follow window.
+
+**`completed` needs evidence.** An `idle` session is not a verdict: it only says nothing is publishing the turn any more. `sanad session show <id> --json` carries no terminal turn record, so the verdict comes from the durable message accounting in `summary` — `final_answers` counts the assistant's finished replies and `user_messages` counts the turns sent to the session. A turn that finished normally leaves a final answer behind; one that was stopped, cancelled, or interrupted leaves its user message and whatever tool activity it produced, and no answer. So a followed task ends `completed` only when a final answer appeared inside the follow window or the session holds one for every user turn, and otherwise ends `failed` with `cause: turn_interrupted` (or the daemon's own cause) and an event a watcher can act on. The verdict is recorded under `follow.evidence` (`finalAnswers`, `userMessages`, `reason`). The result the task reports is that same verdict, so a status line can never show `completed` next to a worker artifact's `interrupted`: a late artifact is reported as `later-result` for triage.
+
+**A group, not a pid.** A Sanad spec commonly runs through a wrapper (`fvm dart run …`, `npm …`), and the process that talks to the daemon is its child. Every task is therefore spawned in its own process group, `pgid` is recorded in the manifest, and cancel, the forced kill, and a graceful supervisor shutdown signal the whole group. After the direct child exits the group is verified with signal `0` before the exit is accepted: a group that outlives its child journals an actionable `worker_group_alive` and the follow reports `worker_exited_group_alive` instead of `worker_exited_turn_in_flight`. A cancelled group whose wrapper exits first is still force-killed on schedule. Never signal a task by name or pattern; use the recorded pid or `pgid`.
+
+The final state is the turn's own durable outcome — and only a final assistant reply proves a completion. If the daemon reported a block, a stop, or a completed turn with its reply, that is what the task records; a terminal `result.json` written during the follow wins over it, and every terminal event names its `resultSource` (`worker_artifact` or `daemon_session`). When the session cannot be read at all, the worker's own verdict is kept; when a confirmed follow loses the session, the task ends `follow_lost` with the reason, which is terminal and actionable.
+
+One boundary is worth knowing before you rely on it: the follow starts only when the daemon still owns the turn, and it never invents a turn that the daemon has already dropped. A transport that dies before the turn reaches a suspendable state (a question, a permission request, a block) takes its turn with it, so the task keeps the worker's own verdict (`follow.reason: turn_not_in_flight`) instead of waiting for work that no longer exists. A turn that reached a pending request or a block survives its transport, which is the case the follow exists for.
+
+**Answering a followed task.** The event carries the session id and the request id, so the answer goes to the exact request, with the same Home the task was launched with:
+
+```bash
+sanad session answer <session-id> -r <request-id> --answer "<answer>" --home <task-Home>
+sanad session permission <session-id> -r <request-id> --allow --home <task-Home>
+```
+
+Report the request to the user first and let them decide; the supervisor never answers on an operator's behalf, and it never journals the answer. A followed task is still cancelled with `cancel --run <dir> --task <id>`: the daemon session is stopped and the task settles `cancelled` without waiting for a process that no longer exists. `continue` needs a terminal task, so it applies after the follow ends, never during it.
 
 ## 6. Inspect progress and let the user watch
 
@@ -250,9 +282,9 @@ node "<skill-dir>/scripts/supervisor.mjs" logs --run <run-directory> --task <tas
 node "<skill-dir>/scripts/supervisor.mjs" inspect --run <run-directory> --task <task-id>
 ```
 
-`status`, `timeline`, and `logs` human outputs include a bounded **Session Observability** footer reporting true session state (`working`, `waiting for input`, `waiting for permission`, `waiting`, `resuming`, `blocked`, `stopped`, `completed`, or `unknown`), error cause (`provider_timeout`, `rate_limit`, `network_error`, `provider_quota`, `auth_error`), state-since, last progress timestamp, elapsed duration, observation source, and current time. PID liveness is shown only as observation metadata and never establishes `working`; without persisted progress the state is `unknown`. Timelines strictly display full ISO timestamps with timezone (`YYYY-MM-DDTHH:mm:ss.sssZ`), distinguish stream receipt time (`(received: <ISO>)`), and label missing historical timestamps as `[unknown time]` without manufacturing fake times from file mtime. Observer attachments persist timing records in `observers/<pid>.json`, tracking start and cancellation cleanly without manufacturing durations when hard kills occur.
+`status`, `timeline`, and `logs` human outputs include a bounded **Session Observability** footer reporting true session state (`working`, `waiting for input`, `waiting for permission`, `waiting`, `resuming`, `blocked`, `stopped`, `completed`, `following the daemon turn`, `follow lost`, or `unknown`), error cause (`provider_timeout`, `rate_limit`, `network_error`, `provider_quota`, `auth_error`), state-since, last progress timestamp, elapsed duration, observation source, current time, and — for a followed task — the follow start, deadline, poll count, and last poll. PID liveness is shown only as observation metadata and never establishes `working`; without persisted progress the state is `unknown`. Timelines strictly display full ISO timestamps with timezone (`YYYY-MM-DDTHH:mm:ss.sssZ`), distinguish stream receipt time (`(received: <ISO>)`), and label missing historical timestamps as `[unknown time]` without manufacturing fake times from file mtime. Observer attachments persist timing records in `observers/<pid>.json`, tracking start and cancellation cleanly without manufacturing durations when hard kills occur.
 
-Default `watch-once` wakes on blocked, waiting, resuming, intervention, and terminal transitions; use `--all` only when routine transitions are also relevant. Use `--follow` only in a human-owned terminal. Agent tool calls use bounded reads or `watch-once`, never an indefinite follow stream.
+Default `watch-once` wakes on blocked, waiting, resuming, intervention, and terminal transitions; use `--all` only when routine transitions are also relevant. Use `--follow` only in a human-owned terminal. Agent tool calls use bounded reads or `watch-once`, never an indefinite follow stream. A task that is `following` a daemon-owned turn is observed through the session, so `status` reports where the observation came from instead of implying a live worker; plain progress still never wakes a watcher.
 
 ## 7. Review every result
 
@@ -261,5 +293,5 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 ## Included scripts
 
 - `scripts/bootstrap.mjs` — discover and check delegate skills or implementer CLIs (`opencode`, `agy`, `sanad`).
-- `scripts/supervisor.mjs` — launch runs, dynamically add/enqueue tasks, explicitly close runs, persist state and workspace identity, inspect logs/timelines, and open a viewer terminal.
+- `scripts/supervisor.mjs` — launch runs, dynamically add/enqueue tasks, explicitly close runs, persist state and workspace identity, follow a Sanad turn whose worker exited, inspect logs/timelines, and open a viewer terminal.
 - `scripts/watch-once.mjs` — race-safe event-driven wait for intervention (`needs_input`, `needs_permission`) or terminal transitions.
