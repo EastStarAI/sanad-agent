@@ -17,6 +17,22 @@ abstract final class ScheduleRunErrorPolicy {
   static const int maxErrorLength = 500;
 }
 
+/// The observation a `schedule.run_failed` notice is published from
+/// (Task 139 S16, S22).
+///
+/// The observer reports the failure it just terminalized together with the
+/// schedule's current streak, so the publisher never recounts the streak and can
+/// never disagree with the run row that caused it. `error` is the same bounded,
+/// redacted text the row carries.
+typedef ScheduleRunFailureSink = void Function({
+  required String scheduleId,
+  required String runId,
+  required String sessionId,
+  required int consecutiveFailures,
+  required bool suggestPause,
+  String? error,
+});
+
 /// The single write seam for `scheduled_task_runs` above the repository
 /// (Task 139 A3, D9).
 ///
@@ -292,14 +308,7 @@ class ScheduleRunObserver {
   final ScheduleRunTurnOutcome Function(String sessionId, String runId)
   _lookupOutcome;
   final String? Function(String sessionId, String runId)? _lookupError;
-  final void Function({
-    required String scheduleId,
-    required String runId,
-    required String sessionId,
-    required int consecutiveFailures,
-    required bool suggestPause,
-    String? error,
-  })? _onRunFailed;
+  final ScheduleRunFailureSink? _onRunFailed;
 
   /// The run whose turn a conversation is currently executing.
   final Map<String, String> _activeRunBySession = {};
@@ -311,14 +320,7 @@ class ScheduleRunObserver {
     required ScheduleRunTurnOutcome Function(String sessionId, String runId)
     lookupOutcome,
     String? Function(String sessionId, String runId)? lookupError,
-    void Function({
-      required String scheduleId,
-      required String runId,
-      required String sessionId,
-      required int consecutiveFailures,
-      required bool suggestPause,
-      String? error,
-    })? onRunFailed,
+    ScheduleRunFailureSink? onRunFailed,
   }) : _recorder = recorder,
        _lookupOutcome = lookupOutcome,
        _lookupError = lookupError,

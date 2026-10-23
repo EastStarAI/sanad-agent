@@ -400,4 +400,24 @@ class CanonicalEventTypes {
   static const String secretDelete = 'secret.delete';
   static const String secretDeleted = 'secret.deleted';
   static const String secretsChanged = 'secrets.changed';
+
+  // ── Task 139: Schedule Control Protocol ──────────────────────────────
+  static const String scheduleList = 'schedule.list';
+  static const String scheduleListResult = 'schedule.list_result';
+  static const String schedulePreview = 'schedule.preview';
+  static const String schedulePreviewResult = 'schedule.preview_result';
+  static const String scheduleCreate = 'schedule.create';
+  static const String scheduleCreated = 'schedule.created';
+  static const String scheduleUpdate = 'schedule.update';
+  static const String scheduleUpdated = 'schedule.updated';
+  static const String schedulePause = 'schedule.pause';
+  static const String scheduleResume = 'schedule.resume';
+  static const String scheduleRunNow = 'schedule.run_now';
+  static const String scheduleRunAccepted = 'schedule.run_accepted';
+  static const String scheduleDelete = 'schedule.delete';
+  static const String scheduleDeleted = 'schedule.deleted';
+  static const String scheduleRuns = 'schedule.runs';
+  static const String scheduleRunsResult = 'schedule.runs_result';
+  static const String scheduleChanged = 'schedule.changed';
+  static const String scheduleRunFailed = 'schedule.run_failed';
 }

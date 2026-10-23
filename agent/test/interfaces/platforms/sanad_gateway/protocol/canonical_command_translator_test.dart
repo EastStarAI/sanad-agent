@@ -57,5 +57,41 @@ void main() {
 
       expect(event, isNull);
     });
+
+    test('translates every schedule command into a payload canonical event',
+        () {
+      const commands = [
+        CanonicalEventTypes.scheduleList,
+        CanonicalEventTypes.schedulePreview,
+        CanonicalEventTypes.scheduleCreate,
+        CanonicalEventTypes.scheduleUpdate,
+        CanonicalEventTypes.schedulePause,
+        CanonicalEventTypes.scheduleResume,
+        CanonicalEventTypes.scheduleRunNow,
+        CanonicalEventTypes.scheduleDelete,
+        CanonicalEventTypes.scheduleRuns,
+      ];
+
+      for (final command in commands) {
+        final event = CanonicalCommandTranslator.translate({
+          'command': command,
+          'payload': {'request_id': 'req-1', 'id': 'task_1'},
+        });
+
+        expect(event, isNotNull, reason: command);
+        expect(event!.type, command);
+        expect(event.payload['request_id'], 'req-1');
+        expect(event.payload['id'], 'task_1');
+      }
+    });
+
+    test('keeps schedule run history off the unsupported list', () {
+      final event = CanonicalCommandTranslator.translate({
+        'command': 'schedule.unknown',
+        'payload': {'schedule_id': 'task_1'},
+      });
+
+      expect(event, isNull);
+    });
   });
 }
