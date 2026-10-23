@@ -41,7 +41,7 @@ Out of scope: browser scenarios, three-family escalation statistics, provider or
 
 - [ ] Re-read the P1 findings and kill criteria, and record exactly where the overrides and the brake attach in `jev_client.py`, `model.py`, and `layer.py`.
 - [ ] Record pre-change baselines: `python3 -m unittest discover -s .agents/skills/sanad-client-tester/tests` (115 pass), `python3 -m unittest discover -s .agents/skills/jev-dual-brain-automation/tests` (29 pass), `fvm dart run scripts/lint_wiki.dart` (exit 0).
-- [ ] Confirm TH1 `~/.sanad-test` is the intended explicit `--home` for the live run and that key presence can be proven without printing the value.
+- [ ] Confirm TH1 (`~/.sanad-test`, worktree `.agent/worktrees/test-home`) is free for the live run and that key presence can be proven without printing the value.
 
 ### G1 — F-06 endpoint and model overrides
 
@@ -66,11 +66,11 @@ Out of scope: browser scenarios, three-family escalation statistics, provider or
 ### G4 — First live scenario on TH1
 
 - [ ] Declare the phases and which are decidable before running: settings navigation, model picker selection, device switch, and one conversation send, each checked against the mode keyset.
-- [ ] Launch with `sanad-dev run --background --driver --home ~/.sanad-test`, then confirm ownership and branch with `sanad-dev status`.
+- [ ] Load the candidate into TH1's own worktree (`.agent/worktrees/test-home`): stay on branch `test/test-home`, run `git reset --hard <candidate sha>` (never detach HEAD), then apply the lightest `sanad-dev` restart there and confirm ownership and SHA with `sanad-dev status`. Never start a second runtime on `~/.sanad-test` from another worktree.
 - [ ] Prove `TYPESAFE_API_KEY` is present without printing it; stop before any model call when absent.
 - [ ] Execute the scenario with the brake armed at US$1.00 and the requests-per-minute limit; route every decidable step to the model and dispatch exactly one `sanad-dev ui` action per admitted step.
 - [ ] Escalate, never retry, on a guard refusal, `model_unavailable`, `model_contradiction`, `rate_limited`, or `cost_ceiling_reached`.
-- [ ] Stop the runtime with `sanad-dev stop` from this worktree and confirm no sibling runtime was touched.
+- [ ] Leave TH1 running unless no remaining work needs it, and confirm no sibling runtime was touched.
 
 ### G5 — Evidence, verdict, and documentation
 
