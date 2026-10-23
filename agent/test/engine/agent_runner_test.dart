@@ -3385,7 +3385,9 @@ void main() {
           expect(
             states,
             containsAllInOrder([
-              SessionExecutionState.blocked,
+              // A retryable failure with budget left suspends as `waiting` with
+              // the scheduled retry counters; `blocked` would mean stopped.
+              SessionExecutionState.waiting,
               SessionExecutionState.resuming,
             ]),
           );

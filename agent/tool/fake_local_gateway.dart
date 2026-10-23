@@ -16,6 +16,7 @@ import 'dart:io';
 /// A session identity the fake gateway reports; callers assert on it.
 const String fakeSessionId = 'fake-gateway-session';
 const String fakeSessionTitle = 'Fake gateway session';
+const String fakeSessionCreatedAt = '2026-01-01T00:00:00Z';
 const String fakeFinalAnswer = 'fake gateway reply';
 const String fakeRunId = 'fake-gateway-run';
 
@@ -156,10 +157,17 @@ class FakeLocalGateway {
   Map<String, dynamic> _commandExtras(String command, String sessionId) {
     switch (command) {
       case 'get_session_history':
+        // A known session is projected with its own identity fields; the daemon
+        // omits them entirely when it does not know the id, which is how
+        // `session show` tells a stopped turn from a missing session.
         return {
           'in_flight': null,
           'execution_snapshot': {'state': 'idle'},
           'history_revision': 1,
+          'title': fakeSessionTitle,
+          'created_at': fakeSessionCreatedAt,
+          'updated_at': fakeSessionCreatedAt,
+          'model': 'fake-model',
         };
       case 'stop_session':
         return {'status': 'stopped'};

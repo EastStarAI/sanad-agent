@@ -114,6 +114,10 @@ class RunResultArtifact {
   bool get isWaiting => status == 'waiting';
   bool get isResuming => status == 'resuming';
 
+  /// The daemon is retrying this failure on its own. Like `waiting`
+  /// and `resuming` it is progress, never a verdict.
+  bool get isRetrying => status == 'retrying';
+
   static final _progressPattern = RegExp(
     r'^(?:'
     r'running(?:\s+(?:tests?|tasks?|steps?|commands?))?(?:\s*[/\\].*|\s*\.{2,})?'
@@ -495,6 +499,8 @@ class RunArtifactCoordinator {
     String? provider,
     String? model,
     String? cause,
+    int? retryAttempt,
+    int? retryBudget,
   }) {
     return _enqueue(() async {
       if (_isTerminal || _currentArtifact.isTerminal) return;
@@ -513,6 +519,8 @@ class RunArtifactCoordinator {
         'session_id': sessionId,
         'provider': ?provider,
         'model': ?model,
+        'retry_attempt': ?retryAttempt,
+        'retry_budget': ?retryBudget,
       };
 
       _currentArtifact = _currentArtifact.copyWith(
@@ -539,6 +547,7 @@ class RunArtifactCoordinator {
       final wasNonterminalBlockedOrWaiting =
           _currentArtifact.status == 'blocked' ||
           _currentArtifact.status == 'waiting' ||
+          _currentArtifact.status == 'retrying' ||
           _currentArtifact.status == 'resuming' ||
           _currentArtifact.isNeedsIntervention;
       if (!wasNonterminalBlockedOrWaiting &&

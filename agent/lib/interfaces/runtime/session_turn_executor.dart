@@ -9,7 +9,6 @@ import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
-import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/models/pending_steer_record.dart';
@@ -19,14 +18,14 @@ import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
-import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
+import 'package:sanad_agent/interfaces/runtime/session_title_refresher.dart';
+import 'package:sanad_agent/interfaces/runtime/turn_event_publisher.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/engine/runtime/steer_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
-import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 
 class ActiveRun {
   final String sessionId;
@@ -135,6 +134,21 @@ class SessionTurnExecutor {
   final Set<String> _titleGenerationSessions = {};
   final void Function(GatewayResponse) emitResponse;
   final PersistedRuntimeStateRepository? Function() getPersistedState;
+
+  /// Publishes this turn's live events — tool lifecycle, thought and reasoning
+  /// deltas, the in-flight snapshot, and the completed pre-steer segment —
+  /// behind this executor's own run-ownership check, so admission stays here.
+  late final TurnEventPublisher _events = TurnEventPublisher(
+    emitResponse: emitResponse,
+    ownsRun: ownsRun,
+    captureContextUsage: _captureContextUsage,
+  );
+
+  /// Owns the post-terminal intelligent title decision and publication; the
+  /// per-session in-flight guard stays here.
+  late final SessionTitleRefresher _titleRefresher = SessionTitleRefresher(
+    emitResponse: emitResponse,
+  );
 
   SessionTurnExecutor({
     required this.emitResponse,
@@ -341,7 +355,7 @@ class SessionTurnExecutor {
                     int? runtimeMs,
                     String? errorCode,
                   }) async {
-                    await _emitToolEvent(
+                    await _events.emitToolEvent(
                       owner: owner,
                       event: event,
                       runId: runId,
@@ -361,7 +375,7 @@ class SessionTurnExecutor {
                   },
               onSteerContinuation: () {
                 if (!ownsRun(owner)) return;
-                _emitCompletedSteerSegment(
+                _events.emitCompletedSteerSegment(
                   owner: owner,
                   event: event,
                   content: fullContent,
@@ -369,13 +383,13 @@ class SessionTurnExecutor {
                 fullContent = '';
                 sessionManager.clearInFlightSnapshot(event.sessionId);
               },
-              onThoughtDelta: (thought) => _emitThoughtDelta(
+              onThoughtDelta: (thought) => _events.emitThoughtDelta(
                 owner: owner,
                 event: event,
                 agentRunner: agentRunner,
                 thought: thought,
               ),
-              onReasoningDelta: (reasoning) => _emitReasoningDelta(
+              onReasoningDelta: (reasoning) => _events.emitReasoningDelta(
                 owner: owner,
                 event: event,
                 agentRunner: agentRunner,
@@ -400,7 +414,7 @@ class SessionTurnExecutor {
                     int? runtimeMs,
                     String? errorCode,
                   }) async {
-                    await _emitToolEvent(
+                    await _events.emitToolEvent(
                       owner: owner,
                       event: event,
                       runId: runId,
@@ -420,7 +434,7 @@ class SessionTurnExecutor {
                   },
               onSteerContinuation: () {
                 if (!ownsRun(owner)) return;
-                _emitCompletedSteerSegment(
+                _events.emitCompletedSteerSegment(
                   owner: owner,
                   event: event,
                   content: fullContent,
@@ -428,13 +442,13 @@ class SessionTurnExecutor {
                 fullContent = '';
                 sessionManager.clearInFlightSnapshot(event.sessionId);
               },
-              onThoughtDelta: (thought) => _emitThoughtDelta(
+              onThoughtDelta: (thought) => _events.emitThoughtDelta(
                 owner: owner,
                 event: event,
                 agentRunner: agentRunner,
                 thought: thought,
               ),
-              onReasoningDelta: (reasoning) => _emitReasoningDelta(
+              onReasoningDelta: (reasoning) => _events.emitReasoningDelta(
                 owner: owner,
                 event: event,
                 agentRunner: agentRunner,
@@ -457,7 +471,7 @@ class SessionTurnExecutor {
             return;
           }
           fullContent += chunk;
-          _appendInFlightSnapshot(
+          _events.appendInFlightSnapshot(
             sessionId: event.sessionId,
             runId: owner.runId,
             turnId: owner.turnId,
@@ -612,7 +626,7 @@ class SessionTurnExecutor {
       );
 
       final titleSession = sessionManager.getSession(event.sessionId);
-      if (_shouldGenerateIntelligentTitle(
+      if (_titleRefresher.shouldGenerateIntelligentTitle(
             isNewSession: isNewSession,
             existingSession: existingSession,
             currentSession: titleSession,
@@ -620,17 +634,19 @@ class SessionTurnExecutor {
           _titleGenerationSessions.add(event.sessionId)) {
         final expectedTitle = titleSession?.title ?? existingSession?.title;
         unawaited(
-          _generateAndEmitIntelligentTitle(
-            sessionId: event.sessionId,
-            platformId: event.platformId,
-            expectedTitle: expectedTitle,
-            userMessage: content,
-            assistantResponse: fullContent,
-            route: agentRunner.lastSuccessfulLlmRoute,
-            runId: runId,
-          ).whenComplete(
-            () => _titleGenerationSessions.remove(event.sessionId),
-          ),
+          _titleRefresher
+              .generateAndEmitIntelligentTitle(
+                sessionId: event.sessionId,
+                platformId: event.platformId,
+                expectedTitle: expectedTitle,
+                userMessage: content,
+                assistantResponse: fullContent,
+                route: agentRunner.lastSuccessfulLlmRoute,
+                runId: runId,
+              )
+              .whenComplete(
+                () => _titleGenerationSessions.remove(event.sessionId),
+              ),
         );
       }
       if (!ownsRun(activeRun)) return;
@@ -869,220 +885,6 @@ class SessionTurnExecutor {
     return snapshot;
   }
 
-  Future<void> _emitToolEvent({
-    required ActiveRun owner,
-    required GatewayEvent event,
-    required String runId,
-    required String toolName,
-    String? input,
-    String? output,
-    ViewImageMediaMetadata? media,
-    required bool isError,
-    required bool isStart,
-    String? toolRunId,
-    DateTime? startedAt,
-    DateTime? terminalAt,
-    int? runtimeMs,
-    String? errorCode,
-    required void Function() onResetFullContent,
-  }) async {
-    if (!ownsRun(owner) || !owner.cancellationScope.isPublicationOpen) {
-      return;
-    }
-    final sessionManager = getIt<SessionManager>();
-    if (isStart) {
-      onResetFullContent();
-      sessionManager.clearInFlightSnapshot(event.sessionId);
-      final contextUsage = await _captureContextUsage(
-        sessionId: event.sessionId,
-        agentRunner: owner.agentRunner,
-      );
-      emitResponse(
-        GatewayResponse(
-          sessionId: event.sessionId,
-          platformId: event.platformId,
-          message: Message(
-            role: MessageRole.tool,
-            content: input,
-            metadata: {
-              if (startedAt != null) 'started_at': startedAt.toIso8601String(),
-            },
-          ),
-          isComplete: false,
-          runId: owner.runId,
-          turnId: owner.turnId,
-          modelStepId: owner.agentRunner.currentModelStepId,
-          toolCallId: toolRunId,
-          usage: owner.agentRunner.lastUsage,
-          contextUsage: contextUsage,
-          toolName: toolName,
-          isToolUse: true,
-        ),
-      );
-      return;
-    }
-    emitResponse(
-      GatewayResponse(
-        sessionId: event.sessionId,
-        platformId: event.platformId,
-        message: Message(
-          role: MessageRole.tool,
-          content: output,
-          metadata: {
-            'media': ?media?.toPublicJson(),
-            'started_at': ?startedAt?.toIso8601String(),
-            'terminal_at': ?terminalAt?.toIso8601String(),
-            'runtime_ms': ?runtimeMs,
-            'error_code': ?errorCode,
-          },
-        ),
-        isComplete: false,
-        runId: owner.runId,
-        turnId: owner.turnId,
-        modelStepId: owner.agentRunner.currentModelStepId,
-        toolCallId: toolRunId,
-        toolName: toolName,
-        isToolResult: true,
-        isToolError: isError,
-      ),
-    );
-  }
-
-  void _emitThoughtDelta({
-    required ActiveRun owner,
-    required GatewayEvent event,
-    required AgentRunner agentRunner,
-    required String thought,
-  }) {
-    if (thought.isEmpty ||
-        !ownsRun(owner) ||
-        !owner.cancellationScope.isPublicationOpen) {
-      return;
-    }
-    _appendInFlightSnapshot(
-      sessionId: event.sessionId,
-      runId: owner.runId,
-      turnId: owner.turnId,
-      modelStepId: agentRunner.currentModelStepId,
-      type: CanonicalEventTypes.thoughtStream,
-      delta: thought,
-    );
-    emitResponse(
-      GatewayResponse(
-        sessionId: event.sessionId,
-        platformId: event.platformId,
-        message: Message(role: MessageRole.assistant, thought: thought),
-        isComplete: false,
-        runId: owner.runId,
-        turnId: owner.turnId,
-        modelStepId: agentRunner.currentModelStepId,
-      ),
-    );
-  }
-
-  void _emitReasoningDelta({
-    required ActiveRun owner,
-    required GatewayEvent event,
-    required AgentRunner agentRunner,
-    required String fallbackRunId,
-    required String reasoning,
-  }) {
-    if (reasoning.isEmpty ||
-        !ownsRun(owner) ||
-        !owner.cancellationScope.isPublicationOpen) {
-      return;
-    }
-    _appendInFlightSnapshot(
-      sessionId: event.sessionId,
-      runId: owner.runId,
-      turnId: owner.turnId,
-      modelStepId: agentRunner.currentModelStepId,
-      type: CanonicalEventTypes.reasoningStream,
-      delta: reasoning,
-    );
-    emitResponse(
-      GatewayResponse(
-        sessionId: event.sessionId,
-        platformId: event.platformId,
-        message: Message(role: MessageRole.assistant, reasoning: reasoning),
-        isComplete: false,
-        runId: owner.runId,
-        turnId: owner.turnId,
-        modelStepId: agentRunner.currentModelStepId,
-      ),
-    );
-  }
-
-  void _appendInFlightSnapshot({
-    required String sessionId,
-    required String runId,
-    required String? turnId,
-    required String? modelStepId,
-    required String type,
-    required String delta,
-  }) {
-    if (delta.isEmpty) return;
-    final sessionManager = getIt<SessionManager>();
-    final existing = sessionManager.getInFlightSnapshot(sessionId);
-    final sameStream =
-        existing != null &&
-        existing['type'] == type &&
-        existing['run_id'] == runId &&
-        existing['turn_id'] == turnId &&
-        existing['model_step_id'] == modelStepId &&
-        existing['content'] is String;
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    sessionManager.saveInFlightSnapshot(sessionId, {
-      'type': type,
-      'status': 'running',
-      'session_id': sessionId,
-      'run_id': runId,
-      'turn_id': ?turnId,
-      'model_step_id': modelStepId,
-      'content': sameStream ? '${existing['content']}$delta' : delta,
-      'timestamp': timestamp,
-      'updated_at': timestamp,
-    });
-  }
-
-  void _emitCompletedSteerSegment({
-    required ActiveRun owner,
-    required GatewayEvent event,
-    required String content,
-  }) {
-    if (content.isEmpty ||
-        !ownsRun(owner) ||
-        !owner.cancellationScope.isPublicationOpen) {
-      return;
-    }
-    final modelStepId = owner.agentRunner.currentModelStepId;
-    emitResponse(
-      GatewayResponse(
-        sessionId: event.sessionId,
-        platformId: event.platformId,
-        message: Message(
-          role: MessageRole.assistant,
-          content: content,
-          metadata: {
-            'canonical_event_type': CanonicalEventTypes.thought,
-            'canonical_payload': {
-              'content': content,
-              'status': 'done',
-              'session_id': event.sessionId,
-              'run_id': owner.runId,
-              if (owner.turnId != null) 'turn_id': owner.turnId,
-              'model_step_id': ?modelStepId,
-            },
-          },
-        ),
-        isComplete: false,
-        runId: owner.runId,
-        turnId: owner.turnId,
-        modelStepId: modelStepId,
-      ),
-    );
-  }
-
   PendingSteerDeliveryCommit commitPendingSteerDelivery({
     required ActiveRun owner,
     required List<Message> history,
@@ -1097,9 +899,9 @@ class SessionTurnExecutor {
         history,
         transaction,
       );
-      final historyRevision = SessionHistoryRevisionRepository(
-        state,
-      ).readInTransaction(transaction, owner.sessionId)?.value;
+      final historyRevision = SessionHistoryRevisionRepository(state)
+          .readInTransaction(transaction, owner.sessionId)
+          ?.value;
       if (historyRevision == null) {
         throw StateError(
           'Session history revision is missing after steer commit.',
@@ -1198,70 +1000,5 @@ class SessionTurnExecutor {
       }
     }
     return null;
-  }
-
-  bool _shouldGenerateIntelligentTitle({
-    required bool isNewSession,
-    required SessionState? existingSession,
-    required SessionState? currentSession,
-  }) {
-    if (currentSession != null) {
-      return currentSession.titleStatus == SessionTitleStatus.pending;
-    }
-    if (existingSession != null) {
-      return existingSession.titleStatus == SessionTitleStatus.pending;
-    }
-    return isNewSession;
-  }
-
-  Future<void> _generateAndEmitIntelligentTitle({
-    required String sessionId,
-    required String platformId,
-    required String? expectedTitle,
-    required String userMessage,
-    required String assistantResponse,
-    required LLMRouteSnapshot? route,
-    String? runId,
-  }) async {
-    try {
-      final titleService = getIt<TitleService>();
-      final newTitle = await titleService.generateTitle(
-        sessionId: sessionId,
-        userMessage: userMessage,
-        assistantResponse: assistantResponse,
-        route: route,
-      );
-
-      final sessionManager = getIt<SessionManager>();
-      final updated = sessionManager.updateSessionTitleIfCurrent(
-        sessionId,
-        expectedTitle: expectedTitle,
-        title: newTitle,
-      );
-      if (!updated) {
-        _logger.fine('Discarded stale generated title for session $sessionId.');
-        return;
-      }
-
-      final updatedSession = sessionManager.getSession(sessionId);
-      emitResponse(
-        GatewayResponse(
-          sessionId: sessionId,
-          platformId: platformId,
-          message: Message(role: MessageRole.assistant, content: newTitle),
-          isSessionUpdated: true,
-          isComplete: true,
-          runId: runId,
-          sessionPayload: updatedSession != null
-              ? buildSessionPayload(
-                  session: updatedSession,
-                  sessionMetadata: sessionManager.getSessionMetadata(sessionId),
-                )
-              : null,
-        ),
-      );
-    } catch (e) {
-      _logger.warning('Failed to generate and emit intelligent title: $e');
-    }
   }
 }

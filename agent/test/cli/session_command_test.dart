@@ -294,6 +294,10 @@ void main() {
         client.historyToReturn = {
           'payload': {
             'session_id': 'sess-ask',
+            // The daemon always projects the session's own identity; a
+            // projection without it is the not-found answer.
+            'title': 'Ask session',
+            'created_at': '2026-09-22T00:00:00.000Z',
             'model': 'deepseek-v4-flash',
             'pending_permission_request': {
               'request_id': 'req-ask-99',
@@ -327,6 +331,8 @@ void main() {
         client.historyToReturn = {
           'payload': {
             'session_id': 'sess-perm',
+            'title': 'Permission session',
+            'created_at': '2026-09-22T00:00:00.000Z',
             'model': 'glm-5.2',
             'pending_permission_request': {
               'request_id': 'req-perm-42',
@@ -355,6 +361,8 @@ void main() {
         client.historyToReturn = {
           'payload': {
             'session_id': 'sess-json',
+            'title': 'JSON session',
+            'created_at': '2026-09-22T00:00:00.000Z',
             'in_flight': {'run_id': 'run-100', 'type': 'thinking'},
             'pending_permission_request': {
               'request_id': 'req-100',
@@ -395,6 +403,8 @@ void main() {
           client.historyToReturn = {
             'payload': {
               'session_id': 'sess-poll',
+              'title': 'Poll session',
+              'created_at': '2026-09-22T00:00:00.000Z',
               'messages': [
                 {'type': 'user_message', 'content': 'hello'},
                 {
@@ -509,6 +519,8 @@ void main() {
           client.historyToReturn = {
             'payload': {
               'session_id': 'sess-full',
+              'title': 'Full session',
+              'created_at': '2026-09-22T00:00:00.000Z',
               'in_flight': {'run_id': 'run-300', 'type': 'thinking'},
               'model': 'deepseek-v4-flash',
               'messages': [
@@ -553,6 +565,8 @@ void main() {
           client.historyToReturn = {
             'payload': {
               'session_id': 'sess-stale',
+              'title': 'Stale session',
+              'created_at': '2026-09-22T00:00:00.000Z',
               'in_flight': {
                 'run_id': 'run-stale',
                 'type': 'thought_stream',
@@ -588,6 +602,213 @@ void main() {
           expect((decoded['identities'] as Map)['run_id'], isNull);
         },
       );
+      test(
+        'a retryable failure with budget left reports retrying, not idle or blocked',
+        () async {
+          // The 2026-10-23 shape: the daemon published a retryable provider
+          // timeout it was already retrying. The projection must carry the
+          // authoritative execution state, the notice, and its counters.
+          client.historyToReturn = {
+            'payload': {
+              'session_id': 'sess-retrying',
+              'title': 'Retrying session',
+              'created_at': '2026-10-23T06:57:00.000Z',
+              'execution_snapshot': {
+                'session_id': 'sess-retrying',
+                'state': 'waiting',
+                'work_item_id': 'wi-retrying',
+                'request_id': 'req-turn-retrying',
+                'revision': 9,
+                'updated_at': '2026-10-23T06:57:01.000Z',
+              },
+              'runtime_notice': {
+                'session_id': 'sess-retrying',
+                'request_id': 'req-turn-retrying',
+                'status': 'waiting',
+                'reason': 'timeout',
+                'severity': 'warning',
+                'title': 'Request timed out',
+                'message': 'The request took too long to complete. Retrying '
+                    'automatically in 2s (attempt 1 of 1).',
+                'retry_attempt': 1,
+                'retry_budget': 1,
+                'retry_after_ms': 2000,
+                'resume_at': '2026-10-23T06:57:03.000Z',
+                'actions': ['stop', 'change_provider'],
+              },
+              'messages': [
+                {'type': 'user_message', 'content': 'build the feature'},
+              ],
+            },
+          };
+
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'show',
+            'sess-retrying',
+            '--json',
+          ]);
+          expect(exitCode, equals(0));
+
+          final decoded =
+              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+          expect(decoded['status'], equals('retrying'));
+          expect(decoded['execution_state'], equals('waiting'));
+          expect(decoded['runtime_notice'], isNotNull);
+          expect((decoded['runtime_notice'] as Map)['status'], equals('waiting'));
+          expect(
+            (decoded['runtime_notice'] as Map)['retry_attempt'],
+            equals(1),
+          );
+          expect(
+            (decoded['runtime_notice'] as Map)['retry_budget'],
+            equals(1),
+          );
+          final retry = decoded['retry'] as Map<String, dynamic>;
+          expect(retry['pending'], isTrue);
+          expect(retry['stopped'], isFalse);
+          expect(retry['attempt'], equals(1));
+          expect(retry['budget'], equals(1));
+          expect(retry['reason'], equals('timeout'));
+          expect(retry['label'], equals('retrying (1/1)'));
+        },
+      );
+
+      test('a retryable failure with budget left is reported in text mode', () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-retrying-text',
+            'title': 'Retrying session',
+            'created_at': '2026-10-23T06:57:00.000Z',
+            'execution_snapshot': {
+              'session_id': 'sess-retrying-text',
+              'state': 'blocked',
+              'revision': 9,
+            },
+            'runtime_notice': {
+              'session_id': 'sess-retrying-text',
+              'status': 'blocked',
+              'reason': 'timeout',
+              'retry_attempt': 1,
+              'retry_budget': 3,
+            },
+            'messages': [],
+          },
+        };
+
+        final runner = buildRunner();
+        expect(
+          await runner.run(['session', 'show', 'sess-retrying-text']),
+          equals(0),
+        );
+        final out = stdoutBuf.toString();
+        expect(out, contains('Status: retrying'));
+        expect(out, contains('Execution: blocked'));
+        expect(out, contains('Recovery: retrying (1/3)'));
+      });
+
+      test('an exhausted retry budget reports a stopped turn', () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-stopped',
+            'title': 'Stopped session',
+            'created_at': '2026-10-23T06:57:00.000Z',
+            'execution_snapshot': {
+              'session_id': 'sess-stopped',
+              'state': 'blocked',
+              'revision': 11,
+            },
+            'runtime_notice': {
+              'session_id': 'sess-stopped',
+              'status': 'blocked',
+              'reason': 'timeout',
+              'retry_attempt': 1,
+              'retry_budget': 1,
+            },
+            'messages': [],
+          },
+        };
+
+        final runner = buildRunner();
+        expect(
+          await runner.run(['session', 'show', 'sess-stopped', '--json']),
+          equals(0),
+        );
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['status'], equals('blocked'));
+        final retry = decoded['retry'] as Map<String, dynamic>;
+        expect(retry['pending'], isFalse);
+        expect(retry['stopped'], isTrue);
+        expect(retry['label'], equals('needs_intervention'));
+      });
+
+      test('a non-retryable failure reports a stopped turn', () async {
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-auth',
+            'title': 'Auth session',
+            'created_at': '2026-10-23T06:57:00.000Z',
+            'execution_snapshot': {
+              'session_id': 'sess-auth',
+              'state': 'blocked',
+              'revision': 3,
+            },
+            'runtime_notice': {
+              'session_id': 'sess-auth',
+              'status': 'blocked',
+              'reason': 'auth',
+            },
+            'messages': [],
+          },
+        };
+
+        final runner = buildRunner();
+        expect(
+          await runner.run(['session', 'show', 'sess-auth', '--json']),
+          equals(0),
+        );
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['status'], equals('blocked'));
+        final retry = decoded['retry'] as Map<String, dynamic>;
+        expect(retry['pending'], isFalse);
+        expect(retry['stopped'], isTrue);
+        expect(retry['attempt'], isNull);
+        expect(retry['budget'], isNull);
+      });
+
+      test('an unknown session id is a not-found error, never idle', () async {
+        // The daemon omits the session's own identity fields when it does not
+        // know the id; reporting that projection as `idle` with exit 0 made an
+        // unknown id indistinguishable from a stopped turn.
+        client.historyToReturn = {
+          'payload': {
+            'session_id': 'sess-missing',
+            'messages': [],
+            'execution_snapshot': {
+              'session_id': 'sess-missing',
+              'state': 'idle',
+              'revision': 0,
+            },
+            'pending_permission_request': null,
+            'in_flight': null,
+          },
+        };
+
+        final runner = buildRunner();
+        expect(
+          await runner.run(['session', 'show', 'sess-missing', '--json']),
+          equals(1),
+        );
+        final decoded =
+            jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+        expect(decoded['error_code'], equals('session_not_found'));
+        expect(decoded['session_id'], equals('sess-missing'));
+        expect(decoded['status'], isNull);
+        expect(stderrBuf.toString(), contains('was not found'));
+      });
     });
 
     group('session stop', () {
