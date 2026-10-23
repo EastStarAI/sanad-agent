@@ -33,7 +33,6 @@ import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
-import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
@@ -51,7 +50,11 @@ import 'handlers/session_query_handler.dart';
 import 'handlers/session_recovery_command_handler.dart';
 import 'handlers/session_compact_command_handler.dart';
 import 'handlers/session_turn_replay_command_handler.dart';
+import 'handlers/capability_discovery_command_handler.dart';
+import 'handlers/computer_use_command_handler.dart';
+import 'handlers/mcp_command_handler.dart';
 import 'handlers/remote_cli_command_handler.dart';
+import 'handlers/support/agent_event_envelope.dart' as canonical_envelope;
 import 'handlers/workspace_command_handler.dart';
 import 'protocol/canonical_events.dart';
 import 'server_sanad_gateway_platform.dart';
@@ -65,6 +68,9 @@ class SanadProtocolBridge {
   ProviderCommandHandler? __providerHandler;
   SessionQueryHandler? __sessionQueryHandler;
   WorkspaceCommandHandler? __workspaceHandler;
+  McpCommandHandler? __mcpHandler;
+  CapabilityDiscoveryCommandHandler? __capabilityDiscoveryHandler;
+  ComputerUseCommandHandler? __computerUseHandler;
   SessionRecoveryCommandHandler? __recoveryHandler;
   SessionTurnReplayCommandHandler? __turnReplayHandler;
   AttachmentAdmissionCommandHandler? __attachmentAdmissionHandler;
@@ -139,16 +145,32 @@ class SanadProtocolBridge {
   WorkspaceCommandHandler get _workspaceHandler =>
       __workspaceHandler ??= WorkspaceCommandHandler(
         runtimeService: getIt<LocalWorkspaceRuntimeService>(),
-        envFileService: getIt.isRegistered<EnvFileService>()
-            ? getIt<EnvFileService>()
-            : null,
         policyStore: getIt.isRegistered<WorkspacePolicyStore>()
             ? getIt<WorkspacePolicyStore>()
             : null,
         admission: getIt.isRegistered<DeviceCommandAdmission>()
             ? getIt<DeviceCommandAdmission>()
             : null,
-        bridge: this,
+      );
+
+  McpCommandHandler get _mcpHandler =>
+      __mcpHandler ??= McpCommandHandler(
+        runtimeService: getIt<LocalWorkspaceRuntimeService>(),
+        admission: getIt.isRegistered<DeviceCommandAdmission>()
+            ? getIt<DeviceCommandAdmission>()
+            : null,
+      );
+
+  CapabilityDiscoveryCommandHandler get _capabilityDiscoveryHandler =>
+      __capabilityDiscoveryHandler ??= CapabilityDiscoveryCommandHandler(
+        runtimeService: getIt<LocalWorkspaceRuntimeService>(),
+      );
+
+  ComputerUseCommandHandler get _computerUseHandler =>
+      __computerUseHandler ??= ComputerUseCommandHandler(
+        envFileService: getIt.isRegistered<EnvFileService>()
+            ? getIt<EnvFileService>()
+            : null,
       );
 
   DeviceSettingsCommandHandler get _deviceSettingsHandler =>
@@ -919,81 +941,81 @@ class SanadProtocolBridge {
         return;
       case CanonicalEventTypes.listMcpServers:
         await emitEnvelope(
-          await _workspaceHandler.buildMcpServersEnvelope(event),
+          await _mcpHandler.buildMcpServersEnvelope(event),
         );
         return;
       case CanonicalEventTypes.saveMcpServer:
         await emitEnvelope(
-          await _workspaceHandler.buildSaveMcpServerEnvelope(event),
+          await _mcpHandler.buildSaveMcpServerEnvelope(event),
         );
         return;
       case CanonicalEventTypes.deleteMcpServer:
         await emitEnvelope(
-          await _workspaceHandler.buildDeleteMcpServerEnvelope(event),
+          await _mcpHandler.buildDeleteMcpServerEnvelope(event),
         );
         return;
       case CanonicalEventTypes.replaceMcpConfig:
         await emitEnvelope(
-          await _workspaceHandler.buildReplaceMcpConfigEnvelope(event),
+          await _mcpHandler.buildReplaceMcpConfigEnvelope(event),
         );
         return;
       case CanonicalEventTypes.inspectMcpServer:
         await emitEnvelope(
-          await _workspaceHandler.buildInspectMcpServerEnvelope(event),
+          await _mcpHandler.buildInspectMcpServerEnvelope(event),
         );
         return;
       case CanonicalEventTypes.previewMcpImport:
         await emitEnvelope(
-          await _workspaceHandler.buildPreviewMcpImportEnvelope(event),
+          await _mcpHandler.buildPreviewMcpImportEnvelope(event),
         );
         return;
       case CanonicalEventTypes.exportMcpServers:
         await emitEnvelope(
-          await _workspaceHandler.buildExportMcpServersEnvelope(event),
+          await _mcpHandler.buildExportMcpServersEnvelope(event),
         );
         return;
       case CanonicalEventTypes.readAdvancedMcpServer:
         await emitEnvelope(
-          await _workspaceHandler.buildReadAdvancedMcpServerEnvelope(event),
+          await _mcpHandler.buildReadAdvancedMcpServerEnvelope(event),
         );
         return;
       case CanonicalEventTypes.previewAdvancedMcpServer:
         await emitEnvelope(
-          await _workspaceHandler.buildPreviewAdvancedMcpServerEnvelope(event),
+          await _mcpHandler.buildPreviewAdvancedMcpServerEnvelope(event),
         );
         return;
       case CanonicalEventTypes.saveAdvancedMcpServer:
         await emitEnvelope(
-          await _workspaceHandler.buildSaveAdvancedMcpServerEnvelope(event),
+          await _mcpHandler.buildSaveAdvancedMcpServerEnvelope(event),
         );
         return;
       case CanonicalEventTypes.startMcpOAuth:
         await emitEnvelope(
-          await _workspaceHandler.buildStartMcpOAuthEnvelope(event),
+          await _mcpHandler.buildStartMcpOAuthEnvelope(event),
         );
         return;
       case CanonicalEventTypes.getMcpOAuthStatus:
         await emitEnvelope(
-          await _workspaceHandler.buildMcpOAuthStatusEnvelope(event),
+          await _mcpHandler.buildMcpOAuthStatusEnvelope(event),
         );
         return;
       case CanonicalEventTypes.cancelMcpOAuth:
         await emitEnvelope(
-          await _workspaceHandler.buildCancelMcpOAuthEnvelope(event),
+          await _mcpHandler.buildCancelMcpOAuthEnvelope(event),
         );
         return;
       case CanonicalEventTypes.completeMcpOAuth:
         await emitEnvelope(
-          await _workspaceHandler.buildCompleteMcpOAuthEnvelope(event),
+          await _mcpHandler.buildCompleteMcpOAuthEnvelope(event),
         );
         return;
       case CanonicalEventTypes.searchSlashCommands:
         await emitEnvelope(
-          await _workspaceHandler.buildSlashCommandsEnvelope(event),
+          await _capabilityDiscoveryHandler.buildSlashCommandsEnvelope(event),
         );
         return;
       case CanonicalEventTypes.listSkills:
-        await emitEnvelope(await _workspaceHandler.buildSkillsEnvelope(event));
+        await emitEnvelope(await _capabilityDiscoveryHandler.buildSkillsEnvelope(event));
         return;
       case CanonicalEventTypes.deviceSettingsGet:
         await emitEnvelope(
@@ -1102,21 +1124,21 @@ class SanadProtocolBridge {
         return;
       case CanonicalEventTypes.systemCheckComputerUsePermissions:
         await emitEnvelope(
-          await _workspaceHandler.buildCheckComputerUsePermissionsEnvelope(
+          await _computerUseHandler.buildCheckComputerUsePermissionsEnvelope(
             event,
           ),
         );
         return;
       case CanonicalEventTypes.systemRequestComputerUsePermissions:
         await emitEnvelope(
-          await _workspaceHandler.buildRequestComputerUsePermissionsEnvelope(
+          await _computerUseHandler.buildRequestComputerUsePermissionsEnvelope(
             event,
           ),
         );
         return;
       case CanonicalEventTypes.systemToggleComputerUse:
         await emitEnvelope(
-          await _workspaceHandler.buildToggleComputerUseEnvelope(event),
+          await _computerUseHandler.buildToggleComputerUseEnvelope(event),
         );
         await emitEnvelope(
           await _providerHandler.buildCapabilitiesChangedEnvelope(event),
@@ -1287,32 +1309,8 @@ class SanadProtocolBridge {
     }
   }
 
-  Map<String, dynamic> buildAgentEventEnvelope(CanonicalEvent canonicalEvent) {
-    final authManager = getIt<AuthManager>();
-    final hardwareId = authManager.hardwareId ?? 'sanad-agent-local';
-
-    final eventId = canonicalEvent.eventId ?? EventId.generate();
-    final delivery =
-        canonicalEvent.delivery ??
-        DeliveryPolicy.origin(
-          requestId: canonicalEvent.payload['request_id']?.toString(),
-        );
-
-    return {
-      'device_id': hardwareId,
-      'hardware_id': hardwareId,
-      'type': 'event',
-      'event': canonicalEvent.type,
-      'payload': canonicalEvent.payload,
-      if (canonicalEvent.sessionId != null)
-        'session_id': canonicalEvent.sessionId,
-      if (canonicalEvent.runId != null) 'run_id': canonicalEvent.runId,
-      if (canonicalEvent.payload['request_id'] != null)
-        'request_id': canonicalEvent.payload['request_id'],
-      'event_id': eventId,
-      'delivery': delivery.toJson(),
-    };
-  }
+  Map<String, dynamic> buildAgentEventEnvelope(CanonicalEvent canonicalEvent) =>
+      canonical_envelope.buildAgentEventEnvelope(canonicalEvent);
 
   Map<String, dynamic> _readPayload(Map<String, dynamic> data) {
     final payload = data['payload'];
