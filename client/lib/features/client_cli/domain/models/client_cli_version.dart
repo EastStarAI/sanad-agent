@@ -12,4 +12,4 @@
 /// (`agent/tool/release_tool.dart prepare-release`) advances this literal with
 /// the Client release version, and `check-preparation` rejects a stale value,
 /// so the literal is never edited by hand.
-const String sanadClientCliVersion = '1.0.19';
+const String sanadClientCliVersion = '1.0.20';

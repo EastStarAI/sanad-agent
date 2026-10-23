@@ -1,3 +1,13 @@
+## 1.0.20
+
+- Stopped opening the Agent secret vault for commands that read no secret, ending the compiled-CLI hang on an invisible macOS Keychain prompt: the per-subcommand classifier covers `session`, `workspace`/`ws`, `memory`, `schedule list`, `skills list`, and the pure queries, a skipped vault refuses `write`/`remove`/`pruneOrphans` instead of falling back to plaintext, and prompt ownership is decided once from explicit evidence so the daemon and an interactive terminal invocation may prompt while `--json`, `--quiet`, and `--child-process` fail closed (#271).
+- Bound every Home-selected command to that Home's own local gateway endpoint and token: the daemon publishes an owner-only `.local_gateway_endpoint.json`, discovery verifies the answering `home_id` before sending a credential, `--home` ignores inherited gateway variables, `.local_token.home` binds the token to its Home, and a missing, stale, foreign, unreachable, or mismatched runtime fails closed with exit code 78 (#268).
+- Let the forced-standalone ownership pre-check select its probe deadline by probe scope again, sharing one run-scoped discovery instance with mode resolution, so a healthy daemon answering slower than the speculative bound is no longer read as absent (#264).
+- Signed the macOS Agent with the stable identifier `com.eaststarai.sanad.agent`, asserted the identifier and designated requirement in the signing step, and guarded both plus the team OU in the `release-security` CI job (#272).
+- Made `sanad-dev ui` reuse a cached native artifact instead of compiling per action, added per-action deadlines with bounded exit 124 diagnostics, `wait-for`, snapshot `generation`/`signature`, verification options in batch steps, and removed the dead Flutter Driver fallbacks except `screenshot` (#266).
+- Recorded Task 78's completed live acceptance and merge in its task record (#265).
+- PENDING (#269): non-interactive `session steer`/`retry`; filled in after PR #269 merges.
+
 ## 1.0.19
 
 - Applied `sanad models --provider/--model`, added a `sanad.models.v1` `--json` document, and failed closed on unknown or ambiguous selectors (#261).
