@@ -22,6 +22,11 @@ typedef BackgroundComponentsManagedChecker =
       required String? clientInstanceSlot,
     });
 
+/// Launches one component in the background and waits for a terminal state.
+///
+/// The exit status is injected through [setExitCode] so tests can assert it
+/// without reading `dart:io`'s process-global `exitCode`, which parallel suites
+/// in one test VM share.
 Future<void> handleBackgroundRun({
   required List<String> originalArguments,
   required SanadDevComponentTarget target,
@@ -38,6 +43,7 @@ Future<void> handleBackgroundRun({
   Future<bool> Function(int? pid) processRunning = isProcessRunning,
   void Function(String message)? printMessage,
   void Function(String message)? printError,
+  void Function(int code)? setExitCode,
 }) async {
   final runtime = await discoverSanadDevRuntime(
     callerDirectory: _callerDirectory,
@@ -56,6 +62,7 @@ Future<void> handleBackgroundRun({
 
   void log(String message) => (printMessage ?? print)(message);
   void logError(String message) => (printError ?? stderr.writeln)(message);
+  final fail = setExitCode ?? _assignBackgroundProcessExitCode;
 
   final scriptPath = Platform.script.toFilePath();
   final childArguments = sanadDevBackgroundChildArguments(
@@ -93,7 +100,7 @@ Future<void> handleBackgroundRun({
           '${attempt.failureReason ?? 'unknown failure'} '
           '(exit ${attempt.exitStatus ?? 1}).',
         );
-        exitCode = attempt.exitStatus ?? 1;
+        fail(attempt.exitStatus ?? 1);
         return;
       }
     }
@@ -127,7 +134,7 @@ Future<void> handleBackgroundRun({
           'Background launcher exited before publishing a managed or failed '
           'startup result. Run "sanad-dev status" for diagnostics.',
         );
-        exitCode = 1;
+        fail(1);
         return;
       }
     } else {
@@ -139,8 +146,10 @@ Future<void> handleBackgroundRun({
     'Background startup did not reach a terminal state within '
     '${timeout.inSeconds} seconds. Run "sanad-dev status" for diagnostics.',
   );
-  exitCode = 1;
+  fail(1);
 }
+
+void _assignBackgroundProcessExitCode(int code) => exitCode = code;
 
 Future<bool> _backgroundRequestedComponentsAreManaged({
   required SanadDevRuntime runtime,

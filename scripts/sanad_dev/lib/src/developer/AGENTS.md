@@ -8,7 +8,9 @@ This contract governs developer observability, interactive controls, and UI auto
 * `developer_journal.dart` owns journal streaming, tailing, bounded log reads, and terminal key listening.
 * `developer_client.dart` owns Client attach actions (hot reload `r`, hot restart `R`), DevTools launch, and compile-time profile validation.
 * `developer_agent.dart` owns Agent log retrieval and authenticated `/restart` requests.
-* `developer_ui_driver.dart` owns UI automation and Flutter Driver command forwarding.
+* `developer_ui_driver.dart` owns UI automation argument planning, child spawning, wall-clock bounding, and partial batch evidence.
+* `developer_ui_driver_target.dart` owns managed driver Client resolution: cached-target revalidation and the full discovery fallback.
+* `developer_ui_driver_target_cache.dart` owns the per-worktree/Home target entry, its bounded file I/O, and its pure validation rules.
 
 ---
 

@@ -35,6 +35,26 @@ A per-call `fvm dart scripts/flutter_driver_cli.dart` invocation pays FVM resolu
 
 Measured on a fake driver-enabled client (five runs per case): a JIT action cost 1.06-1.46 s per call, while the precompiled artifact answered `auth-url`/`snapshot` in 35-107 ms and a tap in 341 ms including its 300 ms post-delay. Cold artifact preparation is a one-time ~3 s compile per source fingerprint, and that cost is reported as `build_ms` in the JSON of the call that paid it (`sanad-dev ui` passes it through the child environment), so a slow first action is attributable instead of looking like a slow snapshot.
 
+## Warm Invocation Budget
+
+A warm `sanad-dev ui` invocation is two process starts plus one VM Service round trip, so every fixed cost in front of the driver is user-visible. Three of them were removed because they did work the action never consumed:
+
+- **Wrapper freshness.** The POSIX wrapper used to hash every runtime CLI source file in its own `shasum` process, which cost roughly half a second per invocation before any Dart code ran. It now asks Git instead: when `git status` reports no change in the watched inputs (`pubspec.yaml`, `pubspec.lock`, and `lib/**/*.dart`), the working tree content is exactly the staged blobs, so the fingerprint is one hash of one `git ls-files --stage` listing. A tracked edit, an untracked file under the watched paths, an ignore change, a deletion, or a branch switch all make that status non-empty and fall back to the previous per-file content hash, so the fast path can never mask a rebuild. The fingerprint is change detection, not a security boundary, and a checkout without Git keeps the content-hash path. The Windows wrapper still hashes each source file.
+- **Port-resolution prelude.** The CLI resolved an agent/client port for every command that reached the client-attach dispatch, and `ui` never read the result. `driver`/`ui` are now dispatched before that resolution, which removes a full process scan plus a 101-port sweep from the warm path.
+- **Target discovery.** The adapter resolved the managed driver Client with a full process-table scan, a 101-port Agent sweep across every candidate Home, and the lease validation, and paid it again on the retry. It now remembers the resolved Client in `<runtime directory>/ui-driver-target.json` (owner-only, `0600`, keyed by worktree id and Sanad Home) and revalidates that entry instead: the loopback endpoint must accept a connection, the recorded development-service and runner pids must still present the same argument vectors, the Agent must answer health on the recorded port, and the launcher lease must still name exactly that Client and VM-service port. Every one of those observations is live evidence; the entry only says where to look. A rejection, an unreadable or foreign entry, or a lease whose client set changed (a second Client started, a Client restarted) discards the entry and falls back to the full scan, which also preserves the "exactly one managed Client" failure mode. Discovery gained matching `candidatePids`/`candidatePorts` narrowing for that purpose; a narrowed scan reads the same live evidence for the subset it was given and never treats an empty result as absence.
+
+Measured on a warm checkout against a loopback VM Service stub, five runs each, with an explicit `--vm-url` so the numbers isolate the fixed cost in front of the driver:
+
+| Stage | Before | After |
+| --- | --- | --- |
+| Wrapper fingerprint (45 sources) | ~500 ms | ~40 ms (two Git reads) |
+| CLI prelude (home inference + unused port resolution) | ~130 ms | ~65 ms |
+| Client resolution (full scan, cold entry) | ~140 ms clients + ~245-1400 ms Agent sweep | ~105 ms revalidated entry |
+| Driver artifact lookup + spawn + snapshot | ~30-60 ms | ~30-60 ms |
+| Whole warm `ui snapshot --json` (no target discovery) | 1283 ms (min) | 217 ms (min) |
+
+The remaining fixed cost is one Git-based runtime discovery for post-launch Home inference (~65 ms), one for the UI adapter's repository root (~40 ms), and one owner-only state read for the revalidated entry (~15 ms). A persistent per-worktree driver connection was therefore not added: it would have saved a ~10-30 ms attach at the cost of a new long-lived local surface. If the remaining budget ever needs to shrink again, that helper is the next step — one worktree-scoped process holding the VM Service socket, loopback or unix only, `0600` socket permissions, idle exit, and a lifetime bound to the resolved Client pid so it can never outlive its runtime.
+
 ## Deadlines
 
 Every action carries a hard deadline, and no driver path may block a caller indefinitely:

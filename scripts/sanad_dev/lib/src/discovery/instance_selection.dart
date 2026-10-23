@@ -6,6 +6,12 @@ class ClientInstance {
   final String path;
   final String? deviceId;
   final int? pid;
+
+  /// Process id of the Dart development service that serves [port].
+  ///
+  /// It is discovery evidence for narrowing one later scan to the same
+  /// endpoint; it never grants ownership, which stays with [pid] and the lease.
+  final int? devServicePid;
   final ClientLaunchProfile? launchProfile;
   ClientInstance(
     this.port,
@@ -13,6 +19,7 @@ class ClientInstance {
     this.path,
     this.deviceId, {
     this.pid,
+    this.devServicePid,
     this.launchProfile,
   });
 }

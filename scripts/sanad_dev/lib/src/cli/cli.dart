@@ -142,6 +142,14 @@ void main(List<String> args) async {
     return;
   }
 
+  // The UI driver resolves its own target and never consumes a resolved
+  // agent/client port, so it must not pay for a full process discovery pass
+  // that would only be discarded here.
+  if (command == 'driver' || command == 'ui') {
+    await handleUiDriverCommand(args.sublist(1), sanadHomePath: sanadHomePath);
+    return;
+  }
+
   if (await dispatchSanadDevRuntimeToolingCommand(
     parsed,
     args,
@@ -220,8 +228,6 @@ void main(List<String> args) async {
       print('Unknown target: $target. Supported targets: client');
       exit(1);
     }
-  } else if (command == 'driver' || command == 'ui') {
-    await handleUiDriverCommand(args.sublist(1), sanadHomePath: sanadHomePath);
   } else {
     print('Unknown command: $command');
     printUsage();
