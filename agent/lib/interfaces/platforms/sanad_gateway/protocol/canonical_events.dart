@@ -391,4 +391,13 @@ class CanonicalEventTypes {
   static const String deviceCliStderr = RemoteCliCommands.stderr;
   static const String deviceCliEvent = RemoteCliCommands.event;
   static const String deviceCliResult = RemoteCliCommands.result;
+
+  // ── Task 140: User Secrets Protocol ──────────────────────────────────
+  static const String secretsList = 'secrets.list';
+  static const String secretsListResult = 'secrets.list_result';
+  static const String secretSet = 'secret.set';
+  static const String secretSaved = 'secret.saved';
+  static const String secretDelete = 'secret.delete';
+  static const String secretDeleted = 'secret.deleted';
+  static const String secretsChanged = 'secrets.changed';
 }

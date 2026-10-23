@@ -73,7 +73,8 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   list/create/remove/tree, folder mutations, and workspace security policy; `McpCommandHandler`
   owns MCP configuration, import/export, OAuth, and inspection;
   `CapabilityDiscoveryCommandHandler` owns skills and slash discovery;
-  `ComputerUseCommandHandler` owns computer-use permissions. Shared managed/cloud admission
+  `ComputerUseCommandHandler` owns computer-use permissions;
+  `SecretCommandHandler` owns device-owner user secrets listing, rotation (set), and deletion without exposing or logging values. Shared managed/cloud admission
   decisions live in exactly one support owner that all four use. `WorkspaceMcpCoordinator`
   remains the single MCP runtime owner, and the MCP confirmation-token salt has exactly one
   owner — the MCP handler; never mint a second salt or duplicate an admission decision.
