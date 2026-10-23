@@ -327,6 +327,7 @@ One row per item, appended by the orchestrator.
 | Item | PR | Status | Files locked | Verification |
 |---|---|---|---|---|
 | docs + guard (this PR) | | in progress | `AGENTS.md`, `agent/AGENTS.md`, `client/AGENTS.md`, `client/lib/features/AGENTS.md`, plans, `docs/llms.txt`, two guard tests | see PR |
+| 113-04 / R4 | PR pending | in review | `client/lib/features/conversations/presentation/widgets/user_message_tile.dart`, `user_attachment_grid.dart`, `inline_edit_attachment_thumbnail.dart`, `user_message_link_builder.dart`, its size-ratchet entry, this ledger | `fvm flutter analyze` clean; six focused widget suites (103); `test/guards/`; full Client fast suite |
 
 ## Definition of Done
 

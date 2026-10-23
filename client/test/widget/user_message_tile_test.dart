@@ -9,6 +9,7 @@ import 'package:sanad_client/features/conversations/data/mappers/unified_device_
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/user_message_link_builder.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
