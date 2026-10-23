@@ -49,6 +49,7 @@ import 'handlers/attachment_admission_command_handler.dart';
 import 'handlers/session_query_handler.dart';
 import 'handlers/session_recovery_command_handler.dart';
 import 'handlers/session_compact_command_handler.dart';
+import 'handlers/session_control_command_handler.dart';
 import 'handlers/session_turn_replay_command_handler.dart';
 import 'handlers/capability_discovery_command_handler.dart';
 import 'handlers/computer_use_command_handler.dart';
@@ -56,6 +57,7 @@ import 'handlers/mcp_command_handler.dart';
 import 'handlers/remote_cli_command_handler.dart';
 import 'handlers/support/agent_event_envelope.dart' as canonical_envelope;
 import 'handlers/workspace_command_handler.dart';
+import 'protocol/canonical_command_translator.dart';
 import 'protocol/canonical_events.dart';
 import 'server_sanad_gateway_platform.dart';
 
@@ -80,6 +82,7 @@ class SanadProtocolBridge {
   DeviceControlCommandHandler? __deviceControlHandler;
   AppearanceCommandHandler? __appearanceHandler;
   RemoteCliCommandHandler? __remoteCliHandler;
+  SessionControlCommandHandler? __sessionControlHandler;
 
   /// Lazy accessors so optional runtime services registered after
   /// construction (e.g. in tests or deferred daemon startup) are only
@@ -282,6 +285,14 @@ class SanadProtocolBridge {
         )
       : null;
 
+  SessionControlCommandHandler get _sessionControlHandler =>
+      __sessionControlHandler ??= SessionControlCommandHandler(
+        orchestrator: getIt<SessionRunOrchestrator>(),
+        persistedState: getIt.isRegistered<PersistedRuntimeStateRepository>()
+            ? getIt<PersistedRuntimeStateRepository>()
+            : null,
+      );
+
   SessionForkCommandHandler? get _forkHandler =>
       __forkHandler ??= getIt.isRegistered<SessionManager>()
       ? SessionForkCommandHandler(
@@ -325,443 +336,7 @@ class SanadProtocolBridge {
     Map<String, dynamic> data,
     Future<void> Function(Map<String, dynamic> envelope) emitEnvelope,
   ) async {
-    final command = data['command'] as String?;
-    final payload = _readPayload(data);
-    final sessionId = payload['session_id'] as String?;
-
-    CanonicalEvent? event;
-    switch (command) {
-      case 'attachment.admit':
-        event = CanonicalEvent(
-          type: 'attachment.admit',
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'get_sessions':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.getSessions,
-          payload: payload,
-        );
-      case 'search_sessions':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.searchSessions,
-          payload: payload,
-        );
-      case 'get_session_history':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.getSessionHistory,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'delete_session':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.deleteSession,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'update_session_title':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.updateSessionTitle,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'update_session_preferences':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.updateSessionPreferences,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'list_workspaces':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.listWorkspaces,
-          payload: payload,
-        );
-      case 'create_workspace':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.createWorkspace,
-          payload: payload,
-        );
-      case 'workspace.rename':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.renameWorkspace,
-          payload: payload,
-        );
-      case 'workspace.remove':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.removeWorkspace,
-          payload: payload,
-        );
-      case 'workspace.relocate':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.relocateWorkspace,
-          payload: payload,
-        );
-      case 'browse_workspace_tree':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.browseWorkspaceTree,
-          payload: payload,
-        );
-      case 'workspace.create_folder':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.createFolder,
-          payload: payload,
-        );
-      case 'workspace.rename_folder':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.renameFolder,
-          payload: payload,
-        );
-      case 'workspace.delete_folder':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.deleteFolder,
-          payload: payload,
-        );
-      case 'list_mcp_servers':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.listMcpServers,
-          payload: payload,
-        );
-      case 'save_mcp_server':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.saveMcpServer,
-          payload: payload,
-        );
-      case 'delete_mcp_server':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.deleteMcpServer,
-          payload: payload,
-        );
-      case 'replace_mcp_config':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.replaceMcpConfig,
-          payload: payload,
-        );
-      case 'inspect_mcp_server':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.inspectMcpServer,
-          payload: payload,
-        );
-      case 'preview_mcp_import':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.previewMcpImport,
-          payload: payload,
-        );
-      case 'export_mcp_servers':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.exportMcpServers,
-          payload: payload,
-        );
-      case 'read_advanced_mcp_server':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.readAdvancedMcpServer,
-          payload: payload,
-        );
-      case 'preview_advanced_mcp_server':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.previewAdvancedMcpServer,
-          payload: payload,
-        );
-      case 'save_advanced_mcp_server':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.saveAdvancedMcpServer,
-          payload: payload,
-        );
-      case 'start_mcp_oauth':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.startMcpOAuth,
-          payload: payload,
-        );
-      case 'get_mcp_oauth_status':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.getMcpOAuthStatus,
-          payload: payload,
-        );
-      case 'cancel_mcp_oauth':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.cancelMcpOAuth,
-          payload: payload,
-        );
-      case 'complete_mcp_oauth':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.completeMcpOAuth,
-          payload: payload,
-        );
-      case 'search_slash_commands':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.searchSlashCommands,
-          payload: payload,
-        );
-      case 'list_skills':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.listSkills,
-          payload: payload,
-        );
-      case 'device.settings.get':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.deviceSettingsGet,
-          payload: payload,
-        );
-      case 'device.settings.update':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.deviceSettingsUpdate,
-          payload: payload,
-        );
-      case CanonicalEventTypes.getAppearance:
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.getAppearance,
-          payload: payload,
-        );
-      case CanonicalEventTypes.updateAppearance:
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.updateAppearance,
-          payload: payload,
-        );
-      case CanonicalEventTypes.deviceUpdateCheck:
-      case CanonicalEventTypes.deviceUpdateApply:
-      case CanonicalEventTypes.deviceRuntimeRestart:
-      case CanonicalEventTypes.deviceCliExecute:
-      case CanonicalEventTypes.deviceCliCancel:
-        event = CanonicalEvent(
-          type: command!,
-          payload: {
-            ...payload,
-            if (data['device_id'] != null) 'device_id': data['device_id'],
-            if (data['request_id'] != null && !payload.containsKey('request_id'))
-              'request_id': data['request_id'],
-          },
-          sessionId: sessionId,
-        );
-      case 'provider.setup_status':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerSetupStatus,
-          payload: payload,
-        );
-      case 'provider.runtime_check':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerRuntimeCheck,
-          payload: payload,
-        );
-      case 'provider.auth.start':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerAuthStart,
-          payload: payload,
-        );
-      case 'provider.auth.poll':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerAuthPoll,
-          payload: payload,
-        );
-      case 'provider.auth.submit':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerAuthSubmit,
-          payload: payload,
-        );
-      case 'provider.auth.cancel':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerAuthCancel,
-          payload: payload,
-        );
-      case 'provider.auth.status':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerAuthStatus,
-          payload: payload,
-        );
-      case 'model.options':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.modelOptions,
-          payload: payload,
-        );
-      case 'model.recommended_default':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.modelRecommendedDefault,
-          payload: payload,
-        );
-      case 'model.set_default':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.modelSetDefault,
-          payload: payload,
-        );
-      case 'system.check_computer_use_permissions':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.systemCheckComputerUsePermissions,
-          payload: payload,
-        );
-      case 'system.request_computer_use_permissions':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.systemRequestComputerUsePermissions,
-          payload: payload,
-        );
-      case 'system.toggle_computer_use':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.systemToggleComputerUse,
-          payload: payload,
-        );
-      case 'workspace.get_policy':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.workspaceGetPolicy,
-          payload: payload,
-        );
-      case 'workspace.set_permission_mode':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.workspaceSetPermissionMode,
-          payload: payload,
-        );
-      case 'provider.templates.list':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerTemplatesList,
-          payload: payload,
-        );
-      case 'provider.instances.list':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerInstancesList,
-          payload: payload,
-        );
-      case 'provider.instance.create':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerInstanceCreate,
-          payload: payload,
-        );
-      case 'provider.instance.update':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerInstanceUpdate,
-          payload: payload,
-        );
-      case 'provider.instance.rename':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerInstanceRename,
-          payload: payload,
-        );
-      case 'provider.instance.remove':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerInstanceRemove,
-          payload: payload,
-        );
-      case 'provider.instance.set_default':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerInstanceSetDefault,
-          payload: payload,
-        );
-      case 'provider.instance.test':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerInstanceTest,
-          payload: payload,
-        );
-      case 'provider.credential.update':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerCredentialUpdate,
-          payload: payload,
-        );
-      case 'provider.auth.reconnect':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerAuthReconnect,
-          payload: payload,
-        );
-      case 'provider.auth.disconnect':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerAuthDisconnect,
-          payload: payload,
-        );
-      case 'model.snapshot':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.modelSnapshot,
-          payload: payload,
-        );
-      case 'model.refresh':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.modelRefresh,
-          payload: payload,
-        );
-      case 'model.recent.list':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.modelRecentList,
-          payload: payload,
-        );
-      case 'model.recent.record':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.modelRecentRecord,
-          payload: payload,
-        );
-      // Task 55: provider account usage limits.
-      case 'provider.usage.get':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerUsageGet,
-          payload: payload,
-        );
-      case 'provider.usage.reset':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerUsageReset,
-          payload: payload,
-        );
-      case 'provider.usage.support':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.providerUsageSupport,
-          payload: payload,
-        );
-      // Device-directed conversation lifecycle commands.
-      case 'session.pending_steer_cancel':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionPendingSteerCancel,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'session.queued_message_delete':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionQueuedMessageDelete,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'session.stop_recovery_ack':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionStopRecoveryAck,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'session.stop_recovery_claim':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionStopRecoveryClaim,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      // Task 49: edit/retry of the latest historical turn.
-      case 'session.turn_replay':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionTurnReplay,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'session.compact':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionCompact,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'session.fork':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionFork,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      // Plan 30: runtime recovery commands
-      case 'session.runtime_retry':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionRuntimeRetry,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'session.runtime_stop':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionRuntimeStop,
-          sessionId: sessionId,
-          payload: payload,
-        );
-      case 'session.runtime_continue_with_provider':
-        event = CanonicalEvent(
-          type: CanonicalEventTypes.sessionRuntimeContinueWithProvider,
-          sessionId: sessionId,
-          payload: payload,
-        );
-    }
-
+    final event = CanonicalCommandTranslator.translate(data);
     if (event == null) {
       return false;
     }
@@ -785,86 +360,10 @@ class SanadProtocolBridge {
         await emitEnvelope(_sessionQueryHandler.buildHistoryEnvelope(event));
         return;
       case CanonicalEventTypes.sessionPendingSteerCancel:
-        final orchestrator = getIt<SessionRunOrchestrator>();
-        final sessionId =
-            event.sessionId ?? event.payload['session_id']?.toString();
-        final targetRequestId = event.payload['request_id']?.toString();
-        final commandRequestId = event.payload['command_request_id']
-            ?.toString();
-        if (sessionId != null &&
-            targetRequestId != null &&
-            commandRequestId != null) {
-          orchestrator.cancelPendingSteer(
-            sessionId: sessionId,
-            targetRequestId: targetRequestId,
-            commandRequestId: commandRequestId,
-          );
-        }
-        return;
       case CanonicalEventTypes.sessionQueuedMessageDelete:
-        final orchestrator = getIt<SessionRunOrchestrator>();
-        final sessionId =
-            event.sessionId ?? event.payload['session_id']?.toString();
-        final targetRequestId = event.payload['request_id']?.toString();
-        final commandRequestId = event.payload['command_request_id']
-            ?.toString();
-        if (sessionId != null &&
-            targetRequestId != null &&
-            commandRequestId != null) {
-          orchestrator.deleteQueuedMessage(
-            sessionId: sessionId,
-            targetRequestId: targetRequestId,
-            commandRequestId: commandRequestId,
-          );
-        }
-        return;
       case CanonicalEventTypes.sessionStopRecoveryAck:
-        final sessionId =
-            event.sessionId ?? event.payload['session_id']?.toString();
-        final stopRequestId = event.payload['stop_request_id']?.toString();
-        final claimantId =
-            (event.payload['claimant_id'] ??
-                    event.payload['command_request_id'])
-                ?.toString();
-        final recoveryOwnerToken = event.payload['recovery_owner_token']
-            ?.toString();
-        if (sessionId != null && stopRequestId != null) {
-          getIt<SessionRunOrchestrator>().acknowledgeStopRecovery(
-            sessionId,
-            stopRequestId,
-            claimantId: claimantId,
-            recoveryOwnerToken: recoveryOwnerToken,
-          );
-        }
-        return;
       case CanonicalEventTypes.sessionStopRecoveryClaim:
-        final sessionId =
-            event.sessionId ?? event.payload['session_id']?.toString();
-        final stopRequestId = event.payload['stop_request_id']?.toString();
-        final commandRequestId = event.payload['command_request_id']
-            ?.toString();
-        if (sessionId != null &&
-            stopRequestId != null &&
-            commandRequestId != null &&
-            getIt.isRegistered<PersistedRuntimeStateRepository>()) {
-          final claimed = getIt<PersistedRuntimeStateRepository>().pendingInputs
-              .claimStopOutcome(
-                sessionId: sessionId,
-                stopRequestId: stopRequestId,
-                claimantId: commandRequestId,
-              );
-          if (claimed != null) {
-            await emitEnvelope(
-              buildAgentEventEnvelope(
-                CanonicalEvent(
-                  type: CanonicalEventTypes.sessionStopDraftRecovery,
-                  sessionId: sessionId,
-                  payload: claimed.toPayload(),
-                ),
-              ),
-            );
-          }
-        }
+        await _sessionControlHandler.handle(event, emitEnvelope);
         return;
       case CanonicalEventTypes.getSessions:
         await emitEnvelope(_sessionQueryHandler.buildThreadsEnvelope(event));
@@ -1311,15 +810,4 @@ class SanadProtocolBridge {
 
   Map<String, dynamic> buildAgentEventEnvelope(CanonicalEvent canonicalEvent) =>
       canonical_envelope.buildAgentEventEnvelope(canonicalEvent);
-
-  Map<String, dynamic> _readPayload(Map<String, dynamic> data) {
-    final payload = data['payload'];
-    if (payload is Map<String, dynamic>) {
-      return payload;
-    }
-    if (payload is Map) {
-      return Map<String, dynamic>.from(payload);
-    }
-    return <String, dynamic>{};
-  }
 }
