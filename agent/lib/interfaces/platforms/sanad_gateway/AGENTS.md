@@ -5,6 +5,8 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 
 ## Bridge Ownership
 - `SanadProtocolBridge` dispatches and translates only; focused handlers own domain command/query workflows.
+- `protocol/canonical_command_translator.dart` owns the accepted command set and the canonical event each accepted command produces; `SanadProtocolBridge.handleCommand` only dispatches the event it returns. A new command is added to exactly one translator table or branch, never as another literal case in the bridge, and the translator never renames a command: an accepted command's canonical event type is its own wire name.
+- `SessionControlCommandHandler` owns the device-directed pending-steer cancel, queued-message delete, and stop-recovery acknowledgment/claim commands. The bridge routes those four canonical events to it and never mutates the orchestrator for them itself.
 - Local and cloud Sanad platforms share translators, envelopes, handlers, session channels, and canonical behavior.
 - Handler dependencies are explicit constructor inputs. Handlers must not resolve runtime owners through `getIt`.
 - Optional runtime owners remain nullable composition inputs and are resolved lazily by the bridge.
