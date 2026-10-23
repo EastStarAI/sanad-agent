@@ -66,6 +66,12 @@ class RunCommand extends SanadCommand {
         help: 'DANGER: automatically approve every gated tool for this one run',
         negatable: false,
       )
+      ..addOption(
+        'reconnect-timeout',
+        help:
+            'Maximum seconds to wait for daemon reconnect across restart (1-86400, default 60)',
+        valueHelp: 'seconds',
+      )
       ..addFlag(
         'no-stdin',
         help:
@@ -130,6 +136,10 @@ class RunCommand extends SanadCommand {
     }
 
     final timeout = _parseTimeout(timeoutSeconds);
+    final reconnectTimeout = _parseOptionalTimeout(
+      getOption('reconnect-timeout'),
+      '--reconnect-timeout',
+    );
     final requestedWorkspace = workspace?.trim();
     final effectiveWorkspace = requestedWorkspace?.isNotEmpty == true
         ? requestedWorkspace
@@ -195,7 +205,20 @@ class RunCommand extends SanadCommand {
       executionRoot: normalizedExecutionRoot,
       eventSink: eventSink,
       readStdin: !getFlag('no-stdin'),
+      reconnectTimeout: reconnectTimeout,
     );
+  }
+
+  Duration? _parseOptionalTimeout(String? raw, String optionName) {
+    if (raw == null) return null;
+    final seconds = int.tryParse(raw);
+    if (seconds == null || seconds < 1 || seconds > 86400) {
+      throw UsageException(
+        '$optionName must be a whole number of seconds from 1 to 86400.',
+        usage,
+      );
+    }
+    return Duration(seconds: seconds);
   }
 
   Duration _parseTimeout(String? raw) {

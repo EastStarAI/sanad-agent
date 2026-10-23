@@ -794,6 +794,7 @@ class LocalGatewayCliClient implements CliTurnClient {
   /// A typed `error` envelope is thrown as [CliClientException] carrying the
   /// gateway's own code: an unreadable session projection is never returned as
   /// if it were session state.
+  @override
   Future<Map<String, dynamic>> getSessionHistory({
     required String sessionId,
     Duration? timeout,

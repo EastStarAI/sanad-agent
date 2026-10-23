@@ -37,3 +37,11 @@ This contract applies to `agent/bin/`.
 - Entry points must not create repository-local configuration that competes with `SANAD_HOME`.
 - Daemon startup must not require an LLM provider or credential. Provider readiness is checked lazily when a model operation is requested so local control, setup, and connectivity remain available after a clean install.
 - Service/install/update mechanics belong to operations documentation and skills, not this contract.
+
+## Oneshot Execution and Restart Resilience (`sanad run`)
+- `sanad run` must follow its active turn across daemon restarts. When the gateway connection drops while a turn is in flight, the runner must not fail immediately; it enters a bounded reconnect loop governed by `--reconnect-timeout` (default 60 seconds).
+- Reconnection discovery must remain bound to the selected Home's live endpoint (`LocalGatewayDiscovery`) and must never connect to an endpoint belonging to a different Home; a detected Home mismatch fails closed with exit code 78 (`home_identity_mismatch`).
+- After reconnecting, the runner must inspect the durable session execution snapshot. If the same turn lineage is active (`running`, `resuming`, `waiting`, or `blocked` with active recovery), it must re-subscribe to turn events and follow the turn to its terminal outcome without re-submitting input or admitting a second turn.
+- A transient blocked or waiting state under active daemon recovery is non-terminal while recovery owns it; the runner must continue following until terminal completion, real failure, or caller timeout.
+- A new `sanad run` invocation targeting an existing session with an in-flight durable turn must refuse dispatch with exit code 3 (`turn_in_flight`) rather than interrupting or injecting duplicate input.
+- If the reconnect window expires before reconnecting or reclaiming the turn, the runner exits with code 1 (`reconnect_window_expired`). If the daemon returns but the turn is missing from history, it exits with code 1 (`turn_lost`).

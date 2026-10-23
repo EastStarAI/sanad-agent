@@ -56,11 +56,22 @@ abstract interface class CliTurnClient {
     String? sessionId,
   });
 
+  Future<Map<String, dynamic>> getSessionHistory({
+    required String sessionId,
+    Duration? timeout,
+  });
+
   Future<void> dispose();
 }
 
 /// Convenience base for in-process and test transports.
 abstract class CliTurnClientBase implements CliTurnClient {
+  @override
+  Future<Map<String, dynamic>> getSessionHistory({
+    required String sessionId,
+    Duration? timeout,
+  }) async => const <String, dynamic>{};
+
   @override
   Stream<CliAssistantChunkEvent> get assistantStream => eventStream
       .where((event) => event is CliAssistantChunkEvent)

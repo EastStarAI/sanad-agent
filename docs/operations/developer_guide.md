@@ -760,6 +760,14 @@ until interrupted, normally returns to the tool only by timeout, and leaves a
 tool marked as executing while controlled restart is trying to reach a safe
 checkpoint.
 
+An attached `sanad run` worker follows its turn across a daemon restart:
+- When the gateway connection drops while a turn is in flight, `sanad run` does not fail immediately. Instead, it enters a bounded reconnect window governed by `--reconnect-timeout` (default 60 seconds).
+- It discovers the restarted daemon on the same Home's endpoint using Home-bound discovery (`LocalGatewayDiscovery`), enforcing fail-closed checks against foreign Homes (exit `78` with reason `home_identity_mismatch`).
+- Upon reconnection, it queries the durable execution snapshot via session history. When the same turn lineage is reclaimed or in progress (`resuming`, `waiting`, `running`, or retryable `blocked`), it re-attaches to the event stream, re-subscribes, and continues following without admitting a second turn or re-submitting input.
+- Transient blocked or waiting states managed by daemon recovery are non-terminal while recovery is active; the runner continues following until a true terminal result or caller timeout.
+- If the reconnect window expires before the daemon recovers or the turn is reclaimed, `sanad run` exits `1` with reason `reconnect_window_expired`. If the turn is missing from history after reconnect, it exits `1` with reason `turn_lost`.
+- Attempting to re-dispatch `sanad run --session <id>` while a session already has an active durable turn refuses dispatch early with exit code `3` and reason `turn_in_flight`.
+
 Use this path only after analyzer, focused startup/recovery tests, and diff
 review pass. Broad bootstrap, supervisor, dependency-injection, migration, or
 other changes that could prevent the daemon from returning or the turn from

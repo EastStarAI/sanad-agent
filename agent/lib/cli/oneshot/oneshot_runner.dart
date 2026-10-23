@@ -6,6 +6,7 @@ import 'package:logging/logging.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/sanad_home/runtime_ownership.dart';
+import '../../core/sanad_home/sanad_home_identity.dart';
 import '../../interfaces/models/agent_turn_request.dart';
 import '../artifacts/run_artifacts.dart';
 import '../client/cli_turn_client.dart';
@@ -127,12 +128,14 @@ class OneshotRunner {
   final ClientFactory? clientFactory;
   final StandaloneClientFactory standaloneClientFactory;
   final StandaloneFallbackStrategy fallbackStrategy;
+  final Duration defaultReconnectTimeout;
 
   OneshotRunner({
     StdinReader? stdinReader,
     this.clientFactory,
     StandaloneClientFactory? standaloneClientFactory,
     StandaloneFallbackStrategy? fallbackStrategy,
+    this.defaultReconnectTimeout = const Duration(seconds: 60),
   }) : stdinReader = stdinReader ?? defaultStdinReader,
        standaloneClientFactory =
            standaloneClientFactory ?? StandaloneCliTurnClient.start,
@@ -158,6 +161,8 @@ class OneshotRunner {
     StringSink? stderrSink,
     CliTurnClient? client,
     Duration timeout = const Duration(minutes: 5),
+    Duration? reconnectTimeout,
+    bool? checkInFlight,
     Stream<ProcessSignal>? signalStream,
     Stream<ProcessSignal> Function(ProcessSignal)? signalWatcher,
     String? outDir,
@@ -166,6 +171,8 @@ class OneshotRunner {
     void Function(RunLifecycleEvent event)? eventSink,
     bool readStdin = true,
   }) async {
+    final effectiveReconnectTimeout =
+        reconnectTimeout ?? defaultReconnectTimeout;
     final out = stdoutSink ?? stdout;
     final err = stderrSink ?? stderr;
     final normalizedThinkingMode = thinkingMode?.trim().toLowerCase();
@@ -410,22 +417,26 @@ class OneshotRunner {
     String? finalModel = model;
     String? finalProvider = provider;
     String? errorMessage;
+    String? terminalCause;
     bool hasError = false;
     bool wasCancelled = false;
     bool wasInterrupted = false;
     bool wasBlocked = false;
+    bool turnDispatched = false;
+    String? dispatchedRequestId;
 
     final automaticallyApproveTools = allowAllTools;
 
-    final subscriptions = <StreamSubscription<dynamic>>[];
+    final signalSubscriptions = <StreamSubscription<dynamic>>[];
+    final clientSubscriptions = <StreamSubscription<dynamic>>[];
     var stopRequested = false;
 
     Future<void> requestStop() async {
       if (stopRequested) return;
       stopRequested = true;
       try {
-        await activeClient!
-            .stop(sessionId: effectiveSessionId)
+        await activeClient
+            ?.stop(sessionId: effectiveSessionId)
             .timeout(const Duration(seconds: 2));
       } catch (_) {
         // Cleanup below still disposes the transport and in-process runtime.
@@ -433,10 +444,14 @@ class OneshotRunner {
     }
 
     void cleanup() {
-      for (final s in subscriptions) {
+      for (final s in signalSubscriptions) {
         s.cancel();
       }
-      subscriptions.clear();
+      signalSubscriptions.clear();
+      for (final s in clientSubscriptions) {
+        s.cancel();
+      }
+      clientSubscriptions.clear();
     }
 
     try {
@@ -457,7 +472,7 @@ class OneshotRunner {
       }
 
       if (signalStream != null) {
-        subscriptions.add(signalStream.listen(handleSignal));
+        signalSubscriptions.add(signalStream.listen(handleSignal));
       } else {
         final watchSignal =
             signalWatcher ?? (ProcessSignal signal) => signal.watch();
@@ -466,7 +481,7 @@ class OneshotRunner {
           ProcessSignal.sigterm,
         ]) {
           try {
-            subscriptions.add(
+            signalSubscriptions.add(
               watchSignal(signal).listen(
                 handleSignal,
                 onError: (Object error, StackTrace stackTrace) {
@@ -489,332 +504,573 @@ class OneshotRunner {
         coordinator.recordProgress();
       }
 
-      subscriptions.add(
-        activeClient.assistantStream.listen((event) {
-          if (event.sessionId == null ||
-              event.sessionId == effectiveSessionId) {
-            onTurnActivity();
-            assistantBuffer.write(event.content);
-            if (!json && !quiet) {
-              out.write(event.content);
-            }
-          }
-        }),
-      );
+      bool isReconnecting = false;
+      late void Function(CliTurnClient targetClient) bindClient;
 
-      subscriptions.add(
-        activeClient.reasoningStream.listen((event) {
-          if (event.sessionId == null ||
-              event.sessionId == effectiveSessionId) {
-            onTurnActivity();
-            if (showReasoning && !json && !quiet) {
-              out.write(event.content);
-            }
-          }
-        }),
-      );
+      Future<void> handleTurnReconnect() async {
+        if (isReconnecting || completer.isCompleted) return;
+        isReconnecting = true;
 
-      subscriptions.add(
-        activeClient.toolCallStream.listen((event) {
-          if (event.sessionId == null ||
-              event.sessionId == effectiveSessionId) {
-            onTurnActivity();
-            toolExecutions.add({
-              'tool_name': event.toolName,
-              'tool_call_id': event.toolCallId,
-              'arguments': event.arguments,
-            });
-            if (!json && !quiet) {
-              final callingStr = CliToolFormatter.formatToolCalling(
-                event.toolName,
-                event.arguments,
+        if (!json && !quiet) {
+          err.writeln(
+            'Notice: Gateway connection lost; waiting up to ${effectiveReconnectTimeout.inSeconds}s to reconnect across restart...',
+          );
+        }
+
+        final deadline = DateTime.now().add(effectiveReconnectTimeout);
+        final discovery = LocalGatewayDiscovery(sanadHomeOverride: sanadHome);
+        final String expectedHome;
+        try {
+          expectedHome = discovery.resolveSanadHome();
+        } catch (e) {
+          hasError = true;
+          errorMessage = 'Failed to resolve Sanad Home for reconnect: $e';
+          terminalCause = 'reconnect_window_expired';
+          if (!json) err.writeln('Error: $errorMessage');
+          if (!completer.isCompleted) completer.complete(1);
+          return;
+        }
+        final expectedHomeId = sanadHomeIdentity(expectedHome);
+
+        CliTurnClient? reconnectedClient;
+        String? reconnectFailureCause;
+
+        while (DateTime.now().isBefore(deadline) && !completer.isCompleted) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+          if (completer.isCompleted) break;
+
+          try {
+            if (clientFactory != null) {
+              reconnectedClient = await clientFactory!(
+                urlOverride: gatewayUrl,
+                sanadHomeOverride: sanadHome,
               );
-              out.writeln('\n$callingStr');
+              break;
             }
-          }
-        }),
-      );
 
-      subscriptions.add(
-        activeClient.toolResultStream.listen((event) {
-          if (event.sessionId == null ||
-              event.sessionId == effectiveSessionId) {
-            onTurnActivity();
-            final match = toolExecutions.lastWhere(
-              (t) =>
-                  t['tool_call_id'] == event.toolCallId ||
-                  (t['tool_name'] == event.toolName &&
-                      !t.containsKey('result')),
-              orElse: () {
-                final entry = <String, dynamic>{
-                  'tool_name': event.toolName,
-                  'tool_call_id': event.toolCallId,
-                };
-                toolExecutions.add(entry);
-                return entry;
-              },
+            final probeResult =
+                await discovery.discover(urlOverride: gatewayUrl);
+            if (!probeResult.isDaemonRunning) {
+              continue;
+            }
+            final servedHomeId =
+                probeResult.healthData?[LocalGatewayDiscovery.healthHomeIdKey];
+            if (servedHomeId != null && servedHomeId != expectedHomeId) {
+              reconnectFailureCause = 'home_identity_mismatch';
+              errorMessage =
+                  'Discovered daemon serves a different Sanad Home ($servedHomeId != $expectedHomeId).';
+              break;
+            }
+
+            reconnectedClient = await LocalGatewayCliClient.discoverAndConnect(
+              urlOverride: gatewayUrl,
+              sanadHomeOverride: sanadHome,
             );
-            match['result'] = event.result;
-            match['is_error'] = event.isError;
-
-            if (!json && !quiet) {
-              final effectiveName = event.toolName.isNotEmpty
-                  ? event.toolName
-                  : (match['tool_name']?.toString() ?? 'tool');
-              final rawArgs = match['arguments'];
-              final argsMap = rawArgs is Map<String, dynamic>
-                  ? rawArgs
-                  : rawArgs is Map
-                  ? Map<String, dynamic>.from(rawArgs)
-                  : null;
-              final resultStr = CliToolFormatter.formatToolResult(
-                toolName: effectiveName,
-                result: event.result,
-                isError: event.isError,
-                arguments: argsMap,
-              );
-              out.writeln(resultStr);
+            break;
+          } on GatewayDiscoveryException catch (e) {
+            if (e.code == 'home_identity_mismatch') {
+              reconnectFailureCause = 'home_identity_mismatch';
+              errorMessage = e.message;
+              break;
             }
+            continue;
+          } catch (_) {
+            continue;
           }
-        }),
-      );
+        }
 
-      subscriptions.add(
-        activeClient.permissionStream.listen((event) async {
-          if (event.sessionId == null ||
-              event.sessionId == effectiveSessionId) {
-            // A secret request is never auto-approved or answered here: it
-            // stays pending until a Sanad Client submits the values.
-            if (event.isSecretRequest) {
-              coordinator.recordPendingIntervention(
-                kind: 'needs_input',
-                requestId: event.requestId,
-                toolName: event.toolName,
-              );
-              if (!json && !quiet) {
-                err.writeln(event.secretRequestNotice(effectiveSessionId));
-              }
-              return;
-            }
-            if (event.isUserQuestion) {
-              coordinator.recordPendingIntervention(
-                kind: 'needs_input',
-                requestId: event.requestId,
-                questions: event.questions,
-              );
-
-              // User clarification questions (system_ask_user) must NEVER be
-              // auto-resolved by --allow-all-tools or given an empty answer.
-              // They remain pending until an explicit matching answer arrives.
-              if (!json && !quiet) {
-                final questionText = event.questions.isNotEmpty
-                    ? event.questions
-                          .map((q) => q['question']?.toString() ?? '')
-                          .where((q) => q.isNotEmpty)
-                          .join('; ')
-                    : 'Clarification required';
-                err.writeln(
-                  'Notice: Clarification question pending for session $effectiveSessionId (request ${event.requestId}): $questionText',
-                );
-              }
-              return;
-            }
-
-            if (!automaticallyApproveTools) {
-              coordinator.recordPendingIntervention(
-                kind: 'needs_permission',
-                requestId: event.requestId,
-                toolName: event.toolName,
-              );
-
-              // Unresolved ordinary permissions remain fail-closed and pending for explicit
-              // session permission/permit intervention.
-              if (!json && !quiet) {
-                err.writeln(
-                  'Notice: Gated tool "${event.toolName}" requires permission for session $effectiveSessionId (request ${event.requestId}). Intervene via: sanad session permission $effectiveSessionId -r ${event.requestId} --allow / --deny',
-                );
-              }
-              return;
-            }
-
-            // Broad approval (--allow-all-tools) auto-approves ordinary tool permissions only.
+        if (completer.isCompleted) {
+          if (reconnectedClient != null) {
             try {
-              await activeClient!.respondPermission(
-                requestId: event.requestId,
-                allowed: true,
-                decision: 'allow',
-                sessionId: effectiveSessionId,
-              );
-            } catch (e) {
-              _logger.warning('Failed to respond to permission request: $e');
-            }
+              await reconnectedClient
+                  .dispose()
+                  .timeout(const Duration(seconds: 2));
+            } catch (_) {}
           }
-        }),
-      );
+          return;
+        }
 
-      subscriptions.add(
-        activeClient.turnCompleteStream.listen((event) {
-          if (event.sessionId == null ||
-              event.sessionId == effectiveSessionId) {
-            usageInfo = event.usage ?? event.contextUsage;
-            if (event.model != null) finalModel = event.model;
-            if (event.provider != null) finalProvider = event.provider;
+        if (reconnectFailureCause == 'home_identity_mismatch') {
+          hasError = true;
+          terminalCause = 'home_identity_mismatch';
+          if (!json) err.writeln('Error: $errorMessage');
+          if (!completer.isCompleted) completer.complete(78);
+          return;
+        }
 
-            // A typed rejection before dispatch is a failed turn, never a
-            // completion: report the specific reason and exit non-zero.
-            final rejectionCode = event.errorCode;
-            if (rejectionCode != null && rejectionCode.isNotEmpty) {
-              hasError = true;
-              final reason = _reasonSentence(event.finalMessage);
-              errorMessage = reason.isEmpty
-                  ? rejectionCode
-                  : '$rejectionCode: $reason';
-              if (!json) {
-                err.writeln('Error: $errorMessage');
+        if (reconnectedClient == null) {
+          hasError = true;
+          terminalCause = 'reconnect_window_expired';
+          errorMessage =
+              'Failed to reconnect to Sanad daemon within ${effectiveReconnectTimeout.inSeconds}s.';
+          if (!json) err.writeln('Error: $errorMessage');
+          if (!completer.isCompleted) completer.complete(1);
+          return;
+        }
+
+        if (!json && !quiet) {
+          err.writeln('Notice: Reconnected to Sanad daemon.');
+        }
+
+        if (shouldDisposeClient && activeClient != null) {
+          try {
+            await activeClient!.dispose().timeout(const Duration(seconds: 2));
+          } catch (_) {}
+        }
+        activeClient = reconnectedClient;
+        shouldDisposeClient = true;
+
+        Map<String, dynamic>? historyPayload;
+        try {
+          final history = await reconnectedClient.getSessionHistory(
+            sessionId: effectiveSessionId,
+            timeout: const Duration(seconds: 10),
+          );
+          historyPayload = history['payload'] is Map
+              ? history['payload'] as Map<String, dynamic>
+              : history;
+        } catch (e) {
+          _logger.warning('Failed to query session history on reconnect: $e');
+        }
+
+        final snapshot = historyPayload?['execution_snapshot'];
+        final snapshotState =
+            snapshot is Map ? snapshot['state']?.toString() : null;
+        final snapshotReqId =
+            snapshot is Map ? snapshot['request_id']?.toString() : null;
+
+        final isOurTurn =
+            snapshotReqId == null || snapshotReqId == dispatchedRequestId;
+
+        if (!isOurTurn) {
+          hasError = true;
+          terminalCause = 'turn_lost';
+          errorMessage =
+              'Turn $dispatchedRequestId was lost after daemon restart (active turn is $snapshotReqId).';
+          if (!json) err.writeln('Error: $errorMessage');
+          if (!completer.isCompleted) completer.complete(1);
+          return;
+        }
+
+        if (snapshotState == 'idle') {
+          final messages = historyPayload?['messages'];
+          if (messages is List && messages.isNotEmpty) {
+            final lastAssistant = messages
+                .reversed
+                .whereType<Map>()
+                .firstWhere(
+                  (m) =>
+                      m['sender'] == 'assistant' ||
+                      m['type'] == 'assistant_message',
+                  orElse: () => const {},
+                );
+            final text = lastAssistant['content']?.toString() ??
+                lastAssistant['text']?.toString() ??
+                '';
+            if (text.isNotEmpty) {
+              if (assistantBuffer.isEmpty) {
+                assistantBuffer.write(text);
+                if (!json && !quiet) out.write(text);
               }
-              if (!completer.isCompleted) {
-                completer.complete(1);
-              }
+              if (!completer.isCompleted) completer.complete(0);
               return;
             }
-
-            if (event.finalMessage.isNotEmpty) {
-              if (assistantBuffer.isEmpty) {
-                assistantBuffer.write(event.finalMessage);
-                if (!json && !quiet) {
-                  out.write(event.finalMessage);
-                }
-              } else if (!RunResultArtifact.hasSemanticFinalSummary(
-                    assistantBuffer.toString(),
-                  ) &&
-                  RunResultArtifact.hasSemanticFinalSummary(
-                    event.finalMessage,
-                  )) {
-                assistantBuffer.clear();
-                assistantBuffer.write(event.finalMessage);
-                if (!json && !quiet) {
-                  out.write(event.finalMessage);
-                }
-              }
-            }
-
-            if (!completer.isCompleted) {
-              completer.complete(0);
-            }
           }
-        }),
-      );
+          hasError = true;
+          terminalCause = 'turn_lost';
+          errorMessage =
+              'Turn $dispatchedRequestId finished without a recorded result after restart.';
+          if (!json) err.writeln('Error: $errorMessage');
+          if (!completer.isCompleted) completer.complete(1);
+          return;
+        }
 
-      subscriptions.add(
-        activeClient.eventStream
-            .where((e) => e is CliErrorEvent)
-            .cast<CliErrorEvent>()
-            .listen((event) {
-              if (event.sessionId == null ||
-                  event.sessionId == effectiveSessionId) {
-                hasError = true;
-                errorMessage = event.message;
-                if (!json) {
-                  err.writeln('Error: ${event.message}');
-                }
-                if (!completer.isCompleted) {
-                  completer.complete(1);
-                }
+        if (snapshotState == 'blocked') {
+          final notice = historyPayload?['runtime_notice'];
+          final hasResume = notice is Map &&
+              (notice['resume_at'] != null ||
+                  (notice['retry_after_ms'] is num &&
+                      (notice['retry_after_ms'] as num) > 0));
+          if (!hasResume) {
+            hasError = true;
+            wasBlocked = true;
+            terminalCause = 'blocked';
+            final reason = _reasonSentence(
+              notice is Map ? (notice['message']?.toString() ?? '') : '',
+            );
+            errorMessage = reason.isEmpty
+                ? 'blocked. Intervene with sanad session stop '
+                      '$effectiveSessionId or retry from a client.'
+                : 'blocked: $reason Intervene with '
+                      'sanad session stop $effectiveSessionId or retry '
+                      'from a client.';
+            if (!json) err.writeln('Error: $errorMessage');
+            if (!completer.isCompleted) completer.complete(1);
+            return;
+          }
+        }
+
+        bindClient(reconnectedClient);
+        isReconnecting = false;
+
+        if (!json && !quiet) {
+          err.writeln(
+            'Notice: Re-attached to turn for session $effectiveSessionId.',
+          );
+        }
+      }
+
+      bindClient = (CliTurnClient targetClient) {
+        for (final s in clientSubscriptions) {
+          s.cancel();
+        }
+        clientSubscriptions.clear();
+
+        clientSubscriptions.add(
+          targetClient.assistantStream.listen((event) {
+            if (event.sessionId == null ||
+                event.sessionId == effectiveSessionId) {
+              onTurnActivity();
+              assistantBuffer.write(event.content);
+              if (!json && !quiet) {
+                out.write(event.content);
               }
-            }),
-      );
+            }
+          }),
+        );
 
-      subscriptions.add(
-        activeClient.eventStream
-            .where((e) => e is CliRuntimeNoticeEvent)
-            .cast<CliRuntimeNoticeEvent>()
-            .listen((event) {
-              if (event.sessionId == null ||
-                  event.sessionId == effectiveSessionId) {
-                // A blocked turn awaits an intervention this non-interactive
-                // run cannot give: end now with one reason line instead of
-                // waiting for --timeout. The blocked work stays daemon-owned
-                // for Retry, Change Provider or Stop, so no Stop is sent.
-                if (event.isBlocked) {
-                  if (completer.isCompleted) return;
-                  hasError = true;
-                  wasBlocked = true;
-                  final reason = _reasonSentence(event.message);
-                  errorMessage = reason.isEmpty
-                      ? 'blocked. Intervene with sanad session stop '
-                            '$effectiveSessionId or retry from a client.'
-                      : 'blocked: $reason Intervene with '
-                            'sanad session stop $effectiveSessionId or retry '
-                            'from a client.';
-                  if (!json) {
-                    err.writeln('Error: $errorMessage');
-                  }
-                  completer.complete(1);
-                  return;
+        clientSubscriptions.add(
+          targetClient.reasoningStream.listen((event) {
+            if (event.sessionId == null ||
+                event.sessionId == effectiveSessionId) {
+              onTurnActivity();
+              if (showReasoning && !json && !quiet) {
+                out.write(event.content);
+              }
+            }
+          }),
+        );
+
+        clientSubscriptions.add(
+          targetClient.toolCallStream.listen((event) {
+            if (event.sessionId == null ||
+                event.sessionId == effectiveSessionId) {
+              onTurnActivity();
+              toolExecutions.add({
+                'tool_name': event.toolName,
+                'tool_call_id': event.toolCallId,
+                'arguments': event.arguments,
+              });
+              if (!json && !quiet) {
+                final callingStr = CliToolFormatter.formatToolCalling(
+                  event.toolName,
+                  event.arguments,
+                );
+                out.writeln('\n$callingStr');
+              }
+            }
+          }),
+        );
+
+        clientSubscriptions.add(
+          targetClient.toolResultStream.listen((event) {
+            if (event.sessionId == null ||
+                event.sessionId == effectiveSessionId) {
+              onTurnActivity();
+              final match = toolExecutions.lastWhere(
+                (t) =>
+                    t['tool_call_id'] == event.toolCallId ||
+                    (t['tool_name'] == event.toolName &&
+                        !t.containsKey('result')),
+                orElse: () {
+                  final entry = <String, dynamic>{
+                    'tool_name': event.toolName,
+                    'tool_call_id': event.toolCallId,
+                  };
+                  toolExecutions.add(entry);
+                  return entry;
+                },
+              );
+              match['result'] = event.result;
+              match['is_error'] = event.isError;
+
+              if (!json && !quiet) {
+                final effectiveName = event.toolName.isNotEmpty
+                    ? event.toolName
+                    : (match['tool_name']?.toString() ?? 'tool');
+                final rawArgs = match['arguments'];
+                final argsMap = rawArgs is Map<String, dynamic>
+                    ? rawArgs
+                    : rawArgs is Map
+                    ? Map<String, dynamic>.from(rawArgs)
+                    : null;
+                final resultStr = CliToolFormatter.formatToolResult(
+                  toolName: effectiveName,
+                  result: event.result,
+                  isError: event.isError,
+                  arguments: argsMap,
+                );
+                out.writeln(resultStr);
+              }
+            }
+          }),
+        );
+
+        clientSubscriptions.add(
+          targetClient.permissionStream.listen((event) async {
+            if (event.sessionId == null ||
+                event.sessionId == effectiveSessionId) {
+              // A secret request is never auto-approved or answered here: it
+              // stays pending until a Sanad Client submits the values.
+              if (event.isSecretRequest) {
+                coordinator.recordPendingIntervention(
+                  kind: 'needs_input',
+                  requestId: event.requestId,
+                  toolName: event.toolName,
+                );
+                if (!json && !quiet) {
+                  err.writeln(event.secretRequestNotice(effectiveSessionId));
                 }
-                if (event.isRecovering) {
-                  coordinator.recordRuntimeNotice(
-                    status: event.status == 'cleared'
-                        ? 'resuming'
-                        : (event.status ?? 'waiting'),
-                    code: event.code,
-                    message: event.message,
-                    provider: finalProvider,
-                    model: finalModel,
+                return;
+              }
+              if (event.isUserQuestion) {
+                coordinator.recordPendingIntervention(
+                  kind: 'needs_input',
+                  requestId: event.requestId,
+                  questions: event.questions,
+                );
+
+                // User clarification questions (system_ask_user) must NEVER be
+                // auto-resolved by --allow-all-tools or given an empty answer.
+                // They remain pending until an explicit matching answer arrives.
+                if (!json && !quiet) {
+                  final questionText = event.questions.isNotEmpty
+                      ? event.questions
+                            .map((q) => q['question']?.toString() ?? '')
+                            .where((q) => q.isNotEmpty)
+                            .join('; ')
+                      : 'Clarification required';
+                  err.writeln(
+                    'Notice: Clarification question pending for session $effectiveSessionId (request ${event.requestId}): $questionText',
                   );
-                  if (!json && !quiet && event.status != 'cleared') {
-                    err.writeln('Notice: ${event.message}');
-                  }
-                  return;
                 }
-                hasError = true;
-                errorMessage = event.message;
-                if (!json) {
-                  err.writeln('Error: ${event.message}');
-                }
-                if (!completer.isCompleted) {
-                  completer.complete(1);
-                }
+                return;
               }
-            }),
-      );
 
-      subscriptions.add(
-        activeClient.eventStream
-            .where((event) => event is CliTurnCancelledEvent)
-            .cast<CliTurnCancelledEvent>()
-            .listen((event) {
-              if (event.sessionId == null ||
-                  event.sessionId == effectiveSessionId) {
-                if (completer.isCompleted) return;
-                wasCancelled = true;
+              if (!automaticallyApproveTools) {
+                coordinator.recordPendingIntervention(
+                  kind: 'needs_permission',
+                  requestId: event.requestId,
+                  toolName: event.toolName,
+                );
+
+                // Unresolved ordinary permissions remain fail-closed and pending for explicit
+                // session permission/permit intervention.
+                if (!json && !quiet) {
+                  err.writeln(
+                    'Notice: Gated tool "${event.toolName}" requires permission for session $effectiveSessionId (request ${event.requestId}). Intervene via: sanad session permission $effectiveSessionId -r ${event.requestId} --allow / --deny',
+                  );
+                }
+                return;
+              }
+
+              // Broad approval (--allow-all-tools) auto-approves ordinary tool permissions only.
+              try {
+                await targetClient.respondPermission(
+                  requestId: event.requestId,
+                  allowed: true,
+                  decision: 'allow',
+                  sessionId: effectiveSessionId,
+                );
+              } catch (e) {
+                _logger.warning('Failed to respond to permission request: $e');
+              }
+            }
+          }),
+        );
+
+        clientSubscriptions.add(
+          targetClient.turnCompleteStream.listen((event) {
+            if (event.sessionId == null ||
+                event.sessionId == effectiveSessionId) {
+              usageInfo = event.usage ?? event.contextUsage;
+              if (event.model != null) finalModel = event.model;
+              if (event.provider != null) finalProvider = event.provider;
+
+              // A typed rejection before dispatch is a failed turn, never a
+              // completion: report the specific reason and exit non-zero.
+              final rejectionCode = event.errorCode;
+              if (rejectionCode != null && rejectionCode.isNotEmpty) {
                 hasError = true;
-                errorMessage = event.reason.isNotEmpty
-                    ? event.reason
-                    : 'Session execution stopped externally.';
+                final reason = _reasonSentence(event.finalMessage);
+                errorMessage = reason.isEmpty
+                    ? rejectionCode
+                    : '$rejectionCode: $reason';
+                terminalCause = rejectionCode;
                 if (!json) {
                   err.writeln('Error: $errorMessage');
                 }
-                completer.complete(130);
+                if (!completer.isCompleted) {
+                  completer.complete(1);
+                }
+                return;
               }
-            }),
-      );
 
-      subscriptions.add(
-        activeClient.stateStream.listen((state) {
-          if (state == CliConnectionState.closed ||
-              state == CliConnectionState.disconnected) {
-            if (!completer.isCompleted) {
-              hasError = true;
-              errorMessage = 'Gateway connection lost before turn completed.';
-              if (!json) {
-                err.writeln('Error: $errorMessage');
+              if (event.finalMessage.isNotEmpty) {
+                if (assistantBuffer.isEmpty) {
+                  assistantBuffer.write(event.finalMessage);
+                  if (!json && !quiet) {
+                    out.write(event.finalMessage);
+                  }
+                } else if (!RunResultArtifact.hasSemanticFinalSummary(
+                      assistantBuffer.toString(),
+                    ) &&
+                    RunResultArtifact.hasSemanticFinalSummary(
+                      event.finalMessage,
+                    )) {
+                  assistantBuffer.clear();
+                  assistantBuffer.write(event.finalMessage);
+                  if (!json && !quiet) {
+                    out.write(event.finalMessage);
+                  }
+                }
               }
-              completer.complete(1);
+
+              if (!completer.isCompleted) {
+                completer.complete(0);
+              }
             }
-          }
-        }),
-      );
+          }),
+        );
+
+        clientSubscriptions.add(
+          targetClient.eventStream
+              .where((e) => e is CliErrorEvent)
+              .cast<CliErrorEvent>()
+              .listen((event) {
+                if (event.sessionId == null ||
+                    event.sessionId == effectiveSessionId) {
+                  hasError = true;
+                  errorMessage = event.message;
+                  terminalCause = event.code.isNotEmpty ? event.code : null;
+                  if (!json) {
+                    err.writeln('Error: ${event.message}');
+                  }
+                  if (!completer.isCompleted) {
+                    completer.complete(1);
+                  }
+                }
+              }),
+        );
+
+        clientSubscriptions.add(
+          targetClient.eventStream
+              .where((e) => e is CliRuntimeNoticeEvent)
+              .cast<CliRuntimeNoticeEvent>()
+              .listen((event) {
+                if (event.sessionId == null ||
+                    event.sessionId == effectiveSessionId) {
+                  final rawPayload = event.raw['payload'] is Map
+                      ? event.raw['payload'] as Map
+                      : const {};
+                  final hasResumeSchedule =
+                      rawPayload['resume_at'] != null ||
+                      (rawPayload['retry_after_ms'] is num &&
+                          (rawPayload['retry_after_ms'] as num) > 0);
+
+                  // A blocked turn awaits an intervention this non-interactive
+                  // run cannot give: end now with one reason line instead of
+                  // waiting for --timeout, unless automatic recovery is scheduled.
+                  if (event.isBlocked && !hasResumeSchedule) {
+                    if (completer.isCompleted) return;
+                    hasError = true;
+                    wasBlocked = true;
+                    terminalCause = 'blocked';
+                    final reason = _reasonSentence(event.message);
+                    errorMessage = reason.isEmpty
+                        ? 'blocked. Intervene with sanad session stop '
+                              '$effectiveSessionId or retry from a client.'
+                        : 'blocked: $reason Intervene with '
+                              'sanad session stop $effectiveSessionId or retry '
+                              'from a client.';
+                    if (!json) {
+                      err.writeln('Error: $errorMessage');
+                    }
+                    completer.complete(1);
+                    return;
+                  }
+                  if (event.isRecovering || hasResumeSchedule) {
+                    coordinator.recordRuntimeNotice(
+                      status: event.status == 'cleared'
+                          ? 'resuming'
+                          : (event.status ?? 'waiting'),
+                      code: event.code,
+                      message: event.message,
+                      provider: finalProvider,
+                      model: finalModel,
+                    );
+                    if (!json && !quiet && event.status != 'cleared') {
+                      err.writeln('Notice: ${event.message}');
+                    }
+                    return;
+                  }
+                  hasError = true;
+                  errorMessage = event.message;
+                  terminalCause = event.code.isNotEmpty ? event.code : null;
+                  if (!json) {
+                    err.writeln('Error: ${event.message}');
+                  }
+                  if (!completer.isCompleted) {
+                    completer.complete(1);
+                  }
+                }
+              }),
+        );
+
+        clientSubscriptions.add(
+          targetClient.eventStream
+              .where((event) => event is CliTurnCancelledEvent)
+              .cast<CliTurnCancelledEvent>()
+              .listen((event) {
+                if (event.sessionId == null ||
+                    event.sessionId == effectiveSessionId) {
+                  if (completer.isCompleted) return;
+                  wasCancelled = true;
+                  hasError = true;
+                  errorMessage = event.reason.isNotEmpty
+                      ? event.reason
+                      : 'Session execution stopped externally.';
+                  if (!json) {
+                    err.writeln('Error: $errorMessage');
+                  }
+                  completer.complete(130);
+                }
+              }),
+        );
+
+        clientSubscriptions.add(
+          targetClient.stateStream.listen((state) {
+            if (state == CliConnectionState.closed ||
+                state == CliConnectionState.disconnected) {
+              if (turnDispatched && !completer.isCompleted) {
+                unawaited(handleTurnReconnect());
+              } else if (!completer.isCompleted) {
+                hasError = true;
+                errorMessage = 'Gateway connection lost before turn completed.';
+                terminalCause = 'connection_lost';
+                if (!json) {
+                  err.writeln('Error: $errorMessage');
+                }
+                completer.complete(1);
+              }
+            }
+          }),
+        );
+      };
+
+      if (activeClient != null) {
+        bindClient(activeClient!);
+      }
 
       // 4. Resolve Model and Provider via ModelProviderResolver
       final resolver = ModelProviderResolver(
@@ -860,9 +1116,10 @@ class OneshotRunner {
       String? resolvedWorkspaceId;
       if (effectiveWorkspace != null) {
         final requestedWorkspace = effectiveWorkspace;
-        if (activeClient is LocalGatewayCliClient) {
+        final currentClient = activeClient;
+        if (currentClient is LocalGatewayCliClient) {
           final locator = WorkspaceLocator(
-            gatewayClient: activeClient,
+            gatewayClient: currentClient,
             stateStore: CliWorkspaceStateStore(sanadHomeOverride: sanadHome),
           );
           try {
@@ -880,6 +1137,51 @@ class OneshotRunner {
         }
       }
 
+      final shouldCheckInFlight = checkInFlight ??
+          (client == null &&
+              session != null &&
+              session.trim().isNotEmpty);
+
+      if (shouldCheckInFlight && activeClient != null) {
+        try {
+          final history = await activeClient!.getSessionHistory(
+            sessionId: effectiveSessionId,
+            timeout: const Duration(seconds: 3),
+          );
+          final payload = history['payload'] is Map
+              ? history['payload'] as Map<String, dynamic>
+              : history;
+          if (_isExecutionInFlight(payload)) {
+            const code = 'turn_in_flight';
+            final message =
+                'Session $effectiveSessionId already has an in-flight turn.';
+            err.writeln('Error: $message');
+            await coordinator.recordTerminal(
+              exitCode: 3,
+              status: 'failed',
+              error: message,
+              cause: code,
+            );
+            await coordinator.drain();
+            emitJsonResult(
+              OneshotResult(
+                exitCode: 3,
+                text: '',
+                sessionId: effectiveSessionId,
+                error: message,
+                errorCode: code,
+              ),
+            );
+            return 3;
+          }
+        } on CliClientException catch (e) {
+          _logger.fine('Pre-dispatch session check: $e');
+        } catch (e) {
+          _logger.fine('Pre-dispatch session check: $e');
+        }
+      }
+
+      final effectiveRequestId = _uuid.v4();
       final turnRequest = AgentTurnRequest(
         sessionId: effectiveSessionId,
         message: effectivePrompt,
@@ -888,6 +1190,7 @@ class OneshotRunner {
         providerInstanceId: resolvedProviderId,
         providerId: resolvedProviderId,
         thinkingMode: effectiveThinkingMode,
+        requestId: effectiveRequestId,
         metadata: {
           'execution_root': ?effectiveExecutionRoot,
           if (automaticallyApproveTools) 'allow_all_tools': true,
@@ -900,7 +1203,10 @@ class OneshotRunner {
         );
       }
 
-      await activeClient.dispatchTurnRequest(turnRequest);
+      dispatchedRequestId = effectiveRequestId;
+      turnDispatched = true;
+
+      await activeClient!.dispatchTurnRequest(turnRequest);
 
       // 5. Await turn completion or timeout
       int exitStatus;
@@ -958,6 +1264,7 @@ class OneshotRunner {
         provider: finalProvider,
         sessionId: effectiveSessionId,
         error: hasError ? errorMessage : null,
+        errorCode: terminalCause,
       );
 
       await coordinator.recordTerminal(
@@ -965,9 +1272,10 @@ class OneshotRunner {
         status: terminalStatus,
         text: assistantBuffer.toString(),
         error: hasError ? errorMessage : null,
-        cause: terminalStatus == 'incomplete'
-            ? 'missing_final'
-            : (wasBlocked ? 'blocked' : null),
+        cause: terminalCause ??
+            (terminalStatus == 'incomplete'
+                ? 'missing_final'
+                : (wasBlocked ? 'blocked' : null)),
         finalModel: finalModel,
         finalProvider: finalProvider,
         usage: usageInfo,
@@ -999,18 +1307,39 @@ class OneshotRunner {
           status: fallbackStatus,
           text: assistantBuffer.toString(),
           error: hasError ? errorMessage : 'Execution terminated unexpectedly',
+          cause: terminalCause,
           finalModel: finalModel,
           finalProvider: finalProvider,
           usage: usageInfo,
         );
       }
       await coordinator.drain();
-      if (shouldDisposeClient) {
+      if (shouldDisposeClient && activeClient != null) {
         try {
-          await activeClient.dispose().timeout(const Duration(seconds: 2));
+          await activeClient!.dispose().timeout(const Duration(seconds: 2));
         } catch (_) {}
       }
     }
+  }
+
+  static bool _isExecutionInFlight(Map<String, dynamic> payload) {
+    final snapshot = payload['execution_snapshot'];
+    if (snapshot is Map) {
+      final state = snapshot['state']?.toString();
+      if (state == 'running' ||
+          state == 'resuming' ||
+          state == 'waiting' ||
+          state == 'blocked' ||
+          state == 'stopping') {
+        return true;
+      }
+      if (state == 'idle') return false;
+    }
+    final inFlight = payload['in_flight'];
+    if (inFlight is Map && inFlight.isNotEmpty) {
+      return true;
+    }
+    return false;
   }
 
   /// One clean reason for stderr and `--json` output.

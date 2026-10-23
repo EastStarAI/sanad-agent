@@ -145,6 +145,13 @@ A Sanad task running against a managed custom Home must declare `home: "<absolut
 
 Build relay arguments from the loaded delegate skill. The supervisor treats non-Sanad relay arguments as opaque; for Sanad it validates only the required machine-contract flags and workspace boundary. Commands are spawned directly except that Windows `.cmd`/`.bat` wrappers require Node's shell mode after shell metacharacters have been rejected. Keep secrets out of briefs, arguments, specs, and logs.
 
+### Sanad Runner Exit & Reason Codes across Restarts
+When a Sanad task crosses an Agent daemon restart, `sanad run` reconnects within its reconnect window and follows the reclaimed turn. If failure occurs, it emits typed reason and exit codes:
+- **`turn_in_flight` (exit code 3):** The target session already has an active durable turn (`running`, `resuming`, `waiting`, or `blocked`). The supervisor must not immediately re-dispatch the same task or send another prompt to that session; inspect the session status or wait for the active turn to settle.
+- **`reconnect_window_expired` (exit code 1):** Gateway connection was lost during execution and the daemon did not recover within the configured `--reconnect-timeout` (default 60s). The turn may still be running headless in the daemon; verify daemon health before retrying.
+- **`turn_lost` (exit code 1):** Reconnection succeeded, but the restored session history no longer contains the original turn lineage.
+- **`home_identity_mismatch` (exit code 78):** Reconnection discovered an endpoint belonging to a different Sanad Home. This is a fatal isolation error; do not retry against the same misconfigured endpoint.
+
 ## 4. Run Topology: Start, Add, Enqueue, and Close
 
 The supervisor maintains one long-lived run per reviewing orchestrator. The worker process remains active even when initial tasks settle, allowing dynamic task registration and queueing.
@@ -247,7 +254,7 @@ Default `watch-once` wakes on blocked, waiting, resuming, intervention, and term
 
 ## 7. Review every result
 
-A terminal status means the relay exited; it does not prove correctness. Follow the owning delegate skill to inspect the result, diff, touched files, and gates. Surface scope changes and decisions instead of silently absorbing them. Preserve the session/conversation identifier for targeted continuation when rework is required.
+A terminal status means the relay exited; it does not prove correctness. Follow the owning delegate skill to inspect the result, diff, touched files, and gates. Surface scope changes and decisions instead of silently absorbing them. Preserve the session/conversation identifier for targeted continuation when rework is required. For Sanad tasks, inspect `cause` and `error_code` before retrying: `turn_in_flight` (exit 3) indicates that the session's prior turn is still active, while `reconnect_window_expired` indicates follow failure across daemon restart.
 
 ## Included scripts
 
