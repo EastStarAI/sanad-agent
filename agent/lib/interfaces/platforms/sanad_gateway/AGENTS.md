@@ -74,7 +74,13 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   owns MCP configuration, import/export, OAuth, and inspection;
   `CapabilityDiscoveryCommandHandler` owns skills and slash discovery;
   `ComputerUseCommandHandler` owns computer-use permissions;
-  `SecretCommandHandler` owns device-owner user secrets listing, rotation (set), and deletion without exposing or logging values. Shared managed/cloud admission
+  `SecretCommandHandler` owns device-owner user secrets listing, rotation (set), and deletion without exposing or logging values.
+  `ScheduleCommandHandler` owns the mutating schedule commands (create, update, pause, resume, run-now,
+  delete) and `ScheduleQueryHandler` owns the schedule queries (list, preview, runs); both call
+  `CronScheduler` with device-owner authority, never a repository, and project structured rows and runs
+  only. `schedule_run_failure_notice.dart` is the family's only publisher of the live, model-invisible
+  `schedule.run_failed` notice, injected at the composition root as the scheduler's failure sink rather
+  than grown into another handler. Shared managed/cloud admission
   decisions live in exactly one support owner that all four use. `WorkspaceMcpCoordinator`
   remains the single MCP runtime owner, and the MCP confirmation-token salt has exactly one
   owner — the MCP handler; never mint a second salt or duplicate an admission decision.

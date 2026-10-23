@@ -68,6 +68,7 @@ class CronScheduler extends BasePlatform {
     ScheduleRunRecorder? runRecorder,
     ScheduleConversationFactory? conversationFactory,
     ScheduleRunObserver? runObserver,
+    ScheduleRunFailureSink? runFailureSink,
     PersistedRuntimeStateRepository? persistedState,
     DateTime Function()? clock,
   }) : _sessionManager = sessionManager ?? SessionManager(),
@@ -105,6 +106,9 @@ class CronScheduler extends BasePlatform {
                   }
                   return null;
                 },
+                // Task 139 S16: the publisher is injected by the composition
+                // root, so the scheduler never depends on the gateway layer.
+                onRunFailed: runFailureSink,
               )
             : null);
   }
@@ -506,7 +510,9 @@ class CronScheduler extends BasePlatform {
     final delay = record.nextRunAt.difference(effectiveNow);
 
     _logger.info(
-      'Scheduling task: "${record.task}" at ${record.nextRunAt} (delay: $delay, id: ${record.id})',
+      'Scheduling task; id=${record.id}, '
+      'next_run_at=${record.nextRunAt.toUtc().toIso8601String()}, '
+      'delay_ms=${delay.inMilliseconds}.',
     );
 
     if (delay.isNegative) {
@@ -542,7 +548,7 @@ class CronScheduler extends BasePlatform {
   void executeTaskForTesting(ScheduledTaskRecord record) => _executeTask(record);
 
   void _executeTask(ScheduledTaskRecord record) {
-    _logger.info('Executing scheduled task: "${record.task}" (id: ${record.id})');
+    _logger.info('Executing scheduled task; id=${record.id}.');
     final executionTime = DateTime.now().toUtc();
     final targetSessionId = _conversationFactory.resolveDispatchSession(record);
     final runId = _runRecorder.startRun(
@@ -697,7 +703,10 @@ class CronScheduler extends BasePlatform {
         if (record.nextRunAt.isAfter(effectiveNow.subtract(const Duration(minutes: 5)))) {
           _scheduleInMemory(record, now: effectiveNow);
         } else {
-          _logger.warning('Skipping stale task: "${record.task}" scheduled for ${record.nextRunAt}');
+          _logger.warning(
+            'Skipping stale once task; id=${record.id}, '
+            'next_run_at=${record.nextRunAt.toUtc().toIso8601String()}.',
+          );
           _sessionManager.db.deleteScheduledTask(record.id);
         }
       } else {
@@ -748,7 +757,9 @@ class CronScheduler extends BasePlatform {
 
     if (isInsideGrace) {
       _logger.info(
-        'Missed recurring task "${record.task}" (id: ${record.id}) at $mostRecentMissed is within grace window of ${graceMinutes}m (missed by $missedStr). Firing once and advancing to $nextFutureRunAt.',
+        'Missed recurring task; id=${record.id}, missed_at=$mostRecentMissed, '
+        'grace_minutes=${graceMinutes}m, missed_by=$missedStr: within grace '
+        'window, firing once and advancing to $nextFutureRunAt.',
       );
 
       final targetSessionId = _conversationFactory.resolveDispatchSession(record);
@@ -793,7 +804,10 @@ class CronScheduler extends BasePlatform {
       }
     } else {
       _logger.warning(
-        'Skipping missed scheduled task "${record.task}" (id: ${record.id}): missed occurrence at $mostRecentMissed exceeded grace window of ${graceMinutes}m (missed by $missedStr). Advancing to $nextFutureRunAt.',
+        'Skipping missed scheduled task; id=${record.id}, '
+        'missed_at=$mostRecentMissed, grace_minutes=${graceMinutes}m, '
+        'missed_by=$missedStr: beyond grace window, advancing to '
+        '$nextFutureRunAt.',
       );
 
       _runRecorder.recordSkipped(

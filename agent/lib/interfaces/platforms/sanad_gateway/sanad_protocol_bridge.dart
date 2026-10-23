@@ -30,6 +30,7 @@ import 'package:sanad_agent/capabilities/secrets/user_secret_catalog.dart';
 import 'package:sanad_agent/capabilities/secrets/user_secret_vault.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
+import 'package:sanad_agent/evolution/cron_scheduler.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -50,6 +51,8 @@ import 'handlers/device_settings_command_handler.dart';
 import 'handlers/device_control_command_handler.dart';
 import 'handlers/provider_command_handler.dart';
 import 'handlers/secret_command_handler.dart';
+import 'handlers/schedule_command_handler.dart';
+import 'handlers/schedule_query_handler.dart';
 import 'handlers/session_fork_command_handler.dart';
 import 'handlers/attachment_admission_command_handler.dart';
 import 'handlers/session_query_handler.dart';
@@ -90,6 +93,8 @@ class SanadProtocolBridge {
   RemoteCliCommandHandler? __remoteCliHandler;
   SessionControlCommandHandler? __sessionControlHandler;
   SecretCommandHandler? __secretHandler;
+  ScheduleCommandHandler? __scheduleCommandHandler;
+  ScheduleQueryHandler? __scheduleQueryHandler;
 
   /// Lazy accessors so optional runtime services registered after
   /// construction (e.g. in tests or deferred daemon startup) are only
@@ -236,6 +241,42 @@ class SanadProtocolBridge {
 
   void setSecretCommandHandlerForTesting(SecretCommandHandler? handler) {
     __secretHandler = handler;
+  }
+
+  /// Task 139: the schedule command family acts as the device owner. It receives
+  /// the scheduler (the only writer), the session manager (conversation titles),
+  /// and the family broadcast, so the handler resolves no runtime owner itself.
+  ScheduleCommandHandler get _scheduleCommandHandler =>
+      __scheduleCommandHandler ??= ScheduleCommandHandler(
+        scheduler: getIt<CronScheduler>(),
+        sessionManager: getIt<SessionManager>(),
+        defaultZone: getIt.isRegistered<Config>()
+            ? getIt<Config>().scheduleTimezone
+            : 'local',
+        bridge: this,
+        broadcastFamilyEvent: (event) {
+          if (getIt.isRegistered<GatewayManager>()) {
+            getIt<GatewayManager>().publishFamilyEvent(event);
+          }
+        },
+      );
+
+  ScheduleQueryHandler get _scheduleQueryHandler =>
+      __scheduleQueryHandler ??= ScheduleQueryHandler(
+        scheduler: getIt<CronScheduler>(),
+        sessionManager: getIt<SessionManager>(),
+        defaultZone: getIt.isRegistered<Config>()
+            ? getIt<Config>().scheduleTimezone
+            : 'local',
+        bridge: this,
+      );
+
+  void setScheduleHandlersForTesting({
+    ScheduleCommandHandler? command,
+    ScheduleQueryHandler? query,
+  }) {
+    __scheduleCommandHandler = command;
+    __scheduleQueryHandler = query;
   }
 
   DeviceControlCommandHandler? get _deviceControlHandler {
@@ -837,6 +878,20 @@ class SanadProtocolBridge {
       case CanonicalEventTypes.secretSet:
       case CanonicalEventTypes.secretDelete:
         await _secretHandler.handle(event, emitEnvelope);
+        return;
+      // Task 139: schedule control protocol.
+      case CanonicalEventTypes.scheduleCreate:
+      case CanonicalEventTypes.scheduleUpdate:
+      case CanonicalEventTypes.schedulePause:
+      case CanonicalEventTypes.scheduleResume:
+      case CanonicalEventTypes.scheduleRunNow:
+      case CanonicalEventTypes.scheduleDelete:
+        await _scheduleCommandHandler.handle(event, emitEnvelope);
+        return;
+      case CanonicalEventTypes.scheduleList:
+      case CanonicalEventTypes.schedulePreview:
+      case CanonicalEventTypes.scheduleRuns:
+        await _scheduleQueryHandler.handle(event, emitEnvelope);
         return;
 
       default:

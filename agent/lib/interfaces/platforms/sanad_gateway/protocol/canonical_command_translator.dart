@@ -85,6 +85,16 @@ class CanonicalCommandTranslator {
     CanonicalEventTypes.secretsList,
     CanonicalEventTypes.secretSet,
     CanonicalEventTypes.secretDelete,
+    // Task 139: schedule control protocol.
+    CanonicalEventTypes.scheduleList,
+    CanonicalEventTypes.schedulePreview,
+    CanonicalEventTypes.scheduleCreate,
+    CanonicalEventTypes.scheduleUpdate,
+    CanonicalEventTypes.schedulePause,
+    CanonicalEventTypes.scheduleResume,
+    CanonicalEventTypes.scheduleRunNow,
+    CanonicalEventTypes.scheduleDelete,
+    CanonicalEventTypes.scheduleRuns,
   };
 
   /// Accepted commands that also bind the payload's `session_id` to the event.

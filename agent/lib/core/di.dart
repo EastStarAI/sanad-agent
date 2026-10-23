@@ -52,6 +52,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/schedule_run_failure_notice.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
@@ -286,7 +287,25 @@ void setupDI() {
       boundaries: getIt<CompactionBoundaryRepository>(),
     ),
   );
-  getIt.registerLazySingleton<CronScheduler>(() => CronScheduler());
+  // Task 139 S16: a terminalized failed run reaches every Sanad client through
+  // one live, model-invisible notice. The notice is the scheduler's injected
+  // failure sink, so `CronScheduler` keeps no dependency on the gateway layer and
+  // no handler grows to publish it.
+  getIt.registerLazySingleton<ScheduleRunFailureNotice>(
+    () => ScheduleRunFailureNotice(
+      publishFamilyEvent: (event) {
+        if (!getIt.isRegistered<GatewayManager>()) return;
+        getIt<GatewayManager>().publishFamilyEvent(event);
+      },
+      scheduleName: (scheduleId) =>
+          getIt<CronScheduler>().getSchedule(scheduleId)?.name,
+    ),
+  );
+  getIt.registerLazySingleton<CronScheduler>(
+    () => CronScheduler(
+      runFailureSink: getIt<ScheduleRunFailureNotice>().publish,
+    ),
+  );
   getIt.registerLazySingleton<TitleService>(() => TitleService());
 
   // ── Agent Runtime (Plan 24: composite adapter cache) ──────────────────

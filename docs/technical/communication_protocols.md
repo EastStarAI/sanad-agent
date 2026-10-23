@@ -104,7 +104,7 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
       }
     }
     ```
-  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, `session.stop_recovery_ack`, `device.update.check`, `device.update.apply`, `device.runtime.restart`, `device.cli.execute`, `device.cli.cancel`, `secrets.list`, `secret.set`, and `secret.delete`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
+  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, `session.stop_recovery_ack`, `device.update.check`, `device.update.apply`, `device.runtime.restart`, `device.cli.execute`, `device.cli.cancel`, `secrets.list`, `secret.set`, `secret.delete`, `schedule.list`, `schedule.preview`, `schedule.create`, `schedule.update`, `schedule.pause`, `schedule.resume`, `schedule.run_now`, `schedule.delete`, and `schedule.runs`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
   - Every routed command has a canonical `request_id`. The gateway records a
     short-lived private route from that identifier to the originating app
     socket before dispatching the command. It does not broadcast a generic
@@ -209,6 +209,69 @@ Device-owner commands for listing, adding/replacing, and deleting user credentia
   - Request Payload: `{"name": "VAR_NAME", "confirm": true}`.
   - Response Event: `secret.deleted` (`{"name": "VAR_NAME", "status": "deleted"|"not_found"}`).
   - Emits family broadcast `secrets.changed` (`{"name": "VAR_NAME", "change": "deleted"}`) on successful deletion.
+
+#### B.4. Schedule Control Commands (Task 139)
+Device-owner commands for listing, previewing, creating, editing, pausing, resuming, running, deleting,
+and reading the run history of recurring schedules (Schedules screen and schedule detail). Every command
+requires transport-derived device-owner authority, and a Client-created schedule is always
+`owner_kind='user'`. Complete specification: see [Schedule Control Protocol](schedule_control_protocol.md).
+
+- **Command: `schedule.list`**
+  - Reads every schedule on the device, ordered by next instant.
+  - Response Event: `schedule.list_result` (`{"schedules": [...], "truncated": false}`), where each row is
+    the structured projection (id, name, task, kind, recurrence fields, zone, `next_run_at`, `enabled`,
+    `owner_kind`, `owner_session_id`, `owner_session_title`, `conversation_mode`, route columns,
+    `last_run_at`, `last_status`, `consecutive_failures`, `created_at`, `updated_at`). The Agent's English
+    recurrence sentence never reaches the wire.
+
+- **Command: `schedule.preview`**
+  - Answers the next instant of a candidate definition; mutates nothing.
+  - Response Event: `schedule.preview_result` (`{"valid": true, "next_run_at": "...", "zone": "+03:00"}` or
+    `{"valid": false, "error_code": "invalid_schedule"}`).
+
+- **Command: `schedule.create`**
+  - Creates a device-owned schedule that needs no conversation; its conversation is created by the first
+    run or Run now.
+  - Request Payload: task, name, recurrence fields, `conversation_mode`, `workspace_id`,
+    `provider_instance_id`, `model`.
+  - Response Event: `schedule.created` (`{"schedule": {...}}`).
+  - Emits family broadcast `schedule.changed` (`{"schedule_id": "...", "change": "created"}`).
+
+- **Command: `schedule.update`**
+  - Merges a partial edit (task, name, conversation mode, route columns, recurrence).
+  - Response Event: `schedule.updated` (`{"schedule": {...}}`).
+  - Emits family broadcast `schedule.changed` with `change: "updated"`.
+
+- **Command: `schedule.pause` / `schedule.resume`**
+  - Pause keeps the stored instant and cancels the timer; resume recomputes the next future instant.
+  - Response Event: `schedule.updated` for both.
+  - Emit family broadcast `schedule.changed` with `change: "paused"` / `"resumed"`.
+
+- **Command: `schedule.run_now`**
+  - Dispatches immediately, including on a paused schedule, without resuming it or shifting the next run.
+  - Response Event: `schedule.run_accepted` (`{"run_id": "...", "session_id": "...", "accepted_at": "..."}`).
+  - Emits family broadcast `schedule.changed` with `change: "run_now"`.
+
+- **Command: `schedule.delete`**
+  - Deletes the schedule and its run rows only; conversations and messages stay readable.
+  - Request Payload: `{"id": "...", "confirm": true}`.
+  - Response Event: `schedule.deleted` (`{"id": "...", "deleted": true}`).
+  - Emits family broadcast `schedule.changed` with `change: "deleted"`.
+
+- **Command: `schedule.runs`**
+  - Reads one bounded, newest-first page of a schedule's run history.
+  - Request Payload: `{"schedule_id": "...", "limit": 50, "cursor": "..."}`; a cursor minted for another
+    schedule is rejected.
+  - Response Event: `schedule.runs_result` (`{"schedule_id": "...", "runs": [...], "has_more": false}`),
+    where each run is exactly id, `run_at`, status, trigger, `duration_ms`, error, `session_id`,
+    `message_id`, and `has_position`.
+
+- **Event: `schedule.run_failed`** (Agent → Sanad client family, live and model-invisible)
+  - Published to the run's conversation when a run reaches `failed`, carrying `schedule_id`,
+    `schedule_name`, `run_id`, `session_id`, `consecutive_failures`, and `suggest_pause`. It carries no
+    error text: the bounded, redacted failure text stays in the run row and is read through
+    `schedule.runs`. It is never written to model history and nothing disables the schedule.
+
 
 #### C. Reverse Tool Result
 - **Event: `tool_result` (Client → Backend)**
