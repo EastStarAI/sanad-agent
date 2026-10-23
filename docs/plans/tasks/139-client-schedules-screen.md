@@ -39,7 +39,7 @@ or the recovery policy of Task 112b.
 | `create` refuses to run without a session context | `ScheduleTaskTool._handleCreate` and `CronScheduler.createSchedule` deny when the session is empty (D5) |
 | There is no run history: one row per schedule carries only `last_run_at`/`last_status` | `docs/technical/agent_database_schema.md` §3.3; `ScheduledTaskRepository` has no run table |
 | The schema document still says pause/resume is out of scope | `docs/technical/agent_database_schema.md` §3.3, `enabled` column note |
-| No schedule command or query exists in the gateway protocol | zero `schedule.` cases in the `handleCommand` switch of `agent/lib/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart` |
+| No schedule command or query exists in the gateway protocol | zero `schedule.` entries in the accepted-command tables of `agent/lib/interfaces/platforms/sanad_gateway/protocol/canonical_command_translator.dart` |
 | The bridge must be edited to add a command family, and it is allowlisted at 1,327 lines | `agent/test/guards/file_size_ratchet_guard_test.dart`; 138-08 is already moving that switch into `protocol/canonical_command_translator.dart` |
 | `scheduled_tasks` DDL lives in an allowlisted 1,635-line file that 138-11 is splitting into `evolution/db/schema/` modules | `agent/test/guards/file_size_ratchet_guard_test.dart`; `docs/plans/tasks/138-agent-srp-tier2.md` item 138-11 |
 | The Client has no scheduling surface at all | zero `Scheduled`/`schedule_task` references under `client/lib` |
@@ -62,17 +62,22 @@ Fixed by the product owner; not reopened here.
 | S6 | Form fields: name (optional), task text (required, self-contained), recurrence (once / interval / daily / weekly / monthly with their fields), advanced zone, workspace, provider+model, conversation mode, and a live "next run" preview. Create = save and appears in the list; the conversation is created on the first run or on Run now. Edit uses the same form (name, task, recurrence, workspace, model, mode); the owning conversation is **not** changeable. | U9 |
 | S7 | A new persisted runs table per schedule (time, status, error, link to the run's session), and the run-history UI is in scope. | U2, U10 |
 | S8 | Run history is a **tab on the schedule detail page**, showing time, status (`succeeded` / `failed` / `running`), duration, error, and **Open conversation**, which jumps to that run inside the conversation. A cross-schedule history tab is not in v1. | U10 |
-| S9 | Run-history rows point at the run's **position** (turn/message) inside its conversation. | U5 |
+| S9 | Run-history rows point at the run's **position** inside its conversation: the `message_id` of the run's user message (S20). | U5 |
 | S10 | Deleting a schedule keeps its conversation(s); only the schedule and its run rows go. | U8 |
 | S11 | Both screens behave identically over local and cloud connections. No local-only restrictions. | U4 |
 | S12 | Schedules are a standalone sidebar page, and conversations that own schedules carry a marker. | accepted recommendation |
 | S13 | Pause/resume use the existing `enabled` column; the agent gains `pause`, `resume`, and `run_now` actions. | accepted recommendation |
-| S14 | Run now does not shift the next scheduled run. | accepted recommendation |
+| S14 | Run now does not shift the next scheduled run, and it is allowed on a paused schedule without resuming it (S21). | accepted recommendation |
 | S15 | A model turn stays owner-scoped (112a D6); the device owner may pause, resume, edit, run, or delete **any** schedule on the device. | accepted recommendation |
-| S16 | Failures surface as a badge plus a message in the run's conversation; after 3 consecutive failures the UI suggests pausing. No auto-disable. | accepted recommendation |
+| S16 | Failures surface as a badge plus a message in the run's conversation; after 3 consecutive failures — manual runs included (S22) — the UI suggests pausing. No auto-disable. | accepted recommendation |
 | S17 | Desktop notifications wait for the notifications task. | accepted recommendation |
 | S18 | An offline device shows "unavailable", never fabricated or cached state presented as current. | accepted recommendation |
 | S19 | Prompts must be self-contained: a run must not depend on hidden context. Compaction owns growth. | U5 |
+| S20 | Run history anchors on the run's **user message**: the run row stores that message's `message_id`, recorded when the message commits, and **Open conversation** jumps to it. | owner decision 2026-10-23 |
+| S21 | Run now on a paused schedule is allowed as a manual override. It does not resume the schedule. | owner decision 2026-10-23 |
+| S22 | A failing manual run counts toward the three-consecutive-failure pause suggestion; the streak is counted per schedule, not per trigger. | owner decision 2026-10-23 |
+| S23 | Deleting a conversation warns that schedules depend on it and, on delete, **pauses** those schedules — never deletes them. Resuming a user-owned `continuous` schedule creates a new conversation on its next run; a model-owned schedule stays paused until the owner edits or deletes it. | owner decision 2026-10-23 |
+| S24 | An edit during an active run applies to the next run only, as `update` already behaves. | owner decision 2026-10-23 |
 
 ### Amendments this task records
 
@@ -99,6 +104,7 @@ additive-migration law of 112a D8 and the size ratchet.
 | D7 | Deleting a schedule deletes its run rows in the same transaction and touches no session or message (S10). |
 | D8 | A model-owned schedule keeps `conversation_mode='continuous'` and runs in its owning conversation; there is no conversation picker anywhere (U5). |
 | D9 | A run row starts `running` when dispatch is accepted and reaches exactly one terminal state (`succeeded`, `failed`, or `skipped` for a missed occurrence that never ran). Duration is measured from dispatch acceptance to terminal state and stored as `duration_ms`. |
+| D10 | A model-owned schedule whose owning conversation was deleted has no dispatch target: the Client offers Edit and Delete only, and `schedule.resume` / `schedule.run_now` reject it with `schedule_orphaned`. Nothing re-creates a conversation for a model-owned row (S23). |
 
 ## Agent work
 
@@ -124,7 +130,7 @@ Extend `CronScheduler` with three actions, each a thin delegate so the host does
 |---|---|
 | `pauseSchedule(id, caller)` | set `enabled=0`, cancel the in-memory timer, keep `next_run_at` and `last_*` unchanged |
 | `resumeSchedule(id, caller)` | set `enabled=1` and recompute the next instant from now (`OccurrenceCalculator.computeNextOccurrence`; interval anchors on the stored slot grid as today); a `once` whose instant has passed fails `schedule_expired` (D6) |
-| `runNowSchedule(id, caller)` | record a `trigger='manual'` run row, dispatch into the conversation now, and **not** touch `next_run_at`, `last_run_at`, or `last_status` (S14) |
+| `runNowSchedule(id, caller)` | dispatch immediately, including while the schedule is paused (S21), record a `trigger='manual'` run row, and **not** touch `next_run_at`, `last_run_at`, `last_status`, or `enabled` (S14) |
 
 - Authority is one owner (`schedule_control.dart`): `owner_kind='user'` is mutable by user-authority
   callers only; `owner_kind='model'` is mutable by its owning conversation and by user-authority
@@ -133,6 +139,12 @@ Extend `CronScheduler` with three actions, each a thin delegate so the host does
   `scheduled_tasks` or `scheduled_task_runs` directly.
 - A paused schedule never fires from the timer, on restart, or during recovery. `initialize()`'s
   existing `!record.enabled` skip is already correct and gains a test rather than a change.
+- Deleting a conversation pauses its schedules, never deletes them (S23). One thin delegate,
+  `pauseForDeletedSession(sessionId)`, pauses every schedule whose owning or run conversation is that
+  session and clears `run_session_id` on a user-owned `continuous` row so its next run creates a new
+  conversation (A4). `SessionManager.deleteSession` calls it before the session rows go, so the
+  allowlisted `session_query_handler.dart` (1,482) does not grow and `CronScheduler` stays the single
+  writer.
 
 ### A3 — Runs table
 
@@ -148,7 +160,7 @@ New table `scheduled_task_runs`, owned by `ScheduledTaskRunRepository`:
 | `duration_ms` | `INTEGER` NULL | dispatch acceptance → terminal state (S8) |
 | `error` | `TEXT` NULL | bounded, and passed through the existing secrets redactor before it is stored |
 | `session_id` | `TEXT` NULL | the conversation the run appended to (S7) |
-| `message_id` | `TEXT` NULL | the run's position inside that conversation (S9) |
+| `message_id` | `TEXT` NULL | id of the run's user message, written when that message commits (S9, S20) |
 | `created_at` | `TEXT` NOT NULL | row creation |
 
 - Index `(schedule_id, run_at DESC)`; retention per D2 (`schedule_run_recorder.dart` prunes on write,
@@ -156,8 +168,10 @@ New table `scheduled_task_runs`, owned by `ScheduledTaskRunRepository`:
 - Every dispatch path writes the `running` row before the event leaves the scheduler: timer fire,
   recovery in-grace fire, manual run. The missed-beyond-grace path writes `skipped` directly and never
   dispatches. At-most-once ordering (112b B-D1) covers the row write too.
-- The terminal transition is written by the owner that observes the run's turn ending; until the
-  correlation identity in Open question 1 is fixed, the item must not invent one.
+- The anchor is written by the owner that commits the run's user message: when that message persists,
+  the recorder sets `message_id` on the `running` row, so no scheduler-side correlation is needed
+  (S20). The terminal transition is a separate observation, written by the owner that observes the
+  run's turn ending (D9).
 - `last_run_at` / `last_status` keep their current meaning for compatibility; the runs table is the
   history of record and the only source for the Run history tab.
 
@@ -168,7 +182,8 @@ New table `scheduled_task_runs`, owned by `ScheduledTaskRunRepository`:
 - `continuous` (default): on the first dispatch — timer fire, recovery fire, or Run now — create one
   conversation with the stored `workspace_id`, `provider_instance_id`, and `model`, title it from the
   schedule (`name`, else a truncated task text), persist its id in `run_session_id`, then dispatch
-  every later run into it (S3).
+  every later run into it (S3). An empty `run_session_id` — a user-owned schedule that never ran, or one
+  paused by a conversation delete — creates the conversation on its next dispatch (S23).
 - `new_each_run`: create a fresh conversation per run with the same stored setup and record its id on
   that run row (S4).
 - Session creation goes through the existing session-creation path (`SessionManager.createSession`
@@ -259,7 +274,7 @@ Row projection (`schedules[]` and every single-row response) — **structured, n
 ```
 
 Run projection (`runs[]`): `{id, run_at, status, trigger, duration_ms, error, session_id, message_id,
-has_position}`.
+has_position}`, where `has_position` is true exactly when `message_id` is set (S20).
 
 Localization rule: the recurrence **sentence** is Agent-internal and model-facing only. The Client composes its own localized summary from `kind` and the structured fields, so no English sentence from the Agent becomes a UI string.
 
@@ -271,6 +286,7 @@ Localization rule: the recurrence **sentence** is Agent-internal and model-facin
 | `invalid_schedule` | `ScheduleDefinition.parse` rejected the definition (vocabulary, `HH:MM`, weekday, `day_of_month`, interval bound, mixed shapes, IANA zone) |
 | `schedule_not_found` | unknown id |
 | `schedule_expired` | resume of a `once` whose instant has passed (D6) |
+| `schedule_orphaned` | `resume` or `run_now` of a model-owned schedule whose owning conversation was deleted (S23, D10) |
 | `permission_denied` | a model-authority caller naming a row it does not own (never reachable from the Client) |
 | `internal_error` | repository or scheduler failure; nothing mutated |
 
@@ -286,7 +302,8 @@ Localization rule: the recurrence **sentence** is Agent-internal and model-facin
 - A failed run writes its terminal row (`status='failed'`, bounded `error`, `duration_ms`) and
   publishes one canonical `schedule.run_failed` event to that run's conversation carrying
   `{schedule_id, schedule_name, run_id, session_id, consecutive_failures, suggest_pause}`.
-- `suggest_pause` is true from the third consecutive failure (S16). Nothing disables the schedule.
+- `suggest_pause` is true from the third consecutive failure (S16), and a manual failure counts exactly
+  like a scheduled one (S22). Nothing disables the schedule.
 - `schedule.run_failed` is a live, model-invisible notice: never written to model history, never
   carrying command output; durability comes from the runs table plus `consecutive_failures` in
   `schedule.list`.
@@ -300,26 +317,29 @@ Localization rule: the recurrence **sentence** is Agent-internal and model-facin
   device chrome and the sidebar, plus a `Schedules` row in `sidebar_composition.dart` /
   `sidebar_sections.dart`. Both pages are scoped to the conversation's device.
 - **Conversation marker.** A compact badge on `sidebar_conversation_row.dart` for a conversation that
-  owns at least one schedule, derived from the same `schedule.list` snapshot (no extra command).
+  owns at least one schedule, derived from the same `schedule.list` snapshot (no extra command). That
+  snapshot also tells the conversation delete confirmation whether schedules depend on it (S23).
 - **Create entry.** A primary "New schedule" action on the list page.
 
 ### C2 — Screens
 
 - `SchedulesScreen` (list): name (or a derived label), localized recurrence summary, next run in the
   schedule's zone, last outcome, paused state, consecutive-failure badge, and row actions pause/resume,
-  run now, edit, delete (confirmed).
+  run now, edit, delete (confirmed). Run now stays available on a paused row and never resumes it (S21);
+  an orphaned model-owned row offers Edit and Delete only (S23, D10).
 - `ScheduleDetailScreen` with two tabs:
   - **Details** — the summary, the owner (conversation or device), the stored workspace/provider/model,
     conversation mode, pause/resume, run now, edit, delete.
   - **Run history** (S8, U10) — rows of time, status (`succeeded` / `failed` / `running`), duration,
-    error, and **Open conversation**, which navigates to the run's conversation at that run's position
-    when `has_position` is true and to the conversation otherwise.
+    error, and **Open conversation**, which navigates to the run's user message when `has_position` is
+    true (S20) and to the conversation otherwise.
 - `ScheduleEditorSheet` (create/edit) in this order: name (optional) → task text (required, with the
   self-contained hint) → recurrence picker for once/interval/daily/weekly/monthly with the matching
   fields → advanced zone → workspace (S5) → provider+model (S5) → conversation mode switch (S4) → live
   next-run preview (D4, debounced `schedule.preview`, rendered in the selected zone) → Create / Save.
 - Edit reuses the same widget with the row as its initial value; the owning conversation is shown and
-  read-only (S6). Changing the recurrence through the form follows the existing `update` merge rule.
+  read-only (S6). Changing the recurrence through the form follows the existing `update` merge rule, and
+  an edit during an active run applies to the next run only (S24).
 
 ### C3 — Reusing the new-conversation widgets
 
@@ -390,10 +410,12 @@ states, and strings serve both routes.
 - **Mutation.** `user` rows are mutable by device-owner authority only. `model` rows are mutable by
   their owning conversation and by device-owner authority. A model turn naming a `user` row or a
   foreign row gets `permission_denied` with the owner named, and nothing mutates (S15, 112a D6).
-- **Run now** never silently bypasses pause semantics: it is recorded with `trigger='manual'`, so the
-  run history distinguishes it from a scheduled fire, and it never shifts `next_run_at` (S14).
+- **Run now** on a paused row is an explicit manual override, not a resume: it is recorded with
+  `trigger='manual'`, so the run history distinguishes it from a scheduled fire, it never shifts
+  `next_run_at`, and it never sets `enabled=1` (S14, S21).
 - **Delete** requires an explicit `confirm:true` plus a Client confirmation dialog, and deletes the
-  schedule and its run rows only (S10, D7) — never a conversation or a message.
+  schedule and its run rows only (S10, D7) — never a conversation or a message. Deleting a
+  *conversation* pauses the schedules that dispatch into it and never deletes them (S23).
 - **Prompt content.** A UI-created prompt is user-authored and self-contained (S19), so a scheduled run
   cannot be steered by content the user never saw. A model-created prompt stays subject to the
   existing turn authority of its own conversation.
@@ -409,10 +431,20 @@ states, and strings serve both routes.
   runs are no-ops); `fromRow` defaults for old rows; the seven new fields round-trip.
 - Unit: pause cancels the timer and keeps `next_run_at`; resume recomputes on the stored slot grid;
   resume of an expired `once` is `schedule_expired`; a paused schedule never fires on restart or in
-  recovery; run now leaves `next_run_at`/`last_run_at`/`last_status` untouched.
+  recovery; run now dispatches from a paused schedule and leaves `next_run_at`/`last_run_at`/
+  `last_status`/`enabled` untouched (S21).
 - Unit: a run row for every dispatch path starts `running`; the missed-beyond-grace path writes
   `skipped` and dispatches nothing; retention prunes to 200 per schedule and 90 days; the row write
   precedes the event.
+- Unit: the run's `message_id` is written when its user message commits, before the terminal row, and
+  is the anchor the Client navigates to (S20).
+- Unit: a failing manual run advances `consecutive_failures` and reaches `suggest_pause` on the third,
+  the same as a scheduled failure (S22); `update` during an active run changes nothing about the
+  in-flight run and applies to the following one (S24).
+- Unit: deleting a conversation pauses its schedules, deletes none, and keeps their run rows; a
+  model-owned row stays paused with Edit/Delete only, while resuming a user-owned `continuous` row
+  creates a new conversation on its next run; `resume`/`run_now` of an orphaned model-owned row is
+  `schedule_orphaned` (S23, D10).
 - Unit: `continuous` creates exactly one conversation across many runs and reuses it; `new_each_run`
   creates one per run and links each from its run row; the conversation is created with the stored
   workspace/provider/model; a user-owned `continuous` schedule dispatches into a newly created
@@ -431,9 +463,11 @@ states, and strings serve both routes.
 - Cubit: load/admit/invalidate states, no fetch from `build` or a rebuild, device-unavailable mapping
   before a request, `schedule.changed` refresh, single-flight per action.
 - Widget: loading/empty/error/unavailable/loaded; both detail tabs; the run history renders duration and
-  status and opens the run's conversation; the create form validates required fields; the preview
-  updates and shows an error for an invalid definition; edit shows the owning conversation read-only;
-  delete asks for confirmation.
+  status and opens the run's user message when `has_position` is true; run now stays enabled on a paused
+  row; an orphaned model-owned row offers Edit and Delete only; the create form validates required
+  fields; the preview updates and shows an error for an invalid definition; edit shows the owning
+  conversation read-only; delete asks for confirmation, and the conversation delete confirmation warns
+  when schedules depend on it (S21, S23).
 - Reuse: the form renders the extracted workspace and model chips and the existing
   `ModelPickerDialog`; a guard fails if a second picker implementation appears under
   `features/schedules/`.
@@ -450,13 +484,15 @@ states, and strings serve both routes.
    provider/model; a second run appends to the same conversation.
 3. `new_each_run`: two runs produce two conversations, each reachable from its run row.
 4. Run now fires immediately, the run row says `trigger=manual` with a duration, and the next scheduled
-   instant is unchanged.
+   instant is unchanged; the same action on a paused schedule dispatches and leaves it paused (S21).
 5. Run history shows `running` while the turn is in flight and `succeeded`/`failed` afterwards, with the
-   error text on failure.
+   error text on failure, and **Open conversation** lands on that run's user message (S20).
 6. Pause stops the timer and survives a daemon restart; resume re-arms at the next future instant.
-7. Delete removes the schedule and its run rows and leaves its conversation(s) readable.
-8. A failing run shows the badge, the message inside the run's conversation, and the pause suggestion
-   after the third consecutive failure; nothing auto-disables.
+7. Delete removes the schedule and its run rows and leaves its conversation(s) readable. Deleting a
+   conversation instead pauses its schedules, deletes none, and resuming a user-owned `continuous` one
+   continues in a new conversation (S23).
+8. A failing run — scheduled or manual — shows the badge, the message inside the run's conversation, and
+   the pause suggestion after the third consecutive failure; nothing auto-disables (S22).
 9. A model turn in an unrelated conversation cannot pause, run, or delete a screen-created schedule; the
    same action from the screen succeeds.
 10. Stop the device (or disconnect the cloud route): the page shows "Unavailable" with disabled actions,
@@ -485,7 +521,7 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
 | Item | Wave | Files locked | Blocked by |
 |---|---|---|---|
 | 139-01 state: columns + `scheduled_task_runs` + repositories | 1 | `agent/lib/evolution/db/schema/scheduling_schema.dart`, `evolution/db/scheduled_task_repository.dart`, `evolution/db/scheduled_task_run_repository.dart`, `evolution/scheduling/schedule_model.dart` (row fields only), `agent/test/evolution/*`, `docs/technical/agent_database_schema.md`, `agent/test/guards/file_size_ratchet_guard_test.dart` | **138-11**; **138-05** fixtures may need a new snapshot |
-| 139-02 scheduler control + conversations + run recorder | 2 | `agent/lib/evolution/cron_scheduler.dart`, `evolution/scheduling/{schedule_control,schedule_run_recorder,schedule_conversation_factory}.dart` | 139-01 |
+| 139-02 scheduler control + conversations + run recorder | 2 | `agent/lib/evolution/cron_scheduler.dart`, `evolution/scheduling/{schedule_control,schedule_run_recorder,schedule_conversation_factory}.dart`, `agent/lib/evolution/session_manager.dart` (the conversation-delete pause hook only) | 139-01 |
 | 139-03 tool actions | 2 | `agent/lib/capabilities/tools/schedule_task_tool.dart`, `agent/lib/capabilities/AGENTS.md` | 139-02 |
 | 139-04 protocol: commands, queries, events, broadcast, tests | 3 | `agent/lib/interfaces/platforms/sanad_gateway/handlers/{schedule_command_handler,schedule_query_handler}.dart`, `protocol/canonical_events.dart`, `agent/test/interfaces/platforms/sanad_gateway/**`, `docs/technical/schedule_control_protocol.md`, `docs/technical/communication_protocols.md` | **138-08** (dispatch table) and 139-02; the `schedule.run_failed` notice must not grow `handlers/session_query_handler.dart` (**138-09**, allowlisted 1,482) |
 | 139-05 shared new-conversation widgets | 4 | `client/lib/features/conversations/presentation/widgets/conversation_input/composer_model_chip.dart`, `composer_workspace_chip.dart`, `conversation_input_composer.dart` (must shrink), `client/test/**composer*` | **113b 113-02** if it is open; otherwise this PR performs the extraction and lowers the composer's ratchet entry |
@@ -500,24 +536,6 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
   SRP item owns a file this task needs.
 - `schedule_model.dart` is allowlisted and deferred by 138: 139-01 may add record fields but must stay
   at or under 1,264 lines. If it cannot, the new fields go to a companion file instead.
-
-## Open questions
-
-Not covered by U1–U10 or by the accepted recommendations. Do not decide them here.
-
-1. **Run-history anchor identity.** S9 requires a position inside the conversation, and U10 requires
-   "Open conversation" to jump there, but the scheduler emits a platform event and never sees the
-   turn's durable identity. Which already-preserved identity links a run row to its exact message (a
-   `message_id` written when the turn's user message commits, a reused `run_id`, or `run_at` only), and
-   does the terminal `succeeded`/`failed` transition come from the same observation?
-2. **Run now on a paused schedule.** Allowed as a manual override, or rejected with a typed error?
-3. **Manual runs and the failure streak.** Does a failing manual run count toward the
-   three-consecutive-failure pause suggestion, or only scheduled fires?
-4. **A schedule whose conversation is deleted.** A model-owned schedule requires an owning conversation
-   (112a D5). When the user deletes that conversation (54g territory), does the schedule
-   cascade-delete, auto-pause, or does the deletion refuse while a schedule depends on it?
-5. **Edit during an active run.** Should an edit apply to the next run only (today's `update`
-   behavior) or be refused until the running turn ends?
 
 ## Out of scope
 

@@ -176,7 +176,9 @@ without adding semantic family branches to `GatewayManager`.
 
 `SanadProtocolBridge` dispatches and translates; it does not own domain command
 workflows. Focused handlers own provider, session query, workspace/MCP, device
-settings, recovery, and turn-replay commands. Dependencies are constructor
+settings, recovery, turn-replay, and session-control commands. Command-name
+translation is owned by `protocol/canonical_command_translator.dart`: the bridge
+only dispatches the canonical event it returns. Dependencies are constructor
 inputs, including optional runtime owners resolved by composition rather than by
 handlers reaching through a service locator.
 

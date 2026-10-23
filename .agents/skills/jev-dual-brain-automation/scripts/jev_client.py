@@ -30,6 +30,13 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 JsonValue = Union[str, int, float, bool, None, Dict[str, Any], list[Any]]
 
+# The documented System One origin and default model. Both stay the fallback when
+# neither a constructor argument nor the environment names another one.
+API_URL_ENV = "TYPESAFE_API_URL"
+MODEL_ENV = "TYPESAFE_MODEL"
+DEFAULT_API_URL = "https://api.typesafe.ai/v1/systemone"
+DEFAULT_MODEL = "jev-latest"
+
 # One fast decision, not a batch job: a hung call blocks an interactive step.
 DEFAULT_TIMEOUT = 4.0
 # Jev prints probabilities to two decimals; this band absorbs that rounding and
@@ -168,15 +175,35 @@ class JevResponse:
 
 
 class JevClient:
-    """Typed HTTP client; workflow and safety decisions remain caller-owned."""
+    """Typed HTTP client; workflow and safety decisions remain caller-owned.
 
-    API_URL = "https://api.typesafe.ai/v1/systemone"
+    The origin and the model are resolved once, in this order: an explicit
+    constructor argument, then ``TYPESAFE_API_URL`` / ``TYPESAFE_MODEL``, then the
+    class defaults. Neither value is a secret, and the key never appears in an
+    error message or a ``repr``: the resolved URL and model are the only
+    configuration this client reports.
+    """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "jev-latest"):
+    API_URL = DEFAULT_API_URL
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        *,
+        api_url: Optional[str] = None,
+    ) -> None:
         self.api_key = api_key or load_typesafe_key()
         if not self.api_key:
             raise ValueError("TYPESAFE_API_KEY not found in environment or local .env")
-        self.model = model
+        resolved_url = api_url or os.environ.get(API_URL_ENV)
+        if resolved_url:
+            # An explicit origin shadows the class constant for this client. ``ask``
+            # keeps reading ``self.API_URL``, so assigning ``client.API_URL`` after
+            # construction still redirects the next request: that seam predates the
+            # environment override and must keep working.
+            self.API_URL = resolved_url
+        self.model = model or os.environ.get(MODEL_ENV) or DEFAULT_MODEL
 
     def ask(
         self,

@@ -3,6 +3,12 @@
 ## Scope
 This contract applies to `agent/lib/evolution/db/`.
 
+## Schema Ownership
+- `AgentStateDatabase` owns the connection and applies the schema; the table DDL and every in-place additive migration live in exactly one module under `agent/lib/evolution/db/schema/`: `sessions_messages_schema.dart`, `attachments_schema.dart`, `scheduling_schema.dart`, `workspaces_schema.dart`, `runtime_work_schema.dart`, `provider_schema.dart`, `compaction_schema.dart`, and `maintenance_schema.dart`. Legacy workspace identity migration lives in `agent/lib/evolution/db/migrations/workspace_identity_migration.dart`.
+- `AgentStateDatabase._createSchemaAndMigrate` is the single ordered list that calls those owners. Preserve the call order and the statement order inside each module: the emitted DDL, the table order, and the row migrations must stay byte-identical, and `agent/test/evolution/agent_state_schema_snapshot_test.dart` pins the result for fresh and legacy databases.
+- `schema/schema_migration_support.dart` is the one owner of `safeAddColumn`, `tableExists`, `columnExists`, and `isBusyOrLocked`. A schema module must not grow its own column-existence probe, and lock contention must never be swallowed as an already-applied migration.
+- No module introduces `PRAGMA user_version`, reorders the migration sequence, or rebuilds a table outside its owning migration (decision A3).
+
 ## Connection Ownership
 - Use one shared `AgentStateDatabase` connection for sessions, provider metadata, runtime work, notices, pending input, route transitions, and maintenance timestamps.
 - Repositories receive the shared connection; they must not open independent handles to the same state database.
@@ -22,13 +28,13 @@ This contract applies to `agent/lib/evolution/db/`.
 - Session database responsibilities are decomposed into cohesive owners behind the `SessionDB` facade:
   - `SessionRepository`: session lifecycle, metadata, titles, and workspace records.
   - `SessionMessageRepository`: message replace, append and read, history pages and projection, and originating tool-call lookup. It is the only owner of the history-rewrite algorithm.
-  - `ScheduledTaskRepository`: every `scheduled_tasks` read and write (create/upsert, single read, ordered list, delete) plus the schema-tolerant `inspectScheduledTasks` read (PRAGMA/SELECT only; missing and pre-112 tables) used by read-only inspection; the table schema and its additive migration stay in `AgentStateDatabase`.
+  -   `ScheduledTaskRepository`: every `scheduled_tasks` read and write (create/upsert, single read, ordered list, delete) plus the schema-tolerant `inspectScheduledTasks` read (PRAGMA/SELECT only; missing and pre-112 tables) used by read-only inspection; the table schema and its additive migration live in `schema/scheduling_schema.dart` and stay reachable as `AgentStateDatabase.migrateScheduledTasks` for the migration suites.
   - `SuspendedCheckpointRepository`: suspended checkpoints and work-item state.
   - `SessionForkCommitRepository`: fork, soft-rewind, and root-user commit records.
   - `SessionDB`: delegating facade preserving the public API surface; it holds no SQL of its own and must never carry a second copy of a repository algorithm.
 - Keep DTO/enums at a stable export seam only while migration requires it.
 - Legacy tables and methods remain migration-only and cannot accept new production work.
-- `WorkspaceSecurityPolicyRepository` (`capabilities/permissions/`) is the sole owner of `workspace_security_policies`; `AgentStateDatabase` only creates the table. The table is additive and rollback-safe: never rename or drop its columns. Workspace removal deletes the workspace's policy row in the same transaction (`LocalWorkspaceRuntimeService.removeWorkspace` on the `SessionDB.state` connection); `exec_root:` rows are kept.
+- `WorkspaceSecurityPolicyRepository` (`capabilities/permissions/`) is the sole owner of `workspace_security_policies`; `WorkspacesSchema.applySecurityPolicies` only creates the table. The table is additive and rollback-safe: never rename or drop its columns. Workspace removal deletes the workspace's policy row in the same transaction (`LocalWorkspaceRuntimeService.removeWorkspace` on the `SessionDB.state` connection); `exec_root:` rows are kept.
 - `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps and the pending-vacuum marker.
 - `AgentStateMaintenanceService` owns post-ready maintenance policy: idle/grace gating, bounded orphan and terminal deletion batches, 14-day retention, prune/vacuum throttles, and vacuum thresholds. It must not perform cleanup before daemon readiness or expose user-facing settings.
 - Full `VACUUM` is never a startup or serving-path operation. The service marks qualifying work pending and may execute it only at the controlled-exit boundary after restart drain and response flush.

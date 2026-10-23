@@ -5,6 +5,8 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 
 ## Bridge Ownership
 - `SanadProtocolBridge` dispatches and translates only; focused handlers own domain command/query workflows.
+- `protocol/canonical_command_translator.dart` owns the accepted command set and the canonical event each accepted command produces; `SanadProtocolBridge.handleCommand` only dispatches the event it returns. A new command is added to exactly one translator table or branch, never as another literal case in the bridge, and the translator never renames a command: an accepted command's canonical event type is its own wire name.
+- `SessionControlCommandHandler` owns the device-directed pending-steer cancel, queued-message delete, and stop-recovery acknowledgment/claim commands. The bridge routes those four canonical events to it and never mutates the orchestrator for them itself.
 - Local and cloud Sanad platforms share translators, envelopes, handlers, session channels, and canonical behavior.
 - Handler dependencies are explicit constructor inputs. Handlers must not resolve runtime owners through `getIt`.
 - Optional runtime owners remain nullable composition inputs and are resolved lazily by the bridge.
@@ -53,6 +55,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - `view_image` tool results expose only deterministic opaque media identity, safe name, verified MIME/dimensions, and availability in live/history projections. The authenticated loopback media route resolves bytes from the exact durable typed result without creating another stored copy; it requires matching hardware device, session, and media identity, permits one valid byte range, and emits private/no-store plus `nosniff` headers. Cross-device/session requests and malformed scopes return no image bytes, and bytes/base64/private paths never enter events or logs. When history pagination splits an oversized tool result from its originating assistant turn, tool context (`tool` name and `view_image` media projection) resolves from the originating tool call within the same session boundary, never returning synthetic or cross-session state.
 - User-message attachment live/history projections use `UserAttachmentPolicy.publicProjection` only. The authenticated loopback attachment route resolves an exact session-owned durable reference through the owning attachment store (relative references are rooted in that store's state-home boundary), revalidates size and SHA-256 before response, emits a generic filename with `private, no-store` and `nosniff`, and returns no payload for wrong device/session/media scope or changed bytes.
 - Route-transition history snapshots provider display names and projects automatic failover only, the set the Client renders live. A notice is inserted right after its durable `anchor_message_id` row; a legacy notice without one resolves, at session scope, to its request turn's newest tool result whose real `terminal_at` precedes it (else the turn's root user row). Each notice appears on exactly the one page that holds its anchor; only a notice whose identities resolve to no active row stays tail-only. Synthetic-timestamp comparison is forbidden.
+- Session history has two owners behind `SessionQueryHandler`: `handlers/session_history/session_history_projector.dart` projects durable page rows (row shapes, stable event ids, terminal-classification input, latest context usage) from explicit inputs, and `handlers/session_history/history_row_placement.dart` places and builds the compaction-lifecycle, fork-marker, and automatic-failover rows. The handler keeps envelope assembly and every runtime-state input. Payload order, stable event ids, `TerminalAssistantClassifier` classification, and synthetic-row placement are contract-level; do not fold row projection or placement back into the handler.
 
 ## Recovery Commands
 - Retry/continue route changes broadcast authoritative session preference confirmation to the Sanad client family only after runtime ownership succeeds.
@@ -66,7 +69,14 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 ## Runtime Queries and Provider Commands
 - Shared handlers own workspace list/create/remove/tree, MCP list/save/delete/replace/inspect, skills, slash commands, device settings, provider setup, models, session queries, recovery, replay, and remote update/restart.
 - Provider account usage limits (Task 55) are read-only and instance-first: `provider.usage.get` fetches a `ProviderUsageResult` typed `available | unsupported | unavailable | auth_required | failed`; `provider.usage.support` returns per-instance capability flags so clients never hardcode a catalog. Result snapshots never carry credentials or raw provider payloads. Usage failure is fully contained — it must not change instance status, readiness, or the ability to execute model requests.
-- Keep workspace and MCP commands in the single workspace command owner unless architecture documentation explicitly replaces that ownership; do not fragment it by convenience.
+- Separate owners hold the gateway command families: `WorkspaceCommandHandler` owns workspace
+  list/create/remove/tree, folder mutations, and workspace security policy; `McpCommandHandler`
+  owns MCP configuration, import/export, OAuth, and inspection;
+  `CapabilityDiscoveryCommandHandler` owns skills and slash discovery;
+  `ComputerUseCommandHandler` owns computer-use permissions. Shared managed/cloud admission
+  decisions live in exactly one support owner that all four use. `WorkspaceMcpCoordinator`
+  remains the single MCP runtime owner, and the MCP confirmation-token salt has exactly one
+  owner — the MCP handler; never mint a second salt or duplicate an admission decision.
 - Workspace browsing starts from real host roots locally and returns parent metadata; path-only workspace creation derives display name from the folder basename. Cloud-admitted calls always inject `managed_remote` (a client-sent value never downgrades it) and are confined to the runtime Home's `workspaces` root: root-scoped browse, create by name or by a selected nested folder, and preview tokens for recursive delete and relocate.
 - Workspace filesystem handlers remain transport-neutral. The cloud adapter
   dispatches remote create, relocate, browse, and folder mutations without

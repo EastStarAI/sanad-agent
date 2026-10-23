@@ -19,6 +19,10 @@ fail, so the model is not offered an action it could not perform. That filter is
 convenience in front of this gate, never a replacement for it: ``evaluate_post``
 re-checks every precondition on the live snapshot, and that check is what refuses a
 stale table.
+
+The two budget codes below are produced by ``brake.BudgetBrake``, not by a guard
+rule: they are stable reason codes of the same escalation contract, so they live in
+the one tuple the docs and the tests read.
 """
 
 from __future__ import annotations
@@ -40,6 +44,8 @@ MODE_MISMATCH = "mode_mismatch"
 DIALOG_BLOCKING = "dialog_blocking"
 EMPTY_CANDIDATE_TABLE = "empty_candidate_table"
 PHASE_REENTRY = "phase_reentry"
+RATE_LIMITED = "rate_limited"
+COST_CEILING_REACHED = "cost_ceiling_reached"
 MODEL_UNAVAILABLE = "model_unavailable"
 MODEL_CONTRADICTION = "model_contradiction"
 MODEL_ABSTAINED = "model_abstained"
@@ -64,6 +70,8 @@ REASON_CODES = (
     DIALOG_BLOCKING,
     EMPTY_CANDIDATE_TABLE,
     PHASE_REENTRY,
+    RATE_LIMITED,
+    COST_CEILING_REACHED,
     MODEL_UNAVAILABLE,
     MODEL_CONTRADICTION,
     MODEL_ABSTAINED,

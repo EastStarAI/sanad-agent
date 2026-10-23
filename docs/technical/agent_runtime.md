@@ -414,16 +414,26 @@ The four largest daemon files were split into focused units with single ownershi
 
 #### Sanad Protocol Bridge (`agent/lib/interfaces/platforms/sanad_gateway/`)
 
-`sanad_protocol_bridge.dart` (666 lines after the split, was 2633) is a **dispatcher and translator only**. Domain command logic lives in focused handlers under `handlers/`:
+`sanad_protocol_bridge.dart` (813 lines after the SRP Tier 2 split, was 1,325) is a **dispatcher and translator only**. Domain command logic lives in focused handlers under `handlers/`:
 
 | Handler | Owns | Lines |
 |---|---|---|
 | `ProviderCommandHandler` | provider templates/instances/credentials/auth/model commands | ~974 |
-| `SessionQueryHandler` | session history, list, title, preferences; runtime notice hydration | ~404 |
+| `SessionQueryHandler` | session list, title, delete, preferences; runtime notice hydration; `session_history` envelope assembly (row projection and synthetic-row placement are delegated to `handlers/session_history/`) | ~683 |
 | `SessionRecoveryCommandHandler` | Plan 30 `runtime_retry` / `runtime_stop` / `runtime_continue_with_provider`; route confirmation (single consumer, therefore kept inside this handler). When a resumed owner is rate-limit waiting, a new recovery command reroutes and wakes that same owner rather than attempting a second claim. | ~330 |
-| `WorkspaceCommandHandler` | workspace browse/create/tree, MCP server management, slash-command discovery, computer-use toggles, workspace policy (MCP is intentionally folded in — no independent state owner, so a separate handler would violate DRY) | ~355 |
+| `WorkspaceCommandHandler` | workspace list/create/remove/tree, relocation, folder mutations, workspace security policy | ~541 |
+| `McpCommandHandler` | MCP configuration CRUD, import/export, Advanced JSON, OAuth, inspection; sole owner of the MCP confirmation-token salt | ~527 |
+| `CapabilityDiscoveryCommandHandler` | skills and slash-command discovery | ~59 |
+| `ComputerUseCommandHandler` | computer-use permission checks and the computer-use toggle | ~59 |
+| `SessionControlCommandHandler` | device-directed pending-steer cancel, queued-message delete, and the stop-recovery acknowledgment/claim pair | ~111 |
+
+Shared managed/cloud admission decisions and the canonical handler envelope live in `handlers/support/`: `ManagedCommandAdmission` owns the `managed_remote` / `cloud_admitted` predicates, the envelope device identity, the recorded-request exemptions, and the confirmation-ticket lifecycle, and `buildAgentEventEnvelope` keeps canonical envelope construction in one place so a handler never imports the bridge it is called from.
 
 Handlers receive `orchestrator`, `runtimeRecovery`, `config`, `agentRuntime`, `policyStore`, `envFileService` as **nullable** explicit constructor params; the bridge resolves them lazily and conditionally; handlers MUST NOT use `getIt`.
+
+Wire-name translation is its own owner. `protocol/canonical_command_translator.dart` holds the accepted command set and the canonical event each accepted command produces — the payload-only, session-scoped, and device-directed tables plus the envelope merge of `device_id` / `request_id` — and `SanadProtocolBridge.handleCommand` only dispatches the event it returns (`null` means no owner handles the command). An accepted command's canonical type is its own wire name, so adding a command touches exactly one translator table or branch instead of the bridge.
+
+Session history is projected in two owners behind the handler. `handlers/session_history/session_history_projector.dart` turns durable page rows into canonical history rows — row shapes, stable event ids, terminal-classification input, and the latest context-usage projection — from explicit inputs (page rows, following message, base time, session metadata, active continuation). `handlers/session_history/history_row_placement.dart` decides where the compaction-lifecycle, fork-marker, and automatic-failover rows sit on a page and builds those synthetic rows; `SessionQueryHandler` only resolves the page and runtime state and assembles the envelope.
 
 #### AgentRunner (`agent/lib/engine/`)
 
