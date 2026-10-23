@@ -7,10 +7,12 @@
 //
 // Three groups live here, each mechanical rather than policy:
 //
-// 1. Fail-fast primitives: `fail`, single-run resolution, and seconds options.
-//    Every command reports a bad flag through the same exit path.
+// 1. Fail-fast primitives: `fail`, single-run resolution, and the seconds and
+//    integer options. Every command reports a bad flag through the same exit
+//    path.
 // 2. The run record's addressing: `runPaths` and `taskRunPaths` derive every
-//    path, and `loadManifest`/`requireTask` are the two ways it is read.
+//    path, `publicTask` projects one spec task into the manifest's task record,
+//    and `loadManifest`/`requireTask` are the two ways it is read.
 // 3. Durable primitives and run facts: atomic JSON writes, the hash the
 //    workspace registry keys an identity by, process liveness, and the
 //    `result.json` digest a terminal task is reported from.
@@ -41,6 +43,17 @@ export function secondsOption(options, key, defaultMs, label) {
   const seconds = Number(options[key]);
   if (!Number.isFinite(seconds) || seconds < 0) fail(`${label} must be a non-negative number`);
   return Math.round(seconds * 1000);
+}
+
+// Compressed-time switches take milliseconds directly so a test can exercise a
+// three-minute grace period in a fraction of a second.
+export function integerOption(options, key, defaultValue, label, minimum = 0) {
+  if (options[key] == null) return defaultValue;
+  const value = Number(options[key]);
+  if (!Number.isInteger(value) || value < minimum) {
+    fail(`${label} must be an integer >= ${minimum}`);
+  }
+  return value;
 }
 
 export function readJson(path, label = path) {
@@ -126,6 +139,49 @@ export function taskRunPaths(task, runDir) {
 
 export function withRunPaths(task, runDir) {
   return { ...task, ...taskRunPaths(task, runDir) };
+}
+
+export function publicTask(task, runDir, initialStatus = 'queued') {
+  const derived = taskRunPaths(task, runDir);
+  return {
+    id: task.id,
+    implementer: task.implementer,
+    workspace: task.workspace,
+    sourceRoot: task.sourceRoot ?? null,
+    home: task.home ?? null,
+    spawnCwd: task.spawnCwd ?? task.workspace,
+    remote: task.remote ?? false,
+    remoteDevice: task.remoteDevice ?? null,
+    status: initialStatus,
+    pid: null,
+    startedAt: null,
+    finishedAt: null,
+    exitCode: null,
+    signal: null,
+    resultPath: derived.resultPath,
+    timelinePath: derived.timelinePath,
+    timelineFormat: task.timelineFormat,
+    stdoutPath: derived.stdoutPath,
+    stderrPath: derived.stderrPath,
+    knownIdentity: task.knownIdentity,
+    identity: null,
+    // A task is one identity with numbered attempts: every `continue` adds an
+    // entry here and archives the previous attempt's artifacts.
+    attempt: 1,
+    attempts: [],
+    // Retry bookkeeping: `retryEpisode` numbers each distinct block so a retry
+    // that recovers the turn does not leave the next block with no budget.
+    retryEpisode: 0,
+    retryAttempts: [],
+    launchRetries: [],
+    nextRetryAt: null,
+    retryExhaustedAt: null,
+    autoRetry: task.autoRetry ?? null,
+    sessionId: null,
+    lastProgressAt: null,
+    progressStall: null,
+    progressStallMs: task.progressStallMs ?? null,
+  };
 }
 
 function firstNonEmptyLine(value) {
