@@ -1,7 +1,7 @@
 ---
 title: "Task 137: CLI Thinking-Control Visibility in `sanad models`"
 description: "Expose the resolved per-route thinking capability (status, options, default, and authority source) through `sanad models` so a developer or agent can read real thinking levels without opening the state database."
-status: "in_review"
+status: "done"
 current_gate: "G4"
 priority: "medium"
 depends_on: "main @ 76b24771"
