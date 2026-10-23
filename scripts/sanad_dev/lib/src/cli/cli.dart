@@ -15,6 +15,7 @@ void main(List<String> args) async {
   final rawCommand = args[0].toLowerCase();
   if (rawCommand != 'driver' &&
       rawCommand != 'ui' &&
+      rawCommand != 'cli' &&
       args.skip(1).any((arg) => arg == '-h' || arg == '--help')) {
     printUsage();
     return;
@@ -149,6 +150,14 @@ void main(List<String> args) async {
     return;
   }
 
+  if (await dispatchSanadDevRuntimeToolingCommand(
+    parsed,
+    args,
+    sanadHomePath: sanadHomePath,
+  )) {
+    return;
+  }
+
   var portOverride =
       parsed.portOverride ??
       await _recordedPortForTarget(target, sanadHomePath: sanadHomePath);
@@ -181,6 +190,7 @@ void main(List<String> args) async {
         'R',
         portOverride,
         sanadHomePath: sanadHomePath,
+        force: parsed.forceRestart,
       ); // R = Hot Restart
     } else if (target == 'agent') {
       if (parsed.restartTimeoutSeconds < 1 ||
@@ -205,6 +215,7 @@ void main(List<String> args) async {
         'r',
         portOverride,
         sanadHomePath: sanadHomePath,
+        force: parsed.forceRestart,
       ); // r = Hot Reload
     } else {
       print('Unknown target: $target. Supported targets: client');

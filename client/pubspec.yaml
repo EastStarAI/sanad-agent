@@ -105,6 +105,10 @@ dev_dependencies:
   integration_test:
     sdk: flutter
   test: any
+  # Test-only: the Agent CLI parses argv with `package:args`, so the relay
+  # approval grammar is certified against that library instead of a copy of its
+  # rules. Never import it from `lib/`.
+  args: ^2.7.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

@@ -6,6 +6,150 @@ bool canRemoveStaleLauncherRecord({
   required bool clientLive,
 }) => !launcherLive && !endpointLive && !clientLive;
 
+/// Driver-host grant check for one macOS TCC permission.
+enum DriverHostGrantStatus { granted, missing, unknown, notApplicable }
+
+class DriverHostGrantReport {
+  const DriverHostGrantReport({
+    required this.name,
+    required this.status,
+    required this.detail,
+  });
+
+  final String name;
+  final DriverHostGrantStatus status;
+  final String detail;
+}
+
+/// Maps a passive preflight answer onto a report status.
+DriverHostGrantStatus classifyMacOsPrivacyPreflight(
+  MacOsPrivacyPreflight preflight,
+) => switch (preflight) {
+  MacOsPrivacyPreflight.granted => DriverHostGrantStatus.granted,
+  MacOsPrivacyPreflight.denied => DriverHostGrantStatus.missing,
+  MacOsPrivacyPreflight.unavailable => DriverHostGrantStatus.unknown,
+};
+
+const driverHostSettingsHint =
+    'check System Settings > Privacy & Security';
+
+typedef DriverHostGrantProbe = Future<DriverHostGrantReport> Function();
+
+/// Accessibility grant used by `sanad-dev ui` taps and window actions.
+///
+/// Read with `AXIsProcessTrusted()`, which reports the current trust state and
+/// never prompts. Driving another application through an automation script is a
+/// different permission, so it is not a substitute probe.
+Future<DriverHostGrantReport> probeAccessibilityGrant({
+  MacOsPrivacyPreflightReader? preflight,
+}) async {
+  if (!Platform.isMacOS) {
+    return const DriverHostGrantReport(
+      name: 'Accessibility',
+      status: DriverHostGrantStatus.notApplicable,
+      detail: 'macOS only',
+    );
+  }
+  final result = (preflight ?? preflightAccessibilityTrust)();
+  return DriverHostGrantReport(
+    name: 'Accessibility',
+    status: classifyMacOsPrivacyPreflight(result),
+    detail: switch (result) {
+      MacOsPrivacyPreflight.granted => 'AXIsProcessTrusted reported a grant',
+      MacOsPrivacyPreflight.denied =>
+        'AXIsProcessTrusted reported no grant; enable Accessibility for the '
+            'driver host in System Settings > Privacy & Security',
+      MacOsPrivacyPreflight.unavailable =>
+        'passive preflight unavailable; $driverHostSettingsHint',
+    },
+  );
+}
+
+/// Screen Recording grant used by `sanad-dev ui screenshot`.
+///
+/// Read with `CGPreflightScreenCaptureAccess()`, which reports the current
+/// state; the requesting variant is never called, so no Screen Recording prompt
+/// can appear and no screenshot is ever taken.
+Future<DriverHostGrantReport> probeScreenRecordingGrant({
+  MacOsPrivacyPreflightReader? preflight,
+}) async {
+  if (!Platform.isMacOS) {
+    return const DriverHostGrantReport(
+      name: 'Screen Recording',
+      status: DriverHostGrantStatus.notApplicable,
+      detail: 'macOS only',
+    );
+  }
+  final result = (preflight ?? preflightScreenCaptureAccess)();
+  return DriverHostGrantReport(
+    name: 'Screen Recording',
+    status: classifyMacOsPrivacyPreflight(result),
+    detail: switch (result) {
+      MacOsPrivacyPreflight.granted =>
+        'CGPreflightScreenCaptureAccess reported a grant',
+      MacOsPrivacyPreflight.denied =>
+        'CGPreflightScreenCaptureAccess reported no grant; enable Screen '
+            'Recording for the driver host in System Settings > Privacy & '
+            'Security',
+      MacOsPrivacyPreflight.unavailable =>
+        'passive preflight unavailable; $driverHostSettingsHint',
+    },
+  );
+}
+
+/// Report-only driver-host checks: TCC grants, driver entry point, and
+/// port/Home ownership. Never mutates runtime or system state.
+Future<void> reportSanadDevDoctorDriverHost({
+  required SanadDevRuntime runtime,
+  required RuntimeOwnershipAssessment ownership,
+  required bool Function(String path) fileExists,
+  DriverHostGrantProbe? accessibilityProbe,
+  DriverHostGrantProbe? screenRecordingProbe,
+  void Function(String message)? printMessage,
+}) async {
+  final log = printMessage ?? print;
+  final driverEntryPoint = p.join(
+    runtime.repositoryRoot,
+    'client',
+    'lib',
+    'driver_main.dart',
+  );
+  log(
+    'Driver entry point: '
+    '${fileExists(driverEntryPoint) ? 'present' : 'missing'} '
+    '($driverEntryPoint)',
+  );
+  final driverClients = selectManagedUiDriverClients(ownership);
+  log(
+    'Driver-enabled clients: ${driverClients.length}'
+    '${driverClients.isEmpty ? ' (run "sanad-dev run --driver")' : ''}',
+  );
+  log(
+    'Port ownership: agent ${runtime.agentPort} / vm '
+    '${runtime.vmServicePort} selected by this worktree '
+    '(${ownership.classification.name})',
+  );
+  log(
+    'Home ownership: ${runtime.sanadHome} '
+    '(${runtime.isLinkedWorktree ? 'worktree-scoped' : 'primary or explicit'})',
+  );
+  if (!Platform.isMacOS) {
+    log('Driver host grants: not applicable on this platform');
+    return;
+  }
+  final probes = [
+    accessibilityProbe ?? probeAccessibilityGrant,
+    screenRecordingProbe ?? probeScreenRecordingGrant,
+  ];
+  for (final probe in probes) {
+    final report = await probe();
+    log(
+      'Driver host grant ${report.name}: ${report.status.name} '
+      '(${report.detail})',
+    );
+  }
+}
+
 Future<void> handleRuntimeDoctor({
   required bool fix,
   String? sanadHomePath,
@@ -15,6 +159,10 @@ Future<void> handleRuntimeDoctor({
       discoverAgentInstances,
   Future<List<ClientInstance>> Function() discoverClients =
       discoverClientInstances,
+  bool Function(String path)? fileExists,
+  DriverHostGrantProbe? accessibilityProbe,
+  DriverHostGrantProbe? screenRecordingProbe,
+  void Function(String message)? printMessage,
 }) async {
   final runtime = await _currentRuntime(sanadHomePath: sanadHomePath);
   final agents = await discoverAgents(sanadHomeOverride: sanadHomePath);
@@ -198,6 +346,14 @@ Future<void> handleRuntimeDoctor({
     staleRecordRemovalAvailable: staleRecordRemovalAvailable,
   );
   print('Next action: $nextAction');
+  await reportSanadDevDoctorDriverHost(
+    runtime: runtime,
+    ownership: ownership,
+    fileExists: fileExists ?? (path) => File(path).existsSync(),
+    accessibilityProbe: accessibilityProbe,
+    screenRecordingProbe: screenRecordingProbe,
+    printMessage: printMessage,
+  );
 }
 
 String doctorNextAction({

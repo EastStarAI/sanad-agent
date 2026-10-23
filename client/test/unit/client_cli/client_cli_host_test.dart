@@ -387,6 +387,230 @@ void main() {
       await socket.close();
     });
 
+    test('approval is scoped to the session the Agent will act on, not to a '
+        'token the parser consumed as a message', () async {
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      final wsUri = Uri.parse('ws://127.0.0.1:${host.port}/ws?token=${host.token}');
+      final socket = await WebSocket.connect(wsUri.toString());
+      final resultSeen = Completer<Map<String, dynamic>>();
+      socket.listen((msg) {
+        final data = jsonDecode(msg.toString()) as Map<String, dynamic>;
+        if (data['type'] == 'result' && !resultSeen.isCompleted) {
+          resultSeen.complete(data);
+        }
+      });
+
+      socket.add(
+        jsonEncode({
+          'type': 'execute',
+          'request_id': 'req-steer-target',
+          'device_id': 'dev-remote-1',
+          // `args` consumes `-s` as the value of `--message`, so the Agent
+          // targets sess-B. Approving sess-A would approve a different session.
+          'argv': ['session', 'steer', 'sess-B', '--message', '-s', 'sess-A'],
+        }),
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(approvalCoordinator.currentRequest, isNotNull);
+      expect(
+        approvalCoordinator.currentRequest!.sessionId,
+        'sess-B',
+        reason: 'the approval must name the session the Agent acts on',
+      );
+
+      approvalCoordinator.resolveCurrent(ClientCliApprovalDecision.deny);
+      final result = await resultSeen.future.timeout(const Duration(seconds: 2));
+      expect(result['exit_code'], 1);
+
+      await socket.close();
+    });
+
+    test('two different session ids in one relay are refused, not guessed',
+        () async {
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      final wsUri = Uri.parse('ws://127.0.0.1:${host.port}/ws?token=${host.token}');
+      final socket = await WebSocket.connect(wsUri.toString());
+      final errorSeen = Completer<Map<String, dynamic>>();
+      socket.listen((msg) {
+        final data = jsonDecode(msg.toString()) as Map<String, dynamic>;
+        if (data['type'] == 'error' && !errorSeen.isCompleted) {
+          errorSeen.complete(data);
+        }
+      });
+
+      socket.add(
+        jsonEncode({
+          'type': 'execute',
+          'request_id': 'req-steer-conflict',
+          'device_id': 'dev-remote-1',
+          'argv': [
+            'session',
+            'steer',
+            'sess-B',
+            '--session',
+            'sess-A',
+            '--message',
+            'x',
+          ],
+        }),
+      );
+
+      final error = await errorSeen.future.timeout(const Duration(seconds: 2));
+      expect(error['code'], 'ambiguous_session_target');
+      expect(
+        approvalCoordinator.currentRequest,
+        isNull,
+        reason: 'nothing is approved when the target is ambiguous',
+      );
+      expect(
+        mockSocket.sentCommands,
+        isEmpty,
+        reason: 'an ambiguous target is never relayed to the Agent',
+      );
+
+      await socket.close();
+    });
+
+    test('an attached short session value is refused, never approved against '
+        'the positional id', () async {
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      final wsUri = Uri.parse('ws://127.0.0.1:${host.port}/ws?token=${host.token}');
+      final socket = await WebSocket.connect(wsUri.toString());
+      final errorSeen = Completer<Map<String, dynamic>>();
+      final resultSeen = Completer<Map<String, dynamic>>();
+      socket.listen((msg) {
+        final data = jsonDecode(msg.toString()) as Map<String, dynamic>;
+        if (data['type'] == 'error' && !errorSeen.isCompleted) {
+          errorSeen.complete(data);
+        }
+        if (data['type'] == 'result' && !resultSeen.isCompleted) {
+          resultSeen.complete(data);
+        }
+      });
+
+      // `args` reads `-ssess-A` as `--session sess-A`, so this command would
+      // steer `sess-A`. Approving it against `sess-B` would approve a session
+      // the Agent does not act on.
+      socket.add(
+        jsonEncode({
+          'type': 'execute',
+          'request_id': 'req-steer-attached',
+          'device_id': 'dev-remote-1',
+          'argv': [
+            'session',
+            'steer',
+            'sess-B',
+            '-ssess-A',
+            '--message',
+            'x',
+          ],
+        }),
+      );
+
+      final error = await errorSeen.future.timeout(const Duration(seconds: 2));
+      expect(error['code'], 'ambiguous_session_target');
+      expect(
+        approvalCoordinator.currentRequest,
+        isNull,
+        reason: 'approval is never requested for a contradictory target',
+      );
+      expect(mockSocket.sentCommands, isEmpty);
+
+      await socket.close();
+    });
+
+    test('a repeated --session that disagrees is refused before approval',
+        () async {
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      final wsUri = Uri.parse('ws://127.0.0.1:${host.port}/ws?token=${host.token}');
+      final socket = await WebSocket.connect(wsUri.toString());
+      final errorSeen = Completer<Map<String, dynamic>>();
+      socket.listen((msg) {
+        final data = jsonDecode(msg.toString()) as Map<String, dynamic>;
+        if (data['type'] == 'error' && !errorSeen.isCompleted) {
+          errorSeen.complete(data);
+        }
+      });
+
+      // The Agent keeps the last value, so this would retry `sess-B` while an
+      // approval keyed on the first value would name `sess-A`.
+      socket.add(
+        jsonEncode({
+          'type': 'execute',
+          'request_id': 'req-retry-conflict',
+          'device_id': 'dev-remote-1',
+          'argv': [
+            'session',
+            'retry',
+            '--session',
+            'sess-A',
+            '--session',
+            'sess-B',
+          ],
+        }),
+      );
+
+      final error = await errorSeen.future.timeout(const Duration(seconds: 2));
+      expect(error['code'], 'ambiguous_session_target');
+      expect(approvalCoordinator.currentRequest, isNull);
+      expect(mockSocket.sentCommands, isEmpty);
+
+      await socket.close();
+    });
+
+    test('session retry is approved against the session it acts on', () async {
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      final wsUri = Uri.parse('ws://127.0.0.1:${host.port}/ws?token=${host.token}');
+      final socket = await WebSocket.connect(wsUri.toString());
+      final resultSeen = Completer<Map<String, dynamic>>();
+      socket.listen((msg) {
+        final data = jsonDecode(msg.toString()) as Map<String, dynamic>;
+        if (data['type'] == 'result' && !resultSeen.isCompleted) {
+          resultSeen.complete(data);
+        }
+      });
+
+      socket.add(
+        jsonEncode({
+          'type': 'execute',
+          'request_id': 'req-retry-scope',
+          'device_id': 'dev-remote-1',
+          'argv': ['session', 'retry', 'sess-B', '--provider', 'inst-1'],
+        }),
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(approvalCoordinator.currentRequest, isNotNull);
+      expect(approvalCoordinator.currentRequest!.sessionId, 'sess-B');
+
+      approvalCoordinator.resolveCurrent(ClientCliApprovalDecision.deny);
+      final result = await resultSeen.future.timeout(const Duration(seconds: 2));
+      expect(result['exit_code'], 1);
+
+      await socket.close();
+    });
+
     test('a relay whose device event stream ends still returns one terminal result',
         () async {
       final livenessSocket = TestSanadSocketService()..setConnected(true);

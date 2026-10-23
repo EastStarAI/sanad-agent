@@ -15,7 +15,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Read active work and insert running-or-queued work atomically.
 - Preserve strict FIFO for queued input and immediately drain queue-only sessions restored without a recovery notice.
 - Queue promotion, deletion, route rewrite, and execution-snapshot recomputation commit through the execution aggregate owner.
-- Steering targets the active run's runner and bypasses ordinary admission only through the dedicated steer lifecycle.
+- Steering targets the active run's runner and bypasses ordinary admission only through the dedicated steer lifecycle. A `steer_only` rejection is published even when the command carries no request id (uncorrelated), so a caller that cannot be correlated is never left with silence.
 - Turn thinking provenance: a turn `thinking_mode` equal to the session preference persisted before that turn (by `create_session`, a previous turn or a preference update) is a carried-over preference, not a fresh explicit choice. Before execution the orchestrator passes it through `ThinkingRouteSessionSync.revalidateCarriedTurnSelection`: an offered value is unchanged, while a value the target route does not offer falls back to provider default with the existing route-scoped correction. A value that differs from the persisted preference stays a fresh explicit request and admission still validates and rejects it.
 - Idle manual compaction obtains its provider projection, ordinary tool list, and request settings from a session-scoped `AgentRunner` seed without admitting or inventing a user turn. Before the seed is built, `LocalRuntimeOrchestrator.prepareIdleRequest` registers the same per-turn tool catalog and builds the same runtime context an ordinary request of the session does, so the seed carries exactly what the next ordinary request will transmit.
 
@@ -111,6 +111,10 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - `session.fork` copies the active prefix through a durable terminal final answer in one transaction.
 - Steer-superseded thoughts, incomplete/failed/cancelled rows, and tool-call asks are not forkable targets.
 - The client sends source session and target identities only. The child starts idle with new message/turn identities.
+
+## Workspace Resolution
+- Path lookups never register a workspace: resolving an id or path returns the supplied id, the exact stored path, the innermost registered workspace whose root equals or contains that path, and otherwise that path's `exec_root:` identity. Only an explicit create registers a folder.
+- The resolution is one rule for every read caller (`describeWorkspace`, workspace policy queries, catalog and runtime-context resolution, session metadata, resume, and CLI lookups), so a session that carries only an execution root can never appear as a registered workspace.
 
 ## Workspace Filesystem Mutation
 - Resolve stable workspace UUIDs to their current daemon-owned path before filesystem, MCP, skill, or permission access; a missing path remains visible but fails execution until repaired.

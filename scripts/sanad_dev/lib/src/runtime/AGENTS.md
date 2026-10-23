@@ -14,6 +14,7 @@ This contract governs runtime state projection, ownership assessment, lifecycle 
 ## 2. Invariants & Operational Laws
 * **Strict Lease Verification:** Managed mutation against an Agent or Client requires full agreement between the live launcher lease, PID, process identity, runtime nonce, launcher id, workspace hash, and exact client inventory. Ambiguity or mismatch must fail closed.
 * **Component Lifecycle Independence:** Starting, stopping, or failing one component (Agent or Client) must not involuntarily terminate a healthy sibling component.
+* **Terminal Readiness Failure:** A readiness wait must end as soon as its component cannot succeed — a spawned process that exited, or a supervised child that keeps dying — and must report that component's own bounded, secret-free error line instead of waiting out the startup window.
 * **Resumable Stop:** Normal Agent stop uses the daemon checkpoint drain. `--force` is valid only for Agent-owning stop targets and signals bounded cancellation.
 * **Autonomous Switch Prohibition:** AI agents must never invoke `sanad-dev switch` autonomously; execution requires direct, explicit user authorization and disclosing shared-session impacts.
 * **Source Switch Transaction Safety:**

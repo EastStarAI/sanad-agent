@@ -92,7 +92,7 @@ sanad-dev run [options]
 * `--background`: Starts a detached launcher and waits through a bounded handshake until the requested components are managed or startup publishes a staged failure. The user does not need `nohup`, `screen`, or another shell wrapper. `--background` and `--dry-run` are mutually exclusive.
 
 ### 2. `status`
-Displays runtime status and metadata for the current Git worktree in real-time. Reports whether the agent and client are running, their PIDs, VM service ports, and active configuration modes. It also reports the latest validated startup attempt, including requested versus resolved Home, startup stage, outcome, and bounded failure reason; this diagnostic record never grants runtime ownership.
+Displays runtime status and metadata for the current Git worktree in real-time. Reports whether the agent and client are running, their PIDs, VM service ports, and active configuration modes, plus the runtime source commit and product version from the launcher lease. It also reports the latest validated startup attempt, including requested versus resolved Home, startup stage, outcome, and bounded failure reason; this diagnostic record never grants runtime ownership. `status` is strictly read-only: it never prepares, repairs, starts, or stops anything, and a stale prepared runtime CLI fails with the `sanad-dev setup` recovery command.
 ```bash
 sanad-dev status
 ```
@@ -147,11 +147,106 @@ sanad-dev takeover
 sanad-dev cleanup-target-orphans
 ```
 
-`doctor` is read-only. `doctor --fix` removes only a proven stale lease and
-never signals a live process. `takeover` converts exactly one complete manual
-pair into a managed runtime after a safe Agent checkpoint.
+`doctor` is read-only. Alongside the ownership class it reports the driver entry
+point, how many lease-owned Clients were started from `lib/driver_main.dart`, the
+Agent and VM-service ports selected for this worktree, the Home and whether it is
+worktree-scoped, and — on macOS — the Accessibility and Screen Recording grants
+that `sanad-dev ui` needs. The grants are read through passive OS preflight calls
+(`AXIsProcessTrusted`, `CGPreflightScreenCaptureAccess`), so `doctor` never opens
+an OS permission dialog; a missing grant prints `unknown — check System Settings >
+Privacy & Security`. `doctor --fix` removes only a proven stale lease and never
+signals a live process. `takeover` converts exactly one complete manual pair into
+a managed runtime after a safe Agent checkpoint.
 
-### 9. Source handoff
+### 10. Reset with Home fixtures
+
+```bash
+sanad-dev reset [--fixture <name>] [--save-fixture <name>] [--include-mcp-config] [--keep-data] [--dry-run]
+```
+
+One command replaces the stop → restore → run sequence: it stops this worktree's
+Agent and Client, proves the ports are free, optionally saves and/or restores a
+Home fixture, then launches a driver-enabled pair and prints one `reset:` line
+with the ports, commit, state, and Home. It refuses any Home other than this
+worktree's own Test Home (`<user home>/.sanad/dev/homes/<worktree id>`), so the
+primary `~/.sanad` and shared `~/.sanad-test*` homes can never be reset from here.
+
+Fixtures live in `<worktree>/.sanad-dev/fixtures/<name>/` (gitignored) and hold
+only `state.db` plus its SQLite sidecars, `config.yaml`, `models_dev_cache.json`,
+`skills/`, `memories/`, and `workspaces/`, plus `mcp_config.json` when
+`--include-mcp-config` is passed. Every secret is excluded: `.env`,
+`.local_token`, credential JSON files, OS-vault material, private keys,
+`logs/` and request dumps, and any file whose name looks like a token, secret,
+credential, or key. Captured paths are owner-only (`0600`/`0700`). A manifest
+entry that is absolute, contains `.`/`..`, escapes the Home, or crosses a symbolic
+link is refused before anything is written; restores stage in a sibling
+directory, swap each top-level group (the `state.db` family together) with
+same-filesystem renames and rollback, and never read, replace, or delete an
+excluded path.
+
+### 11. Apply: pick the lightest correct action
+
+```bash
+sanad-dev apply [--dry-run]
+```
+
+`apply` diffs the working tree and every commit since the runtime's recorded
+start commit, prints the action and its reason, then executes it:
+
+| Changed path | Action |
+|---|---|
+| docs, tests, `.github/**`, `**.md` (except assets) | none |
+| `scripts/sanad_dev/**`, `scripts/sanad-dev*` | `stop` + `run` |
+| `agent/**` | `restart agent` |
+| `client/lib/main.dart`, `driver_main.dart`, startup/DI files | `restart client` |
+| `client/pubspec.*`, assets, native/Web directories | `stop` + `run` |
+| other `client/lib/**.dart` | `reload client` |
+| `shared/**`, `release/contract/**`, or anything unclassified | `restart agent` + `restart client` |
+
+Compiled-bundle changes (pubspec, lockfile, assets, plugins, native source) need a
+full `stop` + `run`, because a hot restart cannot apply them. A driver-mode change
+also selects `stop` + `run`. Before any restart, `apply` refuses when another build
+or test is running in the same worktree and names the matching PIDs with
+secret-like values redacted; `--force` overrides that guard. A successful run
+records a content-sensitive baseline, so an immediate second `apply` reports the
+worktree as up to date while a new edit of an already-dirty file is still
+detected.
+
+### 12. Compiled CLI cache
+
+```bash
+sanad-dev cli path agent|client
+sanad-dev cli agent|client -- <args>
+```
+
+The Agent CLI (`agent/bin/sanad_agent.dart`) and the Client CLI
+(`client/bin/sanad_client.dart`) are compiled once per runtime commit into
+`<worktree>/.sanad-dev/bin/<sha>/` and reused until their sources, native build
+hooks, transitive path dependencies, pubspecs, or the Flutter pin change.
+Concurrent callers serialize through `<component>.build.lock`, publication is a
+single rename, and only the three most recent commit directories are kept. The
+first form prints the artifact path and whether it was built or reused; the second
+runs it with inherited stdio, prints the per-call duration, and returns the child
+exit status. This replaces the 4–6 s `fvm dart run` bootstrap on every call.
+
+### 13. Scheduled out-of-tree refresh
+
+```bash
+sanad-dev refresh --at +2m
+```
+
+Schedules a fast-forward `git pull`, `sanad-dev setup`, and an Agent plus Client
+restart through a one-shot self-deleting OS mechanism: a detached `sh` child on
+macOS (never launchd), `systemd-run --user --on-active` on Linux, and a
+self-deleting `schtasks /SC ONCE` task on Windows. `--at` accepts `+<n>s|m|h`
+between one minute and twelve hours, so a schedule can neither fire before the
+scheduler resolution nor outlive the work it was armed for; the script takes its
+repository, branch, and expected commit as positional arguments, runs git
+non-interactively, and refuses when the branch or `HEAD` has moved. The command
+prints the task name, fire time, script path, log path, and the exact commands to
+verify the result.
+
+### 14. Source handoff
 
 ```bash
 sanad-dev switch --runtime current --target-worktree <path>

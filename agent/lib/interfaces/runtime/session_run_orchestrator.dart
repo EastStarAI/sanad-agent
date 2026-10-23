@@ -637,6 +637,47 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     );
   }
 
+  /// Emits the typed rejection for a `steer_only` command that found no live
+  /// owner.
+  ///
+  /// A `steer_only` steer exists so a non-interactive caller can never turn a
+  /// correction into a fresh turn or a queued turn. The rejection is correlated
+  /// by the command's own `request_id` and names `no_active_turn`, the same code
+  /// the CLI already reports for its own pre-check, so one code means one
+  /// condition for every caller.
+  void _emitSteerRejected({
+    required GatewayEvent event,
+    required String? requestId,
+    required String code,
+    required String message,
+  }) {
+    // The rejection is always published, even when the steer carries no request
+    // id to correlate it with. A silent rejection would leave a caller waiting
+    // for an answer that cannot arrive, and the text is still neither queued nor
+    // admitted, so the outcome must be observable either way.
+    _emitResponse(
+      GatewayResponse(
+        sessionId: event.sessionId,
+        platformId: event.platformId,
+        message: Message(
+          role: MessageRole.system,
+          metadata: {
+            'canonical_event_type': 'error',
+            'canonical_payload': {
+              'session_id': event.sessionId,
+              'request_id': ?requestId,
+              'code': code,
+              'message': message,
+              'is_fatal': false,
+            },
+          },
+        ),
+        isComplete: true,
+        runId: event.runId,
+      ),
+    );
+  }
+
   void _emitCommandOutcome({
     required String sessionId,
     required String type,
@@ -886,6 +927,26 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               durableActiveWork.state == SessionWorkState.resuming) &&
           (activeRecoveryNotice == null ||
               activeRecoveryNotice.status == RuntimeNoticeStatus.resuming);
+      // A `steer_only` command may never become a turn: without a live owner the
+      // message is rejected instead of falling through to the ordinary
+      // admission path, so the text is neither queued nor admitted as a new
+      // turn (and an unknown session id is never created by a steer). Clients
+      // that omit the flag keep the legacy admit-or-queue behaviour.
+      final steerOnly =
+          event.type == 'steer' &&
+          (event.metadata['payload'] as Map?)?['steer_only'] == true;
+      if (steerOnly && !canSteer) {
+        _emitSteerRejected(
+          event: event,
+          requestId: turnRequest.requestId ?? requestIdForEvent(event),
+          code: 'no_active_turn',
+          message:
+              'No run currently owns session ${event.sessionId}, so the '
+              'steer was rejected. No turn was started and the text was not '
+              'queued.',
+        );
+        return;
+      }
       if (!canSteer && isQueuePromotionCommand) {
         final targetRequestId =
             turnRequest.requestId ?? requestIdForEvent(event) ?? '';

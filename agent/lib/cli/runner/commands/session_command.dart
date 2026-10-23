@@ -10,6 +10,46 @@ import '../../discovery/local_gateway_discovery.dart';
 import '../../oneshot/oneshot_runner.dart';
 import '../sanad_command.dart';
 
+/// Unwraps a correlated gateway response into its canonical payload map.
+///
+/// Query responses wrap the canonical payload under `payload`; an envelope that
+/// is already canonical is returned unchanged.
+Map<String, dynamic> _unwrapPayload(Map<String, dynamic> result) =>
+    result['payload'] is Map
+    ? Map<String, dynamic>.from(result['payload'] as Map)
+    : result;
+
+/// Client-side failure codes that are transport problems, never gateway
+/// verdicts. Every session intervention command reports them as exit `1`.
+const Set<String> _transportErrorCodes = {
+  'client_error',
+  'connection_failed',
+  'disposed',
+  'not_connected',
+  'disconnected',
+  'send_error',
+  'query_timeout',
+};
+
+/// Shared upper bound of `--timeout` (`addCommonOptions`), in seconds.
+const int _maxTimeoutSeconds = 86400;
+
+/// Parses the shared `--timeout` option as an acknowledgement bound.
+///
+/// A value outside the documented `1..86400` range is a usage error, never a
+/// silent fall-back to the default. Returns `null` when the option is unset.
+Duration? _acknowledgementTimeout(String? raw) {
+  if (raw == null) return null;
+  final parsed = int.tryParse(raw.trim());
+  if (parsed == null || parsed < 1 || parsed > _maxTimeoutSeconds) {
+    throw FormatException(
+      '--timeout must be a whole number of seconds from 1 to '
+      '$_maxTimeoutSeconds.',
+    );
+  }
+  return Duration(seconds: parsed);
+}
+
 /// Command to manage and inspect conversation sessions.
 class SessionCommand extends SanadCommand {
   final ClientFactory? clientFactory;
@@ -58,6 +98,20 @@ class SessionCommand extends SanadCommand {
     );
     addSubcommand(
       SessionPermissionCommand(
+        clientFactory: clientFactory,
+        clientOverride: clientOverride,
+        customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
+      ),
+    );
+    addSubcommand(
+      SessionSteerCommand(
+        clientFactory: clientFactory,
+        clientOverride: clientOverride,
+        customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
+      ),
+    );
+    addSubcommand(
+      SessionRetryCommand(
         clientFactory: clientFactory,
         clientOverride: clientOverride,
         customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
@@ -155,6 +209,51 @@ abstract class _BaseSessionSubcommand extends SanadCommand {
         } catch (_) {}
       }
     }
+  }
+
+  int reportUsage({required String? id, String? message, int exitCode = 2}) {
+    if (message != null) {
+      stderrSink.writeln('Error: $message');
+      stderrSink.writeln('Usage: $invocation');
+    }
+    if (json) {
+      stdoutSink.writeln(
+        jsonEncode({
+          'session_id': ?id,
+          'status': 'error',
+          'error_code': 'invalid_arguments',
+          'error': message ?? 'Invalid invocation.',
+          'exit_code': exitCode,
+        }),
+      );
+    }
+    return exitCode;
+  }
+
+  int reportFailure({
+    required String sessionId,
+    required String errorCode,
+    required String message,
+    required int exitCode,
+    String? requestId,
+  }) {
+    // Every outcome after a dispatch names its request id, so a caller can
+    // correlate a late acknowledgement with the request it already attempted.
+    final trace = requestId == null ? '' : ' (request $requestId)';
+    stderrSink.writeln('Error: $message$trace');
+    if (json) {
+      stdoutSink.writeln(
+        jsonEncode({
+          'session_id': sessionId,
+          'request_id': ?requestId,
+          'status': 'error',
+          'error_code': errorCode,
+          'error': message,
+          'exit_code': exitCode,
+        }),
+      );
+    }
+    return exitCode;
   }
 
   String? resolveSessionId() {
@@ -332,9 +431,7 @@ class SessionShowCommand extends _BaseSessionSubcommand {
     try {
       return await withClient((client) async {
         final rawResult = await client.getSessionHistory(sessionId: id);
-        final payload = rawResult['payload'] is Map
-            ? Map<String, dynamic>.from(rawResult['payload'] as Map)
-            : rawResult;
+        final payload = _unwrapPayload(rawResult);
 
         final inFlight = payload['in_flight'] is Map
             ? Map<String, dynamic>.from(payload['in_flight'] as Map)
@@ -661,9 +758,7 @@ class SessionStopCommand extends _BaseSessionSubcommand {
   ) async {
     try {
       final history = await client.getSessionHistory(sessionId: sessionId);
-      final payload = history['payload'] is Map
-          ? Map<String, dynamic>.from(history['payload'] as Map)
-          : history;
+      final payload = _unwrapPayload(history);
       final inFlight = payload['in_flight'];
       if (inFlight is Map) {
         final runId = inFlight['run_id']?.toString();
@@ -889,9 +984,7 @@ class SessionAnswerCommand extends _BaseSessionSubcommand {
           answer: answerText!.trim(),
         );
 
-        final payload = result['payload'] is Map
-            ? Map<String, dynamic>.from(result['payload'] as Map)
-            : result;
+        final payload = _unwrapPayload(result);
         final outcome = payload['outcome']?.toString() ?? 'resolved';
 
         if (json) {
@@ -1102,6 +1195,592 @@ class SessionPermissionCommand extends _BaseSessionSubcommand {
       }
       return 1;
     }
+  }
+}
+
+/// Non-interactive live steering (`sanad session steer`).
+///
+/// A steer never discards progress: the daemon registers the text as a pending
+/// steer for the run that currently owns the session and delivers it at the
+/// next execution boundary. The command therefore reports only what it can
+/// prove — that the gateway acknowledged the message as a pending steer for the
+/// active turn — and never that the instruction has already been applied.
+///
+/// Every dispatch carries `steer_only: true`, so the daemon itself refuses a
+/// steer that has no live owner (typed `no_active_turn`) instead of admitting
+/// the text as a new turn or queuing it. The ownership pre-check stays as a
+/// fast path: it answers without a round trip and keeps the local message
+/// precise, but it is no longer the only guard, so a race between the read and
+/// the dispatch cannot create a turn.
+class SessionSteerCommand extends _BaseSessionSubcommand {
+  /// Accepted as a pending steer for the active turn.
+  static const int exitAccepted = 0;
+
+  /// Transport, connection, or unexpected gateway failure.
+  static const int exitFailed = 1;
+
+  /// Invalid invocation (missing session id, message shape, or a bad file).
+  static const int exitUsage = 2;
+
+  /// No run owns the session, so there is nothing to steer.
+  static const int exitNoActiveTurn = 3;
+
+  /// The gateway answered without registering the text as a steer.
+  static const int exitNotSteerable = 4;
+
+  /// Dispatched but not acknowledged within the bounded wait.
+  static const int exitUnacknowledged = 5;
+
+  /// The daemon admitted the text as a new turn (`classification: think`).
+  static const int exitAdmittedAsTurn = 6;
+
+  /// The daemon queued the text as a later turn (`classification: queue`).
+  static const int exitQueuedAsTurn = 7;
+
+  /// The session projection could not be read, so no steer was dispatched.
+  static const int exitStateUnreadable = 8;
+
+  SessionSteerCommand({
+    super.clientFactory,
+    super.clientOverride,
+    super.customAction,
+  }) {
+    argParser
+      ..addOption(
+        'message',
+        help:
+            'Steer text delivered to the active turn at the next execution boundary',
+      )
+      ..addOption(
+        'message-file',
+        abbr: 'f',
+        help: 'Path to a file whose trimmed content is the steer text',
+      );
+  }
+
+  @override
+  String get name => 'steer';
+
+  @override
+  String get description =>
+      'Steer an active turn mid-flight at its next execution boundary';
+
+  @override
+  String get invocation =>
+      'sanad session steer <session-id> (--message <text> | --message-file <path>)';
+
+  @override
+  Future<int> execute() async {
+    final id = resolveSessionId();
+    if (id == null) {
+      return reportUsage(id: null, message: 'Session ID is required.');
+    }
+
+    final rawMessage = getOption('message');
+    final rawMessageFile = getOption('message-file');
+
+    // Presence, not content, decides the shape: `--message "" --message-file f`
+    // is an ambiguous invocation even though one of them is blank.
+    if (rawMessage != null && rawMessageFile != null) {
+      return reportUsage(
+        id: id,
+        message: '--message cannot be combined with --message-file.',
+      );
+    }
+    if (rawMessage == null && rawMessageFile == null) {
+      return reportUsage(
+        id: id,
+        message: 'One of --message or --message-file is required.',
+      );
+    }
+
+    // `--timeout` is the acknowledgement bound and reuses the shared option's
+    // documented range; a value outside it is a usage error, never a silent
+    // fall-back to the default.
+    final Duration? ackTimeout;
+    try {
+      ackTimeout = _acknowledgementTimeout(timeoutSeconds);
+    } on FormatException catch (e) {
+      return reportUsage(id: id, message: e.message);
+    }
+
+    final String text;
+    if (rawMessageFile != null) {
+      // The path is used verbatim: a caller that quotes a path keeps exactly
+      // the bytes it passed.
+      final path = rawMessageFile;
+      if (path.trim().isEmpty) {
+        return reportUsage(id: id, message: 'Message file path is required.');
+      }
+      final type = FileSystemEntity.typeSync(path);
+      if (type == FileSystemEntityType.directory) {
+        return reportUsage(
+          id: id,
+          message: 'Message file "$path" is a directory; pass a file path.',
+        );
+      }
+      if (type == FileSystemEntityType.notFound) {
+        return reportUsage(
+          id: id,
+          message: 'Message file does not exist: $path',
+        );
+      }
+      final String content;
+      try {
+        content = File(path).readAsStringSync().trim();
+      } on FileSystemException catch (e) {
+        return reportUsage(
+          id: id,
+          message: 'Failed to read message file "$path": ${e.message}',
+        );
+      }
+      if (content.isEmpty) {
+        return reportUsage(id: id, message: 'Message file "$path" is empty.');
+      }
+      text = content;
+    } else {
+      final content = rawMessage!.trim();
+      if (content.isEmpty) {
+        return reportUsage(id: id, message: 'Message cannot be empty.');
+      }
+      text = content;
+    }
+
+    // Allocated here so the same identity travels with the dispatch, the
+    // acknowledgement wait, and every reported outcome — including a timeout,
+    // where the caller needs it to correlate a late acknowledgement.
+    final requestId = const Uuid().v4();
+
+    try {
+      return await withClient((client) async {
+        // Fast-path ownership pre-check. The dispatch below is `steer_only`, so
+        // the daemon is the authoritative guard; this read only saves a round
+        // trip and lets the local message name the reason precisely.
+        final Map<String, dynamic> projection;
+        try {
+          projection = _unwrapPayload(
+            await client.getSessionHistory(sessionId: id),
+          );
+        } on CliClientException catch (e) {
+          if (_transportErrorCodes.contains(e.code)) {
+            return reportFailure(
+              sessionId: id,
+              requestId: requestId,
+              errorCode: e.code,
+              message:
+                  'Failed to read the state of session $id before steering, '
+                  'so no steer was sent: $e',
+              exitCode: exitFailed,
+            );
+          }
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'session_state_unreadable',
+            message:
+                'Could not read the state of session $id, so no steer was '
+                'sent (gateway code ${e.code}): ${e.message}',
+            exitCode: exitStateUnreadable,
+          );
+        } catch (e) {
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'session_state_unreadable',
+            message:
+                'Could not read the state of session $id, so no steer was '
+                'sent: $e',
+            exitCode: exitStateUnreadable,
+          );
+        }
+        if (!_hasActiveTurn(projection)) {
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'no_active_turn',
+            message:
+                'No run currently owns session $id, so there is nothing to '
+                'steer and nothing was sent. Retry while the turn is running, '
+                'or inspect it with: sanad session show $id',
+            exitCode: exitNoActiveTurn,
+          );
+        }
+
+        final ack = await client.steerAndAwaitAck(
+          sessionId: id,
+          message: text,
+          requestId: requestId,
+          steerOnly: true,
+          timeout: ackTimeout,
+        );
+        final ackRequestId = ack['request_id']?.toString() ?? requestId;
+        final classification = ack['classification']?.toString();
+        final ackEvent = ack['event']?.toString() ?? 'gateway response';
+        final ackState = ack['state']?.toString();
+
+        if (classification == 'steer') {
+          if (json) {
+            stdoutSink.writeln(
+              jsonEncode({
+                'session_id': id,
+                'request_id': ackRequestId,
+                'status': 'steer_sent',
+              }),
+            );
+          } else {
+            stdoutSink.writeln(
+              'Steer sent to session $id (request $ackRequestId).',
+            );
+          }
+          return exitAccepted;
+        }
+
+        if (classification == 'think') {
+          return reportFailure(
+            sessionId: id,
+            requestId: ackRequestId,
+            errorCode: 'admitted_as_turn',
+            message:
+                'The daemon admitted the steer text as a NEW TURN: a turn is '
+                'now running for session $id instead of being steered. The '
+                'daemon did not honour `steer_only` (an older daemon), so the '
+                'text was not applied to the previous turn.',
+            exitCode: exitAdmittedAsTurn,
+          );
+        }
+
+        if (classification == 'queue') {
+          return reportFailure(
+            sessionId: id,
+            requestId: ackRequestId,
+            errorCode: 'queued_as_turn',
+            message:
+                'The daemon queued the steer text as a LATER TURN for session '
+                '$id: a turn is now queued instead of the text being applied '
+                'to the active turn. The daemon did not honour `steer_only` '
+                '(an older daemon).',
+            exitCode: exitQueuedAsTurn,
+          );
+        }
+
+        return reportFailure(
+          sessionId: id,
+          requestId: ackRequestId,
+          errorCode: 'steer_not_applied',
+          message:
+              'The gateway acknowledged the message for session $id as '
+              '"$ackEvent"${ackState == null ? '' : ' (state $ackState)'} '
+              'without registering it as a pending steer.',
+          exitCode: exitNotSteerable,
+        );
+      });
+    } on CliClientException catch (e) {
+      if (e.code == 'steer_unacknowledged') {
+        return reportFailure(
+          sessionId: id,
+          requestId: requestId,
+          errorCode: e.code,
+          message:
+              'Steer dispatched to session $id but not acknowledged in time; '
+              'it may still be applied. Confirm with: sanad session show $id',
+          exitCode: exitUnacknowledged,
+        );
+      }
+      if (_transportErrorCodes.contains(e.code)) {
+        return reportFailure(
+          sessionId: id,
+          requestId: requestId,
+          errorCode: e.code,
+          message: 'Failed to steer session: $e',
+          exitCode: exitFailed,
+        );
+      }
+      if (e.code == 'no_active_turn') {
+        // The daemon's own `steer_only` rejection: nothing was started and
+        // nothing was queued, so this is the same condition as the local
+        // pre-check, reported the same way.
+        return reportFailure(
+          sessionId: id,
+          requestId: requestId,
+          errorCode: 'no_active_turn',
+          message:
+              'No run currently owns session $id, so the daemon rejected the '
+              'steer: no turn was started and the text was not queued. Retry '
+              'while the turn is running, or inspect it with: '
+              'sanad session show $id',
+          exitCode: exitNoActiveTurn,
+        );
+      }
+      // A typed gateway verdict (for example a rejected or invalid request).
+      return reportFailure(
+        sessionId: id,
+        requestId: requestId,
+        errorCode: e.code,
+        message: 'Gateway rejected the steer: ${e.message}',
+        exitCode: exitNotSteerable,
+      );
+    } catch (e) {
+      return reportFailure(
+        sessionId: id,
+        requestId: requestId,
+        errorCode: 'steer_failed',
+        message: 'Failed to steer session: $e',
+        exitCode: exitFailed,
+      );
+    }
+  }
+
+  /// Whether the session projection proves a run is currently steerable.
+  ///
+  /// The durable execution snapshot is authoritative: only `running`/`resuming`
+  /// work can hold pending steers, and an in-memory partial-stream (`in_flight`)
+  /// left behind by a stopped, blocked, or waiting run must not be read as an
+  /// active turn (Task 134). A projection without a snapshot falls back to
+  /// `in_flight`.
+  ///
+  /// Two further signals prove the run is past steering even while it still
+  /// reads `running`:
+  ///
+  /// * the durable `stopping` state, which the stop path writes before it
+  ///   cancels the run (the projection carries no in-memory stop flag, and the
+  ///   daemon's own `steer_only` guard owns that distinction);
+  /// * an active runtime recovery notice whose status is not `resuming` — a
+  ///   `waiting` or `blocked` run is not executing, so a steer would have no
+  ///   execution boundary to reach.
+  ///
+  /// A controlled-restart drain is not projected through the session query at
+  /// all, so the daemon's own `steer_only` guard decides it; the pre-check only
+  /// avoids a round trip when it already knows the answer.
+  static bool _hasActiveTurn(Map<String, dynamic> projection) {
+    final snapshot = projection['execution_snapshot'];
+    final state = snapshot is Map ? snapshot['state']?.toString() : null;
+    if (state == null) return projection['in_flight'] is Map;
+    if (state != 'running' && state != 'resuming') return false;
+    final notice = projection['runtime_notice'];
+    final noticeStatus = notice is Map ? notice['status']?.toString() : null;
+    if (noticeStatus != null && noticeStatus != 'resuming') return false;
+    return true;
+  }
+}
+
+/// Non-interactive runtime recovery retry (`sanad session retry`).
+///
+/// A blocked `sanad run` worker has no client attached, so nothing presses the
+/// Sanad Client's Retry action and the session can stay blocked indefinitely.
+/// This command dispatches the same `session.runtime_retry` command that action
+/// sends and reports the daemon's own recovery transition.
+///
+/// It resumes the suspended request the session already owns, on the same route
+/// unless `--provider`/`--model` override it. The dedicated "Change Provider"
+/// action is a different command (`session.runtime_continue_with_provider`,
+/// reason `provider_changed`, route-confirmation broadcast); this one is the
+/// recovery Retry with an optional route override, reason `manual_retry`.
+class SessionRetryCommand extends _BaseSessionSubcommand {
+  /// The daemon accepted the retry and is resuming the suspended request.
+  static const int exitAccepted = 0;
+
+  /// Transport, connection, or unexpected gateway failure.
+  static const int exitFailed = 1;
+
+  /// Invalid invocation (missing session id or an unusable `--timeout`).
+  static const int exitUsage = 2;
+
+  /// The session is not in a retryable blocked or waiting recovery state.
+  static const int exitNotBlocked = 3;
+
+  /// The daemon rejected the retry with a typed recovery notice.
+  static const int exitRejected = 4;
+
+  /// Dispatched but not acknowledged within the bounded wait.
+  static const int exitUnacknowledged = 5;
+
+  /// The session projection could not be read, so no retry was dispatched.
+  static const int exitStateUnreadable = 8;
+
+  SessionRetryCommand({
+    super.clientFactory,
+    super.clientOverride,
+    super.customAction,
+  });
+
+  @override
+  String get name => 'retry';
+
+  @override
+  String get description =>
+      'Retry a blocked or waiting session through the daemon recovery owner';
+
+  @override
+  String get invocation =>
+      'sanad session retry <session-id> [--provider <instance-id>] '
+      '[--model <model-id>]';
+
+  @override
+  Future<int> execute() async {
+    final id = resolveSessionId();
+    if (id == null) {
+      return reportUsage(id: null, message: 'Session ID is required.');
+    }
+
+    final Duration? ackTimeout;
+    try {
+      ackTimeout = _acknowledgementTimeout(timeoutSeconds);
+    } on FormatException catch (e) {
+      return reportUsage(id: id, message: e.message);
+    }
+
+    // The shared `--provider`/`--model` options map to the retry payload's
+    // `provider_instance_id`/`model_id`. A blank value is treated as absent so
+    // an empty shell variable never becomes a provider id.
+    final providerInstanceId = _blankToNull(getOption('provider'));
+    final modelId = _blankToNull(getOption('model'));
+
+    // Allocated before dispatch so a timeout still names the identity a caller
+    // can correlate a late acknowledgement with.
+    final requestId = const Uuid().v4();
+
+    try {
+      return await withClient((client) async {
+        // The pre-check answers without a dispatch and keeps "nothing was sent"
+        // exact: a retry on a healthy session would be a silent no-op at best
+        // (already resuming) and a second turn at worst.
+        final Map<String, dynamic> projection;
+        try {
+          projection = _unwrapPayload(
+            await client.getSessionHistory(sessionId: id),
+          );
+        } on CliClientException catch (e) {
+          if (_transportErrorCodes.contains(e.code)) {
+            return reportFailure(
+              sessionId: id,
+              requestId: requestId,
+              errorCode: e.code,
+              message:
+                  'Failed to read the state of session $id before retrying, '
+                  'so nothing was sent: $e',
+              exitCode: exitFailed,
+            );
+          }
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'session_state_unreadable',
+            message:
+                'Could not read the state of session $id, so nothing was sent '
+                '(gateway code ${e.code}): ${e.message}',
+            exitCode: exitStateUnreadable,
+          );
+        } catch (e) {
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'session_state_unreadable',
+            message:
+                'Could not read the state of session $id, so nothing was sent: '
+                '$e',
+            exitCode: exitStateUnreadable,
+          );
+        }
+
+        if (!_isRetryable(projection)) {
+          return reportFailure(
+            sessionId: id,
+            requestId: requestId,
+            errorCode: 'not_blocked',
+            message:
+                'Session $id is not blocked or waiting for a retry, so nothing '
+                'was sent. Inspect it with: sanad session show $id',
+            exitCode: exitNotBlocked,
+          );
+        }
+
+        final ack = await client.retryRuntimeAndAwaitAck(
+          sessionId: id,
+          requestId: requestId,
+          providerInstanceId: providerInstanceId,
+          modelId: modelId,
+          timeout: ackTimeout,
+        );
+        final ackRequestId = ack['request_id']?.toString() ?? requestId;
+        final noticeRequestId = ack['notice_request_id']?.toString();
+
+        if (json) {
+          stdoutSink.writeln(
+            jsonEncode({
+              'session_id': id,
+              'request_id': ackRequestId,
+              'status': 'retrying',
+              'notice_request_id': ?noticeRequestId,
+            }),
+          );
+        } else {
+          stdoutSink.writeln(
+            'Retry accepted for session $id (request $ackRequestId): the '
+            'daemon is resuming the last request.',
+          );
+        }
+        return exitAccepted;
+      });
+    } on CliClientException catch (e) {
+      if (e.code == 'retry_unacknowledged') {
+        return reportFailure(
+          sessionId: id,
+          requestId: requestId,
+          errorCode: e.code,
+          message:
+              'Retry dispatched to session $id but not acknowledged in time; '
+              'the daemon may still resume it. Confirm with: '
+              'sanad session show $id',
+          exitCode: exitUnacknowledged,
+        );
+      }
+      if (_transportErrorCodes.contains(e.code)) {
+        return reportFailure(
+          sessionId: id,
+          requestId: requestId,
+          errorCode: e.code,
+          message: 'Failed to retry session: $e',
+          exitCode: exitFailed,
+        );
+      }
+      return reportFailure(
+        sessionId: id,
+        requestId: requestId,
+        errorCode: e.code,
+        message: 'Gateway rejected the retry: ${e.message}',
+        exitCode: exitRejected,
+      );
+    } catch (e) {
+      return reportFailure(
+        sessionId: id,
+        requestId: requestId,
+        errorCode: 'retry_failed',
+        message: 'Failed to retry session: $e',
+        exitCode: exitFailed,
+      );
+    }
+  }
+
+  /// Whether the projection proves the session is waiting for a recovery.
+  ///
+  /// The daemon's own recovery notice is authoritative: `blocked` waits for an
+  /// explicit Retry/Change Provider/Stop, and `waiting` waits on a resume timer
+  /// a manual retry may shorten. The durable execution snapshot is the second
+  /// signal, because restored blocked work can be projected before its notice is
+  /// rehydrated. Anything else — idle, queued, running, resuming, stopping — is
+  /// not a retry target, and this command sends nothing for it.
+  static bool _isRetryable(Map<String, dynamic> projection) {
+    final notice = projection['runtime_notice'];
+    final noticeStatus = notice is Map ? notice['status']?.toString() : null;
+    if (noticeStatus == 'blocked' || noticeStatus == 'waiting') return true;
+    final snapshot = projection['execution_snapshot'];
+    final state = snapshot is Map ? snapshot['state']?.toString() : null;
+    return state == 'blocked' || state == 'waiting';
+  }
+
+  static String? _blankToNull(String? value) {
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
   }
 }
 

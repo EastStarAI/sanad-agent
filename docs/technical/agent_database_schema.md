@@ -303,6 +303,8 @@ Stores logical workspace identity independently from its current filesystem loca
 
 Folder availability is derived at runtime and is not persisted. A missing folder therefore does not delete the workspace row or its sessions. Workspace queries return `availability: available | missing` and the last known path.
 
+Rows are written only by an explicit registration: `workspace.create` (a picked or new folder), `workspace.relocate`, a managed create, or the legacy migration below. Resolving a workspace id or path is a read and never inserts a row, so an execution root, worktree, or working directory that was never registered keeps its `exec_root:` identity instead of becoming an empty workspace.
+
 The explicit `workspace.remove` operation deletes this row only. It does not
 delete the path or its contents and does not cascade into session or message
 tables; existing conversation rows retain the removed workspace UUID as

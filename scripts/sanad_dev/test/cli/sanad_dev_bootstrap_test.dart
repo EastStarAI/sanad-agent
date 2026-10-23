@@ -2,29 +2,29 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
-import '../support/sanad_dev_bootstrap_fixture.dart';
+import '../support/sanad_dev_bootstrap_harness.dart';
 
 void main() {
-  late SanadBootstrapFixture bootstrap;
+  final harness = SanadDevBootstrapHarness();
   late Directory fixture;
   late Directory fakeBin;
   late Directory userBin;
   late File calls;
 
-  setUp(() async {
-    bootstrap = await SanadBootstrapFixture.create();
-    fixture = bootstrap.root;
-    fakeBin = bootstrap.fakeBin;
-    userBin = bootstrap.userBin;
-    calls = bootstrap.calls;
-  });
-
-  tearDown(() => bootstrap.dispose());
-
   Future<ProcessResult> runBootstrap(
     List<String> arguments, {
     Map<String, String> environment = const {},
-  }) => bootstrap.run(arguments, environment: environment);
+  }) => harness.run(arguments, environment: environment);
+
+  setUp(() async {
+    await harness.setUp();
+    fixture = harness.fixture;
+    fakeBin = harness.fakeBin;
+    userBin = harness.userBin;
+    calls = harness.calls;
+  });
+
+  tearDown(() => harness.tearDown());
 
   group('POSIX bootstrap', () {
     test('fresh setup resolves Contract before Agent and Client', () async {
@@ -103,28 +103,73 @@ void main() {
       },
     );
 
+    test('a stale runtime command fails closed instead of auto-setup', () async {
+      expect((await runBootstrap(['setup'])).exitCode, 0);
+      await calls.writeAsString('');
+      final source = File(
+        '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad_dev${Platform.pathSeparator}lib${Platform.pathSeparator}sanad_dev_cli.dart',
+      );
+      await source.writeAsString('void main() { print(1); }');
+
+      final result = await runBootstrap(const ['apply']);
+
+      expect(result.exitCode, isNot(0));
+      expect(
+        result.stderr,
+        contains('Project runtime is stale. Run: sanad-dev setup'),
+      );
+      expect(result.stderr, isNot(contains('auto-setup')));
+      final invocations = await calls.readAsLines();
+      expect(
+        invocations,
+        isEmpty,
+        reason: 'a mutating runtime command never bootstraps implicitly',
+      );
+    });
+
     test(
-      'stale runtime command auto-heals and executes without manual setup',
+      'stop, status and logs keep working on a stale prepared runtime',
       () async {
         expect((await runBootstrap(['setup'])).exitCode, 0);
-        await calls.writeAsString('');
         final source = File(
           '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad_dev${Platform.pathSeparator}lib${Platform.pathSeparator}sanad_dev_cli.dart',
         );
+        final fingerprint = await File(
+          '${fixture.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}sanad-dev${Platform.pathSeparator}runtime-cli.stamp',
+        ).readAsString();
         await source.writeAsString('void main() { print(1); }');
 
-        final result = await runBootstrap(const ['status']);
+        for (final command in const ['status', 'stop', 'logs']) {
+          await calls.writeAsString('');
+          final result = await runBootstrap([command]);
 
-        expect(
-          result.exitCode,
-          0,
-          reason: '${result.stdout}\n${result.stderr}',
-        );
-        expect(result.stderr, contains('running auto-setup'));
-        final invocations = await calls.readAsLines();
-        expect(invocations, hasLength(2));
-        expect(invocations.first, contains('dart compile exe'));
-        expect(invocations.last, contains('runtime|status'));
+          expect(
+            result.exitCode,
+            0,
+            reason:
+                '$command must not refuse just because the tree moved on: '
+                '${result.stdout}\n${result.stderr}',
+          );
+          expect(
+            result.stderr,
+            contains('running the last prepared CLI'),
+            reason: '$command must say it used the prepared runtime',
+          );
+          final invocations = await calls.readAsLines();
+          expect(
+            invocations,
+            hasLength(1),
+            reason: '$command must not rebuild anything',
+          );
+          expect(invocations.single, contains('runtime|$command'));
+          expect(
+            await File(
+              '${fixture.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}sanad-dev${Platform.pathSeparator}runtime-cli.stamp',
+            ).readAsString(),
+            fingerprint,
+            reason: 'the prepared stamp is never rewritten by a read-only run',
+          );
+        }
       },
     );
 
@@ -400,117 +445,109 @@ void main() {
     });
   }, skip: Platform.isWindows);
 
-  test(
-    'Windows setup executes all stages with a user-scoped shim',
-    () async {
-      final executable = Platform.environment['SystemRoot'] == null
-          ? 'powershell.exe'
-          : '${Platform.environment['SystemRoot']}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
-      final result = await Process.run(
-        executable,
-        [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad-dev.ps1',
-          'setup',
-        ],
-        workingDirectory: fixture.path,
-        environment: {
-          ...Platform.environment,
-          'PATH': '${fakeBin.path};${Platform.environment['PATH']}',
-          'LOCALAPPDATA': fixture.path,
-        },
-      );
+  test('Windows setup executes all stages with a user-scoped shim', () async {
+    final executable = Platform.environment['SystemRoot'] == null
+        ? 'powershell.exe'
+        : '${Platform.environment['SystemRoot']}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+    final result = await Process.run(
+      executable,
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad-dev.ps1',
+        'setup',
+      ],
+      workingDirectory: fixture.path,
+      environment: {
+        ...Platform.environment,
+        'PATH': '${fakeBin.path};${Platform.environment['PATH']}',
+        'LOCALAPPDATA': fixture.path,
+      },
+    );
 
-      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
-      final invocations = await calls.readAsLines();
-      expect(
-        invocations.any((line) => line.contains('install 3.41.9')),
-        isTrue,
-      );
-      expect(
-        invocations.any(
-          (line) => line.contains(
-            'release${Platform.pathSeparator}contract|dart pub get',
-          ),
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    final invocations = await calls.readAsLines();
+    expect(invocations.any((line) => line.contains('install 3.41.9')), isTrue);
+    expect(
+      invocations.any(
+        (line) => line.contains(
+          'release${Platform.pathSeparator}contract|dart pub get',
         ),
-        isTrue,
-      );
-      expect(
-        invocations.any(
-          (line) => line.contains(
-            'scripts${Platform.pathSeparator}sanad_dev|dart pub get',
-          ),
+      ),
+      isTrue,
+    );
+    expect(
+      invocations.any(
+        (line) => line.contains(
+          'scripts${Platform.pathSeparator}sanad_dev|dart pub get',
         ),
-        isTrue,
-      );
-      expect(
-        invocations.any((line) => line.contains('agent|dart pub get')),
-        isTrue,
-      );
-      expect(
-        invocations.any((line) => line.contains('client|flutter pub get')),
-        isTrue,
-      );
-      expect(
-        invocations.any(
-          (line) => line.contains('dart compile exe lib/sanad_dev_cli.dart -o'),
-        ),
-        isTrue,
-      );
-      final runtimeArtifacts =
-          await Directory(
-            '${fixture.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}sanad-dev',
-          ).list().where((entity) {
-            final name = entity.path.split(Platform.pathSeparator).last;
-            return entity is File &&
-                name.startsWith('sanad-dev-runtime-') &&
-                name.endsWith('.exe');
-          }).toList();
-      expect(runtimeArtifacts, hasLength(1));
-      final runtimeStamp = File(
-        '${fixture.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}sanad-dev${Platform.pathSeparator}runtime-cli.stamp',
-      );
-      expect(runtimeStamp.existsSync(), isTrue);
-      final expectedFingerprint = await runtimeStamp.readAsString();
-      await runtimeStamp.writeAsString('stale-fingerprint');
-      final installedShim = File(
-        '${fixture.path}${Platform.pathSeparator}SanadDev${Platform.pathSeparator}bin${Platform.pathSeparator}sanad-dev.cmd',
-      );
-      await installedShim.writeAsString('@echo foreign checkout');
-      await calls.writeAsString('');
-      final reuseResult = await Process.run(
-        executable,
-        [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad-dev.ps1',
-          'setup',
-        ],
-        workingDirectory: fixture.path,
-        environment: {
-          ...Platform.environment,
-          'PATH': '${fakeBin.path};${Platform.environment['PATH']}',
-          'LOCALAPPDATA': fixture.path,
-        },
-      );
-      expect(
-        reuseResult.exitCode,
-        0,
-        reason: '${reuseResult.stdout}\n${reuseResult.stderr}',
-      );
-      expect(await runtimeStamp.readAsString(), expectedFingerprint);
-      expect(await calls.readAsString(), isEmpty);
-      expect(installedShim.existsSync(), isTrue);
-      expect(await installedShim.readAsString(), '@echo foreign checkout');
-    },
-    skip: !Platform.isWindows,
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
+      ),
+      isTrue,
+    );
+    expect(
+      invocations.any((line) => line.contains('agent|dart pub get')),
+      isTrue,
+    );
+    expect(
+      invocations.any((line) => line.contains('client|flutter pub get')),
+      isTrue,
+    );
+    expect(
+      invocations.any(
+        (line) => line.contains('dart compile exe lib/sanad_dev_cli.dart -o'),
+      ),
+      isTrue,
+    );
+    final runtimeArtifacts =
+        await Directory(
+          '${fixture.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}sanad-dev',
+        ).list().where((entity) {
+          final name = entity.path.split(Platform.pathSeparator).last;
+          return entity is File &&
+              name.startsWith('sanad-dev-runtime-') &&
+              name.endsWith('.exe');
+        }).toList();
+    expect(runtimeArtifacts, hasLength(1));
+    final runtimeStamp = File(
+      '${fixture.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}sanad-dev${Platform.pathSeparator}runtime-cli.stamp',
+    );
+    expect(runtimeStamp.existsSync(), isTrue);
+    final expectedFingerprint = await runtimeStamp.readAsString();
+    await runtimeStamp.writeAsString('stale-fingerprint');
+    final installedShim = File(
+      '${fixture.path}${Platform.pathSeparator}SanadDev${Platform.pathSeparator}bin${Platform.pathSeparator}sanad-dev.cmd',
+    );
+    await installedShim.writeAsString('@echo foreign checkout');
+    await calls.writeAsString('');
+    final reuseResult = await Process.run(
+      executable,
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad-dev.ps1',
+        'setup',
+      ],
+      workingDirectory: fixture.path,
+      environment: {
+        ...Platform.environment,
+        'PATH': '${fakeBin.path};${Platform.environment['PATH']}',
+        'LOCALAPPDATA': fixture.path,
+      },
+    );
+    expect(
+      reuseResult.exitCode,
+      0,
+      reason: '${reuseResult.stdout}\n${reuseResult.stderr}',
+    );
+    expect(await runtimeStamp.readAsString(), expectedFingerprint);
+    expect(await calls.readAsString(), isEmpty);
+    expect(installedShim.existsSync(), isTrue);
+    expect(await installedShim.readAsString(), '@echo foreign checkout');
+  }, skip: !Platform.isWindows, timeout: const Timeout(Duration(minutes: 2)));
 
   test('PowerShell bootstrap pins verified user-scoped artifacts', () async {
     final source = await File('../sanad-dev.ps1').readAsString();

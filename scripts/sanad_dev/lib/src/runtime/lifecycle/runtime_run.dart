@@ -25,6 +25,7 @@ Future<ClientInstance?> _waitForManagedClientIdentity({
   required int vmServicePort,
   required String launcherId,
   required String runtimeNonce,
+  bool Function()? shouldAbort,
 }) async {
   final deadline = DateTime.now().add(sanadDevClientStartupTimeout);
   while (DateTime.now().isBefore(deadline)) {
@@ -37,6 +38,9 @@ Future<ClientInstance?> _waitForManagedClientIdentity({
         return client;
       }
     }
+    // An Agent that cannot start makes the paired Client useless, so the pair's
+    // readiness ends together instead of holding the Client window open.
+    if (shouldAbort?.call() ?? false) return null;
     await Future<void>.delayed(const Duration(milliseconds: 250));
   }
   return null;
@@ -71,10 +75,12 @@ Future<bool> _waitForAgent(
   SanadDevRuntime runtime, {
   required String launcherId,
   required String runtimeNonce,
+  bool Function()? shouldAbort,
 }) async {
   final client = HttpClient();
   try {
     return await waitForSanadDevStartupProbe(
+      shouldAbort: shouldAbort,
       probe: () async {
         try {
           final request = await client.getUrl(
@@ -321,6 +327,7 @@ Future<void> handleRun({
   );
   final runtimeNonce = _newRuntimeOwnershipToken();
   final launcherId = 'launcher-$runtimeNonce';
+  final sourceCommit = await readRuntimeSourceCommit(runtime.repositoryRoot);
   var launcherRecord = RuntimeLauncherRecord(
     launcherId: launcherId,
     runtimeNonce: runtimeNonce,
@@ -339,6 +346,7 @@ Future<void> handleRun({
     vmServicePorts: const [],
     status: 'starting',
     updatedAt: DateTime.now().toUtc(),
+    sourceCommit: sourceCommit,
   );
   await writeRuntimeLauncherRecord(launcherRecord);
   await recordStartup(stage: SanadDevStartupStage.recordCreated);
@@ -393,6 +401,11 @@ Future<void> handleRun({
   Process? client;
   ComponentProcessJournal? agentJournal;
   ComponentProcessJournal? clientJournal;
+  // The Agent runs under the in-process HotRestartManager supervisor, so a Home
+  // that cannot be opened leaves a live supervisor restarting a dying child. The
+  // detector turns that into a bounded readiness failure instead of a three
+  // minute wait.
+  final agentCrashLoop = SanadDevAgentCrashLoopDetector();
   final bootLogs = <String>[];
   final startupSignals = <StreamSubscription<ProcessSignal>>[];
   var startupAbortInProgress = false;
@@ -487,6 +500,8 @@ Future<void> handleRun({
   ClientInstance? discoveredClient;
   try {
     if (agent != null) {
+      final agentProcess = agent;
+      unawaited(agentProcess.exitCode.then(agentCrashLoop.recordAgentExit));
       agentJournal = await ComponentProcessJournal.attach(
         process: agent,
         writer: ComponentJournalWriter(
@@ -499,14 +514,14 @@ Future<void> handleRun({
         mirrorStdout: !backgroundMode,
         mirrorStderr: !backgroundMode,
         onBytes: (_, bytes) {
-          bootLogs.addAll(
-            const LineSplitter().convert(
-              utf8.decode(bytes, allowMalformed: true),
-            ),
+          final lines = const LineSplitter().convert(
+            utf8.decode(bytes, allowMalformed: true),
           );
+          bootLogs.addAll(lines);
           while (bootLogs.length > 200) {
             bootLogs.removeAt(0);
           }
+          agentCrashLoop.recordOutputBytes(bytes);
         },
       );
     }
@@ -548,6 +563,7 @@ Future<void> handleRun({
             runtime,
             launcherId: launcherId,
             runtimeNonce: runtimeNonce,
+            shouldAbort: () => agentCrashLoop.isFatal,
           );
         }(),
       if (startsClient)
@@ -556,6 +572,7 @@ Future<void> handleRun({
             vmServicePort: runtime.vmServicePort,
             launcherId: launcherId,
             runtimeNonce: runtimeNonce,
+            shouldAbort: () => agentCrashLoop.isFatal,
           );
         }(),
     ]);
@@ -578,7 +595,11 @@ Future<void> handleRun({
   }
   if (!agentHealthy || (startsClient && discoveredClient?.pid == null)) {
     await cancelStartupSignals();
+    final crashLoopReason = agentCrashLoop.failureReason;
     if (!agentHealthy) {
+      if (crashLoopReason != null) {
+        stderr.writeln('Agent readiness stopped early: $crashLoopReason');
+      }
       stderr.writeln('Agent failed to become healthy. Boot logs:');
       for (final log in bootLogs) {
         stderr.writeln('  $log');
@@ -596,8 +617,13 @@ Future<void> handleRun({
       stage: SanadDevStartupStage.cleanup,
       outcome: SanadDevStartupOutcome.failed,
       exitStatus: 1,
+      // The background launcher's own stderr is not visible to the command that
+      // started it, so the bounded reason travels in the startup record and is
+      // reported by `sanad-dev reset` and `sanad-dev status`.
       failureReason: !agentHealthy
-          ? 'agent readiness failed'
+          ? (crashLoopReason == null
+                ? 'agent readiness failed'
+                : 'agent readiness failed: $crashLoopReason')
           : 'client readiness failed',
     );
     exitCode = 1;

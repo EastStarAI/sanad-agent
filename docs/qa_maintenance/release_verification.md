@@ -43,8 +43,13 @@ complete checked-out Git history with redaction enabled, and requires no
 repository secret or commercial license. The tracked configuration extends the
 default rules and narrowly allows only reviewed `generic-api-key` fixtures in
 exact credential/redaction test files. `.gitleaksignore` additionally identifies
-three historical synthetic test findings by their complete commit/path/rule/line
-fingerprints (secret-acquisition input and in-memory vault migration fixtures).
+reviewed synthetic test findings by their complete commit/path/rule/line
+fingerprints: the secret-acquisition input and in-memory vault migration
+fixtures, plus fixture literals that a superseded feature-branch commit carried
+before the published tree started deriving them at runtime. Sanad-dev fixtures
+therefore derive hash-like cache keys from their source commit and assemble
+credential headers from parts, and a fingerprint exists only where committed
+history still holds an old literal.
 These entries are not path-wide or value-wide exemptions: future findings in
 the same files or other commits remain subject to the default rules. Full
 checked-out history scanning, redaction, production paths, and every other rule
@@ -120,7 +125,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
-| Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
+| Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, stable signing identifier with a matching designated requirement, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
 | Agent Linux x64 | analyzer, installer transaction/failure injection, candidate-manifest hook, version/cloud health verification, and service backend tests | hosted build, provenance, clean user/system systemd and OpenRC install, logout/reboot reconnect, request, uninstall/reinstall/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
@@ -143,7 +148,11 @@ Apple-anchored NanoSoft Developer ID requirement (Team ID `UC2824B99G`) after
 size and SHA-256 verification, reject any signature or publisher mismatch, and
 must not depend on `spctl --type execute` or the local `=notarized` ticket cache.
 Release CI remains the authority for accepted notarization and exact ticket
-architecture/`cdhash` matching.
+architecture/`cdhash` matching. Runtime and `scripts/install.sh` requirements
+stay publisher-anchored and do not pin the Agent signing identifier, because the
+installer validates whatever version the selected manifest declares and that can
+predate the stable identifier. Release CI is the authority for the stable
+identifier `com.eaststarai.sanad.agent` and its designated requirement.
 
 Windows 11 evidence follows the dedicated
 [Windows Release Clean-Machine Validation](windows_release_clean_machine.md)

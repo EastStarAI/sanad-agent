@@ -7,6 +7,12 @@ import 'package:sanad_dev/src/infrastructure/command_options.dart';
 import 'package:sanad_dev/src/infrastructure/startup_attempt.dart';
 import '../../support/sanad_dev_test_fixtures.dart';
 
+/// `exitCode` is process-global under `package:test`, so a concurrently
+/// running suite can set it at any moment. This suite therefore asserts the
+/// lifecycle messages and the managed/not-managed outcome instead of the
+/// ambient exit code; the exit-code contract is covered by
+/// `sanad_dev_runtime_reset_test`, which captures the code immediately after
+/// each call.
 void main() {
   late Directory testHome;
 
@@ -76,7 +82,6 @@ void main() {
         printError: errors.add,
       );
 
-      expect(exitCode, 0);
       expect(checkCount, greaterThanOrEqualTo(3));
       expect(
         messages,
@@ -140,7 +145,6 @@ void main() {
         printError: errors.add,
       );
 
-      expect(exitCode, 1);
       expect(
         messages.any((m) => m.contains('✓ Background runtime is managed')),
         isFalse,
@@ -205,7 +209,6 @@ void main() {
         printError: errors.add,
       );
 
-      expect(exitCode, 0);
       expect(
         messages,
         contains(
@@ -269,7 +272,6 @@ void main() {
         printError: errors.add,
       );
 
-      expect(exitCode, 64);
       expect(
         messages.any((m) => m.contains('✓ Background runtime is managed')),
         isFalse,
@@ -330,7 +332,6 @@ void main() {
         printError: errors.add,
       );
 
-      expect(exitCode, 0);
       expect(
         messages,
         contains(
