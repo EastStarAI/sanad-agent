@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
+import 'package:sanad_agent/evolution/db/user_secret_metadata_repository.dart';
 
 import 'user_secret_vault.dart';
 
@@ -145,10 +146,21 @@ class PreparedSecretDecision {
 /// nothing downstream (the in-memory resolution record, the durable
 /// `resolved_decision`, the tool result, history or logs) can hold a value.
 class SecretAcquisition {
-  SecretAcquisition({UserSecretVault? vault})
-    : _vault = vault ?? UserSecretVault();
+  SecretAcquisition({
+    UserSecretVault? vault,
+    UserSecretMetadataRepository? metadata,
+  }) : _vault = vault ?? UserSecretVault(),
+       _metadata = metadata;
 
   final UserSecretVault _vault;
+
+  /// Owner of the non-secret metadata row of a secret this path stored
+  /// (Task 140 A3).
+  ///
+  /// `null` in a runtime that never opened the agent-state database (a CLI
+  /// turn, a test double); the value is still stored, and the metadata row is
+  /// created by the next `UserSecretCatalog.list()` repair.
+  final UserSecretMetadataRepository? _metadata;
 
   static final _logger = Logger('SecretAcquisition');
 
@@ -253,8 +265,36 @@ class SecretAcquisition {
         sanitized
           ..[outcomeKey] = 'failed'
           ..remove(namesKey);
+        return;
       }
+      _recordAcquiredMetadata(names);
     });
+  }
+
+  /// Records `source = agent_request` for the names a card just stored
+  /// (Task 140 A3).
+  ///
+  /// The vault write already verified, so a metadata failure must not change
+  /// the reported outcome (M3): the row is repaired by the next catalog read.
+  /// Nothing here touches a value, and [names] is all that is passed on.
+  void _recordAcquiredMetadata(List<String> names) {
+    final metadata = _metadata;
+    if (metadata == null) return;
+    try {
+      for (final name in names) {
+        metadata.recordValue(
+          name: name,
+          description: null,
+          source: UserSecretSource.agentRequest,
+        );
+      }
+      _logger.info('Recorded metadata for ${names.length} acquired secret(s).');
+    } catch (error) {
+      _logger.warning(
+        'Acquired user secret stored without metadata '
+        '(${error.runtimeType}); count=${names.length}.',
+      );
+    }
   }
 
   /// Model-visible result for a sanitized decision. Never contains a value.

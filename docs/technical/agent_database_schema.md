@@ -378,6 +378,42 @@ historical metadata.
 
 Legacy databases with `workspaces(path PRIMARY KEY)` are migrated atomically. The migration generates one UUID per distinct old path, updates session and recoverable runtime workspace columns, rewrites nested persisted `workspace_id` values where safe, and creates a workspace row for a path referenced only by a legacy session.
 
+### 3.6. `user_secret_metadata` Table (Task 140)
+
+Non-secret metadata for user secrets. The **value** of a user secret lives only in the Agent vault's `custom:` namespace, owned by `UserSecretVault`; this table holds the fields Settings → Privacy & Security displays beside a name and nothing about the value. No value, no hash of a value, and no prefix of a value ever enters a column here.
+
+Ownership: the DDL lives in `agent/lib/evolution/db/schema/user_secrets_schema.dart`, applied last in `_createSchemaAndMigrate`. Every read and write goes through `UserSecretMetadataRepository` (`agent/lib/evolution/db/user_secret_metadata_repository.dart`); `UserSecretCatalog` and the Task 84 acquisition path reach the table only through it.
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| `name` | `TEXT` | Primary Key, NOT NULL | The vault name; the only identity of a user secret |
+| `description` | `TEXT` | Nullable | User-authored, at most 256 characters after trimming; blank is stored as `NULL`; never derived from a value |
+| `source` | `TEXT` | NOT NULL, CHECK `agent_request \| user` | How the **current** value arrived: `agent_request` through the Task 84 composer card, `user` through the Settings command. A replacement records the path that wrote the current value |
+| `created_at` | `TEXT` | NOT NULL | ISO-8601 UTC; written once |
+| `updated_at` | `TEXT` | NOT NULL | ISO-8601 UTC; advances on every replacement |
+
+`name` is declared `NOT NULL` explicitly because SQLite permits a NULL in a non-INTEGER primary key, and a row whose identity is NULL would describe no secret. `source` has no database default: every writer states how the value arrived, so a row can never claim an origin nobody recorded.
+
+#### Migration Note (Task 140)
+
+The migration is one `CREATE TABLE IF NOT EXISTS` appended after every pre-existing schema module:
+
+- Additive and idempotent. An existing Home gains one empty table on its next open; no existing table, column, index, trigger, or row changes, and a second and third open are byte-identical no-ops.
+- An older agent on the same Home keeps working because it never reads the table.
+- Nothing is backfilled. A secret that already exists in the vault gets its row from the catalog's repair-on-read rule below.
+
+#### Write rules (Task 140 M3, M5)
+
+- **Ordering is vault first, metadata second.** `UserSecretCatalog.set` calls `UserSecretVault.store`, which writes every entry and reads it back. Only a verified vault write is followed by a metadata row.
+- A verified vault write is **never** reported as a failure because the metadata write failed; the row is repaired on the next catalog read.
+- Metadata is never written for a value the vault refused, and never written when the vault is unavailable.
+- Upsert semantics: `created_at` is written at insert only, `updated_at` advances on every write, `source` describes the value stored now, and the passed description is authoritative — an explicit `NULL` or whitespace-only description clears the column.
+- `pruneExcept(names)` is the delete path used by the catalog: a metadata row cannot outlive its vault entry, so a `system_delete_secret` from the model also removes the row on the next read.
+
+#### Repair on read (Task 140 A2)
+
+`UserSecretVault` exposes names only, with no timestamps, so a vault entry may have no metadata row — every secret stored before Task 140, and any row a failed metadata write skipped. `UserSecretCatalog.list()` repairs those in the same read: it inserts a row with `source = agent_request` (the only arrival path this Agent had before the Settings screen existed, so a repair never claims the user typed a value in), `description = NULL`, and both timestamps set to now. A returned entry therefore never carries a null timestamp, and the repair is persisted rather than projected once.
+
 ---
 
 ## 4. Provider Tables in `state.db` (Plan 29)
@@ -888,6 +924,7 @@ After readiness:
 | `provider_schema.dart` | `provider_instances`, `provider_model_cache`, `recent_model_selections` |
 | `compaction_schema.dart` | session projection revisions and `session_compaction_operations` |
 | `maintenance_schema.dart` | `agent_maintenance_state` |
+| `user_secrets_schema.dart` | `user_secret_metadata`: the non-secret metadata of a stored user secret (Task 140), appended last |
 
 `migrations/workspace_identity_migration.dart` owns the legacy workspace-UUID migration (including orphaned absolute-path repair), and `schema/schema_migration_support.dart` owns the shared `safeAddColumn`/`tableExists`/`columnExists`/`isBusyOrLocked` helpers. Modules run in a fixed order that interleaves two of them, so `RuntimeWorkSchema.applySuspendedCheckpoints` and `WorkspacesSchema.applySecurityPolicies` exist as second entry points; the order in `_createSchemaAndMigrate` must not be rearranged.
 
@@ -899,6 +936,8 @@ After readiness:
 | `legacy_pre_112_schedules` | `scheduled_tasks` before Task 112: `run_at` NOT NULL and no recurrence, zone, `next_run_at`, or `enabled` columns |
 
 Task 139 extends all four snapshots in the same change: every one of them now pins `scheduled_task_runs`, its index, and the seven `scheduled_tasks` owner/conversation/route columns — appended after `enabled` in the fresh `CREATE TABLE` and through `ALTER TABLE` on the legacy fixtures, so the trailing column order matches between a fresh and a migrated database.
+
+Task 140 extends all four snapshots as well, by exactly one object each: `user_secret_metadata`, its five columns, and its primary-key index. Nothing else in any snapshot moved, because the module is applied after every pre-existing one and migrates no earlier table.
 
 Committed snapshots live in `agent/test/evolution/fixtures/agent_state/*.schema.txt`; the legacy inputs are the sibling `*.sql` files and contain synthetic placeholders only — no user data or secrets.
 
