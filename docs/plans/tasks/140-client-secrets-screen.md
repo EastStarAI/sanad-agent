@@ -2,7 +2,7 @@
 title: "Task 140 — Secrets Screen (Settings → Privacy & Security)"
 description: "Give user secrets a real surface: a Settings → Privacy & Security page that lists each stored name with non-secret metadata, adds a value, replaces a value without ever reading the old one, and deletes with confirmation, over one local/cloud protocol path whose every value direction is write-only, model-invisible, and absent from logs, caches, and error text."
 status: in_progress
-current_gate: "140-01 merged (#315); 140-02 merged (#318); 140-03 (Client data + cubit) implemented pending PR; 140-04 (destination + page + dialogs) next"
+current_gate: "140-01 merged (#315); 140-02 merged (#318); 140-03 merged (#323); 140-04 (destination + page + dialogs) implemented pending PR; 140-05 (live acceptance + close-out) next"
 remaining_estimate: 35%
 base_commit: 09d5c34a
 depends_on: "138-11 (schema modules), 138-08 (bridge translator), 113b 113-01 (settings pages split) — see Work split"
@@ -459,7 +459,39 @@ clean; `graphify update` run. All required CI checks pass.
 - [x] Tests: `secrets_client_test.dart` (21) and `secrets_cubit_test.dart` (27) — 48 focused tests.
 - [x] Verification: `fvm flutter analyze` clean; focused 48 passed; `test/guards/` 3 passed; full Client fast
       suite 2183 passed / 3 skipped; `lint_wiki.dart` clean.
+- [x] Merge (merged as PR #323, commit `98e721c0`).
+
+### 140-04 — Client destination + page + dialogs — implemented, in review
+
+- [x] C1 `SettingsDestination.privacySecurity` and a Privacy & Security group in the selected-device
+      section of `settings_navigation.dart`, holding Secrets. The route stays
+      `/settings?section=privacySecurity`; no new top-level route.
+- [x] C2 `settings_pages/secrets_page.dart` (`SettingsSecretsPage`), `secret_editor_dialog.dart` (Add and
+      Replace), `delete_secret_dialog.dart`, and the shared typed-failure copy in
+      `secrets_failure_text.dart`. The composer card is unchanged: its field stays local to the Task 84
+      request flow because lifting it would need the request-field spec, the card's keys, its border color
+      and its fonts, and `conversation_input/secret_request_card.dart` is outside this item's file locks.
+- [x] One `SecretsCubit` per page, created from DI with the selected device; `load()` from `initState` and
+      from Retry only, never from `build`.
+- [x] C3 loading, empty, error with Retry, device unavailable, and loaded. Going offline drops the list and
+      disables the actions; an online device whose transport failed also offers Retry in the banner.
+- [x] The value lives only in the dialog's controller, is cleared on submit and on cancel, and is disposed
+      with the dialog. Replace opens with an empty value field, a read-only name, and no reveal.
+- [x] C4 38 new keys in `app_en.arb` and `app_ar.arb`, covering the whole task list; every
+      `SecretsErrorCode` maps to localized copy and no Agent `message` text is rendered.
+- [x] Stable driver keys on every interactive element (`secrets_add_btn`, `secret_row_<name>`,
+      `secret_replace_btn_<name>`, `secret_delete_btn_<name>`, `secret_name_input`, `secret_value_input`,
+      `secret_value_toggle`, `secret_save_btn`, `secret_cancel_btn`, `secret_delete_confirm_btn`,
+      `secrets_retry_btn`, …).
+- [x] Documentation: `client/lib/features/settings/AGENTS.md` records the destination, state,
+      dialog-value, key, and copy laws.
+- [x] Tests: 22 page and dialog widget tests, 2 navigation entry-point tests, and the C4 key-presence test
+      in `test/core/locale_cubit_test.dart`; an RTL pump covers the list and both dialogs.
 - [ ] Merge (blocked on CI and review).
+
+Verification at the candidate commit: `fvm flutter analyze` clean; focused 31 passed; `test/guards/` 3
+passed; full Client fast suite 2209 passed / 3 skipped (3m27s); `lint_wiki.dart` clean; `graphify update`
+run.
 
 ## Out of scope
 

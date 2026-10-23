@@ -25,6 +25,7 @@ import '../widgets/settings_pages/empty_device_page.dart';
 import '../widgets/settings_pages/general_page.dart';
 import '../widgets/settings_pages/profile_page.dart';
 import '../widgets/settings_pages/providers_page.dart';
+import '../widgets/settings_pages/secrets_page.dart';
 import '../widgets/settings_pages/skills_page.dart';
 import '../widgets/settings_pages/workspace_page.dart';
 import '../widgets/sessions_devices_page.dart';
@@ -399,6 +400,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       SettingsDestination.skills => SkillsPage(
         key: ValueKey('skills-${selected.id}'),
+        device: selected,
+      ),
+      SettingsDestination.privacySecurity => SettingsSecretsPage(
+        key: ValueKey('secrets-${selected.id}'),
         device: selected,
       ),
       SettingsDestination.workspace when workspace != null => WorkspacePage(
