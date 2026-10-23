@@ -456,10 +456,13 @@ Collaborators read live state through `CheckpointContext` and mutate history via
 
 #### SessionRunOrchestrator (`agent/lib/interfaces/runtime/`)
 
-`session_run_orchestrator.dart` (≈1.8k lines) is the lifecycle coordinator. Specialized lifecycle steps are in dedicated coordinators:
+`session_run_orchestrator.dart` (≈1.6k lines) is the lifecycle coordinator and the sole admission and active-run authority. Specialized lifecycle steps are in dedicated coordinators:
 
 | Coordinator | Owns | Lines |
 |---|---|---|
+| `SessionInputClassifier` | the pure admission disposition (reject `steer_only`, stale queue promotion, steer, queue, immediate) plus steerability; no state, no mutation | ~109 |
+| `SessionCommandOutcomePublisher` | command-outcome event shape only: message classification, pending-steer change, typed steer rejection, `*_result` outcomes and their wire naming, published through the orchestrator's single response sink | ~141 |
+| `SessionCompactAdmission` | manual `/compact` admission ordering and typed outcome, with the busy/compaction projections and the compaction-owner barrier injected as typed callbacks | ~185 |
 | `SessionQueueCoordinator` | in-memory `_pendingEvents`, SQLite queue persistence + route overrides on queued/non-terminal work | ~163 |
 | `SessionRecoveryRestorer` | daemon startup recovery, crash classification (re-queue vs block by `tool_replay_safety`), timer/notice rehydration, queue-only bootstrap | ~371 |
 | `SessionTurnExecutor` | single turn execution, listener subscriptions via `ActiveRun`, tool-event emission, exception routing, title-update delegation | ~483 |

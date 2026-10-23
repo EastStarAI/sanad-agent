@@ -35,7 +35,7 @@ const Map<String, int> allowlistedFiles = <String, int>{
       1430,
   'lib/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart':
       1010,
-  'lib/interfaces/runtime/session_run_orchestrator.dart': 1847,
+  'lib/interfaces/runtime/session_run_orchestrator.dart': 1603,
   'lib/interfaces/runtime/session_turn_executor.dart': 1267,
 };
 
