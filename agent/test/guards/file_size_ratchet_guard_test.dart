@@ -21,7 +21,6 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/capabilities/runtime/local_runtime_catalog.dart': 1071,
   'lib/cli/client/local_gateway_cli_client.dart': 1247,
   'lib/cli/oneshot/oneshot_runner.dart': 1496,
-  'lib/core/config.dart': 1257,
   'lib/core/setup/linux_service_manager.dart': 1079,
   'lib/engine/adapters/base_anthropic_adapter.dart': 1260,
   'lib/engine/adapters/base_openai_adapter.dart': 2016,

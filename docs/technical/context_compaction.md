@@ -762,9 +762,9 @@ The reservation is a planning value only. Compaction still sends no output cap o
 `ContextCompactionEngine._generateRecoverySummary` runs when the ordinary
 provider request reports `CompactionProviderOverflow`, or without that request
 when the pre-send fit check proves it cannot fit (Task 118b, below). Its limits
-live in `CompactionRecoveryPolicy` (`agent/lib/core/config.dart`; defaults:
-safety ratio `0.80`, at most `16` chunks, minimum pass budget `512` tokens)
-and are injectable through the engine constructor.
+live in `CompactionRecoveryPolicy` (`agent/lib/core/config/compaction_policy.dart`;
+defaults: safety ratio `0.80`, at most `16` chunks, minimum pass budget `512`
+tokens) and are injectable through the engine constructor.
 
 1. **Per-pass budget.** `floor(effectiveInputBudget × safetyRatio)` minus the
    stable system messages, the tool schemas, and the longer of the chunk and
