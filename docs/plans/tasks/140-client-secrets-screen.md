@@ -1,9 +1,9 @@
 ---
 title: "Task 140 — Secrets Screen (Settings → Privacy & Security)"
 description: "Give user secrets a real surface: a Settings → Privacy & Security page that lists each stored name with non-secret metadata, adds a value, replaces a value without ever reading the old one, and deletes with confirmation, over one local/cloud protocol path whose every value direction is write-only, model-invisible, and absent from logs, caches, and error text."
-status: in_progress
-current_gate: "140-01 merged (#315); 140-02 merged (#318); 140-03 merged (#323); 140-04 (destination + page + dialogs) implemented pending PR; 140-05 (live acceptance + close-out) next"
-remaining_estimate: 35%
+status: completed
+current_gate: "closed — 140-01 merged (#315); 140-02 merged (#318); 140-03 merged (#323); 140-04 merged (#324); 140-05 live acceptance and close-out complete"
+remaining_estimate: 0%
 base_commit: 09d5c34a
 depends_on: "138-11 (schema modules), 138-08 (bridge translator), 113b 113-01 (settings pages split) — see Work split"
 ---
@@ -67,6 +67,9 @@ Fixed by the product owner; not reopened here.
 | A2, first bullet ("a name with no metadata row is returned with `description: null` and `updated_at: null`") | projected nulls for an unrepaired name | `updated_at` is NOT NULL, so a null could not also be repaired. Owner decision 2026-10-23: `list()` repairs in the same read — it inserts `source = agent_request`, `description = NULL`, `created_at = updated_at = now` — so a returned entry never carries a null timestamp. The repair records `agent_request` because that was the only arrival path before this screen existed, so it never claims the user typed the value |
 | A2, `set(name, value, description)` description semantics | unstated | the passed description is authoritative: `null` or a whitespace-only string clears the column. The Replace dialog always submits the full desired description |
 | 140-01 Work split file locks | owner classes and tests only | plus minimal wiring, owner decision 2026-10-23: `evolution/db/agent_state_database.dart` (one `UserSecretsSchema.apply` call at the pinned end position) and `core/di.dart` (repository and catalog registration, `SecretAcquisition` metadata injection). Wiring only, no logic |
+| Live acceptance step 10 ("repeat 1–9 over the cloud relay with the local daemon not directly reachable") | a same-device relay-only live leg as the cloud proof | **verified by code inspection**, owner decision 2026-10-24: `SecretsClient` reaches the device only through `DeviceCommandClient` → `DeviceConnectionCoordinator`, and neither `SecretsCubit` nor the page branches on connection scope, so cloud parity is structural. Recorded with file:line citations in `docs/qa_maintenance/secrets_screen_acceptance.md` |
+| Same-device connection routing | unstated | **supported configurations are local only, and local + cloud**; a same-device Agent and Client reached only through the cloud relay with the Agent's local gateway off is not supported, not a default, and not a user option, and Client behavior in that shape is not a defect to fix (owner decision 2026-10-24). Recorded in `docs/technical/communication_protocols.md` §3.2 and `client/lib/features/devices/AGENTS.md` |
+| A real cloud live test shape | one Test Home, local gateway off | **two Test Homes configured for the cloud**: two Agents and two Clients connected through the cloud, commands dispatched to the remote Home. The same-device local-gateway-off recipe is removed from the Client Tester connection-switching reference (owner decision 2026-10-24) |
 
 ### Design decisions taken to make the fixed decisions executable
 
@@ -349,7 +352,12 @@ If any step above cannot be honored, the item does not ship: the value direction
   list and both dialogs.
 - Guards: both size-ratchet guards stay green, no raised number, no dead entry.
 
-### Live acceptance (one Test Home; once locally, once through the cloud relay)
+### Live acceptance (one Test Home; step 10 amended to a code-inspection proof)
+
+Scenario steps 1–9 run once on one Test Home. Step 10 was amended by owner decision 2026-10-24: cloud
+parity is verified by code inspection instead of a same-device relay-only live leg, because that
+configuration is not supported. The pass evidence for every step is recorded in
+[`docs/qa_maintenance/secrets_screen_acceptance.md`](../../qa_maintenance/secrets_screen_acceptance.md).
 
 1. Empty state: the page shows "No secrets stored" on a Home with none.
 2. Add `DATABASE_PASSWORD` with a canary value: the row appears with the description and the current
@@ -366,21 +374,33 @@ If any step above cannot be honored, the item does not ship: the value direction
    reload.
 9. A secret stored through the composer card (Task 84) appears in the list with the "Requested by the
    agent" source.
-10. Repeat 1–9 over the cloud relay with the local daemon not directly reachable, and confirm identical
-    behavior and the same canary-scan result.
+10. Cloud parity: **verified by code inspection** (owner decision 2026-10-24). `SecretsClient` sends only
+    through `DeviceCommandClient`, which resolves transport per request inside
+    `DeviceConnectionCoordinator`, and neither `SecretsCubit` nor the page branches on connection scope
+    (K7, C5). Citations are recorded in the acceptance document. A live cloud leg, when one is needed,
+    runs on two Test Homes configured for the cloud — never on a same-device pair with the local
+    gateway turned off.
 
 ### Definition of Done
 
-- `cd agent && set -o pipefail; fvm dart analyze 2>&1 | tail -5` and
-  `cd client && set -o pipefail; fvm flutter analyze 2>&1 | tail -5` are clean.
-- Focused suites per item, then the full fast suite of each package on the frozen candidate, reporting
-  command, exit code, counts, duration, and a bounded final-five-line summary.
-- Daemon-backed E2E for the new command family (a real socket round trip), because the value direction
-  is a system boundary that mocks cannot prove; local and cloud acceptance per the list above.
-- Documentation updated in the same change: schema, the trust/authority section, the product settings
-  page, and the new protocol page. No stale "needs a scope decision" statement survives.
-- `graphify update .` after the code change.
-- Size ratchet green.
+- [x] `cd agent && set -o pipefail; fvm dart analyze 2>&1 | tail -5` and
+      `cd client && set -o pipefail; fvm flutter analyze 2>&1 | tail -5` are clean — clean at every merged
+      candidate (`234c770c`, `1874cdb9`, `98e721c0`, and the 140-04 candidate).
+- [x] Focused suites per item, then the full fast suite of each package on the frozen candidate, reporting
+      command, exit code, counts, duration, and a bounded final-five-line summary — Agent full fast suite
+      3848 passed / 16 pre-existing skips; Client full fast suite 2209 passed / 3 skipped (3m27s); focused
+      counts per gate below.
+- [x] Daemon-backed E2E for the new command family (a real socket round trip), because the value direction
+      is a system boundary that mocks cannot prove; local and cloud acceptance per the list above — local
+      acceptance steps 1–9 PASS against a real Home vault, with a real Agent restart and a real broadcast
+      frame. Cloud parity is the code-inspection proof recorded as step 10 (owner decision 2026-10-24); no
+      cloud E2E ran, and the relay-only same-device shape it would have required is not a supported
+      configuration. Evidence: `docs/qa_maintenance/secrets_screen_acceptance.md`.
+- [x] Documentation updated in the same change: schema, the trust/authority section, the product settings
+      page, and the new protocol page. No stale "needs a scope decision" statement survives — plus this
+      close-out's acceptance document, the settings hub correction, and the §3.2 routing decision.
+- [x] `graphify update .` after the code change — run for each gate's code change.
+- [x] Size ratchet green — no raised number and no new `settings_pages/` entry; guards green in every gate.
 
 ## Work split
 
@@ -404,7 +424,7 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
 
 ## Gate progress
 
-### 140-01 — metadata table + repository + catalog + acquisition hook — implemented, in review
+### 140-01 — metadata table + repository + catalog + acquisition hook — merged
 
 - [x] A1 `user_secret_metadata` in `evolution/db/schema/user_secrets_schema.dart`, applied after every
       pre-existing module; additive and idempotent for an existing Home.
@@ -425,7 +445,7 @@ Verification at commit `234c770c` (PR #315): `fvm dart analyze` clean; 6 migrati
 regression 74 passed; full Agent fast suite 3848 passed / 16 pre-existing skips; `lint_wiki.dart`
 clean; `graphify update` run. All required CI checks pass.
 
-### 140-02 — protocol: commands, handler, broadcast, tests — implemented, in review
+### 140-02 — protocol: commands, handler, broadcast, tests — merged
 
 - [x] Wire commands translated and dispatched: `secrets.list`, `secret.set`, `secret.delete` in `canonical_command_translator.dart` and `sanad_protocol_bridge.dart`.
 - [x] `SecretCommandHandler` implemented: write-only, structurally value-free list projection, add/replace rotation, confirmed deletion, typed outcomes.
@@ -437,7 +457,7 @@ clean; `graphify update` run. All required CI checks pass.
 - [x] Tests: unit tests for `SecretCommandHandler` (28 tests), `CanonicalCommandTranslator` (4 tests), guards (20 tests), Task 84 regression (81 tests), and evolution suite (456 tests).
 - [x] Merge (merged as PR #318, commit `1874cdb9`).
 
-### 140-03 — Client data + cubit — implemented, in review
+### 140-03 — Client data + cubit — merged
 
 - [x] `SecretsClient` (`client/lib/features/settings/data/secrets_client.dart`): `secrets.list` / `secret.set` /
       `secret.delete` through `DeviceCommandClient`, the value-free `StoredSecret` projection, a payload-free
@@ -461,7 +481,7 @@ clean; `graphify update` run. All required CI checks pass.
       suite 2183 passed / 3 skipped; `lint_wiki.dart` clean.
 - [x] Merge (merged as PR #323, commit `98e721c0`).
 
-### 140-04 — Client destination + page + dialogs — implemented, in review
+### 140-04 — Client destination + page + dialogs — merged
 
 - [x] C1 `SettingsDestination.privacySecurity` and a Privacy & Security group in the selected-device
       section of `settings_navigation.dart`, holding Secrets. The route stays
@@ -487,11 +507,37 @@ clean; `graphify update` run. All required CI checks pass.
       dialog-value, key, and copy laws.
 - [x] Tests: 22 page and dialog widget tests, 2 navigation entry-point tests, and the C4 key-presence test
       in `test/core/locale_cubit_test.dart`; an RTL pump covers the list and both dialogs.
-- [ ] Merge (blocked on CI and review).
+- [x] Merge (merged as PR #324, commit `2fed4227`; accepted live candidate `8b0fb5d9`).
 
 Verification at the candidate commit: `fvm flutter analyze` clean; focused 31 passed; `test/guards/` 3
 passed; full Client fast suite 2209 passed / 3 skipped (3m27s); `lint_wiki.dart` clean; `graphify update`
 run.
+
+### 140-05 — live acceptance + close-out — complete
+
+- [x] Live acceptance steps 1–9 executed on one dedicated Test Home at candidate `8b0fb5d9`, every step
+      PASS: empty state, add with metadata read-back, a real turn using the stored value, replace with an
+      empty value field and an advanced `updated_at`, delete with confirmation followed by
+      `secret_not_found`, daemon-restart persistence, a passive WebSocket harness that observed
+      `secrets.changed` with `change` and `name` only, and a composer-card secret listed with
+      `source=agent_request`.
+- [x] Step 10 cloud parity verified by code inspection (owner decision 2026-10-24): `SecretsClient` →
+      `DeviceCommandClient` → `DeviceConnectionCoordinator`, with no connection-scope branch in
+      `SecretsCubit` or the page.
+- [x] Canary scan clean: 0 occurrences in the agent log, the client log, `request_dumps/`, `state.db`, the
+      harness frames, and both rendered page dumps; the post-cleanup re-scan was also 0. The step 4 echo
+      turn produced `[REDACTED:DATABASE_PASSWORD]` in stored tool output and in session history.
+- [x] `docs/qa_maintenance/secrets_screen_acceptance.md` written: scenario table with pass evidence and
+      keys, the code-inspection proof for step 10, the canary-scan table, and the obstacles worth keeping.
+- [x] `docs/product/settings_hub.md` Privacy & Security → Secrets section matches what shipped: source
+      pill, description placeholder, empty state, unavailable banner with disabled actions, typed failure
+      plus Retry, authoritative description clearing, and route-independent behavior.
+- [x] Routing decision recorded in its owning documents: `docs/technical/communication_protocols.md` §3.2
+      and `client/lib/features/devices/AGENTS.md`. The Client Tester connection-switching reference no
+      longer presents a same-device local-gateway-off pair as the way to test the cloud route.
+- [x] Close-out: task frontmatter closed at `remaining_estimate: 0%`, gates and DoD ticked with evidence,
+      new acceptance doc indexed in `docs/llms.txt`, `fvm dart run scripts/lint_wiki.dart` SUCCESS.
+- [ ] Merge (documentation-only PR).
 
 ## Out of scope
 

@@ -30,13 +30,15 @@ Selecting a device reveals Overview, Providers, MCP Servers, Skills, **Privacy &
 
 Secrets lists the device's own user secrets: the ones the Agent stores in its local vault, keyed by environment variable name. Provider credentials and MCP credentials never appear here; they keep their own screens.
 
-- Each row shows the name, an optional description, the last-updated date in the client locale, and where the value came from: Added by you, or Requested by the agent.
-- Add asks for a name, an optional description, and the value in a masked field with a show/hide toggle.
-- Replace opens the same dialog with the name read-only and the value field empty. The current value is never displayed, and no surface offers a reveal.
+- Each row shows the name, a source pill (Added by you, or Requested by the agent), the description or a "No description" placeholder, and the last-updated date in the client locale.
+- Add asks for a name, an optional description, and the value in a masked field with a show/hide toggle. The name is validated against the Agent's own grammar before the request leaves the Client, so a malformed name is reported inline; a reserved name is reported by the Agent.
+- Replace opens the same dialog with the name read-only, the description editable, and the value field empty. The current value is never displayed, and no surface offers a reveal. Submitting an empty description clears the stored one, because the submitted description is authoritative.
 - Delete asks for confirmation and states that the deletion is permanent.
+- A Home with nothing stored shows "No secrets stored" and the Add action.
+- A device that is not online shows an Unavailable banner, disables every action, and never presents the previous list as current; it reads again when the device comes back. A failed read or mutation is reported as a typed reason plus Retry, never as raw Agent text.
 - The page states only what is stored and that values are write-only. It does not restate the Full Access prompt rule, which is unchanged.
 
-A secret lives in one device's Home vault, so this destination is device-scoped like Providers and Skills. A second Client connected to the same device refreshes its list after any change instead of showing a stale row.
+A secret lives in one device's Home vault, so this destination is device-scoped like Providers and Skills. The screen speaks only the shared device-command protocol, so its behavior does not depend on whether the device is reached locally or through the cloud. Any other Client on the same device refreshes its list after a change instead of showing a stale row.
 
 ## Scope presentation
 
