@@ -82,11 +82,57 @@ bool matchesFlutterRunnerToDevelopmentService(
   return arguments.contains('--host-vmservice-port=$originalPort');
 }
 
-Future<List<_ProcessSnapshot>> _discoverProcessSnapshots() {
+Future<List<_ProcessSnapshot>> discoverProcessSnapshots({
+  Iterable<int>? candidatePids,
+}) {
+  if (candidatePids != null && _supportsCandidateArgumentReads) {
+    return _readCandidateProcessSnapshots(candidatePids);
+  }
   if (Platform.isWindows) return _discoverWindowsProcessSnapshots();
   if (Platform.isMacOS) return _discoverMacOsProcessSnapshots();
   if (Platform.isLinux) return _discoverLinuxProcessSnapshots();
   return Future.value(const []);
+}
+
+/// Whether one process's argument vector can be read without listing the whole
+/// process table. Windows resolves a process command line through CIM, which is
+/// the same cost as the full scan, so it keeps using the full scan.
+bool get _supportsCandidateArgumentReads =>
+    Platform.isMacOS || Platform.isLinux;
+
+/// Reads only the argument vectors of [candidatePids] instead of scanning the
+/// whole process table.
+///
+/// The caller already holds those ids from an earlier full discovery, so this is
+/// the same live OS evidence for a known set of processes; a pid that vanished,
+/// was reused by an unrelated process, or no longer matches the expected shape
+/// simply drops out of the result.
+Future<List<_ProcessSnapshot>> _readCandidateProcessSnapshots(
+  Iterable<int> candidatePids,
+) async {
+  final snapshots = <_ProcessSnapshot>[];
+  for (final pid in candidatePids) {
+    if (pid <= 0) continue;
+    final arguments = await _readProcessArguments(pid);
+    if (arguments.isEmpty) continue;
+    if (_isRelevantClientProcess(arguments)) {
+      snapshots.add(_ProcessSnapshot(pid, arguments));
+    }
+  }
+  return snapshots;
+}
+
+Future<List<String>> _readProcessArguments(int pid) async {
+  if (Platform.isMacOS) return readMacOsProcessArguments(pid);
+  if (Platform.isLinux) {
+    try {
+      final bytes = await File('/proc/$pid/cmdline').readAsBytes();
+      return splitNullTerminatedArguments(bytes);
+    } on FileSystemException {
+      return const [];
+    }
+  }
+  return const [];
 }
 
 Future<List<_ProcessSnapshot>> _discoverLinuxProcessSnapshots() async {
@@ -210,10 +256,13 @@ bool _isRelevantClientProcess(List<String> arguments) {
 
 Future<List<ClientInstance>> discoverClientInstances({
   SanadDevRuntime? runtime,
+  Iterable<int>? candidatePids,
 }) async {
   final instances = <ClientInstance>[];
   try {
-    final processes = await _discoverProcessSnapshots();
+    final processes = await discoverProcessSnapshots(
+      candidatePids: candidatePids,
+    );
     final activeRuntime = runtime ?? await _currentRuntime();
 
     // First, find all Dart development-service processes. Native Flutter uses
@@ -265,6 +314,7 @@ Future<List<ClientInstance>> discoverClientInstances({
             'devToolsPort': devToolsPort,
             'bindPort': bindPort,
             'originalPort': originalPort,
+            'processId': process.pid,
           });
         }
       }
@@ -325,6 +375,7 @@ Future<List<ClientInstance>> discoverClientInstances({
           matchedPath,
           deviceId,
           pid: clientPid,
+          devServicePid: ds['processId'] as int?,
           launchProfile: launchProfile,
         ),
       );

@@ -344,6 +344,43 @@ Web assets use content-hashed Flutter output plus a small no-cache
 `index.html`, serve immutable hashed assets with long-lived caching, and serve
 the shell, version marker, and Appcast without stale caching.
 
+### Asset deployment serialization and health sweep resilience
+
+In release v1.0.20 (run `39881789408`), the three Production asset deployment jobs
+(`web`, `updates`, and `installers`) ran in parallel on the same Production host.
+Workflow-level `concurrency: production-assets` serializes separate workflow
+runs against the host, but jobs within a single run ran concurrently. When
+`installers` finished promoting its source files, its post-promotion health sweep
+checked every Production service. At that exact instant, the parallel `updates`
+job was recreating its Docker container, causing a transient connection refusal
+on loopback port 8299 (`curl: (7) Failed to connect to 127.0.0.1 port 8299`).
+`installers` treated this transient refusal as an immediate verification failure
+and executed an automated rollback, even though `updates` became healthy 10
+seconds later.
+
+To eliminate cross-job interference while maintaining strict safety boundaries:
+
+1. **Deterministic job serialization:** In `.github/workflows/deploy.yml`, the
+   jobs are strictly serialized in the deterministic order:
+   `updates` → `web` → `installers`.
+2. **Explicit skip and failure propagation:** Jobs must still execute when an
+   upstream job is intentionally skipped (for example when `deploy_updates` is
+   false), but any job failure must stop all subsequent jobs immediately. This
+   is enforced using explicit `needs:` dependencies and fail-closed conditionals:
+   - `web`: `needs: updates` with
+     `if: always() && inputs.deploy_web == true && (needs.updates.result == 'success' || needs.updates.result == 'skipped')`
+   - `installers`: `needs: [updates, web]` with
+     `if: always() && inputs.deploy_installers == true && (needs.updates.result == 'success' || needs.updates.result == 'skipped') && (needs.web.result == 'success' || needs.web.result == 'skipped')`
+3. **Bounded fail-closed verification sweeps:** Both activation verification
+   and rollback verification across all three surfaces (`updates`, `web`, and
+   `installers`) use bounded retry loops: up to 12 attempts with a 5-second sleep
+   between attempts (a 60-second total deadline per checked endpoint). A single
+   transient connection refusal or container restart blip will not trigger an
+   immediate rollback. If an endpoint fails to return the expected status or bytes
+   within the 60-second deadline, the sweep fails closed and initiates rollback.
+   The job's own release surface verification (exact payload bytes, SHA-256
+   digests, version markers) is strictly verified and never relaxed.
+
 ## Readiness and live handoff
 
 Local verification proves the release contract, manifest/checksum generation,

@@ -88,21 +88,6 @@ const Set<String> _uiDriverValueFlags = {
   '--until-visible',
 };
 
-List<ClientInstance> selectManagedUiDriverClients(
-  RuntimeOwnershipAssessment ownership,
-) {
-  if (!ownership.isManaged) return const [];
-  return ownership.state.ownedClients
-      .where(
-        (client) =>
-            client.launchProfile?.target
-                ?.replaceAll('\\\\', '/')
-                .endsWith('lib/driver_main.dart') ==
-            true,
-      )
-      .toList(growable: false);
-}
-
 /// Everything one `sanad-dev ui` invocation needs before a child is spawned.
 class UiDriverRunPlan {
   const UiDriverRunPlan({
@@ -162,8 +147,11 @@ class UiDriverBatchStepBudget {
   final int? delayMs;
   final int? sleepMs;
 
-  bool get _verifies => action == 'tap' || action == 'enter_text' ||
-      action == 'entertext' || action == 'type';
+  bool get _verifies =>
+      action == 'tap' ||
+      action == 'enter_text' ||
+      action == 'entertext' ||
+      action == 'type';
   bool get _sleeps => action == 'sleep' || action == 'delay';
 }
 
@@ -259,7 +247,8 @@ UiDriverRunPlan planUiDriverRun(
         ? const Duration(seconds: uiDriverBatchDefaultWallSeconds)
         : Duration(seconds: budget + uiDriverChildGraceSeconds);
   } else {
-    final actionSeconds = explicitSeconds ?? uiDriverDefaultActionTimeoutSeconds;
+    final actionSeconds =
+        explicitSeconds ?? uiDriverDefaultActionTimeoutSeconds;
     final verifies = uiDriverVerifyingCommands.contains(command);
     final delayMs = int.tryParse(
       _uiDriverOptionValue(driverArgs, '--delay') ?? '',
@@ -306,17 +295,17 @@ int uiDriverBatchBudgetSeconds(
   var total = 0;
   for (final step in steps) {
     final stepTimeout =
-        step.timeoutSeconds ?? fallbackStepTimeout ?? uiDriverDefaultActionTimeoutSeconds;
+        step.timeoutSeconds ??
+        fallbackStepTimeout ??
+        uiDriverDefaultActionTimeoutSeconds;
     if (step._sleeps) {
       total += ((step.sleepMs ?? uiDriverDefaultSleepMs) / 1000).ceil();
       continue;
     }
     total += stepTimeout;
     if (step._verifies) {
-      total +=
-          ((step.delayMs ?? uiDriverDefaultDelayMs) / 1000).ceil();
-      total +=
-          ((stepVerifyWindowMs(stepTimeout)) / 1000).ceil();
+      total += ((step.delayMs ?? uiDriverDefaultDelayMs) / 1000).ceil();
+      total += ((stepVerifyWindowMs(stepTimeout)) / 1000).ceil();
     }
   }
   return total == 0 ? 0 : total;
@@ -639,57 +628,3 @@ void _printUiDriverPartialBatch(String partialJson) {
     stdout.writeln(partialJson);
   }
 }
-
-class _ManagedUiDriverClient {
-  const _ManagedUiDriverClient(this.client, this.error);
-
-  final ClientInstance? client;
-  final String? error;
-}
-
-/// Resolves the single launcher-owned driver Client for this worktree.
-///
-/// A missing Client is retried once because discovery can race a Client that is
-/// still finishing startup; the same condition reported by a live Client was
-/// the most common transient `ui` failure.
-Future<_ManagedUiDriverClient> _resolveManagedUiDriverClient(
-  SanadDevRuntime runtime,
-  String? sanadHomePath,
-) async {
-  for (var attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) {
-      await Future<void>.delayed(const Duration(milliseconds: 400));
-    }
-    final activeClients = await discoverClientInstances();
-    final processState = selectRuntimeProcessState(
-      activeAgents: await discoverAgentInstances(
-        sanadHomeOverride: sanadHomePath,
-      ),
-      activeClients: activeClients,
-      runtime: runtime,
-    );
-    final activeHome = resolveActiveSanadHome(runtime, processState);
-    final ownership = await assessRuntimeOwnership(
-      runtime: runtime,
-      state: processState,
-      sanadHome: activeHome,
-    );
-    final managedClients = selectManagedUiDriverClients(ownership);
-    if (managedClients.length == 1) {
-      return _ManagedUiDriverClient(managedClients.single, null);
-    }
-    if (managedClients.length > 1) {
-      return const _ManagedUiDriverClient(
-        null,
-        'Multiple managed clients are active for this worktree. '
-        'Pass --vm-url explicitly to select one.',
-      );
-    }
-  }
-  return const _ManagedUiDriverClient(
-    null,
-    'No active driver-enabled client is managed for this worktree. '
-    'Run `sanad-dev run --driver` first or pass --vm-url explicitly.',
-  );
-}
-
