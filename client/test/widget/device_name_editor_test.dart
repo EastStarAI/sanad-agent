@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
-import 'package:sanad_client/features/settings/presentation/widgets/settings_pages.dart';
+import 'package:sanad_client/features/settings/presentation/widgets/settings_pages/device_rename_dialog.dart';
 
 void main() {
   Widget buildEditor({

@@ -20,7 +20,13 @@ import 'package:sanad_client/features/settings/presentation/bloc/account_lifecyc
 import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_management_screen.dart';
 
 import '../widgets/settings_navigation.dart';
-import '../widgets/settings_pages.dart';
+import '../widgets/settings_pages/device_overview_page.dart';
+import '../widgets/settings_pages/empty_device_page.dart';
+import '../widgets/settings_pages/general_page.dart';
+import '../widgets/settings_pages/profile_page.dart';
+import '../widgets/settings_pages/providers_page.dart';
+import '../widgets/settings_pages/skills_page.dart';
+import '../widgets/settings_pages/workspace_page.dart';
 import '../widgets/sessions_devices_page.dart';
 
 class SettingsScreen extends StatefulWidget {

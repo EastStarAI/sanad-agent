@@ -77,7 +77,7 @@ Not product choices; they exist because the fixed decisions do not name a shape.
 | M4 | The protocol is write-only: `secrets.list` returns metadata, `secret.set` returns metadata, `secret.delete` returns an outcome. No command, response, event, or error carries a stored value in any direction. |
 | M5 | `source` records how the **current** value arrived: `agent_request` when it came through the Task 84 acquisition card, `user` when it came through this screen. A replacement through the screen sets it to `user`. |
 | M6 | The submitted value is rejected if it is a redaction sentinel (`[REDACTED:…]`) or empty, so a displayed mask can never be written back as a secret. |
-| M7 | New owners keep the ratchet green: `capabilities/secrets/user_secret_catalog.dart`, `evolution/db/user_secret_metadata_repository.dart`, `interfaces/platforms/sanad_gateway/handlers/secret_command_handler.dart`, `client/lib/features/settings/presentation/widgets/settings_pages/secrets_page.dart` + its dialogs. `agent_state_database.dart` (1,635) and `settings_pages.dart` (2,018) may not grow. |
+| M7 | New owners keep the ratchet green: `capabilities/secrets/user_secret_catalog.dart`, `evolution/db/user_secret_metadata_repository.dart`, `interfaces/platforms/sanad_gateway/handlers/secret_command_handler.dart`, `client/lib/features/settings/presentation/widgets/settings_pages/secrets_page.dart` + its dialogs. `agent_state_database.dart` (1,635) may not grow, and no `settings_pages/` library takes a new ratchet entry. |
 
 ## Agent work
 
@@ -195,8 +195,7 @@ or its length in characters.
   containing the **Secrets** destination. A secret lives in one device's Home vault, so the page is
   device-scoped like Providers and Skills.
 - `SettingsSecretsPage` in `client/lib/features/settings/presentation/widgets/settings_pages/`
-  (a new file — `settings_pages.dart` is allowlisted at 2,018 and must not grow; 113b 113-01 creates that
-  folder).
+  (a new file in the folder 113b 113-01 created; no settings page library takes a ratchet entry).
 - The route stays inside the existing Settings destination (`/settings?section=privacySecurity`), so no
   new top-level route is needed.
 
@@ -390,15 +389,15 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
 | 140-01 metadata table + repository + catalog + acquisition hook | 1 | `agent/lib/evolution/db/schema/user_secrets_schema.dart`, `evolution/db/user_secret_metadata_repository.dart`, `capabilities/secrets/user_secret_catalog.dart`, `capabilities/secrets/secret_acquisition.dart`, `agent/test/capabilities/**`, `docs/technical/agent_database_schema.md`, `agent/test/guards/file_size_ratchet_guard_test.dart` | **138-11** (the DDL host); **138-05** snapshot fixtures may need a new entry |
 | 140-02 protocol: commands, handler, broadcast, tests | 2 | `agent/lib/interfaces/platforms/sanad_gateway/handlers/secret_command_handler.dart`, `protocol/canonical_events.dart`, `agent/test/interfaces/platforms/sanad_gateway/**`, `docs/technical/secret_management_protocol.md`, `docs/technical/communication_protocols.md`, `docs/technical/execution_trust_and_permission_authority.md` | **138-08** (dispatch table) and 140-01 |
 | 140-03 Client data + cubit | 3 | `client/lib/features/settings/data/secrets_client.dart`, `features/settings/presentation/bloc/secrets_cubit.dart` (or the feature-local equivalent), `client/test/**secrets*` | 140-02 |
-| 140-04 Client destination + page + dialogs | 4 | `client/lib/features/settings/presentation/widgets/settings_navigation.dart`, `settings_screen.dart`, `settings_pages/secrets_page.dart`, `settings_pages/secret_editor_dialog.dart`, `settings_pages/delete_secret_dialog.dart`, `client/lib/l10n/app_{en,ar}.arb` | **113b 113-01** (`settings_pages.dart` and `settings_screen.dart` fan-in) and 140-03. `settings_pages.dart` must not grow; the new page is its own file |
+| 140-04 Client destination + page + dialogs | 4 | `client/lib/features/settings/presentation/widgets/settings_navigation.dart`, `settings_screen.dart`, `settings_pages/secrets_page.dart`, `settings_pages/secret_editor_dialog.dart`, `settings_pages/delete_secret_dialog.dart`, `client/lib/l10n/app_{en,ar}.arb` | **113b 113-01** (landed: `settings_pages/` and `settings_screen.dart` fan-in) and 140-03. The new page is its own file under `settings_pages/` |
 | 140-05 live acceptance + close-out | 5 | this file, `docs/qa_maintenance/secrets_screen_acceptance.md`, `docs/product/settings_hub.md` | 140-04 |
 
 - 140-01/140-02 are Agent-only; 140-03/140-04 are Client; 140-05 is QA. Never run Agent and Client
   suites concurrently on one machine.
 - Hard SRP dependencies: **138-11** (schema host) and **138-08** (bridge switch) on the Agent,
   **113b 113-01** (settings pages host) on the Client. No other SRP item owns a file this task needs.
-- If 113b 113-01 has already landed, `settings_pages/` exists and 140-04 only adds files plus the two
-  navigation edits; if it has not, 140-04 waits — do not add a page to the 2,018-line host.
+- 113b 113-01 has landed: `settings_pages/` exists, so 140-04 only adds files plus the two
+  navigation edits. Never move the new page back into a shared page library or add a ratchet entry.
 
 ## Out of scope
 
