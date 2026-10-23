@@ -61,4 +61,7 @@ Do not load all diagnostic references together. Begin from the runner's failed p
 
 Success emits JSON containing the assistant event key, `assistant_response`, Jev probability, optional user event key, and `returned_to_origin`.
 
-`temp/jev_sanad_conversation_runner.py` remains a compatibility forwarder to the canonical Client Tester script. New automation and documentation must use the canonical path.
+`scripts/sanad_conversation_workflow.py` is the only tracked entry point. Any
+`temp/` wrapper is an untracked, environment-local convenience: it is not part of
+the repository contract, it does not exist in a fresh worktree or CI checkout, and
+new automation and documentation must use the canonical path.
