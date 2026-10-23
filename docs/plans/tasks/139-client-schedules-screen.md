@@ -39,7 +39,7 @@ or the recovery policy of Task 112b.
 | `create` refuses to run without a session context | `ScheduleTaskTool._handleCreate` and `CronScheduler.createSchedule` deny when the session is empty (D5) |
 | There is no run history: one row per schedule carries only `last_run_at`/`last_status` | `docs/technical/agent_database_schema.md` §3.3; `ScheduledTaskRepository` has no run table |
 | The schema document still says pause/resume is out of scope | `docs/technical/agent_database_schema.md` §3.3, `enabled` column note |
-| No schedule command or query exists in the gateway protocol | zero `schedule.` cases in the `handleCommand` switch of `agent/lib/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart` |
+| No schedule command or query exists in the gateway protocol | zero `schedule.` entries in the accepted-command tables of `agent/lib/interfaces/platforms/sanad_gateway/protocol/canonical_command_translator.dart` |
 | The bridge must be edited to add a command family, and it is allowlisted at 1,327 lines | `agent/test/guards/file_size_ratchet_guard_test.dart`; 138-08 is already moving that switch into `protocol/canonical_command_translator.dart` |
 | `scheduled_tasks` DDL lives in an allowlisted 1,635-line file that 138-11 is splitting into `evolution/db/schema/` modules | `agent/test/guards/file_size_ratchet_guard_test.dart`; `docs/plans/tasks/138-agent-srp-tier2.md` item 138-11 |
 | The Client has no scheduling surface at all | zero `Scheduled`/`schedule_task` references under `client/lib` |
