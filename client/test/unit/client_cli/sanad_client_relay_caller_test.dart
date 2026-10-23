@@ -254,6 +254,54 @@ void main() {
       expect(await run, 64);
     });
 
+    test('a session steer is relayed as verbatim argv with no stdin wait', () async {
+      // The relay forwards the argument vector to the target Agent's own
+      // command runner, so a session subcommand needs no caller-side
+      // allow-list entry to be relayable.
+      final neverEndingStdin = Completer<String?>();
+      addTearDown(() {
+        if (!neverEndingStdin.isCompleted) neverEndingStdin.complete(null);
+      });
+      final runner = buildRunner(stdinReader: () => neverEndingStdin.future);
+
+      final run = runner.run(
+        [
+          '--home',
+          tempHome.path,
+          '-d',
+          'remote-1',
+          'session',
+          'steer',
+          'sess-remote-1',
+          '--message',
+          'Add an audit trail',
+          '--timeout',
+          '20',
+        ],
+        stdoutSink: StringBuffer(),
+        stderrSink: StringBuffer(),
+      );
+
+      final execute = await relayHost.waitForExecute();
+      expect(execute['argv'], [
+        'session',
+        'steer',
+        'sess-remote-1',
+        '--message',
+        'Add an audit trail',
+        '--timeout',
+        '20',
+      ]);
+      expect(execute['stdin'], isNull);
+      expect(execute['timeout_seconds'], 50);
+      relayHost.send({
+        'type': 'result',
+        'request_id': execute['request_id'],
+        'exit_code': 0,
+      });
+      expect(await run, 0);
+    });
+
     test('a run without a prompt still forwards piped standard input', () async {
       var stdinReads = 0;
       final runner = buildRunner(
