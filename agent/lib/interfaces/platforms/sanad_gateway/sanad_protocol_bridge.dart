@@ -26,13 +26,18 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
+import 'package:sanad_agent/capabilities/secrets/user_secret_catalog.dart';
+import 'package:sanad_agent/capabilities/secrets/user_secret_vault.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
+import 'package:sanad_agent/evolution/db/user_secret_metadata_repository.dart';
+import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
@@ -44,6 +49,7 @@ import 'handlers/appearance_command_handler.dart';
 import 'handlers/device_settings_command_handler.dart';
 import 'handlers/device_control_command_handler.dart';
 import 'handlers/provider_command_handler.dart';
+import 'handlers/secret_command_handler.dart';
 import 'handlers/session_fork_command_handler.dart';
 import 'handlers/attachment_admission_command_handler.dart';
 import 'handlers/session_query_handler.dart';
@@ -83,6 +89,7 @@ class SanadProtocolBridge {
   AppearanceCommandHandler? __appearanceHandler;
   RemoteCliCommandHandler? __remoteCliHandler;
   SessionControlCommandHandler? __sessionControlHandler;
+  SecretCommandHandler? __secretHandler;
 
   /// Lazy accessors so optional runtime services registered after
   /// construction (e.g. in tests or deferred daemon startup) are only
@@ -205,6 +212,30 @@ class SanadProtocolBridge {
 
   void setRemoteCliHandlerForTesting(RemoteCliCommandHandler? handler) {
     __remoteCliHandler = handler;
+  }
+
+  SecretCommandHandler get _secretHandler =>
+      __secretHandler ??= SecretCommandHandler(
+        catalog: getIt.isRegistered<UserSecretCatalog>()
+            ? getIt<UserSecretCatalog>()
+            : UserSecretCatalog(
+                vault: UserSecretVault(),
+                metadata: getIt.isRegistered<UserSecretMetadataRepository>()
+                    ? getIt<UserSecretMetadataRepository>()
+                    : UserSecretMetadataRepository(
+                        getIt<AgentStateDatabase>(),
+                      ),
+              ),
+        bridge: this,
+        broadcastFamilyEvent: (event) {
+          if (getIt.isRegistered<GatewayManager>()) {
+            getIt<GatewayManager>().publishFamilyEvent(event);
+          }
+        },
+      );
+
+  void setSecretCommandHandlerForTesting(SecretCommandHandler? handler) {
+    __secretHandler = handler;
   }
 
   DeviceControlCommandHandler? get _deviceControlHandler {
@@ -800,6 +831,12 @@ class SanadProtocolBridge {
           event,
           emitEnvelope,
         );
+        return;
+      // Task 140: user secrets protocol.
+      case CanonicalEventTypes.secretsList:
+      case CanonicalEventTypes.secretSet:
+      case CanonicalEventTypes.secretDelete:
+        await _secretHandler.handle(event, emitEnvelope);
         return;
 
       default:

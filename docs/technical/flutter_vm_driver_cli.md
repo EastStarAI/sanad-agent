@@ -17,7 +17,8 @@ Desktop worktree discovery belongs to `sanad-dev ui`. Standalone, mobile, and we
 
 ## Components
 
-- `client/lib/driver_main.dart` registers development-only VM extensions and starts the normal Client application. Flutter Driver text-entry emulation is disabled at binding creation so the operating-system text channel and physical keyboard remain active.
+- `client/lib/driver_main.dart` registers development-only VM extensions in documented order and starts the normal Client application. Flutter Driver text-entry emulation is disabled at binding creation so the operating-system text channel and physical keyboard remain active.
+- `client/lib/driver/` hosts modular driver helpers: `driver_widget_filters.dart` (noise suppression, key filters, scope root resolution), `inspect_ui_extension.dart` (`ext.sanad_client.inspect_ui`), `interaction_extensions.dart` (`ext.sanad_client.enter_text`, `ext.sanad_client.scroll`, `ext.sanad_client.tap`, `ext.sanad_client.reveal`), `ui_inspection_state.dart` (enabled state resolution), `ui_inspection_text.dart` (rendered text extraction), and `ui_type_census.dart` (bounded type walks).
 - `scripts/flutter_driver_cli/flutter_vm_controller.dart` owns VM RPC, isolate selection, action execution, post-condition verification, and connection cleanup.
 - `scripts/flutter_driver_cli/cli_runner.dart` validates commands, applies the per-action deadline, and produces human-readable or machine-readable results.
 - `scripts/flutter_driver_cli/tree_state.dart` owns the change-detection tree signature and the monotonic snapshot generation counter.

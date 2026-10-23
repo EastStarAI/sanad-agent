@@ -2,8 +2,8 @@
 title: "Task 140 — Secrets Screen (Settings → Privacy & Security)"
 description: "Give user secrets a real surface: a Settings → Privacy & Security page that lists each stored name with non-secret metadata, adds a value, replaces a value without ever reading the old one, and deletes with confirmation, over one local/cloud protocol path whose every value direction is write-only, model-invisible, and absent from logs, caches, and error text."
 status: in_progress
-current_gate: "140-01 (metadata store) complete pending PR merge; 140-02 (protocol) next and blocked on 138-08"
-remaining_estimate: 80%
+current_gate: "140-01 merged (#315); 140-02 merged (#318); 140-03 (Client data + cubit) implemented pending PR; 140-04 (destination + page + dialogs) next"
+remaining_estimate: 35%
 base_commit: 09d5c34a
 depends_on: "138-11 (schema modules), 138-08 (bridge translator), 113b 113-01 (settings pages split) — see Work split"
 ---
@@ -418,12 +418,48 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
       catalog (join/repair/prune, validation, M3 ordering, replace/delete, log and dump scans),
       acquisition hook, and the value-read guard.
 - [x] Schema snapshots regenerated for all four fixtures: one new table each, no other movement.
-- [ ] Merge (blocked on CI and review).
+- [x] Merge (merged as PR #315, commit `06f99a37`).
 
 Verification at commit `234c770c` (PR #315): `fvm dart analyze` clean; 6 migration + 26 catalog +
 8 acquisition + 7 guard tests; `test/evolution/` 456 passed; guard suite 18 passed; Task 84
 regression 74 passed; full Agent fast suite 3848 passed / 16 pre-existing skips; `lint_wiki.dart`
 clean; `graphify update` run. All required CI checks pass.
+
+### 140-02 — protocol: commands, handler, broadcast, tests — implemented, in review
+
+- [x] Wire commands translated and dispatched: `secrets.list`, `secret.set`, `secret.delete` in `canonical_command_translator.dart` and `sanad_protocol_bridge.dart`.
+- [x] `SecretCommandHandler` implemented: write-only, structurally value-free list projection, add/replace rotation, confirmed deletion, typed outcomes.
+- [x] Security: no secret value ever returned or logged; sentinel canary tested against logs, responses, broadcasts, error envelopes, and request dumps.
+- [x] Authority: device-owner only (`command_authority: owner`); unverified callers refused with `permission_denied` mutating nothing.
+- [x] Family broadcast: `secrets.changed` with `{name, change: 'set'|'deleted'}` published to all Sanad client platforms via `publishFamilyEvent`.
+- [x] Static guard: `secrets_value_read_guard_test.dart` asserts `secret_command_handler.dart` contains no `.resolve(` or `.read(` calls and references `resolve` nowhere.
+- [x] Documentation: `secret_management_protocol.md`, `communication_protocols.md`, `execution_trust_and_permission_authority.md`.
+- [x] Tests: unit tests for `SecretCommandHandler` (28 tests), `CanonicalCommandTranslator` (4 tests), guards (20 tests), Task 84 regression (81 tests), and evolution suite (456 tests).
+- [x] Merge (merged as PR #318, commit `1874cdb9`).
+
+### 140-03 — Client data + cubit — implemented, in review
+
+- [x] `SecretsClient` (`client/lib/features/settings/data/secrets_client.dart`): `secrets.list` / `secret.set` /
+      `secret.delete` through `DeviceCommandClient`, the value-free `StoredSecret` projection, a payload-free
+      `secrets.changed` signal, and the value rules mirrored from the Agent (empty, `maxValueLength`, redaction
+      sentinel).
+- [x] Typed errors: `SecretsErrorCode.fromWireCode` maps every protocol code (plus an unmapped code and a
+      transport failure) and no Agent `message` text is carried into a Client value.
+- [x] `SecretsCubit` (`presentation/bloc/secrets_cubit.dart`): the C3 states, no fetch on construction or from
+      `build`, `DeviceConfig.isOnline == false` short circuit, `secrets.changed` re-read that never trusts the
+      payload, coalesced `load`, and `busy` for a second in-flight mutation. Local and cloud share the one path
+      (C5).
+- [x] The submitted value is a method argument that is sent and dropped: no cubit or state field, no cache, no
+      log line, no exception text. Tests assert a canary value is absent from every emitted state after both a
+      successful and a failed set.
+- [x] `delete` always sends `confirm: true`; the confirmation dialog stays in 140-04.
+- [x] `SecretsClient` registered in `core/di/injection.dart` next to the other device command clients.
+- [x] Documentation: `docs/technical/secret_management_protocol.md` §8 (client contract, state table, error
+      mapping, admission) and `client/lib/features/settings/AGENTS.md` (Privacy and Security Secrets).
+- [x] Tests: `secrets_client_test.dart` (21) and `secrets_cubit_test.dart` (27) — 48 focused tests.
+- [x] Verification: `fvm flutter analyze` clean; focused 48 passed; `test/guards/` 3 passed; full Client fast
+      suite 2183 passed / 3 skipped; `lint_wiki.dart` clean.
+- [ ] Merge (blocked on CI and review).
 
 ## Out of scope
 

@@ -181,6 +181,7 @@ A name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and must not be a protected opera
 - Deletion requires an explicit confirmation and removes the vault entry and its metadata row together. A later command naming the deleted secret fails as `secret_not_found`.
 - A verified vault write is never reported as a failure because metadata could not be recorded; the metadata row is repaired by the next list read, with `source = agent_request`, so a repair never claims the owner typed a value in.
 - The list projection is structurally value-free: it has no value field, add and replace return metadata, delete returns an outcome, and no command, response, event, or error carries a stored value in either direction. The handler and the catalog log the name and the outcome only.
+- The protocol commands (`secrets.list`, `secret.set`, `secret.delete`) require stamped `owner` authority (`command_authority: owner`); any unverified or model caller is refused as `permission_denied` and mutates nothing. Successful mutations broadcast `secrets.changed` (`{name, change: 'set'|'deleted'}`) to every connected client on every platform. See [User Secret Management Protocol](secret_management_protocol.md).
 
 ### Limits
 

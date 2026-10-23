@@ -26,9 +26,19 @@ This contract applies to `client/lib/features/settings/`.
 - A `stale_revision` rejection reloads Agent truth and shows the localized refresh message; the composer toggle retries once on the fresh revision before showing it. Never fail a policy change silently.
 - Disable choices the Agent reports it would reject (`canWiden: false`); never cache policy as authority or retry a rejected mutation automatically.
 
+## Privacy and Security Secrets
+- `SecretsClient` (`data/secrets_client.dart`) is the only Client transport for the user-secret protocol (`secrets.list`, `secret.set`, `secret.delete`, `secrets.changed`) and it uses `DeviceCommandClient`, so local and cloud routes are identical and no page selects a transport. List rows and dialogs never receive a stored value: the protocol has no reveal and no `secret.get`.
+- A submitted value is a method argument on `SecretsCubit.set`, handed to `SecretsClient.set`, and dropped. It must never become a cubit or state field, a cache entry, a `SharedPreferences` value, a dialog-retained value after submit/cancel, a log line, or exception text; `SecretsState` deliberately has no field that could hold one.
+- Failures are typed once, in `SecretsErrorCode.fromWireCode`, and reach the UI only as `SecretsFailure`. Agent error `message` text is operator copy and never becomes UI copy, so an unmapped protocol code degrades to `unknown` with its wire token kept for diagnosis.
+- `SecretsCubit` states are `loading`, `empty`, `loaded`, `error`, and `deviceUnavailable`. `SecretsState.secrets` is non-empty only for `loaded`, so an offline or failed state cannot present a stale row as current; `DeviceConfig.isOnline == false` short-circuits before any request. The page drops a loaded list with `markDeviceUnavailable()` when its inspected device goes offline.
+- Nothing loads on construction or from `build`: the page calls `load()` from its own lifecycle and from Retry.
+- A `set`/`delete` while another mutation is in flight returns `SecretsActionOutcome.busy` and sends nothing; a `load` during a read joins it and queues at most one follow-up read, so a burst of broadcasts cannot stack requests.
+- `secrets.changed` announces that the authoritative list moved. The cubit re-reads the list and never projects the event payload.
+- A successful mutation re-reads the list instead of patching rows locally. `delete` always sends `confirm: true`; the user confirmation is the page's responsibility and the protocol flag is the client's.
+- The Client mirrors the name grammar only (`SecretsClient.isValidNameFormat`). The reserved-name list stays Agent-owned, so a reserved name is surfaced from the Agent as `reserved_secret_name`.
+
 ## Device Scope
-- Selecting a device inside Settings changes inspection context only.
-- Update the active conversation device only through an explicit Set as active action delegated to `DeviceCubit`.
+- Selecting a device inside Settings changes inspection context only.- Update the active conversation device only through an explicit Set as active action delegated to `DeviceCubit`.
 - Show Cloud Connection mutation only when the inspected target resolves to the local route.
 - Device Overview rename UI must wait for the authoritative inventory mutation result and remain open with an actionable error when the mutation fails.
 
