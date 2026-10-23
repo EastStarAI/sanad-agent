@@ -63,6 +63,9 @@ client/test/interactive/screenshots/
 # Local Sanad agent permissions
 /.sanad/settings.json
 
+# sanad-dev worktree cache: per-SHA compiled CLIs and Home fixtures
+/.sanad-dev/
+
 .codex/
 .agents/rules
 .agents/workflows

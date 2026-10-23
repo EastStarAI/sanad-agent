@@ -1,6 +1,6 @@
 ---
 title: "sanad-dev Runtime Ownership"
-description: "Managed launcher leases, workspace/client ownership, clone isolation, reconciliation, and continuous source handoff."
+description: "Managed launcher leases, workspace/client ownership, clone isolation, continuous source handoff, and the reset, apply, refresh, `cli`, status, and doctor runtime tooling."
 ---
 
 # sanad-dev Runtime Ownership
@@ -17,15 +17,17 @@ responsibility:
   authenticated Agents, infers the active Home, and performs exact selection;
 - `runtime/ownership/` projects process state and validates managed launcher
   ownership;
-- `runtime/lifecycle/` owns run, readiness, status, component stop/control,
-  doctor, orphan cleanup, takeover, and bounded wait orchestration;
+- `runtime/lifecycle/` owns run, readiness, status, reset with Home fixtures,
+  apply, refresh, the compiled-CLI runner, the restart build guard, component
+  stop/control, doctor, orphan cleanup, takeover, and bounded wait orchestration;
 - `runtime/switch/` owns source-handoff admission, process waits, transaction
   control, target launch, rollback, and terminal result persistence;
 - `developer/` owns bounded journals, Client reload/restart/DevTools actions,
   Agent restart/log actions, and UI-driver forwarding;
 - `infrastructure/` owns secure files, credentials, runtime context, launch
-  profiles, journals, startup records, endpoint configuration, and terminal
-  adapters.
+  profiles, journals, startup records, endpoint configuration, terminal adapters,
+  the per-SHA compiled CLI cache, Home fixtures, the foreign-worktree build probe,
+  and scheduled refresh plans.
 
 Files in `lib/src/` depend directly on the narrow owning implementation rather
 than importing through root compatibility facades. The `lib/` root contains
@@ -239,7 +241,13 @@ stdout/stderr without buffering, then report elapsed duration and success or
 failure. The idempotent dependency stamp binds `.fvmrc` plus all package
 lockfiles and package configs. A separate runtime fingerprint binds the
 standalone CLI's `lib/`, `pubspec.yaml`, and lockfile to a fingerprint-named
-native artifact. A changed source builds beside any still-running artifact.
+native artifact. That fingerprint covers the same transitive input closure the
+compiled-CLI component cache uses: the package `lib/`/`bin`/`hook` trees, both
+pubspecs, and every package reached through the `path:` dependency closure
+(`shared/**`, the Release Contract). Covering only `scripts/sanad_dev` would keep
+the recorded stamp matching after a `shared/` edit, and `run`, `reset`, `switch`,
+and `apply` would then execute the pre-edit binary with no message. A changed
+source builds beside any still-running artifact.
 Windows cleanup removes only stale artifacts that are no longer locked; POSIX
 retains prior cache artifacts because an active launcher may need its executable
 path for a later child spawn. Setup reuses an existing artifact whose filename
@@ -264,7 +272,363 @@ The development profile and endpoint overrides are explicit internal integration
 choices; `--no-cloud` is the explicit hosted-disable boundary. Automated tests
 inject fakes and never connect to Production.
 
+## Runtime tooling commands
+
+`reset`, `apply`, `refresh`, `cli`, `status`, and `doctor` are the worktree-local
+tooling surface for live rounds. Every one of them is scoped to the invoking
+worktree's own runtime and Test Home; none of them can reach another worktree's
+runtime or the primary user Home. `status` and `doctor` are strictly read-only,
+and `reset` is the only command that destroys runtime state.
+
+### Compiled CLI cache (`sanad-dev cli`)
+
+`fvm dart run bin/sanad_agent.dart` costs 6.5 s per call on the reference host
+(SDK resolution plus kernel compile). `sanad-dev` therefore keeps one native
+artifact per component and per runtime commit:
+
+| Component | Entry point | Build command | Cached executable |
+| --- | --- | --- | --- |
+| Agent | `agent/bin/sanad_agent.dart` | `fvm dart compile exe bin/sanad_agent.dart -o …` | `.sanad-dev/bin/<sha>/agent[.exe]` |
+| Client | `client/bin/sanad_client.dart` | `fvm dart build cli -t bin/sanad_client.dart -o …` | `.sanad-dev/bin/<sha>/client-bundle/bin/sanad_client[.exe]` |
+
+The Client CLI cannot use `dart compile exe`: the Client package carries native
+build hooks (`cnativeapi`, `objective_c`), so `dart build cli` is used and its
+bundle keeps the dynamic libraries beside the executable. The Agent compile
+receives `-DSANAD_AGENT_VERSION=<agent/pubspec.yaml version>` so a compiled
+binary reports the same version as the `fvm dart run` path.
+
+`<sha>` is the first 12 characters of the runtime source `HEAD` (`nogit` outside
+a Git checkout). Beside each artifact, `<component>.stamp` holds a SHA-256 over
+that component's `pubspec.yaml`, `pubspec.lock`, every file under `lib/`, `bin/`,
+and `hook/`, every transitive `path:` dependency package root (breadth-first over
+each path dependency's own pubspec), and the Flutter pin: `.fvmrc` when present,
+otherwise the installed `fvm dart --version`. The artifact is reused only when
+the stamp matches, so a dirty tree, a changed shared package, a changed native
+build hook, or a new Flutter pin rebuilds in place; nothing is ever reused
+across commits.
+
+Two callers can race, and an interrupted build must not leave a usable artifact:
+
+- `<component>.build.lock` is held exclusively for a whole build. The lock
+  combines an OS file lock with an in-process mutex, because a POSIX record lock
+  cannot serialize two callers inside one process. A contending caller waits up
+  to 15 minutes, then re-checks the stamp instead of rebuilding.
+- Builds are staged (`agent.building`, `.client-bundle-building`) inside the
+  commit directory and published with a single rename, so a failed or
+  interrupted build leaves neither artifact nor stamp.
+- Every publish prunes older commit directories beyond the three most recent and
+  never removes the directory it just published.
+- `cli path` and `cli <component>` take the shared half of the lock only while
+  the artifact is started, so a reader never observes a half-published bundle and
+  a long child run never blocks a rebuild. A rebuild publishes into a new
+  `<sha>/` directory and never rewrites the inode a running child already exec'd,
+  so holding the shared lock for the child's whole lifetime bought nothing and
+  blocked every rebuild for up to 15 minutes.
+
+| Command | Effect |
+| --- | --- |
+| `sanad-dev cli path agent\|client` | Ensures the artifact and prints its path with the cache key and `built in <duration>` or `reused`. |
+| `sanad-dev cli agent\|client -- <args>` | Ensures the artifact and runs it with inherited stdio, then prints `call <duration>` on stderr and returns the child exit status. |
+
+Measured on the reference macOS host (Dart 3.13, warm pub cache): Agent build
+14.4 s cold, `cli path agent` 0.27 s warm, `sanad-dev cli agent -- --version`
+355 ms; Client bundle 47 s with a cold hook build and 2.1 s warm,
+`sanad-dev cli client -- --version` 239 ms. `.sanad-dev/` is gitignored.
+
+### `sanad-dev reset` and Home fixtures
+
+`sanad-dev reset [--fixture <name>] [--save-fixture <name>] [--include-mcp-config] [--keep-data]`
+is the single command that replaces the hand-written stop/restore/run sequences:
+
+1. Refuse a Home this worktree does not own (see below) before any mutation.
+2. Stop this worktree's Agent and Client through the normal managed component
+   boundary, then prove the Agent port, the reserved VM-service port, and every
+   managed Client endpoint are free (TCP connect plus client discovery).
+3. `--save-fixture <name>` snapshots the Home's databases and configuration into
+   `<worktree>/.sanad-dev/fixtures/<name>/` through a staging directory.
+4. Restore `--fixture <name>` when requested; otherwise keep the data.
+5. Launch the matched runtime with `run --driver` in the background, wait for the
+   managed state, and print exactly one summary line:
+   `reset: worktree=… agent=… vm=… sha=… state=… home=… fixture=…`.
+
+`reset` always launches a driver-enabled runtime, because that is its purpose.
+It restarts `all --driver` — one Agent plus one driver-enabled Client — in every
+path, including `--keep-data`: there is no reset mode that restarts a single
+component. A reset therefore ends either with a managed driver pair or with a
+nonzero exit; a Home that cannot start is a failed reset, never a partial
+success. `--fixture` and `--keep-data` are mutually exclusive; `--keep-data` is
+otherwise the explicit default, since a `reset` without a fixture restarts the
+pair and leaves the Home data alone. `--dry-run` prints the plan and touches
+nothing.
+
+`--client-instance <slot>` selects which same-device Client instance the restart
+brings back, and it is threaded through both halves of the launch: the flag is
+repeated on the child `run` command line that actually starts the Client, and the
+same slot is handed to the readiness probe. Dropping it restarted the default
+instance and verified the wrong component set while the operator watched slot `b`.
+
+The per-Home staging directory exists only while a restore runs, or after a
+restore crashed. A restore that succeeds deletes its staging directory and its
+backup, so a finished `reset` leaves nothing named
+`.sanad-dev-reset-staging-*` beside the Home — finding one means a restore did
+not complete, and its contents are the rollback material, not the restored
+state. Staging is never inside the Home and never a place to read the state a
+successful reset produced. A Home that cannot start also fails fast: readiness
+stops within seconds once the Agent child keeps dying, and the reported line
+carries the child's own error instead of the CLI waiting out the three-minute
+startup window.
+
+Home scope is deliberately narrower than every other command. Only a Home equal
+to, or below, `<user home>/.sanad/dev/homes/<worktree id>` is accepted. The
+primary user Home `~/.sanad` is always refused, and shared homes such as
+`~/.sanad-test*` or another worktree's Test Home are refused as foreign.
+
+A fixture captures an explicit allowlist and nothing else:
+
+| Included | Excluded (never copied, never replaced) |
+| --- | --- |
+| `state.db`, `state.db-wal`, `state.db-shm` | `.env`, `.env.*` (provider keys) |
+| `config.yaml` | `.local_token`, `.local_token.lock` (local gateway credential) |
+| `models_dev_cache.json` | `provider_secrets.json`, `provider_auth.json`, `mcp_secrets.json`, `auth.json` |
+| `mcp_config.json`, only with `--include-mcp-config` | `agent_credentials.json`, `agent_credential_backend.json` |
+| `skills/` (recursive) | OS keychain/SecretVault material |
+| `memories/` (recursive) | any file whose name contains `token`, `secret`, `credential`, `vault`, `keyring`, `password`, `apikey` |
+| `workspaces/` (recursive) | any file whose name begins with `id_` or ends with `.key`, `.pem`, `.p12`, `.p8`, `.netrc` |
+| | any path under a `logs/` or `request_dumps/` directory |
+| | `dev/` (leases, journals, control and switch records), `media/`, `attachments/`, `sessions/`, `bin/` |
+
+`mcp_config.json` is opt-in because it can carry provider or tool arguments; the
+CLI prints a warning that the saved fixture inherits whatever that file contains.
+Capture is by allowlist and every path is filtered again by the exclusion list,
+so a secret placed inside `memories/` or `skills/` is still skipped. Symbolic
+links are never followed. The fixture manifest (`fixture.json`, schema version 2)
+records the creation time, source Home, whether MCP configuration was included,
+and the size plus SHA-256 of every file.
+
+Every file and directory the capture or the restore creates is created
+owner-only (`0700` directories, `0600` files), including every nested level such
+as `memories/`, `skills/<name>/`, or `workspaces/<id>/`, both in the fixture and
+when restoring, so a fixture never widens the permissions of the Home.
+
+Restore validates before it writes anything. A manifest entry is rejected unless
+its recorded path is relative, contains no `.` or `..` segment, is not Windows
+drive-qualified or absolute, still passes the exclusion list, and resolves inside
+the Home with no symbolic link in any intermediate segment. The Home target is
+validated before the fixture bytes are read, so a Home reached through a symlinked
+parent refuses with a symbolic-link error instead of a checksum error.
+
+Restore then stages every captured file into a per-Home sibling directory,
+`<home parent>/.sanad-dev-reset-staging-<home label>-<home digest>/` (never inside
+the Home, so it can be found again). The staging directory is keyed by the Home's
+canonical path because every worktree Test Home shares the `homes/` parent: a
+fixed name let crash recovery in one worktree move another Home's backed-up
+`state.db` into its own Home and let two parallel resets delete each other's
+in-flight backups. Recovery reads and deletes only its own staging directory, and
+a `staging-home` marker inside it refuses recovery when the recorded Home differs
+from the Home being restored.
+
+The swap removes captured files the fixture does not contain and moves each
+top-level group — the `state.db` family travels as one group, matched
+case-insensitively so a case-insensitive disk keeps the database and its
+WAL/SHM sidecars together — into place with same-filesystem renames. A group that
+fails mid-swap is restored from the retained original, and a crashed run is
+rolled back on the next attempt from the same staging directory.
+
+The whole Home-touching half of a restore — recovery, the staged writes, the swap,
+and any rollback — runs under one exclusive per-Home lock,
+`<staging path>.lock`, taken through the shared file-lock helper and held to the
+end. Two `reset --fixture` invocations for the same Home therefore take turns
+instead of interleaving: without the lock the second one's recovery adopts the
+first one's in-flight staging directory, renames its freshly placed files back
+over the originals, and deletes the only rollback copy. Because the lock is what
+serializes them, any staging directory recovery can see was left by a process that
+already finished or died, never by a live one. The lock file sits beside the
+staging directory, never inside the Home, and is never read as Home content.
+
+When the rollback itself fails, the staging directory is kept rather than deleted,
+and the message names its path together with what to move back by hand, so a
+failure never silently discards the only copy of a Home file. The success message
+`The Home was rolled back to its previous state.` is therefore always true, and a
+failed rollback never prints it. No destination file is ever half-written, and no
+excluded path is read, replaced, or deleted — the gateway credential, `.env`,
+journals, logs, media, and runtime leases survive a restore untouched. A missing,
+partial, or corrupt fixture fails closed before the runtime is started.
+
+### `sanad-dev apply`
+
+`apply` compares the working tree and every commit since the runtime's recorded
+start commit with the decision table and executes the lightest correct action. It
+prints the action, one reason per matched row, and up to three example paths.
+`--dry-run` prints the decision only.
+
+| Changed path | Action |
+| --- | --- |
+| docs, tests (`*/test/**`), `.github/**`, `**.md` except `client/assets/**` | none |
+| `scripts/sanad_dev/**`, `scripts/sanad-dev*` | `stop` + `run` |
+| `agent/**` | `restart agent` |
+| `client/lib/main.dart`, `client/lib/driver_main.dart`, files containing `bootstrap`/`startup`, and files under a `di/` or `startup/` directory | `restart client` |
+| `client/lib/l10n/**`, `client/l10n.yaml`, any `client/**.arb` | `stop` + `run` (localizations must be regenerated) |
+| `client/pubspec.yaml`, `client/pubspec.lock`, `client/assets/**` (any extension), `client/{macos,windows,linux,web,ios,android}/**` | `stop` + `run` |
+| other `client/lib/**.dart` | `reload client` |
+| `shared/**`, `release/contract/**` | `restart agent` + `restart client` |
+| anything else | `restart agent` + `restart client` |
+
+`stop + run` subsumes every other action and `restart client` subsumes
+`reload client`. Pubspec, asset, plugin, and native changes are compiled into the
+desktop bundle, so a hot restart cannot apply them and they select `stop + run`.
+An `.arb` or `l10n.yaml` change is build input for the generated
+`app_localizations*.dart`, so a hot reload keeps showing the old strings and a hot
+restart cannot regenerate them: it selects `stop + run`, and the printed reason
+says the strings must be regenerated.
+The documentation row deliberately runs before the asset row and matches
+`client/assets/**` as an exception, so a `.md` or `.yaml` asset never falls into
+`none`. A requested driver-mode change (the running pair has no
+`lib/driver_main.dart` Client) also selects `stop + run`. The start commit is the
+`source_commit` recorded in the launcher lease at launch; a lease that predates
+that field yields a note and inspects the working tree only.
+
+After a successful `apply`, the command records a per-path content snapshot in
+`<runtime directory>/apply-baseline.json`: the repository-relative path of every
+changed file mapped to a SHA-256 of the bytes that were applied (or the marker
+`missing` for a deletion). The next run inspects the union of the working tree,
+the commit range since the start commit, and every recorded path, and drops a
+candidate only when its current content still hashes to the recorded value. The
+union is what makes the baseline authoritative: `git checkout -- <path>` returns
+a tracked edit to the start commit's content, an applied untracked file can be
+deleted without leaving any Git trace, and in both cases Git reports nothing
+while the running Agent still holds the applied code. Comparing against the
+recorded fingerprint reports the revert and the deletion, so an already-applied
+working-tree edit is not reported twice while a revert, a deletion, or a second
+edit of the same file is. The earlier whole-worktree signature could not do this:
+`git diff --name-only <start commit>` reports a tracked working-tree edit on
+every call regardless of the signature, so a tracked file repeated forever while
+only an untracked file appeared idempotent.
+
+The snapshot advances only for the paths whose actions actually ran. An action
+skipped because its target — typically the Client — is not running stays
+unrecorded, keeps the older commit baseline, and is reported again by the next
+`apply`, which prints `Skipped …, start one, then rerun apply`.
+
+A rename counts on **both** sides, and both Git queries run with `--no-renames`, so
+a rename is inspected as a delete plus an add. A rename where only the destination
+were reported would be silently skipped in the one direction that matters: moving
+`agent/lib/x.dart` to `docs/x.md` yields only the destination, which is a
+non-runtime path, so `apply` printed `No runtime action is required.` while the
+running Agent still held the pre-rename build.
+
+### `status` is read-only
+
+`status` performs discovery, reads the lease, and prints the projection. It never
+starts, stops, restarts, repairs, or prepares anything. Before this contract, a
+stale prepared runtime CLI triggered a hidden `auto-setup` during `status`; the
+wrappers now fail with `Project runtime is stale. Run: sanad-dev setup` and leave
+the environment untouched. Only `setup`, `run`, and `switch` prepare the runtime.
+
+`status`, `stop`, and `logs` are read-only observation commands, so they are the
+exception: when the prepared runtime CLI is stale they still run the last prepared
+artifact, print `running the last prepared CLI` on stderr, and never rewrite the
+stamp. Repairing failures stay fail-closed — a mutating command never uses a stale
+artifact, and with no prepared artifact at all every command asks for `setup`.
+
+`status` also prints the runtime source commit (`Runtime source commit:`) and the
+product version (`Runtime version:`) from the Client pubspec. When the launcher
+lease records a commit that value wins; a lease that predates the field, or no
+lease at all, falls back to the worktree `HEAD`, so the line always names a commit
+instead of a placeholder.
+
+### `doctor` driver-host checks
+
+`doctor` keeps its ownership diagnosis and adds report-only driver-host checks
+after the ownership next-action line:
+
+- **Driver entry point:** whether `client/lib/driver_main.dart` exists in the
+  runtime source and how many lease-owned Clients were started from it.
+- **Port and Home ownership:** the Agent and VM-service ports selected for this
+  worktree with the current ownership class, plus the Home and whether it is
+  worktree-scoped.
+- **macOS grants:** Accessibility (`AXIsProcessTrusted`) and Screen Recording
+  (`CGPreflightScreenCaptureAccess`) for the host that runs the driver, read
+  through `dart:ffi` bindings on `ApplicationServices` and `CoreGraphics` in
+  `scripts/sanad_dev/lib/src/infrastructure/macos_privacy_grants.dart`.
+
+Both grants are passive preflight queries: they report the current grant without
+prompting, so `doctor` never opens a TCC dialog and never needs an FVM, Dart, or
+AppleScript subprocess. A grant that is absent reports `unknown — check System
+Settings > Privacy & Security`; another platform reports `not applicable`.
+
+The new checks never mutate state. `doctor --fix` keeps its existing narrow
+stale-record repair and does not attempt to grant or change OS permissions.
+
+### `sanad-dev refresh --at <+duration>`
+
+`refresh` schedules an out-of-tree refresh that survives the tree it refreshes,
+for remote test devices. `--at` accepts `+<n>s`, `+<n>m`, or `+<n>h` between one
+minute and twelve hours; a bare `2m`, a zero delay, a negative or non-numeric
+value, and anything above twelve hours are usage errors that schedule nothing. The
+lower bound exists because the schedulers cannot represent a finer fire time, and
+the upper bound keeps a stale schedule from outliving the source it was created
+for.
+
+| Platform | Scheduler |
+| --- | --- |
+| macOS | detached `sh` child (`ProcessStartMode.detached`), never launchd |
+| Linux | `systemd-run --user --collect --unit=<task> --on-active=<seconds>` |
+| Windows | `schtasks /Create /SC ONCE /ST <hh:mm>` with a script that deletes the task and itself |
+
+The scheduled script receives the repository, branch, expected commit, runtime CLI
+path, and Home as positional arguments (`$1`…`$6`) instead of interpolating them
+into shell text, and every exit path deletes the script. Signals cancel the run:
+`HUP`/`INT`/`TERM` delete the script and exit `129`/`130`/`143`, and the delay
+itself runs as a background `sleep` that the script `wait`s on, so the trap fires
+immediately instead of after the remaining delay. A trap that only deleted the
+script would let the shell resume the interrupted command and still pull and
+restart. Before touching anything the script refuses to continue when the branch
+is not the recorded one or `HEAD` is no longer the commit that was current when
+the schedule was created, so a schedule cannot land on unrelated new work.
+Every git call runs with `GIT_TERMINAL_PROMPT=0` (and a `BatchMode` SSH command),
+because a scheduled job has no terminal to answer a credential prompt.
+
+A successful run performs `git -C <repo> pull --ff-only`, then `sanad-dev setup`
+(the prepared runtime CLI must match the new source), then `sanad-dev restart
+agent` and `sanad-dev restart client`, appending everything to
+`<runtime directory>/refresh/<task>.log`, and finally deletes itself. When the
+scheduler itself fails (`systemd-run`/`schtasks` non-zero, or a value `cmd.exe`
+cannot represent), `refresh` prints the scheduler error, deletes the script it
+just wrote, returns non-zero, and prints none of the success lines; a leftover
+script with no schedule would look like a pending refresh. A Windows `/TR`
+command line refuses a value containing `%` or `&`, because `cmd.exe` expands
+`%NAME%` inside quotes and has no reliable escape for it. After scheduling,
+`refresh` prints the task name, fire time, script path, log path, and the exact
+verification commands (`git -C <repo> rev-parse HEAD`, `sanad-dev status`, bounded
+Agent/Client logs).
+
+### Restart build guard
+
+`restart client`, `reload client`, `restart agent`, and the restart actions of
+`apply` first check for a foreign build or test in the same worktree: one `ps`
+(POSIX) or `Get-CimInstance Win32_Process` (Windows) query, filtered for a
+command line that references the worktree root and invokes `flutter test`,
+`dart test`, `flutter build`, `dart build`, `dart compile`, `flutter assemble`,
+`xcodebuild`, `cargokit`, `flutter pub get`, or `dart pub get`. A path match must
+be a real path boundary, and a quoted occurrence (a search pattern) is ignored.
+
+When something is running, the command prints `Refusing to restart <worktree>`
+with every matching PID and command line and returns nonzero instead of waiting
+for an unbounded rebuild. `--force` skips the check.
+
+Command lines are redacted before they are printed or logged. A token that looks
+like a secret assignment (`--dart-define=SANAD_TOKEN=…`, `--api-key=…`,
+`*PASSWORD*=`…) keeps its name and loses its value, including when the value is
+nested inside a `--dart-define` payload, and a `--flag value` pair with a
+secret-like flag name loses the separate value too. A header flag (`-H`,
+`--header`, `-b`, `--cookie`) names no secret itself, so its value is redacted when
+the header name before the first `:` is secret-like — `-H "Authorization: Bearer
+…"`, `-H 'X-Api-Key: …'`, and a shell-split `-H Authorization: …` all lose the
+value while `-H "Accept: application/json"` keeps it. The detector is a pure
+function, so the printed list can be asserted in tests without spawning a build.
+
 ## Detached background launch
+
 
 `sanad-dev run --background` is the official detached source-runtime command.
 On POSIX hosts, the foreground requester starts the pinned runtime entry point in
@@ -319,6 +683,31 @@ attempt projects its exact stage in `status` for at most the six-minute
 component-control window, suppressing premature manual/orphaned/unverifiable
 labels without granting mutation. Expired or terminal attempts defer entirely
 to current process and lease evidence.
+
+The Agent runs under the in-process `HotRestartManager` supervisor, so a Home it
+cannot open does not end the launch: the supervisor keeps the process alive and
+restarts the dying child. Readiness therefore watches two terminal signals —
+the Agent child exiting non-zero twice while the supervisor keeps restarting it,
+or the spawned Agent process itself exiting — and ends the wait instead of
+running out the three-minute Agent window. Twice is the threshold because one
+restart is a child failure the supervisor can absorb. The failure reason in the
+startup record carries that signal plus the Agent's last output line that
+explains it: the exception's first line (`SqliteException(26): … file is not a
+database`), taken after the supervisor chatter and stack frames are dropped,
+after a continuation line is refused in favour of the line it continues, and after
+secret-shaped text is redacted, bounded to 300 characters. Refusing the
+continuation is what keeps the useful line: Dart prints the cause first and then
+indents the detail, so keeping the last line reported
+`last error: Causing statement: PRAGMA journal_mode = WAL` and hid the exception
+identity. Redaction is by *name* — every `name=value` and `name: value` pair whose
+name matches the shared secret-like fragments loses its value, and an
+`Authorization: Bearer …` credential keeps its own rule — so the header this tool
+actually handles, `x-sanad-gateway-token`, no longer reaches the readiness message
+or the persisted startup record verbatim. The launch
+keeps exit 1, and the background launcher and `status` report that stored reason,
+so `sanad-dev reset` names the child's error instead of only
+`agent readiness failed`. The paired Client readiness ends with the same signal,
+because an Agent that cannot start makes that Client useless.
 
 ## Managed component journals
 

@@ -31,6 +31,7 @@ class RuntimeLauncherRecord {
     required this.vmServicePorts,
     required this.status,
     required this.updatedAt,
+    this.sourceCommit = '',
   });
 
   final String launcherId;
@@ -46,6 +47,13 @@ class RuntimeLauncherRecord {
   final List<int> vmServicePorts;
   final String status;
   final DateTime updatedAt;
+
+  /// Runtime source commit recorded when this lease was created.
+  ///
+  /// It is the baseline `sanad-dev apply` diffs against and the commit `status`
+  /// reports for the live runtime. It is diagnostic identity, never ownership
+  /// evidence, and an older lease without it stays valid.
+  final String sourceCommit;
 
   RuntimeLauncherRecord copyWith({
     String? workspaceHash,
@@ -68,6 +76,7 @@ class RuntimeLauncherRecord {
       vmServicePorts: vmServicePorts ?? this.vmServicePorts,
       status: status ?? this.status,
       updatedAt: DateTime.now().toUtc(),
+      sourceCommit: sourceCommit,
     );
   }
 
@@ -86,6 +95,7 @@ class RuntimeLauncherRecord {
     'vm_service_ports': vmServicePorts,
     'status': status,
     'updated_at': updatedAt.toUtc().toIso8601String(),
+    'source_commit': sourceCommit,
   };
 
   static RuntimeLauncherRecord fromJson(Map<String, dynamic> json) {
@@ -109,6 +119,7 @@ class RuntimeLauncherRecord {
       vmServicePorts: _intList(json['vm_service_ports']),
       status: _requiredString(json, 'status'),
       updatedAt: DateTime.parse(_requiredString(json, 'updated_at')).toUtc(),
+      sourceCommit: json['source_commit']?.toString().trim() ?? '',
     );
   }
 }
@@ -284,15 +295,7 @@ Future<String?> readProcessIdentity(int pid) async {
   }
   final result = await Process.run(
     'ps',
-    [
-      '-ww',
-      '-p',
-      '$pid',
-      '-o',
-      'lstart=',
-      '-o',
-      'command=',
-    ],
+    ['-ww', '-p', '$pid', '-o', 'lstart=', '-o', 'command='],
     environment: const {'LC_ALL': 'C'},
   );
   final value = result.stdout.toString().trim();

@@ -4,6 +4,7 @@ import 'package:path/path.dart' as path;
 import 'package:sanad_windows_path/windows_path.dart';
 import 'package:test/test.dart';
 
+import 'package:sanad_dev/sanad_dev_cli.dart' as sanad_dev;
 import 'package:sanad_dev/src/infrastructure/runtime_context.dart';
 
 void main() {
@@ -320,6 +321,38 @@ void main() {
     );
 
     expect(runtime.worktreeDisplayName, 'ui-status');
+  });
+
+  group('status source commit', () {
+    test('uses the recorded lease commit', () async {
+      var readHead = 0;
+      final commit = await sanad_dev.resolveStatusSourceCommit(
+        recordedCommit: 'abc1234',
+        readHeadCommit: () async {
+          readHead++;
+          return 'def5678';
+        },
+      );
+
+      expect(commit, 'abc1234');
+      expect(readHead, 0, reason: 'the lease wins without a git call');
+    });
+
+    test('falls back to HEAD when the lease has no commit', () async {
+      for (final recorded in const ['', '   ']) {
+        final commit = await sanad_dev.resolveStatusSourceCommit(
+          recordedCommit: recorded,
+          readHeadCommit: () async => 'head999\n',
+        );
+
+        expect(
+          commit,
+          'head999',
+          reason:
+              'a lease without a commit must print HEAD, never a placeholder',
+        );
+      }
+    });
   });
 }
 

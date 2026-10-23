@@ -29,6 +29,9 @@ Future<void> handleClientDeveloperAction(
   String action,
   int? portOverride, {
   String? sanadHomePath,
+  bool force = false,
+  bool guardForeignActivity = true,
+  ForeignActivityDetector? detectActivity,
 }) async {
   final instance = await selectClientInstance(
     portOverride,
@@ -40,6 +43,14 @@ Future<void> handleClientDeveloperAction(
     callerDirectory: _callerDirectory,
     sanadHomeOverride: sanadHomePath,
   );
+  if (guardForeignActivity &&
+      await refuseRestartDuringForeignActivity(
+        runtime: runtime,
+        force: force,
+        detectActivity: detectActivity,
+      )) {
+    return;
+  }
   final expectedClientDirectory =
       '${runtime.repositoryRoot}${Platform.pathSeparator}client';
   if (!_samePath(instance.path, expectedClientDirectory)) {
