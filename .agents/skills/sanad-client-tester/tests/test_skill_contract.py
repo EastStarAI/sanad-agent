@@ -13,6 +13,17 @@ sys.path.insert(0, str(SCRIPTS))
 
 from decision_layer.guard import REASON_CODES  # noqa: E402
 
+# The rule Task 141 publishes verbatim. Wrapped source text is compared with its
+# whitespace flattened, so a reflowed paragraph cannot break the contract.
+DIRECT_ROUTING_RULE = (
+    "if a step can be done by the decision model, route it there directly, "
+    "without LLM thinking"
+)
+
+
+def _flatten(text: str) -> str:
+    return " ".join(text.split())
+
 ROUTED_REFERENCES = {
     "references/automated-testing.md",
     "references/interactive-ui-testing.md",
@@ -73,6 +84,17 @@ class ClientTesterSkillContractTest(unittest.TestCase):
             "irreversible step",
         ):
             self.assertIn(required.lower(), self.routing_reference.lower())
+
+    def test_the_direct_routing_rule_is_published(self) -> None:
+        """G3: the rule is verbatim in the skill, the reference, the QA page, eval 7."""
+        self.assertIn(DIRECT_ROUTING_RULE, _flatten(self.skill))
+        self.assertIn(DIRECT_ROUTING_RULE, _flatten(self.routing_reference))
+        self.assertIn(DIRECT_ROUTING_RULE, _flatten(self.docs_page))
+        payload = json.loads(
+            (SKILL_ROOT / "evals" / "evals.json").read_text(encoding="utf-8")
+        )
+        decision_layer = next(item for item in payload["evals"] if item["id"] == 7)
+        self.assertIn(DIRECT_ROUTING_RULE, _flatten(decision_layer["expected_output"]))
 
     def test_routing_reference_covers_cost_escalation_and_resume(self) -> None:
         for required in (

@@ -30,6 +30,8 @@ Escalate to runtime/UI references and diagnostic commands only after a structure
 
 Use the decision layer whenever a step's next action depends on the current screen but is chosen from a known, finite set. Keep the agent whenever the step needs judgment a candidate table cannot express.
 
+Route it directly: if a step can be done by the decision model, route it there directly, without LLM thinking. Build the candidate table, ask one closed-choice question, and dispatch the admitted answer; do not re-derive the choice in prose before the call or second-guess it afterwards.
+
 **USE the decision layer** — navigation between known destinations, picking one listed option (model, `ask_user` option, search result, settings tile), confirming a reversible dialog, waiting for a state, and fixed form flows. One such step is a single closed-choice call of roughly 0.3–1 s and about $0.00006.
 
 **KEEP the agent** — judging visual or semantic correctness, unknown or unclassifiable screens, authoring free text, diagnosing a failure, and any irreversible step the scenario has not explicitly pre-authorized. A guard refusal, a `model_unavailable` / `model_contradiction` escalation, an `unknown` mode, or an `abstain`/`reobserve` answer hands the step back to the agent; never answer an escalation by re-running the refused action.

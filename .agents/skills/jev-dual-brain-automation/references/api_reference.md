@@ -7,6 +7,7 @@ Source basis: TypeSafe documentation for State, Primitives, Choice, Score, Noul,
 - Endpoint: `POST https://api.typesafe.ai/v1/systemone`
 - Header: `Authorization: Bearer <TYPESAFE_API_KEY>`
 - Never track, print, or include the key in state, exceptions, eval fixtures, or command output.
+- Origin and model overrides: an explicit client argument wins, then `TYPESAFE_API_URL` / `TYPESAFE_MODEL`, then the defaults above. A redirect from an overridden origin is still refused, because a 3xx would carry the bearer token to another origin.
 
 ## Request
 
