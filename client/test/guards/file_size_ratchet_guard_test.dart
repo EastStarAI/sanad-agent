@@ -32,9 +32,6 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/features/conversations/presentation/widgets/tools/file_tool_tile.dart':
       1469,
   'lib/features/conversations/presentation/widgets/user_message_tile.dart': 1233,
-  'lib/features/mcp/presentation/screens/add_mcp_server_screen.dart': 1178,
-  'lib/features/mcp/presentation/screens/mcp_server_management_screen.dart':
-      1055,
   'lib/features/provider_setup/presentation/bloc/provider_setup_cubit.dart':
       1119,
 };

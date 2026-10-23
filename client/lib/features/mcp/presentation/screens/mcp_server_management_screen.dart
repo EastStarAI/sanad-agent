@@ -1,10 +1,7 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
-import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -15,6 +12,8 @@ import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/features/mcp/data/mcp_runtime_client.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_runtime_models.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_server_config.dart';
+import 'package:sanad_client/features/mcp/presentation/widgets/mcp_advanced_json_dialog.dart';
+import 'package:sanad_client/features/mcp/presentation/widgets/mcp_server_card.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
@@ -371,103 +370,14 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         workspaceId: workspaceId,
       );
       if (!mounted) return;
-      final controller = TextEditingController(text: document.json);
-      McpConfigPreview? preview;
-      String? error;
-      var busy = false;
-      final saved = await showDialog<bool>(
+      final saved = await showMcpAdvancedJsonDialog(
         context: context,
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text('Advanced JSON · ${server.name}'),
-            content: SizedBox(
-              width: 680,
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(AppLocalizations.of(context)!.mcpPreviewRequiredNote),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: controller,
-                      minLines: 12,
-                      maxLines: 20,
-                      style: const TextStyle(fontFamily: 'monospace'),
-                      onChanged: (_) => setDialogState(() {
-                        preview = null;
-                        error = null;
-                      }),
-                    ),
-                    if (preview != null) ...[
-                      const SizedBox(height: 12),
-                      Text('${preview!.diff.length} fields changed'),
-                      for (final item in preview!.diff) Text('• ${item.field}'),
-                    ],
-                    if (error != null) ...[
-                      const SizedBox(height: 12),
-                      Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: busy ? null : () => Navigator.pop(context, false), child: Text(AppLocalizations.of(context)!.mcpCancel)),
-              OutlinedButton(
-                onPressed: busy
-                    ? null
-                    : () async {
-                        setDialogState(() => busy = true);
-                        try {
-                          final value = await dialogContext.read<McpRuntimeClient>().previewAdvanced(
-                            device: _targetDevice,
-                            serverName: server.name,
-                            scope: scope,
-                            workspaceId: workspaceId,
-                            input: controller.text,
-                          );
-                          setDialogState(() {
-                            preview = value;
-                            error = null;
-                          });
-                        } catch (value) {
-                          setDialogState(() => error = value.toString());
-                        } finally {
-                          setDialogState(() => busy = false);
-                        }
-                      },
-                child: Text(AppLocalizations.of(context)!.mcpPreviewChanges),
-              ),
-              FilledButton(
-                onPressed: busy || preview == null
-                    ? null
-                    : () async {
-                        setDialogState(() => busy = true);
-                        try {
-                          await dialogContext.read<McpRuntimeClient>().saveAdvanced(
-                            device: _targetDevice,
-                            serverName: server.name,
-                            scope: scope,
-                            workspaceId: workspaceId,
-                            input: controller.text,
-                            baseRevision: document.baseRevision,
-                            previewRevision: preview!.revision,
-                          );
-                          if (context.mounted) Navigator.pop(context, true);
-                        } catch (value) {
-                          setDialogState(() => error = value.toString());
-                        } finally {
-                          if (context.mounted) setDialogState(() => busy = false);
-                        }
-                      },
-                child: Text(AppLocalizations.of(context)!.mcpSave),
-              ),
-            ],
-          ),
-        ),
+        device: _targetDevice,
+        server: server,
+        scope: scope,
+        workspaceId: workspaceId,
+        document: document,
       );
-      await Future<void>.delayed(kThemeAnimationDuration);
-      controller.dispose();
       if (saved == true) await _loadData();
     } catch (error) {
       if (mounted) ToastUtils.showError(context, error.toString());
@@ -734,242 +644,33 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   }
 
   Widget _buildServerCard(BuildContext context, McpServerConfig server) {
-    final isConnected = _activeConnections.containsKey(server.id);
-    final isConnecting = _isConnecting[server.id] == true;
-    final error = _connectionErrors[server.id];
-    final tools = _serverTools[server.id] ?? const <McpRuntimeTool>[];
     final isExpanded = _expandedServerIds.contains(server.id);
-
-    final statusText = !server.enabled
-        ? AppLocalizations.of(context)!.mcpDisabled
-        : isConnecting
-        ? AppLocalizations.of(context)!.mcpConnecting
-        : error ?? (isConnected ? '${tools.length} tools' : 'Disconnected');
-
-    final appearance = context.watch<AppearanceCubit?>()?.state;
-    final isCustomBg = appearance != null && appearance.backgroundOption != AppBackgroundOption.defaultTheme;
-    final cardColor = isCustomBg
-        ? (Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface).withValues(alpha: 0.60)
-        : Theme.of(context).colorScheme.surface;
-
-    final card = Container(
-      decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outline.withValues(alpha: isCustomBg ? 0.25 : 0.12),
-        ),
-      ),
-      child: Column(
-          children: [
-            Semantics(
-              button: true,
-              container: true,
-              explicitChildNodes: true,
-              label: '${isExpanded ? AppLocalizations.of(context)!.mcpCollapse : AppLocalizations.of(context)!.mcpExpand} ${server.name} details',
-
-              child: InkWell(
-                key: ValueKey('mcp_server_toggle_${server.name}'),
-                excludeFromSemantics: true,
-                onTap: () {
-                  setState(() {
-                    if (isExpanded) {
-                      _expandedServerIds.remove(server.id);
-                    } else {
-                      _expandedServerIds.add(server.id);
-                    }
-                  });
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      _StatusDot(
-                        color: !server.enabled
-                            ? Theme.of(context).colorScheme.outline
-                            : error != null
-                            ? Theme.of(context).colorScheme.error
-                            : isConnected
-                            ? Theme.of(context).colorScheme.primary
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              server.name,
-                              style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 4),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                _MetaChip(label: server.enabled ? AppLocalizations.of(context)!.mcpEnabled : AppLocalizations.of(context)!.mcpDisabled),
-                                _MetaChip(label: _transportLabel(server)),
-                                _MetaChip(label: server.authType.displayName),
-                                _MetaChip(label: '${tools.length} tools'),
-                                if (_source == _McpConfigSource.effective) _MetaChip(label: _originLabel(server)),
-                                if (server.disabledTools.isNotEmpty)
-                                  _MetaChip(label: '${server.disabledTools.length} disabled'),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              statusText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: error != null
-                                    ? Theme.of(context).colorScheme.error
-                                    : Theme.of(context).colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Semantics(
-                        excludeSemantics: true,
-                        label: '${server.enabled ? AppLocalizations.of(context)!.mcpDisable : AppLocalizations.of(context)!.mcpEnable} ${server.name}',
-                        toggled: server.enabled,
-
-                        child: Switch(
-                          value: server.enabled,
-                          onChanged: _canEditCurrentSource ? (value) => _toggleServerEnabled(server, value) : null,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            if (isExpanded)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Divider(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12)),
-                    if (tools.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(
-                          server.enabled ? AppLocalizations.of(context)!.mcpConnectToDiscover : AppLocalizations.of(context)!.mcpServerDisabled,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ...tools.map(
-                      (tool) => Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(tool.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    tool.description,
-                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Column(
-                              children: [
-                                Semantics(
-                                  excludeSemantics: true,
-                                  label: '${server.isToolDisabled(tool.name) ? AppLocalizations.of(context)!.mcpEnable : AppLocalizations.of(context)!.mcpDisable} tool ${tool.name}',
-                                  toggled: !server.isToolDisabled(tool.name),
-                                  child: Switch(
-                                    value: !server.isToolDisabled(tool.name),
-                                    onChanged: _canEditCurrentSource
-                                        ? (value) => _toggleToolEnabled(server, tool.name, value)
-                                        : null,
-                                  ),
-                                ),
-                                Text(
-                                  server.isToolDisabled(tool.name) ? AppLocalizations.of(context)!.mcpDisabled : AppLocalizations.of(context)!.mcpEnabled,
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Wrap(
-                      alignment: WrapAlignment.end,
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: _deviceOnline && !_mutating
-                              ? () => _connectToServer(server, _connectionRefreshCycle)
-                              : null,
-                          icon: const Icon(Icons.wifi_find),
-                          label: Text(AppLocalizations.of(context)!.mcpTest),
-                        ),
-                        if (_source != _McpConfigSource.effective || _effectiveOrigins.containsKey(server.name))
-                          OutlinedButton.icon(
-                            onPressed: _deviceOnline && !_mutating ? () => _openEditServer(server) : null,
-                            icon: Icon(Icons.edit_outlined),
-                            label: Text(AppLocalizations.of(context)!.mcpEdit),
-                          ),
-                        PopupMenuButton<String>(
-                          tooltip: AppLocalizations.of(context)!.mcpAdvancedActions,
-                          onSelected: (value) {
-                            if (value == 'export') unawaited(_exportServer(server));
-                            if (value == 'json') unawaited(_editAdvancedJson(server));
-                          },
-                          itemBuilder: (context) => [
-                            PopupMenuItem(value: 'export', child: Text(AppLocalizations.of(context)!.mcpExportJson)),
-                            PopupMenuItem(value: 'json', child: Text(AppLocalizations.of(context)!.mcpEditJson)),
-                          ],
-                        ),
-                        if (_canMutate)
-                          TextButton.icon(
-                            key: ValueKey('mcp_server_remove_${server.name}'),
-                            onPressed: () => _deleteServer(server),
-                            icon: const Icon(Icons.delete_outline),
-                            label: Text(AppLocalizations.of(context)!.mcpRemove),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      );
-
-    final wrappedCard = isCustomBg
-        ? ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: card,
-            ),
-          )
-        : card;
-
-    return Semantics(
-      container: true,
-      explicitChildNodes: true,
-      label: '${server.name}, ${server.enabled ? AppLocalizations.of(context)!.mcpEnabled : AppLocalizations.of(context)!.mcpDisabled}, ${tools.length} tools',
-      child: wrappedCard,
+    return McpServerCard(
+      server: server,
+      isConnected: _activeConnections.containsKey(server.id),
+      isConnecting: _isConnecting[server.id] == true,
+      error: _connectionErrors[server.id],
+      tools: _serverTools[server.id] ?? const <McpRuntimeTool>[],
+      isExpanded: isExpanded,
+      originLabel: _source == _McpConfigSource.effective ? _originLabel(server) : null,
+      showEdit: _source != _McpConfigSource.effective || _effectiveOrigins.containsKey(server.name),
+      canEditCurrentSource: _canEditCurrentSource,
+      canTestOrEdit: _deviceOnline && !_mutating,
+      canMutate: _canMutate,
+      onToggleExpanded: () => setState(() {
+        if (isExpanded) {
+          _expandedServerIds.remove(server.id);
+        } else {
+          _expandedServerIds.add(server.id);
+        }
+      }),
+      onToggleEnabled: (value) => _toggleServerEnabled(server, value),
+      onToggleTool: (toolName, value) => _toggleToolEnabled(server, toolName, value),
+      onTest: () => _connectToServer(server, _connectionRefreshCycle),
+      onEdit: () => _openEditServer(server),
+      onExport: () => unawaited(_exportServer(server)),
+      onEditJson: () => unawaited(_editAdvancedJson(server)),
+      onDelete: () => _deleteServer(server),
     );
   }
 
@@ -1000,56 +701,4 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         .map((server) => server.name)
         .toSet();
   }
-}
-
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.color});
-
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 12,
-      height: 12,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
-    );
-  }
-}
-
-class _MetaChip extends StatelessWidget {
-  const _MetaChip({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-
-String _transportLabel(McpServerConfig server) {
-  return switch (server.transport) {
-    McpTransportType.auto => 'Auto',
-    McpTransportType.stdio => 'STDIO',
-    McpTransportType.sse => 'SSE',
-    McpTransportType.streamableHttp => 'HTTP',
-  };
 }

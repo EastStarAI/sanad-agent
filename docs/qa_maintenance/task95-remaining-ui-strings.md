@@ -70,18 +70,38 @@ Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker)
   - `Delete “${instance.displayName}” and its stored credentials?`
   - … and 40 more
 
-- `lib/features/mcp/presentation/screens/add_mcp_server_screen.dart` (50 strings)
+- `lib/features/mcp/presentation/screens/` (18 strings; remaining in the two MCP screen hosts after Plan 113b 113-05)
+  - `Add server`
+  - `Add to ${_workspaceName ?? `
+  - `All`
+  - `Cancel`
+  - `Device`
+  - `I understand this server can access data and perform actions.`
+  - `MCP`
+  - `Only enable tools and servers you trust.`
+  - `Remote`
+  - `Save changes`
+  - `Saving…`
+  - `Stdio`
+  - `Unknown`
+  - `Unknown connection error`
+  - `Unsupported: $field`
+  - `Warning: $warning`
+  - `Workspace`
+  - `Workspace definitions override same-name device servers. Overridden device servers: ${_overriddenDeviceServers.join(`
+
+- `lib/features/mcp/presentation/widgets/` (48 strings; split out of the former MCP screens by Plan 113b 113-05)
   - `Add argument`
   - `Add header`
-  - `Add server`
   - `Add variable`
+  - `Advanced JSON · ${server.name}`
   - `Allowed tools`
   - `Argument ${entry.key + 1}`
   - `Arguments`
   - `Authentication`
   - `Authentication: ${result.authState}`
+  - `Auto`
   - `Bearer token`
-  - `Cancel`
   - `Command`
   - `Command line arguments passed to the process.`
   - `Configure how Sanad connects to this remote MCP server.`
@@ -90,13 +110,13 @@ Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker)
   - `Connection failed`
   - `Connection succeeded`
   - `Credentials`
+  - `Disconnected`
   - `Enter an HTTP or HTTPS URL`
   - `Enter client secret`
   - `Enter token string`
   - `Environment variables`
-  - `Headers`
-  - `I understand this server can access data and perform actions.`
-  - … and 25 more
+  - `HTTP`
+  - … and 23 more
 
 - `lib/features/provider_setup/presentation/bloc/provider_setup_cubit.dart` (37 strings)
   - `Authentication failed.`
@@ -391,21 +411,6 @@ Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker)
   - `The background service is registered and started.`
   - `The exact verified agent is installed.`
   - `Verification successful. The agent version and authenticated connection are ready.`
-
-- `lib/features/mcp/presentation/screens/mcp_server_management_screen.dart` (13 strings)
-  - `Add to ${_workspaceName ?? `
-  - `Advanced JSON · ${server.name}`
-  - `Auto`
-  - `Device`
-  - `Disconnected`
-  - `HTTP`
-  - `Remote`
-  - `STDIO`
-  - `Stdio`
-  - `Unknown`
-  - `Unknown connection error`
-  - `Workspace`
-  - `Workspace definitions override same-name device servers. Overridden device servers: ${_overriddenDeviceServers.join(`
 
 - `lib/features/conversations/presentation/widgets/tools/web_tool_tile.dart` (13 strings)
   - `Fetched Pages`
