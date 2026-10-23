@@ -14,6 +14,13 @@ This contract applies to `client/lib/features/mcp/`.
 - Workspace detail views may show effective device and workspace entries but must label origins and communicate same-name workspace precedence.
 - Pending suspension and recovery state must come from daemon-owned conversation/history metadata, not MCP-local dialogs or caches.
 
+## Presentation Layout
+- `AddMcpServerScreen` and `McpServerManagementScreen` remain the screen hosts: they own draft, connection, expansion, and mutation state, and they are the only owners that call `McpRuntimeClient` for those flows.
+- The typed form fields, the inspection review, the server card, and the one-server Advanced JSON dialog are one library each under `client/lib/features/mcp/presentation/widgets/`. The hosts compose them and pass typed callbacks; the extracted widgets own no draft or connection state.
+- The Advanced JSON dialog keeps the daemon preview mandatory: Save stays disabled until the same document previews, and the host reloads the snapshot only after the dialog reports a save.
+- Keys and semantics are protocol. The `mcp_form_*` keys, `mcp_scope_segment_btn`, `add-mcp-server`, `mcp_server_toggle_<name>`, and `mcp_server_remove_<name>` stay byte-identical across any further decomposition.
+- A form cubit that owns the draft and the OAuth poll interval is a separate behavior change; until it lands, the draft and the poll loop stay in `AddMcpServerScreen`.
+
 ## Form and Secret Projection
 - MCP management is card-first; raw JSON is limited to explicit one-server Advanced actions with daemon preview and stale-edit protection.
 - Add and Edit reuse one typed draft flow. Import only seeds that draft after daemon preview.

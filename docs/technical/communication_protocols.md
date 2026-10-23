@@ -342,8 +342,9 @@ an explicit policy:
   app socket. This includes a Gateway or Agent `error` event that repeats the
   request id, so the Client completes the pending request with it. Sanad
   Client treats such a correlated `error` event, and a reply whose payload
-  holds an `error` object, as a failed request (`ConversationCommands`
-  `_responseError`), never as an empty result.
+  holds an `error` object, as a failed request (`ConversationCommands` reply
+  helpers through `data/transport/command_response_errors.dart`), never as an
+  empty result.
 - Live conversation events (`user_message`, thought/tool streams,
   `final_answer`, suspension, stop, and error events) broadcast to every app
   interface owned by the user. Each event retains `device_id` and `session_id`,

@@ -11,6 +11,7 @@ Incoming events follow:
 `Transport -> EventRouter -> Conversation Client -> UnifiedDeviceMapper -> DeviceConversationStore -> Presentation`
 
 - Presentation must never bypass the repository/client chain or parse transport payloads.
+- `ConversationCommands` stays the façade of the conversation transport. Workspace CRUD, folder CRUD, tree browsing, and slash lookup are owned by `WorkspaceCommands` in `data/transport/workspace_commands.dart`; reply-rejection decoding is owned by `data/transport/command_response_errors.dart`. Session, history, and compaction commands stay in the façade until their own owner lands.
 - Preserve exactly one managed conversation client per device.
 - A merged local/cloud device client must subscribe to both its canonical local id and its server-owned `cloud_device_id`; command responses and conversation events accept only those explicit aliases and must reject every other device id. Inventory refresh must update aliases on the existing managed client and rebind its event routing without replacing its conversation store.
 - Reverse tool execution and tool results remain transport/runtime concerns; presentation never owns that protocol.
@@ -32,7 +33,7 @@ Incoming events follow:
 - Session state, drafts, processing, attention, suspension, and recovery remain isolated by device and session identity.
 - Reconnect history hydration must reject stale generations, retain live events received while the snapshot is in flight, and reconcile by canonical event identity before replacing the visible snapshot.
 - Raw `request_id` is the wire identity. Display prefixes must never become transport ids.
-- The command gateway completes a request with any event that repeats its `request_id`. Every `ConversationCommands` request helper must check the reply through the shared `_responseError` helper (a correlated `error` event or a payload `error` object) and fail, so the caller shows its failure or stale surface; an error reply must never become an empty list, an empty history, or a confirmed mutation.
+- The command gateway completes a request with any event that repeats its `request_id`. Every `ConversationCommands` request helper must check the reply through the shared `responseError` helper in `data/transport/command_response_errors.dart` (a correlated `error` event or a payload `error` object) and fail, so the caller shows its failure or stale surface; an error reply must never become an empty list, an empty history, or a confirmed mutation.
 - Sidebar resources in `staleError` recover through `ConversationCacheRepository.refreshStaleResources`: any successful sidebar fetch for the device, a default session-list publication, or the active device coming back Online refreshes each stale resource once. Nothing stale means no request.
 - The route thinking-mode control retries a failed `model.snapshot` once when its active device comes back Online, in addition to adopting a later snapshot another consumer loaded.
 - Replay Edit/Retry eligibility is the latest active root user turn identified by `message_id`, `turn_id`, and `request_id`, and it must occur after the latest completed context-compaction event. Steer events and messages at or before that compaction boundary are not replay targets even when they appear as user timeline rows; the daemon remains authoritative on direct commands.
