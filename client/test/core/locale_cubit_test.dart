@@ -33,6 +33,52 @@ void main() {
       expect(ar, en);
     });
   });
+
+  group('secrets screen strings', () {
+    // Task 140 C4: every key the task names is authored in both locales.
+    const required = <String>{
+      'privacyAndSecurity',
+      'secrets',
+      'secretsEmpty',
+      'addSecret',
+      'secretName',
+      'secretDescription',
+      'secretDescriptionOptional',
+      'secretValue',
+      'secretValueHint',
+      'secretValueShow',
+      'secretValueHide',
+      'saveSecret',
+      'replaceSecret',
+      'replaceSecretNote',
+      'deleteSecret',
+      'deleteSecretConfirm',
+      'secretDeleted',
+      'secretSaved',
+      'secretUpdatedAt',
+      'secretSourceUser',
+      'secretSourceAgent',
+      'secretNoDescription',
+      'secretInvalidName',
+      'secretReservedName',
+      'secretValueRequired',
+      'secretValueTooLong',
+      'secretsUnavailable',
+      'secretsLoadFailed',
+      'secretsSaveFailed',
+      'retry',
+    };
+
+    test('every Secrets screen key exists in en and ar', () {
+      for (final path in ['lib/l10n/app_en.arb', 'lib/l10n/app_ar.arb']) {
+        expect(
+          required.difference(_keys(path)),
+          isEmpty,
+          reason: '$path is missing Secrets screen keys',
+        );
+      }
+    });
+  });
 }
 
 /// Reads key lists from checked-in fixtures so the parity test does not

@@ -6,7 +6,17 @@ import 'package:sanad_client/features/conversations/domain/models/device_workspa
 import 'package:sanad_client/features/devices/presentation/utils/device_ui_mapper.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
-enum SettingsDestination { profile, general, sessionsDevices, overview, providers, mcp, skills, workspace }
+enum SettingsDestination {
+  profile,
+  general,
+  sessionsDevices,
+  overview,
+  providers,
+  mcp,
+  skills,
+  privacySecurity,
+  workspace,
+}
 
 class SettingsNavigation extends StatelessWidget {
   const SettingsNavigation({
@@ -123,6 +133,14 @@ class SettingsNavigation extends StatelessWidget {
                   onTap: () => onSelectDeviceSection(item.$1),
                 ),
               ),
+            NavigationLabel(AppLocalizations.of(context)!.privacyAndSecurity),
+            NavigationTile(
+              icon: Icons.shield_outlined,
+              label: AppLocalizations.of(context)!.secrets,
+              navKey: 'privacy_security',
+              selected: selectedDestination == SettingsDestination.privacySecurity,
+              onTap: () => onSelectDeviceSection(SettingsDestination.privacySecurity),
+            ),
             Padding(
               padding: const EdgeInsets.only(left: 30),
               child: NavigationLabel(AppLocalizations.of(context)!.workspaces),

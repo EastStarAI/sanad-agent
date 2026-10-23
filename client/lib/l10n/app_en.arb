@@ -687,5 +687,78 @@
   "secretRequestSave": "Save to vault",
   "secretRequestSkip": "Skip",
   "secretRequestShowValue": "Show value",
-  "secretRequestHideValue": "Hide value"
+  "secretRequestHideValue": "Hide value",
+  "privacyAndSecurity": "Privacy & Security",
+  "@privacyAndSecurity": {
+    "description": "Settings navigation group that holds the Secrets destination"
+  },
+  "secrets": "Secrets",
+  "secretsSubtitle": "Secrets stored in the secure vault on {device}. Values are write-only and are never shown again.",
+  "@secretsSubtitle": {
+    "description": "Subtitle of the device-scoped Secrets page",
+    "placeholders": {
+      "device": {
+        "type": "String"
+      }
+    }
+  },
+  "secretsEmpty": "No secrets stored",
+  "addSecret": "Add secret",
+  "secretName": "Name",
+  "secretDescription": "Description",
+  "secretDescriptionOptional": "Description (optional)",
+  "secretValue": "Value",
+  "secretValueHint": "Paste or type the value",
+  "secretValueShow": "Show value",
+  "secretValueHide": "Hide value",
+  "saveSecret": "Save secret",
+  "replaceSecret": "Replace",
+  "replaceSecretNote": "Replaces the saved value. The current value is never shown.",
+  "deleteSecret": "Delete secret",
+  "deleteSecretConfirm": "Delete {name}? The stored value is removed permanently and cannot be recovered.",
+  "@deleteSecretConfirm": {
+    "description": "Body of the delete-secret confirmation dialog",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "secretDeleteConfirmBtn": "Delete permanently",
+  "secretDeleted": "Secret deleted",
+  "secretSaved": "Secret saved",
+  "secretUpdatedAt": "Updated {date}",
+  "@secretUpdatedAt": {
+    "description": "Updated date of a stored secret, already formatted for the client locale",
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "secretSourceUser": "Added by you",
+  "secretSourceAgent": "Requested by the agent",
+  "secretNoDescription": "No description",
+  "secretInvalidName": "Use letters, digits and underscores only, and start with a letter or an underscore.",
+  "secretReservedName": "This name is reserved by Sanad. Choose another name.",
+  "secretValueRequired": "Enter a value",
+  "secretValueTooLong": "The value is too long. The maximum is {max} characters.",
+  "@secretValueTooLong": {
+    "description": "Value bound mirrored from the Agent vault",
+    "placeholders": {
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "secretValueInvalid": "That cannot be stored as a secret. Enter the value itself.",
+  "secretsUnavailable": "Unavailable",
+  "secretsUnavailableHint": "This device is offline. Actions are disabled until it reconnects.",
+  "secretsLoadFailed": "Could not load secrets.",
+  "secretsSaveFailed": "Could not save the secret.",
+  "secretsDeleteFailed": "Could not delete the secret.",
+  "secretsPermissionDenied": "You do not have permission to manage secrets on this device.",
+  "secretsInvalidRequest": "The device rejected the request. Check the name and description.",
+  "secretsVaultUnavailable": "The secure vault on this device is not available right now.",
+  "secretsInternalError": "The device could not complete the request."
 }
