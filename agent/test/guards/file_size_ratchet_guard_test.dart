@@ -26,7 +26,6 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/engine/adapters/base_openai_adapter.dart': 2016,
   'lib/engine/agent_runner.dart': 2025,
   'lib/engine/context/context_compaction_engine.dart': 2026,
-  'lib/engine/llm_request_dumper.dart': 1080,
   'lib/engine/runtime/tool_execution_coordinator.dart': 1116,
   'lib/evolution/db/agent_state_database.dart': 1635,
   'lib/evolution/db/compaction_boundary_repository.dart': 1173,

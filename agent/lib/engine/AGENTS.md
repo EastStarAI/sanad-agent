@@ -28,6 +28,7 @@ This contract applies to `agent/lib/engine/`.
 - Plugin notifications for tool results receive a text-only message copy; canonical history alone retains `toolResult` blocks. Events and history queries likewise project bounded `content`, never rich blocks.
 - `view_image` tool lifecycle logs, public events, and history-query projections redact the local path while preserving safe detail/status and stable tool-call identity; approval requests remain the explicit path-review surface.
 - LLM request diagnostics recursively sanitize a deep copy. Typed image blocks and data URIs become MIME/decoded-size metadata with no payload sample, and the live provider request remains untouched.
+- `LLMRequestDumper` owns dump lifecycle, file naming, and capture state; `LLMPayloadSanitizer` is the single owner of the redaction applied to every value a dump writes — credential masking, image metadata, MIME sniffing, and string sanitization — so no part of a credential survives sanitization.
 
 ## Provider-Neutral Completion
 - A new user turn resets turn-scoped tool maintenance budgets before model execution; tool retries within the same turn share that bounded budget.
