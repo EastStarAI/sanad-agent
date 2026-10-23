@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('desktop settings expose an explicit update check', () {
     final source = File(
-      'lib/features/settings/presentation/widgets/settings_pages.dart',
+      'lib/features/settings/presentation/widgets/settings_pages/general_page.dart',
     ).readAsStringSync();
 
     // Localization pass (Task 95) moved visible copy into AppLocalizations;

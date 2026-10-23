@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sanad_client/features/settings/presentation/widgets/settings_pages.dart';
+import 'package:sanad_client/features/settings/presentation/widgets/settings_pages/agent_restart_confirmation_dialog.dart';
 
 void main() {
   testWidgets('shows Cancel, red Force restart, then Restart', (tester) async {
