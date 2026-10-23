@@ -139,6 +139,18 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   active Sanad Home and appears only in the dedicated header. Host must match
   the configured loopback authority and port; any supplied Origin must be in
   the explicit allowlist.
+- `LocalDaemonServerPlatform` owns the loopback socket lifecycle, that
+  authentication gate and its credential-free failure envelopes, response
+  fan-out with delivery scopes, and voice.
+  `local_daemon/http_control_routes.dart` owns the route bodies for
+  `/auth/logout`, `/auth/coupling`, `/health`, `/update`, `/logs`, `/restart`,
+  `/shutdown`, `/stop`, `/authentication-exchange`, and `/capabilities`, and
+  `local_daemon/local_media_stream_handler.dart` owns the attachment and
+  `view_image` media routes. Each owner receives the runtime owners it needs as
+  explicit constructor inputs instead of resolving them through the service
+  locator, and the platform never re-implements a route body. A new control
+  route belongs in the routes owner; a new media projection belongs in the
+  media owner.
 - Source-development health responses expose the inherited launcher id and
   runtime nonce only as local ownership evidence; neither value is an
   authentication credential, and managed mutation still requires the complete
