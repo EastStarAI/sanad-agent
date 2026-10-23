@@ -95,17 +95,29 @@ void main() {
     }
 
     /// Runs one runtime command and reports whether the CLI was recompiled.
-    Future<({bool compiled, String? error})> runRuntimeCommand() async {
+    ///
+    /// `status` is a runtime command: it never bootstraps implicitly, it reports
+    /// staleness and keeps using the last prepared CLI. `setup` is the entry
+    /// point that rebuilds a stale prepared runtime.
+    Future<({bool compiled, bool stale, String? error})> runRuntimeCommand({
+      String command = 'status',
+    }) async {
       await calls.writeAsString('');
-      final result = await runBootstrap(const ['status']);
+      final result = await runBootstrap([command]);
+      final stale = '${result.stderr}'.contains('Project runtime is stale');
       if (result.exitCode != 0) {
-        return (compiled: false, error: '${result.stdout}\n${result.stderr}');
+        return (
+          compiled: false,
+          stale: stale,
+          error: '${result.stdout}\n${result.stderr}',
+        );
       }
       final invocations = result.exitCode == 0
           ? await calls.readAsLines()
           : const <String>[];
       return (
         compiled: invocations.any((line) => line.contains('dart compile')),
+        stale: stale,
         error: null,
       );
     }
@@ -138,14 +150,28 @@ void main() {
     });
 
     test(
-      'a tracked edit recompiles and reverting reuses the artifact',
+      'a tracked edit rebuilds on setup and reverting reuses the artifact',
       () async {
         expect((await runBootstrap(const ['setup'])).exitCode, 0);
         final prepared = await artifactNames();
         expect(prepared, hasLength(1));
 
         await source.writeAsString('void main() { print(1); }');
-        final edited = await runRuntimeCommand();
+        final staleStatus = await runRuntimeCommand();
+        expect(staleStatus.error, isNull);
+        expect(
+          staleStatus.stale,
+          isTrue,
+          reason: 'a runtime command reports staleness instead of rebuilding',
+        );
+        expect(
+          staleStatus.compiled,
+          isFalse,
+          reason: 'a runtime command never bootstraps implicitly',
+        );
+        expect(await artifactNames(), prepared);
+
+        final edited = await runRuntimeCommand(command: 'setup');
         expect(edited.compiled, isTrue, reason: 'a tracked edit is a rebuild');
         final rebuilt = await artifactNames();
         expect(rebuilt, hasLength(2));
@@ -157,7 +183,7 @@ void main() {
 
         final reverted = await git(['checkout', '--', 'scripts/sanad_dev']);
         expect(reverted.exitCode, 0, reason: '${reverted.stderr}');
-        final restored = await runRuntimeCommand();
+        final restored = await runRuntimeCommand(command: 'setup');
         expect(restored.error, isNull);
         expect(
           restored.compiled,
@@ -176,7 +202,15 @@ void main() {
       final added = File(sourcePath('extra_untracked.dart'));
 
       await added.writeAsString('class Extra {}\n');
-      final withExtra = await runRuntimeCommand();
+      final staleStatus = await runRuntimeCommand();
+      expect(staleStatus.error, isNull);
+      expect(
+        staleStatus.stale,
+        isTrue,
+        reason: 'an untracked source makes the prepared runtime stale',
+      );
+      expect(staleStatus.compiled, isFalse);
+      final withExtra = await runRuntimeCommand(command: 'setup');
       expect(
         withExtra.compiled,
         isTrue,
@@ -186,7 +220,7 @@ void main() {
       expect(afterExtra, hasLength(2));
 
       await added.delete();
-      final withoutExtra = await runRuntimeCommand();
+      final withoutExtra = await runRuntimeCommand(command: 'setup');
       expect(withoutExtra.error, isNull);
       expect(withoutExtra.compiled, isFalse);
       expect(await artifactNames(), afterExtra);
@@ -213,7 +247,7 @@ void main() {
       expect(removed.exitCode, 0, reason: '${removed.stderr}');
       await commitAll('drop tracked source');
 
-      final afterDeletion = await runRuntimeCommand();
+      final afterDeletion = await runRuntimeCommand(command: 'setup');
       expect(
         afterDeletion.compiled,
         isTrue,
@@ -224,7 +258,7 @@ void main() {
 
       final back = await git(['checkout', '--quiet', preparedHead]);
       expect(back.exitCode, 0, reason: '${back.stderr}');
-      final afterBranchReturn = await runRuntimeCommand();
+      final afterBranchReturn = await runRuntimeCommand(command: 'setup');
       expect(afterBranchReturn.error, isNull);
       expect(
         afterBranchReturn.compiled,
