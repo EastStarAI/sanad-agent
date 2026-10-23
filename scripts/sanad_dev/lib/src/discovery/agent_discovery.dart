@@ -22,6 +22,7 @@ class AgentInstance {
 Future<List<AgentInstance>> discoverAgentInstances({
   String? sanadHomeOverride,
   SanadDevRuntime? runtime,
+  Iterable<int>? candidatePorts,
 }) async {
   final client = HttpClient();
   client.connectionTimeout = const Duration(milliseconds: 150);
@@ -47,6 +48,10 @@ Future<List<AgentInstance>> discoverAgentInstances({
       // A runtime without a started daemon may not have generated a token yet.
     }
   }
+  if (credentials.isEmpty) {
+    client.close(force: true);
+    return instances;
+  }
   final credentialCounts = <String, int>{};
   for (final credential in credentials) {
     credentialCounts.update(
@@ -59,9 +64,11 @@ Future<List<AgentInstance>> discoverAgentInstances({
     (credential) => credentialCounts[credential.value] != 1,
   );
 
+  final ports =
+      candidatePorts ?? [for (int port = 58085; port <= 58185; port++) port];
   final futures = <Future>[];
-  // Scan the default and worktree allocation range.
-  for (int port = 58085; port <= 58185; port++) {
+  // Scan the default and worktree allocation range, or the caller's candidates.
+  for (final port in ports) {
     futures.add(() async {
       for (final credential in credentials) {
         try {

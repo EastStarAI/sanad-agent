@@ -44,6 +44,11 @@ sha256_file() {
   elif command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
   else echo 'A SHA-256 utility (shasum or sha256sum) is required.' >&2; return 1; fi
 }
+sha256_stdin() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 | awk '{print $1}';
+  elif command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}';
+  else echo 'A SHA-256 utility (shasum or sha256sum) is required.' >&2; return 1; fi
+}
 
 print_help() {
   cat <<'EOF'
@@ -190,17 +195,49 @@ ensure_dependencies() {
   printf '%s' "$fingerprint" > "$stamp"
 }
 
-runtime_cli_fingerprint() {
-  local package_root="$PROJECT_DIR/scripts/sanad_dev"
+# Everything one compiled sanad-dev runtime depends on, as git pathspecs.
+RUNTIME_CLI_INPUTS=(pubspec.yaml pubspec.lock ':(glob)lib/**/*.dart')
+
+# Content fingerprint of the watched inputs.
+#
+# The slow path hashes every file individually, which costs one process per
+# file. The fast path answers the warm case instead: when `git status` reports
+# no change in a watched path, the working tree content is exactly the staged
+# index blobs, so the fingerprint is one hash of one `git ls-files --stage`
+# listing. Edits, untracked files, deletions, ignores, and branch switches all
+# make that status non-empty and fall back to the content hash, so the fast path
+# can never mask a real change.
+runtime_cli_git_fingerprint() {
+  command -v git >/dev/null 2>&1 || return 1
   (
-    cd "$package_root"
+    cd "$PROJECT_DIR/scripts/sanad_dev" || exit 1
+    local status listing
+    status="$(git --no-optional-locks status --porcelain \
+      --untracked-files=all --ignored=matching -- \
+      "${RUNTIME_CLI_INPUTS[@]}" 2>/dev/null)" || exit 1
+    [ -z "$status" ] || exit 1
+    listing="$(git ls-files --stage -- "${RUNTIME_CLI_INPUTS[@]}" 2>/dev/null)" ||
+      exit 1
+    [ -n "$listing" ] || exit 1
+    printf '%s\n' "$listing" | sha256_stdin
+  )
+}
+
+runtime_cli_fingerprint() {
+  local fast
+  if fast="$(runtime_cli_git_fingerprint)" && [ -n "$fast" ]; then
+    printf 'g%s\n' "$fast"
+    return
+  fi
+  (
+    cd "$PROJECT_DIR/scripts/sanad_dev"
     {
       printf '%s\n' pubspec.yaml pubspec.lock
       find lib -type f -name '*.dart' -print
     } | sort | while IFS= read -r file; do
       printf '%s:%s\n' "$file" "$(sha256_file "$file")"
     done
-  ) | { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | awk '{print $1}'
+  ) | sha256_stdin
 }
 
 compile_runtime_cli() {

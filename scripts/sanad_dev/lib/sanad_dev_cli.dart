@@ -27,6 +27,8 @@ part 'src/developer/developer_client.dart';
 part 'src/developer/developer_agent.dart';
 part 'src/developer/developer_ui_driver.dart';
 part 'src/developer/developer_ui_driver_artifact.dart';
+part 'src/developer/developer_ui_driver_target.dart';
+part 'src/developer/developer_ui_driver_target_cache.dart';
 part 'src/developer/developer_ui_driver_process.dart';
 part 'src/developer/developer_ui_driver_activation.dart';
 part 'src/discovery/process_discovery.dart';
