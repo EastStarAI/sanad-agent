@@ -18,7 +18,6 @@ const int productionLineLimit = 1000;
 /// the same pull request, and a file that drops under [productionLineLimit]
 /// loses its entry.
 const Map<String, int> allowlistedFiles = <String, int>{
-  'lib/capabilities/runtime/local_runtime_catalog.dart': 1071,
   'lib/cli/client/local_gateway_cli_client.dart': 1247,
   'lib/cli/oneshot/oneshot_runner.dart': 1496,
   'lib/core/setup/linux_service_manager.dart': 1079,
