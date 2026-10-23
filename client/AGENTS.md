@@ -81,6 +81,7 @@ When interface or runtime ownership changes affect the local daemon contract, pr
 3. Analysis (`fvm flutter analyze`) passes without errors.
 4. Targeted tests covering the changed behavior pass.
 5. Full fast-suite and E2E results are provided only when the change scope requires them under the testing requirements above.
+6. A new or grown non-generated `lib/` file stays inside the size ratchet: over 1000 lines it fails `test/guards/file_size_ratchet_guard_test.dart`, and an allowlisted file never exceeds its recorded count; split the file instead of raising the number.
 
 ## Boundary Ownership
 - Keep infrastructure-specific transport laws in the infrastructure domain.
