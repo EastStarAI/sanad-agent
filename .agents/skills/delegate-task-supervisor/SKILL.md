@@ -147,10 +147,12 @@ Build relay arguments from the loaded delegate skill. The supervisor treats non-
 
 ### Sanad Runner Exit & Reason Codes across Restarts
 When a Sanad task crosses an Agent daemon restart, `sanad run` reconnects within its reconnect window and follows the reclaimed turn. If failure occurs, it emits typed reason and exit codes:
-- **`turn_in_flight` (exit code 3):** The target session already has an active durable turn (`running`, `resuming`, `waiting`, or `blocked`). The supervisor must not immediately re-dispatch the same task or send another prompt to that session; inspect the session status or wait for the active turn to settle.
+- **`turn_in_flight` (exit code 3):** The target session is still owned by an active durable turn (`running`, `resuming`, `waiting`, or `stopping`). The supervisor must not immediately re-dispatch the same task or send another prompt to that session; inspect the session status or wait for the active turn to settle. A parked `blocked` turn and a `queued` turn never refuse a dispatch.
 - **`reconnect_window_expired` (exit code 1):** Gateway connection was lost during execution and the daemon did not recover within the configured `--reconnect-timeout` (default 60s). The turn may still be running headless in the daemon; verify daemon health before retrying.
 - **`turn_lost` (exit code 1):** Reconnection succeeded, but the restored session history no longer contains the original turn lineage.
 - **`home_identity_mismatch` (exit code 78):** Reconnection discovered an endpoint belonging to a different Sanad Home. This is a fatal isolation error; do not retry against the same misconfigured endpoint.
+
+While the run crosses the restart it stays alive and emits `reconnecting`, `reconnected`, and `re_attached` lifecycle records on its event stream. Treat those as liveness evidence and do not cancel or re-dispatch the task while they appear; a `blocked` cause still ends the run at once with exit 1.
 
 ## 4. Run Topology: Start, Add, Enqueue, and Close
 

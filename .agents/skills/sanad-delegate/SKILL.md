@@ -141,7 +141,8 @@ For CLI-only delegation, the managed runtime needs the Agent daemon only. Do not
 7. **Daemon Restart Resilience & Turn Follow:**
    - When the gateway drops mid-turn, `sanad run` does not fail immediately; it enters a bounded reconnect loop (`--reconnect-timeout`, default 60s) discovering the same Home's restarted daemon and re-attaching to the reclaimed turn.
    - If reconnect expires before re-attachment, it records `cause: "reconnect_window_expired"` with exit code 1 in `result.json`. If the turn is lost after restart, it records `cause: "turn_lost"` with exit code 1.
-   - If a dispatch targets an existing session with an active durable turn already in flight, it refuses dispatch immediately with exit code 3 and `cause: "turn_in_flight"`.
+   - If a dispatch targets an existing session whose durable turn still owns it, it refuses dispatch immediately with exit code 3 and `cause: "turn_in_flight"`; a queued or parked (blocked) turn never refuses.
+   - While the restart is crossed, the run emits `reconnecting`, `reconnected`, and `re_attached` lifecycle records, so a supervisor can distinguish a live run from a hung one.
    - Reconnection to an endpoint of a different Home fails closed with exit code 78 and `cause: "home_identity_mismatch"`.
 
 ---

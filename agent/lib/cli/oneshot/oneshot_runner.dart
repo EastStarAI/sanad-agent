@@ -516,8 +516,16 @@ class OneshotRunner {
             'Notice: Gateway connection lost; waiting up to ${effectiveReconnectTimeout.inSeconds}s to reconnect across restart...',
           );
         }
+        await coordinator.recordLifecycle(
+          type: 'reconnecting',
+          data: {
+            'reason': 'gateway_connection_lost',
+            'window_seconds': effectiveReconnectTimeout.inSeconds,
+          },
+        );
 
         final deadline = DateTime.now().add(effectiveReconnectTimeout);
+        final startedAt = DateTime.now();
         final discovery = LocalGatewayDiscovery(sanadHomeOverride: sanadHome);
         final String expectedHome;
         try {
@@ -534,10 +542,12 @@ class OneshotRunner {
 
         CliTurnClient? reconnectedClient;
         String? reconnectFailureCause;
+        var reconnectAttempts = 0;
 
         while (DateTime.now().isBefore(deadline) && !completer.isCompleted) {
           await Future<void>.delayed(const Duration(milliseconds: 500));
           if (completer.isCompleted) break;
+          reconnectAttempts++;
 
           try {
             if (clientFactory != null) {
@@ -548,8 +558,9 @@ class OneshotRunner {
               break;
             }
 
-            final probeResult =
-                await discovery.discover(urlOverride: gatewayUrl);
+            final probeResult = await discovery.discover(
+              urlOverride: gatewayUrl,
+            );
             if (!probeResult.isDaemonRunning) {
               continue;
             }
@@ -558,7 +569,8 @@ class OneshotRunner {
             if (servedHomeId != null && servedHomeId != expectedHomeId) {
               reconnectFailureCause = 'home_identity_mismatch';
               errorMessage =
-                  'Discovered daemon serves a different Sanad Home ($servedHomeId != $expectedHomeId).';
+                  'Discovered daemon serves a different Sanad Home '
+                  '($servedHomeId != $expectedHomeId).';
               break;
             }
 
@@ -611,6 +623,13 @@ class OneshotRunner {
         if (!json && !quiet) {
           err.writeln('Notice: Reconnected to Sanad daemon.');
         }
+        await coordinator.recordLifecycle(
+          type: 'reconnected',
+          data: {
+            'attempts': reconnectAttempts,
+            'elapsed_ms': DateTime.now().difference(startedAt).inMilliseconds,
+          },
+        );
 
         if (shouldDisposeClient && activeClient != null) {
           try {
@@ -633,71 +652,32 @@ class OneshotRunner {
           _logger.warning('Failed to query session history on reconnect: $e');
         }
 
-        final snapshot = historyPayload?['execution_snapshot'];
-        final snapshotState =
-            snapshot is Map ? snapshot['state']?.toString() : null;
-        final snapshotReqId =
-            snapshot is Map ? snapshot['request_id']?.toString() : null;
+        final durableTurn = _DurableTurn.fromPayload(
+          historyPayload ?? const <String, dynamic>{},
+        );
+        final sameLineage =
+            durableTurn.requestId == null ||
+            durableTurn.requestId == dispatchedRequestId;
 
-        final isOurTurn =
-            snapshotReqId == null || snapshotReqId == dispatchedRequestId;
-
-        if (!isOurTurn) {
+        if (!sameLineage) {
           hasError = true;
           terminalCause = 'turn_lost';
           errorMessage =
-              'Turn $dispatchedRequestId was lost after daemon restart (active turn is $snapshotReqId).';
+              'Turn $dispatchedRequestId was lost after daemon restart '
+              '(active turn is ${durableTurn.requestId}).';
           if (!json) err.writeln('Error: $errorMessage');
           if (!completer.isCompleted) completer.complete(1);
           return;
         }
 
-        if (snapshotState == 'idle') {
-          final messages = historyPayload?['messages'];
-          if (messages is List && messages.isNotEmpty) {
-            final lastAssistant = messages
-                .reversed
-                .whereType<Map>()
-                .firstWhere(
-                  (m) =>
-                      m['sender'] == 'assistant' ||
-                      m['type'] == 'assistant_message',
-                  orElse: () => const {},
-                );
-            final text = lastAssistant['content']?.toString() ??
-                lastAssistant['text']?.toString() ??
-                '';
-            if (text.isNotEmpty) {
-              if (assistantBuffer.isEmpty) {
-                assistantBuffer.write(text);
-                if (!json && !quiet) out.write(text);
-              }
-              if (!completer.isCompleted) completer.complete(0);
-              return;
-            }
-          }
-          hasError = true;
-          terminalCause = 'turn_lost';
-          errorMessage =
-              'Turn $dispatchedRequestId finished without a recorded result after restart.';
-          if (!json) err.writeln('Error: $errorMessage');
-          if (!completer.isCompleted) completer.complete(1);
-          return;
-        }
-
-        if (snapshotState == 'blocked') {
-          final notice = historyPayload?['runtime_notice'];
-          final hasResume = notice is Map &&
-              (notice['resume_at'] != null ||
-                  (notice['retry_after_ms'] is num &&
-                      (notice['retry_after_ms'] as num) > 0));
-          if (!hasResume) {
+        switch (durableTurn.follow) {
+          case _DurableFollow.following:
+            break;
+          case _DurableFollow.awaitingIntervention:
             hasError = true;
             wasBlocked = true;
             terminalCause = 'blocked';
-            final reason = _reasonSentence(
-              notice is Map ? (notice['message']?.toString() ?? '') : '',
-            );
+            final reason = _reasonSentence(durableTurn.noticeMessage);
             errorMessage = reason.isEmpty
                 ? 'blocked. Intervene with sanad session stop '
                       '$effectiveSessionId or retry from a client.'
@@ -707,7 +687,40 @@ class OneshotRunner {
             if (!json) err.writeln('Error: $errorMessage');
             if (!completer.isCompleted) completer.complete(1);
             return;
-          }
+          case _DurableFollow.finished:
+            final recordedResult = _lastAssistantText(historyPayload);
+            if (recordedResult.isNotEmpty) {
+              if (assistantBuffer.isEmpty) {
+                assistantBuffer.write(recordedResult);
+                if (!json && !quiet) out.write(recordedResult);
+              }
+              await coordinator.recordLifecycle(
+                type: 're_attached',
+                data: {
+                  'state': durableTurn.state,
+                  'request_id': ?dispatchedRequestId,
+                  'outcome': 'completed_during_reconnect',
+                },
+              );
+              if (!completer.isCompleted) completer.complete(0);
+              return;
+            }
+            hasError = true;
+            terminalCause = 'turn_lost';
+            errorMessage =
+                'Turn $dispatchedRequestId finished without a recorded '
+                'result after restart.';
+            if (!json) err.writeln('Error: $errorMessage');
+            if (!completer.isCompleted) completer.complete(1);
+            return;
+          case _DurableFollow.unknown:
+            // No execution snapshot came back: the turn still may be alive, so
+            // the run keeps following instead of claiming it was lost.
+            _logger.warning(
+              'Session history carried no execution snapshot on reconnect; '
+              'following the turn without lineage proof.',
+            );
+            break;
         }
 
         bindClient(reconnectedClient);
@@ -718,6 +731,14 @@ class OneshotRunner {
             'Notice: Re-attached to turn for session $effectiveSessionId.',
           );
         }
+        await coordinator.recordLifecycle(
+          type: 're_attached',
+          data: {
+            'state': durableTurn.state,
+            'request_id': ?dispatchedRequestId,
+            'recovery_scheduled': durableTurn.hasScheduledResume,
+          },
+        );
       }
 
       bindClient = (CliTurnClient targetClient) {
@@ -970,18 +991,13 @@ class OneshotRunner {
               .listen((event) {
                 if (event.sessionId == null ||
                     event.sessionId == effectiveSessionId) {
-                  final rawPayload = event.raw['payload'] is Map
-                      ? event.raw['payload'] as Map
-                      : const {};
-                  final hasResumeSchedule =
-                      rawPayload['resume_at'] != null ||
-                      (rawPayload['retry_after_ms'] is num &&
-                          (rawPayload['retry_after_ms'] as num) > 0);
-
                   // A blocked turn awaits an intervention this non-interactive
                   // run cannot give: end now with one reason line instead of
-                  // waiting for --timeout, unless automatic recovery is scheduled.
-                  if (event.isBlocked && !hasResumeSchedule) {
+                  // waiting for --timeout. The daemon schedules an automatic
+                  // resume only for a `waiting` notice, so a blocked turn stays
+                  // daemon-owned for Retry, Change Provider or Stop and is never
+                  // followed as if recovery still owned it.
+                  if (event.isBlocked) {
                     if (completer.isCompleted) return;
                     hasError = true;
                     wasBlocked = true;
@@ -999,7 +1015,7 @@ class OneshotRunner {
                     completer.complete(1);
                     return;
                   }
-                  if (event.isRecovering || hasResumeSchedule) {
+                  if (event.isRecovering) {
                     coordinator.recordRuntimeNotice(
                       status: event.status == 'cleared'
                           ? 'resuming'
@@ -1053,7 +1069,30 @@ class OneshotRunner {
             if (state == CliConnectionState.closed ||
                 state == CliConnectionState.disconnected) {
               if (turnDispatched && !completer.isCompleted) {
-                unawaited(handleTurnReconnect());
+                unawaited(
+                  handleTurnReconnect().catchError((
+                    Object error,
+                    StackTrace stack,
+                  ) {
+                    // A reconnect that cannot finish must never leave the run
+                    // waiting on --timeout: it fails closed with the
+                    // documented connection_lost cause instead.
+                    _logger.warning(
+                      'Turn reconnect failed unexpectedly: $error',
+                      error,
+                      stack,
+                    );
+                    if (completer.isCompleted) return;
+                    hasError = true;
+                    errorMessage =
+                        'Gateway connection lost before turn completed.';
+                    terminalCause = 'connection_lost';
+                    if (!json) {
+                      err.writeln('Error: $errorMessage');
+                    }
+                    completer.complete(1);
+                  }),
+                );
               } else if (!completer.isCompleted) {
                 hasError = true;
                 errorMessage = 'Gateway connection lost before turn completed.';
@@ -1151,11 +1190,21 @@ class OneshotRunner {
           final payload = history['payload'] is Map
               ? history['payload'] as Map<String, dynamic>
               : history;
-          if (_isExecutionInFlight(payload)) {
+          final durableTurn = _DurableTurn.fromPayload(payload);
+          if (durableTurn.blocksNewDispatch) {
             const code = 'turn_in_flight';
             final message =
-                'Session $effectiveSessionId already has an in-flight turn.';
+                'Session $effectiveSessionId already has an in-flight turn '
+                '(${durableTurn.state}).';
             err.writeln('Error: $message');
+            await coordinator.recordLifecycle(
+              type: 'refused',
+              data: {
+                'reason': code,
+                'state': durableTurn.state,
+                'request_id': ?durableTurn.requestId,
+              },
+            );
             await coordinator.recordTerminal(
               exitCode: 3,
               status: 'failed',
@@ -1322,24 +1371,24 @@ class OneshotRunner {
     }
   }
 
-  static bool _isExecutionInFlight(Map<String, dynamic> payload) {
-    final snapshot = payload['execution_snapshot'];
-    if (snapshot is Map) {
-      final state = snapshot['state']?.toString();
-      if (state == 'running' ||
-          state == 'resuming' ||
-          state == 'waiting' ||
-          state == 'blocked' ||
-          state == 'stopping') {
-        return true;
-      }
-      if (state == 'idle') return false;
-    }
-    final inFlight = payload['in_flight'];
-    if (inFlight is Map && inFlight.isNotEmpty) {
-      return true;
-    }
-    return false;
+  /// Last assistant message recorded in a session-history payload.
+  ///
+  /// Used only when the durable turn already reached `idle` while the gateway
+  /// was down: the turn's own completion event is unrecoverable then, so the
+  /// recorded message is the only proof the turn produced a result.
+  static String _lastAssistantText(Map<String, dynamic>? payload) {
+    final messages = payload?['messages'];
+    if (messages is! List || messages.isEmpty) return '';
+    final lastAssistant = messages
+        .reversed
+        .whereType<Map>()
+        .firstWhere(
+          (m) => m['sender'] == 'assistant' || m['type'] == 'assistant_message',
+          orElse: () => const {},
+        );
+    final content = lastAssistant['content']?.toString();
+    if (content != null && content.isNotEmpty) return content;
+    return lastAssistant['text']?.toString() ?? '';
   }
 
   /// One clean reason for stderr and `--json` output.
@@ -1358,4 +1407,90 @@ class OneshotRunner {
         .replaceFirst(RegExp(r'[\s.]+$'), '');
     return withoutPrefix.isEmpty ? '' : '$withoutPrefix.';
   }
+}
+
+/// How a run must treat the durable turn a session-history payload reports.
+enum _DurableFollow {
+  /// The daemon still owns the turn and will drive it to a terminal outcome.
+  following,
+
+  /// A durable turn is parked on an intervention a non-interactive run cannot
+  /// give, with no automatic retry scheduled.
+  awaitingIntervention,
+
+  /// The session holds no turn.
+  finished,
+
+  /// The payload carried no execution snapshot, so the turn cannot be proven
+  /// either way. Never treated as proof that the turn was lost.
+  unknown,
+}
+
+/// The durable turn as reported by the daemon's session projection.
+///
+/// A reclaimed turn keeps its work item and `request_id` across a restart, so
+/// the dispatched request id is the identity check that separates "my turn was
+/// reclaimed" from "another turn now owns the session".
+class _DurableTurn {
+  final _DurableFollow follow;
+  final String? state;
+  final String? requestId;
+  final String noticeMessage;
+  final bool hasScheduledResume;
+
+  const _DurableTurn({
+    required this.follow,
+    required this.state,
+    required this.requestId,
+    required this.noticeMessage,
+    required this.hasScheduledResume,
+  });
+
+  factory _DurableTurn.fromPayload(Map<String, dynamic> payload) {
+    final snapshot = payload['execution_snapshot'];
+    final state = snapshot is Map ? snapshot['state']?.toString() : null;
+    final requestId = snapshot is Map ? snapshot['request_id']?.toString() : null;
+    final notice = payload['runtime_notice'];
+    final hasScheduledResume =
+        notice is Map &&
+        (notice['resume_at'] != null ||
+            (notice['retry_after_ms'] is num &&
+                (notice['retry_after_ms'] as num) > 0));
+    final noticeMessage = notice is Map
+        ? (notice['message']?.toString() ?? '')
+        : '';
+    final inFlight = payload['in_flight'];
+
+    final _DurableFollow follow;
+    if (state == null) {
+      follow = inFlight is Map && inFlight.isNotEmpty
+          ? _DurableFollow.following
+          : _DurableFollow.unknown;
+    } else {
+      follow = switch (state) {
+        'running' || 'resuming' || 'waiting' || 'stopping' || 'queued' =>
+          _DurableFollow.following,
+        // `blocked` is never transient: the daemon schedules an automatic
+        // resume only for a `waiting` notice, so a blocked turn waits for an
+        // intervention this non-interactive run cannot give.
+        'blocked' => _DurableFollow.awaitingIntervention,
+        'idle' => _DurableFollow.finished,
+        _ => _DurableFollow.unknown,
+      };
+    }
+
+    return _DurableTurn(
+      follow: follow,
+      state: state,
+      requestId: requestId,
+      noticeMessage: noticeMessage,
+      hasScheduledResume: hasScheduledResume,
+    );
+  }
+
+  /// Whether a turn is in flight for the session, so a new dispatch must be
+  /// refused. A queued turn is followable but does not own the session yet, so
+  /// it never blocks a new dispatch.
+  bool get blocksNewDispatch =>
+      follow == _DurableFollow.following && state != 'queued';
 }

@@ -146,6 +146,7 @@ void main() {
         );
 
         var factoryCallCount = 0;
+        final events = <RunLifecycleEvent>[];
         final runner = SanadCommandRunner(
           stdoutSink: stdoutBuffer,
           stderrSink: stderrBuffer,
@@ -155,6 +156,7 @@ void main() {
             await client2.connect();
             return client2;
           },
+          eventSink: events.add,
           stdinReader: () async => null,
         );
 
@@ -261,6 +263,29 @@ void main() {
           contains('Notice: Re-attached to turn for session sess-reclaim-1.'),
         );
         expect(factoryCallCount, 1);
+
+        // The reconnected transport must carry no second turn: following a
+        // reclaimed turn never re-sends the brief.
+        expect(
+          mockSocket2.sentMessages.where(
+            (raw) => (jsonDecode(raw) as Map<String, dynamic>)['command'] ==
+                'think',
+          ),
+          isEmpty,
+        );
+
+        // Lifecycle transitions are visible to `--events` consumers.
+        expect(
+          events.map((e) => e.type),
+          containsAllInOrder(<String>[
+            'reconnecting',
+            'reconnected',
+            're_attached',
+          ]),
+        );
+        final reattach = events.firstWhere((e) => e.type == 're_attached');
+        expect(reattach.data['state'], 'resuming');
+        expect(reattach.data['request_id'], dispatchedReqId);
       },
     );
 
@@ -378,7 +403,7 @@ void main() {
         expect(exitCode, 3);
         expect(
           stderrBuffer.toString(),
-          contains('Session sess-active-turn already has an in-flight turn.'),
+          contains('Session sess-active-turn already has an in-flight turn'),
         );
 
         // Verify that NO think command was dispatched
@@ -389,6 +414,81 @@ void main() {
             as Map<String, dynamic>;
         expect(jsonResult['exit_code'], 3);
         expect(jsonResult['error_code'], 'turn_in_flight');
+      },
+    );
+
+    test(
+      'a really blocked session does not refuse a new dispatch as in-flight',
+      () async {
+        final mockSocket = MockWebSocket();
+        final client = LocalGatewayCliClient(
+          gatewayUri: Uri.parse('ws://127.0.0.1:58085/gateway'),
+          token: 'test-token',
+          autoReconnect: false,
+          connector: (uri, {headers, timeout}) async => mockSocket,
+        );
+        await client.connect();
+
+        final runner = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = runner.run(
+          prompt: 'Rework after a real block',
+          session: 'sess-blocked-turn',
+          client: client,
+          checkInFlight: true,
+          timeout: const Duration(seconds: 5),
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+        );
+
+        final queryRaw = await mockSocket.nextSentMessage();
+        final queryEnvelope = jsonDecode(queryRaw) as Map<String, dynamic>;
+        expect(queryEnvelope['command'], 'get_session_history');
+
+        // Blocked with no scheduled retry: parked on an intervention, so the
+        // documented blocked outcome is preserved instead of a refusal.
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_response',
+            'request_id': queryEnvelope['request_id'],
+            'payload': {
+              'session_id': 'sess-blocked-turn',
+              'execution_snapshot': {
+                'session_id': 'sess-blocked-turn',
+                'state': 'blocked',
+                'request_id': 'req-blocked-turn',
+                'work_item_id': 'work-blocked',
+                'revision': 2,
+                'updated_at': DateTime.now().toUtc().toIso8601String(),
+              },
+              'runtime_notice': {
+                'status': 'blocked',
+                'message': 'Provider credentials are invalid.',
+              },
+            },
+          }),
+        );
+
+        // The dispatch is admitted, so a `think` follows the history query.
+        final thinkRaw = await mockSocket.nextSentMessage();
+        expect(
+          (jsonDecode(thinkRaw) as Map<String, dynamic>)['command'],
+          'think',
+        );
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': 'sess-blocked-turn',
+            'event': {
+              'type': 'turn_complete',
+              'session_id': 'sess-blocked-turn',
+              'payload': {'text': 'Completed the rework.'},
+            },
+          }),
+        );
+
+        expect(await runFuture, 0);
       },
     );
 
@@ -471,7 +571,7 @@ void main() {
     );
 
     test(
-      'transient recovery state (waiting with scheduled resume) keeps following',
+      'waiting under automatic recovery keeps following to completion',
       () async {
         final mockSocket1 = MockWebSocket();
         final mockSocket2 = MockWebSocket();
@@ -524,7 +624,8 @@ void main() {
         final historyRaw = await mockSocket2.nextSentMessage();
         final historyEnv = jsonDecode(historyRaw) as Map<String, dynamic>;
 
-        // Return snapshot with state == 'resuming' AND a transient blocked notice with resume_at
+        // The reclaimed turn is waiting on provider recovery with an automatic
+        // resume scheduled, so the transient state must not be terminal.
         mockSocket2.emitFromServer(
           jsonEncode({
             'type': 'device_response',
@@ -533,17 +634,19 @@ void main() {
               'session_id': 'sess-transient-1',
               'execution_snapshot': {
                 'session_id': 'sess-transient-1',
-                'state': 'resuming',
+                'state': 'waiting',
                 'request_id': dispatchedReqId,
                 'work_item_id': 'work-transient',
                 'revision': 3,
                 'updated_at': DateTime.now().toUtc().toIso8601String(),
               },
               'runtime_notice': {
-                'status': 'blocked',
+                'status': 'waiting',
                 'message': 'Rate limited; retry scheduled in 2s',
-                'resume_at':
-                    DateTime.now().add(const Duration(seconds: 2)).toUtc().toIso8601String(),
+                'resume_at': DateTime.now()
+                    .add(const Duration(seconds: 2))
+                    .toUtc()
+                    .toIso8601String(),
                 'retry_after_ms': 2000,
               },
             },
@@ -575,6 +678,102 @@ void main() {
         );
       },
     );
+
+    test('blocked keeps the documented blocked exit even with a retry delay', () async {
+      final mockSocket1 = MockWebSocket();
+      final mockSocket2 = MockWebSocket();
+
+      final client1 = LocalGatewayCliClient(
+        gatewayUri: Uri.parse('ws://127.0.0.1:58085/gateway'),
+        token: 'test-token',
+        autoReconnect: false,
+        connector: (uri, {headers, timeout}) async => mockSocket1,
+      );
+      await client1.connect();
+
+      final client2 = LocalGatewayCliClient(
+        gatewayUri: Uri.parse('ws://127.0.0.1:58085/gateway'),
+        token: 'test-token',
+        autoReconnect: false,
+        connector: (uri, {headers, timeout}) async => mockSocket2,
+      );
+
+      final events = <RunLifecycleEvent>[];
+      final runner = SanadCommandRunner(
+        stdoutSink: stdoutBuffer,
+        stderrSink: stderrBuffer,
+        client: client1,
+        clientFactory: ({sanadHomeOverride, urlOverride}) async {
+          await client2.connect();
+          return client2;
+        },
+        eventSink: events.add,
+        stdinReader: () async => null,
+      );
+
+      final runFuture = runner.run([
+        'run',
+        'Task blocked without automatic recovery',
+        '--session',
+        'sess-blocked-1',
+        '--reconnect-timeout',
+        '5',
+        '--json',
+        '--execution-root',
+        Directory.current.path,
+      ]);
+
+      final sentRaw = await mockSocket1.nextSentMessage();
+      final dispatchedReqId =
+          ((jsonDecode(sentRaw) as Map<String, dynamic>)['payload']
+              as Map)['request_id'] as String;
+
+      mockSocket1.simulateClose();
+
+      final historyRaw = await mockSocket2.nextSentMessage();
+      final historyEnv = jsonDecode(historyRaw) as Map<String, dynamic>;
+
+      mockSocket2.emitFromServer(
+        jsonEncode({
+          'type': 'device_response',
+          'request_id': historyEnv['request_id'],
+          'payload': {
+            'session_id': 'sess-blocked-1',
+            'execution_snapshot': {
+              'session_id': 'sess-blocked-1',
+              'state': 'blocked',
+              'request_id': dispatchedReqId,
+              'work_item_id': 'work-blocked',
+              'revision': 4,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            },
+            // The daemon only schedules automatic resume for `waiting`, so a
+            // blocked notice stays parked even when it carries a delay.
+            'runtime_notice': {
+              'status': 'blocked',
+              'message': 'Provider credentials are invalid.',
+              'resume_at': DateTime.now()
+                  .add(const Duration(seconds: 30))
+                  .toUtc()
+                  .toIso8601String(),
+              'retry_after_ms': 30000,
+            },
+          },
+        }),
+      );
+
+      final exitCode = await runFuture;
+      expect(exitCode, 1);
+
+      final jsonResult =
+          jsonDecode(stdoutBuffer.toString().trim()) as Map<String, dynamic>;
+      expect(jsonResult['exit_code'], 1);
+      expect(jsonResult['error_code'], 'blocked');
+      expect(jsonResult['error'], contains('Provider credentials are invalid.'));
+      final failedEvent = events.firstWhere((e) => e.type == 'failed');
+      expect(failedEvent.data['cause'], 'blocked');
+      expect(events.map((e) => e.type), isNot(contains('re_attached')));
+    });
 
     test(
       'turn lost after restart exits 1 with cause turn_lost',

@@ -472,6 +472,21 @@ class RunArtifactCoordinator {
     });
   }
 
+  /// Lifecycle transition that is neither progress nor a runtime notice.
+  ///
+  /// Emits one event for an attached-runner transition (reconnecting,
+  /// reconnected, re-attached, refused) without touching the artifact status,
+  /// so a supervisor can tell "still alive across a restart" from "hung".
+  Future<void> recordLifecycle({
+    required String type,
+    Map<String, dynamic> data = const {},
+  }) {
+    return _enqueue(() async {
+      if (_isTerminal || _currentArtifact.isTerminal) return;
+      await _emitEvent(type, {'session_id': sessionId, ...data});
+    });
+  }
+
   /// Non-terminal runtime notice (e.g. blocked, waiting, resuming).
   Future<void> recordRuntimeNotice({
     required String status,
