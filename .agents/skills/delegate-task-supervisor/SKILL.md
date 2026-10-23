@@ -294,6 +294,15 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 
 ## Included scripts
 
+- `scripts/supervisor.mjs` — the CLI entrypoint and `__worker`. It owns the command contract (flags, `HELP`, `main`), `start`, the worker loop, and the process-group lifecycle; every command it dispatches lives in the module that owns that responsibility.
+- `scripts/supervisor-spec.mjs` — `validateTask`/`validateSpec`: the only place a submitted spec is accepted.
+- `scripts/supervisor-core.mjs` — the shared primitives every other script imports: fail-fast errors and option helpers, run paths and the run manifest, atomic JSON, time parsing, and the `result.json` digest a terminal task is reported from.
+- `scripts/supervisor-registry.mjs` — run identity and the workspace registry: the project/session remembered per workspace, keyed by the canonical workspace path.
+- `scripts/supervisor-windows.mjs` — the Windows broker, its handshake, and the batch quoting both launch paths share.
+- `scripts/supervisor-control.mjs` — `sendControlRequest` and the commands that change a live run: `add`, `enqueue`, `continue`, `steer`, `retry`, `cancel`, `set-concurrency`, `close`, plus the launch verification they report.
+- `scripts/supervisor-views.mjs` — the read-only surfaces (`status` verbose/`--brief`/`--json`, `inspect`, `timeline`, `logs`, `view`) and the queue/progress formatting they quote.
+- `scripts/supervisor-watch.mjs` — the durable `watch` loop with its cursor, the actionable-event enrichment every wake-up goes through, and `reconcileRun`, which turns a dead worker or a settled session into manifest state (`status` imports it too, so both surfaces repair the same way).
 - `scripts/bootstrap.mjs` — discover and check delegate skills or implementer CLIs (`opencode`, `agy`, `sanad`).
-- `scripts/supervisor.mjs` — launch runs, dynamically add/enqueue tasks, explicitly close runs, persist state and workspace identity, follow a Sanad turn whose worker exited, inspect logs/timelines, and open a viewer terminal.
 - `scripts/watch-once.mjs` — race-safe event-driven wait for intervention (`needs_input`, `needs_permission`) or terminal transitions.
+
+The pure policy modules `scripts/supervisor-events.mjs`, `scripts/supervisor-retry.mjs`, and `scripts/supervisor-follow.mjs` are imported by these owners as well; none of the scripts keeps a private copy of their rules.
