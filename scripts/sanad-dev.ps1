@@ -266,7 +266,7 @@ function Get-RuntimeCliInputs([string] $Root) {
   $inputs = @()
   while ($queue.Count -gt 0) {
     $current = [string]$queue.Dequeue()
-    $inputs += Get-RuntimeCliPackageInputs $current
+    $inputs += @(Get-RuntimeCliPackageInputs $current)
     foreach ($dependency in (Get-RuntimeCliPathDependencies $current)) {
       $resolved = [IO.Path]::GetFullPath((Join-Path $current $dependency))
       if (-not (Test-Path -PathType Container -Path $resolved)) { continue }

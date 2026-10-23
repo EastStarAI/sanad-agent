@@ -123,21 +123,21 @@ dependencies:
       await File(
         '${fakeBin.path}${Platform.pathSeparator}fvm.cmd',
       ).writeAsString('''@echo off
- if "%1"==spawn (
+ if "%1"=="spawn" (
    if exist .fake-fvm-installed exit /b 0
    exit /b 1
  )
  echo %CD%^|%*>>"${calls.path}"
- if "%1"==install type nul > .fake-fvm-installed
- if "%1"==dart if "%2"==pub (
+ if "%1"=="install" type nul > .fake-fvm-installed
+ if "%1"=="dart" if "%2"=="pub" (
    mkdir .dart_tool 2>nul
    echo {}> .dart_tool\\package_config.json
  )
- if "%1"==flutter if "%2"==pub (
+ if "%1"=="flutter" if "%2"=="pub" (
    mkdir .dart_tool 2>nul
    echo {}> .dart_tool\\package_config.json
  )
- if "%1"==dart if "%2"==compile type nul > "%6"
+ if "%1"=="dart" if "%2"=="compile" type nul > "%6"
 ''');
       await File(
         '${fakeBin.path}${Platform.pathSeparator}Get-FileHash.ps1',
