@@ -1,9 +1,9 @@
 ---
 title: "Task 139 — Schedules Screen, Schedule Control, and Run History"
 description: "Give schedules a real product surface: a standalone Client list and detail page, a create/edit form that reuses the existing new-conversation widgets, pause/resume/run-now, a per-schedule conversation mode, a persisted run history anchored to the run's conversation, and one local/cloud protocol path, while the model stays owner-scoped and the device owner can control any schedule."
-status: pending
-current_gate: "Wave 1 (agent state) blocked on 138-11; Wave 2 (protocol) blocked on 138-08"
-remaining_estimate: 100%
+status: in_progress
+current_gate: "139-01 (agent state, migrations, repositories) in review; 139-02 next, 139-04 still blocked on 138-08"
+remaining_estimate: 88%
 base_commit: 09d5c34a
 depends_on: "138-11 (schema modules), 138-08 (bridge translator), 138-09 (history projection host), 113b 113-02 (composer split) — see Work split"
 ---
@@ -87,6 +87,8 @@ Fixed by the product owner; not reopened here.
 | 112a D10 ("`pause`/`resume`, `run-now` … out of scope") | out of scope | in scope (S13, S14) |
 | 112a D9 ("list exposes id, recurrence summary, next instant, last status") | as written | additionally exposes the owner kind, the owning conversation or "device", `enabled`, and the consecutive-failure count; the Agent's English recurrence summary stays model-facing only (see the projection rule in §Protocol) |
 | `docs/technical/agent_database_schema.md` §3.3 `enabled` note ("pause/resume is out of scope in this release; reserved for future lifecycle control") | stale | pause/resume is that lifecycle control |
+| 139-01 scope: `agent/lib/evolution/db/session_db.dart` was not in the item's file lock | 139-02 would have had to extend the facade to write the new columns, and 139-02 does not lock it either | 139-01 takes the delegation-only change (seven forwarding parameters plus one repository getter and export, no logic) and discloses it in the PR |
+| 139-01 scope: `schedule_model.dart` may add record fields but had to stay within 1,264 lines | exactly 1,264 lines, zero headroom | `ScheduledTaskRecord` moves verbatim to the companion `evolution/scheduling/scheduled_task_record.dart` (re-exported from `schedule_model.dart`, so no importer changes), gains the seven Task 139 fields there, and the ratchet entry drops to the file's new count |
 
 ### Design decisions taken to make the fixed decisions executable
 
@@ -520,7 +522,7 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
 
 | Item | Wave | Files locked | Blocked by |
 |---|---|---|---|
-| 139-01 state: columns + `scheduled_task_runs` + repositories | 1 | `agent/lib/evolution/db/schema/scheduling_schema.dart`, `evolution/db/scheduled_task_repository.dart`, `evolution/db/scheduled_task_run_repository.dart`, `evolution/scheduling/schedule_model.dart` (row fields only), `agent/test/evolution/*`, `docs/technical/agent_database_schema.md`, `agent/test/guards/file_size_ratchet_guard_test.dart` | **138-11**; **138-05** fixtures may need a new snapshot |
+| 139-01 state: columns + `scheduled_task_runs` + repositories | 1 | `agent/lib/evolution/db/schema/scheduling_schema.dart`, `evolution/db/scheduled_task_repository.dart`, `evolution/db/scheduled_task_run_repository.dart`, `evolution/db/session_db.dart` (delegation and wiring only — coordinator amendment), `evolution/scheduling/schedule_model.dart` (row fields only; `ScheduledTaskRecord` moved to `evolution/scheduling/scheduled_task_record.dart`), `agent/test/evolution/*`, `docs/technical/agent_database_schema.md`, `agent/test/guards/file_size_ratchet_guard_test.dart` | **138-11**; **138-05** fixtures may need a new snapshot |
 | 139-02 scheduler control + conversations + run recorder | 2 | `agent/lib/evolution/cron_scheduler.dart`, `evolution/scheduling/{schedule_control,schedule_run_recorder,schedule_conversation_factory}.dart`, `agent/lib/evolution/session_manager.dart` (the conversation-delete pause hook only) | 139-01 |
 | 139-03 tool actions | 2 | `agent/lib/capabilities/tools/schedule_task_tool.dart`, `agent/lib/capabilities/AGENTS.md` | 139-02 |
 | 139-04 protocol: commands, queries, events, broadcast, tests | 3 | `agent/lib/interfaces/platforms/sanad_gateway/handlers/{schedule_command_handler,schedule_query_handler}.dart`, `protocol/canonical_events.dart`, `agent/test/interfaces/platforms/sanad_gateway/**`, `docs/technical/schedule_control_protocol.md`, `docs/technical/communication_protocols.md` | **138-08** (dispatch table) and 139-02; the `schedule.run_failed` notice must not grow `handlers/session_query_handler.dart` (**138-09**, allowlisted 1,482) |
@@ -536,6 +538,15 @@ held by an open SRP PR; merge that PR first (138 decision 8: no rebase across a 
   SRP item owns a file this task needs.
 - `schedule_model.dart` is allowlisted and deferred by 138: 139-01 may add record fields but must stay
   at or under 1,264 lines. If it cannot, the new fields go to a companion file instead.
+
+## Progress ledger
+
+One row per item. A row is appended when the item's PR opens, and its verification column carries the
+exact commands and counts from that PR.
+
+| Item | PR | Status | Verification |
+|---|---|---|---|
+| 139-01 state: columns + `scheduled_task_runs` + repositories | see PR | in review | `fvm dart analyze` clean; `test/evolution/scheduled_tasks_migration_test.dart` + `test/evolution/scheduled_task_runs_test.dart` 32; `test/evolution/` 445; `test/guards/` 11; schema snapshots regenerated for all four fixtures (runs table, its index, seven appended columns) with the pre-112 fixture group asserting the `model`/`continuous` backfill; full fast suite result posted on the PR. Ratchet: `schedule_model.dart` 1,264 → 1,143 (record moved to `scheduled_task_record.dart`, 241 lines, no entry) |
 
 ## Out of scope
 

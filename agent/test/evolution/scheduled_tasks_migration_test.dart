@@ -1,5 +1,6 @@
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/session_db.dart';
+import 'package:sanad_agent/evolution/scheduling/schedule_model.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
@@ -384,4 +385,312 @@ void main() {
       },
     );
   });
+
+  group('Task 139 owner, conversation, and route columns (A1)', () {
+    test('a fresh database has the seven columns with their defaults', () {
+      final stateDb = AgentStateDatabase.inMemory();
+      addTearDown(stateDb.dispose);
+
+      final columns = <String, Row>{
+        for (final row in stateDb.db.select('PRAGMA table_info(scheduled_tasks)'))
+          row['name'] as String: row,
+      };
+
+      expect(columns['name']!['notnull'], 0);
+      expect(columns['name']!['dflt_value'], isNull);
+      expect(columns['owner_kind']!['notnull'], 1);
+      expect(columns['owner_kind']!['dflt_value'], "'model'");
+      expect(columns['conversation_mode']!['notnull'], 1);
+      expect(columns['conversation_mode']!['dflt_value'], "'continuous'");
+      for (final optional in <String>[
+        'run_session_id',
+        'workspace_id',
+        'provider_instance_id',
+        'model',
+      ]) {
+        expect(columns[optional]!['notnull'], 0, reason: optional);
+        expect(columns[optional]!['dflt_value'], isNull, reason: optional);
+      }
+
+      // An INSERT that names none of the seven values takes the column
+      // defaults: model-owned, one continuous conversation, no route.
+      stateDb.db.execute(
+        'INSERT INTO scheduled_tasks (id, task, session_id, created_at) '
+        'VALUES (?, ?, ?, ?)',
+        <Object?>[
+          'task_defaults',
+          'Defaults',
+          'session_defaults',
+          '2026-10-23T09:00:00.000Z',
+        ],
+      );
+      final row = stateDb.db
+          .select('SELECT * FROM scheduled_tasks WHERE id = ?', <Object?>[
+            'task_defaults',
+          ])
+          .single;
+      expect(row['owner_kind'], 'model');
+      expect(row['conversation_mode'], 'continuous');
+      expect(row['name'], isNull);
+      expect(row['run_session_id'], isNull);
+    });
+
+    test('a pre-112 Home gains the columns and keeps every row model-owned', () {
+      const legacyInstant = '2026-10-25T14:30:00.000Z';
+      final db = _legacyDatabase(
+        rows: <List<Object?>>[
+          <Object?>[
+            'task_legacy_139',
+            'Legacy task',
+            legacyInstant,
+            'session_139',
+            '2026-10-18T10:00:00.000Z',
+          ],
+        ],
+      );
+      addTearDown(db.dispose);
+
+      AgentStateDatabase.fromConnection(db);
+
+      final row = db.select('SELECT * FROM scheduled_tasks').single;
+      expect(row['task'], 'Legacy task');
+      expect(row['next_run_at'], legacyInstant);
+      expect(row['owner_kind'], 'model');
+      expect(row['conversation_mode'], 'continuous');
+      expect(row['name'], isNull);
+      expect(row['run_session_id'], isNull);
+      expect(row['workspace_id'], isNull);
+      expect(row['provider_instance_id'], isNull);
+      expect(row['model'], isNull);
+    });
+
+    test('three consecutive migrations are no-ops for every shape', () {
+      final pre112 = _legacyDatabase(
+        rows: <List<Object?>>[
+          <Object?>[
+            'task_pre_112',
+            'Pre 112',
+            '2026-10-25T14:30:00.000Z',
+            'session_a',
+            '2026-10-18T10:00:00.000Z',
+          ],
+        ],
+      );
+      addTearDown(pre112.dispose);
+
+      final current = AgentStateDatabase.inMemory();
+      addTearDown(current.dispose);
+      SessionDB.fromState(current).saveScheduledTask(
+        'task_current',
+        'Current shape',
+        DateTime.utc(2026, 11, 1, 9),
+        'session_b',
+        kind: 'daily',
+        atTime: '09:00',
+        zone: 'Z',
+        name: 'Current',
+        ownerKind: 'user',
+        conversationMode: 'new_each_run',
+        workspaceId: 'workspace_b',
+        providerInstanceId: 'provider_b',
+        model: 'model_b',
+      );
+
+      for (final entry in <String, Database>{
+        'pre-112': pre112,
+        'current': current.db,
+      }.entries) {
+        AgentStateDatabase.fromConnection(entry.value);
+        final schema = _schemaFingerprint(entry.value);
+        final rows = _rowFingerprint(entry.value);
+
+        // A second and a third pass, as three daemon starts on one Home run
+        // the migration again.
+        AgentStateDatabase.fromConnection(entry.value);
+        AgentStateDatabase.migrateScheduledTasks(entry.value);
+
+        expect(_schemaFingerprint(entry.value), schema, reason: entry.key);
+        expect(_rowFingerprint(entry.value), rows, reason: entry.key);
+      }
+
+      final row = current.db.select('SELECT * FROM scheduled_tasks').single;
+      expect(row['owner_kind'], 'user');
+      expect(row['conversation_mode'], 'new_each_run');
+      expect(row['name'], 'Current');
+      expect(row['workspace_id'], 'workspace_b');
+      expect(row['provider_instance_id'], 'provider_b');
+      expect(row['model'], 'model_b');
+    });
+
+    test('fromRow defaults an old row and ignores blank or unknown values', () {
+      final legacyRow = <String, dynamic>{
+        'id': 'task_old',
+        'task': 'Old task',
+        'session_id': 'session_old',
+        'kind': 'daily',
+        'interval_minutes': null,
+        'at_time': '09:00',
+        'weekdays': null,
+        'month_day': null,
+        'zone': 'Z',
+        'next_run_at': '2026-11-01T09:00:00.000Z',
+        'created_at': '2026-10-01T09:00:00.000Z',
+        'updated_at': '2026-10-01T09:00:00.000Z',
+        'last_run_at': null,
+        'last_status': null,
+        'enabled': 1,
+      };
+
+      // A pre-139 row reaches the decoder without the seven columns at all
+      // (read-only inspection never migrates).
+      final record = ScheduledTaskRecord.fromRow(legacyRow);
+      expect(record.name, isNull);
+      expect(record.ownerKind, ScheduleOwnerKind.model);
+      expect(record.conversationMode, ScheduleConversationMode.continuous);
+      expect(record.runSessionId, isNull);
+      expect(record.workspaceId, isNull);
+      expect(record.providerInstanceId, isNull);
+      expect(record.model, isNull);
+
+      final blank = ScheduledTaskRecord.fromRow(<String, dynamic>{
+        ...legacyRow,
+        'name': '   ',
+        'owner_kind': '',
+        'conversation_mode': '',
+        'run_session_id': '',
+        'workspace_id': '  ',
+        'provider_instance_id': '',
+        'model': '',
+      });
+      expect(blank.name, isNull);
+      expect(blank.ownerKind, ScheduleOwnerKind.model);
+      expect(blank.conversationMode, ScheduleConversationMode.continuous);
+      expect(blank.runSessionId, isNull);
+      expect(blank.workspaceId, isNull);
+      expect(blank.providerInstanceId, isNull);
+      expect(blank.model, isNull);
+
+      final unknown = ScheduledTaskRecord.fromRow(<String, dynamic>{
+        ...legacyRow,
+        'owner_kind': 'device',
+        'conversation_mode': 'per_run',
+      });
+      expect(
+        unknown.ownerKind,
+        ScheduleOwnerKind.model,
+        reason: 'an unknown kind keeps the most restrictive authority',
+      );
+      expect(unknown.conversationMode, ScheduleConversationMode.continuous);
+    });
+
+    test('the seven fields round-trip through save, read, and the row map', () {
+      final stateDb = AgentStateDatabase.inMemory();
+      addTearDown(stateDb.dispose);
+      final repository = ScheduledTaskRepository(stateDb);
+
+      // A user-owned `continuous` schedule that never ran keeps an empty
+      // session id (D1): no payload may present it as an identity.
+      const emptySession = '';
+      final nextRunAt = DateTime.utc(2026, 11, 2, 9);
+      repository.saveScheduledTask(
+        'task_round_trip',
+        'Summarise the open items.',
+        nextRunAt,
+        emptySession,
+        kind: 'daily',
+        atTime: '09:00',
+        zone: '+03:00',
+        name: 'Morning brief',
+        ownerKind: 'user',
+        conversationMode: 'new_each_run',
+        runSessionId: 'session_run',
+        workspaceId: 'workspace_uuid',
+        providerInstanceId: 'provider_uuid',
+        model: 'model-id',
+      );
+
+      final record = ScheduledTaskRecord.fromRow(
+        repository.getScheduledTask('task_round_trip')!,
+      );
+      expect(record.sessionId, emptySession);
+      expect(record.name, 'Morning brief');
+      expect(record.ownerKind, ScheduleOwnerKind.user);
+      expect(record.conversationMode, ScheduleConversationMode.newEachRun);
+      expect(record.runSessionId, 'session_run');
+      expect(record.workspaceId, 'workspace_uuid');
+      expect(record.providerInstanceId, 'provider_uuid');
+      expect(record.model, 'model-id');
+
+      final decodedAgain = ScheduledTaskRecord.fromRow(record.toMap());
+      expect(decodedAgain.name, record.name);
+      expect(decodedAgain.ownerKind, record.ownerKind);
+      expect(decodedAgain.conversationMode, record.conversationMode);
+      expect(decodedAgain.runSessionId, record.runSessionId);
+      expect(decodedAgain.workspaceId, record.workspaceId);
+      expect(decodedAgain.providerInstanceId, record.providerInstanceId);
+      expect(decodedAgain.model, record.model);
+      expect(decodedAgain.kind, ScheduleKind.daily);
+      expect(decodedAgain.nextRunAt, nextRunAt);
+    });
+
+    test('an omitted write stores the column defaults callers rely on', () {
+      final stateDb = AgentStateDatabase.inMemory();
+      addTearDown(stateDb.dispose);
+      final repository = ScheduledTaskRepository(stateDb);
+
+      repository.saveScheduledTask(
+        'task_omitted',
+        'Legacy caller',
+        DateTime.utc(2026, 11, 3, 9),
+        'session_omitted',
+      );
+
+      final record = ScheduledTaskRecord.fromRow(
+        repository.getScheduledTask('task_omitted')!,
+      );
+      expect(record.ownerKind, ScheduleOwnerKind.model);
+      expect(record.conversationMode, ScheduleConversationMode.continuous);
+      expect(record.name, isNull);
+      expect(record.runSessionId, isNull);
+      expect(record.workspaceId, isNull);
+      expect(record.providerInstanceId, isNull);
+      expect(record.model, isNull);
+    });
+  });
 }
+
+/// Column, index, and DDL shape of `scheduled_tasks`, used to prove repeated
+/// migrations change nothing.
+String _schemaFingerprint(Database db) {
+  final objects = db
+      .select(
+        'SELECT type, name, sql FROM sqlite_master '
+        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+      )
+      .map((row) => '${row['type']}|${row['name']}|${row['sql']}')
+      .join('\n');
+  final columns = db
+      .select('PRAGMA table_info(scheduled_tasks)')
+      .map(
+        (row) =>
+            '${row['name']}|${row['type']}|${row['notnull']}|'
+            '${row['dflt_value']}|${row['pk']}',
+      )
+      .join('\n');
+  final indexes = db
+      .select('PRAGMA index_list(scheduled_tasks)')
+      .map((row) => '${row['name']}|${row['unique']}|${row['origin']}')
+      .join('\n');
+  return '$objects\n$columns\n$indexes';
+}
+
+/// Every stored `scheduled_tasks` value, used to prove repeated migrations are
+/// row-idempotent.
+String _rowFingerprint(Database db) => db
+    .select('SELECT * FROM scheduled_tasks ORDER BY id ASC')
+    .map(
+      (row) => Map<String, dynamic>.from(row).entries
+          .map((entry) => '${entry.key}=${entry.value}')
+          .join(','),
+    )
+    .join('\n');

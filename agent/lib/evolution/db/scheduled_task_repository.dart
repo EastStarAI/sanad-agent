@@ -22,6 +22,10 @@ enum ScheduledTaskTableShape {
 /// save and read only by the tolerant [inspectScheduledTasks] listing. The
 /// only mutation path above this repository is `CronScheduler` (single
 /// writer).
+///
+/// A caller writes the whole row: an omitted Task 139 value (`ownerKind`,
+/// `conversationMode`, the route columns) is stored as its column default,
+/// exactly like an omitted `kind` or `zone`.
 class ScheduledTaskRepository {
   final AgentStateDatabase _state;
 
@@ -44,6 +48,13 @@ class ScheduledTaskRepository {
     DateTime? lastRunAt,
     String? lastStatus,
     bool enabled = true,
+    String? name,
+    String ownerKind = 'model',
+    String conversationMode = 'continuous',
+    String? runSessionId,
+    String? workspaceId,
+    String? providerInstanceId,
+    String? model,
   }) {
     final now = DateTime.now();
     final nextRunAtValue = _normalizeDateTime(nextRunAt);
@@ -51,9 +62,11 @@ class ScheduledTaskRepository {
       INSERT INTO scheduled_tasks (
         id, task, session_id, kind, interval_minutes, at_time,
         weekdays, month_day, zone, next_run_at, run_at, created_at,
-        updated_at, last_run_at, last_status, enabled
+        updated_at, last_run_at, last_status, enabled, name, owner_kind,
+        conversation_mode, run_session_id, workspace_id,
+        provider_instance_id, model
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         task = excluded.task,
         session_id = excluded.session_id,
@@ -68,7 +81,14 @@ class ScheduledTaskRepository {
         updated_at = excluded.updated_at,
         last_run_at = excluded.last_run_at,
         last_status = excluded.last_status,
-        enabled = excluded.enabled;
+        enabled = excluded.enabled,
+        name = excluded.name,
+        owner_kind = excluded.owner_kind,
+        conversation_mode = excluded.conversation_mode,
+        run_session_id = excluded.run_session_id,
+        workspace_id = excluded.workspace_id,
+        provider_instance_id = excluded.provider_instance_id,
+        model = excluded.model;
     ''');
     try {
       stmt.execute([
@@ -90,6 +110,13 @@ class ScheduledTaskRepository {
         lastRunAt != null ? _normalizeDateTime(lastRunAt) : null,
         lastStatus,
         enabled ? 1 : 0,
+        name,
+        ownerKind,
+        conversationMode,
+        runSessionId,
+        workspaceId,
+        providerInstanceId,
+        model,
       ]);
     } finally {
       stmt.dispose();
@@ -173,6 +200,16 @@ class ScheduledTaskRepository {
     'last_run_at': row['last_run_at'],
     'last_status': row['last_status'],
     'enabled': row['enabled'],
+    // Task 139 columns. A pre-139 table reaches this decoder without them
+    // (read-only inspection never migrates), and a missing column reads as
+    // null, which is the "old row" default the record expects.
+    'name': row['name'],
+    'owner_kind': row['owner_kind'],
+    'conversation_mode': row['conversation_mode'],
+    'run_session_id': row['run_session_id'],
+    'workspace_id': row['workspace_id'],
+    'provider_instance_id': row['provider_instance_id'],
+    'model': row['model'],
   };
 
   static String _normalizeDateTime(DateTime value) =>

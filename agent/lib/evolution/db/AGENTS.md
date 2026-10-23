@@ -29,6 +29,7 @@ This contract applies to `agent/lib/evolution/db/`.
   - `SessionRepository`: session lifecycle, metadata, titles, and workspace records.
   - `SessionMessageRepository`: message replace, append and read, history pages and projection, and originating tool-call lookup. It is the only owner of the history-rewrite algorithm.
   -   `ScheduledTaskRepository`: every `scheduled_tasks` read and write (create/upsert, single read, ordered list, delete) plus the schema-tolerant `inspectScheduledTasks` read (PRAGMA/SELECT only; missing and pre-112 tables) used by read-only inspection; the table schema and its additive migration live in `schema/scheduling_schema.dart` and stay reachable as `AgentStateDatabase.migrateScheduledTasks` for the migration suites.
+  - `ScheduledTaskRunRepository`: every `scheduled_task_runs` read and write — the `running` row a dispatch writes first, the user-message anchor, the compare-and-set terminal transition, bounded keyset pages, write-side retention pruning, and per-schedule deletion. The table DDL is owned by the same schema module as the schedules it belongs to, and deleting a schedule composes both deletes in one transaction.
   - `SuspendedCheckpointRepository`: suspended checkpoints and work-item state.
   - `SessionForkCommitRepository`: fork, soft-rewind, and root-user commit records.
   - `SessionDB`: delegating facade preserving the public API surface; it holds no SQL of its own and must never carry a second copy of a repository algorithm.
