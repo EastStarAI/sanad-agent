@@ -206,3 +206,68 @@ The error `message` names the secret and the failure reason, and **never contain
 3. **Agent Logging Boundary:** Daemon logs record the secret name, command type, and outcome code only. Payloads are never serialized to string or logged.
 4. **Redaction Sentinel Rejection:** A submitted value matching `[REDACTED:<NAME>]` is rejected on both Client and Agent, ensuring displayed redaction masks cannot become stored secrets.
 5. **No Model Exposure:** Secret values are never part of LLM prompts, tool arguments, tool outputs, message history, or request dumps.
+
+---
+
+## 8. Client Contract (Data Client and Cubit)
+
+The Client consumes this protocol through two owners and nothing else:
+
+| Layer | Owner | Responsibility |
+|---|---|---|
+| Data | `client/lib/features/settings/data/secrets_client.dart` (`SecretsClient`) | Builds the three requests, projects the value-free metadata (`StoredSecret`), maps `DeviceCommandException.code` to a typed code, and filters `secrets.changed` into a payload-free signal. |
+| Presentation state | `client/lib/features/settings/presentation/bloc/secrets_cubit.dart` (`SecretsCubit`) | Owns the list state, admission (single-flight), the offline short circuit, and the broadcast-driven re-read. |
+
+Both use `DeviceCommandClient` → `DeviceConnectionCoordinator`, so a loopback
+client, a cloud-relayed client, and a web or mobile client run the same code
+path (K7); no screen selects a transport.
+
+### 8.1. States
+
+| Status | Meaning |
+|---|---|
+| `loading` | The first read of a device scope is in flight. |
+| `empty` | The device reported no stored secret. |
+| `loaded` | At least one stored secret is known for the current scope. |
+| `error` | The last read or mutation failed; the typed code drives localized copy plus Retry. |
+| `deviceUnavailable` | The device is offline or the transport failed. `DeviceConfig.isOnline == false` short-circuits before any request. |
+
+`SecretsState.secrets` is non-empty only for `loaded`, so an offline or failed
+state cannot present a stale row as current. Nothing loads on construction or
+from `build`; the page calls `load()` from its own lifecycle and from Retry.
+
+### 8.2. Typed errors
+
+`SecretsErrorCode.fromWireCode` is the only place a protocol code becomes a
+Client value. The Agent `message` is never carried, logged as a value, or shown.
+
+| Protocol code | `SecretsErrorCode` |
+|---|---|
+| `permission_denied` | `permissionDenied` |
+| `invalid_request` | `invalidRequest` |
+| `invalid_secret_name` | `invalidSecretName` |
+| `reserved_secret_name` | `reservedSecretName` |
+| `invalid_secret_value` | `invalidSecretValue` |
+| `vault_unavailable` | `vaultUnavailable` |
+| `internal_error` | `internalError` |
+| a code this Client does not know | `unknown`, with the wire token kept for diagnosis |
+| no code, a closed socket, or a timeout | `deviceUnavailable` (also produced locally, never by the wire) |
+
+The Client additionally refuses a value that is empty, longer than 16,384
+characters, or contains a `[REDACTED:...]` sentinel before sending (M6), so a
+displayed mask can never leave the Client as a secret. The name grammar is
+mirrored (`SecretsClient.isValidNameFormat`) but the reserved-name list stays
+Agent-owned.
+
+### 8.3. Admission
+
+- `set` and `delete` are single-flight: a second mutation while one is in flight
+  returns `busy` and sends nothing.
+- `load` is coalesced: a call during a read joins it and at most one follow-up
+  read is queued, so a burst of `secrets.changed` cannot stack requests.
+- A successful mutation re-reads the list rather than patching a row locally, so
+  the displayed row is the Agent's projection of what it stored.
+- `delete` always sends `confirm: true`; the user confirmation belongs to the
+  screen.
+- The `secrets.changed` payload is never trusted as the list: the cubit re-reads
+  through `secrets.list`.
