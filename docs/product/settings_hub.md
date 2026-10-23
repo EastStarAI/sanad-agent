@@ -24,6 +24,20 @@ A workspace opens one detail page with Overview, MCP Servers, and Skills tabs. I
 
 Compact layouts move the same navigation into a drawer. Destinations and capabilities remain identical to the wide layout.
 
+## Privacy & Security
+
+Selecting a device reveals Overview, Providers, MCP Servers, Skills, **Privacy & Security**, and its Workspaces. Privacy & Security currently contains **Secrets** (Task 140).
+
+Secrets lists the device's own user secrets: the ones the Agent stores in its local vault, keyed by environment variable name. Provider credentials and MCP credentials never appear here; they keep their own screens.
+
+- Each row shows the name, an optional description, the last-updated date in the client locale, and where the value came from: Added by you, or Requested by the agent.
+- Add asks for a name, an optional description, and the value in a masked field with a show/hide toggle.
+- Replace opens the same dialog with the name read-only and the value field empty. The current value is never displayed, and no surface offers a reveal.
+- Delete asks for confirmation and states that the deletion is permanent.
+- The page states only what is stored and that values are write-only. It does not restate the Full Access prompt rule, which is unchanged.
+
+A secret lives in one device's Home vault, so this destination is device-scoped like Providers and Skills. A second Client connected to the same device refreshes its list after any change instead of showing a stale row.
+
 ## Scope presentation
 
 - Device MCP lists and edits only device-level servers.

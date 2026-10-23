@@ -37,6 +37,7 @@ This contract applies to `agent/lib/evolution/db/`.
 - Keep DTO/enums at a stable export seam only while migration requires it.
 - Legacy tables and methods remain migration-only and cannot accept new production work.
 - `WorkspaceSecurityPolicyRepository` (`capabilities/permissions/`) is the sole owner of `workspace_security_policies`; `WorkspacesSchema.applySecurityPolicies` only creates the table. The table is additive and rollback-safe: never rename or drop its columns. Workspace removal deletes the workspace's policy row in the same transaction (`LocalWorkspaceRuntimeService.removeWorkspace` on the `SessionDB.state` connection); `exec_root:` rows are kept.
+- `UserSecretMetadataRepository` (`evolution/db/user_secret_metadata_repository.dart`) is the sole owner of `user_secret_metadata`: the non-secret metadata (description, arrival source, created/updated instants) of a secret whose value lives only in the vault's `custom:` namespace. Its DDL lives in `schema/user_secrets_schema.dart`, applied last so no earlier module moves. The table holds no value, no hash of one, and no prefix of one; the repository likewise stores and returns no value, and `UserSecretCatalog` plus the Task 84 acquisition path reach it only through its methods.
 - `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps and the pending-vacuum marker.
 - `AgentStateMaintenanceService` owns post-ready maintenance policy: idle/grace gating, bounded orphan and terminal deletion batches, 14-day retention, prune/vacuum throttles, and vacuum thresholds. It must not perform cleanup before daemon readiness or expose user-facing settings.
 - Full `VACUUM` is never a startup or serving-path operation. The service marks qualifying work pending and may execute it only at the controlled-exit boundary after restart drain and response flush.
@@ -70,5 +71,5 @@ This contract applies to `agent/lib/evolution/db/`.
 
 ## Data Safety
 - Redact nested durable payloads, tool arguments/results, recovered text, and event metadata before SQLite writes where contracts require redaction.
-- Secrets never enter state database tables.
+- Secret values never enter state database tables. `user_secret_metadata` carries metadata only; a value stays in the vault's `custom:` namespace, and the metadata owner has no API that accepts one.
 - Partial unique active-work constraints remain final enforcement and must not escape as raw SQLite errors.
