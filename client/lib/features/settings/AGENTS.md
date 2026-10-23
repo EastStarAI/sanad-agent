@@ -36,6 +36,11 @@ This contract applies to `client/lib/features/settings/`.
 - `secrets.changed` announces that the authoritative list moved. The cubit re-reads the list and never projects the event payload.
 - A successful mutation re-reads the list instead of patching rows locally. `delete` always sends `confirm: true`; the user confirmation is the page's responsibility and the protocol flag is the client's.
 - The Client mirrors the name grammar only (`SecretsClient.isValidNameFormat`). The reserved-name list stays Agent-owned, so a reserved name is surfaced from the Agent as `reserved_secret_name`.
+- The destination is Settings → Privacy & Security → Secrets (`SettingsDestination.privacySecurity`, route `/settings?section=privacySecurity`) in the selected-device section. `settings_pages/secrets_page.dart` owns one `SecretsCubit` per page, created from DI in `initState`; `load()` runs there and from Retry only, never from `build`.
+- The page renders metadata only and shows exactly one of loading, empty, error with Retry, device unavailable, or loaded. When the inspected device is offline the list is dropped rather than presented as current, the actions are disabled, and the unavailable banner replaces the rows.
+- A dialog owns the only value in the feature: a `TextEditingController` cleared on submit and on cancel and disposed with the dialog, handed straight to `SecretsCubit.set`. Replace opens with an empty value field, the name read-only, and no reveal; no surface pre-fills, previews, or reads a stored value.
+- The page states only what is stored and that values are write-only. It does not restate the Full Access prompt rule.
+- Every interactive element carries a stable `ValueKey` so driver-driven UI tests can act on it, and every user-facing string is authored in both ARB files. Agent error `message` text is never rendered: a `SecretsFailure` becomes localized copy through `settings_pages/secrets_failure_text.dart`.
 
 ## Device Scope
 - Selecting a device inside Settings changes inspection context only.- Update the active conversation device only through an explicit Set as active action delegated to `DeviceCubit`.
