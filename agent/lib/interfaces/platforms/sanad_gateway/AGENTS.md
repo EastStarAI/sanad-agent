@@ -66,7 +66,14 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 ## Runtime Queries and Provider Commands
 - Shared handlers own workspace list/create/remove/tree, MCP list/save/delete/replace/inspect, skills, slash commands, device settings, provider setup, models, session queries, recovery, replay, and remote update/restart.
 - Provider account usage limits (Task 55) are read-only and instance-first: `provider.usage.get` fetches a `ProviderUsageResult` typed `available | unsupported | unavailable | auth_required | failed`; `provider.usage.support` returns per-instance capability flags so clients never hardcode a catalog. Result snapshots never carry credentials or raw provider payloads. Usage failure is fully contained — it must not change instance status, readiness, or the ability to execute model requests.
-- Keep workspace and MCP commands in the single workspace command owner unless architecture documentation explicitly replaces that ownership; do not fragment it by convenience.
+- Separate owners hold the gateway command families: `WorkspaceCommandHandler` owns workspace
+  list/create/remove/tree, folder mutations, and workspace security policy; `McpCommandHandler`
+  owns MCP configuration, import/export, OAuth, and inspection;
+  `CapabilityDiscoveryCommandHandler` owns skills and slash discovery;
+  `ComputerUseCommandHandler` owns computer-use permissions. Shared managed/cloud admission
+  decisions live in exactly one support owner that all four use. `WorkspaceMcpCoordinator`
+  remains the single MCP runtime owner, and the MCP confirmation-token salt has exactly one
+  owner — the MCP handler; never mint a second salt or duplicate an admission decision.
 - Workspace browsing starts from real host roots locally and returns parent metadata; path-only workspace creation derives display name from the folder basename. Cloud-admitted calls always inject `managed_remote` (a client-sent value never downgrades it) and are confined to the runtime Home's `workspaces` root: root-scoped browse, create by name or by a selected nested folder, and preview tokens for recursive delete and relocate.
 - Workspace filesystem handlers remain transport-neutral. The cloud adapter
   dispatches remote create, relocate, browse, and folder mutations without

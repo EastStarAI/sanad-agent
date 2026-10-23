@@ -6,7 +6,7 @@ import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/core/secrets_redactor.dart';
-import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/workspace_command_handler.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/mcp_command_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_gateway_behavior.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
@@ -25,7 +25,7 @@ void main() {
   late Directory tempDir;
   late DeviceCommandAdmission admission;
   late LocalWorkspaceRuntimeService runtime;
-  late WorkspaceCommandHandler handler;
+  late McpCommandHandler handler;
   late StreamSubscription<LogRecord> logSub;
   late List<String> logLines;
 
@@ -41,9 +41,8 @@ void main() {
       sanadHomePath: tempDir.path,
       currentWorkingDirectory: tempDir.path,
     );
-    handler = WorkspaceCommandHandler(
+    handler = McpCommandHandler(
       runtimeService: runtime,
-      bridge: SanadProtocolBridge(),
       admission: admission,
     );
     logLines = <String>[];
