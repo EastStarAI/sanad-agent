@@ -51,9 +51,28 @@ cmp -s "$temporary/source-aliases.conf" "$temporary/aliases.conf"
 grep -Eq '^upload-client-aliases v9\.8\.7 [0-9a-f]{64} [0-9a-f]{64} [1-9][0-9]*$' "$temporary/commands.log"
 grep -Eq '^deploy-client-aliases v9\.8\.7 [0-9a-f]{64} [0-9a-f]{64}$' "$temporary/commands.log"
 
+$SCRIPT_DIR/deploy_production_asset.sh activate static-updates \
+  "$identity" "$digest"
+grep -Eq '^activate static-updates [0-9a-f]{40} [0-9a-f]{64}$' "$temporary/commands.log"
+
+$SCRIPT_DIR/deploy_production_asset.sh rollback static-updates \
+  "$previous_identity" "$previous_digest"
+grep -Eq '^rollback static-updates [0-9a-f]{40} [0-9a-f]{64}$' "$temporary/commands.log"
+
 if $SCRIPT_DIR/deploy_production_asset.sh hash static-updates install.sh >/dev/null 2>&1; then
   echo "Unexpected static hash target passed the client allowlist." >&2
   exit 1
 fi
+
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+DEPLOY_YML="$REPO_ROOT/.github/workflows/deploy.yml"
+
+# Validate serialized job graph in deploy.yml
+grep -F 'needs: updates' "$DEPLOY_YML" >/dev/null
+grep -F 'needs: [updates, web]' "$DEPLOY_YML" >/dev/null
+grep -F "needs.updates.result == 'success' || needs.updates.result == 'skipped'" "$DEPLOY_YML" >/dev/null
+grep -F "needs.web.result == 'success' || needs.web.result == 'skipped'" "$DEPLOY_YML" >/dev/null
+test "$(grep -Fc 'environment: client-downloads-production' "$DEPLOY_YML")" -eq 3
+test "$(grep -Fc 'for attempt in $(seq 1 12); do' "$DEPLOY_YML")" -eq 6
 
 echo "production-deployment-client=pass"

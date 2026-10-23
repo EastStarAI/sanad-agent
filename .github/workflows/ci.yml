@@ -336,6 +336,11 @@ jobs:
           grep -F 'restoring the previous selector' .github/workflows/deploy.yml
           test "$(grep -Fc 'environment: client-downloads-production' .github/workflows/deploy.yml)" -eq 3
           ! grep -Eq 'environment: (web|updates|installers)-production' .github/workflows/deploy.yml
+          grep -F 'needs: updates' .github/workflows/deploy.yml
+          grep -F 'needs: [updates, web]' .github/workflows/deploy.yml
+          grep -F "needs.updates.result == 'success' || needs.updates.result == 'skipped'" .github/workflows/deploy.yml
+          grep -F "needs.web.result == 'success' || needs.web.result == 'skipped'" .github/workflows/deploy.yml
+          test "$(grep -Fc 'for attempt in $(seq 1 12); do' .github/workflows/deploy.yml)" -eq 6
           grep -F 'environment: client-downloads-production' .github/workflows/release.yml
           grep -F 'deploy_production_asset.sh deploy-client-aliases' .github/workflows/release.yml
           ! grep -Fq 'sudo /usr/local/sbin/sanad-client-downloads-control' .github/workflows/release.yml
