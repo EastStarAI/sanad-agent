@@ -1,30 +1,33 @@
-// The durable watch loop.
+// The durable watch loop and the run reconciliation behind it.
 //
 // `watch` is the coordinator interface for several runs at once: it persists
 // the last handled sequence per run in a cursor file, replays what a re-invoked
-// orchestrator missed, and prints one line per actionable event. Reconciliation
-// runs first, so a worker that died without journaling still wakes the watcher.
+// orchestrator missed, and prints one line per actionable event.
+//
+// `reconcileRun` lives here because it answers the same question one step
+// earlier: a worker that died without journaling, or a session that settled
+// after its worker exited, is turned into manifest state before either `watch`
+// or `status` reports it. `status` imports it rather than keeping a copy.
 //
 // The wake vocabulary itself is shared with `watch-once.mjs` through
 // `supervisor-events.mjs`; this module only decides when to read the journal.
 
-import { existsSync, readFileSync, watch } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, watch } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import {
+  applyVisibleResult,
   fail,
   formatDuration,
   parseIsoMillis,
+  processIsAlive,
+  readResultDigest,
+  resultBelongsToTask,
+  runPaths,
   secondsOption,
   taskResultForView,
   writeJsonAtomic,
 } from './supervisor-core.mjs';
-import {
-  readManifestQuiet,
-  reconcileRun,
-  runIsFinished,
-  runPaths,
-} from './supervisor-registry.mjs';
 import { TERMINAL_STATUSES, isActionableEvent } from './supervisor-events.mjs';
 
 const WATCH_EVENT_VERSION = 'delegate-watch-event.v1';
@@ -55,6 +58,16 @@ function readJournalEvents(journalPath) {
   return events;
 }
 
+function readManifestQuiet(runDir) {
+  const path = runPaths(runDir).manifest;
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function loadCursor(cursorPath) {
   if (!existsSync(cursorPath)) return { version: CURSOR_VERSION, updatedAt: null, runs: {} };
   let value;
@@ -81,6 +94,239 @@ function saveCursor(cursorPath, cursor) {
   writeJsonAtomic(cursorPath, cursor);
 }
 
+function runIsFinished(runDir) {
+  const manifest = readManifestQuiet(runDir);
+  if (!manifest) return true;
+  if (['completed', 'stale', 'failed'].includes(manifest.status)) return true;
+  if (manifest.closed) {
+    const tasks = Object.values(manifest.tasks || {});
+    if (tasks.every((task) => TERMINAL_STATUSES.has(task?.status))) return true;
+  }
+  return false;
+}
+
+/**
+ * Repairs a run whose supervisor is gone.
+ *
+ * A dead supervisor leaves tasks parked in a live-looking state forever, which
+ * is how a coordinator ends up believing five sessions are running when only
+ * four are. Nothing else can write this run, so the repair is performed here
+ * (and journaled exactly like a worker transition). A live run is never
+ * touched: its worker owns task state.
+ */
+export function reconcileRun(runDir) {
+  const paths = runPaths(runDir);
+  const manifest = readManifestQuiet(runDir);
+  if (!manifest) return { runDir, manifest: null, changed: false, lost: [], recovered: [], orphaned: [] };
+  let changed = false;
+  let supervisorDied = false;
+  if (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid)) {
+    supervisorDied = true;
+    manifest.status = 'stale';
+    manifest.staleReason = 'Supervisor process is not running.';
+    manifest.supervisorDeadAt = new Date().toISOString();
+    changed = true;
+  }
+  const outcome = { runDir, manifest, changed, lost: [], recovered: [], orphaned: [] };
+  if (manifest.status !== 'stale') return outcome;
+
+  let seq = Number.isInteger(manifest.seq) ? manifest.seq : 0;
+  const records = [];
+  // A dead supervisor with work still non-terminal is its own, actionable fact:
+  // nothing will ever advance those tasks again. It is reported once, at the
+  // moment the run is repaired, and it is deliberately not a `progress_stall` —
+  // that one only says a single task went quiet while its supervisor is alive.
+  if (supervisorDied && manifest.supervisorDeadNoticed !== true) {
+    const nonTerminal = Object.entries(manifest.tasks || {})
+      .filter(([, task]) => task && !TERMINAL_STATUSES.has(task.status))
+      .map(([id]) => id);
+    if (nonTerminal.length > 0) {
+      seq += 1;
+      records.push({
+        seq,
+        taskId: null,
+        implementer: null,
+        workspace: null,
+        from: 'running',
+        to: 'supervisor_dead',
+        at: manifest.supervisorDeadAt,
+        kind: 'supervisor_dead',
+        supervisorPid: manifest.supervisorPid ?? null,
+        nonTerminal,
+      });
+      manifest.supervisorDeadNoticed = true;
+    }
+  }
+  for (const [id, task] of Object.entries(manifest.tasks || {})) {
+    if (!task) continue;
+    if (TERMINAL_STATUSES.has(task.status)) {
+      // A completion that landed after the supervisor died must still be
+      // reported: an already-repaired `failed/worker_lost` task upgrades to the
+      // task's own terminal artifact instead of staying wrong forever.
+      if (task.cause === 'worker_lost') {
+        const late = readResultDigest(task.resultPath);
+        if (late?.status && TERMINAL_STATUSES.has(late.status) && resultBelongsToTask(task, late)) {
+          seq += 1;
+          task.status = late.status;
+          task.cause = 'result_recorded_after_exit';
+          task.error = null;
+          task.result = late;
+          task.laterResult = null;
+          records.push({
+            seq,
+            taskId: id,
+            implementer: task.implementer ?? null,
+            workspace: task.workspace ?? null,
+            from: 'failed',
+            to: late.status,
+            at: new Date().toISOString(),
+            kind: 'recovered',
+            cause: 'result_recorded_after_exit',
+            recovered: true,
+          });
+          outcome.recovered.push(id);
+          changed = true;
+        }
+      } else {
+        // A terminal task keeps its own outcome. If the artifact on its path was
+        // produced after it settled (a later attempt reused the same --out-dir),
+        // it is reported as `later-result` for triage instead of being adopted or
+        // printed as this task's result. A followed task is the same case with a
+        // stronger reason: its verdict came from the durable session.
+        if (applyVisibleResult(task, readResultDigest(task.resultPath)) === 'later') changed = true;
+      }
+      continue;
+    }
+    if (['queued', 'held'].includes(task.status)) continue;
+    const from = task.status;
+    // A followed task has no worker to lose: the supervisor died while polling a
+    // daemon-owned turn, so nothing here can observe that turn again. A terminal
+    // artifact written during the follow is still adopted; otherwise the honest
+    // report is that the outcome is unknown, not that the worker vanished.
+    if (task.follow?.active === true) {
+      const lateFollow = readResultDigest(task.resultPath);
+      const adoptFollow = lateFollow?.status && TERMINAL_STATUSES.has(lateFollow.status)
+        && resultBelongsToTask(task, lateFollow);
+      const followStatus = adoptFollow ? lateFollow.status : 'failed';
+      const followFinishedAt = new Date().toISOString();
+      Object.assign(task, {
+        status: followStatus,
+        finishedAt: followFinishedAt,
+        stateSince: followFinishedAt,
+        cause: adoptFollow ? 'result_recorded_after_exit' : 'follow_abandoned',
+        recovered: true,
+        follow: { ...task.follow, active: false, endedAt: followFinishedAt },
+        ...(adoptFollow ? { result: lateFollow } : {}),
+      });
+      if (!adoptFollow) {
+        task.error = 'the supervisor died while following the daemon session; the turn outcome is unknown';
+      }
+      seq += 1;
+      records.push({
+        seq,
+        taskId: id,
+        implementer: task.implementer ?? null,
+        workspace: task.workspace ?? null,
+        from,
+        to: followStatus,
+        at: followFinishedAt,
+        kind: adoptFollow ? 'recovered' : 'follow_abandoned',
+        cause: task.cause,
+        recovered: true,
+      });
+      if (adoptFollow) outcome.recovered.push(id);
+      else outcome.lost.push(id);
+      changed = true;
+      continue;
+    }
+    // A process that is still alive is still running, even though its
+    // supervisor is gone. Failing it would be as wrong as claiming it is
+    // healthy, so the run reports it as orphaned and journals that once; the
+    // next read after the process exits records the real `worker_lost` outcome.
+    if (processIsAlive(task.pid)) {
+      const orphanFields = {
+        orphaned: true,
+        orphanPid: task.pid,
+        orphanNote: 'process outlived its supervisor and is unmanaged',
+        orphanSince: task.orphanSince ?? new Date().toISOString(),
+      };
+      const needsNotice = task.orphanNoticed !== true;
+      Object.assign(task, orphanFields, needsNotice ? { orphanNoticed: true } : {});
+      if (needsNotice) {
+        seq += 1;
+        records.push({
+          seq,
+          taskId: id,
+          implementer: task.implementer ?? null,
+          workspace: task.workspace ?? null,
+          from,
+          to: from,
+          at: new Date().toISOString(),
+          kind: 'worker_orphaned',
+          cause: 'supervisor_stale',
+          orphanPid: task.pid,
+        });
+      }
+      outcome.orphaned.push(id);
+      changed = true;
+      continue;
+    }
+    const digest = readResultDigest(task.resultPath);
+    const terminalFromResult = digest?.status && TERMINAL_STATUSES.has(digest.status)
+      && resultBelongsToTask(task, digest);
+    const status = terminalFromResult ? digest.status : 'failed';
+    const cause = terminalFromResult ? 'result_recorded_after_exit' : 'worker_lost';
+    const finishedAt = new Date().toISOString();
+    Object.assign(task, {
+      status,
+      finishedAt,
+      stateSince: finishedAt,
+      cause,
+      recovered: true,
+      orphaned: false,
+      ...(digest ? { result: digest } : {}),
+    });
+    if (!terminalFromResult) {
+      task.error = 'task process is no longer running and no terminal result was recorded';
+    }
+    seq += 1;
+    records.push({
+      seq,
+      taskId: id,
+      implementer: task.implementer ?? null,
+      workspace: task.workspace ?? null,
+      from,
+      to: status,
+      at: finishedAt,
+      kind: terminalFromResult ? 'recovered' : 'worker_lost',
+      cause,
+      recovered: true,
+    });
+    if (terminalFromResult) outcome.recovered.push(id);
+    else outcome.lost.push(id);
+    changed = true;
+  }
+  if (records.length) {
+    appendFileSync(paths.journal, records.map((record) => `${JSON.stringify(record)}\n`).join(''), 'utf8');
+  }
+  if (changed) {
+    // Live counters belong to the dead worker, so they are recomputed here
+    // instead of being carried over into a repaired manifest.
+    manifest.active = Object.values(manifest.tasks || {})
+      .filter((task) => task && !TERMINAL_STATUSES.has(task.status) && !['queued', 'held'].includes(task.status))
+      .length;
+    manifest.seq = seq;
+    writeJsonAtomic(paths.manifest, manifest);
+  }
+  outcome.changed = changed;
+  return outcome;
+}
+
+/**
+ * Renders one journal record for a coordinator: the transition, its elapsed
+ * time, and — for a terminal outcome — the result status, artifact path, and
+ * any branch/SHA/PR the task published. No second call is needed to triage.
+ */
 function enrichWatchEvent(runDir, event) {
   const actionable = isActionableEvent(event);
   const manifest = readManifestQuiet(runDir);

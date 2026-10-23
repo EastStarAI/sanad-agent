@@ -296,12 +296,12 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 
 - `scripts/supervisor.mjs` — the CLI entrypoint and `__worker`. It owns the command contract (flags, `HELP`, `main`), `start`, the worker loop, and the process-group lifecycle; every command it dispatches lives in the module that owns that responsibility.
 - `scripts/supervisor-spec.mjs` — `validateTask`/`validateSpec`: the only place a submitted spec is accepted.
-- `scripts/supervisor-registry.mjs` — run identity, the workspace registry, run paths, the run manifest, and `reconcileRun`, which repairs a run record from the artifacts its tasks already wrote.
-- `scripts/supervisor-control.mjs` — `sendControlRequest` and the commands that change a live run: `add`, `enqueue`, `continue`, `steer`, `retry`, `cancel`, `set-concurrency`, `close`, plus the launch verification they report.
-- `scripts/supervisor-views.mjs` — the read-only surfaces: `status` (verbose, `--brief`, `--json`), `inspect`, `timeline`, `logs`, and `view`.
-- `scripts/supervisor-watch.mjs` — the durable `watch` loop, its cursor file, and the actionable-event enrichment every wake-up goes through.
+- `scripts/supervisor-core.mjs` — the shared primitives every other script imports: fail-fast errors and option helpers, run paths and the run manifest, atomic JSON, time parsing, and the `result.json` digest a terminal task is reported from.
+- `scripts/supervisor-registry.mjs` — run identity and the workspace registry: the project/session remembered per workspace, keyed by the canonical workspace path.
 - `scripts/supervisor-windows.mjs` — the Windows broker, its handshake, and the batch quoting both launch paths share.
-- `scripts/supervisor-core.mjs` — the shared primitives every other script imports: fail-fast errors and option helpers, atomic JSON, queue/progress facts, and the `result.json` digest.
+- `scripts/supervisor-control.mjs` — `sendControlRequest` and the commands that change a live run: `add`, `enqueue`, `continue`, `steer`, `retry`, `cancel`, `set-concurrency`, `close`, plus the launch verification they report.
+- `scripts/supervisor-views.mjs` — the read-only surfaces (`status` verbose/`--brief`/`--json`, `inspect`, `timeline`, `logs`, `view`) and the queue/progress formatting they quote.
+- `scripts/supervisor-watch.mjs` — the durable `watch` loop with its cursor, the actionable-event enrichment every wake-up goes through, and `reconcileRun`, which turns a dead worker or a settled session into manifest state (`status` imports it too, so both surfaces repair the same way).
 - `scripts/bootstrap.mjs` — discover and check delegate skills or implementer CLIs (`opencode`, `agy`, `sanad`).
 - `scripts/watch-once.mjs` — race-safe event-driven wait for intervention (`needs_input`, `needs_permission`) or terminal transitions.
 

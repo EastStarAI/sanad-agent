@@ -58,31 +58,21 @@ import {
 // parsing, `HELP`, `main`, and the worker — and routes every command to the
 // module that owns it.
 import {
-  DEFAULT_PROGRESS_STALL_MS,
-  DEFAULT_QUEUED_STALL_MS,
-  describeQueuedTask,
   fail,
-  formatShortDuration,
   getArgValue,
   parseIsoMillis,
   processIsAlive,
-  progressThresholdMs,
-  queueOutcomes,
-  queueSnapshot,
   readJson,
   readResultDigest,
+  runPaths,
   secondsOption,
   sha256,
   sleepSync,
-  writeJsonAtomic,
-} from './supervisor-core.mjs';
-import {
-  identityCommand,
-  recordIdentity,
-  runPaths,
   taskRunPaths,
   withRunPaths,
-} from './supervisor-registry.mjs';
+  writeJsonAtomic,
+} from './supervisor-core.mjs';
+import { identityCommand, recordIdentity } from './supervisor-registry.mjs';
 import { SANAD_CLIENT_COMMAND, validateSpec } from './supervisor-spec.mjs';
 import {
   CANCEL_FORCE_KILL_MS,
@@ -111,8 +101,15 @@ import {
   verifyOption,
 } from './supervisor-control.mjs';
 import {
+  DEFAULT_PROGRESS_STALL_MS,
+  DEFAULT_QUEUED_STALL_MS,
+  describeQueuedTask,
+  formatShortDuration,
   inspectCommand,
   logsCommand,
+  progressThresholdMs,
+  queueOutcomes,
+  queueSnapshot,
   statusCommand,
   timelineCommand,
   viewCommand,

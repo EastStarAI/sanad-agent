@@ -13,19 +13,19 @@ import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, watch } from
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import {
-  describeQueuedTask,
   fail,
-  formatQueueOutcome,
+  loadManifest,
   processIsAlive,
-  queueSnapshot,
   readJson,
+  requireTask,
+  runPaths,
   secondsOption,
   sha256,
   singleRun,
   writeJsonAtomic,
 } from './supervisor-core.mjs';
-import { loadManifest, requireTask, runPaths } from './supervisor-registry.mjs';
 import { validateSpec } from './supervisor-spec.mjs';
+import { describeQueuedTask, formatQueueOutcome, queueSnapshot } from './supervisor-views.mjs';
 import { TERMINAL_STATUSES } from './supervisor-events.mjs';
 
 // Task states `retry` may resume. `retrying` is included because the daemon is

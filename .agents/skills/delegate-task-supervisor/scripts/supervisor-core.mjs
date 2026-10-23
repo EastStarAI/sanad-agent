@@ -1,38 +1,28 @@
 // Shared primitives for the supervisor scripts.
 //
-// This is the bottom layer of the supervisor scripts: the entrypoint, the
-// control commands, the read-only views, the watch loop, and the validator all
-// import from it, and none of them keeps a private copy of a primitive. That is
-// what stops a command and a worker from disagreeing about a run path, a
-// manifest field, or a queue threshold.
+// This is the bottom layer: the entrypoint and the command modules above it
+// import from here, and none of them keeps a private copy of a primitive. That
+// is what stops a command and a worker from disagreeing about a run path, a
+// manifest field, or a timestamp.
 //
 // Three groups live here, each mechanical rather than policy:
 //
 // 1. Fail-fast primitives: `fail`, single-run resolution, and seconds options.
 //    Every command reports a bad flag through the same exit path.
-// 2. Durable primitives: atomic JSON writes and the hash the workspace registry
-//    keys an identity by.
-// 3. Run facts: the `result.json` digest, and the queue and progress arithmetic
-//    `status`, `watch`, and the worker all report.
+// 2. The run record's addressing: `runPaths` and `taskRunPaths` derive every
+//    path, and `loadManifest`/`requireTask` are the two ways it is read.
+// 3. Durable primitives and run facts: atomic JSON writes, the hash the
+//    workspace registry keys an identity by, process liveness, and the
+//    `result.json` digest a terminal task is reported from.
 //
 // Nothing here knows a command name, so every other script may import it.
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { TERMINAL_STATUSES } from './supervisor-events.mjs';
 
-// A task that waits for a slot while every slot is busy is normal; a task that
-// stays invisible in the queue for minutes is the silent stall live rounds
-// reported. The worker journals one `queued_stall` notice per task per queue
-// episode after this default, and `status` recomputes the same condition on
-// read so a caller that never watched still sees it.
-export const DEFAULT_QUEUED_STALL_MS = 120_000;
-// A running task that publishes no progress for this long is silent, not busy.
-// The worker journals one `progress_stall` notice per stall episode and a
-// `progress_resumed` notice when progress returns.
-export const DEFAULT_PROGRESS_STALL_MS = 900_000;
 export function fail(message, code = 2) {
   process.stderr.write(`supervisor: ${message}\n`);
   process.exit(code);
@@ -104,6 +94,38 @@ export function getArgValue(args, taskId, ...flags) {
     fail(`task ${taskId} contains duplicate ${flags[0]} values`);
   }
   return values[0] ?? null;
+}
+
+export function runPaths(runDir) {
+  return {
+    manifest: join(runDir, 'manifest.json'),
+    journal: join(runDir, 'events.jsonl'),
+    tasks: join(runDir, 'tasks.json'),
+    requests: join(runDir, 'requests'),
+    supervisorLog: join(runDir, 'supervisor.log'),
+  };
+}
+
+// Task artifacts live in the run directory. A remote `sanad-client` task
+// streams its NDJSON lifecycle events and terminal `--json` envelope over
+// stdout, so the relayed stdout log is both the observed timeline and the
+// source of the captured result; `--out-dir` would only create remote files.
+export function taskRunPaths(task, runDir) {
+  const stdoutPath = join(runDir, `${task.id}.stdout.log`);
+  const stderrPath = join(runDir, `${task.id}.stderr.log`);
+  if (!task.remote) {
+    return { stdoutPath, stderrPath, timelinePath: task.timelinePath, resultPath: task.resultPath };
+  }
+  return {
+    stdoutPath,
+    stderrPath,
+    timelinePath: stdoutPath,
+    resultPath: task.resultPath ?? join(runDir, `${task.id}.result.json`),
+  };
+}
+
+export function withRunPaths(task, runDir) {
+  return { ...task, ...taskRunPaths(task, runDir) };
 }
 
 function firstNonEmptyLine(value) {
@@ -235,6 +257,18 @@ export function taskResultForView(task) {
   return resultBelongsToTask(task, digest) ? digest : null;
 }
 
+export function loadManifest(runDir) {
+  const path = runPaths(resolve(runDir)).manifest;
+  if (!existsSync(path)) fail(`manifest not found: ${path}`);
+  return readJson(path, 'run manifest');
+}
+
+export function requireTask(manifest, id) {
+  const task = manifest.tasks?.[id];
+  if (!task) fail(`task not found: ${id}`);
+  return task;
+}
+
 export function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -260,128 +294,4 @@ export function parseIsoMillis(value) {
   if (!value) return null;
   const parsed = new Date(value).getTime();
   return Number.isNaN(parsed) ? null : parsed;
-}
-
-// Queue ages and stall thresholds are often sub-second during a live
-// investigation; printing `0s` for a configured 600ms limit hides the setting.
-export function formatShortDuration(ms) {
-  if (ms == null || isNaN(ms) || ms < 0) return 'unknown';
-  return ms < 1000 ? `${Math.round(ms)}ms` : formatDuration(ms);
-}
-
-export function queuedStallThreshold(manifest) {
-  const configured = Number(manifest?.queuedStallMs);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_QUEUED_STALL_MS;
-}
-
-export function progressThresholdMs(manifest, taskState = null) {
-  const perTask = Number(taskState?.progressStallMs);
-  if (Number.isFinite(perTask) && perTask > 0) return perTask;
-  const configured = Number(manifest?.progressStallMs);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_PROGRESS_STALL_MS;
-}
-
-/**
- * Progress age for one task: how long since the last observable progress.
- *
- * `status` recomputes this on read (a caller that never watched must still see
- * a silent turn), and the same computation drives the worker's stall notices.
- */
-export function describeProgress(manifest, task, now = Date.now()) {
-  const thresholdMs = progressThresholdMs(manifest, task);
-  const reference = task.lastProgressAt ?? task.startedAt ?? task.stateSince ?? null;
-  const referenceMs = reference ? parseIsoMillis(reference) : null;
-  const silentForMs = referenceMs == null ? null : Math.max(0, now - referenceMs);
-  const live = ['running', 'resuming'].includes(task.status);
-  return {
-    lastProgressAt: task.lastProgressAt ?? null,
-    silentForMs,
-    thresholdMs,
-    // `blocked`, `waiting`, and intervention states are already actionable
-    // transitions; only a live turn can be silent.
-    stalled: live && silentForMs != null && silentForMs >= thresholdMs,
-    noticed: task.progressStall ?? null,
-  };
-}
-
-// Queue order is FIFO by the moment a task entered `queued`: the worker stamps
-// `queuedSeq` on every transition, so a read-only `status` reproduces exactly
-// the positions the worker uses when it fills slots.
-export function queueSnapshot(manifest) {
-  const active = Number.isInteger(manifest?.active) ? manifest.active : 0;
-  const maxConcurrency = Number.isInteger(manifest?.maxConcurrency) ? manifest.maxConcurrency : null;
-  const entries = Object.entries(manifest?.tasks || {});
-  const queued = entries
-    .filter(([, state]) => state?.status === 'queued')
-    .map(([id, state], index) => ({
-      id,
-      state,
-      order: Number.isInteger(state.queuedSeq)
-        ? state.queuedSeq
-        : Number.MAX_SAFE_INTEGER - entries.length + index,
-    }))
-    .sort((left, right) => left.order - right.order)
-    .map((entry, index) => ({ id: entry.id, state: entry.state, position: index + 1 }));
-  return { active, maxConcurrency, queued };
-}
-
-// Why a task is still waiting: a full slot is the honest answer, and a task
-// that outlives the stall threshold while slots are occupied is flagged so a
-// silent queue can never be mistaken for progress.
-export function describeQueuedTask(manifest, id, now = Date.now()) {
-  const snapshot = queueSnapshot(manifest);
-  const entry = snapshot.queued.find((item) => item.id === id);
-  if (!entry) return null;
-  const counts = `${snapshot.active}/${snapshot.maxConcurrency ?? '?'} active`;
-  const queuedAt = entry.state.queuedAt ?? null;
-  const queuedForMs = queuedAt == null ? null : Math.max(0, now - (parseIsoMillis(queuedAt) ?? now));
-  const awaitingSlot = snapshot.maxConcurrency != null && snapshot.active >= snapshot.maxConcurrency;
-  return {
-    position: entry.position,
-    queuedTotal: snapshot.queued.length,
-    active: snapshot.active,
-    maxConcurrency: snapshot.maxConcurrency,
-    queuedAt,
-    queuedForMs,
-    stallThresholdMs: queuedStallThreshold(manifest),
-    stalled: entry.state.queueStall != null
-      || (awaitingSlot && queuedForMs != null && queuedForMs >= queuedStallThreshold(manifest)),
-    reason: awaitingSlot ? 'awaiting_slot' : 'launch_pending',
-    reasonText: awaitingSlot
-      ? `waiting for a concurrency slot (${counts})`
-      : `slot is free but the task is not launched yet (${counts})`,
-  };
-}
-
-export function queueOutcomes(manifest, ids) {
-  const snapshot = queueSnapshot(manifest);
-  return ids.map((id) => {
-    const state = manifest?.tasks?.[id];
-    if (state?.status === 'queued') {
-      return { id, status: 'queued', ...describeQueuedTask(manifest, id) };
-    }
-    return {
-      id,
-      // A launched task is reported as `started`, the operator-facing word for
-      // "it left the queue and is now occupying a slot".
-      status: state?.status === 'running' ? 'started' : (state?.status ?? 'unknown'),
-      position: null,
-      queuedTotal: snapshot.queued.length,
-      active: snapshot.active,
-      maxConcurrency: snapshot.maxConcurrency,
-    };
-  });
-}
-
-export function formatQueueOutcome(outcome) {
-  const counts = `${outcome.active}/${outcome.maxConcurrency ?? '?'} active`;
-  if (outcome.status === 'started') return `${outcome.id}: started (${counts})`;
-  if (outcome.status === 'queued') {
-    return `${outcome.id}: queued at position ${outcome.position} of ${outcome.queuedTotal}`
-      + ` — ${outcome.reasonText}, queued for ${formatShortDuration(outcome.queuedForMs)}`;
-  }
-  if (outcome.status === 'held') {
-    return `${outcome.id}: held — not queued until enqueue --task ${outcome.id} (${counts})`;
-  }
-  return `${outcome.id}: ${outcome.status} (${counts})`;
 }
