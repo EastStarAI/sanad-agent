@@ -373,6 +373,24 @@ class SessionDB {
   Map<String, dynamic>? getScheduledTask(String id) =>
       _scheduledTaskRepository.getScheduledTask(id);
 
+  bool updateScheduleSettings(
+    String id, {
+    Object? name = ScheduledTaskRepository.unset,
+    Object? conversationMode = ScheduledTaskRepository.unset,
+    Object? runSessionId = ScheduledTaskRepository.unset,
+    Object? workspaceId = ScheduledTaskRepository.unset,
+    Object? providerInstanceId = ScheduledTaskRepository.unset,
+    Object? model = ScheduledTaskRepository.unset,
+  }) => _scheduledTaskRepository.updateScheduleSettings(
+    id,
+    name: name,
+    conversationMode: conversationMode,
+    runSessionId: runSessionId,
+    workspaceId: workspaceId,
+    providerInstanceId: providerInstanceId,
+    model: model,
+  );
+
   List<Map<String, dynamic>> getAllScheduledTasks() =>
       _scheduledTaskRepository.getAllScheduledTasks();
 

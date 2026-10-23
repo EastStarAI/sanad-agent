@@ -657,6 +657,173 @@ void main() {
       expect(record.model, isNull);
     });
   });
+
+  group('Task 139 settings persistence (D5)', () {
+    /// A user-owned schedule with every Task 139 column set, as item 139-04
+    /// will create it from the Client form.
+    ScheduledTaskRepository seedUserOwned(AgentStateDatabase stateDb) {
+      final repository = ScheduledTaskRepository(stateDb);
+      repository.saveScheduledTask(
+        'task_user',
+        'Nightly report',
+        DateTime.utc(2026, 11, 2, 9),
+        '',
+        kind: 'daily',
+        atTime: '09:00',
+        zone: 'Z',
+        updatedAt: DateTime.utc(2026, 10, 1, 9),
+        name: 'Nightly',
+        ownerKind: 'user',
+        conversationMode: 'new_each_run',
+        runSessionId: 'session_run',
+        workspaceId: 'workspace_uuid',
+        providerInstanceId: 'provider_uuid',
+        model: 'model-id',
+      );
+      return repository;
+    }
+
+    test('a scheduler re-save keeps all seven Task 139 columns', () {
+      final stateDb = AgentStateDatabase.inMemory();
+      addTearDown(stateDb.dispose);
+      final repository = seedUserOwned(stateDb);
+
+      // Every `CronScheduler` save passes the legacy parameters only, so a
+      // re-save after a run must not touch the Task 139 columns at all.
+      repository.saveScheduledTask(
+        'task_user',
+        'Nightly report',
+        DateTime.utc(2026, 11, 3, 9),
+        '',
+        kind: 'daily',
+        atTime: '09:00',
+        zone: 'Z',
+        lastRunAt: DateTime.utc(2026, 11, 2, 9),
+        lastStatus: 'fired',
+      );
+
+      final row = repository.getScheduledTask('task_user')!;
+      expect(row['owner_kind'], 'user');
+      expect(row['name'], 'Nightly');
+      expect(row['conversation_mode'], 'new_each_run');
+      expect(row['run_session_id'], 'session_run');
+      expect(row['workspace_id'], 'workspace_uuid');
+      expect(row['provider_instance_id'], 'provider_uuid');
+      expect(row['model'], 'model-id');
+
+      // The recurrence and lifecycle columns still advance.
+      expect(
+        row['next_run_at'],
+        DateTime.utc(2026, 11, 3, 9).toIso8601String(),
+      );
+      expect(row['last_status'], 'fired');
+    });
+
+    test('a later save cannot change owner_kind or the insert-only columns', () {
+      final stateDb = AgentStateDatabase.inMemory();
+      addTearDown(stateDb.dispose);
+      final repository = seedUserOwned(stateDb);
+
+      repository.saveScheduledTask(
+        'task_user',
+        'Nightly report',
+        DateTime.utc(2026, 11, 4, 9),
+        '',
+        kind: 'daily',
+        atTime: '09:00',
+        zone: 'Z',
+        name: 'Renamed by a save',
+        ownerKind: 'model',
+        conversationMode: 'continuous',
+        model: 'other-model',
+      );
+
+      final row = repository.getScheduledTask('task_user')!;
+      expect(
+        row['owner_kind'],
+        'user',
+        reason: 'a model turn must never take over a user-owned schedule',
+      );
+      expect(row['name'], 'Nightly');
+      expect(row['conversation_mode'], 'new_each_run');
+      expect(row['model'], 'model-id');
+    });
+
+    test('updateScheduleSettings changes only the passed values', () {
+      final stateDb = AgentStateDatabase.inMemory();
+      addTearDown(stateDb.dispose);
+      final repository = seedUserOwned(stateDb);
+      final sessionDb = SessionDB.fromState(stateDb);
+
+      expect(
+        sessionDb.updateScheduleSettings('task_user', runSessionId: 'session_2'),
+        isTrue,
+        reason: 'the facade delegates to the repository',
+      );
+
+      final row = repository.getScheduledTask('task_user')!;
+      expect(row['run_session_id'], 'session_2');
+      expect(row['name'], 'Nightly');
+      expect(row['conversation_mode'], 'new_each_run');
+      expect(row['workspace_id'], 'workspace_uuid');
+      expect(row['provider_instance_id'], 'provider_uuid');
+      expect(row['model'], 'model-id');
+      expect(row['owner_kind'], 'user');
+      expect(
+        row['updated_at'],
+        isNot(DateTime.utc(2026, 10, 1, 9).toIso8601String()),
+        reason: 'an update bumps updated_at',
+      );
+    });
+
+    test('updateScheduleSettings clears a passed null and nothing else', () {
+      final stateDb = AgentStateDatabase.inMemory();
+      addTearDown(stateDb.dispose);
+      final repository = seedUserOwned(stateDb);
+
+      expect(
+        repository.updateScheduleSettings(
+          'task_user',
+          name: null,
+          workspaceId: null,
+          model: null,
+        ),
+        isTrue,
+      );
+
+      final row = repository.getScheduledTask('task_user')!;
+      expect(row['name'], isNull);
+      expect(row['workspace_id'], isNull);
+      expect(row['model'], isNull);
+      expect(row['conversation_mode'], 'new_each_run');
+      expect(row['run_session_id'], 'session_run');
+      expect(row['provider_instance_id'], 'provider_uuid');
+      expect(row['owner_kind'], 'user');
+    });
+
+    test('updateScheduleSettings never touches an unknown row or owner_kind', () {
+      final stateDb = AgentStateDatabase.inMemory();
+      addTearDown(stateDb.dispose);
+      final repository = seedUserOwned(stateDb);
+      final before = repository.getScheduledTask('task_user')!;
+
+      // No parameters: nothing to write, and updated_at must not move.
+      expect(repository.updateScheduleSettings('task_user'), isFalse);
+      final after = repository.getScheduledTask('task_user')!;
+      expect(after['updated_at'], before['updated_at']);
+
+      expect(
+        repository.updateScheduleSettings('task_missing', name: 'Ghost'),
+        isFalse,
+      );
+      expect(repository.getScheduledTask('task_missing'), isNull);
+      expect(repository.getScheduledTask('task_user')!['owner_kind'], 'user');
+      expect(
+        () => repository.updateScheduleSettings('task_user', model: 7),
+        throwsArgumentError,
+      );
+    });
+  });
 }
 
 /// Column, index, and DDL shape of `scheduled_tasks`, used to prove repeated

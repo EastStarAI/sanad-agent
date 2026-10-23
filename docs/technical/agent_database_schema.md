@@ -279,7 +279,7 @@ Ownership: the table schema and its migration live in `agent/lib/evolution/db/sc
 | `last_status` | `TEXT` | Nullable | Status of previous execution (`fired`, `skipped_missed`, `error`) |
 | `enabled` | `INTEGER` | Non-null DEFAULT `1` | `1` while the schedule is active. Startup restore already skips a row whose value is `0`, so a `0` row never fires; Task 139's pause/resume lifecycle control (item 139-02) is the writer of that state |
 | `name` | `TEXT` | Nullable | Optional display name; a null name means the list derives its label from `task` |
-| `owner_kind` | `TEXT` | Non-null DEFAULT `'model'` | Who may mutate the row: `model` (created by a model turn; mutable by its owning conversation and by device-owner authority) or `user` (created by a device-owner command; mutable by device-owner authority only). Set by the receiving command family, never read from a payload |
+| `owner_kind` | `TEXT` | Non-null DEFAULT `'model'` | Who may mutate the row: `model` (created by a model turn; mutable by its owning conversation and by device-owner authority) or `user` (created by a device-owner command; mutable by device-owner authority only). Set by the receiving command family, never read from a payload, written once at insert, and immutable afterwards |
 | `conversation_mode` | `TEXT` | Non-null DEFAULT `'continuous'` | `continuous` reuses one conversation created on the first dispatch; `new_each_run` creates a fresh conversation per run |
 | `run_session_id` | `TEXT` | Nullable | The conversation runs append to. Empty until a user-owned `continuous` schedule's first dispatch creates it; a model-owned row mirrors its owning conversation |
 | `workspace_id` | `TEXT` | Nullable | Workspace the schedule's conversation is created in |
@@ -300,6 +300,12 @@ Pre-existing rows from earlier versions migrate automatically via an idempotent 
 - The migration backfills `owner_kind = 'model'` and `conversation_mode = 'continuous'` wherever they are null or blank, and leaves the remaining five columns null.
 - `scheduled_task_runs` is created on every open (`CREATE TABLE IF NOT EXISTS`), so an existing Home gains the run history table without touching a single schedule row.
 - Three consecutive opens leave the schema and every row byte-identical.
+
+#### Write rules (Task 139 — owner and settings are insert-only)
+- The upsert is **insert-only** for the seven Task 139 columns. `ScheduledTaskRepository.saveScheduledTask` names them in the `INSERT` and never in its `ON CONFLICT ... DO UPDATE SET` list, so a re-save keeps them byte-for-byte.
+- This is required, not stylistic: `CronScheduler` re-saves a schedule after every run and on every state change with the legacy parameters only. If a re-save overwrote the new columns, the first run of a user-owned schedule would reset it to `owner_kind = 'model'` — handing a user-owned schedule to the model authority — and erase its `name`, `run_session_id`, and route.
+- `owner_kind` is therefore written once at insert and is immutable afterwards. No repository method changes it, and the model path cannot produce `'user'` (D5).
+- `ScheduledTaskRepository.updateScheduleSettings` is the single edit path for the six editable settings: `name`, `conversation_mode`, `run_session_id`, `workspace_id`, `provider_instance_id`, `model`. An omitted parameter keeps its stored value, an explicit `null` clears the column, it bumps `updated_at`, and it never touches `owner_kind`. `SessionDB` exposes it as delegation only.
 
 ### 3.3.1. `scheduled_task_runs` Table
 Per-run history of a schedule (Task 139, decisions S7, S8, D2, D9). One row per dispatch attempt: the row starts `running` when dispatch is accepted and reaches exactly one terminal state.

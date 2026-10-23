@@ -89,6 +89,7 @@ Fixed by the product owner; not reopened here.
 | `docs/technical/agent_database_schema.md` §3.3 `enabled` note ("pause/resume is out of scope in this release; reserved for future lifecycle control") | stale | pause/resume is that lifecycle control |
 | 139-01 scope: `agent/lib/evolution/db/session_db.dart` was not in the item's file lock | 139-02 would have had to extend the facade to write the new columns, and 139-02 does not lock it either | 139-01 takes the delegation-only change (seven forwarding parameters plus one repository getter and export, no logic) and discloses it in the PR |
 | 139-01 scope: `schedule_model.dart` may add record fields but had to stay within 1,264 lines | exactly 1,264 lines, zero headroom | `ScheduledTaskRecord` moves verbatim to the companion `evolution/scheduling/scheduled_task_record.dart` (re-exported from `schedule_model.dart`, so no importer changes), gains the seven Task 139 fields there, and the ratchet entry drops to the file's new count |
+| 139-01 write rules for the D1 columns | `saveScheduledTask`'s upsert overwrote all seven new columns on conflict, and every `CronScheduler` re-save passes legacy parameters only | the upsert is insert-only for the D1 columns; `owner_kind` is immutable after insert; `ScheduledTaskRepository.updateScheduleSettings` (omit keeps, `null` clears, never touches `owner_kind`, bumps `updated_at`) is the single edit path for the other six, exposed through `SessionDB` as delegation only |
 
 ### Design decisions taken to make the fixed decisions executable
 
@@ -546,7 +547,7 @@ exact commands and counts from that PR.
 
 | Item | PR | Status | Verification |
 |---|---|---|---|
-| 139-01 state: columns + `scheduled_task_runs` + repositories | see PR | in review | `fvm dart analyze` clean; `test/evolution/scheduled_tasks_migration_test.dart` + `test/evolution/scheduled_task_runs_test.dart` 32; `test/evolution/` 445; `test/guards/` 11; schema snapshots regenerated for all four fixtures (runs table, its index, seven appended columns) with the pre-112 fixture group asserting the `model`/`continuous` backfill; full fast suite result posted on the PR. Ratchet: `schedule_model.dart` 1,264 → 1,143 (record moved to `scheduled_task_record.dart`, 241 lines, no entry) |
+| 139-01 state: columns + `scheduled_task_runs` + repositories | see PR | in review | `fvm dart analyze` clean; `test/evolution/scheduled_tasks_migration_test.dart` 19 + `test/evolution/scheduled_task_runs_test.dart` 18; `test/evolution/` 450; `test/guards/` 11; schema snapshots regenerated for all four fixtures (runs table, its index, seven appended columns) with the pre-112 fixture group asserting the `model`/`continuous` backfill; full fast suite result posted on the PR. Ratchet: `schedule_model.dart` 1,264 → 1,143 (record moved to `scheduled_task_record.dart`, 241 lines, no entry). Review delta 1: the upsert is insert-only for the D1 columns and `updateScheduleSettings` is their single edit path |
 
 ## Out of scope
 
