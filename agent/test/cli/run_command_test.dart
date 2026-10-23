@@ -244,6 +244,11 @@ class DelayedHealthyGateway {
   }
 }
 
+void _writeOwnerOnly(String path, String contents) {
+  File(path).writeAsStringSync(contents);
+  if (!Platform.isWindows) Process.runSync('chmod', ['600', path]);
+}
+
 void main() {
   useIsolatedSanadTestHome();
   group('Headless One-Shot Execution (sanad run)', () {
@@ -1494,6 +1499,8 @@ void main() {
 
         final runFuture = _runTargeted(runner, [
           'run',
+          '--reconnect-timeout',
+          '1',
           'Will disconnect mid-flight',
         ]);
 
@@ -1528,9 +1535,10 @@ void main() {
             );
           await request.response.close();
         });
-        await File(
+        _writeOwnerOnly(
           '${home.path}/${LocalGatewayCredentials.relativePath}',
-        ).writeAsString('test-token');
+          'test-token',
+        );
         var standaloneFactoryCalled = false;
         final err = StringBuffer();
 
@@ -1581,9 +1589,10 @@ void main() {
         final err = StringBuffer();
 
         try {
-          await File(
+          _writeOwnerOnly(
             '${home.path}/${LocalGatewayCredentials.relativePath}',
-          ).writeAsString('test-token');
+            'test-token',
+          );
 
           final runner = OneshotRunner(
             stdinReader: () async => null,
@@ -1630,9 +1639,10 @@ void main() {
         final err = StringBuffer();
 
         try {
-          await File(
+          _writeOwnerOnly(
             '${home.path}/${LocalGatewayCredentials.relativePath}',
-          ).writeAsString('home-token');
+            'home-token',
+          );
 
           final runner = OneshotRunner(
             stdinReader: () async => null,
@@ -1677,9 +1687,10 @@ void main() {
         final err = StringBuffer();
 
         try {
-          await File(
+          _writeOwnerOnly(
             '${home.path}/${LocalGatewayCredentials.relativePath}',
-          ).writeAsString('home-token');
+            'home-token',
+          );
 
           final runner = OneshotRunner(
             stdinReader: () async => null,

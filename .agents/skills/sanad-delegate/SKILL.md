@@ -95,6 +95,7 @@ For CLI-only delegation, the managed runtime needs the Agent daemon only. Do not
 | `--session` | `-s` | String | Pre-allocated session ID (e.g. UUID v4). Allows concurrent observers to attach and monitor the turn. |
 | `--events` | | Flag | Stream real-time newline-delimited JSON (NDJSON) events to standard output. |
 | `--timeout` | | Seconds | Whole number of seconds (1–86400). Scoped session stop is triggered upon expiry, exiting code 124. |
+| `--reconnect-timeout` | | Seconds | Whole number of seconds (1–86400, default 60). Time to wait for gateway reconnection and turn re-attachment across daemon restart before exiting code 1. |
 | `--allow-all-tools` | | Flag | Auto-approves ordinary tool execution permissions. Questions (`system_ask_user`) ALWAYS remain pending. |
 | `--provider` | | String | Target LLM provider override. |
 | `--model` | `-m` | String | Target LLM model override. |
@@ -136,6 +137,13 @@ For CLI-only delegation, the managed runtime needs the Agent daemon only. Do not
 6. **External Stop / Cancellation:**
    - When stopped externally via `sanad session stop <session_id>`, `sanad run` receives the daemon stop event, records `status: "cancelled"` with exit code 130 in `result.json`, and exits cleanly.
    - External stop affects only the targeted session and never overwrites prior timeout or signal interruptions.
+
+7. **Daemon Restart Resilience & Turn Follow:**
+   - When the gateway drops mid-turn, `sanad run` does not fail immediately; it enters a bounded reconnect loop (`--reconnect-timeout`, default 60s) discovering the same Home's restarted daemon and re-attaching to the reclaimed turn.
+   - If reconnect expires before re-attachment, it records `cause: "reconnect_window_expired"` with exit code 1 in `result.json`. If the turn is lost after restart, it records `cause: "turn_lost"` with exit code 1.
+   - If a dispatch targets an existing session whose durable turn still owns it, it refuses dispatch immediately with exit code 3 and `cause: "turn_in_flight"`; a queued or parked (blocked) turn never refuses.
+   - While the restart is crossed, the run emits `reconnecting`, `reconnected`, and `re_attached` lifecycle records, so a supervisor can distinguish a live run from a hung one.
+   - Reconnection to an endpoint of a different Home fails closed with exit code 78 and `cause: "home_identity_mismatch"`.
 
 ---
 
