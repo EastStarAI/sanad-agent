@@ -8,15 +8,18 @@ Ownership at a glance:
 3. Phase re-entry is refused here: a completed **irreversible** phase may never be
    decided again, so no provider is asked to re-authorize what already happened.
 4. ``guard.evaluate_pre`` refuses an unusable screen *before* any model call.
-5. ``DecisionModel.choose`` makes one closed-choice judgment, and any failure it
+5. ``brake.BudgetBrake.admit`` refuses a call that would cross the requests-per-minute
+   limit or the per-run USD ceiling, again before any model call, and ``charge``
+   records what the admitted reply cost.
+6. ``DecisionModel.choose`` makes one closed-choice judgment, and any failure it
    raises - network, timeout, HTTP error, malformed or contradictory reply - becomes
    an escalation instead of an exception.
-6. ``guard.evaluate_post`` enforces the selected action's own preconditions and
+7. ``guard.evaluate_post`` enforces the selected action's own preconditions and
    its irreversible-authorization boundary.
-7. ``admit_choice`` applies the confidence/selected-probability threshold last, as
+8. ``admit_choice`` applies the confidence/selected-probability threshold last, as
    a stall filter - never as the only gate.
-8. ``CircuitBreaker`` refuses a repeat or an oscillation before dispatch.
-9. The trace records the whole step so it can be replayed.
+9. ``CircuitBreaker`` refuses a repeat or an oscillation before dispatch.
+10. The trace records the whole step so it can be replayed.
 
 Execution is not owned here: the layer returns one admitted action and the caller
 performs exactly one driver action, then calls ``revalidate`` before dispatch and
@@ -37,6 +40,7 @@ from .bridge import (
     EscalationRequired,
     admit_choice,
 )
+from .brake import BudgetBrake
 from .candidates import CandidateTable, extract
 from .escalation import EscalationPayload
 from .guard import (
@@ -134,12 +138,16 @@ class DecisionLayer:
         policy: Optional[DecisionPolicy] = None,
         trace: Optional[TraceWriter] = None,
         breaker: Optional[CircuitBreaker] = None,
+        brake: Optional[BudgetBrake] = None,
         completed_phases: Sequence[str] = (),
     ) -> None:
         self.model = model
         self.policy = policy or DecisionPolicy(min_confidence=DEFAULT_MIN_CONFIDENCE)
         self.trace = trace
         self.breaker = breaker or CircuitBreaker()
+        # An unconfigured brake has no limits, so an offline test or a dry run keeps
+        # its previous behaviour and still accounts for what it would have spent.
+        self.brake = brake or BudgetBrake()
         self.completed_phases: Tuple[str, ...] = tuple(completed_phases)
         self.recent_actions: Tuple[Mapping[str, Any], ...] = ()
         # Phases whose admitted action was irreversible and which were recorded as
@@ -173,6 +181,13 @@ class DecisionLayer:
         if refusal is not None:
             return self._escalate(observation, request, mode_evidence, table, refusal, None)
 
+        # The brake is the last check before the provider call: an unusable screen was
+        # already refused above without spending quota, and once a limit trips nothing
+        # below may reach the model.
+        refusal = self.brake.admit()
+        if refusal is not None:
+            return self._escalate(observation, request, mode_evidence, table, refusal, None)
+
         try:
             choice = self.model.choose(self._context(request, mode_evidence, table))
         except Exception as error:  # noqa: BLE001 - a provider failure must never crash a step
@@ -184,6 +199,8 @@ class DecisionLayer:
                 _refusal_from_error(error),
                 None,
             )
+        # The call happened, so it is charged whatever the guard decides next.
+        self.brake.charge(choice.input_tokens)
         refusal = evaluate_post(
             observation, request, mode_evidence, table, choice.choice
         )
@@ -434,6 +451,7 @@ class DecisionLayer:
                 else None
             ),
             "verdict": "admitted" if outcome.admitted else "escalated",
+            "spend_usd": round(self.brake.spend_usd, 8),
             "reason_code": outcome.escalation.reason_code
             if outcome.escalation is not None
             else None,

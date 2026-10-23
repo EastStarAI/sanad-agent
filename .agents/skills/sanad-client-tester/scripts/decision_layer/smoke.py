@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .bridge import DecisionPolicy
+from .brake import USD_PER_MILLION_INPUT_TOKENS
 from .layer import DecisionLayer, DecisionRequest
 from .model import DEFAULT_DECISION_TIMEOUT, JevDecisionModel, build_model
 from .modes import (
@@ -38,8 +39,6 @@ DEFAULT_LABELS = SKILL_ROOT / "tests/fixtures/labels.json"
 
 MAX_CALLS = 20
 DEFAULT_FLOOR = 0.65
-# Documented TypeSafe list price, used only to report a bounded cost estimate.
-USD_PER_MILLION_INPUT_TOKENS = 0.042
 
 DECLINE_CODES = frozenset({"model_abstained", "model_reobserve"})
 

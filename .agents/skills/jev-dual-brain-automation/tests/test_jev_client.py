@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import threading
 import time
@@ -375,6 +376,112 @@ class TransportFailureTest(unittest.TestCase):
         with self.assertRaises(JevClientError) as context:
             client.ask({"screen": "conversation"}, self._questions(), timeout=1)
         self.assertEqual(context.exception.code, "network")
+
+
+class EndpointAndModelOverrideTest(unittest.TestCase):
+    """F-06: arguments, then the environment, then today's constants.
+
+    The origin and the model are configuration, never a source edit; the key stays
+    out of everything this class can report.
+    """
+
+    def _questions(self):
+        return {
+            "target": {
+                "type": "choice",
+                "instructions": "Choose",
+                "criteria": {"send": "Send", "wait": "Wait"},
+            }
+        }
+
+    @staticmethod
+    def _payload():
+        return {
+            "answers": {
+                "target": {"choice": "send", "probabilities": {"send": 1.0, "wait": 0.0}}
+            }
+        }
+
+    def _send(self, **client_kwargs):
+        """Ask one question over a stub transport and return the request it made."""
+        opener = _StubOpener(_Response(self._payload()))
+        with patch.object(jev_client, "_OPENER", opener):
+            JevClient(api_key="test-only", **client_kwargs).ask(
+                {"screen": "conversation"}, self._questions()
+            )
+        return opener.calls[0][0]
+
+    def test_the_environment_names_the_origin(self):
+        with patch.dict(os.environ, {"TYPESAFE_API_URL": "http://127.0.0.1:9/v1/systemone"}):
+            client = JevClient(api_key="test-only")
+            request = self._send()
+        self.assertEqual(request.full_url, "http://127.0.0.1:9/v1/systemone")
+        self.assertEqual(client.API_URL, "http://127.0.0.1:9/v1/systemone")
+
+    def test_the_argument_wins_over_the_environment(self):
+        with patch.dict(os.environ, {"TYPESAFE_API_URL": "http://127.0.0.1:9/v1/systemone"}):
+            request = self._send(api_url="http://127.0.0.1:8/v1/systemone")
+        self.assertEqual(request.full_url, "http://127.0.0.1:8/v1/systemone")
+
+    def test_an_unset_environment_leaves_both_defaults_unchanged(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TYPESAFE_API_URL", None)
+            os.environ.pop("TYPESAFE_MODEL", None)
+            client = JevClient(api_key="test-only")
+            request = self._send()
+        self.assertEqual(client.API_URL, "https://api.typesafe.ai/v1/systemone")
+        self.assertEqual(JevClient.API_URL, "https://api.typesafe.ai/v1/systemone")
+        self.assertEqual(client.model, "jev-latest")
+        self.assertEqual(json.loads(request.data.decode("utf-8"))["model"], "jev-latest")
+
+    def test_the_environment_names_the_model(self):
+        with patch.dict(os.environ, {"TYPESAFE_MODEL": "jev-1.14.0"}):
+            request = self._send()
+        self.assertEqual(json.loads(request.data.decode("utf-8"))["model"], "jev-1.14.0")
+
+    def test_the_model_argument_wins_over_the_environment(self):
+        with patch.dict(os.environ, {"TYPESAFE_MODEL": "jev-1.14.0"}):
+            request = self._send(model="jev-2")
+        self.assertEqual(json.loads(request.data.decode("utf-8"))["model"], "jev-2")
+
+    def test_the_test_seam_still_wins_after_construction(self):
+        with patch.dict(os.environ, {"TYPESAFE_API_URL": "http://127.0.0.1:9/v1/systemone"}):
+            client = JevClient(api_key="test-only")
+        client.API_URL = "http://127.0.0.1:8/v1/systemone"
+        opener = _StubOpener(_Response(self._payload()))
+        with patch.object(jev_client, "_OPENER", opener):
+            client.ask({"screen": "conversation"}, self._questions())
+        self.assertEqual(opener.calls[0][0].full_url, "http://127.0.0.1:8/v1/systemone")
+
+    def test_an_overridden_origin_still_refuses_a_redirect(self):
+        def respond(handler):
+            handler.send_response(302)
+            handler.send_header("Location", "/elsewhere")
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+
+        with _StubServer(respond) as server:
+            with patch.dict(os.environ, {"TYPESAFE_API_URL": server.base_url}):
+                with self.assertRaises(JevClientError) as context:
+                    JevClient(api_key="test-only").ask(
+                        {"screen": "conversation"}, self._questions()
+                    )
+            requests = list(server.requests)
+
+        self.assertEqual(context.exception.code, "redirect")
+        self.assertEqual(context.exception.status, 302)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["path"], "/v1/systemone")
+
+    def test_the_key_never_appears_in_a_repr_or_an_error(self):
+        client = JevClient(api_key="secret-value", api_url="http://127.0.0.1:1/v1/systemone")
+        self.assertNotIn("secret-value", repr(client))
+        self.assertNotIn("secret-value", str(client))
+        with self.assertRaises(JevClientError) as context:
+            client.ask({"screen": "conversation"}, self._questions(), timeout=1)
+        self.assertNotIn("secret-value", str(context.exception))
+        self.assertNotIn("secret-value", repr(context.exception))
+
 
 
 if __name__ == "__main__":

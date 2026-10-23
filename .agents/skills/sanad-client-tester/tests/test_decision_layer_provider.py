@@ -11,15 +11,17 @@ Everything here is offline: the transport is a stub opener, and no model is real
 """
 
 import json
+import os
 import sys
 import unittest
 import urllib.error
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from decision_layer.bridge import JevClient, JevClientError  # noqa: E402
+from decision_layer.bridge import JevAnswer, JevClient, JevClientError, JevResponse  # noqa: E402
 from decision_layer.candidates import extract  # noqa: E402
 from decision_layer.guard import (  # noqa: E402
     LOW_CONFIDENCE,
@@ -29,8 +31,10 @@ from decision_layer.guard import (  # noqa: E402
 from decision_layer.layer import DecisionLayer, DecisionRequest  # noqa: E402
 from decision_layer.model import (  # noqa: E402
     DEFAULT_DECISION_TIMEOUT,
+    DecisionContext,
     DecisionModel,
     JevDecisionModel,
+    build_model,
 )
 from decision_layer.modes import classify  # noqa: E402
 from decision_layer.observation import Observation  # noqa: E402
@@ -296,6 +300,100 @@ class ConsistentReplyTest(unittest.TestCase):
         probabilities[CHOSEN] = round(1.0 - share * len(others), 6)
         outcome, _opener = _decision(_payload_with(probabilities, confidence=0.55))
         self.assertEqual(outcome.escalation.reason_code, LOW_CONFIDENCE)
+
+
+class JevAdapterStub:
+    """A minimal stand-in for ``JevClient``: no transport, no key."""
+
+    model = "jev-latest"
+
+    def __init__(self, response) -> None:
+        self._response = response
+
+    def ask(self, state, questions, timeout=DEFAULT_DECISION_TIMEOUT):
+        return self._response
+
+
+def _configured_context() -> DecisionContext:
+    return DecisionContext(
+        goal="Open the Profile settings page",
+        phase="navigate_settings",
+        mode="settings",
+        mode_detail=None,
+        candidates={"nav_tile_profile": "Profile settings tile"},
+    )
+
+
+class EndpointConfiguredModelTest(unittest.TestCase):
+    """F-06: the model resolves its origin from arguments, then ``TYPESAFE_*``."""
+
+    FAKE_KEY = "test-only"
+
+    def test_from_environment_forwards_the_url(self):
+        with patch.dict(os.environ, {"TYPESAFE_API_KEY": self.FAKE_KEY}):
+            model = JevDecisionModel.from_environment(
+                api_url="http://127.0.0.1:9/v1/systemone"
+            )
+        self.assertEqual(model._client.API_URL, "http://127.0.0.1:9/v1/systemone")
+        self.assertEqual(model._client.model, "jev-latest")
+
+    def test_build_model_of_jev_needs_no_scenario_edit(self):
+        environment = {
+            "TYPESAFE_API_KEY": self.FAKE_KEY,
+            "TYPESAFE_API_URL": "http://127.0.0.1:9/v1/systemone",
+            "TYPESAFE_MODEL": "jev-1.14.0",
+        }
+        with patch.dict(os.environ, environment):
+            model = build_model("jev")
+        self.assertEqual(model._client.API_URL, "http://127.0.0.1:9/v1/systemone")
+        self.assertEqual(model._client.model, "jev-1.14.0")
+
+    def test_without_an_override_the_defaults_are_unchanged(self):
+        with patch.dict(os.environ, {"TYPESAFE_API_KEY": self.FAKE_KEY}, clear=False):
+            os.environ.pop("TYPESAFE_API_URL", None)
+            os.environ.pop("TYPESAFE_MODEL", None)
+            model = JevDecisionModel.from_environment()
+        self.assertEqual(model._client.API_URL, "https://api.typesafe.ai/v1/systemone")
+        self.assertEqual(model._client.model, "jev-latest")
+
+    def test_the_choice_exposes_the_usage_the_brake_charges(self):
+        client = JevAdapterStub(
+            JevResponse(
+                answers={
+                    "target": JevAnswer(
+                        kind="choice",
+                        choice="nav_tile_profile",
+                        probabilities={"nav_tile_profile": 0.9, "abstain": 0.1},
+                        confidence=0.9,
+                        raw={},
+                    )
+                },
+                latency_ms=1,
+                raw={"usage": {"input_tokens": 1_501}},
+            )
+        )
+        choice = JevDecisionModel(client).choose(_configured_context())
+        self.assertEqual(choice.input_tokens, 1_501)
+        self.assertEqual(choice.model, "jev-latest")
+
+    def test_a_reply_without_usage_exposes_no_tokens(self):
+        client = JevAdapterStub(
+            JevResponse(
+                answers={
+                    "target": JevAnswer(
+                        kind="choice",
+                        choice="nav_tile_profile",
+                        probabilities={"nav_tile_profile": 1.0},
+                        confidence=0.9,
+                        raw={},
+                    )
+                },
+                latency_ms=1,
+                raw={},
+            )
+        )
+        choice = JevDecisionModel(client).choose(_configured_context())
+        self.assertIsNone(choice.input_tokens)
 
 
 class TypedErrorContractTest(unittest.TestCase):

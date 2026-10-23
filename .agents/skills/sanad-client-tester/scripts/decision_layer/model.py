@@ -92,6 +92,24 @@ class ModelChoice:
         value = self.probabilities.get(option)
         return float(value) if value is not None else None
 
+    @property
+    def input_tokens(self) -> Optional[int]:
+        """Input tokens to charge for, from the provider's own usage report.
+
+        ``None`` means the reply carried no usable ``usage.input_tokens``, so the
+        spend brake charges its documented conservative estimate instead of
+        treating a missing field as a free call.
+        """
+        value = (
+            self.metadata.get("input_tokens")
+            if isinstance(self.metadata, Mapping)
+            else None
+        )
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        number = int(value)
+        return number if number >= 0 else None
+
     def to_dict(self) -> dict:
         return {
             "choice": self.choice,
@@ -198,9 +216,15 @@ class JevDecisionModel(DecisionModel):
 
     @classmethod
     def from_environment(cls, **kwargs: Any) -> "JevDecisionModel":
+        """Build the Jev model from arguments, then ``TYPESAFE_*``, then defaults.
+
+        ``api_url`` is forwarded as well as ``model``, so a caller can point the
+        model at another origin without editing this package, and
+        ``build_model("jev")`` keeps working unchanged.
+        """
         from .bridge import JevClient
 
-        accepted = {key: kwargs[key] for key in ("model",) if key in kwargs}
+        accepted = {key: kwargs[key] for key in ("model", "api_url") if key in kwargs}
         return cls(
             JevClient(**accepted),
             timeout=kwargs.get("timeout", DEFAULT_DECISION_TIMEOUT),
