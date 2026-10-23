@@ -147,6 +147,75 @@ Keychain when no explicit Sparkle key-file path is supplied. Windows signing
 likewise passes `WINSPARKLE_PRIVATE_KEY_PATH` directly to `sign_update`; the DSA
 private key is never copied into the Client checkout.
 
+## Stable macOS Agent signing identifier
+
+`codesign` derives the signing identifier from the file name when a call omits
+`--identifier`, and the Agent artifact name carries the release version. The
+identifier is part of the designated requirement, so every release used to
+publish a different requirement. macOS records that requirement as the trusted
+code of the Keychain items an application creates, which made each release look
+like a different program to the login Keychain: an ACL granted to one version
+never covered the next one, and an Agent without a user present could block on a
+prompt nobody could answer.
+
+The workflow therefore defines one workflow-level
+`SANAD_AGENT_CODESIGN_IDENTIFIER` (`com.eaststarai.sanad.agent`) and passes it to
+the macOS Agent `codesign` call. The value contains neither the release version
+nor the architecture, because both change per artifact while the identifier must
+not. After signing, the workflow fails unless `codesign -d --verbose=2` reports
+exactly that `Identifier` and `codesign -d -r-` reports a designated requirement
+that names the same identifier and the `UC2824B99G` team OU. The
+`release-security` CI job additionally guards the env definition, the
+`--identifier` argument, and the requirement assertion as static checks that run
+on pull requests, so a future edit cannot silently drop them.
+
+The signed Client `.app`, its nested frameworks, helpers, and bundles, and the
+signed disk image stay unchanged. A bundle takes its identifier from its own
+bundle identifier, and a bare helper executable inside one keeps the stable file
+name its bundle layout gives it; neither carries a release version. A disk image
+is not an executable whose requirement can become a Keychain ACL entry. Those are
+the only other macOS `codesign` calls in the release surface, so no version-named
+standalone executable is signed anywhere else.
+
+### Upgrade behaviour
+
+- Keychain items created by v1.0.18 and v1.0.19 carry authorized-application ACL
+  entries for those binaries' exact requirements, which contain
+  `identifier "sanad-agent-<version>-macos-<arch>"`.
+- The first release with the stable identifier can therefore still prompt once
+  for such an item. Choosing **Always Allow** adds the new, now
+  version-independent requirement to that item, so every later release with the
+  same identifier and team is already authorized for it. Users on the x64 and
+  arm64 builds share that outcome, because the identifier does not encode the
+  architecture.
+- A fresh installation creates its items with the stable requirement directly
+  and never prompts.
+- `MacOsKeychainAgentSecretStore.write` in `agent/lib/core/auth/agent_secret_store.dart`
+  performs `SecItemAdd` with only the item class, the service
+  `ai.eaststar.sanad.agent`, the account `<scope>:<key>`, the value, and
+  `kSecAttrAccessibleAfterFirstUnlock`. It sets no `kSecAttrAccess` ACL and no
+  `kSecAttrAccessGroup`, so macOS defaults the item's authorized applications to
+  the creating application, matched by its designated requirement. A later
+  `SecItemUpdate` rewrites only the value and leaves that ACL untouched, which is
+  why an existing item keeps its old requirement until the new binary is
+  authorized once.
+- Commands that never open the vault never reach this prompt; the prompt can only
+  appear on an actual secret read or write.
+
+### Installer and runtime verification
+
+`scripts/install.sh` and the runtime updater keep verifying the Apple-anchored
+NanoSoft publisher requirement — team `UC2824B99G` and the exact
+`Developer ID Application: NanoSoft LY LLC` common name — instead of pinning the
+identifier. `install.sh` resolves its manifest from `SANAD_RELEASE_MANIFEST_URL`
+and validates whatever version that manifest declares, so it must still accept an
+older artifact that was signed before the stable identifier existed; pinning the
+identifier would reject exactly those installer runs. The identifier is also not
+a trust boundary: any signer can assert any identifier, while the Apple anchor,
+team, and publisher name decide who is allowed to sign. Release CI pins the
+identifier so the ACL continuity above holds; installation and update keep
+proving the publisher.
+
 ## Protected environments
 
 | Environment | Responsibility |
