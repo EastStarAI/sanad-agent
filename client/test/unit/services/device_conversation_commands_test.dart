@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_command_gateway.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_commands.dart';
+import 'package:sanad_client/features/conversations/data/transport/conversation_history_commands.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
@@ -1968,6 +1969,58 @@ void main() {
     final olderFuture = commands.loadSessionHistory('session-1');
     final olderRequest = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
     final newerFuture = commands.loadSessionHistory('session-1');
+    final newerRequest = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': newerRequest['request_id'],
+        'messages': [
+          {
+            'id': 2,
+            'sender': 'ai',
+            'type': 'final_answer',
+            'content': 'new snapshot',
+            'created_at': '2026-01-01T00:00:02Z',
+            'session_id': 'session-1',
+          },
+        ],
+      },
+    });
+    await newerFuture;
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': olderRequest['request_id'],
+        'messages': [
+          {
+            'id': 1,
+            'sender': 'ai',
+            'type': 'final_answer',
+            'content': 'old snapshot',
+            'created_at': '2026-01-01T00:00:01Z',
+            'session_id': 'session-1',
+          },
+        ],
+      },
+    });
+    await olderFuture;
+
+    expect(store.currentMessages.single.text, 'new snapshot');
+  });
+
+  test('ConversationHistoryCommands rejects a stale generation for the same session', () async {
+    final history = ConversationHistoryCommands(
+      gateway: gateway,
+      conversationStore: store,
+      mapper: UnifiedDeviceMapper(),
+    );
+    final olderFuture = history.loadSessionHistory('session-1');
+    final olderRequest = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
+    final newerFuture = history.loadSessionHistory('session-1');
     final newerRequest = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
 
     socket.eventRouter.routeEvent({

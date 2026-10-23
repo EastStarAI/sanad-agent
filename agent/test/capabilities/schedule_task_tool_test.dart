@@ -9,6 +9,7 @@ import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
+import 'package:sanad_agent/evolution/db/scheduled_task_run_repository.dart';
 import 'package:sanad_agent/evolution/scheduling/schedule_model.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:test/test.dart';
@@ -215,9 +216,15 @@ void main() {
           expect(result.isError, isFalse);
           expect(result.displayText, contains('Scheduled Tasks (2 total):'));
           expect(result.displayText, contains('[task_1] "Task in Alpha"'));
-          expect(result.displayText, contains('Owning session: session_alpha'));
+          expect(
+            result.displayText,
+            contains('Owner: model (conversation "session_alpha")'),
+          );
           expect(result.displayText, contains('[task_2] "Task in Beta"'));
-          expect(result.displayText, contains('Owning session: session_beta'));
+          expect(
+            result.displayText,
+            contains('Owner: model (conversation "session_beta")'),
+          );
         },
       );
 
@@ -415,7 +422,7 @@ void main() {
         expect(
           result.displayText,
           contains(
-            'update action requires "task" and/or schedule recurrence parameters',
+            'update action requires "task", "name", and/or schedule recurrence parameters',
           ),
         );
       });
@@ -599,6 +606,492 @@ void main() {
         }, context: ToolContext(sessionId: 'session_alpha'));
         expect(result.isError, isTrue);
         expect(result.errorCode, ToolResultErrorCode.notFound);
+      });
+    });
+
+    group('Task 139 A5: pause, resume, run_now, and the optional name', () {
+      late String ownerSessionId;
+
+      /// A real conversation, because a model-owned schedule dispatches into the
+      /// conversation that owns it and the control layer checks it exists.
+      String createOwnerSession() =>
+          SessionManager().createSession('test-model').sessionId;
+
+      Map<String, dynamic> rowOf(String id) {
+        final row = SessionManager().db.getScheduledTask(id);
+        expect(row, isNotNull, reason: 'schedule $id must still exist');
+        return row!;
+      }
+
+      setUp(() {
+        ownerSessionId = createOwnerSession();
+      });
+
+      Future<String> createOwnedSchedule({
+        String task = 'Owned work',
+        String? name,
+        String time = '09:00',
+        String zone = 'Z',
+      }) async {
+        final result = await tool.executeResult({
+          'action': 'create',
+          'task': task,
+          'kind': 'daily',
+          'time': time,
+          'zone': zone,
+          'name': ?name,
+        }, context: ToolContext(sessionId: ownerSessionId));
+        expect(result.isError, isFalse, reason: result.displayText);
+        return scheduler.listSchedules().last.id;
+      }
+
+      group('pause and resume', () {
+        test('pause succeeds on an owned row and keeps the next run', () async {
+          final id = await createOwnedSchedule(name: 'Morning brief');
+          final before = rowOf(id);
+          final armedBefore = scheduler.activeTasks.any((t) => t.id == id);
+
+          final paused = await tool.executeResult({
+            'action': 'pause',
+            'id': id,
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          expect(paused.isError, isFalse, reason: paused.displayText);
+          expect(paused.displayText, contains('paused'));
+          expect(paused.displayText, contains('Enabled: no'));
+          expect(paused.displayText, contains('- Name: "Morning brief"'));
+
+          final after = rowOf(id);
+          expect(after['enabled'], 0);
+          expect(after['next_run_at'], before['next_run_at']);
+          expect(after['last_run_at'], before['last_run_at']);
+          expect(after['last_status'], before['last_status']);
+          expect(armedBefore, isTrue);
+          expect(scheduler.activeTasks.any((t) => t.id == id), isFalse);
+        });
+
+        test('resume re-arms the schedule and recomputes the next run', () async {
+          final id = await createOwnedSchedule();
+          await tool.executeResult({
+            'action': 'pause',
+            'id': id,
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          final resumed = await tool.executeResult({
+            'action': 'resume',
+            'id': id,
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          expect(resumed.isError, isFalse, reason: resumed.displayText);
+          expect(resumed.displayText, contains('Enabled: yes'));
+
+          final record = scheduler.getSchedule(id)!;
+          expect(record.enabled, isTrue);
+          expect(record.nextRunAt.isAfter(DateTime.now().toUtc()), isTrue);
+          expect(scheduler.activeTasks.any((t) => t.id == id), isTrue);
+        });
+
+        test('resume of an expired once schedule is schedule_expired', () async {
+          final created = await tool.executeResult({
+            'action': 'create',
+            'task': 'One shot',
+            'kind': 'once',
+            'in': '30 minutes',
+          }, context: ToolContext(sessionId: ownerSessionId));
+          expect(created.isError, isFalse, reason: created.displayText);
+          final id = scheduler.listSchedules().single.id;
+
+          // Age the stored instant past now, as a long-stopped daemon would.
+          SessionManager().db.saveScheduledTask(
+            id,
+            'One shot',
+            DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+            ownerSessionId,
+            kind: 'once',
+            zone: 'local',
+          );
+          final before = rowOf(id);
+
+          final resumed = await tool.executeResult({
+            'action': 'resume',
+            'id': id,
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          expect(resumed.isError, isTrue);
+          expect(resumed.errorCode, ToolResultErrorCode.executionFailed);
+          expect(
+            resumed.displayText,
+            contains(ScheduleTaskTool.scheduleExpiredCode),
+          );
+          expect(resumed.displayText, contains('never fires retroactively'));
+
+          final after = rowOf(id);
+          expect(after['enabled'], before['enabled']);
+          expect(after['next_run_at'], before['next_run_at']);
+        });
+
+        test('resume of an orphaned model-owned row is schedule_orphaned', () async {
+          final orphan = scheduler.createSchedule(
+            task: 'Orphaned work',
+            sessionId: 'deleted_conversation',
+            definition: ScheduleDefinition(
+              kind: ScheduleKind.daily,
+              zone: 'Z',
+              atTime: '09:00',
+            ),
+          );
+
+          final resumed = await tool.executeResult({
+            'action': 'resume',
+            'id': orphan.id,
+          }, context: ToolContext(sessionId: 'deleted_conversation'));
+
+          expect(resumed.isError, isTrue);
+          expect(
+            resumed.displayText,
+            contains(ScheduleTaskTool.scheduleOrphanedCode),
+          );
+          expect(scheduler.getSchedule(orphan.id)!.enabled, isTrue);
+        });
+      });
+
+      group('run_now', () {
+        test(
+          'dispatches a paused schedule, records trigger=manual, and shifts nothing (S14, S21)',
+          () async {
+            final id = await createOwnedSchedule();
+            await tool.executeResult({
+              'action': 'pause',
+              'id': id,
+            }, context: ToolContext(sessionId: ownerSessionId));
+            final before = rowOf(id);
+
+            final result = await tool.executeResult({
+              'action': 'run_now',
+              'id': id,
+            }, context: ToolContext(sessionId: ownerSessionId));
+
+            expect(result.isError, isFalse, reason: result.displayText);
+            expect(result.displayText, contains('Manual run accepted'));
+            expect(result.displayText, contains('never resumes a paused schedule'));
+
+            final after = rowOf(id);
+            expect(after['enabled'], 0);
+            expect(after['next_run_at'], before['next_run_at']);
+            expect(after['last_run_at'], before['last_run_at']);
+            expect(after['last_status'], before['last_status']);
+
+            final runs = SessionManager().db.scheduledTaskRuns.listRuns(id).runs;
+            expect(runs, hasLength(1));
+            expect(runs.single.trigger, ScheduledTaskRunTrigger.manual);
+            expect(runs.single.status, ScheduledTaskRunStatus.running);
+            expect(result.displayText, contains(runs.single.id));
+            expect(result.displayText, contains(ownerSessionId));
+          },
+        );
+
+        test('run_now of an orphaned model-owned row is schedule_orphaned', () async {
+          final orphan = scheduler.createSchedule(
+            task: 'Orphaned work',
+            sessionId: 'deleted_conversation',
+            definition: ScheduleDefinition(
+              kind: ScheduleKind.daily,
+              zone: 'Z',
+              atTime: '09:00',
+            ),
+          );
+
+          final result = await tool.executeResult({
+            'action': 'run_now',
+            'id': orphan.id,
+          }, context: ToolContext(sessionId: 'deleted_conversation'));
+
+          expect(result.isError, isTrue);
+          expect(
+            result.displayText,
+            contains(ScheduleTaskTool.scheduleOrphanedCode),
+          );
+          expect(SessionManager().db.scheduledTaskRuns.listRuns(orphan.id).runs,
+              isEmpty);
+        });
+      });
+
+      group('ownership (D5, S15)', () {
+        test('a foreign conversation cannot pause, resume, or run an owned row',
+            () async {
+          final id = await createOwnedSchedule();
+          final before = rowOf(id);
+          final foreign = ToolContext(sessionId: 'foreign_session');
+
+          for (final action in ['pause', 'resume', 'run_now']) {
+            final result = await tool.executeResult({
+              'action': action,
+              'id': id,
+            }, context: foreign);
+
+            expect(result.isError, isTrue, reason: '$action must be denied');
+            expect(result.errorCode, ToolResultErrorCode.permissionDenied);
+            expect(
+              result.displayText,
+              contains('owned by conversation "$ownerSessionId"'),
+            );
+            expect(
+              result.displayText,
+              contains('cannot be modified from conversation "foreign_session"'),
+            );
+          }
+
+          // Nothing mutated: state, timers, and run rows are all untouched.
+          expect(rowOf(id), before);
+          expect(scheduler.activeTasks.any((t) => t.id == id), isTrue);
+          expect(
+            SessionManager().db.scheduledTaskRuns.listRuns(id).runs,
+            isEmpty,
+          );
+        });
+
+        test('a user-owned row is denied for every model action, mutating nothing',
+            () async {
+          final userSchedule = scheduler.createSchedule(
+            task: 'Device work',
+            ownerKind: ScheduleOwnerKind.user,
+            definition: ScheduleDefinition(
+              kind: ScheduleKind.daily,
+              zone: 'Z',
+              atTime: '08:00',
+            ),
+          );
+          final before = rowOf(userSchedule.id);
+          final context = ToolContext(sessionId: ownerSessionId);
+
+          final attempts = <Map<String, dynamic>>[
+            {'action': 'pause', 'id': userSchedule.id},
+            {'action': 'resume', 'id': userSchedule.id},
+            {'action': 'run_now', 'id': userSchedule.id},
+            {'action': 'update', 'id': userSchedule.id, 'task': 'Hijacked'},
+            {'action': 'cancel', 'id': userSchedule.id},
+          ];
+
+          for (final args in attempts) {
+            final result = await tool.executeResult(args, context: context);
+            expect(result.isError, isTrue, reason: '${args['action']} must deny');
+            expect(result.errorCode, ToolResultErrorCode.permissionDenied);
+            expect(result.displayText, contains('owned by the device user'));
+            expect(
+              rowOf(userSchedule.id),
+              before,
+              reason: '${args['action']} must not mutate the row',
+            );
+          }
+
+          expect(rowOf(userSchedule.id)['owner_kind'], 'user');
+          expect(scheduler.activeTasks.any((t) => t.id == userSchedule.id), isTrue);
+          expect(
+            SessionManager().db.scheduledTaskRuns.listRuns(userSchedule.id).runs,
+            isEmpty,
+          );
+        });
+
+        test('list shows the owner kind and the conversation label of each row',
+            () async {
+          await createOwnedSchedule(name: 'Model owned');
+          final userSchedule = scheduler.createSchedule(
+            task: 'Device owned',
+            ownerKind: ScheduleOwnerKind.user,
+            definition: ScheduleDefinition(
+              kind: ScheduleKind.daily,
+              zone: 'Z',
+              atTime: '08:00',
+            ),
+          );
+
+          final listed = await tool.executeResult({
+            'action': 'list',
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          expect(listed.isError, isFalse);
+          expect(
+            listed.displayText,
+            contains('Owner: model (conversation "$ownerSessionId")'),
+          );
+          expect(
+            listed.displayText,
+            contains('Owner: user (device)'),
+          );
+          expect(listed.displayText, contains('Enabled: yes'));
+          expect(listed.displayText, contains('Consecutive failures: 0'));
+          expect(listed.displayText, contains(userSchedule.id));
+        });
+      });
+
+      group('forged payloads and partial mutations', () {
+        test('a forged owner_kind on create is ignored', () async {
+          final result = await tool.executeResult({
+            'action': 'create',
+            'task': 'Forged ownership',
+            'kind': 'daily',
+            'time': '09:00',
+            'zone': 'Z',
+            'owner_kind': 'user',
+            'ownerKind': 'user',
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          expect(result.isError, isFalse, reason: result.displayText);
+          final row = SessionManager().db.getAllScheduledTasks().single;
+          expect(row['owner_kind'], 'model');
+          expect(row['session_id'], ownerSessionId);
+
+          // A model row stays controllable by its own conversation.
+          final paused = await tool.executeResult({
+            'action': 'pause',
+            'id': row['id'],
+          }, context: ToolContext(sessionId: ownerSessionId));
+          expect(paused.isError, isFalse, reason: paused.displayText);
+        });
+
+        test('a forged owner_kind on update is ignored', () async {
+          final id = await createOwnedSchedule();
+
+          final updated = await tool.executeResult({
+            'action': 'update',
+            'id': id,
+            'task': 'Renamed work',
+            'owner_kind': 'user',
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          expect(updated.isError, isFalse, reason: updated.displayText);
+          final row = rowOf(id);
+          expect(row['task'], 'Renamed work');
+          expect(row['owner_kind'], 'model');
+        });
+
+        test('a rejected update applies none of its fields', () async {
+          final id = await createOwnedSchedule(name: 'Original name', time: '09:00');
+          final before = rowOf(id);
+
+          final result = await tool.executeResult({
+            'action': 'update',
+            'id': id,
+            'name': 'New name',
+            'time': 'not-a-time',
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          expect(result.isError, isTrue);
+          expect(result.errorCode, ToolResultErrorCode.invalidInput);
+          expect(rowOf(id), before);
+          expect(rowOf(id)['name'], 'Original name');
+        });
+
+        test('a denied update applies neither the task, the name, nor the shape',
+            () async {
+          final id = await createOwnedSchedule(name: 'Original name', time: '09:00');
+          final before = rowOf(id);
+
+          final result = await tool.executeResult({
+            'action': 'update',
+            'id': id,
+            'task': 'Hijacked',
+            'name': 'Hijacked name',
+            'kind': 'weekly',
+            'weekdays': ['sun'],
+            'time': '23:00',
+          }, context: ToolContext(sessionId: 'foreign_session'));
+
+          expect(result.isError, isTrue);
+          expect(result.errorCode, ToolResultErrorCode.permissionDenied);
+          expect(rowOf(id), before);
+        });
+      });
+
+      group('name on create and update', () {
+        test('create stores the name and update keeps it when omitted', () async {
+          final id = await createOwnedSchedule(name: 'Morning brief');
+          expect(rowOf(id)['name'], 'Morning brief');
+
+          final renamed = await tool.executeResult({
+            'action': 'update',
+            'id': id,
+            'name': 'Evening brief',
+          }, context: ToolContext(sessionId: ownerSessionId));
+          expect(renamed.isError, isFalse, reason: renamed.displayText);
+          expect(rowOf(id)['name'], 'Evening brief');
+
+          final taskOnly = await tool.executeResult({
+            'action': 'update',
+            'id': id,
+            'task': 'Evening brief task text',
+          }, context: ToolContext(sessionId: ownerSessionId));
+          expect(taskOnly.isError, isFalse, reason: taskOnly.displayText);
+          expect(rowOf(id)['name'], 'Evening brief');
+          expect(rowOf(id)['task'], 'Evening brief task text');
+        });
+
+        test('a blank name is treated as absent', () async {
+          final id = await createOwnedSchedule(name: 'Kept name');
+
+          final blank = await tool.executeResult({
+            'action': 'update',
+            'id': id,
+            'name': '   ',
+            'task': 'Updated text',
+          }, context: ToolContext(sessionId: ownerSessionId));
+
+          expect(blank.isError, isFalse, reason: blank.displayText);
+          expect(rowOf(id)['name'], 'Kept name');
+        });
+      });
+
+      group('invalid control requests', () {
+        test('every control action rejects a missing id', () async {
+          for (final action in ['pause', 'resume', 'run_now']) {
+            final result = await tool.executeResult({
+              'action': action,
+            }, context: ToolContext(sessionId: ownerSessionId));
+
+            expect(result.isError, isTrue, reason: action);
+            expect(result.errorCode, ToolResultErrorCode.invalidInput);
+            expect(result.displayText, contains('"id" parameter is required'));
+          }
+        });
+
+        test('every control action requires a session context', () async {
+          final id = await createOwnedSchedule();
+
+          for (final action in ['pause', 'resume', 'run_now']) {
+            final result = await tool.executeResult({'action': action, 'id': id});
+
+            expect(result.isError, isTrue, reason: action);
+            expect(result.errorCode, ToolResultErrorCode.invalidInput);
+            expect(
+              result.displayText,
+              contains('without a session context'),
+            );
+          }
+        });
+
+        test('an unknown control id is notFound', () async {
+          for (final action in ['pause', 'resume', 'run_now']) {
+            final result = await tool.executeResult({
+              'action': action,
+              'id': 'missing_id',
+            }, context: ToolContext(sessionId: ownerSessionId));
+
+            expect(result.isError, isTrue, reason: action);
+            expect(result.errorCode, ToolResultErrorCode.notFound);
+            expect(result.displayText, contains('Schedule "missing_id" not found'));
+          }
+        });
+
+        test('the schema advertises the new actions and the optional name', () {
+          final properties =
+              tool.schema.parameters['properties'] as Map<String, dynamic>;
+          expect(
+            (properties['action'] as Map<String, dynamic>)['enum'],
+            containsAll(['pause', 'resume', 'run_now']),
+          );
+          expect(properties.containsKey('name'), isTrue);
+          expect(tool.schema.parameters['required'], equals(['action']));
+        });
       });
     });
   });

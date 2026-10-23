@@ -6,17 +6,14 @@ import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/presentation/utils/device_ui_mapper.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/composer_workspace_chip.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 
 class ConversationContextChips extends StatelessWidget {
-  static const String addNewWorkspaceMenuValue = '__add_new_workspace__';
-  static const String clearWorkspaceMenuValue = '__clear_workspace__';
-
   final GlobalKey<PopupMenuButtonState<String>> agentSelectorKey;
   final ConversationInputAgentSlice agentSlice;
   final ConversationInputSlice inputSlice;
@@ -53,7 +50,21 @@ class ConversationContextChips extends StatelessWidget {
           agents.isEmpty ? _buildNoAgentsFoundChip(context) : _buildAgentSelectorChip(context),
           if (capabilities.supportsWorkspaces || capabilities.workspaceRequired) ...[
             const SizedBox(width: 8),
-            _buildWorkspaceSelectorChip(context),
+            ComposerWorkspaceChip(
+              availableWorkspaces: inputSlice.availableWorkspaces,
+              selectedWorkspace: inputSlice.selectedWorkspace,
+              isLoadingWorkspaces: inputSlice.isLoadingWorkspaces,
+              requiresWorkspace: inputSlice.requiresWorkspace,
+              hasActiveAgent: agentSlice.hasActiveAgent,
+              isLocked: sessionId != null && sessionId!.isNotEmpty && inputSlice.selectedWorkspace != null,
+              chipBgColor: chipBgColor,
+              borderColor: borderColor,
+              dimTextColor: dimTextColor,
+              onRefreshWorkspaces: () => unawaited(context.read<ConversationInputCubit>().refreshWorkspaces()),
+              onWorkspaceSelected: (workspace) => context.read<ConversationInputCubit>().selectWorkspace(workspace),
+              onWorkspaceCleared: () => context.read<ConversationInputCubit>().clearWorkspace(),
+              onAddNewWorkspace: () => unawaited(onPickAndCreateWorkspace(agentSlice.activeAgent)),
+            ),
           ],
           const SizedBox(width: 8),
           // todo : will be implemented in future
@@ -75,152 +86,6 @@ class ConversationContextChips extends StatelessWidget {
           // _buildIconButton(Icons.add),
         ],
       ),
-    );
-  }
-
-  Widget _buildWorkspaceSelectorChip(BuildContext context) {
-    final selectedWorkspace = inputSlice.selectedWorkspace;
-    final hasBoundSessionWorkspace = sessionId != null && sessionId!.isNotEmpty && selectedWorkspace != null;
-    final label = selectedWorkspace?.name ?? (inputSlice.requiresWorkspace ? 'Choose Workspace' : 'Workspace');
-    final color = selectedWorkspace == null && inputSlice.requiresWorkspace
-        ? Theme.of(context).colorScheme.error.withValues(alpha: 0.8)
-        : dimTextColor;
-
-    return PopupMenuButton<String>(
-      key: const Key('workspace_selector_btn'),
-      tooltip: hasBoundSessionWorkspace ? 'Workspace is locked for this session' : 'Select Workspace',
-      enabled: !hasBoundSessionWorkspace && agentSlice.hasActiveAgent,
-      offset: const Offset(0, 32),
-      color: Theme.of(context).colorScheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: borderColor),
-      ),
-      onOpened: () {
-        if (inputSlice.availableWorkspaces.isEmpty && !inputSlice.isLoadingWorkspaces) {
-          unawaited(context.read<ConversationInputCubit>().refreshWorkspaces());
-        }
-      },
-      onSelected: (value) {
-        if (value == addNewWorkspaceMenuValue) {
-          unawaited(onPickAndCreateWorkspace(agentSlice.activeAgent));
-          return;
-        }
-
-        if (value == clearWorkspaceMenuValue) {
-          context.read<ConversationInputCubit>().clearWorkspace();
-          return;
-        }
-
-        for (final workspace in inputSlice.availableWorkspaces) {
-          if (workspace.id == value) {
-            context.read<ConversationInputCubit>().selectWorkspace(workspace);
-            return;
-          }
-        }
-      },
-      child: _buildChip(
-        context,
-        Icons.folder_outlined,
-        label,
-        color: color,
-        trailing: inputSlice.isLoadingWorkspaces
-            ? Container(
-                width: 12,
-                height: 12,
-                margin: const EdgeInsets.only(left: 6),
-                child: const AppProgressIndicator(strokeWidth: 1.5),
-              )
-            : hasBoundSessionWorkspace
-            ? Container(
-                margin: const EdgeInsets.only(left: 6),
-                child: Icon(Icons.lock_outline, size: 12, color: dimTextColor),
-              )
-            : Container(
-                margin: const EdgeInsets.only(left: 6),
-                child: Icon(Icons.keyboard_arrow_down, size: 12, color: dimTextColor),
-              ),
-      ),
-      itemBuilder: (context) => [
-        ...inputSlice.availableWorkspaces.map((workspace) {
-          final isSelected = workspace.id == inputSlice.selectedWorkspace?.id;
-          return PopupMenuItem<String>(
-            key: Key('workspace_item_${workspace.id}'),
-            value: workspace.id,
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                Icon(Icons.folder_outlined, size: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        workspace.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: isSelected
-                              ? Theme.of(context).colorScheme.onSurface
-                              : Theme.of(context).colorScheme.onSurfaceVariant,
-                          fontSize: 12,
-                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                        ),
-                      ),
-                      Text(
-                        workspace.path,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (isSelected) Icon(Icons.check, size: 12, color: Theme.of(context).colorScheme.primary),
-              ],
-            ),
-          );
-        }),
-        if (!inputSlice.requiresWorkspace && inputSlice.selectedWorkspace != null) ...[
-          PopupMenuItem<String>(
-            value: clearWorkspaceMenuValue,
-            height: 32,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                Icon(Icons.close, size: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                const SizedBox(width: 8),
-                Text(
-                  'No workspace',
-                  style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          PopupMenuDivider(height: 1, color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1)),
-        ],
-        PopupMenuItem<String>(
-          value: addNewWorkspaceMenuValue,
-          height: 32,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            children: [
-              Icon(Icons.create_new_folder_outlined, size: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
-              const SizedBox(width: 8),
-              Text(
-                'Add New Workspace',
-                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 
@@ -420,39 +285,6 @@ class ConversationContextChips extends StatelessWidget {
       if (agent.id == id) return agent;
     }
     return null;
-  }
-
-  Widget _buildChip(
-    BuildContext context,
-    IconData icon,
-    String label, {
-    Color? color,
-    Widget? trailing,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: chipBgColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: color ?? dimTextColor),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: GoogleFonts.inter(
-              color: color ?? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.8),
-              fontSize: 12,
-              fontWeight: FontWeight.w400,
-            ),
-          ),
-          if (trailing != null) trailing,
-        ],
-      ),
-    );
   }
 
   // Widget _buildIconButton(IconData icon, {double size = 16}) {

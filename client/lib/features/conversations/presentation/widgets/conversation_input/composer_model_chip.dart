@@ -4,41 +4,90 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/di/injection.dart';
-import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/llm_usage_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/provider_route_label.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/context_usage_indicator.dart';
-import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/model_picker_dialog.dart';
-import 'package:sanad_client/features/devices/domain/models/capability.dart';
+import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
 
 import '../sidebar/sidebar_composition.dart';
 
-/// Model selector chip: the active model label, its usage fill, and the picker.
+/// Model selector chip: the selected model label, its usage fill, and the
+/// picker.
+///
+/// The chip is state-agnostic: it holds no conversation state and reads no
+/// conversation cubit. A caller supplies the effective route it already
+/// resolved (plus the conversation context usage when it has one) and receives
+/// the picked route through [onModelSelected]. The conversation composer and
+/// the schedule form therefore share one selector over their own state.
+///
+/// The two device-scoped resources the chip consumes stay inside it because
+/// they are not caller state: `ProviderUsageCubit` (display names and usage
+/// windows, deduped per device and provider) and the picker's recent-model
+/// preference write, which belongs to the picker interaction itself.
 class ComposerModelChip extends StatefulWidget {
-  final ConversationInputAgentSlice agentSlice;
-  final ConversationInputSlice inputSlice;
-  final Capability capabilities;
+  final DeviceConfig? activeAgent;
+
+  /// The effective provider instance id for the next message.
+  final String? providerId;
+
+  /// The effective model id for the next message.
+  final String? modelId;
+
+  /// Conversation context usage, when the caller has a live transcript.
+  final LlmUsageSnapshot? contextUsage;
+
+  /// The bound session, used only as a provider display-name fallback while
+  /// the daemon-owned display metadata is still loading.
+  final Session? session;
+
   final Color dimTextColor;
   final Color chipBgColor;
   final Color borderColor;
 
+  /// Receives the provider instance id and model id the user picked.
+  final void Function(String providerId, String modelId) onModelSelected;
+
   const ComposerModelChip({
-    required this.agentSlice,
-    required this.inputSlice,
-    required this.capabilities,
+    super.key,
+    required this.activeAgent,
+    required this.providerId,
+    required this.modelId,
+    required this.contextUsage,
+    required this.session,
     required this.dimTextColor,
     required this.chipBgColor,
     required this.borderColor,
+    required this.onModelSelected,
   });
+
+  /// The effective provider instance id: the caller's pending selection wins,
+  /// then the bound session's own route and metadata.
+  static String? resolveProviderId({String? nextMessageProviderId, Session? session}) {
+    final nextProviderId = nextMessageProviderId?.trim();
+    if (nextProviderId != null && nextProviderId.isNotEmpty) return nextProviderId;
+    final sessionProvider = session?.modelProvider?.trim();
+    if (sessionProvider != null && sessionProvider.isNotEmpty) return sessionProvider;
+    final metadataProvider = session?.metadata?['provider']?.toString().trim();
+    if (metadataProvider != null && metadataProvider.isNotEmpty) return metadataProvider;
+    final metadataModelProvider = session?.metadata?['model_provider']?.toString().trim();
+    if (metadataModelProvider != null && metadataModelProvider.isNotEmpty) return metadataModelProvider;
+    return null;
+  }
+
+  /// The effective model id: the caller's pending selection wins, then the
+  /// bound session's own route.
+  static String? resolveModelId({String? nextMessageModel, Session? session}) {
+    final nextModel = nextMessageModel?.trim();
+    if (nextModel != null && nextModel.isNotEmpty) return nextModel;
+    final sessionModel = session?.model?.trim();
+    if (sessionModel != null && sessionModel.isNotEmpty) return sessionModel;
+    return null;
+  }
 
   @override
   State<ComposerModelChip> createState() => _ComposerModelChipState();
@@ -64,16 +113,18 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
     super.didChangeDependencies();
     if (_didSyncInitialResource) return;
     _didSyncInitialResource = true;
-    final selectedSession = context.read<SessionCubit>().state.selectedSession;
-    _syncProviderResource(selectedSession: selectedSession);
+    _syncProviderResource();
   }
 
   @override
   void didUpdateWidget(covariant ComposerModelChip oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final agentChanged = oldWidget.agentSlice.activeAgent?.id != widget.agentSlice.activeAgent?.id;
-    final providerChanged = oldWidget.inputSlice.nextMessageProviderId != widget.inputSlice.nextMessageProviderId;
-    if (agentChanged || providerChanged) {
+    final agentChanged = oldWidget.activeAgent?.id != widget.activeAgent?.id;
+    final providerChanged = oldWidget.providerId != widget.providerId;
+    // A rebind to another session (or to a new conversation) changes the route
+    // the caller resolved, and may change it to an empty route.
+    final sessionChanged = oldWidget.session != widget.session;
+    if (agentChanged || providerChanged || sessionChanged) {
       _syncProviderResource();
     }
   }
@@ -82,16 +133,15 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
   /// usage/support are loaded for the current device. The owner dedupes by
   /// (device, query) and shares in-flight requests, so repeated calls from
   /// rebuilds and remounts cost zero Agent requests after the first load.
-  void _syncProviderResource({Session? selectedSession}) {
+  void _syncProviderResource() {
     if (!getIt.isRegistered<ProviderUsageCubit>()) return;
-    final cubit = getIt<ProviderUsageCubit>();
-    final resolved = selectedSession ?? (mounted ? context.read<SessionCubit>().state.selectedSession : null);
-    final activeProviderId = _activeProviderId(resolved);
+    final activeProviderId = widget.providerId?.trim();
     if (activeProviderId == null || activeProviderId.isEmpty) return;
-    unawaited(cubit.ensureProviderDisplayNames(agent: widget.agentSlice.activeAgent));
+    final cubit = getIt<ProviderUsageCubit>();
+    unawaited(cubit.ensureProviderDisplayNames(agent: widget.activeAgent));
     unawaited(
       cubit.ensureInstanceUsage(
-        agent: widget.agentSlice.activeAgent,
+        agent: widget.activeAgent,
         instanceId: activeProviderId,
       ),
     );
@@ -99,10 +149,6 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
 
   @override
   Widget build(BuildContext context) {
-    final selectedSession = context.select<SessionCubit, Session?>((cubit) => cubit.state.selectedSession);
-    final contextUsage = context.select<SessionMessagesCubit, LlmUsageSnapshot?>(
-      (cubit) => latestContextUsage(cubit.state.messages),
-    );
     final showProgress = getIt.isRegistered<ProviderUsageCubit>();
 
     Widget buildChip(
@@ -111,102 +157,78 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
       double? progress,
       Color? progressColor,
     ) {
-      final currentModel = _currentModelLabel(
-        selectedSession,
-        nextMessageModel: widget.inputSlice.nextMessageModel,
-        providerDisplayNames: providerDisplayNames,
-      );
+      final currentModel = _currentModelLabel(providerDisplayNames);
 
       return InkWell(
         key: const Key('model_selector_btn'),
         onTap: () => _openModelPicker(context),
         borderRadius: BorderRadius.circular(8),
-        child: _buildModelChip(context, currentModel, contextUsage, progress, progressColor),
+        child: _buildModelChip(context, currentModel, widget.contextUsage, progress, progressColor),
       );
     }
 
-    return BlocListener<SessionCubit, SessionState>(
-      listenWhen: (previous, current) => previous.selectedSession != current.selectedSession,
-      listener: (context, state) {
-        _syncProviderResource(selectedSession: state.selectedSession);
-      },
-      child: showProgress
-          ? BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
-              bloc: getIt<ProviderUsageCubit>(),
-              builder: (context, usageState) {
-                final theme = Theme.of(context);
-                final deviceId = widget.agentSlice.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
-                final providerDisplayNames = usageState.displayNamesFor(deviceId);
-                final activeProviderId = _activeProviderId(selectedSession);
-                double? progress;
-                Color? progressColor;
+    return showProgress
+        ? BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
+            bloc: getIt<ProviderUsageCubit>(),
+            builder: (context, usageState) {
+              final theme = Theme.of(context);
+              final deviceId = widget.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
+              final providerDisplayNames = usageState.displayNamesFor(deviceId);
+              final activeProviderId = widget.providerId?.trim();
+              double? progress;
+              Color? progressColor;
 
-                if (activeProviderId != null && activeProviderId.isNotEmpty) {
-                  final entry = usageState.entry(deviceId, activeProviderId);
-                  final supports = usageState.support.supports(deviceId, activeProviderId);
+              if (activeProviderId != null && activeProviderId.isNotEmpty) {
+                final entry = usageState.entry(deviceId, activeProviderId);
+                final supports = usageState.support.supports(deviceId, activeProviderId);
 
-                  if (supports && entry != null && entry.phase != ProviderUsagePhase.hidden) {
-                    final hasSnapshot = entry.hasVisibleSnapshot;
-                    if (hasSnapshot && entry.result?.snapshot?.windows != null) {
-                      double maxProgress = 0.0;
-                      for (final window in entry.result!.snapshot!.windows) {
-                        final remaining = window.remainingPercent;
-                        final used = window.usedPercent;
-                        final p = (used ?? (remaining != null ? 100.0 - remaining : 0.0)) / 100.0;
-                        if (p > maxProgress) {
-                          maxProgress = p;
-                        }
+                if (supports && entry != null && entry.phase != ProviderUsagePhase.hidden) {
+                  final hasSnapshot = entry.hasVisibleSnapshot;
+                  if (hasSnapshot && entry.result?.snapshot?.windows != null) {
+                    double maxProgress = 0.0;
+                    for (final window in entry.result!.snapshot!.windows) {
+                      final remaining = window.remainingPercent;
+                      final used = window.usedPercent;
+                      final p = (used ?? (remaining != null ? 100.0 - remaining : 0.0)) / 100.0;
+                      if (p > maxProgress) {
+                        maxProgress = p;
                       }
-                      progress = maxProgress.clamp(0.0, 1.0);
-
-                      Color getProgressColor(double value) {
-                        if (value >= 0.9) return const Color(0xFFE53935);
-                        return theme.colorScheme.primary;
-                      }
-
-                      progressColor = getProgressColor(progress);
                     }
+                    progress = maxProgress.clamp(0.0, 1.0);
+
+                    Color getProgressColor(double value) {
+                      if (value >= 0.9) return const Color(0xFFE53935);
+                      return theme.colorScheme.primary;
+                    }
+
+                    progressColor = getProgressColor(progress);
                   }
                 }
+              }
 
-                return buildChip(context, providerDisplayNames, progress, progressColor);
-              },
-            )
-          : Builder(
-              builder: (context) => buildChip(context, const {}, null, null),
-            ),
-    );
+              return buildChip(context, providerDisplayNames, progress, progressColor);
+            },
+          )
+        : Builder(
+            builder: (context) => buildChip(context, const {}, null, null),
+          );
   }
 
   void _openModelPicker(BuildContext context) {
-    final selectedSession = context.read<SessionCubit>().state.selectedSession;
-    final activeProviderId = widget.inputSlice.nextMessageProviderId?.trim().isNotEmpty == true
-        ? widget.inputSlice.nextMessageProviderId!.trim()
-        : selectedSession?.modelProvider?.trim();
-    final activeModelId = widget.inputSlice.nextMessageModel?.trim().isNotEmpty == true
-        ? widget.inputSlice.nextMessageModel!.trim()
-        : selectedSession?.model?.trim();
-
     unawaited(
       showDialog(
         context: context,
         builder: (dialogContext) => ModelPickerDialog(
-          agent: widget.agentSlice.activeAgent,
-          activeProviderId: activeProviderId,
-          activeModelId: activeModelId,
+          agent: widget.activeAgent,
+          activeProviderId: widget.providerId?.trim(),
+          activeModelId: widget.modelId?.trim(),
           onSelected: (providerId, modelId) {
-            unawaited(
-              context.read<ConversationInputCubit>().selectModel(
-                scope: widget.capabilities.modelSelectionScope,
-                providerId: providerId,
-                model: modelId,
-              ),
-            );
+            widget.onModelSelected(providerId, modelId);
             unawaited(
               getIt<ProviderSetupClient>().modelRecentRecord(
                 providerInstanceId: providerId,
                 modelId: modelId,
-                agent: widget.agentSlice.activeAgent,
+                agent: widget.activeAgent,
               ),
             );
           },
@@ -215,27 +237,9 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
     );
   }
 
-  String? _activeProviderId(Session? session) {
-    final nextProviderId = widget.inputSlice.nextMessageProviderId?.trim();
-    if (nextProviderId != null && nextProviderId.isNotEmpty) return nextProviderId;
-    final sessionProvider = session?.modelProvider?.trim();
-    if (sessionProvider != null && sessionProvider.isNotEmpty) return sessionProvider;
-    final metadataProvider = session?.metadata?['provider']?.toString().trim();
-    if (metadataProvider != null && metadataProvider.isNotEmpty) return metadataProvider;
-    final metadataModelProvider = session?.metadata?['model_provider']?.toString().trim();
-    if (metadataModelProvider != null && metadataModelProvider.isNotEmpty) return metadataModelProvider;
-    return null;
-  }
-
-  String _currentModelLabel(
-    Session? session, {
-    String? nextMessageModel,
-    Map<String, String> providerDisplayNames = const {},
-  }) {
-    final activeProviderId = _activeProviderId(session);
-    final activeModelId = nextMessageModel?.trim().isNotEmpty == true
-        ? nextMessageModel!.trim()
-        : session?.model?.trim();
+  String _currentModelLabel(Map<String, String> providerDisplayNames) {
+    final activeProviderId = widget.providerId?.trim();
+    final activeModelId = widget.modelId?.trim();
     if (activeModelId == null || activeModelId.isEmpty) return 'Select model';
     var cleanModelName = activeModelId;
     if (activeProviderId != null && activeProviderId.isNotEmpty) {
@@ -244,7 +248,7 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
     }
     if (cleanModelName.contains('/')) cleanModelName = cleanModelName.split('/').last;
     final providerDisplayName = resolveProviderDisplayName(
-      session: session,
+      session: widget.session,
       providerId: activeProviderId,
       providerDisplayNames: providerDisplayNames,
     );
@@ -342,4 +346,3 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
     );
   }
 }
-
