@@ -33,6 +33,7 @@ Plan 29 provider tables hold **no secrets**; API keys and OAuth tokens live only
 erDiagram
     sessions ||--o{ messages : "contains"
     sessions ||--o{ suspended_checkpoints : "registers"
+    scheduled_tasks ||--o{ scheduled_task_runs : "history"
     
     sessions {
         text session_id PK
@@ -87,6 +88,26 @@ erDiagram
         text last_run_at
         text last_status
         integer enabled
+        text name
+        text owner_kind "model | user"
+        text conversation_mode "continuous | new_each_run"
+        text run_session_id
+        text workspace_id
+        text provider_instance_id
+        text model
+    }
+
+    scheduled_task_runs {
+        text id PK
+        text schedule_id FK
+        text run_at
+        text status "running | succeeded | failed | skipped"
+        text trigger "scheduled | manual | recovery"
+        integer duration_ms
+        text error
+        text session_id
+        text message_id
+        text created_at
     }
     
     suspended_checkpoints {
@@ -235,7 +256,7 @@ Indexes (B1):
 See `docs/technical/context_compaction.md` §8 for activation CAS and Task 51/52 invalidation rules.
 
 ### 3.3. `scheduled_tasks` Table
-Tracks automation tasks and scheduled recurring loops that the daemon runs asynchronously (Task 112a, Decision D8).
+Tracks automation tasks and scheduled recurring loops that the daemon runs asynchronously (Task 112a, Decision D8). Task 139 adds the owner, conversation, and dispatch-route columns that let a schedule belong to a device-owner command and run inside a conversation it created.
 
 Ownership: the table schema and its migration live in `agent/lib/evolution/db/schema/scheduling_schema.dart`; every read and write goes through `ScheduledTaskRepository` (`agent/lib/evolution/db/scheduled_task_repository.dart`) behind the `SessionDB` facade, and `CronScheduler` is the only caller that mutates rows. `sanad schedule list` reads the table through a separate read-only connection (`AgentStateDatabase.readOnlyAtPath`) and never migrates it; see `docs/technical/sanad_cli_architecture.md` §11.
 
@@ -243,7 +264,7 @@ Ownership: the table schema and its migration live in `agent/lib/evolution/db/sc
 |---|---|---|---|
 | `id` | `TEXT` | Primary Key | Unique task identifier |
 | `task` | `TEXT` | Non-null | Task details or command prompt to execute |
-| `session_id` | `TEXT` | Non-null | Originating conversation thread |
+| `session_id` | `TEXT` | Non-null | Originating conversation thread; empty string for a user-owned `continuous` schedule whose conversation does not exist yet, in which case `owner_kind` carries the meaning and no payload presents the empty string as an identity |
 | `kind` | `TEXT` | Non-null DEFAULT `'once'` | Recurrence kind (`once`, `interval`, `daily`, `weekly`, `monthly`) |
 | `interval_minutes` | `INTEGER` | Nullable | Interval duration in minutes (for `interval`) |
 | `at_time` | `TEXT` | Nullable | Wall-clock `HH:MM` time (for `daily`, `weekly`, `monthly`) |
@@ -256,7 +277,14 @@ Ownership: the table schema and its migration live in `agent/lib/evolution/db/sc
 | `updated_at` | `TEXT` | Nullable only for rows an older agent inserted (backfilled from `created_at` at the next open) | ISO8601 UTC last update timestamp |
 | `last_run_at` | `TEXT` | Nullable | ISO8601 UTC timestamp of previous execution (preserved without change on skipped occurrences) |
 | `last_status` | `TEXT` | Nullable | Status of previous execution (`fired`, `skipped_missed`, `error`) |
-| `enabled` | `INTEGER` | Non-null DEFAULT `1` | 1 if schedule is active (pause/resume is out of scope in this release; reserved for future lifecycle control) |
+| `enabled` | `INTEGER` | Non-null DEFAULT `1` | `1` while the schedule is active. Startup restore already skips a row whose value is `0`, so a `0` row never fires; Task 139's pause/resume lifecycle control (item 139-02) is the writer of that state |
+| `name` | `TEXT` | Nullable | Optional display name; a null name means the list derives its label from `task` |
+| `owner_kind` | `TEXT` | Non-null DEFAULT `'model'` | Who may mutate the row: `model` (created by a model turn; mutable by its owning conversation and by device-owner authority) or `user` (created by a device-owner command; mutable by device-owner authority only). Set by the receiving command family, never read from a payload, written once at insert, and immutable afterwards |
+| `conversation_mode` | `TEXT` | Non-null DEFAULT `'continuous'` | `continuous` reuses one conversation created on the first dispatch; `new_each_run` creates a fresh conversation per run |
+| `run_session_id` | `TEXT` | Nullable | The conversation runs append to. Empty until a user-owned `continuous` schedule's first dispatch creates it; a model-owned row mirrors its owning conversation |
+| `workspace_id` | `TEXT` | Nullable | Workspace the schedule's conversation is created in |
+| `provider_instance_id` | `TEXT` | Nullable | Provider instance the schedule's conversation runs on |
+| `model` | `TEXT` | Nullable | Model the schedule's conversation runs on |
 
 #### Migration Note (Task 112a)
 Pre-existing rows from earlier versions migrate automatically via an idempotent guarded migration:
@@ -265,6 +293,44 @@ Pre-existing rows from earlier versions migrate automatically via an idempotent 
 - Rows default to `kind = 'once'`, `zone = 'local'`, `enabled = 1`, and `updated_at = created_at`.
 - An index `idx_scheduled_tasks_next_run` is created on `next_run_at ASC`.
 - Repeated migration execution is an idempotent no-op.
+
+#### Migration Note (Task 139 — owner, conversation, and route columns)
+- The seven columns above are appended after `enabled` in the `CREATE TABLE` **and** in the `ALTER TABLE` sequence, so a fresh database and a migrated one keep the same trailing column order.
+- They are nullable or defaulted, so a pre-139 row becomes `owner_kind = 'model'` with `conversation_mode = 'continuous'`, a null `name`, and null route columns — exactly how it already behaved. An older agent's `INSERT` that names none of them keeps working.
+- The migration backfills `owner_kind = 'model'` and `conversation_mode = 'continuous'` wherever they are null or blank, and leaves the remaining five columns null.
+- `scheduled_task_runs` is created on every open (`CREATE TABLE IF NOT EXISTS`), so an existing Home gains the run history table without touching a single schedule row.
+- Three consecutive opens leave the schema and every row byte-identical.
+
+#### Write rules (Task 139 — owner and settings are insert-only)
+- The upsert is **insert-only** for the seven Task 139 columns. `ScheduledTaskRepository.saveScheduledTask` names them in the `INSERT` and never in its `ON CONFLICT ... DO UPDATE SET` list, so a re-save keeps them byte-for-byte.
+- This is required, not stylistic: `CronScheduler` re-saves a schedule after every run and on every state change with the legacy parameters only. If a re-save overwrote the new columns, the first run of a user-owned schedule would reset it to `owner_kind = 'model'` — handing a user-owned schedule to the model authority — and erase its `name`, `run_session_id`, and route.
+- `owner_kind` is therefore written once at insert and is immutable afterwards. No repository method changes it, and the model path cannot produce `'user'` (D5).
+- `ScheduledTaskRepository.updateScheduleSettings` is the single edit path for the six editable settings: `name`, `conversation_mode`, `run_session_id`, `workspace_id`, `provider_instance_id`, `model`. An omitted parameter keeps its stored value, an explicit `null` clears the column, it bumps `updated_at`, and it never touches `owner_kind`. `SessionDB` exposes it as delegation only.
+
+### 3.3.1. `scheduled_task_runs` Table
+Per-run history of a schedule (Task 139, decisions S7, S8, D2, D9). One row per dispatch attempt: the row starts `running` when dispatch is accepted and reaches exactly one terminal state.
+
+Ownership: the table DDL lives in `agent/lib/evolution/db/schema/scheduling_schema.dart`; every read and write goes through `ScheduledTaskRunRepository` (`agent/lib/evolution/db/scheduled_task_run_repository.dart`), which `SessionDB` exposes beside the schedule repository. `CronScheduler` and the owners it delegates to are the only writers, as they are for `scheduled_tasks`.
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| `id` | `TEXT` | Primary Key | Run identity, `run_<microseconds>` |
+| `schedule_id` | `TEXT` | Non-null | Parent schedule |
+| `run_at` | `TEXT` | Non-null | ISO8601 UTC instant of the attempt |
+| `status` | `TEXT` | Non-null | `running`, `succeeded`, `failed`, or `skipped` (a missed occurrence that never ran) |
+| `trigger` | `TEXT` | Non-null | `scheduled`, `manual` (Run now, including on a paused schedule), or `recovery` |
+| `duration_ms` | `INTEGER` | Nullable | Dispatch acceptance to terminal state; null while running |
+| `error` | `TEXT` | Nullable | Bounded, already redacted failure text; never command output, file content, or timeline text |
+| `session_id` | `TEXT` | Nullable | The conversation the run appended to |
+| `message_id` | `TEXT` | Nullable | Identity of the run's user message, written when that message commits; the anchor "Open conversation" jumps to |
+| `created_at` | `TEXT` | Non-null | ISO8601 UTC row creation |
+
+Index: `idx_scheduled_task_runs_schedule_run_at` on `(schedule_id, run_at DESC)`.
+
+- A terminal transition is a compare-and-set from `running`, so a run is never double-terminal and a second observation changes nothing.
+- Retention is a write-side policy, never a read-side one: the newest 200 rows per schedule and nothing older than 90 days survive a prune (`ScheduledTaskRunRetention`). A history page is therefore a faithful slice of what was retained.
+- Deleting a schedule deletes its run rows in the same transaction and touches no session or message. Deleting a *conversation* never deletes run rows.
+- `last_run_at` and `last_status` on `scheduled_tasks` keep their existing meaning for compatibility; this table is the history of record.
 
 ### 3.4. `suspended_checkpoints` Table
 Persists agent execution states when suspended for manual user approvals or clarifying questions.
@@ -311,6 +377,42 @@ tables; existing conversation rows retain the removed workspace UUID as
 historical metadata.
 
 Legacy databases with `workspaces(path PRIMARY KEY)` are migrated atomically. The migration generates one UUID per distinct old path, updates session and recoverable runtime workspace columns, rewrites nested persisted `workspace_id` values where safe, and creates a workspace row for a path referenced only by a legacy session.
+
+### 3.6. `user_secret_metadata` Table (Task 140)
+
+Non-secret metadata for user secrets. The **value** of a user secret lives only in the Agent vault's `custom:` namespace, owned by `UserSecretVault`; this table holds the fields Settings → Privacy & Security displays beside a name and nothing about the value. No value, no hash of a value, and no prefix of a value ever enters a column here.
+
+Ownership: the DDL lives in `agent/lib/evolution/db/schema/user_secrets_schema.dart`, applied last in `_createSchemaAndMigrate`. Every read and write goes through `UserSecretMetadataRepository` (`agent/lib/evolution/db/user_secret_metadata_repository.dart`); `UserSecretCatalog` and the Task 84 acquisition path reach the table only through it.
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| `name` | `TEXT` | Primary Key, NOT NULL | The vault name; the only identity of a user secret |
+| `description` | `TEXT` | Nullable | User-authored, at most 256 characters after trimming; blank is stored as `NULL`; never derived from a value |
+| `source` | `TEXT` | NOT NULL, CHECK `agent_request \| user` | How the **current** value arrived: `agent_request` through the Task 84 composer card, `user` through the Settings command. A replacement records the path that wrote the current value |
+| `created_at` | `TEXT` | NOT NULL | ISO-8601 UTC; written once |
+| `updated_at` | `TEXT` | NOT NULL | ISO-8601 UTC; advances on every replacement |
+
+`name` is declared `NOT NULL` explicitly because SQLite permits a NULL in a non-INTEGER primary key, and a row whose identity is NULL would describe no secret. `source` has no database default: every writer states how the value arrived, so a row can never claim an origin nobody recorded.
+
+#### Migration Note (Task 140)
+
+The migration is one `CREATE TABLE IF NOT EXISTS` appended after every pre-existing schema module:
+
+- Additive and idempotent. An existing Home gains one empty table on its next open; no existing table, column, index, trigger, or row changes, and a second and third open are byte-identical no-ops.
+- An older agent on the same Home keeps working because it never reads the table.
+- Nothing is backfilled. A secret that already exists in the vault gets its row from the catalog's repair-on-read rule below.
+
+#### Write rules (Task 140 M3, M5)
+
+- **Ordering is vault first, metadata second.** `UserSecretCatalog.set` calls `UserSecretVault.store`, which writes every entry and reads it back. Only a verified vault write is followed by a metadata row.
+- A verified vault write is **never** reported as a failure because the metadata write failed; the row is repaired on the next catalog read.
+- Metadata is never written for a value the vault refused, and never written when the vault is unavailable.
+- Upsert semantics: `created_at` is written at insert only, `updated_at` advances on every write, `source` describes the value stored now, and the passed description is authoritative — an explicit `NULL` or whitespace-only description clears the column.
+- `pruneExcept(names)` is the delete path used by the catalog: a metadata row cannot outlive its vault entry, so a `system_delete_secret` from the model also removes the row on the next read.
+
+#### Repair on read (Task 140 A2)
+
+`UserSecretVault` exposes names only, with no timestamps, so a vault entry may have no metadata row — every secret stored before Task 140, and any row a failed metadata write skipped. `UserSecretCatalog.list()` repairs those in the same read: it inserts a row with `source = agent_request` (the only arrival path this Agent had before the Settings screen existed, so a repair never claims the user typed a value in), `description = NULL`, and both timestamps set to now. A returned entry therefore never carries a null timestamp, and the repair is persisted rather than projected once.
 
 ---
 
@@ -816,12 +918,13 @@ After readiness:
 |---|---|
 | `sessions_messages_schema.dart` | `sessions`, `messages`, their additive columns, ordering indexes, and the `last_user_message_at`/workspace-id backfill |
 | `attachments_schema.dart` | `user_attachments`, the v2 rebuild, and the message-ownership trigger |
-| `scheduling_schema.dart` | `scheduled_tasks` and the additive Task 112 recurrence migration |
+| `scheduling_schema.dart` | `scheduled_tasks`, its additive Task 112 and Task 139 migrations, and `scheduled_task_runs` with its `(schedule_id, run_at DESC)` index |
 | `workspaces_schema.dart` | `workspaces`, plus the additively created `workspace_security_policies` table |
 | `runtime_work_schema.dart` | `suspended_checkpoints`, persisted runtime state, work items, pending steers, stop-recovery outcomes, execution snapshots, route transitions |
 | `provider_schema.dart` | `provider_instances`, `provider_model_cache`, `recent_model_selections` |
 | `compaction_schema.dart` | session projection revisions and `session_compaction_operations` |
 | `maintenance_schema.dart` | `agent_maintenance_state` |
+| `user_secrets_schema.dart` | `user_secret_metadata`: the non-secret metadata of a stored user secret (Task 140), appended last |
 
 `migrations/workspace_identity_migration.dart` owns the legacy workspace-UUID migration (including orphaned absolute-path repair), and `schema/schema_migration_support.dart` owns the shared `safeAddColumn`/`tableExists`/`columnExists`/`isBusyOrLocked` helpers. Modules run in a fixed order that interleaves two of them, so `RuntimeWorkSchema.applySuspendedCheckpoints` and `WorkspacesSchema.applySecurityPolicies` exist as second entry points; the order in `_createSchemaAndMigrate` must not be rearranged.
 
@@ -831,6 +934,10 @@ After readiness:
 | `legacy_pre_workspace_uuid` | `workspaces(path PRIMARY KEY)` with path-valued `sessions.workspace_id` |
 | `legacy_pre_attachments_v2` | `user_attachments` without `admission_id`, with a NOT NULL `message_id` and the v1 insert trigger |
 | `legacy_pre_112_schedules` | `scheduled_tasks` before Task 112: `run_at` NOT NULL and no recurrence, zone, `next_run_at`, or `enabled` columns |
+
+Task 139 extends all four snapshots in the same change: every one of them now pins `scheduled_task_runs`, its index, and the seven `scheduled_tasks` owner/conversation/route columns — appended after `enabled` in the fresh `CREATE TABLE` and through `ALTER TABLE` on the legacy fixtures, so the trailing column order matches between a fresh and a migrated database.
+
+Task 140 extends all four snapshots as well, by exactly one object each: `user_secret_metadata`, its five columns, and its primary-key index. Nothing else in any snapshot moved, because the module is applied after every pre-existing one and migrates no earlier table.
 
 Committed snapshots live in `agent/test/evolution/fixtures/agent_state/*.schema.txt`; the legacy inputs are the sibling `*.sql` files and contain synthetic placeholders only — no user data or secrets.
 

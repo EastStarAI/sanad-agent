@@ -28,7 +28,7 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/engine/runtime/tool_execution_coordinator.dart': 1116,
   'lib/evolution/db/compaction_boundary_repository.dart': 1173,
   'lib/evolution/db/runtime/session_execution_state_coordinator.dart': 1227,
-  'lib/evolution/scheduling/schedule_model.dart': 1264,
+  'lib/evolution/scheduling/schedule_model.dart': 1143,
   'lib/interfaces/platforms/sanad_gateway/handlers/provider_command_handler.dart':
       1122,
   'lib/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart':
