@@ -24,6 +24,15 @@ class AppRoutes {
   /// New Conversation for a device: /conversations/:deviceId/new
   static const newConversation = '/conversations/:deviceId/new';
 
+  // ── Schedules ─────────────────────────────────────────────────────────────
+
+  /// Device schedule list: /conversations/:deviceId/schedules
+  static const schedules = '/conversations/:deviceId/schedules';
+
+  /// One schedule: /conversations/:deviceId/schedules/:scheduleId
+  static const scheduleDetail =
+      '/conversations/:deviceId/schedules/:scheduleId';
+
   // ── Settings ──────────────────────────────────────────────────────────────
 
   static const settings = '/settings';
@@ -71,4 +80,14 @@ class AppRoutes {
       queryParameters: workspaceId != null && workspaceId.isNotEmpty ? {'workspace': workspaceId} : null,
     ).toString();
   }
+
+  /// Build a route string for a device's schedule list.
+  static String schedulesLocation(String deviceId) => Uri(
+    pathSegments: ['', 'conversations', deviceId, 'schedules'],
+  ).toString();
+
+  /// Build a route string for one schedule.
+  static String scheduleDetailLocation(String deviceId, String scheduleId) => Uri(
+    pathSegments: ['', 'conversations', deviceId, 'schedules', scheduleId],
+  ).toString();
 }

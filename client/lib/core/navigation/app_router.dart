@@ -19,6 +19,8 @@ import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_manage
 import 'package:sanad_client/features/mcp/presentation/screens/add_mcp_server_screen.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_runtime_models.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_server_config.dart';
+import 'package:sanad_client/features/schedules/presentation/screens/schedule_detail_screen.dart';
+import 'package:sanad_client/features/schedules/presentation/screens/schedules_screen.dart';
 import 'package:sanad_client/core/presentation/screens/not_found_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -38,6 +40,8 @@ class AppRouterBuilders {
     this.agentsBuilder,
     this.addAgentBuilder,
     this.onboardingBuilder,
+    this.schedulesBuilder,
+    this.scheduleDetailBuilder,
     this.errorBuilder,
   });
 
@@ -51,6 +55,13 @@ class AppRouterBuilders {
   final AppRouteBuilder? agentsBuilder;
   final AppRouteBuilder? addAgentBuilder;
   final AppRouteBuilder? onboardingBuilder;
+
+  /// Overrides the device schedule list page (Task 139 C1).
+  final AppRouteBuilder? schedulesBuilder;
+
+  /// Overrides the schedule detail page (Task 139 C1).
+  final AppRouteBuilder? scheduleDetailBuilder;
+
   final AppRouteErrorBuilder? errorBuilder;
 }
 
@@ -135,6 +146,26 @@ class AppRouter {
             context,
             state,
             builders.homeBuilder,
+          ),
+        ),
+        // The schedule routes are declared before [AppRoutes.session]: both
+        // `/conversations/:deviceId/schedules` and a session path have three
+        // segments, and GoRouter matches in declaration order, so `schedules`
+        // must not be captured as a session id.
+        GoRoute(
+          path: AppRoutes.schedules,
+          pageBuilder: (context, state) => _buildPlainPage(
+            context,
+            state,
+            builders.schedulesBuilder ?? _defaultSchedulesBuilder,
+          ),
+        ),
+        GoRoute(
+          path: AppRoutes.scheduleDetail,
+          pageBuilder: (context, state) => _buildPlainPage(
+            context,
+            state,
+            builders.scheduleDetailBuilder ?? _defaultScheduleDetailBuilder,
           ),
         ),
         GoRoute(
@@ -461,8 +492,36 @@ class AppRouter {
     );
   }
 
-  static Page<void> _buildSplashPage(
+  /// The device schedule list page (Task 139 C1).
+  ///
+  /// 139-06 routes it at the thin shell that owns the feature cubit and its one
+  /// initial read; 139-07 supplies the body and the device chrome.
+  static Widget buildSchedulesPage({required String deviceId}) => SchedulesScreen(deviceId: deviceId);
+
+  /// The schedule detail page (Task 139 C1).
+  static Widget buildScheduleDetailPage({required String deviceId, required String scheduleId}) =>
+      ScheduleDetailScreen(deviceId: deviceId, scheduleId: scheduleId);
+
+  static Widget _defaultSchedulesBuilder(BuildContext context, GoRouterState state) =>
+      buildSchedulesPage(deviceId: state.pathParameters['deviceId'] ?? '');
+
+  static Widget _defaultScheduleDetailBuilder(BuildContext context, GoRouterState state) =>
+      buildScheduleDetailPage(
+        deviceId: state.pathParameters['deviceId'] ?? '',
+        scheduleId: state.pathParameters['scheduleId'] ?? '',
+      );
+
+  /// A device-scoped route that is not the conversation surface itself.
+  static Page<void> _buildPlainPage(
     BuildContext context,
+    GoRouterState state,
+    AppRouteBuilder builder,
+  ) => NoTransitionPage<void>(
+    key: ValueKey('device-page-${state.matchedLocation}'),
+    child: builder(context, state),
+  );
+
+  static Page<void> _buildSplashPage(    BuildContext context,
     GoRouterState state,
     AppRouteBuilder? overrideBuilder, {
     required bool bootstrapGateway,

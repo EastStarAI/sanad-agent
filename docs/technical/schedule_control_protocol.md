@@ -1,6 +1,6 @@
 ---
 title: "Schedule Control Protocol"
-description: "Unified local/cloud protocol commands, envelopes, projections, error codes, change broadcasts, and failure surfacing for device-owner schedule control."
+description: "Unified local/cloud protocol commands, envelopes, projections, error codes, change broadcasts, failure surfacing, and the Client data client, cubit, and route contract for device-owner schedule control."
 ---
 
 # Schedule Control Protocol
@@ -320,3 +320,102 @@ Rules:
    run message is the task text verbatim.
 6. **Additive migrations only.** The protocol never introduces a schema change; it reads and writes the
    Task 139 columns through the existing additive migration (112a D8).
+
+---
+
+## 9. Client Contract (Data Client, Cubit, and Routes)
+
+The Client consumes this protocol through three owners and nothing else:
+
+| Layer | Owner | Responsibility |
+|---|---|---|
+| Data | `client/lib/features/schedules/data/schedules_client.dart` (`SchedulesClient`) | Builds one request per command and query, projects rows, runs, the preview answer and the acceptance, maps `DeviceCommandException.code` to a typed code, and filters the two broadcasts. |
+| Domain | `client/lib/features/schedules/domain/models/` | Typed `Schedule`, `ScheduleRun`, `ScheduleRunsPage`, `SchedulePreview`, `ScheduleRunAcceptance`, `ScheduleRunFailureNotice`, the request payloads, and `ScheduleErrorCode`. |
+| Presentation state | `client/lib/features/schedules/presentation/bloc/schedules_cubit.dart` (`SchedulesCubit`) | Owns the list, the open detail with its run page, the preview answer, admission (single-flight), the offline short circuit, and the broadcast-driven re-read. |
+
+Both use `DeviceCommandClient` → `DeviceConnectionCoordinator`, so a loopback client, a
+cloud-relayed client, and a web or mobile client run the same code path (S11); no screen selects a
+transport.
+
+### 9.1. Payload discipline
+
+- One method per command and query with its own expected event: `list`, `preview`, `create`, `update`,
+  `pause`, `resume`, `run_now`, `delete`, `runs`.
+- A payload carries only the fields §4.1 accepts. `owner_kind` is not a field of any Client request, so a
+  Client can never claim the model kind (D5).
+- `delete` always sends `confirm: true`. The user-facing confirmation is the screen's responsibility; the
+  protocol flag is the client's.
+- `runs` passes `limit` and the opaque `cursor` through unchanged and never parses the cursor.
+- A response that omits its own projection — a single-row response without `schedule`, a `delete` that
+  does not report `deleted: true` — is a protocol violation, not a silent success.
+
+### 9.2. Typed errors
+
+`ScheduleErrorCode.fromWireCode` is the only place a protocol code becomes a Client value. The Agent
+`message` is never carried, logged as a value, or shown.
+
+| Protocol code | `ScheduleErrorCode` |
+|---|---|
+| `invalid_request` | `invalidRequest` |
+| `invalid_schedule` | `invalidSchedule` |
+| `schedule_not_found` | `scheduleNotFound` |
+| `schedule_expired` | `scheduleExpired` |
+| `schedule_orphaned` | `scheduleOrphaned` |
+| `permission_denied` | `permissionDenied` |
+| `internal_error` | `internalError` |
+| a code this Client does not know | `unknown`, with the wire token kept for diagnosis |
+| no code, a closed socket, or a timeout | `deviceUnavailable` (also produced locally, never by the wire) |
+
+`schedule.preview` reports an invalid definition inside its own result: the Client maps its `error_code`
+through the same table and never raises it as a transport failure.
+
+### 9.3. States
+
+| Status | Meaning |
+|---|---|
+| `initial` | Nothing has been asked for yet; no request has been issued. |
+| `loading` | The first read of a device scope is in flight. |
+| `empty` | The device reported no schedule. |
+| `loaded` | At least one schedule is known for the current scope. |
+| `error` | The last read failed; the typed code drives localized copy plus Retry. |
+| `deviceUnavailable` | The device is offline or the transport failed. `DeviceConfig.isOnline == false` short-circuits before any request. |
+
+`SchedulesState.schedules` is non-empty only for `loaded`, so an offline or failed state cannot present a
+stale snapshot as current (S18). The open detail's row is derived from that same snapshot, and its run
+page, the preview answer, and the list are dropped together when the device goes unavailable.
+
+### 9.4. Admission
+
+- Nothing loads on construction or from `build`; a surface calls `load()` from its own lifecycle and from
+  Retry.
+- A `load()` during a read joins it and queues at most one follow-up read, so a burst of
+  `schedule.changed` events cannot stack requests.
+- A second identical action (same kind, same target schedule) returns `ScheduleActionOutcome.busy` and
+  sends nothing.
+- A successful mutation re-reads `schedule.list` instead of patching the response row in, because the list
+  is ordered by the next instant the mutation may have moved.
+- Only the newest `schedule.preview` answer may emit.
+
+### 9.5. Broadcasts
+
+| Event | Client behavior |
+|---|---|
+| `schedule.changed` | Re-reads the list, and the open detail with its first run page when a detail is open. The payload is never projected as data. |
+| `schedule.run_failed` | Forwarded as a typed `ScheduleRunFailureNotice` for the Client's own failure surface. It is never written to state, a log, or history, and it carries no error text. |
+
+### 9.6. Conversation marker data
+
+`SchedulesState.conversationIdsWithSchedules` is the set of conversations that own at least one schedule,
+derived from the same `schedule.list` snapshot. The sidebar marker and the conversation-delete warning
+(S23) consume it, and it costs no additional command. It is empty whenever the list is not current.
+
+### 9.7. Routes
+
+| Route | Page |
+|---|---|
+| `/conversations/:deviceId/schedules` (`AppRoutes.schedules`) | Device schedule list. |
+| `/conversations/:deviceId/schedules/:scheduleId` (`AppRoutes.scheduleDetail`) | One schedule's detail and run history. |
+
+Both are declared ahead of `AppRoutes.session`, because `/conversations/:deviceId/schedules` and a session
+path have three segments and the router matches in declaration order. `AppRoutes.schedulesLocation` and
+`AppRoutes.scheduleDetailLocation` are the only path builders.
