@@ -419,11 +419,13 @@ The four largest daemon files were split into focused units with single ownershi
 | Handler | Owns | Lines |
 |---|---|---|
 | `ProviderCommandHandler` | provider templates/instances/credentials/auth/model commands | ~974 |
-| `SessionQueryHandler` | session history, list, title, preferences; runtime notice hydration | ~404 |
+| `SessionQueryHandler` | session list, title, delete, preferences; runtime notice hydration; `session_history` envelope assembly (row projection and synthetic-row placement are delegated to `handlers/session_history/`) | ~683 |
 | `SessionRecoveryCommandHandler` | Plan 30 `runtime_retry` / `runtime_stop` / `runtime_continue_with_provider`; route confirmation (single consumer, therefore kept inside this handler). When a resumed owner is rate-limit waiting, a new recovery command reroutes and wakes that same owner rather than attempting a second claim. | ~330 |
 | `WorkspaceCommandHandler` | workspace browse/create/tree, MCP server management, slash-command discovery, computer-use toggles, workspace policy (MCP is intentionally folded in — no independent state owner, so a separate handler would violate DRY) | ~355 |
 
 Handlers receive `orchestrator`, `runtimeRecovery`, `config`, `agentRuntime`, `policyStore`, `envFileService` as **nullable** explicit constructor params; the bridge resolves them lazily and conditionally; handlers MUST NOT use `getIt`.
+
+Session history is projected in two owners behind the handler. `handlers/session_history/session_history_projector.dart` turns durable page rows into canonical history rows — row shapes, stable event ids, terminal-classification input, and the latest context-usage projection — from explicit inputs (page rows, following message, base time, session metadata, active continuation). `handlers/session_history/history_row_placement.dart` decides where the compaction-lifecycle, fork-marker, and automatic-failover rows sit on a page and builds those synthetic rows; `SessionQueryHandler` only resolves the page and runtime state and assembles the envelope.
 
 #### AgentRunner (`agent/lib/engine/`)
 
