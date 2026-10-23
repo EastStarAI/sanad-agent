@@ -11,6 +11,7 @@ This contract applies to `client/lib/features/conversations/domain/`.
   - `ConversationDraftCache` owns draft read, write, recovery, and clear operations for existing sessions and New Conversation. Its device-context callbacks (`getContext`, `updateContext`, `ensureDeviceContext`) are required, so a New Conversation draft write can never be silently skipped.
   Owners receive dependencies through explicit constructor parameters or typed callbacks and never reach into another owner's private state; per-device context slices stay owned by `SessionSectionCache` and the other owners read or write them only through its context accessors.
 - `DeviceConversationStore` owns canonical timeline state; `ProcessingStore` and attention/execution registries own their respective authoritative projections. It owns independent older/newer history cursors for an anchored slice and may retain at most two recently visited timelines exhausted in both directions so same-runtime navigation does not discard pages the user explicitly loaded; this retention is not persisted cache authority.
+- `PendingSteerProjection` owns the pending-steer lifecycle map, the request ids a stop already recovered, and the pending/delivered/cancelled/recovered projection of those rows onto the canonical timeline. It receives the store's timeline state, its selected session id, and its message-emit callback, so a lifecycle row can only project into, re-anchor in, or disappear from the owning conversation timeline.
 - Cubits and widgets must not create parallel cache maps, cursors, drafts, processing sets, or recovery stores.
 - `SessionCubit.agentSessions` is a compatibility projection from the cache store, not a second owner.
 
@@ -29,10 +30,10 @@ This contract applies to `client/lib/features/conversations/domain/`.
 
 ## Queue, Steer, and Recovery
 - Project queue and pending-steer state only from daemon lifecycle/mutation outcomes.
-- Scope pending steers by session, raw request id, and monotonic revision.
+- Scope pending steers by session, raw request id, and monotonic revision, in the dedicated `PendingSteerProjection` owner.
 - Pending renders one projection at the live activity tail; delivered reuses it and moves it to the daemon-provided causal anchor; cancelled or recovered removes it.
 - Background-session outcomes must not mutate the active timeline.
-- Stop-draft recovery removes matching pending-steer projections before offering recovered text to the draft owner.
+- Stop-draft recovery removes matching pending-steer projections before offering recovered text to the draft owner, and the recovered request ids are retained by `PendingSteerProjection` so a late lifecycle replay cannot resurrect them.
 - Stop-draft recovery also clears the session queued-messages projection atomically, mirroring the daemon's queue cleanup during stop.
 - User-stop recovery requires the separately persisted owner token and acknowledgment only after draft persistence succeeds.
 - Restart recovery requires an atomic claim; apply text only when `claimed_by` matches this client's claim id.
