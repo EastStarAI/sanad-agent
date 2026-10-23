@@ -144,7 +144,13 @@ session snapshot.
 The agent can persist one-shot and recurring tasks for future execution and run
 them even when the client window is closed, as long as the daemon remains
 running. Scheduling is managed through the action-oriented `schedule_task` tool
-(`create`, `list`, `cancel`, `update`).
+(`create`, `list`, `cancel`, `update`, `pause`, `resume`, `run_now`). A schedule
+carries an optional display name, set on `create` and `update`.
+
+A schedule's task text runs verbatim when it fires, with no earlier conversation
+to draw context from, so it must be self-contained. A prompt the user authored on
+a schedule screen is therefore never steered by content hidden from them, and
+compaction of the run's conversation owns any later growth.
 
 Recurring schedules use a bounded vocabulary:
 - `once`: absolute ISO-8601 timestamp (`at`) or relative delay (`in <n> <minutes|hours|days>`; the legacy `seconds` unit remains accepted for one-shot delays). An `at` value without an offset is wall-clock time in the schedule's zone.
@@ -157,12 +163,28 @@ Recurring schedules use a bounded vocabulary:
 Schedules carry an explicit timezone: `local` (host operating system rules) or a
 fixed UTC offset (`Z`, `+HH:MM`, `-HH:MM`). The agent-level default comes from
 `SCHEDULE_TIMEZONE` (default `local`) and is persisted with each schedule at
-creation. Mutation (`cancel`, `update`) is owner-scoped to the originating
-conversation, while `list` provides device-wide visibility. An `update` that
-omits `kind` changes only the supplied fields and keeps the existing shape (for
-example, a new `time` keeps a weekly schedule weekly); an `update` that supplies
-`kind` replaces the whole schedule definition. Next-run instants render as
-`YYYY-MM-DDTHH:MM:SS` with an explicit `Z` or `±HH:MM` designator.
+creation. Mutation (`cancel`, `update`, `pause`, `resume`, `run_now`) is
+owner-scoped to the originating conversation, while `list` provides device-wide
+visibility. An `update` that omits `kind` changes only the supplied fields and
+keeps the existing shape (for example, a new `time` keeps a weekly schedule
+weekly); an `update` that supplies `kind` replaces the whole schedule definition.
+Next-run instants render as `YYYY-MM-DDTHH:MM:SS` with an explicit `Z` or
+`±HH:MM` designator.
+
+Every schedule records who owns it: the conversation that created it, or the
+device when a screen created it without one. A model turn may touch only the
+schedules its own conversation created; naming any other schedule is refused
+with the owner named and changes nothing. `list` shows each schedule's owner,
+its paused state, and its consecutive-failure count.
+
+A schedule can be paused and resumed. Pausing keeps the stored next run and stops
+the timer; resuming recomputes the next instant from now. A one-shot schedule
+whose instant has already passed cannot be resumed — it never fires
+retroactively. A schedule the model created belongs to the conversation that owns
+it, and if that conversation is deleted it can only be edited or deleted.
+`run_now` dispatches immediately, including on a paused schedule: it is recorded
+as a manual run, it does not shift the next scheduled instant, and it does not
+resume the schedule.
 
 ### Wake, Recovery, and Missed-Occurrence Policy
 

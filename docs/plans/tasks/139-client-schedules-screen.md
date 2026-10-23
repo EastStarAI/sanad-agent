@@ -2,8 +2,8 @@
 title: "Task 139 — Schedules Screen, Schedule Control, and Run History"
 description: "Give schedules a real product surface: a standalone Client list and detail page, a create/edit form that reuses the existing new-conversation widgets, pause/resume/run-now, a per-schedule conversation mode, a persisted run history anchored to the run's conversation, and one local/cloud protocol path, while the model stays owner-scoped and the device owner can control any schedule."
 status: in_progress
-current_gate: "139-01 merged (#312); 139-02 in review; 139-03 next"
-remaining_estimate: 75%
+current_gate: "139-01 merged (#312); 139-02 merged (#317); 139-03 in review; 139-04 next"
+remaining_estimate: 65%
 base_commit: 09d5c34a
 depends_on: "138-11 (schema modules), 138-08 (bridge translator), 138-09 (history projection host), 113b 113-02 (composer split) — see Work split"
 ---
@@ -549,7 +549,7 @@ exact commands and counts from that PR.
 | Item | PR | Status | Verification |
 |---|---|---|---|
 | 139-01 state: columns + `scheduled_task_runs` + repositories | #312 | merged | `fvm dart analyze` clean; `test/evolution/scheduled_tasks_migration_test.dart` 19 + `test/evolution/scheduled_task_runs_test.dart` 18; `test/evolution/` 450; `test/guards/` 11; schema snapshots regenerated for all four fixtures (runs table, its index, seven appended columns) with the pre-112 fixture group asserting the `model`/`continuous` backfill; full fast suite result posted on the PR. Ratchet: `schedule_model.dart` 1,264 → 1,143 (record moved to `scheduled_task_record.dart`, 241 lines, no entry). Review delta 1: the upsert is insert-only for the D1 columns and `updateScheduleSettings` is their single edit path |
-| 139-02 scheduler control + conversations + run recorder | #317 | in review | `cd agent && fvm dart analyze` clean (0 issues); `test/evolution/schedule_control_test.dart` (15 passed); `test/evolution/schedule_conversations_and_runs_test.dart` (18 passed); `test/guards/file_size_ratchet_guard_test.dart` (3 passed); full `agent/test/evolution/` suite passed; full Agent fast suite passed. Line counts: `cron_scheduler.dart` 836 lines, `session_manager.dart` 427 lines, `schedule_control.dart` 294 lines, `schedule_run_recorder.dart` 487 lines, `schedule_conversation_factory.dart` 167 lines (all ≤ 1000 ratchet limit). Q1/Q2 coordinator decisions implemented and tested. |
+| 139-02 scheduler control + conversations + run recorder | #317 | merged | `cd agent && fvm dart analyze` clean (0 issues); `test/evolution/schedule_control_test.dart` (15 passed); `test/evolution/schedule_conversations_and_runs_test.dart` (18 passed); `test/guards/file_size_ratchet_guard_test.dart` (3 passed); full `agent/test/evolution/` suite passed; full Agent fast suite passed. Line counts: `cron_scheduler.dart` 836 lines, `session_manager.dart` 427 lines, `schedule_control.dart` 294 lines, `schedule_run_recorder.dart` 487 lines, `schedule_conversation_factory.dart` 167 lines (all ≤ 1000 ratchet limit). Q1/Q2 coordinator decisions implemented and tested. |
 
 ## Out of scope
 
