@@ -264,7 +264,10 @@ requires transport-derived device-owner authority, and a Client-created schedule
     schedule is rejected.
   - Response Event: `schedule.runs_result` (`{"schedule_id": "...", "runs": [...], "has_more": false}`),
     where each run is exactly id, `run_at`, status, trigger, `duration_ms`, error, `session_id`,
-    `message_id`, and `has_position`.
+    `message_id`, `has_position`, and `anchor_event_id`. `anchor_event_id` is the canonical history event
+    id of the run's user message (`history:<session_id>:<message_row_id>:user_message:0`) and is the value
+    Open conversation passes to `session_history`; it is `null` when the run has no position or its
+    message row is no longer active, and `message_id` is never a substitute for it.
 
 - **Event: `schedule.run_failed`** (Agent → Sanad client family, live and model-invisible)
   - Published to the run's conversation when a run reaches `failed`, carrying `schedule_id`,

@@ -102,6 +102,48 @@ void main() {
       );
 
       test(
+        'in-grace recovery dispatches into the conversation the stored row already owns',
+        () async {
+          final conversation = sessionManager.createSession('test-model');
+          final armed = scheduler.createSchedule(
+            task: 'Continuous recovery task',
+            name: 'Continuous recovery',
+            ownerKind: ScheduleOwnerKind.user,
+            conversationMode: ScheduleConversationMode.continuous,
+            definition: ScheduleDefinition(
+              kind: ScheduleKind.daily,
+              zone: 'Z',
+              atTime: '10:00',
+            ),
+          );
+          expect(armed.runSessionId, isNull);
+
+          // The factory persists the conversation straight to the row, so the
+          // copy a restart or a re-arm still holds never learns it.
+          sessionManager.db.updateScheduleSettings(
+            armed.id,
+            runSessionId: conversation.sessionId,
+          );
+
+          final receivedEvents = <GatewayEvent>[];
+          final subscription = scheduler.eventStream.listen(receivedEvents.add);
+
+          scheduler.restoreRecurringSchedule(
+            armed,
+            now: armed.nextRunAt.add(const Duration(minutes: 5)),
+          );
+          await pumpEventQueue();
+          await subscription.cancel();
+
+          expect(receivedEvents, hasLength(1));
+          expect(receivedEvents.single.sessionId, conversation.sessionId);
+          final advanced = scheduler.getSchedule(armed.id)!;
+          expect(advanced.runSessionId, conversation.sessionId);
+          expect(advanced.lastStatus, 'fired');
+        },
+      );
+
+      test(
         'due-beyond-grace fires zero times, advances, and records last_status=skipped_missed',
         () async {
           final now = DateTime.utc(2026, 10, 20, 15, 0);

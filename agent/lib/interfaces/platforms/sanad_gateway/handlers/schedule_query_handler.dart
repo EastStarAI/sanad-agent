@@ -330,7 +330,16 @@ class ScheduleQueryHandler {
           payload: {
             'request_id': ?requestId,
             'schedule_id': scheduleId,
-            'runs': [for (final run in runs) ScheduleRunProjection.project(run)],
+            'runs': [
+              for (final run in runs)
+                ScheduleRunProjection.project(
+                  run,
+                  anchorEventId: ScheduleRunProjection.anchorEventIdFor(
+                    run,
+                    db: _sessionManager.db,
+                  ),
+                ),
+            ],
             'has_more': page.hasMore,
             'next_cursor': ?nextCursor,
           },

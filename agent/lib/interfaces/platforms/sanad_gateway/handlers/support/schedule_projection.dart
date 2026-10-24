@@ -1,4 +1,5 @@
-import 'package:sanad_agent/evolution/db/scheduled_task_run_repository.dart';
+import 'package:sanad_agent/evolution/db/session_db.dart';
+import 'package:sanad_agent/evolution/models/session_history_page.dart';
 import 'package:sanad_agent/evolution/scheduling/schedule_model.dart';
 
 /// Wire projection of `scheduled_tasks` and `scheduled_task_runs` for the
@@ -85,12 +86,18 @@ abstract final class ScheduleRowProjection {
 /// The run projection every `schedule.runs_result` row uses.
 abstract final class ScheduleRunProjection {
   /// Exactly `{id, run_at, status, trigger, duration_ms, error, session_id,
-  /// message_id, has_position}`.
+  /// message_id, has_position, anchor_event_id}`.
   ///
   /// `has_position` is true exactly when `message_id` is set, which is the only
   /// case in which the Client can open the run inside its conversation (S20).
-  /// No conversation title, message text, or command output is projected here.
-  static Map<String, dynamic> project(ScheduledTaskRun run) => {
+  /// `anchor_event_id` is the identity that open actually navigates with: the
+  /// canonical history event id of the run's user message, or `null` when there
+  /// is none to open (see [anchorEventIdFor]). No conversation title, message
+  /// text, or command output is projected here.
+  static Map<String, dynamic> project(
+    ScheduledTaskRun run, {
+    String? anchorEventId,
+  }) => {
     'id': run.id,
     'run_at': run.runAt.toUtc().toIso8601String(),
     'status': run.status.wireName,
@@ -100,5 +107,30 @@ abstract final class ScheduleRunProjection {
     'session_id': run.sessionId,
     'message_id': run.messageId,
     'has_position': run.hasPosition,
+    'anchor_event_id': anchorEventId,
   };
+
+  /// The canonical history anchor [run]'s Open conversation navigates with.
+  ///
+  /// A run stores the identity of the message its turn committed; the history
+  /// anchor addresses that message's durable row, so the id is built from the
+  /// stored conversation through [SessionHistoryEventId] rather than formatted
+  /// here. `null` while the run has no position, and also when that message row
+  /// is no longer the active one — an anchor the history loader cannot resolve
+  /// is indistinguishable from no anchor, and the run row's stored identity is
+  /// never rewritten to fake a position it lost.
+  static String? anchorEventIdFor(
+    ScheduledTaskRun run, {
+    required SessionDB db,
+  }) {
+    final sessionId = run.sessionId;
+    final messageId = run.messageId;
+    if (sessionId == null || messageId == null) return null;
+    final messageRowId = db.activeRowIdForMessageId(sessionId, messageId);
+    if (messageRowId == null) return null;
+    return SessionHistoryEventId.forUserMessage(
+      sessionId: sessionId,
+      messageRowId: messageRowId,
+    );
+  }
 }

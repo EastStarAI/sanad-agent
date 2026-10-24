@@ -31,6 +31,40 @@ class SessionHistoryAnchorNotFoundException implements Exception {
   const SessionHistoryAnchorNotFoundException();
 }
 
+/// Canonical identity of one `session_history` row.
+///
+/// The single owner of the `history:<sessionId>:<rowId>:<kind>:<ordinal>` shape
+/// that [SessionHistoryRequest.anchorRowIdForSession] admits, so no producer of
+/// an anchor hand-formats an id the history loader would reject.
+abstract final class SessionHistoryEventId {
+  /// The row kind a persisted user message projects to.
+  static const String userMessageKind = 'user_message';
+
+  /// The canonical event id of one projected history row.
+  static String canonical({
+    required String sessionId,
+    required int rowId,
+    required String kind,
+    required int ordinal,
+  }) => 'history:$sessionId:$rowId:$kind:$ordinal';
+
+  /// The canonical event id of the one history row the user message stored at
+  /// [messageRowId] renders as.
+  ///
+  /// A persisted user message projects to exactly one row of [userMessageKind]
+  /// with ordinal `0`, which is why that message's row identity alone addresses
+  /// it (Task 139 S20).
+  static String forUserMessage({
+    required String sessionId,
+    required int messageRowId,
+  }) => canonical(
+    sessionId: sessionId,
+    rowId: messageRowId,
+    kind: userMessageKind,
+    ordinal: 0,
+  );
+}
+
 class SessionHistoryRequest {
   final int limit;
   final String? cursor;

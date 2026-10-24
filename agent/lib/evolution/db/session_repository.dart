@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/session_history_page.dart';
 import '../models/session_query.dart';
 import '../models/session_search.dart';
 import '../models/session_state.dart';
@@ -414,7 +415,12 @@ class SessionRepository {
           anchorEventId:
               rowId == null || anchorKind == null || anchorOrdinal == null
               ? null
-              : 'history:${row['session_id']}:$rowId:$anchorKind:$anchorOrdinal',
+              : SessionHistoryEventId.canonical(
+                  sessionId: row['session_id'].toString(),
+                  rowId: rowId,
+                  kind: anchorKind,
+                  ordinal: anchorOrdinal,
+                ),
         ),
       );
     }
