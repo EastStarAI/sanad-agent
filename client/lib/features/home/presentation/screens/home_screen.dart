@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:sanad_client/features/settings/data/workspace_security_client.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -34,9 +33,9 @@ import 'package:sanad_client/features/conversations/data/repositories/conversati
 import 'package:sanad_client/features/conversations/data/repositories/conversation_media_loader_resolver.dart';
 import 'package:sanad_client/features/devices/domain/device_preferences_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/screens/brain_activity_view.dart';
-import 'package:sanad_client/features/conversations/presentation/widgets/session_sidebar.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
 import 'package:sanad_client/features/home/presentation/widgets/conversation_workspace_layout.dart';
+import 'package:sanad_client/features/home/presentation/widgets/sidebar_drawer.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
@@ -46,6 +45,7 @@ import 'package:sanad_client/infrastructure/platform/window_manager_service.dart
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 
 import 'package:sanad_client/features/home/presentation/widgets/status_bar.dart';
+import 'package:sanad_client/features/schedules/presentation/schedules_chrome_scope.dart';
 
 /// The root home screen.  It is an "orchestration screen" that spans the
 /// [auth], [devices], and [conversations] features.  Placed in its own
@@ -53,9 +53,19 @@ import 'package:sanad_client/features/home/presentation/widgets/status_bar.dart'
 class HomeScreen extends StatefulWidget {
   final ConversationDestination? destination;
 
+  /// A device-scoped surface rendered in the chrome's content slot instead of
+  /// the conversation (Task 139 C1).
+  ///
+  /// The two Schedules routes are hosted here, because their pages must keep the
+  /// real device chrome and sidebar and the sidebar needs this screen's provider
+  /// tree. When set, the conversation routing of this screen does not run: the
+  /// route owns the content and the URL.
+  final Widget? deviceContent;
+
   const HomeScreen({
     super.key,
     this.destination,
+    this.deviceContent,
   });
 
   @visibleForTesting
@@ -209,6 +219,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
       child: _HomeScreenContent(
         destination: widget.destination,
+        deviceContent: widget.deviceContent,
       ),
     );
   }
@@ -218,7 +229,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _HomeScreenContent extends StatefulWidget {
   final ConversationDestination? destination;
-  const _HomeScreenContent({this.destination});
+
+  /// See [HomeScreen.deviceContent].
+  final Widget? deviceContent;
+
+  const _HomeScreenContent({this.destination, this.deviceContent});
 
   @override
   State<_HomeScreenContent> createState() => _HomeScreenContentState();
@@ -282,6 +297,9 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final dest = widget.destination;
       if (!mounted) return;
+      // A hosted device surface owns the content slot and the URL; conversation
+      // routing must not redirect away from it.
+      if (widget.deviceContent != null) return;
 
       if (dest == null) {
         final deviceState = context.read<DeviceCubit>().state;
@@ -555,36 +573,37 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
             return ValueListenableBuilder<bool>(
               valueListenable: WindowManagerService.compactModeListenable,
               builder: (context, isCompactWindow, _) {
-                return Scaffold(
-                  key: _scaffoldKey,
-                  backgroundColor: Colors.transparent,
-                  drawer: isDesktop ? null : const _SidebarDrawer(),
-                  body: Column(
-                    children: [
-                      Expanded(
-                        child: Stack(
-                          children: [
-                            if (isDesktop)
-                              const ConversationWorkspaceLayout(
-                                child: _MainContent(isMobile: false),
-                              )
-                            else
-                              const _MainContent(
-                                isMobile: true,
-                              ),
-                            if (_providerSetupDevice != null)
-                              _ProviderSetupGate(
-                                device: _providerSetupDevice!,
-                                onReady: (readiness) => _dismissProviderSetupGate(
-                                  readiness: readiness,
+                final deviceContent = widget.deviceContent;
+                return SchedulesChromeScope(
+                  child: Scaffold(
+                    key: _scaffoldKey,
+                    backgroundColor: Colors.transparent,
+                    drawer: isDesktop ? null : const SidebarDrawer(),
+                    body: Column(
+                      children: [
+                        Expanded(
+                          child: Stack(
+                            children: [
+                              if (isDesktop)
+                                ConversationWorkspaceLayout(
+                                  child: deviceContent ?? const _MainContent(isMobile: false),
+                                )
+                              else
+                                deviceContent ?? const _MainContent(isMobile: true),
+                              if (_providerSetupDevice != null && deviceContent == null)
+                                _ProviderSetupGate(
+                                  device: _providerSetupDevice!,
+                                  onReady: (readiness) => _dismissProviderSetupGate(
+                                    readiness: readiness,
+                                  ),
+                                  onSkip: () => _dismissProviderSetupGate(skipped: true),
                                 ),
-                                onSkip: () => _dismissProviderSetupGate(skipped: true),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      const DesktopOnlyStatusBar(),
-                    ],
+                        const DesktopOnlyStatusBar(),
+                      ],
+                    ),
                   ),
                 );
               },
@@ -915,58 +934,6 @@ class _HistoryTransitionOverlay extends StatelessWidget {
                       ),
                     ],
                   ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Sidebar drawer (mobile) ───────────────────────────────────────────────
-
-class _SidebarDrawer extends StatelessWidget {
-  const _SidebarDrawer();
-
-  @override
-  Widget build(BuildContext context) {
-    final Widget content = SessionSidebar(
-      isDrawerMode: true,
-      onClose: () => Navigator.pop(context),
-    );
-    final theme = Theme.of(context);
-    final isRtl = Directionality.of(context) == TextDirection.rtl;
-
-    return Drawer(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      width: (MediaQuery.of(context).size.width * SidebarBreakpoints.drawerWidthFactor).clamp(
-        SidebarBreakpoints.minWidth,
-        MediaQuery.of(context).size.width,
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.horizontal(
-          right: isRtl ? Radius.zero : const Radius.circular(16),
-          left: isRtl ? const Radius.circular(16) : Radius.zero,
-        ),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface.withValues(alpha: 0.25),
-              border: Border(
-                right: isRtl
-                    ? BorderSide.none
-                    : BorderSide(
-                        color: theme.colorScheme.outline.withValues(alpha: 0.25),
-                      ),
-                left: isRtl
-                    ? BorderSide(
-                        color: theme.colorScheme.outline.withValues(alpha: 0.25),
-                      )
-                    : BorderSide.none,
-              ),
-            ),
-            child: content,
           ),
         ),
       ),

@@ -5,6 +5,9 @@ import 'package:sanad_client/core/theme/activity_animation_policy.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:sanad_client/features/schedules/presentation/bloc/schedules_cubit.dart';
+import 'package:sanad_client/features/schedules/presentation/schedules_chrome_scope.dart';
+
 import '../../../../devices/domain/models/device_config.dart';
 import '../../../../devices/presentation/bloc/device_capabilities_cubit.dart';
 import '../../../../devices/presentation/bloc/device_capabilities_state.dart';
@@ -176,20 +179,30 @@ class _SidebarConversationRowState extends State<SidebarConversationRow> {
                               widget.session,
                             )
                           : null,
-                      child: Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: Text(
-                          displayTitle,
-                          textDirection: titleDirection,
-                          textAlign: TextAlign.start,
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: isSelected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
-                            fontSize: 12,
-                            fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: Text(
+                                displayTitle,
+                                textDirection: titleDirection,
+                                textAlign: TextAlign.start,
+                                maxLines: 1,
+                                style: TextStyle(
+                                  color: isSelected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
+                                  fontSize: 12,
+                                  fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
                           ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                          ConversationScheduleMarker(
+                            deviceId: widget.device.id,
+                            sessionId: widget.session.id,
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -369,15 +382,31 @@ void _showRenameDialog(BuildContext context, SessionCubit sessionCubit, DeviceCo
 }
 
 void _showDeleteConfirmation(BuildContext context, SessionCubit sessionCubit, DeviceConfig device, Session session) {
+  // Schedules that dispatch into this conversation are paused by the Agent, never
+  // deleted (S23); the warning is derived from the same schedule.list snapshot
+  // the sidebar marker reads, so it costs no extra command.
+  final ownedScheduleExists = conversationOwnsSchedules(context, device.id, session.id);
   unawaited(
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Session'),
-        content: Text('Are you sure you want to delete "${session.title}"? This cannot be undone.'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Are you sure you want to delete "${session.title}"? This cannot be undone.'),
+            ConversationDeleteWarning(hasOwnedSchedules: ownedScheduleExists),
+          ],
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(
+            key: const Key('conversation_delete_cancel_btn'),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: const Key('conversation_delete_confirm_btn'),
             onPressed: () async {
               await sessionCubit.deleteSession(agent: device, session: session);
               switch (context.mounted) {
@@ -760,6 +789,71 @@ class _BusyDotState extends State<_BusyDot> with SingleTickerProviderStateMixin 
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The compact badge that marks a conversation owning at least one schedule
+/// (Task 139 C1, S12).
+///
+/// It reads the chrome's one `schedule.list` snapshot through [SchedulesScope],
+/// so it issues no command of its own, and it renders nothing when the subtree
+/// has no schedules scope (a sidebar pumped on its own) or when the conversation
+/// owns none.
+class ConversationScheduleMarker extends StatelessWidget {
+  const ConversationScheduleMarker({super.key, required this.deviceId, required this.sessionId});
+
+  final String deviceId;
+  final String sessionId;
+
+  @override
+  Widget build(BuildContext context) {
+    final cubit = SchedulesScope.cubitFor(context, deviceId);
+    if (cubit == null) return const SizedBox.shrink();
+    return BlocSelector<SchedulesCubit, SchedulesState, bool>(
+      bloc: cubit,
+      selector: (state) => state.conversationIdsWithSchedules.contains(sessionId),
+      builder: (context, ownsSchedules) {
+        if (!ownsSchedules) return const SizedBox.shrink();
+        final l10n = AppLocalizations.of(context)!;
+        return Tooltip(
+          message: l10n.scheduleHasSchedules,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.only(start: 6),
+            child: Icon(
+              Icons.event_note_rounded,
+              key: Key('schedule_marker_$sessionId'),
+              size: 13,
+              color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// The Schedules sentence of the conversation delete confirmation (Task 139
+/// S23).
+///
+/// Deleting a conversation never deletes its schedules: the Agent pauses them,
+/// and this warning is the only place the user is told. It renders nothing when
+/// no schedule depends on the conversation.
+class ConversationDeleteWarning extends StatelessWidget {
+  const ConversationDeleteWarning({super.key, required this.hasOwnedSchedules});
+
+  final bool hasOwnedSchedules;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hasOwnedSchedules) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Text(
+        AppLocalizations.of(context)!.scheduleConversationDeleteWarning,
+        key: const Key('conversation_delete_schedules_warning'),
+        style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12),
       ),
     );
   }

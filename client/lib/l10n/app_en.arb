@@ -760,5 +760,204 @@
   "secretsPermissionDenied": "You do not have permission to manage secrets on this device.",
   "secretsInvalidRequest": "The device rejected the request. Check the name and description.",
   "secretsVaultUnavailable": "The secure vault on this device is not available right now.",
-  "secretsInternalError": "The device could not complete the request."
+  "secretsInternalError": "The device could not complete the request.",
+  "schedules": "Schedules",
+  "newSchedule": "New schedule",
+  "scheduleNewTitle": "New schedule",
+  "scheduleEditTitle": "Edit schedule",
+  "scheduleName": "Name",
+  "scheduleNameOptional": "Optional. A short label for this schedule.",
+  "scheduleTask": "Task",
+  "scheduleTaskHint": "Write the instruction exactly as it should run. A run does not see this conversation, so the task must be self-contained.",
+  "scheduleRecurrence": "Repeats",
+  "scheduleRecurrenceOnce": "Once",
+  "scheduleRecurrenceInterval": "Every few minutes",
+  "scheduleRecurrenceDaily": "Daily",
+  "scheduleRecurrenceWeekly": "Weekly",
+  "scheduleRecurrenceMonthly": "Monthly",
+  "scheduleTime": "Time",
+  "scheduleWeekdays": "Days",
+  "scheduleDayOfMonth": "Day of month",
+  "scheduleInterval": "Interval in minutes",
+  "scheduleZone": "Time zone",
+  "scheduleZoneHint": "Local time, or a fixed offset such as +03:00.",
+  "scheduleWorkspace": "Workspace",
+  "scheduleModel": "Model",
+  "scheduleConversationMode": "Conversation mode",
+  "scheduleModeContinuous": "One conversation",
+  "scheduleModeContinuousHint": "The first run creates a conversation and every later run is added to it.",
+  "scheduleModeNewEachRun": "A new conversation each run",
+  "scheduleModeNewEachRunHint": "Every run starts a fresh conversation, linked from the run history.",
+  "scheduleModeUnknown": "Unrecognized conversation mode",
+  "scheduleNextRunPreview": "Next run",
+  "schedulePreviewInvalid": "This schedule is not valid yet.",
+  "schedulePaused": "Paused",
+  "pauseSchedule": "Pause",
+  "resumeSchedule": "Resume",
+  "runNow": "Run now",
+  "deleteSchedule": "Delete schedule",
+  "deleteScheduleConfirm": "Delete \"{name}\"? Its run history is removed too. Conversations it created are kept.",
+  "@deleteScheduleConfirm": {
+    "description": "Confirmation for deleting one schedule",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "scheduleDetails": "Details",
+  "scheduleRunHistory": "Run history",
+  "scheduleRunStatusRunning": "Running",
+  "scheduleRunStatusSucceeded": "Succeeded",
+  "scheduleRunStatusFailed": "Failed",
+  "scheduleRunStatusSkipped": "Skipped",
+  "scheduleRunStatusUnknown": "Unknown status",
+  "scheduleRunTriggerScheduled": "Scheduled",
+  "scheduleRunTriggerManual": "Manual",
+  "scheduleRunTriggerRecovery": "Recovered",
+  "scheduleRunTriggerUnknown": "Unknown trigger",
+  "scheduleDuration": "Duration",
+  "scheduleOpenConversation": "Open conversation",
+  "scheduleOpenConversationMissing": "This run has no conversation to open yet.",
+  "scheduleEmpty": "No schedules yet",
+  "scheduleEmptyHint": "Create a schedule to run a task on a recurring basis without starting a conversation first.",
+  "scheduleUnavailable": "Unavailable",
+  "scheduleUnavailableHint": "This device is offline. Actions are disabled until it reconnects.",
+  "scheduleLoadFailed": "Could not load schedules.",
+  "scheduleSaveFailed": "Could not save the schedule.",
+  "scheduleActionFailed": "The device rejected that action.",
+  "scheduleLoadRunsFailed": "Could not load the run history.",
+  "scheduleExpired": "This schedule already ran and cannot be resumed.",
+  "scheduleFailureSuggestion": "This schedule keeps failing. Pause it until the cause is fixed.",
+  "scheduleFailureNotice": "Schedule \"{name}\" failed to run.",
+  "@scheduleFailureNotice": {
+    "description": "Non-modal notice for a failed run; it never carries error text",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "scheduleOwnedByConversation": "Conversation: {title}",
+  "@scheduleOwnedByConversation": {
+    "description": "Owner line of a schedule bound to a conversation",
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "scheduleOwnedByDevice": "Owned by this device",
+  "scheduleOwnedByDeviceHint": "The conversation is created on the first run.",
+  "scheduleHasSchedules": "This conversation has schedules",
+  "scheduleConversationDeleteWarning": "Schedules that use this conversation will be paused.",
+  "scheduleCreate": "Create",
+  "scheduleSave": "Save",
+  "scheduleEdit": "Edit",
+  "scheduleTaskRequired": "Enter the task to run.",
+  "scheduleTimeRequired": "Enter a time.",
+  "scheduleInvalidTime": "Use 24-hour time such as 09:30.",
+  "scheduleWeekdaysRequired": "Pick at least one day.",
+  "scheduleDayOfMonthRequired": "Enter a day between 1 and 31.",
+  "scheduleIntervalRequired": "Enter a positive number of minutes.",
+  "scheduleOnceRequired": "Pick when this should run.",
+  "scheduleSummaryOnce": "Once, at {instant}",
+  "@scheduleSummaryOnce": {
+    "description": "Recurrence summary for a one-off schedule",
+    "placeholders": {
+      "instant": {
+        "type": "String"
+      }
+    }
+  },
+  "scheduleSummaryOncePast": "Once, in the past",
+  "scheduleSummaryInterval": "Every {minutes} minutes",
+  "@scheduleSummaryInterval": {
+    "description": "Recurrence summary for an interval schedule",
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "scheduleSummaryDaily": "Daily at {time}",
+  "@scheduleSummaryDaily": {
+    "description": "Recurrence summary for a daily schedule",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "scheduleSummaryWeekly": "Weekly on {days} at {time}",
+  "@scheduleSummaryWeekly": {
+    "description": "Recurrence summary for a weekly schedule",
+    "placeholders": {
+      "days": {
+        "type": "String"
+      },
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "scheduleSummaryMonthly": "Monthly on day {day} at {time}",
+  "@scheduleSummaryMonthly": {
+    "description": "Recurrence summary for a monthly schedule",
+    "placeholders": {
+      "day": {
+        "type": "int"
+      },
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "scheduleWeekdayMon": "Mon",
+  "scheduleWeekdayTue": "Tue",
+  "scheduleWeekdayWed": "Wed",
+  "scheduleWeekdayThu": "Thu",
+  "scheduleWeekdayFri": "Fri",
+  "scheduleWeekdaySat": "Sat",
+  "scheduleWeekdaySun": "Sun",
+  "scheduleNextRun": "Next run",
+  "scheduleNextRunUnknown": "No upcoming run",
+  "scheduleLastRun": "Last run",
+  "scheduleNeverRan": "Never ran",
+  "scheduleLastOutcomeFired": "Fired",
+  "scheduleLastOutcomeError": "Failed",
+  "scheduleLastOutcomeSkipped": "Skipped",
+  "scheduleLastOutcomeUnknown": "Unknown outcome",
+  "scheduleInstantWithZone": "{instant} ({zone})",
+  "@scheduleInstantWithZone": {
+    "description": "An instant rendered in the schedule's own zone",
+    "placeholders": {
+      "instant": {
+        "type": "String"
+      },
+      "zone": {
+        "type": "String"
+      }
+    }
+  },
+  "scheduleNoRuns": "No runs yet",
+  "scheduleErrorInvalidRequest": "The device rejected the request. Check the schedule fields.",
+  "scheduleErrorInvalidSchedule": "That recurrence is not valid. Check the time, days and interval.",
+  "scheduleErrorNotFound": "This schedule no longer exists on the device.",
+  "scheduleErrorOrphaned": "Its conversation was deleted, so this schedule cannot run. Edit or delete it.",
+  "scheduleErrorPermissionDenied": "You do not have permission to change this schedule.",
+  "scheduleErrorInternal": "The device could not complete the request.",
+  "scheduleInvalidZone": "Use local, or an offset such as +03:00.",
+  "scheduleNotSet": "Not set",
+  "scheduleOwner": "Owner",
+  "scheduleRunTrigger": "Trigger",
+  "scheduleDerivedLabel": "Schedule {id}",
+  "@scheduleDerivedLabel": {
+    "description": "Fallback label for a schedule that has no name and no task preview",
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  }
 }

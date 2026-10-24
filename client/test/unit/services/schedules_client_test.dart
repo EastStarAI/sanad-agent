@@ -406,6 +406,7 @@ void main() {
               'session_id': 'sess_2',
               'message_id': 'msg_9c1f0d1c',
               'has_position': true,
+              'anchor_event_id': 'history:sess_2:29586081:user_message:0',
               'future_run_field': 'ignored',
             },
           ],
@@ -437,7 +438,61 @@ void main() {
       expect(run.error, isNull);
       expect(run.messageId, 'msg_9c1f0d1c');
       expect(run.hasPosition, isTrue);
+      expect(run.anchorEventId, 'history:sess_2:29586081:user_message:0');
       expect(run.canOpenConversation, isTrue);
+    });
+
+    test('a run row from an Agent without anchor_event_id still parses', () async {
+      // The field is additive: an older Agent sends none, and that means "no
+      // position", not a broken row (Task 139 F2).
+      final commands = _RecordingCommands()
+        ..response = {
+          'request_id': 'req-1',
+          'schedule_id': 'task_1',
+          'runs': [
+            {
+              'id': 'run_1',
+              'run_at': '2026-10-23T09:00:04.000Z',
+              'status': 'succeeded',
+              'trigger': 'scheduled',
+              'duration_ms': 1200,
+              'error': null,
+              'session_id': 'sess_1',
+              'message_id': 'msg_1',
+              'has_position': true,
+            },
+          ],
+          'has_more': false,
+        };
+
+      final run = (await SchedulesClient(commands).runs(device, scheduleId: 'task_1')).runs.single;
+
+      expect(run.anchorEventId, isNull);
+      expect(run.messageId, 'msg_1', reason: 'the identity is still projected, just not an anchor');
+      expect(run.canOpenConversation, isTrue, reason: 'the conversation itself can still be opened');
+    });
+
+    test('a blank anchor_event_id is absent, not an empty anchor', () async {
+      final commands = _RecordingCommands()
+        ..response = {
+          'request_id': 'req-1',
+          'schedule_id': 'task_1',
+          'runs': [
+            {
+              'id': 'run_1',
+              'run_at': '2026-10-23T09:00:04.000Z',
+              'status': 'failed',
+              'trigger': 'manual',
+              'session_id': 'sess_1',
+              'anchor_event_id': '   ',
+            },
+          ],
+          'has_more': false,
+        };
+
+      final run = (await SchedulesClient(commands).runs(device, scheduleId: 'task_1')).runs.single;
+
+      expect(run.anchorEventId, isNull);
     });
 
     test('omits limit and cursor when they are not supplied', () async {
@@ -476,7 +531,7 @@ void main() {
       final run = (await SchedulesClient(commands).runs(device, scheduleId: 'task_1')).runs.single;
 
       expect(run.hasPosition, isTrue);
-      expect(run.canOpenConversation, isFalse);
+      expect(run.canOpenConversation, isFalse, reason: 'no session_id means nothing to open');
       expect(run.isRunning, isFalse);
       expect(run.error, 'Provider refused the turn.');
     });

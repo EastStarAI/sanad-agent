@@ -350,6 +350,16 @@ class _SidebarBody extends StatelessWidget {
             onTap: () => newConversationIn(null),
           ),
         ),
+        // The Schedules page is a device product surface beside conversations
+        // (Task 139 C1, S12).
+        SliverToBoxAdapter(
+          child: SidebarSchedulesRow(
+            onOpen: () {
+              context.go(AppRoutes.schedulesLocation(device.id));
+              if (isDrawerMode && onClose != null) onClose!();
+            },
+          ),
+        ),
         SliverToBoxAdapter(
           child: BlocSelector<SessionSidebarCubit, SessionSidebarState, _WorkspaceShellSlice>(
             selector: (state) => _WorkspaceShellSlice(

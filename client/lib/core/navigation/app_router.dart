@@ -19,8 +19,7 @@ import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_manage
 import 'package:sanad_client/features/mcp/presentation/screens/add_mcp_server_screen.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_runtime_models.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_server_config.dart';
-import 'package:sanad_client/features/schedules/presentation/screens/schedule_detail_screen.dart';
-import 'package:sanad_client/features/schedules/presentation/screens/schedules_screen.dart';
+import 'package:sanad_client/features/schedules/presentation/screens/schedules_route_surface.dart';
 import 'package:sanad_client/core/presentation/screens/not_found_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -494,13 +493,16 @@ class AppRouter {
 
   /// The device schedule list page (Task 139 C1).
   ///
-  /// 139-06 routes it at the thin shell that owns the feature cubit and its one
-  /// initial read; 139-07 supplies the body and the device chrome.
-  static Widget buildSchedulesPage({required String deviceId}) => SchedulesScreen(deviceId: deviceId);
+  /// 139-07 hosts both Schedules routes in the device chrome, so the page keeps
+  /// the real sidebar and the chrome's one device-scoped schedules cubit.
+  static Widget buildSchedulesPage({required String deviceId}) =>
+      HomeScreen(deviceContent: SchedulesRouteSurface(deviceId: deviceId));
 
-  /// The schedule detail page (Task 139 C1).
+  /// The schedule detail page (Task 139 C1), hosted the same way.
   static Widget buildScheduleDetailPage({required String deviceId, required String scheduleId}) =>
-      ScheduleDetailScreen(deviceId: deviceId, scheduleId: scheduleId);
+      HomeScreen(
+        deviceContent: SchedulesRouteSurface(deviceId: deviceId, scheduleId: scheduleId),
+      );
 
   static Widget _defaultSchedulesBuilder(BuildContext context, GoRouterState state) =>
       buildSchedulesPage(deviceId: state.pathParameters['deviceId'] ?? '');

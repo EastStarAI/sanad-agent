@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:sanad_client/features/schedules/domain/models/schedule_instant.dart';
 
 /// The lifecycle state of one run (Task 139 D9, protocol §4.5).
 enum ScheduleRunStatus {
@@ -62,6 +63,7 @@ class ScheduleRun extends Equatable {
     this.sessionId,
     this.messageId,
     this.hasPosition = false,
+    this.anchorEventId,
   });
 
   final String id;
@@ -86,11 +88,31 @@ class ScheduleRun extends Equatable {
   final String? messageId;
 
   /// Whether the Agent reported a message anchor.
+  ///
+  /// It only says that the run's user message was recorded; it is not itself an
+  /// anchor, and it is never used as one.
   final bool hasPosition;
 
-  /// Whether **Open conversation** can land on this run's own user message.
-  /// A position without a conversation to open it in is not navigable.
-  bool get canOpenConversation => hasPosition && sessionId != null && messageId != null;
+  /// The canonical history event id of the run's user message (S9, S20), or
+  /// `null` when the run has no position the Agent can still resolve.
+  ///
+  /// `history:<session_id>:<row_id>:user_message:0` is the shape the history
+  /// accepts as `anchor_event_id`, and this is the **only** value Open
+  /// conversation may anchor on. [messageId] is a message identity, not a
+  /// canonical event id: passing it makes the anchored load fail and the
+  /// conversation opens at its tail (Task 139 F2, protocol §9.1).
+  ///
+  /// The field is additive: an older Agent that does not send it leaves this
+  /// `null`, which is the same meaning as "no position" — open the conversation
+  /// at its own default place.
+  final String? anchorEventId;
+
+  /// Whether **Open conversation** can open this run's conversation.
+  ///
+  /// Only a run without a `session_id` (still in flight, its message not
+  /// committed yet) has nothing to open. A conversation with no anchor opens at
+  /// its default position, which is not an error.
+  bool get canOpenConversation => sessionId != null;
 
   /// Whether the run is still in flight.
   bool get isRunning => status == ScheduleRunStatus.running;
@@ -98,7 +120,7 @@ class ScheduleRun extends Equatable {
   factory ScheduleRun.fromJson(Map<String, dynamic> json) {
     return ScheduleRun(
       id: json['id']?.toString() ?? '',
-      runAt: _asUtc(json['run_at']) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      runAt: ScheduleInstant.utcTryParse(json['run_at']) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       status: ScheduleRunStatus.fromWire(json['status']),
       trigger: ScheduleRunTrigger.fromWire(json['trigger']),
       durationMs: _asInt(json['duration_ms']),
@@ -106,13 +128,13 @@ class ScheduleRun extends Equatable {
       sessionId: _blankToNull(json['session_id']),
       messageId: _blankToNull(json['message_id']),
       hasPosition: json['has_position'] == true,
+      anchorEventId: _blankToNull(json['anchor_event_id']),
     );
   }
 
   /// Identity and outcome only; it never carries the task text or message text.
   @override
-  String toString() =>
-      'ScheduleRun(id: $id, status: ${status.name}, trigger: ${trigger.name})';
+  String toString() => 'ScheduleRun(id: $id, status: ${status.name}, trigger: ${trigger.name})';
 
   @override
   List<Object?> get props => [
@@ -125,6 +147,7 @@ class ScheduleRun extends Equatable {
     sessionId,
     messageId,
     hasPosition,
+    anchorEventId,
   ];
 }
 

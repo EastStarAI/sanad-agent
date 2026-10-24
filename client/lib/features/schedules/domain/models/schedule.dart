@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:sanad_client/features/schedules/domain/models/schedule_instant.dart';
 
 /// The recurrence shape of a schedule (Task 139 protocol §4.4).
 ///
@@ -35,8 +36,7 @@ enum ScheduleOwnerKind {
   model,
   unknown;
 
-  static ScheduleOwnerKind fromWire(Object? value) =>
-      value?.toString().trim().toLowerCase() == 'user'
+  static ScheduleOwnerKind fromWire(Object? value) => value?.toString().trim().toLowerCase() == 'user'
       ? ScheduleOwnerKind.user
       : value?.toString().trim().toLowerCase() == 'model'
       ? ScheduleOwnerKind.model
@@ -168,6 +168,7 @@ class Schedule extends Equatable {
     this.weekdays = const <ScheduleWeekday>[],
     this.monthDay,
     this.nextRunAt,
+    this.nextRunAtOffset,
     this.ownerSessionId,
     this.ownerSessionTitle,
     this.workspaceId,
@@ -213,6 +214,13 @@ class Schedule extends Equatable {
   /// The next instant the schedule fires, as an absolute instant, or `null`
   /// before an instant could be computed.
   final DateTime? nextRunAt;
+
+  /// The offset token the Agent wrote with [nextRunAt] (`+03:00`, or `Z`).
+  ///
+  /// A `local` schedule means the *Agent's* local zone, and the device may be
+  /// remote, so this token — never the Client's own timezone — is what the
+  /// surfaces render the wall clock in (Task 139 F4).
+  final String? nextRunAtOffset;
 
   /// Whether the timer may fire. A paused row keeps its [nextRunAt].
   final bool enabled;
@@ -275,6 +283,7 @@ class Schedule extends Equatable {
       }
     }
     final rawOutcome = json['last_status'];
+    final nextRun = ScheduleInstant.tryParse(json['next_run_at']);
     return Schedule(
       id: json['id']?.toString() ?? '',
       name: _blankToNull(json['name']),
@@ -285,7 +294,8 @@ class Schedule extends Equatable {
       weekdays: List<ScheduleWeekday>.unmodifiable(weekdays),
       monthDay: _asInt(json['month_day']),
       zone: _blankToNull(json['zone']) ?? 'local',
-      nextRunAt: _asUtc(json['next_run_at']),
+      nextRunAt: nextRun?.instant,
+      nextRunAtOffset: nextRun?.offset,
       enabled: json['enabled'] == true,
       ownerKind: ScheduleOwnerKind.fromWire(json['owner_kind']),
       ownerSessionId: _blankToNull(json['owner_session_id']),
@@ -294,7 +304,7 @@ class Schedule extends Equatable {
       workspaceId: _blankToNull(json['workspace_id']),
       providerInstanceId: _blankToNull(json['provider_instance_id']),
       model: _blankToNull(json['model']),
-      lastRunAt: _asUtc(json['last_run_at']),
+      lastRunAt: ScheduleInstant.utcTryParse(json['last_run_at']),
       lastOutcome: rawOutcome == null ? null : ScheduleLastOutcome.fromWire(rawOutcome),
       consecutiveFailures: _asInt(json['consecutive_failures']) ?? 0,
       createdAt: _asUtc(json['created_at']),
@@ -334,6 +344,7 @@ class Schedule extends Equatable {
     monthDay,
     zone,
     nextRunAt,
+    nextRunAtOffset,
     enabled,
     ownerKind,
     ownerSessionId,

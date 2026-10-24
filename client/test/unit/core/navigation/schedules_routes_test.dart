@@ -2,23 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/core/navigation/app_router.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/features/auth/domain/auth_repository.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
-import 'package:sanad_client/features/devices/domain/device_repository.dart';
-import 'package:sanad_client/features/devices/domain/models/device_config.dart';
-import 'package:sanad_client/features/schedules/data/schedules_client.dart';
-import 'package:sanad_client/features/schedules/domain/models/schedule.dart';
-import 'package:sanad_client/features/schedules/domain/models/schedule_run.dart';
-import 'package:sanad_client/features/schedules/domain/models/schedule_run_failure_notice.dart';
-import 'package:sanad_client/features/schedules/presentation/screens/schedule_detail_screen.dart';
-import 'package:sanad_client/features/schedules/presentation/screens/schedules_screen.dart';
+import 'package:sanad_client/features/home/presentation/screens/home_screen.dart';
+import 'package:sanad_client/features/schedules/presentation/screens/schedules_route_surface.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
-import '../../../helpers/fake_device_repository.dart';
 
 class _FakeAuthCubit extends AuthCubit {
   _FakeAuthCubit() : super(authRepository: _FakeAuthRepository());
@@ -45,39 +37,6 @@ class _FakeAuthCubit extends AuthCubit {
 }
 
 class _FakeAuthRepository implements IAuthRepository {
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-/// Records the device it was asked about and answers with one schedule.
-class _RecordingSchedulesClient implements SchedulesClient {
-  final listCalls = <String>[];
-  final runsCalls = <String>[];
-
-  @override
-  Future<SchedulesSnapshot> list(DeviceConfig device) async {
-    listCalls.add(device.id);
-    return const SchedulesSnapshot(schedules: []);
-  }
-
-  @override
-  Future<ScheduleRunsPage> runs(
-    DeviceConfig device, {
-    required String scheduleId,
-    int? limit,
-    String? cursor,
-  }) async {
-    runsCalls.add(scheduleId);
-    return ScheduleRunsPage(scheduleId: scheduleId, runs: const []);
-  }
-
-  @override
-  Stream<void> changes(DeviceConfig device) => const Stream<void>.empty();
-
-  @override
-  Stream<ScheduleRunFailureNotice> runFailures(DeviceConfig device) =>
-      const Stream<ScheduleRunFailureNotice>.empty();
-
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -119,15 +78,24 @@ void main() {
       );
     });
 
-    test('the default builders point at the two thin shells', () {
+    test('the default builders host both routes in the device chrome', () {
+      // A Schedules route renders inside the real sidebar, which needs
+      // HomeScreen's provider tree, so the route builds the chrome and hands it
+      // the schedules surface instead of a standalone page (Task 139 C1).
       final list = AppRouter.buildSchedulesPage(deviceId: 'device-1');
       final detail = AppRouter.buildScheduleDetailPage(deviceId: 'device-1', scheduleId: 'task_9');
 
-      expect(list, isA<SchedulesScreen>());
-      expect((list as SchedulesScreen).deviceId, 'device-1');
-      expect(detail, isA<ScheduleDetailScreen>());
-      expect((detail as ScheduleDetailScreen).deviceId, 'device-1');
-      expect(detail.scheduleId, 'task_9');
+      expect(list, isA<HomeScreen>());
+      final listSurface = (list as HomeScreen).deviceContent;
+      expect(listSurface, isA<SchedulesRouteSurface>());
+      expect((listSurface as SchedulesRouteSurface).deviceId, 'device-1');
+      expect(listSurface.scheduleId, isNull);
+
+      expect(detail, isA<HomeScreen>());
+      final detailSurface = (detail as HomeScreen).deviceContent;
+      expect(detailSurface, isA<SchedulesRouteSurface>());
+      expect((detailSurface as SchedulesRouteSurface).deviceId, 'device-1');
+      expect(detailSurface.scheduleId, 'task_9');
     });
   });
 
@@ -196,30 +164,25 @@ void main() {
       expect(sessionId, 'session-456');
     });
 
-    testWidgets('the default schedule paths render the shells with the route device', (tester) async {
-      final client = _RecordingSchedulesClient();
-      final repository = FakeDeviceRepository()
-        ..seedAgents(
-          [DeviceConfig(id: 'device-1', name: 'Laptop', hardwareId: 'hw-1', isOnline: true)],
-          activeAgentId: 'device-1',
-        );
-      getIt.registerSingleton<IDeviceRepository>(repository);
-      getIt.registerSingleton<SchedulesClient>(client);
-      addTearDown(() async {
-        await getIt.unregister<IDeviceRepository>();
-        await getIt.unregister<SchedulesClient>();
-      });
-
-      final detailSetup = AppRouter.createRouter(
+    testWidgets('the schedules path is still never read as a session id', (tester) async {
+      var sessionId = '';
+      final setup = AppRouter.createRouter(
         authCubit,
-        initialLocation: AppRoutes.scheduleDetailLocation('device-1', 'task_9'),
+        initialLocation: AppRoutes.schedulesLocation('agent-123'),
+        builders: AppRouterBuilders(
+          homeBuilder: (context, state) {
+            sessionId = state.pathParameters['sessionId'] ?? 'session-was-matched';
+            return const Text('session', textDirection: TextDirection.ltr);
+          },
+          schedulesBuilder: (context, state) => const Text('schedules', textDirection: TextDirection.ltr),
+        ),
       );
-      await tester.pumpWidget(MaterialApp.router(routerConfig: detailSetup.router));
+
+      await tester.pumpWidget(MaterialApp.router(routerConfig: setup.router));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('schedule_detail_screen')), findsOneWidget);
-      expect(client.listCalls, ['device-1']);
-      expect(client.runsCalls, ['task_9']);
+      expect(find.text('schedules'), findsOneWidget);
+      expect(sessionId, isEmpty);
     });
   });
 }

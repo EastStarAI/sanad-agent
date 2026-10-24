@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
@@ -326,6 +327,58 @@ class _SectionStatusInline extends StatelessWidget {
             child: const Text('Retry'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The `Schedules` row of the device sidebar (Task 139 C1, S12).
+///
+/// Schedules are a standalone device page, so the sidebar carries one product
+/// row above the conversation sections. It is a navigation intent only: the page
+/// owns its reads, and this row never asks the Agent for anything.
+class SidebarSchedulesRow extends StatelessWidget {
+  final VoidCallback onOpen;
+
+  const SidebarSchedulesRow({super.key, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
+      child: Material(
+        key: const Key('schedules_sidebar_row'),
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(6),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onOpen,
+          hoverColor: theme.colorScheme.surfaceContainer.withValues(alpha: 0.8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  Symbols.calendar_month,
+                  size: 16,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    AppLocalizations.of(context)!.schedules,
+                    style: TextStyle(
+                      color: theme.colorScheme.onSurface,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
