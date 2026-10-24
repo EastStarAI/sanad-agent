@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule_error.dart';
+import 'package:sanad_client/features/schedules/domain/models/schedule_run_failure_notice.dart';
 import 'package:sanad_client/features/schedules/presentation/screens/schedules_screen.dart';
 
 import '../../helpers/pump_app.dart';
@@ -104,6 +105,33 @@ void main() {
         isNull,
       );
       expect(client.listCalls, isEmpty, reason: 'an offline device is never asked');
+    });
+  });
+
+  group('availability (F3)', () {
+    testWidgets('a deviceUnavailable state disables create while the device is online', (tester) async {
+      // The inventory still reports the device online; the schedules transport has
+      // already said it cannot answer. Both facts must close every action (S18).
+      environment.reseed([deviceFixture()]);
+      client.listError = const ScheduleException(ScheduleErrorCode.deviceUnavailable);
+
+      await pumpList(tester);
+      final l10n = await l10nFor('en');
+
+      expect(find.byKey(const Key('schedules_unavailable_banner')), findsOneWidget);
+      expect(find.text(l10n.scheduleUnavailable), findsOneWidget);
+      expect(find.byKey(const Key('schedules_list')), findsNothing);
+      expect(
+        tester.widget<FilledButton>(find.byKey(const Key('schedules_create_btn'))).onPressed,
+        isNull,
+        reason: 'a device that cannot answer never offers the create action',
+      );
+      expect(find.byKey(const Key('schedules_empty_create_btn')), findsNothing);
+
+      // Tapping it opens nothing.
+      await tester.tap(find.byKey(const Key('schedules_create_btn')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('schedule_editor_sheet')), findsNothing);
     });
   });
 
@@ -214,6 +242,37 @@ void main() {
 
       expect(find.byKey(const Key('schedule_action_failure_notice')), findsOneWidget);
       expect(find.text(l10n.scheduleErrorOrphaned), findsOneWidget);
+    });
+  });
+
+  group('freshness (F5)', () {
+    testWidgets('a run-failed notice re-reads the list once and the badge appears', (tester) async {
+      client.schedules = [scheduleFixture(consecutiveFailures: 2)];
+      await pumpList(tester);
+      expect(client.listCalls, hasLength(1));
+      expect(
+        find.byKey(const Key('schedule_failure_badge_task_1')),
+        findsNothing,
+        reason: 'two failures are below the pause suggestion',
+      );
+
+      // The Agent has just recorded the third failure; the notice carries the
+      // streak but the Client must ask for the authoritative row.
+      client.schedules = [scheduleFixture(consecutiveFailures: 3)];
+      client.failuresController.add(
+        const ScheduleRunFailureNotice(
+          scheduleId: 'task_1',
+          runId: 'run_3',
+          scheduleName: 'Morning brief',
+          consecutiveFailures: 3,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(client.listCalls, hasLength(2), reason: 'exactly one refresh per notice');
+      final badge = find.byKey(const Key('schedule_failure_badge_task_1'));
+      expect(badge, findsOneWidget);
+      expect(find.descendant(of: badge, matching: find.text('3')), findsOneWidget);
     });
   });
 

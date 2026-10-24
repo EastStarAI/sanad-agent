@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:sanad_client/features/schedules/domain/models/schedule_instant.dart';
 
 /// The lifecycle state of one run (Task 139 D9, protocol §4.5).
 enum ScheduleRunStatus {
@@ -98,7 +99,7 @@ class ScheduleRun extends Equatable {
   factory ScheduleRun.fromJson(Map<String, dynamic> json) {
     return ScheduleRun(
       id: json['id']?.toString() ?? '',
-      runAt: _asUtc(json['run_at']) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      runAt: ScheduleInstant.utcTryParse(json['run_at']) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       status: ScheduleRunStatus.fromWire(json['status']),
       trigger: ScheduleRunTrigger.fromWire(json['trigger']),
       durationMs: _asInt(json['duration_ms']),
@@ -111,8 +112,7 @@ class ScheduleRun extends Equatable {
 
   /// Identity and outcome only; it never carries the task text or message text.
   @override
-  String toString() =>
-      'ScheduleRun(id: $id, status: ${status.name}, trigger: ${trigger.name})';
+  String toString() => 'ScheduleRun(id: $id, status: ${status.name}, trigger: ${trigger.name})';
 
   @override
   List<Object?> get props => [

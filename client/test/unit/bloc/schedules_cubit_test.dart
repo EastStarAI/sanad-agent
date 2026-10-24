@@ -515,7 +515,7 @@ void main() {
   });
 
   group('schedule.run_failed', () {
-    test('is forwarded as a typed notice and is never stored in state', () async {
+    test('is forwarded as a typed notice, is never stored, and re-reads the list once', () async {
       client.schedules = [_schedule()];
       final cubit = buildCubit();
       addTearDown(cubit.close);
@@ -540,8 +540,36 @@ void main() {
       expect(seen, hasLength(1));
       expect(seen.single.suggestPause, isTrue);
       expect(cubit.state.toString(), isNot(contains('run_3')));
-      // A failure notice is not a list mutation: no extra read is issued.
-      expect(client.listCalls, hasLength(1));
+      // A failed run broadcasts no `schedule.changed`, so the notice is the
+      // freshness signal: it asks the Agent for the authoritative list (Task 139
+      // F5) without projecting any of its own payload.
+      expect(client.listCalls, hasLength(2));
+    });
+
+    test('re-reads the open run page only for the schedule it names', () async {
+      client.schedules = [_schedule()];
+      client.runRows = [_run('run_1')];
+      final cubit = buildCubit();
+      addTearDown(cubit.close);
+      await cubit.load();
+      await cubit.openDetail('task_1');
+      expect(client.runsCalls, hasLength(1));
+
+      client.runFailuresController.add(
+        const ScheduleRunFailureNotice(scheduleId: 'task_9', runId: 'run_9'),
+      );
+      await _settle();
+
+      expect(client.listCalls, hasLength(2), reason: 'the list is always re-read');
+      expect(client.runsCalls, hasLength(1), reason: 'another schedule is not on screen');
+
+      client.runFailuresController.add(
+        const ScheduleRunFailureNotice(scheduleId: 'task_1', runId: 'run_2'),
+      );
+      await _settle();
+
+      expect(client.listCalls, hasLength(3));
+      expect(client.runsCalls, hasLength(2), reason: 'the open schedule gained a terminal row');
     });
   });
 

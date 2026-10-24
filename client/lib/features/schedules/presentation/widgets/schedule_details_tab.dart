@@ -41,10 +41,10 @@ class ScheduleDetailsTab extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final summary = scheduleRecurrenceSummary(schedule: schedule, l10n: l10n, context: context);
-    final storedRoute = <String?>[schedule.providerInstanceId, schedule.model]
-        .whereType<String>()
-        .where((value) => value.trim().isNotEmpty)
-        .join(' / ');
+    final storedRoute = <String?>[
+      schedule.providerInstanceId,
+      schedule.model,
+    ].whereType<String>().where((value) => value.trim().isNotEmpty).join(' / ');
 
     return SingleChildScrollView(
       key: const Key('schedule_detail_details_tab'),
@@ -85,14 +85,18 @@ class ScheduleDetailsTab extends StatelessWidget {
             label: l10n.scheduleOwner,
             value: scheduleOwnerLabel(schedule: schedule, l10n: l10n),
           ),
-          if (schedule.ownerSessionId == null)
-            _DetailHint(text: l10n.scheduleOwnedByDeviceHint),
+          if (schedule.ownerSessionId == null) _DetailHint(text: l10n.scheduleOwnedByDeviceHint),
           _DetailLine(
             label: l10n.scheduleNextRun,
             value: schedule.nextRunAt == null
                 ? l10n.scheduleNextRunUnknown
                 : l10n.scheduleInstantWithZone(
-                    formatScheduleInstant(context, schedule.nextRunAt!, zone: schedule.zone),
+                    formatScheduleInstant(
+                      context,
+                      schedule.nextRunAt!,
+                      zone: schedule.zone,
+                      wireOffset: schedule.nextRunAtOffset,
+                    ),
                     schedule.zone,
                   ),
           ),
@@ -103,7 +107,14 @@ class ScheduleDetailsTab extends StatelessWidget {
                 : [
                     scheduleLastOutcomeLabel(schedule.lastOutcome!, l10n),
                     if (schedule.lastRunAt != null)
-                      formatScheduleInstant(context, schedule.lastRunAt!, zone: schedule.zone),
+                      formatScheduleInstant(
+                        context,
+                        schedule.lastRunAt!,
+                        zone: schedule.zone,
+                        // `last_run_at` travels as UTC; a `local` schedule's
+                        // Agent offset comes from the row's own next instant.
+                        wireOffset: schedule.nextRunAtOffset,
+                      ),
                   ].join(' · '),
           ),
           _DetailLine(
@@ -143,27 +154,21 @@ class ScheduleDetailsTab extends StatelessWidget {
               if (schedule.canResume)
                 OutlinedButton.icon(
                   key: Key('schedule_resume_btn_${schedule.id}'),
-                  onPressed: actionsEnabled
-                      ? () => unawaited(ScheduleActions.resume(context, schedule))
-                      : null,
+                  onPressed: actionsEnabled ? () => unawaited(ScheduleActions.resume(context, schedule)) : null,
                   icon: const Icon(Icons.play_arrow_rounded, size: 18),
                   label: Text(l10n.resumeSchedule),
                 ),
               if (!schedule.isPaused && !schedule.isOrphaned)
                 OutlinedButton.icon(
                   key: Key('schedule_pause_btn_${schedule.id}'),
-                  onPressed: actionsEnabled
-                      ? () => unawaited(ScheduleActions.pause(context, schedule))
-                      : null,
+                  onPressed: actionsEnabled ? () => unawaited(ScheduleActions.pause(context, schedule)) : null,
                   icon: const Icon(Icons.pause_rounded, size: 18),
                   label: Text(l10n.pauseSchedule),
                 ),
               if (schedule.canRunNow)
                 FilledButton.icon(
                   key: Key('schedule_run_now_btn_${schedule.id}'),
-                  onPressed: actionsEnabled
-                      ? () => unawaited(ScheduleActions.runNow(context, schedule))
-                      : null,
+                  onPressed: actionsEnabled ? () => unawaited(ScheduleActions.runNow(context, schedule)) : null,
                   icon: const Icon(Icons.bolt_rounded, size: 18),
                   label: Text(l10n.runNow),
                 ),

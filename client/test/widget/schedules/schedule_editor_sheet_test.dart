@@ -195,6 +195,35 @@ void main() {
     });
   });
 
+  group('availability (F3)', () {
+    testWidgets('an editor that goes unavailable disables submit and refuses with typed copy', (
+      tester,
+    ) async {
+      final cubit = newCubit();
+      await openEditor(tester, cubit: cubit);
+      await enterVisible(tester, find.byKey(const Key('schedule_editor_task_field')), 'Do the thing');
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final l10n = await l10nFor('en');
+      final submit = find.byKey(const Key('schedule_editor_submit_btn'));
+      expect(tester.widget<FilledButton>(submit).onPressed, isNotNull);
+
+      // The transport fails while the form is open. Tapping in this same frame
+      // reproduces the race the guard exists for: the button has not rebuilt yet,
+      // so its previous callback runs against the new state.
+      cubit.markDeviceUnavailable();
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('schedule_editor_error')), findsOneWidget);
+      expect(find.text(l10n.scheduleUnavailableHint), findsOneWidget);
+      expect(client.createCalls, isEmpty, reason: 'an unavailable device is never asked');
+
+      // And the button is closed from then on.
+      expect(tester.widget<FilledButton>(submit).onPressed, isNull);
+    });
+  });
+
   group('preview', () {
     testWidgets('the preview asks the Agent and shows the next run in the schedule zone', (tester) async {
       client.previewResult = SchedulePreview(

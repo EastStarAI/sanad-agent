@@ -14,8 +14,10 @@ import 'package:sanad_client/features/conversations/presentation/widgets/workspa
 import 'package:sanad_client/features/devices/domain/device_preferences_repository.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule.dart';
+import 'package:sanad_client/features/schedules/domain/models/schedule_error.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule_request.dart';
 import 'package:sanad_client/features/schedules/presentation/bloc/schedules_cubit.dart';
+import 'package:sanad_client/features/schedules/presentation/widgets/schedule_availability.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_failure_text.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_format.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_recurrence_fields.dart';
@@ -349,6 +351,15 @@ class _ScheduleEditorSheetState extends State<ScheduleEditorSheet> {
   Future<void> _submit() async {
     if (_submitting) return;
     final l10n = AppLocalizations.of(context)!;
+    // A form that was opened while the device could answer still refuses once the
+    // device or the schedules transport has gone unavailable (S18), and it says
+    // so with the typed copy instead of letting the request fail.
+    if (!scheduleActionsEnabled(device: widget.device, state: widget.cubit.state)) {
+      setState(() {
+        _submitError = scheduleFailureText(l10n, ScheduleErrorCode.deviceUnavailable) ?? l10n.scheduleSaveFailed;
+      });
+      return;
+    }
     if (!_validate(l10n)) return;
     setState(() => _submitting = true);
 
@@ -399,7 +410,7 @@ class _ScheduleEditorSheetState extends State<ScheduleEditorSheet> {
     final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final online = widget.device?.isOnline ?? false;
+    final deviceOnline = widget.device?.isOnline ?? false;
 
     return Padding(
       key: const Key('schedule_editor_sheet'),
@@ -493,7 +504,7 @@ class _ScheduleEditorSheetState extends State<ScheduleEditorSheet> {
                             selectedWorkspace: _selectedWorkspace,
                             isLoadingWorkspaces: _loadingWorkspaces,
                             requiresWorkspace: false,
-                            hasActiveAgent: online,
+                            hasActiveAgent: deviceOnline,
                             isLocked: false,
                             chipBgColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
                             borderColor: colorScheme.outline.withValues(alpha: 0.3),
@@ -574,10 +585,13 @@ class _ScheduleEditorSheetState extends State<ScheduleEditorSheet> {
                         child: Text(l10n.cancel),
                       ),
                       const SizedBox(width: 8),
-                      FilledButton(
-                        key: const Key('schedule_editor_submit_btn'),
-                        onPressed: !online || _submitting ? null : () => unawaited(_submit()),
-                        child: Text(_isEditing ? l10n.scheduleSave : l10n.scheduleCreate),
+                      BlocSelector<SchedulesCubit, SchedulesState, bool>(
+                        selector: (state) => scheduleActionsEnabled(device: widget.device, state: state),
+                        builder: (context, deviceCanAnswer) => FilledButton(
+                          key: const Key('schedule_editor_submit_btn'),
+                          onPressed: !deviceCanAnswer || _submitting ? null : () => unawaited(_submit()),
+                          child: Text(_isEditing ? l10n.scheduleSave : l10n.scheduleCreate),
+                        ),
                       ),
                     ],
                   ),
@@ -677,7 +691,12 @@ class _SchedulePreviewView extends StatelessWidget {
           final nextRunAt = preview.nextRunAt;
           value = nextRunAt == null
               ? l10n.scheduleNextRunUnknown
-              : formatScheduleInstant(context, nextRunAt, zone: preview.zone ?? zone);
+              : formatScheduleInstant(
+                  context,
+                  nextRunAt,
+                  zone: preview.zone ?? zone,
+                  wireOffset: preview.nextRunAtOffset,
+                );
         }
         return Row(
           key: const Key('schedule_editor_preview'),

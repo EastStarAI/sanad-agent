@@ -40,9 +40,7 @@ class ScheduleRunHistoryTab extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     return BlocBuilder<SchedulesCubit, SchedulesState>(
       buildWhen: (previous, current) =>
-          previous.detail != current.detail ||
-          previous.status != current.status ||
-          previous.failure != current.failure,
+          previous.detail != current.detail || previous.status != current.status || previous.failure != current.failure,
       builder: (context, state) {
         final detail = state.detail;
         final runs = detail?.runs ?? const <ScheduleRun>[];
@@ -148,6 +146,7 @@ class _ScheduleRunRow extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final duration = formatScheduleDuration(run.durationMs);
     final canOpen = run.sessionId != null;
+    final period = _schedulePeriodOf(context, scheduleId);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
@@ -163,7 +162,14 @@ class _ScheduleRunRow extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  formatScheduleInstant(context, run.runAt, zone: _scheduleZoneOf(context, scheduleId)),
+                  formatScheduleInstant(
+                    context,
+                    run.runAt,
+                    zone: period.zone,
+                    // `run_at` travels as UTC, so a `local` schedule renders in
+                    // the Agent offset the row's next instant carries.
+                    wireOffset: period.agentOffset,
+                  ),
                   style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                 ),
               ),
@@ -211,13 +217,18 @@ class _ScheduleRunRow extends StatelessWidget {
     );
   }
 
-  /// The schedule's own zone, read from the open detail row.
+  /// The schedule's own zone and the Agent offset its instants render in.
   ///
-  /// The run projection carries instants, not a zone, and the schedule's zone is
-  /// the one it fires in, so the history renders the same wall clock the list
-  /// shows.
-  static String? _scheduleZoneOf(BuildContext context, String scheduleId) {
-    return context.read<SchedulesCubit>().state.scheduleById(scheduleId)?.zone;
+  /// The run projection carries instants, not a zone: the schedule's zone is the
+  /// one it fires in, and its `next_run_at` designator is this Client's only
+  /// evidence of the Agent's `local` offset, so the history renders the same wall
+  /// clock the list shows.
+  static ({String? zone, String? agentOffset}) _schedulePeriodOf(
+    BuildContext context,
+    String scheduleId,
+  ) {
+    final schedule = context.read<SchedulesCubit>().state.scheduleById(scheduleId);
+    return (zone: schedule?.zone, agentOffset: schedule?.nextRunAtOffset);
   }
 
   /// Opens the run inside its conversation (S8, S20).

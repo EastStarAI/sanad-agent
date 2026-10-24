@@ -308,8 +308,12 @@ enum ScheduleActionOutcome {
 /// - `DeviceConfig.isOnline == false` short-circuits before any request and
 ///   clears the snapshot.
 /// - `schedule.changed` re-reads the list, and the open detail with it, without
-///   projecting the event payload; `schedule.run_failed` is forwarded as a typed
-///   stream and is never stored.
+///   projecting the event payload.
+/// - `schedule.run_failed` is forwarded as a typed stream and is never stored as
+///   data, but it *is* a freshness signal: a failed run broadcasts no
+///   `schedule.changed`, so the notice triggers the same coalesced re-read (Task
+///   139 F5). Without it the failure badge and `consecutive_failures` stayed one
+///   failure behind until the user re-entered the page.
 class SchedulesCubit extends Cubit<SchedulesState> {
   SchedulesCubit({
     required SchedulesClient client,
@@ -655,7 +659,12 @@ class SchedulesCubit extends Cubit<SchedulesState> {
       );
     } catch (_) {
       if (_isStale(version, deviceId)) return;
-      emit(_emptyState(status: SchedulesStatus.error, failure: const ScheduleFailure(code: ScheduleErrorCode.unknown)));
+      emit(
+        _emptyState(
+          status: SchedulesStatus.error,
+          failure: const ScheduleFailure(code: ScheduleErrorCode.unknown),
+        ),
+      );
     }
   }
 
@@ -749,8 +758,7 @@ class SchedulesCubit extends Cubit<SchedulesState> {
   }
 
   /// Whether a read that started at [version] for [deviceId] has been overtaken.
-  bool _isStale(int version, String deviceId) =>
-      isClosed || version != _snapshotVersion || _device()?.id != deviceId;
+  bool _isStale(int version, String deviceId) => isClosed || version != _snapshotVersion || _device()?.id != deviceId;
 
   /// The device-unavailable state: no list, no detail rows, no preview, and no
   /// failure text, because none of the previous snapshot can be presented as
@@ -771,9 +779,7 @@ class SchedulesCubit extends Cubit<SchedulesState> {
     return SchedulesState(
       status: status,
       failure: failure,
-      detail: detail == null
-          ? null
-          : SchedulesDetailState(scheduleId: detail.scheduleId, failure: failure),
+      detail: detail == null ? null : SchedulesDetailState(scheduleId: detail.scheduleId, failure: failure),
     );
   }
 
@@ -784,10 +790,11 @@ class SchedulesCubit extends Cubit<SchedulesState> {
     return next.copyWith(detail: detail.withSchedule(next.scheduleById(detail.scheduleId)));
   }
 
-  /// Follows the device's broadcasts: `schedule.changed` announces that the
+  /// Follows the device's broadcasts. `schedule.changed` announces that the
   /// authoritative snapshot moved, so it triggers a re-read and its payload is
-  /// never projected into state; `schedule.run_failed` is forwarded as a typed
-  /// notice.
+  /// never projected into state. `schedule.run_failed` is forwarded as a typed
+  /// notice and, because a failed run broadcasts nothing else, it also triggers
+  /// that same re-read (Task 139 F5).
   void _watch(DeviceConfig device) {
     if (_watchedDeviceId == device.id && _changedSubscription != null) return;
     unawaited(_stopWatching());
@@ -822,6 +829,23 @@ class SchedulesCubit extends Cubit<SchedulesState> {
   void _forwardRunFailure(ScheduleRunFailureNotice notice) {
     if (_runFailures.isClosed) return;
     _runFailures.add(notice);
+    unawaited(_refreshFromRunFailure(notice));
+  }
+
+  /// Re-reads what a failed run changed, using the notice only as a trigger.
+  ///
+  /// A failure writes the run's terminal row and the schedule's
+  /// `consecutive_failures`, but broadcasts no `schedule.changed`, so the
+  /// list snapshot (and the failure badge derived from it) went stale until the
+  /// surface was reopened. The notice payload is never projected: this asks the
+  /// Agent for the authoritative list, and for the open schedule's first run page
+  /// when the failure belongs to the schedule on screen.
+  Future<void> _refreshFromRunFailure(ScheduleRunFailureNotice notice) async {
+    await load();
+    if (isClosed) return;
+    final detail = state.detail;
+    if (detail == null || detail.scheduleId != notice.scheduleId) return;
+    await refreshRuns();
   }
 
   void _dropWatch(StreamSubscription<void> subscription) {

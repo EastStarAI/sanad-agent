@@ -21,10 +21,18 @@ Duration? parseScheduleZoneOffset(String? zone) {
   final token = zone?.trim();
   if (token == null || token.isEmpty) return null;
   final normalized = token.toUpperCase();
-  if (normalized == 'LOCAL' || normalized == 'UTC' || normalized == 'Z') {
-    return normalized == 'LOCAL' ? null : Duration.zero;
-  }
-  final match = RegExp(r'^([+-])(\d{1,2}):?(\d{2})$').firstMatch(token);
+  if (normalized == 'LOCAL') return null;
+  return parseScheduleWireOffset(token);
+}
+
+/// The offset token an instant was written with (`+03:00`, `-05:30`, `Z`), or
+/// `null` when it carries none this Client can read (Task 139 F4).
+Duration? parseScheduleWireOffset(String? token) {
+  final trimmed = token?.trim();
+  if (trimmed == null || trimmed.isEmpty) return null;
+  final normalized = trimmed.toUpperCase();
+  if (normalized == 'UTC' || normalized == 'Z') return Duration.zero;
+  final match = RegExp(r'^([+-])(\d{1,2}):?(\d{2})$').firstMatch(trimmed);
   if (match == null) return null;
   final sign = match.group(1) == '-' ? -1 : 1;
   final hours = int.tryParse(match.group(2) ?? '') ?? 0;
@@ -32,24 +40,44 @@ Duration? parseScheduleZoneOffset(String? zone) {
   return Duration(minutes: sign * (hours * 60 + minutes));
 }
 
-/// [instant] as the wall clock of [zone].
+/// [instant] as the wall clock its surface must render, which is exactly what
+/// the date and time formatters read.
 ///
-/// The shifted `DateTime` keeps its fields equal to the zone's wall clock, which
-/// is exactly what the date and time formatters read.
-DateTime scheduleWallClock(DateTime instant, String? zone) {
-  final offset = parseScheduleZoneOffset(zone);
+/// - no [zone] means "the Client's own clock", used for an instant this Client
+///   itself composed (the editor's one-off picker);
+/// - `local` means the **Agent's** local zone, so the offset the Agent wrote the
+///   instant with is the only correct answer — the device may be remote, and
+///   substituting the Client's timezone shifted a 09:00 local schedule to 06:00
+///   for a UTC+0 consumer (Task 139 F4);
+/// - a fixed [zone] such as `+03:00` keeps its own offset, falling back to the
+///   wire offset when the stored token is unreadable.
+///
+/// [wireOffset] is the Agent's designator for the schedule's zone. For a `local`
+/// schedule that is the row's own `next_run_at`; `last_run_at` and `run_at`
+/// travel as UTC by protocol, so their own `Z` says nothing about the Agent's
+/// zone and the caller passes the schedule's designator instead.
+DateTime scheduleWallClock(DateTime instant, {String? zone, String? wireOffset}) {
+  final token = zone?.trim();
   final utc = instant.toUtc();
-  return offset == null ? utc : utc.add(offset);
+  if (token == null || token.isEmpty) return instant.toLocal();
+  if (token.toLowerCase() == 'local') {
+    return utc.add(parseScheduleWireOffset(wireOffset) ?? Duration.zero);
+  }
+  return utc.add(
+    parseScheduleZoneOffset(token) ?? parseScheduleWireOffset(wireOffset) ?? Duration.zero,
+  );
 }
 
-/// A date and time rendered in the schedule's own [zone].
+/// A date and time rendered in the schedule's own [zone], in the offset the
+/// Agent computed that zone in.
 String formatScheduleInstant(
   BuildContext context,
   DateTime instant, {
   String? zone,
+  String? wireOffset,
 }) {
   final material = MaterialLocalizations.of(context);
-  final wallClock = scheduleWallClock(instant, zone);
+  final wallClock = scheduleWallClock(instant, zone: zone, wireOffset: wireOffset);
   final date = material.formatMediumDate(wallClock);
   return '$date ${formatScheduleTimeOfDay(context, TimeOfDay.fromDateTime(wallClock))}';
 }
@@ -60,8 +88,7 @@ String formatScheduleInstant(
 /// value the Client cannot parse is still visible instead of silently dropped.
 String formatScheduleTimeOfDay(BuildContext context, TimeOfDay? time) {
   if (time == null) return '';
-  final alwaysUse24Hour =
-      MediaQuery.maybeOf(context)?.alwaysUse24HourFormat ?? false;
+  final alwaysUse24Hour = MediaQuery.maybeOf(context)?.alwaysUse24HourFormat ?? false;
   return MaterialLocalizations.of(
     context,
   ).formatTimeOfDay(time, alwaysUse24HourFormat: alwaysUse24Hour);
@@ -100,16 +127,19 @@ String? scheduleRecurrenceSummary({
       final nextRunAt = schedule.nextRunAt;
       if (nextRunAt == null) return l10n.scheduleSummaryOncePast;
       return l10n.scheduleSummaryOnce(
-        formatScheduleInstant(context, nextRunAt, zone: schedule.zone),
+        formatScheduleInstant(
+          context,
+          nextRunAt,
+          zone: schedule.zone,
+          wireOffset: schedule.nextRunAtOffset,
+        ),
       );
     case ScheduleKind.interval:
       return l10n.scheduleSummaryInterval(schedule.intervalMinutes ?? 0);
     case ScheduleKind.daily:
       return time.isEmpty ? l10n.scheduleRecurrenceDaily : l10n.scheduleSummaryDaily(time);
     case ScheduleKind.weekly:
-      final weekdayNames = schedule.weekdays
-          .map((day) => scheduleWeekdayLabel(day, l10n))
-          .toList(growable: false);
+      final weekdayNames = schedule.weekdays.map((day) => scheduleWeekdayLabel(day, l10n)).toList(growable: false);
       if (weekdayNames.isEmpty) return l10n.scheduleRecurrenceWeekly;
       final separator = Directionality.of(context) == TextDirection.rtl ? '، ' : ', ';
       if (time.isEmpty) return l10n.scheduleRecurrenceWeekly;
@@ -137,9 +167,7 @@ String scheduleDisplayLabel(Schedule schedule, AppLocalizations l10n) {
       .firstWhere((line) => line.isNotEmpty, orElse: () => '');
   if (firstLine.isEmpty) return l10n.scheduleDerivedLabel(schedule.id);
   const maxLength = 64;
-  return firstLine.length <= maxLength
-      ? firstLine
-      : '${firstLine.substring(0, maxLength).trimRight()}…';
+  return firstLine.length <= maxLength ? firstLine : '${firstLine.substring(0, maxLength).trimRight()}…';
 }
 
 /// The localized weekday of a weekly shape.

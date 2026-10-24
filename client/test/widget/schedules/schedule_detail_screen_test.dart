@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/features/schedules/domain/models/schedule_error.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule_run.dart';
+import 'package:sanad_client/features/schedules/domain/models/schedule_run_failure_notice.dart';
 import 'package:sanad_client/features/schedules/presentation/screens/schedule_detail_screen.dart';
 
 import '../../helpers/pump_app.dart';
@@ -125,6 +127,57 @@ void main() {
       await tester.tap(find.byKey(const Key('schedule_runs_load_more_btn')));
       await tester.pumpAndSettle();
       expect(client.runsCursors, [null, 'cursor-2']);
+    });
+  });
+
+  group('availability and freshness', () {
+    testWidgets('the same unavailable state closes the detail actions', (tester) async {
+      // The device reports online while the schedules transport reports it cannot
+      // answer: the detail must show the banner and offer nothing (S18).
+      environment.reseed([deviceFixture()]);
+      client.listError = const ScheduleException(ScheduleErrorCode.deviceUnavailable);
+
+      await pumpDetail(tester);
+      final l10n = await l10nFor('en');
+
+      expect(find.byKey(const Key('schedules_unavailable_banner')), findsOneWidget);
+      expect(find.text(l10n.scheduleUnavailable), findsOneWidget);
+      expect(find.byKey(const Key('schedule_run_now_btn_task_1')), findsNothing);
+      expect(find.byKey(const Key('schedule_delete_btn_task_1')), findsNothing);
+      expect(find.byKey(const Key('schedule_detail_runs_tab')), findsNothing);
+    });
+
+    testWidgets('a notice for the open schedule re-reads its run page', (tester) async {
+      client.schedules = [scheduleFixture()];
+      client.runsBySchedule = {
+        'task_1': [runFixture(id: 'run_1')],
+      };
+      await pumpDetail(tester);
+      expect(client.listCalls, hasLength(1));
+      expect(client.runsCalls, ['task_1']);
+
+      client.failuresController.add(
+        const ScheduleRunFailureNotice(
+          scheduleId: 'task_1',
+          runId: 'run_2',
+          consecutiveFailures: 3,
+          suggestPause: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(client.listCalls, hasLength(2), reason: 'the streak lives in the list');
+      expect(client.runsCalls, ['task_1', 'task_1'], reason: 'the terminal run row is on this page');
+
+      // Another schedule's failure refreshes the list but must not re-page a
+      // history this page is not showing.
+      client.failuresController.add(
+        const ScheduleRunFailureNotice(scheduleId: 'task_9', runId: 'run_9'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(client.listCalls, hasLength(3));
+      expect(client.runsCalls, ['task_1', 'task_1']);
     });
   });
 

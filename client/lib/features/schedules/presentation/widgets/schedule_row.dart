@@ -102,7 +102,12 @@ class ScheduleRow extends StatelessWidget {
                 value: schedule.nextRunAt == null
                     ? l10n.scheduleNextRunUnknown
                     : l10n.scheduleInstantWithZone(
-                        formatScheduleInstant(context, schedule.nextRunAt!, zone: schedule.zone),
+                        formatScheduleInstant(
+                          context,
+                          schedule.nextRunAt!,
+                          zone: schedule.zone,
+                          wireOffset: schedule.nextRunAtOffset,
+                        ),
                         schedule.zone,
                       ),
               ),
@@ -114,7 +119,15 @@ class ScheduleRow extends StatelessWidget {
                     : [
                         scheduleLastOutcomeLabel(schedule.lastOutcome!, l10n),
                         if (schedule.lastRunAt != null)
-                          formatScheduleInstant(context, schedule.lastRunAt!, zone: schedule.zone),
+                          formatScheduleInstant(
+                            context,
+                            schedule.lastRunAt!,
+                            zone: schedule.zone,
+                            // `last_run_at` travels as UTC, so a `local`
+                            // schedule's Agent offset comes from the row's own
+                            // next instant, the only field that carries it.
+                            wireOffset: schedule.nextRunAtOffset,
+                          ),
                       ].join(' · '),
               ),
               const SizedBox(height: 4),
@@ -282,9 +295,7 @@ class _ScheduleRowButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = destructive
-        ? Theme.of(context).colorScheme.error
-        : Theme.of(context).colorScheme.onSurfaceVariant;
+    final color = destructive ? Theme.of(context).colorScheme.error : Theme.of(context).colorScheme.onSurfaceVariant;
     return TextButton.icon(
       key: buttonKey,
       onPressed: onPressed,

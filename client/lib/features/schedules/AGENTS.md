@@ -14,7 +14,10 @@ This contract applies to `client/lib/features/schedules/`.
   rewrites a cursor.
 - `schedule.changed` is a payload-free signal and `schedule.run_failed` is a typed
   `ScheduleRunFailureNotice`. Neither is ever projected as data; the notice carries no error text and is
-  never written to state, a log, or history.
+  never written to state, a log, or history. The notice is nevertheless a **freshness signal**: a failed
+  run broadcasts no `schedule.changed`, so it triggers the cubit's own coalesced list re-read (and the
+  open schedule's first run page), which is what keeps `consecutive_failures` and the failure badge
+  current. Ask the Agent for the authoritative snapshot; never patch a row from the notice.
 - Rotation of the recurrence vocabulary (kind, interval, time, weekdays, day of month, zone) stays
   structured. The Agent's English recurrence sentence never becomes a UI string; the Client composes its
   own localized summary.
@@ -83,3 +86,11 @@ This contract applies to `client/lib/features/schedules/`.
 - A failed run reaches the user as the chrome's non-modal notice: localized, naming the schedule, with
   the pause suggestion only when `suggest_pause` is true, and carrying no error text. The bounded failure
   text lives in the run history row and nothing is persisted from the live event.
+- Availability has one owner: `scheduleActionsEnabled(device:, state:)`. Every action — create, pause,
+  resume, run now, edit, delete, and the editor's submit — is closed when the device is offline **or** the
+  state is `deviceUnavailable`, so the banner and the actions can never disagree. An editor opened while
+  the device could answer refuses submit with the typed unavailable copy instead of letting the request
+  fail.
+- Instants are rendered in the offset the Agent wrote them with (`ScheduleInstant`), never in the
+  Client's own timezone: `zone: local` means the *Agent's* local zone, so a remote device's 09:00 must not
+  become 06:00. An explicit `±HH:MM` zone keeps its stored offset.

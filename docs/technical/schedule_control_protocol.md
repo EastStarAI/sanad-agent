@@ -409,13 +409,15 @@ page, the preview answer, and the list are dropped together when the device goes
 - A successful mutation re-reads `schedule.list` instead of patching the response row in, because the list
   is ordered by the next instant the mutation may have moved.
 - Only the newest `schedule.preview` answer may emit.
+- A `schedule.run_failed` notice and a `schedule.changed` announcement both re-read; neither is projected
+  into state, and a notice naming another schedule does not refresh the open detail's run page.
 
 ### 9.5. Broadcasts
 
 | Event | Client behavior |
 |---|---|
 | `schedule.changed` | Re-reads the list, and the open detail with its first run page when a detail is open. The payload is never projected as data. |
-| `schedule.run_failed` | Forwarded as a typed `ScheduleRunFailureNotice` for the Client's own failure surface. It is never written to state, a log, or history, and it carries no error text. |
+| `schedule.run_failed` | Forwarded as a typed `ScheduleRunFailureNotice` for the Client's own failure surface, and used as a re-read trigger: the notice is never projected as data (no log, no history, no error text), but because a failed run publishes no `schedule.changed`, the owning cubit re-reads `schedule.list` — and the open schedule's first run page — through its coalesced load so `consecutive_failures` and the failure badge stay current. |
 
 ### 9.6. Conversation marker data
 
@@ -441,7 +443,7 @@ none of which holds protocol knowledge of its own:
 
 | Owner | Responsibility |
 |---|---|
-| `presentation/schedules_chrome_scope.dart` (`SchedulesChromeScope`, `SchedulesScope`) | Owns **one** `SchedulesCubit` for the chrome's active device, drops its snapshot when the device goes offline, re-reads when it returns, and forwards `schedule.run_failed` as a localized non-modal notice. |
+| `presentation/schedules_chrome_scope.dart` (`SchedulesChromeScope`, `SchedulesScope`) | Owns **one** `SchedulesCubit` for the chrome's active device, drops its snapshot when the device goes offline, re-reads when it returns, and forwards `schedule.run_failed` as a localized non-modal notice (the cubit also re-reads on it). |
 | `presentation/screens/schedules_screen.dart` | The list: the five C4 states, one row per schedule, and the create entry. |
 | `presentation/screens/schedule_detail_screen.dart` | The detail with the **Details** and **Run history** tabs. |
 | `presentation/widgets/schedule_editor_sheet.dart` (+ `schedule_recurrence_fields.dart`) | The create/edit form: one definition per kind, the debounced `schedule.preview`, the shared workspace and model chips, and the conversation-mode switch. |
@@ -454,6 +456,11 @@ Rules these owners share:
   pauses them, and the confirmation says so (S23).
 - Run now stays enabled on a paused row and never resumes it (S21); an orphaned model-owned row offers
   edit and delete only (S23, D10); every action is disabled while the device cannot answer (S18).
+  Availability is one predicate — offline device **or** `deviceUnavailable` state — so the Unavailable
+  banner and the actions (create included, and an already-open editor's submit) can never disagree.
+- Instants are rendered in the offset the Agent wrote with them (`ScheduleInstant` on the row, run and
+  preview projections). `zone: local` means the Agent's local zone, so a remote device's wall clock is
+  preserved instead of being replaced by the Client's own timezone.
 - The recurrence sentence, every status and trigger label, and every refusal are Client copy. The Agent
   `message` is never rendered, and an unknown code degrades to a generic sentence.
 - The form reuses the new-conversation widgets (`ComposerWorkspaceChip`, `ComposerModelChip`, and the

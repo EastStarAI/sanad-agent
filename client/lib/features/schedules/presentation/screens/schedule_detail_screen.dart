@@ -10,6 +10,7 @@ import 'package:sanad_client/features/schedules/data/schedules_client.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule_error.dart';
 import 'package:sanad_client/features/schedules/presentation/bloc/schedules_cubit.dart';
 import 'package:sanad_client/features/schedules/presentation/schedule_device_scope.dart';
+import 'package:sanad_client/features/schedules/presentation/widgets/schedule_availability.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_details_tab.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_run_history_tab.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedules_state_views.dart';
@@ -77,7 +78,7 @@ class _ScheduleDetailScreenState extends State<ScheduleDetailScreen> {
     final l10n = AppLocalizations.of(context)!;
     final colorScheme = Theme.of(context).colorScheme;
     final device = ScheduleDeviceScope.resolve(widget.deviceId);
-    final online = device?.isOnline ?? false;
+    final deviceOnline = device?.isOnline ?? false;
 
     return BlocProvider<SchedulesCubit>.value(
       value: _cubit,
@@ -105,15 +106,16 @@ class _ScheduleDetailScreenState extends State<ScheduleDetailScreen> {
                 Expanded(
                   child: BlocBuilder<SchedulesCubit, SchedulesState>(
                     builder: (context, state) {
-                      final unavailable =
-                          !online || state.status == SchedulesStatus.deviceUnavailable;
-                      if (unavailable) {
+                      // The same predicate as the list: an offline device and a
+                      // failed schedules transport both close every action (S18).
+                      final enabled = scheduleActionsEnabled(device: device, state: state);
+                      if (!enabled) {
                         return Align(
                           alignment: AlignmentDirectional.topStart,
                           child: Padding(
                             padding: const EdgeInsets.all(20),
                             child: SchedulesUnavailableBanner(
-                              onRetry: online ? () => unawaited(_cubit.load()) : null,
+                              onRetry: deviceOnline ? () => unawaited(_cubit.load()) : null,
                             ),
                           ),
                         );
@@ -126,26 +128,23 @@ class _ScheduleDetailScreenState extends State<ScheduleDetailScreen> {
                               schedule: schedule,
                               device: device,
                               deviceId: widget.deviceId,
-                              actionsEnabled: online,
+                              actionsEnabled: enabled,
                             ),
                             ScheduleRunHistoryTab(
                               deviceId: widget.deviceId,
                               scheduleId: widget.scheduleId,
-                              actionsEnabled: online,
+                              actionsEnabled: enabled,
                             ),
                           ],
                         );
                       }
-                      if (state.status == SchedulesStatus.error ||
-                          state.status == SchedulesStatus.loaded) {
+                      if (state.status == SchedulesStatus.error || state.status == SchedulesStatus.loaded) {
                         return Align(
                           alignment: AlignmentDirectional.topStart,
                           child: Padding(
                             padding: const EdgeInsets.all(20),
                             child: SchedulesErrorView(
-                              failure:
-                                  state.failure ??
-                                  const ScheduleFailure(code: ScheduleErrorCode.scheduleNotFound),
+                              failure: state.failure ?? const ScheduleFailure(code: ScheduleErrorCode.scheduleNotFound),
                               onRetry: () => unawaited(_cubit.load()),
                             ),
                           ),

@@ -400,8 +400,13 @@ void _showDeleteConfirmation(BuildContext context, SessionCubit sessionCubit, De
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(
+            key: const Key('conversation_delete_cancel_btn'),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: const Key('conversation_delete_confirm_btn'),
             onPressed: () async {
               await sessionCubit.deleteSession(agent: device, session: session);
               switch (context.mounted) {

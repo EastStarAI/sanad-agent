@@ -10,6 +10,7 @@ import 'package:sanad_client/features/schedules/data/schedules_client.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule.dart';
 import 'package:sanad_client/features/schedules/presentation/bloc/schedules_cubit.dart';
 import 'package:sanad_client/features/schedules/presentation/schedule_device_scope.dart';
+import 'package:sanad_client/features/schedules/presentation/widgets/schedule_availability.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_editor_sheet.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_row.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedules_state_views.dart';
@@ -78,7 +79,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
     final l10n = AppLocalizations.of(context)!;
     final colorScheme = Theme.of(context).colorScheme;
     final device = _device;
-    final online = device?.isOnline ?? false;
+    final deviceOnline = device?.isOnline ?? false;
 
     return BlocProvider<SchedulesCubit>.value(
       value: _cubit,
@@ -88,59 +89,60 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
-            child: Column(
-              key: const Key('schedules_screen_body'),
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
+            child: BlocBuilder<SchedulesCubit, SchedulesState>(
+              builder: (context, state) {
+                // One predicate for the banner, the create action, and every row
+                // action, so a state that reports the device unavailable cannot
+                // leave a sibling action open (S18).
+                final enabled = scheduleActionsEnabled(device: device, state: state);
+                return Column(
+                  key: const Key('schedules_screen_body'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            l10n.schedules,
-                            style: Theme.of(
-                              context,
-                            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                l10n.schedules,
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              if (device != null)
+                                Text(
+                                  device.name,
+                                  style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
+                                ),
+                            ],
                           ),
-                          if (device != null)
-                            Text(
-                              device.name,
-                              style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
-                            ),
-                        ],
-                      ),
+                        ),
+                        FilledButton.icon(
+                          key: const Key('schedules_create_btn'),
+                          onPressed: enabled ? () => unawaited(_openEditor(device: device)) : null,
+                          icon: const Icon(Icons.add_rounded, size: 18),
+                          label: Text(l10n.newSchedule),
+                        ),
+                      ],
                     ),
-                    FilledButton.icon(
-                      key: const Key('schedules_create_btn'),
-                      onPressed: online
-                          ? () => unawaited(_openEditor(device: device))
-                          : null,
-                      icon: const Icon(Icons.add_rounded, size: 18),
-                      label: Text(l10n.newSchedule),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: enabled
+                          ? _buildState(context, state, device)
+                          : Align(
+                              alignment: AlignmentDirectional.topStart,
+                              child: SchedulesUnavailableBanner(
+                                // Retry only when the device itself is online; an
+                                // offline device is never asked.
+                                onRetry: deviceOnline ? () => unawaited(_cubit.load()) : null,
+                              ),
+                            ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: BlocBuilder<SchedulesCubit, SchedulesState>(
-                    builder: (context, state) {
-                      final unavailable =
-                          !online || state.status == SchedulesStatus.deviceUnavailable;
-                      if (unavailable) {
-                        return Align(
-                          alignment: AlignmentDirectional.topStart,
-                          child: SchedulesUnavailableBanner(
-                            onRetry: online ? () => unawaited(_cubit.load()) : null,
-                          ),
-                        );
-                      }
-                      return _buildState(context, state, device, online);
-                    },
-                  ),
-                ),
-              ],
+                );
+              },
             ),
           ),
         ),
@@ -152,7 +154,6 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
     BuildContext context,
     SchedulesState state,
     DeviceConfig? device,
-    bool online,
   ) {
     if (state.showsList) {
       return ListView.builder(
@@ -163,7 +164,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
           final schedule = state.schedules[index];
           return ScheduleRow(
             schedule: schedule,
-            actionsEnabled: online,
+            actionsEnabled: true,
             onOpen: () => context.go(
               AppRoutes.scheduleDetailLocation(widget.deviceId, schedule.id),
             ),
@@ -176,7 +177,8 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
       SchedulesStatus.empty => Align(
         alignment: AlignmentDirectional.topStart,
         child: SchedulesEmptyView(
-          onCreate: online ? () => unawaited(_openEditor(device: device)) : null,
+          // The list only reaches this branch when an action is allowed.
+          onCreate: () => unawaited(_openEditor(device: device)),
         ),
       ),
       SchedulesStatus.error => Align(
