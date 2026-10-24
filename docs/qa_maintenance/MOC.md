@@ -46,7 +46,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Remote Device Control QA](remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management, starting from the current cloud freeze.
 - [Remote Workspace Folder Management QA](workspace_folder_management_qa.md): Coverage for local native picker continuity and the confined remote workspace picker.
 - [Remote MCP Management Boundary QA](remote_mcp_management_qa.md): Coverage for cloud MCP configuration admission, redaction, confirmation tickets, local continuity, and preserved MCP tool use in cloud-origin turns.
-- [Workspace Identity and Change Path QA](workspace_identity_relocation_qa.md): Coverage for UUID migration, missing folders, scoped Settings routing, display rename, path repair, and cache reconciliation.
+- [Workspace Identity and Change Path QA](workspace_identity_relocation_qa.md): Coverage for UUID migration, missing folders, scoped Settings routing, display rename, path repair, cache reconciliation, and live remote Change Path tooling notes.
 - [Live Context Usage Indicator QA](live_context_usage_indicator_qa.md): Regression coverage for exact latest-provider values, cached-input visibility, tool-loop updates, session isolation, and history restoration.
 - [Session Title Generation QA](session_title_generation_qa.md): Regression coverage for background first-exchange title generation, atomic placeholder ownership, stale-result rejection, and client synchronization.
 - [Conversation Event Live/History Parity QA](conversation_event_parity_qa.md): Focused coverage for model-step segmentation, tool identity, opaque event IDs, and canonical history hydration.
