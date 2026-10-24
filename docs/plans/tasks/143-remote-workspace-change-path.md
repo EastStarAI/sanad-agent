@@ -1,9 +1,9 @@
 ---
 title: "Task 143 — Remote Change Path through the confined browser"
 description: "Offer Workspace Settings → Change Path for a device reached over the cloud by reusing the Task 123 confined folder browser and the Agent's existing preview-ticketed workspace.relocate, with an in-root notice, one confirmation line naming the resolved target, and a specific out-of-root message."
-status: in_progress
-current_gate: "G5 closed — implementation, tests, guards, full fast suite, and docs done; G6 delivery in progress"
-remaining_estimate: "~10% (CI and coordinator live acceptance)"
+status: lgtm-pending-live
+current_gate: "G6 closed — PR #331 open, CI green; live acceptance with the coordinator"
+remaining_estimate: "~5% (live acceptance only)"
 base_commit: 23b7a825
 depends_on: "Task 123 (confined remote browser, done); Task 140 (settings pages split, done)"
 delivery: own PR
@@ -159,8 +159,8 @@ every touched file stays far below 1000 lines.
 - [x] `fvm dart run scripts/lint_wiki.dart` from the repository root.
 
 ### G6 — Delivery
-- [ ] No `Co-Authored-By` or "Generated with" line anywhere.
-- [ ] PR opened to `main`; CI green.
+- [x] No `Co-Authored-By` or "Generated with" line anywhere.
+- [x] PR opened to `main`; CI green.
 
 ## Acceptance criteria
 
@@ -195,5 +195,6 @@ every touched file stays far below 1000 lines.
 | `fvm flutter test test/guards/` | 6 passed, exit 0 |
 | `fvm flutter test` (full Client fast suite) | 2365 passed, 3 skipped, exit 0 |
 | `fvm dart run scripts/lint_wiki.dart` (repository root) | success, exit 0 |
+| CI on PR #331 (`gh run watch 40053720642 --exit-status`) | client, bootstrap (macos/ubuntu/windows), docs/governance, branch history, protected labels: pass; `agent`, CLI, and release jobs skipped for unaffected paths |
 
 No Agent, protocol, or Gateway file changed.
