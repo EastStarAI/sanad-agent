@@ -93,6 +93,13 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
   final List<Map<String, String?>> browseWorkspaceTreeRequests = [];
   final List<Map<String, String>> folderMutations = [];
   final List<Map<String, String?>> permissionResponses = [];
+  final List<Map<String, String>> relocateRequests = [];
+  Future<DeviceWorkspace> Function(
+    DeviceConfig agent,
+    String workspaceId,
+    String newPath,
+  )?
+  relocateWorkspaceHandler;
   List<SlashCommandEntry> slashCommandResults = const [];
   WorkspaceTreeSnapshot? workspaceTreeSnapshot;
   Future<SessionQueryResult> Function(DeviceConfig agent, SessionQueryRequest? query)? refreshSessionsHandler;
@@ -735,6 +742,13 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
     required String workspaceId,
     required String newPath,
   }) async {
+    relocateRequests.add({
+      'device_id': agent.id,
+      'workspace_id': workspaceId,
+      'new_path': newPath,
+    });
+    final handler = relocateWorkspaceHandler;
+    if (handler != null) return handler(agent, workspaceId, newPath);
     return DeviceWorkspace(id: workspaceId, name: workspaceId, path: newPath);
   }
 

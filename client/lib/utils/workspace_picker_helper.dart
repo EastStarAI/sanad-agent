@@ -2,6 +2,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 
@@ -14,8 +15,6 @@ class WorkspaceCreateRequest {
 }
 
 class WorkspacePickerHelper {
-  static const remoteDisabledMessage = 'To change a workspace path, you must use a local connection.';
-
   @visibleForTesting
   static ValueChanged<String>? debugOnRemoteDisabled;
 
@@ -25,11 +24,19 @@ class WorkspacePickerHelper {
   static Future<String?> Function(WorkspaceBrowserCallbacks callbacks)?
   debugRemoteBrowserPick;
 
-  /// Opens the native picker locally. Remote Change Path stays host-local only.
+  /// The single workspace-path picker.
+  ///
+  /// A confirmed same-desktop local device opens the native host panel. Any
+  /// other online device opens the confined in-app browser through
+  /// [remoteBrowser], which must be bound to [device]; its pick starts at
+  /// [remoteStartPath] when that folder is inside the device's workspaces root.
+  /// One dialog, one returned path.
   static Future<String?> pickWorkspacePath({
     required BuildContext context,
     required DeviceConfig? device,
     String confirmButtonText = 'Select Workspace',
+    WorkspaceBrowserCallbacks? remoteBrowser,
+    String? remoteStartPath,
     Future<String?> Function()? debugOverride,
   }) async {
     final isLocal = AppPlatform.isDesktop && device?.isLocalReachable == true;
@@ -40,8 +47,21 @@ class WorkspacePickerHelper {
       return getDirectoryPath(confirmButtonText: confirmButtonText);
     }
 
-    debugOnRemoteDisabled?.call(remoteDisabledMessage);
-    ToastUtils.showError(context, remoteDisabledMessage);
+    final browser = remoteBrowser;
+    if (browser != null && device != null) {
+      return openRemoteFolderBrowser(
+        context: context,
+        callbacks: browser,
+        mode: WorkspaceBrowserMode.changePath,
+        initialPath: remoteStartPath,
+      );
+    }
+
+    // A caller reached here without device-bound callbacks, so there is nothing
+    // to browse and no path to return.
+    final message = AppLocalizations.of(context)!.workspacePickerDeviceUnavailable;
+    debugOnRemoteDisabled?.call(message);
+    ToastUtils.showError(context, message);
     return null;
   }
 
@@ -80,6 +100,8 @@ class WorkspacePickerHelper {
   static Future<String?> openRemoteFolderBrowser({
     required BuildContext context,
     required WorkspaceBrowserCallbacks callbacks,
+    WorkspaceBrowserMode mode = WorkspaceBrowserMode.createWorkspace,
+    String? initialPath,
   }) {
     final debugPick = debugRemoteBrowserPick;
     if (debugPick != null) return debugPick(callbacks);
@@ -90,6 +112,8 @@ class WorkspacePickerHelper {
         onCreateFolder: callbacks.onCreateFolder,
         onRenameFolder: callbacks.onRenameFolder,
         onDeleteFolder: callbacks.onDeleteFolder,
+        mode: mode,
+        initialPath: initialPath,
       ),
     );
   }

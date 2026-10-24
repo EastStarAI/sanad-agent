@@ -12,6 +12,11 @@ Total affected UI files: 83
 
 Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker) and removed its entry.
 
+Task 143 removed `Change Path` and `Could not change workspace path.` from
+`settings_screen.dart` by localizing the native picker label and the Change Path
+failure, and localized the picker helper's obsolete remote refusal. The file's
+count above reflects that pass.
+
 ## Files
 
 - `lib/features/settings/presentation/widgets/settings_pages/` (90 strings; split out of the former `settings_pages.dart` by Plan 113b 113-01)
@@ -462,11 +467,9 @@ Task 123 localized `workspace_browser_dialog.dart` (the remote workspace picker)
   - `Sign in to access Sanad Agent on your computers and servers.`
   - `Sign in to connect a remote device`
 
-- `lib/features/settings/presentation/screens/settings_screen.dart` (12 strings)
+- `lib/features/settings/presentation/screens/settings_screen.dart` (10 strings)
   - `Back to conversations`
   - `Cancel`
-  - `Change Path`
-  - `Could not change workspace path.`
   - `Could not remove workspace.`
   - `Could not rename workspace.`
   - `Open settings menu`

@@ -102,7 +102,7 @@ Automated owners:
 | Area | Pass | Fail |
 |---|---|---|
 | Selected device | Overview Check/Update/Restart use `DeviceControlClient` for the inspected device | Settings call `LocalDaemonController` or the local daemon for a cloud device |
-| Remote workspace | Confined in-app browser pick (Task 123); Change Path stays local-only | Remote create sends a path outside the root; browse lists `/` or Home |
+| Remote workspace | Confined in-app browser pick (Task 123) for add-workspace and Change Path, limited to the device's workspaces root | Remote create or relocate sends a path outside the root; browse lists `/` or Home |
 | MCP settings | Offline devices show a reconnect message and disable Add/Test/Edit/Remove; delete reloads snapshot on failure | Mutations fire while offline; a timed-out delete retries automatically |
 | English copy | All new labels and dialogs are English | Arabic UI strings |
 

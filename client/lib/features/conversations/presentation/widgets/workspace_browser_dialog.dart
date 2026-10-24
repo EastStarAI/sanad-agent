@@ -61,17 +61,39 @@ class WorkspaceBrowserCallbacks {
   final WorkspaceFolderDeleter? onDeleteFolder;
 }
 
+/// What the picked folder becomes.
+///
+/// The browser is one widget with one confinement; only the sentence the call
+/// to action makes changes between registering a new workspace and re-pointing
+/// an existing one.
+enum WorkspaceBrowserMode {
+  /// The picked folder becomes a new workspace.
+  createWorkspace,
+
+  /// The picked folder becomes the new folder of the existing workspace.
+  changePath,
+}
+
 /// The single folder picker for a device reached remotely.
 ///
 /// It lists folders only. The Agent confines a remote browse to its Home's
-/// workspaces root and opens there for an empty path; "Use This Folder" is
-/// disabled at that root, which the Agent also refuses to register.
+/// workspaces root and opens there for an empty path; the call to action is
+/// disabled at that root, which the Agent also refuses to use as a workspace.
+/// In [WorkspaceBrowserMode.changePath] it additionally states the in-root
+/// scope before the user picks and offers to change the workspace to the
+/// folder instead of using it as a new one.
 
 class WorkspaceBrowserDialog extends StatefulWidget {
   final WorkspaceTreeLoader loader;
   final WorkspaceFolderCreator? onCreateFolder;
   final WorkspaceFolderRenamer? onRenameFolder;
   final WorkspaceFolderDeleter? onDeleteFolder;
+  final WorkspaceBrowserMode mode;
+
+  /// The folder the browser opens at, when the caller wants to start
+  /// elsewhere than the device root. A folder the device will not open (for
+  /// example one outside its workspaces root) silently falls back to the root.
+  final String? initialPath;
 
   const WorkspaceBrowserDialog({
     super.key,
@@ -79,6 +101,8 @@ class WorkspaceBrowserDialog extends StatefulWidget {
     this.onCreateFolder,
     this.onRenameFolder,
     this.onDeleteFolder,
+    this.mode = WorkspaceBrowserMode.createWorkspace,
+    this.initialPath,
   });
 
   @override
@@ -94,10 +118,19 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
   @override
   void initState() {
     super.initState();
-    unawaited(_load());
+    final startPath = _startPath;
+    unawaited(
+      startPath == null ? _load() : _load(path: startPath, fallBackToRoot: true),
+    );
   }
 
-  Future<void> _load({String? path}) async {
+  /// The requested start folder, or `null` for the device root.
+  String? get _startPath {
+    final startPath = widget.initialPath?.trim();
+    return startPath == null || startPath.isEmpty ? null : startPath;
+  }
+
+  Future<void> _load({String? path, bool fallBackToRoot = false}) async {
     setState(() {
       _isLoading = true;
       _loadError = null;
@@ -113,6 +146,12 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
       });
     } catch (error) {
       if (!mounted) return;
+      if (fallBackToRoot) {
+        // The workspace's current folder is outside the device's workspaces
+        // root, gone, or not browsable: open at the root instead of failing.
+        await _load();
+        return;
+      }
       setState(() {
         _loadError = error;
         _isLoading = false;
@@ -313,6 +352,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
     final canGoUp = snapshot?.parentPath != null;
     final canMutateCurrentPath = snapshot != null && snapshot.path.isNotEmpty;
     final atRoot = snapshot == null || _isAtRoot(snapshot);
+    final isChangePath = widget.mode == WorkspaceBrowserMode.changePath;
 
     return AlertDialog(
       title: Row(
@@ -352,7 +392,19 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                   ),
                 ),
               ),
-            if (snapshot != null && atRoot && snapshot.path.isNotEmpty)
+            if (snapshot != null && isChangePath)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  l10n.workspaceBrowserChangePathNotice,
+                  key: const Key('workspace_browser_change_path_notice'),
+                  style: GoogleFonts.inter(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            if (snapshot != null && !isChangePath && atRoot && snapshot.path.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
@@ -528,7 +580,11 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
         FilledButton(
           key: const Key('workspace_browser_use_folder_button'),
           onPressed: _isLoading || snapshot == null || atRoot ? null : () => Navigator.of(context).pop(snapshot.path),
-          child: Text(l10n.workspaceBrowserUseFolder),
+          child: Text(
+            isChangePath
+                ? l10n.workspaceBrowserChangeToFolder
+                : l10n.workspaceBrowserUseFolder,
+          ),
         ),
       ],
     );

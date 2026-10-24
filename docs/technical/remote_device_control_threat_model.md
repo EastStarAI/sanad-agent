@@ -157,6 +157,15 @@ G0 browse and create bullets above:
 - `managed_remote` is injected only by the cloud adapter; a client-sent
   `managed_remote: false` cannot downgrade a cloud command.
 
+Task 143 (2026-10-24) adds no new authority class: it exposes the existing
+managed `workspace.relocate` in Settings for a device reached over the cloud.
+The target rule, the preview, and the one-time ticket are unchanged, and an
+owner could already create, rename, and recursively delete folders inside the
+root from the cloud, so re-pointing a workspace row inside it grants nothing
+new. The Client contributes one modernization only: it returns a path the
+device itself reported in a `workspace_tree` reply and never assembles or
+normalizes one, so the confinement decision stays entirely Agent-owned.
+
 Residual risk: each mutation revalidates on the serialized queue immediately
 before the filesystem call, but a check-then-act window remains between that
 check and the system call. Exploiting it needs a local process on the Agent
@@ -197,6 +206,11 @@ cloud-admitted calls.
   middle component), race, root-delete, and workspace-ancestor attempts fail
   closed (`path_not_allowed` / `workspace_in_use`). Lost-success recovery
   re-reads the snapshot rather than repeating delete.
+- Change Path over the cloud targets the same confined root and uses the same
+  preview + one-time token. It is allowed while work is in flight, and a
+  running turn keeps the folder it captured until its next turn; the Client
+  states the target scope before the pick and shows a specific message for a
+  refused target instead of the daemon reason.
 
 ### Remote MCP
 

@@ -113,8 +113,18 @@ prompt. Every browse and folder call goes to the device being configured
 "Use This Folder" is disabled at the root; the picked folder is sent as
 `create_workspace` `path`. Rejections render localized text keyed by the error
 code (`path_not_allowed`, `workspace_in_use`, `stale_confirmation`, generic).
-Change Path remains same-desktop local only; a remote Change Path through the
-same browser is a separate follow-up.
+
+Settings → Workspace → Change Path reuses that same browser through the shared
+picker boundary instead of a second picker. It is offered for every online
+device: a confirmed same-desktop local device keeps the native picker, and a
+device reached over the cloud opens the browser in change mode, where the call
+to action reads "Change to This Folder", the in-root target scope is stated
+before the pick, and the browser opens at the workspace's current folder when
+the device will browse it and at the root otherwise. The root stays
+unpickable. One confirmation line naming the resolved target precedes
+`workspace.relocate`, the daemon's preview ticket stays invisible, and a
+`path_not_allowed` target renders its own localized message instead of the
+daemon reason. The browser returns a path the device itself reported.
 
 ## Local continuity
 

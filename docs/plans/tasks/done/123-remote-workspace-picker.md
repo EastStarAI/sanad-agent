@@ -305,5 +305,5 @@ Residual from the run: the test conversation stays in TH2 history, unscoped from
 
 ## Follow-up
 
-- Remote Settings "Change Path" (relocate) using this confined browser, limited to targets inside the managed root (Q4). Separate task.
+- Remote Settings "Change Path" (relocate) using this confined browser, limited to targets inside the managed root (Q4). **Delivered by [Task 143](../tasks/143-remote-workspace-change-path.md).**
 

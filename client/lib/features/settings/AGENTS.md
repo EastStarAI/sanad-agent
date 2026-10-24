@@ -7,11 +7,19 @@ This contract applies to `client/lib/features/settings/`.
 - `/settings` is the only user-facing settings destination.
 - Workspace deep links carry explicit `device_id` and stable `workspace_id`; Settings selects that inspection scope without changing the active conversation device.
 - Workspace Settings owns display-name rename and Change Path; sidebar workspace
-  rows only navigate to this destination. Change Path uses the shared picker
-  boundary and is available only for a confirmed same-desktop local device.
-  Remote devices add workspaces through the confined in-app folder browser
-  owned by the conversations presentation and never open a native
-  host-directory picker. Remote Change Path is not offered here.
+  rows only navigate to this destination. Change Path is offered for every
+  online device through the shared picker boundary: a confirmed same-desktop
+  local device opens the native host picker, and a device reached over the cloud
+  opens the confined in-app folder browser bound to the inspected device. That
+  browser states the in-root target scope before the pick, one confirmation line
+  names the resolved target before `workspace.relocate` is sent, and a target
+  outside the device's workspaces root renders its own localized message
+  instead of the daemon reason. The daemon's preview ticket stays invisible.
+  Remote devices add workspaces through that same browser and never open a
+  native host-directory picker.
+- Change Path never waits for work in flight: the protocol exposes no
+  per-workspace busy signal, so Settings sends the relocate and a running turn
+  keeps the old folder until its next turn.
 - Remove Workspace deletes only the daemon-owned workspace record after an
   explicit confirmation. It must not delete the host folder, its files, or
   conversation rows.
