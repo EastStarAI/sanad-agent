@@ -199,7 +199,8 @@ Projection rules:
   "error": null,
   "session_id": "8f14e45f-ea0a-4c1a-9c1f-0d1c9b3e1234",
   "message_id": "msg_9c1f0d1c",
-  "has_position": true
+  "has_position": true,
+  "anchor_event_id": "history:8f14e45f-ea0a-4c1a-9c1f-0d1c9b3e1234:29586081:user_message:0"
 }
 ```
 
@@ -207,6 +208,13 @@ Projection rules:
   `recovery`.
 - `has_position` is true exactly when `message_id` is set — the only case in which the Client can open
   that run inside its conversation (S9, S20).
+- `anchor_event_id` is the canonical history event id of the run's user message, in exactly the
+  `history:<session_id>:<row_id>:<kind>:<ordinal>` shape `session_history` accepts as
+  `anchor_event_id`; for a run's user message that is `history:<session_id>:<message_row_id>:user_message:0`,
+  built by `SessionHistoryEventId` and never formatted by a caller. It is `null` when the run has no
+  position, and also when the message identity the run stored no longer resolves to an active history
+  row (a superseded or deleted message): the Agent never invents or re-derives a position it lost. The
+  run row's stored `message_id` is never rewritten to manufacture one.
 - The projection carries no conversation title, message text, task text, or command output.
 - `schedule.runs` paging is a keyset on `(run_at DESC, id DESC)`: `limit` defaults to `50` and is clamped
   to `1..200`, `has_more` reports a further page, and `next_cursor` is present only while one exists.
@@ -346,6 +354,12 @@ transport.
 - `delete` always sends `confirm: true`. The user-facing confirmation is the screen's responsibility; the
   protocol flag is the client's.
 - `runs` passes `limit` and the opaque `cursor` through unchanged and never parses the cursor.
+- **Open conversation navigates with `anchor_event_id`, never with `message_id`.** `anchor_event_id` is
+  the only value the history anchor accepts; a run's `message_id` is the message identity, not a
+  canonical event id, so passing it makes the anchored load fail and the conversation opens at its tail
+  instead of at the run. A `null` `anchor_event_id` carries the same meaning as `has_position: false` —
+  open the conversation without an anchor — and the Client must not substitute another value, derive one
+  itself, or treat it as a transport failure.
 - A response that omits its own projection — a single-row response without `schedule`, a `delete` that
   does not report `deleted: true` — is a protocol violation, not a silent success.
 

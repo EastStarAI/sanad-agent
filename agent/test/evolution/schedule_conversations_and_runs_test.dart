@@ -641,6 +641,91 @@ void main() {
       expect(sessionRecord.titleStatus, SessionTitleStatus.pending);
     });
 
+    test('continuous schedule fires three times into the one conversation its first run created', () async {
+      final schedule = scheduler.createSchedule(
+        task: 'Continuous fires',
+        name: 'Continuous fires',
+        ownerKind: ScheduleOwnerKind.user,
+        conversationMode: ScheduleConversationMode.continuous,
+        workspaceId: 'ws_gamma',
+        definition: ScheduleDefinition(
+          kind: ScheduleKind.interval,
+          zone: 'local',
+          intervalMinutes: 1,
+        ),
+      );
+      expect(schedule.runSessionId, isNull);
+
+      // A timer carries the record captured when it was armed and hands that
+      // same copy to every fire, so this is the exact input the timer path
+      // receives on the second and third occurrence.
+      final armed = scheduler.activeTasks.single.record!;
+      expect(armed.id, schedule.id);
+      expect(armed.runSessionId, isNull);
+
+      final dispatchedSessionIds = <String>[];
+      final sub = scheduler.eventStream.listen(
+        (event) => dispatchedSessionIds.add(event.sessionId),
+      );
+
+      for (var fire = 0; fire < 3; fire++) {
+        scheduler.executeTaskForTesting(armed);
+      }
+      await pumpEventQueue();
+      await sub.cancel();
+
+      expect(dispatchedSessionIds, hasLength(3));
+      expect(dispatchedSessionIds.toSet(), hasLength(1));
+      final conversationId = dispatchedSessionIds.first;
+      expect(conversationId, isNotEmpty);
+
+      final stored = scheduler.getSchedule(schedule.id)!;
+      expect(stored.runSessionId, conversationId);
+
+      final runs = sessionManager.db.scheduledTaskRuns
+          .listRuns(schedule.id, limit: 10)
+          .runs;
+      expect(runs, hasLength(3));
+      expect(
+        runs.every((run) => run.trigger == ScheduledTaskRunTrigger.scheduled),
+        isTrue,
+      );
+
+      // Re-arming keeps the refreshed row, not the stale armed copy, so the
+      // next occurrence starts from the conversation this schedule now owns.
+      expect(scheduler.activeTasks.single.record!.runSessionId, conversationId);
+    });
+
+    test('new_each_run fires three times into three conversations', () async {
+      final schedule = scheduler.createSchedule(
+        task: 'Per fire task',
+        name: 'Per fire task',
+        ownerKind: ScheduleOwnerKind.user,
+        conversationMode: ScheduleConversationMode.newEachRun,
+        definition: ScheduleDefinition(
+          kind: ScheduleKind.interval,
+          zone: 'local',
+          intervalMinutes: 1,
+        ),
+      );
+
+      final armed = scheduler.activeTasks.single.record!;
+      final dispatchedSessionIds = <String>[];
+      final sub = scheduler.eventStream.listen(
+        (event) => dispatchedSessionIds.add(event.sessionId),
+      );
+
+      for (var fire = 0; fire < 3; fire++) {
+        scheduler.executeTaskForTesting(armed);
+      }
+      await pumpEventQueue();
+      await sub.cancel();
+
+      expect(dispatchedSessionIds, hasLength(3));
+      expect(dispatchedSessionIds.toSet(), hasLength(3));
+      expect(scheduler.getSchedule(schedule.id)!.runSessionId, isNull);
+    });
+
     test('new_each_run creates fresh conversation per run', () {
       final schedule = scheduler.createSchedule(
         task: 'Per run task',

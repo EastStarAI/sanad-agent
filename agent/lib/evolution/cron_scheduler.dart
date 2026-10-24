@@ -547,7 +547,20 @@ class CronScheduler extends BasePlatform {
   @visibleForTesting
   void executeTaskForTesting(ScheduledTaskRecord record) => _executeTask(record);
 
-  void _executeTask(ScheduledTaskRecord record) {
+  /// The row as it is stored now, falling back to [armed] when it is gone.
+  ///
+  /// A timer carries the record captured when it was armed, and the conversation
+  /// a `continuous` schedule creates is persisted to the row by
+  /// [ScheduleConversationFactory] — not through the armed copy. Every dispatch
+  /// therefore takes its conversation from the stored row, exactly as a manual
+  /// run does, so a recurring fire reuses the one conversation its first run
+  /// created (S3). A fired one-shot deletes its own row as it dispatches, which
+  /// is the one case with nothing left to read.
+  ScheduledTaskRecord _persistedRecord(ScheduledTaskRecord armed) =>
+      getSchedule(armed.id) ?? armed;
+
+  void _executeTask(ScheduledTaskRecord armed) {
+    final record = _persistedRecord(armed);
     _logger.info('Executing scheduled task; id=${record.id}.');
     final executionTime = DateTime.now().toUtc();
     final targetSessionId = _conversationFactory.resolveDispatchSession(record);
@@ -762,9 +775,14 @@ class CronScheduler extends BasePlatform {
         'window, firing once and advancing to $nextFutureRunAt.',
       );
 
-      final targetSessionId = _conversationFactory.resolveDispatchSession(record);
+      // Recovery dispatches through the same conversation resolution as a
+      // timer fire, so it reads the row it is about to advance instead of the
+      // copy the caller happened to hold (S3).
+      final dispatchRecord = _persistedRecord(record);
+      final targetSessionId =
+          _conversationFactory.resolveDispatchSession(dispatchRecord);
       final runId = _runRecorder.startRun(
-        scheduleId: record.id,
+        scheduleId: dispatchRecord.id,
         runAt: mostRecentMissed,
         trigger: ScheduledTaskRunTrigger.recovery,
       );
@@ -776,7 +794,7 @@ class CronScheduler extends BasePlatform {
       );
 
       final advanced = ScheduleControl.withStatus(
-        record,
+        dispatchRecord,
         lastStatus: 'fired',
         lastRunAt: effectiveNow,
         updatedAt: effectiveNow,

@@ -6,6 +6,7 @@ import 'package:sanad_agent/evolution/compaction/model_context_projection.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/session_message_repository.dart';
 import 'package:sanad_agent/evolution/db/terminal_assistant_classifier.dart';
+import 'package:sanad_agent/evolution/models/session_history_page.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 
 /// Resolves the originating tool call of a durable tool message when the
@@ -465,7 +466,12 @@ class SessionHistoryProjector {
           (value) => value + 1,
           ifAbsent: () => 0,
         );
-        final eventId = 'history:$sessionId:${persisted.rowId}:$kind:$ordinal';
+        final eventId = SessionHistoryEventId.canonical(
+          sessionId: sessionId,
+          rowId: persisted.rowId,
+          kind: kind,
+          ordinal: ordinal,
+        );
         row['id'] = eventId;
         row['event_id'] = eventId;
         row['source_message_row_id'] = persisted.rowId;

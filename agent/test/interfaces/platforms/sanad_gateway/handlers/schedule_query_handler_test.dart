@@ -1,5 +1,8 @@
 import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
+import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/scheduled_task_run_repository.dart';
+import 'package:sanad_agent/evolution/models/session_history_page.dart';
 import 'package:sanad_agent/evolution/scheduling/schedule_model.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/schedule_query_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/support/schedule_projection.dart';
@@ -469,6 +472,7 @@ void main() {
         'session_id',
         'message_id',
         'has_position',
+        'anchor_event_id',
       });
       expect(run['status'], 'failed');
       expect(run['trigger'], 'manual');
@@ -476,6 +480,10 @@ void main() {
       expect(run['session_id'], session.sessionId);
       expect(run['message_id'], 'message_1');
       expect(run['has_position'], isTrue);
+      // The stored message identity no longer resolves to an active history
+      // row, so there is no anchor to open; the run row is never rewritten to
+      // invent one.
+      expect(run['anchor_event_id'], isNull);
       expect(run['duration_ms'], isNotNull);
       // No conversation title, message text, or command output is projected.
       expect(run.containsKey('session_title'), isFalse);
@@ -493,7 +501,50 @@ void main() {
       expect(run['session_id'], isNull);
       expect(run['message_id'], isNull);
       expect(run['has_position'], isFalse);
+      expect(run['anchor_event_id'], isNull);
       expect(run['duration_ms'], isNull);
+    });
+
+    test('anchor_event_id is the canonical history anchor of the run user message', () async {
+      final session = harness.sessionManager.createSession('test-model');
+      harness.sessionManager.db.replaceMessages(session.sessionId, [
+        Message(role: MessageRole.user, content: 'Reply with exactly OK.'),
+      ]);
+      final persisted = harness.sessionManager.db.getPersistedMessages(
+        session.sessionId,
+      );
+      expect(persisted, hasLength(1));
+      final messageRowId = persisted.single.rowId;
+      final messageId = MessageHistoryIdentity.read(
+        persisted.single.message,
+      ).messageId;
+      expect(messageId, isNotEmpty);
+
+      harness.seedRun(
+        scheduleId: scheduleId,
+        status: ScheduledTaskRunStatus.succeeded,
+        sessionId: session.sessionId,
+        messageId: messageId,
+      );
+
+      final payload = await listRuns();
+      final run = (payload['runs'] as List).single as Map<String, dynamic>;
+
+      expect(run['has_position'], isTrue);
+      expect(run['message_id'], messageId);
+      // The anchor addresses the durable history row, never the message
+      // identity stored on the run row (S20).
+      expect(
+        run['anchor_event_id'],
+        'history:${session.sessionId}:$messageRowId:user_message:0',
+      );
+
+      // ...and it is exactly the shape the history anchor admits, so the
+      // anchored load resolves back to the same row.
+      final request = SessionHistoryRequest(
+        anchorEventId: run['anchor_event_id'] as String,
+      );
+      expect(request.anchorRowIdForSession(session.sessionId), messageRowId);
     });
 
     test('an unverified transport is permission_denied', () async {
