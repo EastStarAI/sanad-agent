@@ -26,7 +26,9 @@ local picker matrix and the client projection checks.
   cannot be browsed or changed from the cloud.
 - Remove workspace deletes the database record only; folders, files, sessions,
   and messages remain untouched.
-- Change Path remains same-desktop local only.
+- Change Path follows Remove workspace: any online device may change a
+  workspace's folder, and a device reached over the cloud targets only folders
+  inside its own Sanad workspaces root.
 
 ## Automated Coverage Matrix
 
@@ -63,7 +65,10 @@ local picker matrix and the client projection checks.
    localized `workspace_in_use` message.
 5. Choose Remove workspace, verify the confirmation explains record-only
    removal, then confirm that the folder/files and conversation records remain.
-6. Change Path remains unavailable on the remote device.
+6. Change Path opens the confined browser for the remote device: the notice
+   states the in-root scope, the browser starts at the workspace's current
+   folder, one confirmation names the picked folder, and the workspace follows
+   it; cancel sends nothing.
 7. Switch the interface to Arabic: the dialog mirrors, while the path line
    stays left to right.
 

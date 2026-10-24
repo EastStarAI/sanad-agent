@@ -436,6 +436,86 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text(ar.workspaceBrowserDeleteConfirmation('child')), findsOneWidget);
   });
+  testWidgets('change mode offers to change the workspace to the picked folder', (
+    tester,
+  ) async {
+    final requests = <String?>[];
+    final en = await AppLocalizations.delegate.load(const Locale('en'));
+
+    await _openBrowser(
+      tester,
+      mode: WorkspaceBrowserMode.changePath,
+      initialPath: '/root/apps',
+      loader: ({path}) async {
+        requests.add(path);
+        return path == '/root/apps' ? _nestedSnapshot : _rootSnapshot;
+      },
+      onCreateFolder: (parentPath, name) async {},
+    );
+
+    expect(requests, ['/root/apps']);
+    expect(find.text(en.workspaceBrowserChangeToFolder), findsOneWidget);
+    expect(find.text(en.workspaceBrowserUseFolder), findsNothing);
+    expect(
+      find.byKey(const Key('workspace_browser_change_path_notice')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('workspace_browser_root_hint')), findsNothing);
+
+    await tester.tap(find.text(en.workspaceBrowserChangeToFolder));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('workspace_browser_change_path_notice')), findsNothing);
+  });
+
+  testWidgets('change mode keeps the call to action disabled at the root', (
+    tester,
+  ) async {
+    await _openBrowser(
+      tester,
+      mode: WorkspaceBrowserMode.changePath,
+      initialPath: '/outside/workspaces-root-foreign',
+      loader: ({path}) async {
+        if (path != null && path.isNotEmpty) throw StateError('Not allowed.');
+        return _rootSnapshot;
+      },
+    );
+
+    final cta = tester.widget<FilledButton>(
+      find.byKey(const Key('workspace_browser_use_folder_button')),
+    );
+    expect(cta.onPressed, isNull);
+    expect(find.byKey(const Key('workspace_browser_load_error')), findsNothing);
+  });
+
+  testWidgets('change mode renders Arabic copy right-to-left', (tester) async {
+    final ar = await AppLocalizations.delegate.load(const Locale('ar'));
+
+    await _openBrowser(
+      tester,
+      mode: WorkspaceBrowserMode.changePath,
+      initialPath: '/root/apps',
+      locale: const Locale('ar'),
+      loader: ({path}) async => _nestedSnapshot,
+    );
+
+    expect(find.text(ar.workspaceBrowserChangeToFolder), findsOneWidget);
+    expect(
+      find.byKey(const Key('workspace_browser_change_path_notice')),
+      findsOneWidget,
+    );
+    expect(
+      Directionality.of(
+        tester.element(find.byKey(const Key('workspace_browser_change_path_notice'))),
+      ),
+      TextDirection.rtl,
+    );
+    expect(
+      Directionality.of(
+        tester.element(find.byKey(const Key('workspace_browser_current_path'))),
+      ),
+      TextDirection.ltr,
+    );
+  });
 }
 
 const _repoSnapshot = WorkspaceTreeSnapshot(
@@ -460,6 +540,8 @@ Future<void> _openBrowser(
   WorkspaceFolderCreator? onCreateFolder,
   WorkspaceFolderRenamer? onRenameFolder,
   WorkspaceFolderDeleter? onDeleteFolder,
+  WorkspaceBrowserMode mode = WorkspaceBrowserMode.createWorkspace,
+  String? initialPath,
   Locale? locale,
 }) async {
   await tester.pumpWidget(
@@ -480,6 +562,8 @@ Future<void> _openBrowser(
                       onCreateFolder: onCreateFolder,
                       onRenameFolder: onRenameFolder,
                       onDeleteFolder: onDeleteFolder,
+                      mode: mode,
+                      initialPath: initialPath,
                     ),
                   ),
                 );

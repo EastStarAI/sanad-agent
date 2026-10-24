@@ -8,7 +8,7 @@ import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
-import 'package:sanad_client/utils/workspace_picker_helper.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
@@ -27,6 +27,7 @@ import '../widgets/settings_pages/profile_page.dart';
 import '../widgets/settings_pages/providers_page.dart';
 import '../widgets/settings_pages/secrets_page.dart';
 import '../widgets/settings_pages/skills_page.dart';
+import '../widgets/settings_pages/workspace_change_path.dart';
 import '../widgets/settings_pages/workspace_page.dart';
 import '../widgets/sessions_devices_page.dart';
 
@@ -171,26 +172,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     DeviceConfig device,
     DeviceWorkspace workspace,
   ) async {
-    final path = await WorkspacePickerHelper.pickWorkspacePath(
+    await showWorkspaceChangePathFlow(
       context: context,
+      cache: _cache,
       device: device,
-      confirmButtonText: 'Change Path',
+      workspace: workspace,
+      browser: WorkspaceBrowserCallbacks.forDevice(_cache, device),
     );
-    if (path == null || path.trim().isEmpty) return;
-    try {
-      await _cache.relocateWorkspace(
-        device,
-        workspaceId: workspace.id,
-        newPath: path,
-      );
-    } catch (error) {
-      if (mounted) {
-        ToastUtils.showError(
-          context,
-          _workspaceMutationError(error, 'Could not change workspace path.'),
-        );
-      }
-    }
   }
 
   Future<void> _removeWorkspace(
@@ -411,7 +399,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         device: selected,
         workspace: workspace,
         onRename: () => _renameWorkspace(selected, workspace),
-        onChangePath: selected.isLocalReachable ? () => _changeWorkspacePath(selected, workspace) : null,
+        onChangePath: workspaceChangePathAction(
+          device: selected,
+          action: () => _changeWorkspacePath(selected, workspace),
+        ),
         onRemove: selected.isOnline ? () => _removeWorkspace(selected, workspace) : null,
       ),
       _ => const EmptyDevicePage(),

@@ -623,6 +623,57 @@ void main() {
     expect(workspace.name, 'desktop-agent');
   });
 
+  test('workspace relocation sends the id and path, then retries with the preview ticket', () async {
+    final future = commands.relocateWorkspace(
+      workspaceId: ' ws-1 ',
+      newPath: ' /root/acc/target ',
+    );
+    var command = socket.capturedCommands.single;
+    expect(command['command'], 'workspace.relocate');
+    var payload = command['payload'] as Map<String, dynamic>;
+    // Change Path sends nothing but the workspace and the chosen folder.
+    expect(payload.keys.toSet(), {'request_id', 'workspace_id', 'new_path'});
+    expect(payload['workspace_id'], 'ws-1');
+    expect(payload['new_path'], '/root/acc/target');
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'workspace.relocate.preview',
+      'payload': {
+        'request_id': payload['request_id'],
+        'confirmation_token': 'ticket-1',
+        'confirmation_fingerprint': 'fingerprint-1',
+        'summary': {'workspace_id': 'ws-1'},
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(socket.capturedCommands, hasLength(2));
+    command = socket.capturedCommands.last;
+    payload = command['payload'] as Map<String, dynamic>;
+    expect(command['command'], 'workspace.relocate');
+    expect(payload['workspace_id'], 'ws-1');
+    expect(payload['new_path'], '/root/acc/target');
+    expect(payload['confirmation_token'], 'ticket-1');
+    expect(payload['confirmation_fingerprint'], 'fingerprint-1');
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'workspace.relocated',
+      'payload': {
+        'request_id': payload['request_id'],
+        'workspace': {
+          'id': 'ws-1',
+          'name': 'app',
+          'path': '/root/acc/target',
+        },
+      },
+    });
+
+    final workspace = await future;
+    expect(workspace.path, '/root/acc/target');
+  });
+
   test('workspace relocation surfaces the correlated daemon error', () async {
     final future = commands.relocateWorkspace(
       workspaceId: 'workspace-1',

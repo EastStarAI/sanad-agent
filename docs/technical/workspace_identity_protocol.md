@@ -38,11 +38,20 @@ Request payload: `request_id`, `workspace_id`, and `new_path`.
 
 Success event: `workspace.relocated`, carrying the correlated request id and complete authoritative `workspace` object. The daemon requires an existing directory, normalizes it, and rejects a path already owned by another workspace. Validation failures return a correlated `error` event, leave the prior workspace snapshot unchanged, and do not terminate the transport or daemon. Sessions and work items are not rewritten because their UUID remains stable.
 
+Relocate re-points the workspace row; it never moves, copies, or deletes a folder, so the folder that no longer carries the workspace keeps its files. Sessions, schedules, permission policy, and secrets follow the UUID, while anything stored inside the old folder (project `.sanad` MCP configuration, skills found by walking the workspace's ancestors, `.git`) does not follow it.
+
+Nothing serializes relocate against execution. A turn captures its workspace root when its runtime catalog is built, so a relocate while work is in flight is allowed and that work keeps the old folder until its next turn re-resolves the workspace path; a suspended turn resumed after a relocate runs in the new folder. The protocol exposes no "is a turn running in workspace X on device Y" query, so no client can gate Change Path on another client's work.
+
 ## Client UX
 
 A workspace row shows a missing-folder warning when unavailable and disables New Conversation for that workspace. A settings gear appears only while hovering the row. It opens `/settings?section=workspace&device_id=...&workspace_id=...`; Settings selects the exact inspection device and workspace without changing the active conversation device.
 
-The Workspace Settings overview owns `Rename Workspace` and `Change Path`. Change Path is offered only for local reachable desktop devices, through the native directory picker; a remote add-workspace uses the confined daemon-owned browser (Task 123). Mutation results update the conversation cache only after the correlated authoritative response. Each successful create, rename, relocate, or remove mutation invalidates older in-flight workspace-list generations for that device so a stale refresh cannot overwrite the confirmed result. A rejected mutation preserves the daemon-provided reason through the command and cache layers and displays it with the project's error toast; Settings does not replace it with a generic message or use a `SnackBar`.
+The Workspace Settings overview owns `Rename Workspace` and `Change Path`. Change Path is offered for every online device, like Remove Workspace:
+
+- A confirmed same-desktop local device uses the native directory picker, unchanged.
+- A device reached over the cloud picks inside the confined daemon-owned browser (Task 123). The `new_path` is limited to the device's managed workspaces root, so a workspace registered outside that root can be moved *into* it from the cloud but cannot be repaired to another outside-root folder there.
+
+A remote Change Path states that in-root scope before the pick, opens at the workspace's current folder when the device browses it and at the root otherwise, names the resolved target in one confirmation line before anything is sent, and renders one specific localized message instead of the daemon reason when the target is `path_not_allowed`. The daemon's relocation preview ticket stays invisible: the transport performs the preview and the ticketed retry. Mutation results update the conversation cache only after the correlated authoritative response. Each successful create, rename, relocate, or remove mutation invalidates older in-flight workspace-list generations for that device so a stale refresh cannot overwrite the confirmed result. A rejected mutation preserves the daemon-provided reason through the command and cache layers and displays it with the project's error toast; Settings does not replace it with a generic message or use a `SnackBar`.
 
 ## Legacy Cache Reconciliation
 

@@ -107,6 +107,7 @@ class WorkspacePage extends StatelessWidget {
                           ),
                           if (onChangePath != null)
                             FilledButton.icon(
+                              key: const Key('workspace_change_path_button'),
                               onPressed: onChangePath,
                               icon: const Icon(
                                 Icons.drive_folder_upload_outlined,

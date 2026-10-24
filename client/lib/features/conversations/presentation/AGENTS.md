@@ -63,6 +63,12 @@ This contract applies to `client/lib/features/conversations/presentation/`.
   it returns a folder the device reported and creates the workspace from that
   path. "Use This Folder" stays disabled at the device's workspaces root, and
   rejections render localized text keyed by the daemon error code.
+- A remote Change Path is the same dialog in `WorkspaceBrowserMode.changePath`,
+  not a second picker: the call to action reads "Change to This Folder", a
+  notice states the in-root scope before the pick, it opens at the caller's
+  start folder when the device browses it and silently at the root otherwise,
+  and it still cannot pick the root. The dialog never decides or assembles a
+  target; it returns a path the device itself reported.
 
 ## Delivery Controls
 - Enter/send emits typed automatic intent; Command+Enter and Control+Enter emit typed queue intent.
