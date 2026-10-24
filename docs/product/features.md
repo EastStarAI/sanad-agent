@@ -143,9 +143,11 @@ session snapshot.
 
 The agent can persist one-shot and recurring tasks for future execution and run
 them even when the client window is closed, as long as the daemon remains
-running. Scheduling is managed through the action-oriented `schedule_task` tool
-(`create`, `list`, `cancel`, `update`, `pause`, `resume`, `run_now`). A schedule
-carries an optional display name, set on `create` and `update`.
+running. The model manages schedules through the action-oriented `schedule_task`
+tool (`create`, `list`, `cancel`, `update`, `pause`, `resume`, `run_now`), and you
+manage device-owned schedules directly on the [Schedules screen](#schedules-screen)
+without starting a conversation. A schedule carries an optional display name, set
+on `create` and `update`.
 
 A schedule's task text runs verbatim when it fires, with no earlier conversation
 to draw context from, so it must be self-contained. A prompt the user authored on
@@ -195,6 +197,56 @@ Schedules survive daemon restarts through SQLite persistence. When the daemon re
 - **Startup delivery:** An occurrence dispatched during startup recovery is held until the gateway subscribes to the scheduler and then delivered once, so a fire recorded as `fired` is never dropped.
 - **Immediate mutation liveness:** `cancel` removes the in-memory timer and deletes the database row immediately; `update` stops the old timer and arms a new timer for the recomputed instant.
 - **Time awareness:** The system prompt's single per-turn date line reads `Date: YYYY-MM-DD (zone: <zone>)` with no clock time, keeping the prompt byte-stable within a day while informing the agent of today's date in the schedule's resolved timezone.
+
+### Schedules screen
+
+Every device also has a Schedules page in the sidebar, so you do not have to start a
+conversation to schedule work. The list shows each schedule's name (or a label
+derived from its task), a localized recurrence summary, its next run in the
+schedule's own timezone, whether it is paused, and — from the third consecutive
+failure — a failure badge. Each row offers Pause or Resume, Run now, Edit, and
+Delete with a confirmation; Run now stays available on a paused schedule and never
+resumes it.
+
+Selecting a row opens the schedule's detail page, with two tabs. **Details** shows
+the summary, who owns the schedule (a conversation or the device), the stored
+workspace, provider, and model, the conversation mode, and the same actions. **Run
+history** shows every attempt with its time, status (`running`, `succeeded`,
+`failed`, or `skipped`), trigger (`scheduled`, `manual`, or `recovery`), duration,
+and error text when it failed. **Open conversation** jumps to that run's own user
+message inside its conversation, so the history is a way back into the work rather
+than a log of it.
+
+**New schedule** opens one form, which Edit reuses: an optional name, the task
+text (required and self-contained, because a run starts from it alone), the
+recurrence, an optional timezone, a workspace, a provider and model chosen with
+the same pickers a new conversation uses, a conversation-mode switch, and a live
+next-run preview answered by the agent. Editing an active schedule applies to its
+next run, and the conversation that owns a model-created schedule cannot be
+changed.
+
+Conversation mode decides where runs land:
+
+- `continuous` (the default) keeps one conversation per schedule. It is created on
+  the first run or on Run now, with the stored workspace, provider, and model, and
+  every later run appends to it.
+- `new_each_run` creates a fresh conversation per run and links each one from its
+  run-history row.
+
+Conversations that own schedules carry a marker in the sidebar. Deleting such a
+conversation warns you first and **pauses** its schedules instead of deleting
+them; resuming one that the device owns continues in a new conversation. A
+schedule the model created belongs to its conversation and can only be edited or
+deleted once that conversation is gone.
+
+A failing run is visible in three places: the row's badge in the list, a
+non-modal notice in the run's conversation naming the schedule, and, after three
+consecutive failures, a suggestion to pause it. Nothing is paused or disabled for
+you. On an unreachable device the page says the schedules are unavailable, every
+action including New schedule is closed, and no cached row is presented as
+current; it recovers by itself when the device answers again. All of this is
+identical over a local and a cloud connection, and every string is localized in
+English and Arabic.
 
 ## Experimental voice
 
