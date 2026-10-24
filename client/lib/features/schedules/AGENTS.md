@@ -54,6 +54,14 @@ This contract applies to `client/lib/features/schedules/`.
   offers Edit and Delete only, and `resume`/`run_now` answer `schedule_orphaned`.
 - Run now stays available on a paused row and never resumes it. `suggestsPause` starts at the third
   consecutive failure; nothing auto-disables a schedule.
+- **Open conversation anchors on `anchor_event_id` and nothing else.** It is the canonical history event
+  id of the run's user message (`history:<sessionId>:<rowId>:user_message:0`), so it is what
+  `SessionMessagesCubit.requestHistoryAnchor` receives and what the viewport anchor records. The run's
+  `message_id` is a message identity, not a canonical event id, and substituting it makes the anchored
+  load fail and the conversation open at its tail (S20). A `null` anchor — no position, an unresolvable
+  one, or an older Agent that does not send the field — opens the conversation at its default position
+  and is not an error. The action is offered whenever the run has a `session_id`; a run still in flight
+  has none yet.
 
 ## Routes and Screens
 - `AppRoutes.schedules` and `AppRoutes.scheduleDetail` are declared before `AppRoutes.session` so

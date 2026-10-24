@@ -7,20 +7,48 @@ import 'package:sanad_client/features/schedules/domain/models/schedule_run.dart'
 import 'package:sanad_client/features/schedules/domain/models/schedule_run_failure_notice.dart';
 import 'package:sanad_client/features/schedules/presentation/screens/schedule_detail_screen.dart';
 
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
+
 import '../../helpers/pump_app.dart';
 import 'schedules_test_harness.dart';
+
+/// Records the history anchors the surface requests, so a test can prove which
+/// value reached `SessionMessagesCubit.requestHistoryAnchor` (Task 139 F2).
+class _RecordingSessionMessagesCubit extends Cubit<SessionMessagesState>
+    implements SessionMessagesCubit {
+  _RecordingSessionMessagesCubit() : super(const SessionMessagesState());
+
+  final anchors = <({String deviceId, String sessionId, String anchorEventId})>[];
+
+  @override
+  void requestHistoryAnchor({
+    required String deviceId,
+    required String sessionId,
+    required String anchorEventId,
+  }) {
+    anchors.add((deviceId: deviceId, sessionId: sessionId, anchorEventId: anchorEventId));
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   late SchedulesTestEnvironment environment;
   late FakeSchedulesClient client;
+  late _RecordingSessionMessagesCubit messagesCubit;
 
   setUp(() async {
     environment = SchedulesTestEnvironment();
     client = environment.client;
+    messagesCubit = _RecordingSessionMessagesCubit();
     await environment.install();
   });
 
   tearDown(() async {
+    await messagesCubit.close();
     await environment.dispose();
   });
 
@@ -53,6 +81,7 @@ void main() {
       child: const SizedBox.shrink(),
       router: router,
       locale: locale,
+      sessionMessagesCubit: messagesCubit,
       conversationCacheRepository: environment.cacheRepository,
       conversationRepository: environment.conversationRepository,
     );
@@ -181,12 +210,20 @@ void main() {
     });
   });
 
-  group('open conversation', () {
-    testWidgets('a run position lands on its own user message', (tester) async {
+  group('open conversation (F2)', () {
+    const canonicalAnchor = 'history:session-1:29586081:user_message:0';
+
+    testWidgets('lands on the anchor_event_id the Agent sent', (tester) async {
       client.schedules = [scheduleFixture()];
       client.runsBySchedule = {
         'task_1': [
-          runFixture(id: 'run_1', sessionId: 'session-1', messageId: 'msg_42', hasPosition: true),
+          runFixture(
+            id: 'run_1',
+            sessionId: 'session-1',
+            messageId: 'msg_42',
+            hasPosition: true,
+            anchorEventId: canonicalAnchor,
+          ),
         ],
       };
       final router = await pumpDetail(tester);
@@ -196,20 +233,57 @@ void main() {
       await tester.tap(find.byKey(const Key('schedule_open_conversation_btn_run_1')));
       await tester.pumpAndSettle();
 
+      expect(messagesCubit.anchors, [
+        (deviceId: 'device-1', sessionId: 'session-1', anchorEventId: canonicalAnchor),
+      ]);
       expect(
         environment.cacheRepository.sessionViewportAnchor('device-1', 'session-1'),
-        'msg_42',
-        reason: "has_position means the run's user message is the anchor",
+        canonicalAnchor,
       );
       expect(router.state.matchedLocation, '/conversations/device-1/session-1');
       expect(find.text('session:session-1'), findsOneWidget);
     });
 
-    testWidgets('a run without a position opens the conversation itself', (tester) async {
+    testWidgets('never anchors on message_id', (tester) async {
+      // A run whose message identity exists but whose event id did not resolve:
+      // the Agent sends a null anchor, and the Client must not derive one from
+      // `message_id` (protocol §9.1).
       client.schedules = [scheduleFixture()];
       client.runsBySchedule = {
         'task_1': [
-          runFixture(id: 'run_1', sessionId: 'session-1', messageId: null, hasPosition: false),
+          runFixture(
+            id: 'run_1',
+            sessionId: 'session-1',
+            messageId: 'msg_42',
+            hasPosition: true,
+            anchorEventId: null,
+          ),
+        ],
+      };
+      await pumpDetail(tester);
+
+      await tester.tap(find.byKey(const Key('schedule_run_history_tab_btn')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('schedule_open_conversation_btn_run_1')));
+      await tester.pumpAndSettle();
+
+      expect(messagesCubit.anchors, isEmpty);
+      expect(environment.cacheRepository.sessionViewportAnchor('device-1', 'session-1'), isNull);
+    });
+
+    testWidgets('a run without a position opens the conversation at its default place', (
+      tester,
+    ) async {
+      client.schedules = [scheduleFixture()];
+      client.runsBySchedule = {
+        'task_1': [
+          runFixture(
+            id: 'run_1',
+            sessionId: 'session-1',
+            messageId: null,
+            hasPosition: false,
+            anchorEventId: null,
+          ),
         ],
       };
       final router = await pumpDetail(tester);
@@ -219,8 +293,36 @@ void main() {
       await tester.tap(find.byKey(const Key('schedule_open_conversation_btn_run_1')));
       await tester.pumpAndSettle();
 
+      expect(messagesCubit.anchors, isEmpty);
       expect(environment.cacheRepository.sessionViewportAnchor('device-1', 'session-1'), isNull);
       expect(router.state.matchedLocation, '/conversations/device-1/session-1');
+    });
+
+    testWidgets('a run still in flight has no conversation to open', (tester) async {
+      client.schedules = [scheduleFixture()];
+      client.runsBySchedule = {
+        'task_1': [
+          runFixture(
+            id: 'run_1',
+            status: ScheduleRunStatus.running,
+            durationMs: null,
+            sessionId: null,
+            messageId: null,
+            anchorEventId: null,
+          ),
+        ],
+      };
+      await pumpDetail(tester);
+
+      await tester.tap(find.byKey(const Key('schedule_run_history_tab_btn')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<TextButton>(find.byKey(const Key('schedule_open_conversation_btn_run_1')))
+            .onPressed,
+        isNull,
+      );
     });
   });
 

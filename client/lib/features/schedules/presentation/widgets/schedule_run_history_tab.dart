@@ -233,13 +233,18 @@ class _ScheduleRunRow extends StatelessWidget {
 
   /// Opens the run inside its conversation (S8, S20).
   ///
-  /// A position is a request to land on the run's own user message, so it is
-  /// recorded as the conversation's viewport anchor before navigating; without a
-  /// position the conversation opens at its own default place.
+  /// The run's `anchor_event_id` is the canonical history event id of its user
+  /// message and the only anchor the history accepts, so it is recorded as the
+  /// conversation's viewport anchor before navigating. The run's `message_id` is
+  /// a different identity and is never substituted: passing it made the anchored
+  /// load fail and the conversation open at its tail (Task 139 F2, protocol
+  /// §9.1). Without an anchor — no position, or one the Agent could no longer
+  /// resolve — the conversation opens at its own default place, which is not an
+  /// error.
   void _openConversation(BuildContext context) {
     final sessionId = run.sessionId;
     if (sessionId == null) return;
-    final anchor = run.hasPosition ? run.messageId : null;
+    final anchor = run.anchorEventId;
     if (anchor != null && anchor.isNotEmpty) {
       _maybeRead<SessionMessagesCubit>(context)?.requestHistoryAnchor(
         deviceId: deviceId,

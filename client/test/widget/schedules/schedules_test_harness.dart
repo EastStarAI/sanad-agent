@@ -218,6 +218,7 @@ ScheduleRun runFixture({
   String? sessionId = 'session-1',
   String? messageId = 'msg_1',
   bool hasPosition = true,
+  String? anchorEventId = 'history:session-1:29586081:user_message:0',
   DateTime? runAt,
 }) => ScheduleRun(
   id: id,
@@ -229,6 +230,7 @@ ScheduleRun runFixture({
   sessionId: sessionId,
   messageId: messageId,
   hasPosition: hasPosition,
+  anchorEventId: anchorEventId,
 );
 
 Future<AppLocalizations> l10nFor(String locale) =>
