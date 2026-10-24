@@ -2,8 +2,8 @@
 title: "Task 143 — Remote Change Path through the confined browser"
 description: "Offer Workspace Settings → Change Path for a device reached over the cloud by reusing the Task 123 confined folder browser and the Agent's existing preview-ticketed workspace.relocate, with an in-root notice, one confirmation line naming the resolved target, and a specific out-of-root message."
 status: in_progress
-current_gate: "G1 — task plan committed"
-remaining_estimate: "~85%"
+current_gate: "G5 closed — implementation, tests, guards, full fast suite, and docs done; G6 delivery in progress"
+remaining_estimate: "~10% (CI and coordinator live acceptance)"
 base_commit: 23b7a825
 depends_on: "Task 123 (confined remote browser, done); Task 140 (settings pages split, done)"
 delivery: own PR
@@ -140,23 +140,23 @@ every touched file stays far below 1000 lines.
 - [x] This file committed on `feat/143-remote-change-path`.
 
 ### G2 — Picker and dialog (W1, W2)
-- [ ] `pickWorkspacePath` delegates to the confined browser for an online non-local device.
-- [ ] Change mode: CTA label, D2 notice, D4 start folder with a silent root fallback, root still disabled.
-- [ ] `fvm flutter gen-l10n` and `fvm flutter analyze` clean; dialog create-mode suite green.
+- [x] `pickWorkspacePath` delegates to the confined browser for an online non-local device.
+- [x] Change mode: CTA label, D2 notice, D4 start folder with a silent root fallback, root still disabled.
+- [x] `fvm flutter gen-l10n` and `fvm flutter analyze` clean; dialog create-mode suite green.
 
 ### G3 — Settings wiring (W3)
-- [ ] Gate is `isOnline`; callbacks bound to the inspected device.
-- [ ] D3 confirmation names the resolved target; `path_not_allowed` renders the D7 copy.
+- [x] Gate is `isOnline`; callbacks bound to the inspected device.
+- [x] D3 confirmation names the resolved target; `path_not_allowed` renders the D7 copy.
 
 ### G4 — Tests (W4)
-- [ ] New Settings Change Path suite covers presence, binding, D4, cancel, send + ticketed retry, D7, and the
+- [x] New Settings Change Path suite covers presence, binding, D4, cancel, send + ticketed retry, D7, and the
       local native-picker path.
-- [ ] Existing dialog, composer, sidebar, and schedules callers stay green; en/ar with an RTL pump.
-- [ ] `fvm flutter test test/guards/` green.
+- [x] Existing dialog, composer, sidebar, and schedules callers stay green; en/ar with an RTL pump.
+- [x] `fvm flutter test test/guards/` green.
 
 ### G5 — Docs (W5)
-- [ ] The six pages updated, with no stale "remote Change Path is a follow-up" or "local only" text left.
-- [ ] `fvm dart run scripts/lint_wiki.dart` from the repository root.
+- [x] The docs pages updated, with no stale "remote Change Path is a follow-up" or "local only" text left.
+- [x] `fvm dart run scripts/lint_wiki.dart` from the repository root.
 
 ### G6 — Delivery
 - [ ] No `Co-Authored-By` or "Generated with" line anywhere.
@@ -180,6 +180,20 @@ every touched file stays far below 1000 lines.
 
 - Analyzer clean; focused suites, guards, and one full Client fast suite green with recorded counts.
 - `fvm flutter gen-l10n` regenerated and committed; en/ar strings complete.
-- Owning `AGENTS.md` files and the six documentation pages updated in this PR.
+- Owning `AGENTS.md` files and the documentation pages updated in this PR.
 - `graphify update .` run after the code change.
 - Live acceptance dispatched by the coordinator; this task closes on that evidence.
+
+## Verification record (2026-10-24)
+
+| Gate command | Result |
+|---|---|
+| `fvm flutter gen-l10n` (in `client/`) | exit 0 |
+| `fvm flutter analyze` (in `client/`) | No issues found, exit 0 |
+| `fvm flutter test test/widget/settings/workspace_change_path_test.dart test/widget/workspace_browser_dialog_test.dart` | 22 passed, exit 0 |
+| `fvm flutter test test/unit/services/device_conversation_commands_test.dart test/widget/device_workspace_sidebar_structure_test.dart test/widget/schedules/schedule_editor_sheet_test.dart test/widget/conversation_input_panel_rebuild_test.dart` | 128 passed, exit 0 |
+| `fvm flutter test test/guards/` | 6 passed, exit 0 |
+| `fvm flutter test` (full Client fast suite) | 2365 passed, 3 skipped, exit 0 |
+| `fvm dart run scripts/lint_wiki.dart` (repository root) | success, exit 0 |
+
+No Agent, protocol, or Gateway file changed.
