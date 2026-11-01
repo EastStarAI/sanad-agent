@@ -271,12 +271,16 @@ are correct.
 
 `client/release/ios/build_signed_ipa.sh` is the single owner of the iOS binary:
 both the private release `client-ios` job and `Internal TestFlight` call it, and
-neither workflow builds or exports an IPA itself. It archives and exports with
-`--export-options-plist`, then fails the job unless the exported app claims every
-host listed in `client/ios/Runner/Runner.entitlements`, its embedded profile
-grants the capability, and that profile is the one the export options name. It
-reads the profile name from the export options, so the reviewed profile has a
-single declaration. Enable the capability on `UC2824B99G.com.eaststarai.sanad`,
+neither workflow builds or exports an IPA itself. It generates the Flutter
+artifacts with `--no-codesign`, then archives through `xcodebuild archive` with
+`CODE_SIGN_STYLE=Manual` and the profile named in the export options, because a
+hosted runner has no Apple ID account for automatic signing, and an unsigned
+archive loses the app entitlements on export. It then exports with
+`-exportOptionsPlist` and fails the job unless the exported app claims every host
+listed in `client/ios/Runner/Runner.entitlements`, its embedded profile grants the
+capability, and that profile is the one the export options name. It reads the
+profile name from the export options, so the reviewed profile has a single
+declaration. Enable the capability on `UC2824B99G.com.eaststarai.sanad`,
 regenerate the `Sanad App Store` profile, and update
 `IOS_APP_STORE_PROFILE_BASE64` before the next upload.
 

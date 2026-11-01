@@ -19,7 +19,19 @@ void main() {
       reason: 'The signed IPA builder is the single owner of the iOS sequence.',
     );
     final scriptBody = script.readAsStringSync();
-    expect(scriptBody, contains('--export-options-plist'));
+    expect(
+      scriptBody,
+      contains('flutter build ios --release --no-codesign'),
+      reason: 'Flutter must generate the artifacts and AOT before archiving.',
+    );
+    expect(
+      scriptBody,
+      contains('CODE_SIGN_STYLE=Manual'),
+      reason:
+          'A hosted runner has no Apple ID account, so automatic signing '
+          'cannot archive the app.',
+    );
+    expect(scriptBody, contains('-exportOptionsPlist'));
     expect(scriptBody, contains('com.apple.developer.associated-domains'));
     expect(scriptBody, contains('ios/Runner/Runner.entitlements'));
 
