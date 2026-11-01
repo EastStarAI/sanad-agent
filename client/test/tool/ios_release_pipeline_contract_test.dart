@@ -19,21 +19,34 @@ void main() {
       reason: 'The signed IPA builder is the single owner of the iOS sequence.',
     );
     final scriptBody = script.readAsStringSync();
+    expect(scriptBody, contains('--export-options-plist'));
     expect(
       scriptBody,
-      contains('flutter build ios --release --no-codesign'),
-      reason: 'Flutter must generate the artifacts and AOT before archiving.',
-    );
-    expect(
-      scriptBody,
-      contains('CODE_SIGN_STYLE=Manual'),
+      isNot(contains('build ipa --release --no-codesign')),
       reason:
-          'A hosted runner has no Apple ID account, so automatic signing '
-          'cannot archive the app.',
+          'An unsigned archive loses the app entitlements on export, which is '
+          'what broke the iOS authentication return.',
     );
-    expect(scriptBody, contains('-exportOptionsPlist'));
     expect(scriptBody, contains('com.apple.developer.associated-domains'));
     expect(scriptBody, contains('ios/Runner/Runner.entitlements'));
+
+    final project = File('ios/Runner.xcodeproj/project.pbxproj').readAsStringSync();
+    expect(
+      'CODE_SIGN_STYLE = Manual;'.allMatches(project),
+      hasLength(2),
+      reason:
+          'Runner Release and Profile sign manually so a hosted runner needs no '
+          'Apple ID account, and the pods and Swift packages keep their own '
+          'signing settings.',
+    );
+    expect(
+      'PROVISIONING_PROFILE_SPECIFIER = "'.allMatches(project),
+      hasLength(2),
+      reason:
+          'Manual signing must name the reviewed profile for the app target; '
+          'the builder fails when it drifts from the export options.',
+    );
+    expect(scriptBody, contains('Profile drift'));
 
     for (final workflow in const [
       '../.github/workflows/testflight.yml',
