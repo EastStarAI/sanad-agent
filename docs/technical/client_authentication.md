@@ -36,7 +36,11 @@ User credential.
    - iOS/Android: environment-configured claimed HTTPS app/universal link.
 3. The Client calls `POST /auth/client/transactions` with registered client ID,
    exact redirect URI, and challenge.
-4. The system browser/Portal completes provider login.
+4. The system browser/Portal completes provider login. On iOS and Android the
+   authorization page is opened in the external system browser through
+   `LaunchMode.externalApplication`, never in an in-app browser view or custom
+   tab, so the user's existing provider sessions and saved passwords are reused
+   instead of a fresh Google/Apple sign-in inside empty per-app website data.
 5. The registered callback receives only a short code and transaction state.
 6. The Client validates state and calls `POST /auth/client/token` with the code,
    exact client/redirect, and locally held verifier.

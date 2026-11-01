@@ -8,6 +8,7 @@ description: "Regression and physical-device gates for PKCE callback delivery th
 ## Security and delivery invariants
 
 - Provider callbacks terminate on the environment Portal host. The iOS redirect is the matching Client host at exact path `/oauth/ios`, ensuring the final Safari navigation is cross-domain.
+- Mobile authorization opens the Portal page in the external system browser (Safari on iOS, the default browser on Android), never in an in-app browser view or custom tab. The external browser is the only surface that reuses the user's existing provider sessions and saved passwords, so a signed-in user is not forced to recreate Google/Apple sign-in; the test driver's saved-password prompt therefore belongs to the device browser, not to a per-app web view.
 - Android continues to use the matching Portal host at exact path `/oauth/android`.
 - iOS AASA binds only `UC2824B99G.com.eaststarai.sanad` and `/oauth/ios`; the signed app's effective Associated Domains claim the three Client hosts.
 - `app_links` subscribes before browser launch and is the sole Flutter callback owner. `FlutterDeepLinkingEnabled` remains false, while AppDelegate preserves Flutter superclass lifecycle delegation for application and scene callbacks.
