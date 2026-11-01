@@ -250,6 +250,36 @@ unprotected artifacts.
 `GITHUB_TOKEN` is workflow-scoped and receives only the permissions declared by
 the owning job.
 
+### iOS Universal Link entitlement
+
+The installed iOS app can only claim `applinks:app.sanad.eaststarai.com` (and the
+Development/Staging hosts) when two independent conditions both hold:
+
+1. The **archive is signed**. Exporting an unsigned `--no-codesign` archive with
+   a separate `xcodebuild -exportArchive` re-signs the app from the profile alone
+   and drops its own `CODE_SIGN_ENTITLEMENTS`, so
+   `com.apple.developer.associated-domains` disappears from the IPA even when the
+   profile grants it.
+2. The **distribution profile grants the capability**. Provisioning profiles
+   snapshot App ID capabilities at creation time, and signing is manual with the
+   profile named in `client/release/ios/ExportOptions.plist`.
+
+When either is missing, iOS keeps the authentication return in Safari, the
+Public edge answers `303 /oauth/ios/callback-failed`, and login fails with
+"Authentication return failed" even though the portal, PKCE, and callback code
+are correct.
+
+`client/release/ios/build_signed_ipa.sh` is the single owner of the iOS binary:
+both the private release `client-ios` job and `Internal TestFlight` call it, and
+neither workflow builds or exports an IPA itself. It archives and exports with
+`--export-options-plist`, then fails the job unless the exported app claims every
+host listed in `client/ios/Runner/Runner.entitlements`, its embedded profile
+grants the capability, and that profile is the one the export options name. It
+reads the profile name from the export options, so the reviewed profile has a
+single declaration. Enable the capability on `UC2824B99G.com.eaststarai.sanad`,
+regenerate the `Sanad App Store` profile, and update
+`IOS_APP_STORE_PROFILE_BASE64` before the next upload.
+
 ## Apple publisher
 
 Apple signing and Internal TestFlight distribution use the NanoSoft LY LLC

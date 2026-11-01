@@ -38,17 +38,19 @@ class AuthLoginChallenge {
   });
 }
 
+/// Opens the Portal authorization page in the surface that owns the user's
+/// real sign-in session.
+///
+/// Mobile deliberately leaves the app for the platform's external browser
+/// (Safari on iOS, the default browser on Android) instead of an in-app
+/// browser view / custom tab. The external browser is the only surface that
+/// carries the user's existing provider sessions and saved passwords, so an
+/// already signed-in user does not have to recreate a Google or Apple sign-in
+/// from empty website data. This mirrors the documented system-browser
+/// contract for mobile authorization.
 Future<bool> _launchPortalAuthorization(Uri uri) async {
   if (kIsWeb) {
     return WebAuthPopupService.instance.openAuthPopup(uri.toString());
-  }
-  if (AppPlatform.isMobile) {
-    try {
-      final inApp = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
-      if (inApp) return true;
-    } catch (_) {
-      // Fall through to external application if custom tab is unavailable
-    }
   }
   return launchUrl(uri, mode: LaunchMode.externalApplication);
 }

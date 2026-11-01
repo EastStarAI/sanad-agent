@@ -64,28 +64,15 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RUNNER_TEMP/sanad.mobileprovision" \
             "$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.mobileprovision"
-      - name: Build signed IPA
+      - name: Build and verify signed IPA
         working-directory: client
         run: |
           set -euo pipefail
           fvm flutter pub get
-          fvm flutter build ipa --release --no-codesign \
+          bash release/ios/build_signed_ipa.sh \
             --build-name="${{ steps.contract.outputs.version }}" \
             --build-number="${{ inputs.build_number }}" \
-            --dart-define-from-file=config/prod.json
-          archive=build/ios/archive/Runner.xcarchive
-          test -d "$archive"
-          rm -rf build/ios/ipa
-          xcodebuild -exportArchive \
-            -archivePath "$archive" \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist release/ios/ExportOptions.plist
-          ipa="$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)"
-          test -n "$ipa"
-          unzip -q "$ipa" -d "$RUNNER_TEMP/ipa-check"
-          app="$(find "$RUNNER_TEMP/ipa-check/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          test -n "$app"
-          codesign --verify --deep --strict --verbose=2 "$app"
+            --env-config=config/prod.json
       - uses: actions/upload-artifact@v4
         with:
           name: sanad-ios-internal-${{ inputs.build_number }}
