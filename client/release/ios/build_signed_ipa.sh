@@ -32,6 +32,9 @@ usage() {
 Usage: release/ios/build_signed_ipa.sh --build-name <name> --build-number <number>
          [--env-config <dart-define file>] [--export-options <plist>]
 
+Arguments accept both `--key value` and `--key=value` so the workflows and a
+manual run use the same interface.
+
 Builds, signs, exports, and verifies the iOS IPA. Exits non-zero when the
 exported app cannot claim the Portal callback Universal Link.
 USAGE
@@ -39,10 +42,24 @@ USAGE
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --build-name) build_name="$2"; shift 2 ;;
-    --build-number) build_number="$2"; shift 2 ;;
-    --env-config) env_config="$2"; shift 2 ;;
-    --export-options) export_options="$2"; shift 2 ;;
+    --build-name=*) build_name="${1#*=}"; shift ;;
+    --build-number=*) build_number="${1#*=}"; shift ;;
+    --env-config=*) env_config="${1#*=}"; shift ;;
+    --export-options=*) export_options="${1#*=}"; shift ;;
+    --build-name|--build-number|--env-config|--export-options)
+      if [ "$#" -lt 2 ]; then
+        echo "Missing value for $1" >&2
+        usage
+        exit 2
+      fi
+      case "$1" in
+        --build-name) build_name="$2" ;;
+        --build-number) build_number="$2" ;;
+        --env-config) env_config="$2" ;;
+        --export-options) export_options="$2" ;;
+      esac
+      shift 2
+      ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
   esac

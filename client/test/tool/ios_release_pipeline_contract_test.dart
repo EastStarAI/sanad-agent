@@ -35,6 +35,13 @@ void main() {
       );
       expect(
         body,
+        contains('--build-name='),
+        reason:
+            '$workflow passes key=value arguments, which the builder must '
+            'accept.',
+      );
+      expect(
+        body,
         isNot(contains('--no-codesign')),
         reason:
             '$workflow would archive unsigned and export an app without its '
@@ -49,4 +56,26 @@ void main() {
       );
     }
   });
+
+  test(
+    'the shipped builder accepts the key=value form the workflows use',
+    () async {
+      final result = await Process.run('bash', [
+        'release/ios/build_signed_ipa.sh',
+        '--build-name=1.0.20',
+        '--build-number=21',
+        '--export-options=missing/ExportOptions.plist',
+      ]);
+      expect(
+        result.exitCode,
+        2,
+        reason: 'Argument parsing must reach the argument validation stage.',
+      );
+      expect(result.stderr, contains('Missing export options'));
+      expect(result.stderr, isNot(contains('Unknown argument')));
+    },
+    skip: Platform.isWindows
+        ? 'The builder is a Bash script exercised on POSIX runners.'
+        : false,
+  );
 }
