@@ -69,23 +69,51 @@ jobs:
         run: |
           set -euo pipefail
           fvm flutter pub get
-          fvm flutter build ipa --release --no-codesign \
+          # The archive must be signed: an unsigned `--no-codesign` archive
+          # exports without the app's own CODE_SIGN_ENTITLEMENTS, which silently
+          # drops com.apple.developer.associated-domains from the IPA and makes
+          # the Universal Link authentication return impossible. Flutter applies
+          # release/ios/ExportOptions.plist to the signed archive and exports it.
+          fvm flutter build ipa --release \
             --build-name="${{ steps.contract.outputs.version }}" \
             --build-number="${{ inputs.build_number }}" \
+            --export-options-plist=release/ios/ExportOptions.plist \
             --dart-define-from-file=config/prod.json
           archive=build/ios/archive/Runner.xcarchive
           test -d "$archive"
-          rm -rf build/ios/ipa
-          xcodebuild -exportArchive \
-            -archivePath "$archive" \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist release/ios/ExportOptions.plist
           ipa="$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)"
           test -n "$ipa"
           unzip -q "$ipa" -d "$RUNNER_TEMP/ipa-check"
           app="$(find "$RUNNER_TEMP/ipa-check/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
+          # A TestFlight build can only claim the Portal return URL when its
+          # distribution profile actually grants Associated Domains. A profile
+          # that predates the App ID capability is signed without it, the
+          # Universal Link never reaches the app, and iOS login fails in Safari
+          # with "Authentication return failed." Fail the build instead.
+          entitlements="$RUNNER_TEMP/ipa-entitlements.plist"
+          codesign -d --entitlements :- "$app" > "$entitlements" 2>/dev/null
+          grep -Fq 'com.apple.developer.associated-domains' "$entitlements" || {
+            echo "::error::The exported app is missing the Associated Domains entitlement. Regenerate the App Store provisioning profile after enabling the capability on the App ID, then update IOS_APP_STORE_PROFILE_BASE64."
+            exit 1
+          }
+          for domain in \
+            applinks:app.sanad.eaststarai.com \
+            applinks:staging.app.sanad.eaststarai.com \
+            applinks:dev.app.sanad.eaststarai.com; do
+            grep -Fq "$domain" "$entitlements" || {
+              echo "::error::The exported app does not claim $domain; the iOS authentication return would open Safari instead of the app."
+              exit 1
+            }
+          done
+          embedded_profile="$RUNNER_TEMP/ipa-embedded-profile.plist"
+          security cms -D -i "$app/embedded.mobileprovision" > "$embedded_profile"
+          exported_profile_name="$(plutil -extract Name raw -o - "$embedded_profile")"
+          test "$exported_profile_name" = "Sanad App Store" || {
+            echo "::error::The app is signed with '$exported_profile_name' instead of the Sanad App Store profile named by release/ios/ExportOptions.plist, so its entitlement set is not the reviewed one."
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: sanad-ios-internal-${{ inputs.build_number }}
