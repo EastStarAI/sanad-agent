@@ -82,38 +82,34 @@ if len(profiles) != 1:
 print(next(iter(profiles.values())))
 ' "$export_options")"
 
+# The Runner target names the same profile for its Release and Profile builds, so
+# a hosted runner signs without an Apple ID account and signing stays scoped to
+# the app target instead of every CocoaPods and Swift Package target. A drift
+# between the two declarations is a signing failure waiting for a release run.
+project_specifiers="$(
+  sed -nE 's/.*PROVISIONING_PROFILE_SPECIFIER = "([^"]+)";.*/\1/p' \
+    ios/Runner.xcodeproj/project.pbxproj | sort -u
+)"
+test "$project_specifiers" = "$expected_profile" || {
+  echo "Profile drift: the Xcode project declares '${project_specifiers:-none}' while ${export_options} names '$expected_profile'" >&2
+  exit 1
+}
+
 echo "Building signed IPA ${build_name} (${build_number}) with profile: ${expected_profile}"
 
-# 1) Generate the Flutter artifacts, including the AOT snapshot, without signing.
-fvm flutter build ios --release --no-codesign \
+# The Runner target signs Release/Profile builds manually with the Apple
+# Distribution identity, so Xcode needs no Apple ID account, and signing is
+# scoped to the app target instead of every CocoaPods and Swift Package target.
+# The archive stays signed, so the app's own CODE_SIGN_ENTITLEMENTS reach the
+# IPA; an unsigned archive loses them on export.
+fvm flutter build ipa --release \
   --build-name="$build_name" \
   --build-number="$build_number" \
+  --export-options-plist="$export_options" \
   --dart-define-from-file="$env_config"
-
-# 2) Archive with explicit manual signing. Automatic signing would ask the
-# runner for a development account and fail, and an unsigned archive would drop
-# the app's own entitlements on export. The profile name comes from the export
-# options and the team stays whatever the Xcode project declares.
-rm -rf build/ios/archive/Runner.xcarchive
-xcodebuild -workspace ios/Runner.xcworkspace \
-  -scheme Runner \
-  -configuration Release \
-  -destination 'generic/platform=iOS' \
-  -archivePath build/ios/archive/Runner.xcarchive \
-  CODE_SIGN_STYLE=Manual \
-  CODE_SIGN_IDENTITY='Apple Distribution' \
-  PROVISIONING_PROFILE_SPECIFIER="$expected_profile" \
-  archive
 
 archive="build/ios/archive/Runner.xcarchive"
 test -d "$archive" || { echo "Missing archive: $archive" >&2; exit 1; }
-
-# 3) Export the archive with the reviewed export options.
-rm -rf build/ios/ipa
-xcodebuild -exportArchive \
-  -archivePath "$archive" \
-  -exportPath build/ios/ipa \
-  -exportOptionsPlist "$export_options"
 
 ipa="$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)"
 test -n "$ipa" || { echo "No IPA was exported" >&2; exit 1; }
