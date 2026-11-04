@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:logging/logging.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/core/presentation/app/app_auth_listener.dart';
 import 'package:sanad_client/core/presentation/app/app_providers.dart';
 import 'package:sanad_client/core/presentation/app/app_shell.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
+import 'package:sanad_client/core/presentation/utils/external_paste_manager.dart';
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
@@ -36,12 +38,33 @@ class SanadAgentApp extends StatefulWidget {
 class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserver {
   late final ConversationCachePersistor _conversationCachePersistor;
   bool _wasBackgrounded = false;
+  static const _pasteEventChannel = MethodChannel('com.eaststarai.sanad/pasteEvents');
 
   @override
   void initState() {
     super.initState();
     _conversationCachePersistor = getIt<ConversationCachePersistor>();
     WidgetsBinding.instance.addObserver(this);
+    if (AppPlatform.isMacOS) {
+      _listenToExternalPaste();
+    }
+  }
+
+  /// Text pastes are captured by the macOS runner at the key event, so a
+  /// dictation tool that restores the pasteboard right after posting Cmd+V
+  /// cannot lose its transcript. The runner only captures plain text and keeps
+  /// leaving files and images to the composer's paste routing.
+  void _listenToExternalPaste() {
+    _pasteEventChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onExternalPaste') {
+        final args = call.arguments as Map<dynamic, dynamic>;
+        final text = args['text']?.toString() ?? '';
+        if (text.isNotEmpty) {
+          ExternalPasteManager.handlePaste(text);
+        }
+      }
+      return null;
+    });
   }
 
   @override
