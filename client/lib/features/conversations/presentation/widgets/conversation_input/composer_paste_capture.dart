@@ -115,7 +115,9 @@ class _ComposerPasteCaptureState extends State<ComposerPasteCapture> {
       );
 
       if (!hasFileOrImage) {
-        _fallbackTextPaste();
+        if (!await _insertSnapshotText(reader)) {
+          _fallbackTextPaste();
+        }
         return;
       }
 
@@ -139,7 +141,9 @@ class _ComposerPasteCaptureState extends State<ComposerPasteCapture> {
         return;
       }
       if (items.isEmpty) {
-        _fallbackTextPaste();
+        if (!await _insertSnapshotText(reader)) {
+          _fallbackTextPaste();
+        }
         return;
       }
 
@@ -185,6 +189,46 @@ class _ComposerPasteCaptureState extends State<ComposerPasteCapture> {
       }
     }
     return null;
+  }
+
+  /// Inserts the plain text held by the snapshot read for this paste.
+  ///
+  /// A tool that posts Cmd+V on the user's behalf (dictation, a launcher, a
+  /// clipboard manager) can restore or clear the system pasteboard immediately
+  /// after posting it, so text must come from the snapshot taken for this
+  /// event. Reading the clipboard again would paste the restored content or
+  /// nothing at all. Returns `false` when the snapshot holds no text.
+  Future<bool> _insertSnapshotText(ClipboardReader reader) async {
+    for (final item in reader.items) {
+      if (!item.canProvide(Formats.plainText)) continue;
+      String? text;
+      try {
+        text = await item.readValue(Formats.plainText);
+      } catch (_) {
+        continue;
+      }
+      if (text == null || text.isEmpty) continue;
+      if (!mounted) return true;
+      _insertTextAtSelection(text);
+      return true;
+    }
+    return false;
+  }
+
+  /// Inserts [text] at the caret, replacing the selection when there is one.
+  /// An invalid selection appends at the end, so a paste is never dropped.
+  void _insertTextAtSelection(String text) {
+    final value = widget.chatController.value;
+    final selection = value.selection;
+    final textLength = value.text.length;
+    final start = selection.isValid ? selection.start.clamp(0, textLength) : textLength;
+    final end = selection.isValid ? selection.end.clamp(0, textLength) : textLength;
+    widget.chatController.value = value.copyWith(
+      text: value.text.replaceRange(start, end, text),
+      selection: TextSelection.collapsed(offset: start + text.length),
+      composing: TextRange.empty,
+    );
+    widget.chatFocusNode.requestFocus();
   }
 
   void _fallbackTextPaste() {

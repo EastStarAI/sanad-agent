@@ -188,8 +188,12 @@ On a remote agent, those same files become attachment-rail items (up to 5 MiB,
 with a clear rejection above). "Same machine" means a desktop client whose
 active agent shares this machine's hardware identity; web and mobile clients,
 and agents with unknown identity, are always treated as remote. Keyboard paste
-(Cmd/Ctrl+V) uses this routing only while the message field has focus; plain
-text paste is unchanged. File-token names and paths are escaped in the exported
+(Cmd/Ctrl+V) uses this routing only while the message field has focus. On macOS
+the window captures plain text at the key event itself and inserts it at the
+caret, so a dictation tool that restores the previous pasteboard right after
+posting Cmd+V cannot lose its transcript; a pasteboard carrying a file or an
+image still uses this routing, and other hosts paste plain text unchanged.
+File-token names and paths are escaped in the exported
 link, so names with brackets and paths with parentheses survive send and draft
 restore, where a saved draft turns its file links back into tokens.
 
