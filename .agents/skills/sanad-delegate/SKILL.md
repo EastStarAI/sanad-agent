@@ -224,6 +224,45 @@ When a task targets a remote machine or worker device rather than the local daem
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### 6.1.1. CLI Channel Resolution (release vs. source build)
+
+Before the first relay command, resolve **which** `sanad-client` executes. A source-development
+bundle and a packaged release report the same `--version` string, so version alone never identifies
+the channel.
+
+Collect evidence in this order:
+
+```bash
+command -v sanad-client                                   # packaged command on PATH
+ls <checkout>/build/cli/bundle/bin/sanad_client 2>/dev/null   # source bundle
+sanad-client --version                                    # informational only
+```
+
+| Evidence | Channel | Invocation |
+|---|---|---|
+| `command -v sanad-client` resolves and no checkout bundle is in use | Release | `sanad-client …` |
+| `<checkout>/build/cli/bundle/bin/sanad_client` exists and is invoked by path | Source-dev | `<checkout>/build/cli/bundle/bin/sanad_client …` |
+| Both resolve | Ambiguous | Ask the user. Default to the release; a source build is justified only when the task needs unreleased behaviour. |
+
+- A source build is a **bundle**: `bin/sanad_client` plus its sibling `lib/` shared libraries
+  (`objective_c.dylib`, `libcnativeapi.dylib` on macOS). Copying the executable alone yields a broken
+  CLI, and the bundle must be run from inside `bundle/bin` (or with that `lib` on the loader path).
+- Build or rebuild a source bundle from the `sanad-agent` checkout with:
+
+  ```bash
+  cd client
+  fvm dart pub get
+  fvm dart build cli --target bin/sanad_client.dart -o ../build/cli
+  ```
+
+  `fvm dart compile exe bin/sanad_client.dart` is rejected: `cnativeapi` and `objective_c` declare
+  build hooks, and `dart compile` refuses hook-bearing packages. A stale bundle silently exercises
+  old behaviour, so rebuild after client or contract changes.
+- `sanad` (the Agent CLI) and `sanad-dev` (the source Agent launcher) are **not** relay tools. Only
+  `sanad-client` forwards a task to another machine.
+- State the detected channel, absolute path, and version in the run report; never report a bundle as
+  an installed CLI, or a PATH command as a source build.
+
 ### 6.2. Remote Device Discovery
 
 List all connected remote devices registered under the Client's active account:
@@ -258,6 +297,18 @@ List workspaces on the remote target device:
 ```bash
 sanad-client -d dev-linux-build-node ws list --json
 ```
+
+`--device` is mandatory for this command too: without it the CLI exits with
+`Error: Missing target device.` and never falls back to the local Client. The JSON payload carries
+the remote identity to pass to `run`:
+
+```json
+[{"id":"7db7e5c5-8797-4fbc-aa4c-c14d8d6d15e1","name":"FasterLink","path":"/var/lib/sanad-agent/workspaces/FasterLink","policy":"full_access","is_active":false}]
+```
+
+Use `id` as `--workspace`, or `path` as `--execution-root`. Both describe the **remote** machine; the
+`path` is never resolved on the caller. When the user names a workspace, prefer the registered `id`
+over a raw path so conversation continuity is preserved.
 
 ### 6.4. Remote Task Execution
 
