@@ -328,6 +328,12 @@ class DeviceManager {
 
   bool get _isCloudGatewayReady => !_socket.isLocalTransport && _socket.lifecycleState == SocketLifecycleState.ready;
 
+  /// True when [fetchAgents] can answer from the gateway rather than the cache.
+  bool get isInventoryReady => _isCloudGatewayReady;
+
+  /// True once a successful inventory response landed for this session.
+  bool get hasAuthoritativeInventory => _hasAuthoritativeInventory;
+
   Future<void> _handleDevicesResponse(dynamic data) async {
     if (data is Map<String, dynamic> && data['status'] == 'ok') {
       final rawDevices = data['devices'];

@@ -279,6 +279,32 @@ void main() {
 
   // Task 113a port guard for 327805d2: a response timeout that fires after a
   // reconnect cleans up on the connection's live socket, as on 6a832396.
+  group('SocketConnectionController reconnect guard', () {
+    test('reconnect keeps a live connection instead of replacing it', () async {
+      final sockets = <_TestCloudSocket>[];
+      final connection = SocketConnectionController(
+        url: 'https://gateway.invalid',
+        hardwareId: 'test-hw',
+        startToken: 'token',
+        cloudSocketFactory: (_, _) {
+          final socket = _TestCloudSocket();
+          sockets.add(socket);
+          return socket;
+        },
+      );
+      await connection.connect();
+      expect(sockets, hasLength(1));
+
+      await connection.reconnect();
+
+      // Tearing the live socket down here is what cost the post-sign-in
+      // inventory request a 10s timeout on the device.
+      expect(sockets, hasLength(1));
+      expect(connection.socket, same(sockets.single));
+      connection.dispose();
+    });
+  });
+
   group('SocketCommandTransport timeout after a reconnect', () {
     late List<_TestCloudSocket> sockets;
     late SocketConnectionController connection;
@@ -313,7 +339,10 @@ void main() {
       final firstSocket = sockets.single;
       expect(firstSocket.listeners.containsKey('slow_request_response'), isTrue);
 
-      await connection.reconnect();
+      // A replacement socket, the way a dropped transport is replaced: the
+      // controller's reconnect() refuses to tear down a live connection.
+      connection.disconnect();
+      await connection.connect();
       expect(sockets, hasLength(2));
       final liveSocket = sockets.last;
       expect(connection.socket, same(liveSocket));
@@ -327,7 +356,8 @@ void main() {
 
     test("late timeout keeps another call's response listener on the live socket", () async {
       final staleCall = transport.emitWithResponse('slow_request', {}, (_) {});
-      await connection.reconnect();
+      connection.disconnect();
+      await connection.connect();
       final liveSocket = sockets.last;
 
       Map<String, dynamic>? received;

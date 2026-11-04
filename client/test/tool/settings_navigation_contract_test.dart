@@ -19,4 +19,14 @@ void main() {
     expect(wideSource, contains(keyDeclaration));
     expect(wideSource, contains(directHomeAction));
   });
+
+  test('the conversation header exposes a stable navigation-menu key', () {
+    // Live acceptance drives in-app navigation by key; a tooltip label is not a
+    // stable selector once the header is reused across layouts.
+    final header = File(
+      'lib/features/conversations/presentation/widgets/conversation_header_actions.dart',
+    ).readAsStringSync();
+
+    expect(header, contains("key: const Key('nav_menu_btn')"));
+  });
 }

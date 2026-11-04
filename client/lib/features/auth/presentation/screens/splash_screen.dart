@@ -159,6 +159,7 @@ class _SplashScreenState extends State<SplashScreen> {
                     return Column(
                       children: [
                         ElevatedButton.icon(
+                          key: const Key('sign_in_btn'),
                           onPressed: _handleLogin,
                           icon: const Icon(Icons.login),
                           label: const Text('Sign In'),

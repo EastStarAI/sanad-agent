@@ -16,6 +16,21 @@ abstract class IDeviceRepository {
   List<DeviceConfig> get agents;
   Stream<List<DeviceConfig>> get onAgentsUpdate;
   Future<List<DeviceConfig>> fetchAgents();
+
+  /// True when the repository can answer an inventory fetch authoritatively.
+  ///
+  /// Before the cloud gateway is ready [fetchAgents] can only echo the cached
+  /// snapshot, so a caller must keep its pending phase instead of publishing an
+  /// empty cache as an empty account. Defaults to `true` for authoritative test
+  /// doubles; the real implementation reports the gateway state.
+  bool get isInventoryReady => true;
+
+  /// True once a successful inventory response has been applied for the current
+  /// authenticated session, so an empty list is an authoritative answer.
+  ///
+  /// Defaults to `true` for authoritative test doubles; the real implementation
+  /// reports whether a `get_devices` response has landed since the last reset.
+  bool get hasAuthoritativeInventory => true;
   DeviceConfig? getActiveAgent();
 
   /// The currently persisted active device id, regardless of whether the

@@ -64,6 +64,15 @@ class FakeSanadSocketService extends SanadSocketService {
         ]);
   }
 
+  /// Test doubles keep the naive reconnect so their overridden [connect] and
+  /// [disconnect] still observe the calls; the production service delegates to
+  /// the controller guard instead.
+  @override
+  Future<void> reconnect() async {
+    disconnect();
+    await connect();
+  }
+
   /// Manually switch the connected state and notify listeners.
   void setConnected(bool value) {
     _fakeReady = value;

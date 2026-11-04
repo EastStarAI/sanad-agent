@@ -33,15 +33,15 @@ void main() {
     final project = File('ios/Runner.xcodeproj/project.pbxproj').readAsStringSync();
     expect(
       'CODE_SIGN_STYLE = Manual;'.allMatches(project),
-      hasLength(2),
+      hasLength(1),
       reason:
-          'Runner Release and Profile sign manually so a hosted runner needs no '
-          'Apple ID account, and the pods and Swift packages keep their own '
-          'signing settings.',
+          'Only the Runner Release build signs manually, so a hosted runner '
+          'needs no Apple ID account, while Debug and Profile keep automatic '
+          'signing for on-device developer runs.',
     );
     expect(
       'PROVISIONING_PROFILE_SPECIFIER = "'.allMatches(project),
-      hasLength(2),
+      hasLength(1),
       reason:
           'Manual signing must name the reviewed profile for the app target; '
           'the builder fails when it drifts from the export options.',

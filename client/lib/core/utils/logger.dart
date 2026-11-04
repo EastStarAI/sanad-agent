@@ -9,8 +9,10 @@ final ValueNotifier<List<String>> clientLogNotifier = ValueNotifier<List<String>
 
 /// Initializes the customized, colored logger for the Flutter client.
 void initClientLogger() {
-  // Only log in debug mode
-  Logger.root.level = kDebugMode ? Level.INFO : Level.OFF;
+  // Developer builds keep INFO diagnostics; a release build stays silent.
+  // Profile builds are the on-device acceptance surface, and the device
+  // inventory pending window can only be diagnosed from their logs.
+  Logger.root.level = (kDebugMode || kProfileMode) ? Level.INFO : Level.OFF;
 
   Logger.root.onRecord.listen((record) {
     final timeStr = _formatTime(record.time);

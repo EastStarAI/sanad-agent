@@ -106,7 +106,13 @@ deep-link handler is disabled to prevent duplicate callback delivery. After
 successful redemption, authenticated navigation enters the bootstrap route
 without preserving `/login` as a return destination. Bootstrap rejects stale
 auth-only, malformed, or external destinations and falls back to `/home`,
-preventing `/login` ↔ `/` redirect loops and a post-login 404.
+preventing `/login` ↔ `/` redirect loops and a post-login 404. The redeemed
+session reaches the app before the cloud gateway is ready, and the gateway can
+connect and drop once before the inventory fetch lands; that window is published
+as a pending device inventory, so the surface shows a loading state instead of an
+empty account and the gateway status stays `connecting` rather than routing to
+onboarding. The post-sign-in connect retries once, and a resume-driven reconnect
+covers a gateway that stays down.
 
 ## Headless Agent Device Authorization
 
