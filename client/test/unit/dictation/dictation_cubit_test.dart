@@ -248,5 +248,33 @@ void main() {
       expect(cubit.state.status, DictationStatus.idle);
       expect(transport.commands, contains('cancel'));
     });
+
+    test('a drain with no segment reports no speech', () async {
+      cubit = build();
+      await cubit.start(device);
+
+      await cubit.stop();
+      transport.controller.add({'event': 'dictation_done', 'segments': 0});
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cubit.state.status, DictationStatus.idle);
+      expect(cubit.state.errorCode, 'no_speech');
+    });
+
+    test('the client session cap stops the session and reports the limit', () async {
+      cubit = build();
+      await cubit.start(device);
+      transport.controller.add({'event': 'dictation_final', 'seq': 1, 'text': 'نص'});
+      await Future<void>.delayed(Duration.zero);
+
+      await cubit.stopForLimit();
+      transport.controller.add({'event': 'dictation_done', 'segments': 1});
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cubit.state.errorCode, 'session_limit');
+      expect(cubit.state.committedText, 'نص');
+    });
   });
 }

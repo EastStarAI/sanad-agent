@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' show Abi;
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:logging/logging.dart';
 
@@ -114,12 +115,28 @@ class DictationService {
 
   SttCatalogEntry? get selectedEntry => sttEntryById(selectedModelId);
 
+  /// True while a dictation session holds the engine. A second session is
+  /// refused instead of loading a second copy of the model.
+  bool get isBusy => _activeSessions > 0;
+
+  int _activeSessions = 0;
+
+  /// One dictation lease per daemon: returns false when another session holds it.
+  bool acquireSession() {
+    if (_activeSessions > 0) return false;
+    _activeSessions = 1;
+    return true;
+  }
+
+  void releaseSession() => _activeSessions = 0;
+
   Map<String, dynamic> statusPayload() {
     final readiness = this.readiness();
     final installedOverrides = _settings.modelPath?.trim();
     return {
       'supported': readiness.isSupported,
       if (readiness.reason != null) 'reason': readiness.reason,
+      'busy': isBusy,
       'selected': selectedModelId,
       'model_path': (installedOverrides?.isEmpty ?? true)
           ? null
@@ -178,8 +195,16 @@ class _DictationConnection {
   final DictationChannel transport;
   final Logger _logger = Logger('DictationConnection');
 
+  /// Microphone frames can arrive before the engine finished loading its
+  /// model. Dropping them loses the first words, so they are buffered here
+  /// (bounded) and flushed once the session is running.
+  final DictationAudioBuffer _preSession = DictationAudioBuffer();
+
   DictationSession? _session;
   StreamSubscription<DictationMessage>? _commands;
+  StreamSubscription<Uint8List>? _audio;
+  StreamController<Uint8List>? _audioIn;
+  bool _sessionReady = false;
   bool _installing = false;
   bool _installCancelled = false;
   bool _closed = false;
@@ -189,20 +214,43 @@ class _DictationConnection {
     _commands = transport.commands.listen((message) {
       unawaited(_handleCommand(message));
     });
+    _audio = transport.audio.listen(
+      _onAudio,
+      onError: (Object _) {},
+      onDone: () {},
+      cancelOnError: false,
+    );
     // The socket stays open until the peer closes it; the audio stream done
     // event triggers teardown through the session.
     await transport.audio.drain<void>().catchError((Object _) {});
     await _teardown();
   }
 
+  void _onAudio(Uint8List chunk) {
+    if (_closed || chunk.isEmpty) return;
+    final controller = _audioIn;
+    if (_sessionReady && controller != null && !controller.isClosed) {
+      controller.add(chunk);
+      return;
+    }
+    _preSession.add(chunk);
+  }
+
   Future<void> _teardown() async {
     if (_closed) return;
     _closed = true;
     _installCancelled = true;
+    _sessionReady = false;
+    service.releaseSession();
     await _commands?.cancel();
     _commands = null;
+    await _audio?.cancel();
+    _audio = null;
     await _session?.close();
     _session = null;
+    final controller = _audioIn;
+    _audioIn = null;
+    if (controller != null && !controller.isClosed) await controller.close();
     await transport.close();
   }
 
@@ -294,19 +342,104 @@ class _DictationConnection {
       });
       return;
     }
+    if (!service.acquireSession()) {
+      _logger.info('dictation refused: another session holds the engine');
+      transport.send('dictation_error', {
+        'code': 'dictation_busy',
+        'message': 'another dictation session is running',
+      });
+      return;
+    }
     final engine = service.createEngine();
-    await engine.start(
-      files,
-      modelId: files.modelId,
-      threads: service.settings.threads,
-    );
+    try {
+      await engine.start(
+        files,
+        modelId: files.modelId,
+        threads: service.settings.threads,
+      );
+    } on Object {
+      service.releaseSession();
+      rethrow;
+    }
+    final audioIn = StreamController<Uint8List>();
+    _audioIn = audioIn;
     final session = DictationSession(
-      transport: transport,
+      transport: _SessionChannel(transport, audioIn.stream),
       engine: engine,
       modelId: files.modelId,
     );
     _session = session;
     await session.start();
+    _sessionReady = true;
+    final pending = _preSession.drain();
+    for (final chunk in pending) {
+      audioIn.add(chunk);
+    }
+    if (pending.isNotEmpty) {
+      _logger.info(
+        'dictation pre-session audio flushed: chunks=${pending.length} '
+        'dropped_bytes=${_preSession.droppedBytes}',
+      );
+    }
     _logger.info('dictation session started: model=${files.modelId}');
+  }
+}
+
+/// Wraps the socket channel so a session consumes the connection's audio
+/// controller instead of the raw socket stream.
+class _SessionChannel implements DictationChannel {
+  _SessionChannel(this._inner, this._audio);
+
+  final DictationChannel _inner;
+  final Stream<Uint8List> _audio;
+
+  @override
+  Stream<Uint8List> get audio => _audio;
+
+  @override
+  Stream<DictationMessage> get commands => _inner.commands;
+
+  @override
+  void send(String event, [Map<String, dynamic> payload = const {}]) =>
+      _inner.send(event, payload);
+
+  @override
+  Future<void> close() => _inner.close();
+}
+
+/// Bounded FIFO for microphone frames captured before a session exists.
+class DictationAudioBuffer {
+  DictationAudioBuffer({this.maxBytes = 4 * 1024 * 1024});
+
+  /// 4 MiB is ≈2 minutes of 16 kHz mono PCM16; beyond that the buffer would
+  /// cost more than the words it protects.
+  final int maxBytes;
+
+  final List<Uint8List> _chunks = [];
+  int _bytes = 0;
+  int _droppedBytes = 0;
+
+  int get bufferedBytes => _bytes;
+  int get bufferedChunks => _chunks.length;
+  int get droppedBytes => _droppedBytes;
+
+  /// Returns false when the frame did not fit and was dropped instead.
+  bool add(Uint8List chunk) {
+    if (chunk.isEmpty) return true;
+    if (_bytes + chunk.length > maxBytes) {
+      _droppedBytes += chunk.length;
+      return false;
+    }
+    _chunks.add(chunk);
+    _bytes += chunk.length;
+    return true;
+  }
+
+  /// Removes and returns everything buffered, in arrival order.
+  List<Uint8List> drain() {
+    final drained = List<Uint8List>.of(_chunks);
+    _chunks.clear();
+    _bytes = 0;
+    return drained;
   }
 }

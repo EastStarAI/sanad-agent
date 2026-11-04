@@ -294,6 +294,8 @@ class ComposerContainer extends StatelessWidget {
             child: DictationMicButton(
               chatController: chatController,
               device: agentSlice.activeAgent,
+              scopeKey: sessionId,
+              focusNode: chatFocusNode,
               dimTextColor: dimTextColor,
             ),
           )

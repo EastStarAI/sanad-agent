@@ -59,6 +59,55 @@ void main() {
       expect(insertion.hasRange, isFalse);
     });
 
+    test('a live IME composition defers the write until it ends', () {
+      controller.value = const TextEditingValue(
+        text: 'كت',
+        selection: TextSelection.collapsed(offset: 2),
+        composing: TextRange(start: 0, end: 2),
+      );
+
+      insertion.apply(controller, 'نص مُملَى');
+      expect(controller.text, 'كت');
+      expect(insertion.hasPending, isTrue);
+
+      controller.value = const TextEditingValue(
+        text: 'كت',
+        selection: TextSelection.collapsed(offset: 2),
+      );
+      insertion.flushPending(controller);
+      expect(controller.text, 'كت نص مُملَى');
+      expect(insertion.hasPending, isFalse);
+    });
+
+    test('a caret outside the owned range keeps its place', () {
+      controller.value = const TextEditingValue(
+        text: 'abc ',
+        selection: TextSelection.collapsed(offset: 4),
+      );
+      insertion.apply(controller, 'one');
+      expect(controller.text, 'abc one');
+
+      // The user moves to the start while dictation keeps writing.
+      controller.selection = const TextSelection.collapsed(offset: 0);
+      insertion.apply(controller, 'one two');
+      expect(controller.text, 'abc one two');
+      expect(controller.selection.baseOffset, 0);
+    });
+
+    test('a caret inside the owned range follows the replaced text', () {
+      controller.value = const TextEditingValue(
+        text: '',
+        selection: TextSelection.collapsed(offset: 0),
+      );
+      insertion.apply(controller, 'one');
+      expect(controller.selection.baseOffset, 3);
+
+      controller.selection = const TextSelection.collapsed(offset: 1);
+      insertion.apply(controller, 'one two');
+      expect(controller.text, 'one two');
+      expect(controller.selection.baseOffset, 7);
+    });
+
     test('an empty update clears the owned range', () {
       insertion.apply(controller, 'text');
       expect(controller.text, 'text');

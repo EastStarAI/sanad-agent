@@ -69,6 +69,16 @@ Add a dictation mic button to the conversation composer that sends microphone PC
 - [ ] Model switching uses the existing `stt_select` path; the enable toggle needs one new settings command plus daemon persistence and tests (nothing is wired to the file system from the client).
 - [ ] Out of scope: writing `config.yaml` from the client, a client-local toggle that hides the button without telling the daemon, and any settings surface outside the device settings page.
 
+### G2b — Parity hardening from the Hermes reference study (owner-approved, six items)
+Reference: `refrence_projects/hermes-agent` (`use-voice-recorder.ts`, `stt-lease.ts`, `use-composer-draft.ts`, `undo-history.ts`, `voice-activity.tsx`). Each item closes a verified gap in our v1 surface; order is the implementation order.
+
+- [x] **1. Pre-session audio must not be dropped.** `DictationAudioBuffer` (bounded, 4 MiB) holds socket frames until `session.start()` and flushes them in arrival order; flushed chunks and dropped bytes are logged as counts only. Flushed only after `session.start()` subscribes, so no frame is lost either side of the model load.
+- [x] **2. Insertion safety: never break IME or steal the caret.** `DictationInsertion` defers writes while `composing` is live and replays them when composition ends (the button listens to the controller), and `_adjustSelection` shifts offsets by the replaced-range delta instead of collapsing the caret — a caret inside the range follows it, a caret outside never moves.
+- [x] **3. Bind the session to its scope.** `DictationMicButton.scopeKey` (the conversation id) cancels the live session and drops the owned range when the composer switches conversations, and the controller/scope changes reset local insertion state; async UI callbacks re-check `mounted`.
+- [x] **4. Feedback the user can see.** Localized `no_speech` (a drain with zero segments and no text), a visible `m:ss` elapsed counter with the client mirroring the 5-minute cap (`stopForLimit` → `session_limit`), localized `microphone_denied`/`dictation_busy` snackbars, and focus returned to the composer when the session settles.
+- [x] **5. One undo step per dictation session.** Cancel removes the whole session range in one write, returning the composer to its pre-session text; edits the user made outside the range are untouched (covered by widget and insertion tests). No client-side undo stack exists to integrate with, so the session is its own unit.
+- [x] **6. One dictation lease per daemon.** `DictationService.acquireSession()/releaseSession()` allows a single session; a second one is refused with `dictation_busy`, the lease is released on teardown and on engine-start failure, and `stt_status` advertises `busy`.
+
 ### G5 — Generic streaming engine (after v1)
 - [ ] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer` emitting `dictation_partial` + `dictation_final`; the worker isolate is reused.
 - [ ] Catalog entry with `mode: streaming`, validated with a public English streaming model (no Arabic streaming model exists in sherpa today).

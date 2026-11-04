@@ -85,7 +85,7 @@ void main() {
     await cubit.close();
   });
 
-  Widget build() {
+  Widget build({Object? scopeKey}) {
     return MaterialApp(
       localizationsDelegates: const [
         AppLocalizations.delegate,
@@ -99,6 +99,7 @@ void main() {
           child: DictationMicButton(
             chatController: chatController,
             device: device,
+            scopeKey: scopeKey,
           ),
         ),
       ),
@@ -160,6 +161,58 @@ void main() {
     await tester.pump();
 
     expect(chatController.text, 'السلام عليكم');
+  });
+
+  testWidgets('cancel returns the composer to its pre-session text', (tester) async {
+    chatController.text = 'draft: ';
+    chatController.selection = const TextSelection.collapsed(offset: 7);
+
+    await tester.pumpWidget(build());
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+
+    transport.eventsController
+        .add({'event': 'dictation_final', 'seq': 1, 'text': 'dictated'});
+    await tester.pump();
+    await tester.pump();
+    expect(chatController.text, 'draft: dictated');
+
+    await tester.runAsync(() => cubit.cancel());
+    await tester.pump();
+    await tester.pump();
+
+    expect(chatController.text, 'draft: ');
+    expect(chatController.selection.baseOffset, lessThanOrEqualTo(7));
+  });
+
+  testWidgets('the elapsed counter appears while listening', (tester) async {
+    await tester.pumpWidget(build());
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+
+    expect(find.byKey(const Key('dictation_elapsed')), findsNothing);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+
+    expect(find.byKey(const Key('dictation_elapsed')), findsOneWidget);
+    expect(find.text('0:02'), findsOneWidget);
+  });
+
+  testWidgets('changing the composer scope cancels the live session', (tester) async {
+    await tester.pumpWidget(build());
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+    expect(cubit.state.status, DictationStatus.listening);
+
+    await tester.pumpWidget(build(scopeKey: 'other-conversation'));
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    });
+    await tester.pump();
+
+    expect(transport.commands, contains('cancel'));
+    expect(chatController.text, isEmpty);
   });
 }
 

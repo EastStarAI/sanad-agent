@@ -40,6 +40,7 @@ class DictationCubit extends Cubit<DictationState> {
   StreamSubscription<List<int>>? _audioSubscription;
   Timer? _stopTimer;
   bool _closing = false;
+  bool _limitReached = false;
 
   static String _timestampSessionId() =>
       'dict-${DateTime.now().millisecondsSinceEpoch}';
@@ -102,6 +103,13 @@ class DictationCubit extends Cubit<DictationState> {
       _logger.warning('dictation stop timed out');
       unawaited(_reset(clearText: false));
     });
+  }
+
+  /// Stops the session because the client-side cap was reached.
+  Future<void> stopForLimit() async {
+    if (!state.isActive) return;
+    _limitReached = true;
+    await stop();
   }
 
   /// Abandons the session and drops everything it produced.
@@ -186,8 +194,15 @@ class DictationCubit extends Cubit<DictationState> {
         final committed = _appendSegment(state.committedText, text);
         emit(state.copyWith(committedText: committed, partialText: ''));
       case 'dictation_done':
-        _logger.info('dictation drained: segments=${event['segments']}');
-        unawaited(_reset(clearText: false));
+        final segments = (event['segments'] as num?)?.toInt() ?? 0;
+        _logger.info('dictation drained: segments=$segments');
+        final noSpeech = segments == 0 && state.committedText.isEmpty;
+        unawaited(
+          _reset(
+            clearText: false,
+            errorCode: noSpeech ? 'no_speech' : null,
+          ),
+        );
       case 'dictation_error':
         _fail((event['code'] as String?) ?? 'dictation_error');
       default:
@@ -244,6 +259,8 @@ class DictationCubit extends Cubit<DictationState> {
   Future<void> _reset({required bool clearText, String? errorCode}) async {
     if (_closing) return;
     _closing = true;
+    final limitReached = _limitReached;
+    _limitReached = false;
     _stopTimer?.cancel();
     _stopTimer = null;
     await _audioSubscription?.cancel();
@@ -261,8 +278,8 @@ class DictationCubit extends Cubit<DictationState> {
         status: DictationStatus.idle,
         committedText: clearText ? '' : state.committedText,
         partialText: '',
-        errorCode: errorCode,
-        clearError: errorCode == null,
+        errorCode: errorCode ?? (limitReached ? 'session_limit' : null),
+        clearError: errorCode == null && !limitReached,
         sessionNeedsFirstUseSheet: errorCode == 'model_not_installed',
       ),
     );
