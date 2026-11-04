@@ -295,6 +295,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Builder(
                             builder: (context) {
                               return IconButton(
+                                key: const Key('settings_menu_btn'),
                                 icon: const Icon(Icons.menu_rounded),
                                 tooltip: 'Open settings menu',
                                 onPressed: () => Scaffold.of(context).openDrawer(),

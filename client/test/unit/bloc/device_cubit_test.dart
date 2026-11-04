@@ -51,6 +51,23 @@ class _ControlledFetchDeviceRepository extends FakeDeviceRepository {
   }
 }
 
+/// Loses the first inventory request (the post-sign-in socket flap) and answers
+/// the retry, which is what the live device showed when Retry was pressed.
+class _FailOnceDeviceRepository extends FakeDeviceRepository {
+  int calls = 0;
+
+  @override
+  Future<List<DeviceConfig>> fetchAgents() async {
+    calls += 1;
+    if (calls == 1) {
+      throw TimeoutException('Timed out waiting for the device inventory');
+    }
+    authoritativeInventory = true;
+    emitAgentsUpdate();
+    return agents;
+  }
+}
+
 class _FailingRefreshRepository extends FakeDeviceRepository {
   Object? errorToThrow;
 
@@ -91,6 +108,125 @@ void main() {
     agentRepository: repository,
     agentClientRegistry: clientRegistry,
   );
+
+  test('a lost first inventory request retries once instead of asking the user to retry', () async {
+    // Live reproduction: the post-sign-in request was emitted onto a connection
+    // that dropped 3ms later, so the 5s fetch timed out and the user saw an error
+    // surface; pressing Retry then loaded devices in ~120ms.
+    final flakyRepository = _FailOnceDeviceRepository();
+    flakyRepository.cloudInventoryPending = true;
+    flakyRepository.authoritativeInventory = false;
+    flakyRepository.seedAgents([cloudDevice]);
+    repository = flakyRepository;
+    socket.setConnected(true);
+
+    final cubit = buildCubit();
+    await cubit.init();
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+    expect(flakyRepository.calls, 2);
+    expect(cubit.state, isA<DeviceActive>());
+    await cubit.close();
+  });
+
+  test('an empty update after a transport error still waits, it does not claim empty', () async {
+    // A dropped socket makes the gateway report "not pending" while no
+    // authoritative inventory exists yet; that is still not an empty account.
+    repository.cloudInventoryPending = false;
+    repository.authoritativeInventory = false;
+    final cubit = buildCubit();
+    await cubit.init();
+    await Future<void>.delayed(Duration.zero);
+    cubit.markInventoryPending();
+
+    repository.emitAgentsUpdate();
+    await Future<void>.delayed(Duration.zero);
+
+    expect((cubit.state as DeviceNoActive).phase, DevicesPhase.loading);
+
+    // Only an applied inventory response may publish an authoritative empty.
+    repository.authoritativeInventory = true;
+    repository.emitAgentsUpdate();
+    await Future<void>.delayed(Duration.zero);
+
+    expect((cubit.state as DeviceNoActive).phase, DevicesPhase.readyEmpty);
+  });
+
+  test('an empty inventory update while the gateway is pending keeps loading', () async {
+    // The repository pushes an empty inventory on connection changes; that push
+    // is not an authoritative answer before a successful response lands, and it
+    // must not replace the loading phase with a "no devices" claim.
+    repository.cloudInventoryPending = true;
+    repository.authoritativeInventory = false;
+    final cubit = buildCubit();
+    await cubit.init();
+    await Future<void>.delayed(Duration.zero);
+    cubit.markInventoryPending();
+
+    repository.emitAgentsUpdate();
+    await Future<void>.delayed(Duration.zero);
+
+    expect((cubit.state as DeviceNoActive).phase, DevicesPhase.loading);
+  });
+
+  test('a gateway that cannot answer keeps the inventory pending, never empty', () async {
+    repository.inventoryReady = false;
+    final cubit = buildCubit();
+    await cubit.init();
+    await Future<void>.delayed(Duration.zero);
+
+    await cubit.fetchAgents();
+
+    final pending = cubit.state as DeviceNoActive;
+    expect(pending.agents, isEmpty);
+    expect(pending.phase, DevicesPhase.loading);
+
+    // Once the gateway answers, the same fetch resolves the real inventory.
+    repository.inventoryReady = true;
+    repository.seedAgents([cloudDevice]);
+    await cubit.fetchAgents();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(cubit.state, isA<DeviceActive>());
+  });
+
+  test('a pending inventory after sign-in is never an authoritative empty', () async {
+    final cubit = buildCubit();
+    await cubit.init();
+    await Future<void>.delayed(Duration.zero);
+    expect(cubit.state, isA<DeviceNoActive>());
+
+    // Sign-in completes before the cloud gateway is ready: publishing that
+    // window as an empty result is what looked like lost devices on the phone.
+    repository.cloudInventoryPending = false;
+    cubit.markInventoryPending();
+
+    final pending = cubit.state as DeviceNoActive;
+    expect(pending.agents, isEmpty);
+    expect(pending.isLoadingFromBackend, isTrue);
+    expect(pending.phase, DevicesPhase.loading);
+    expect(cubit.state, isNot(predicate<DeviceState>((state) => state is DeviceNoActive && state.phase == DevicesPhase.readyEmpty)));
+
+    // The fetch that follows publishes the real inventory.
+    repository.seedAgents([cloudDevice]);
+    await cubit.fetchAgents();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(cubit.state, isA<DeviceActive>());
+  });
+
+  test('a known active device is not degraded to a pending inventory', () async {
+    repository.cloudInventoryPending = false;
+    repository.seedAgents([cloudDevice]);
+    final cubit = buildCubit();
+    await cubit.init();
+    await Future<void>.delayed(Duration.zero);
+    expect(cubit.state, isA<DeviceActive>());
+
+    cubit.markInventoryPending();
+
+    expect(cubit.state, isA<DeviceActive>());
+  });
 
   test('cold start with a persisted device that is not loaded yet does not fall back to the local device', () async {
     // Persisted active device id points at the cloud device, but the initial
@@ -290,6 +426,7 @@ void main() {
 
   test('empty inventory remains loading until its fetch settles without a stream event', () async {
     final controlledRepository = _ControlledFetchDeviceRepository();
+    controlledRepository.cloudInventoryPending = false;
     repository = controlledRepository;
     socket.setConnected(true);
 
@@ -317,6 +454,7 @@ void main() {
 
   test('failed initial inventory fetch clears loading without an unhandled error', () async {
     final controlledRepository = _ControlledFetchDeviceRepository();
+    controlledRepository.cloudInventoryPending = false;
     repository = controlledRepository;
     socket.setConnected(true);
 
@@ -333,6 +471,7 @@ void main() {
 
   test('failed initial inventory fetch surfaces a typed error, not an authoritative empty', () async {
     final controlledRepository = _ControlledFetchDeviceRepository();
+    controlledRepository.cloudInventoryPending = false;
     repository = controlledRepository;
     socket.setConnected(true);
 
@@ -354,6 +493,7 @@ void main() {
 
   test('timeout is a typed error, never an authoritative empty', () async {
     final controlledRepository = _ControlledFetchDeviceRepository();
+    controlledRepository.cloudInventoryPending = false;
     repository = controlledRepository;
     socket.setConnected(true);
 

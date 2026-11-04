@@ -140,6 +140,12 @@ class _MemoryInventory implements IDeviceRepository {
   @override
   bool get isCloudInventoryPending => true;
 
+  @override
+  bool get isInventoryReady => true;
+
+  @override
+  bool get hasAuthoritativeInventory => true;
+
   _MemoryInventory(DeviceConfig initial) : _agents = [initial];
 
   List<DeviceConfig> _agents;

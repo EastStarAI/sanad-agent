@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:logging/logging.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/core/presentation/app/app_auth_listener.dart';
 import 'package:sanad_client/core/presentation/app/app_providers.dart';
@@ -45,6 +46,11 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The gateway socket is created while the app returns from the external
+    // login browser; a connection opened across that transition can look ready
+    // while its transport is already dead, so lifecycle ordering is diagnosed
+    // from this line.
+    Logger('app.lifecycle').info('app.lifecycle state=${state.name}');
     if (state == AppLifecycleState.resumed) {
       if (_wasBackgrounded) {
         _wasBackgrounded = false;

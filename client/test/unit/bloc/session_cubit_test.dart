@@ -2685,6 +2685,12 @@ class _FakeDeviceRepository implements IDeviceRepository {
   @override
   bool get isCloudInventoryPending => true;
 
+  @override
+  bool get isInventoryReady => true;
+
+  @override
+  bool get hasAuthoritativeInventory => true;
+
   final _agentsController = StreamController<List<DeviceConfig>>.broadcast();
   List<DeviceConfig> _agents = [];
   String? _activeAgentId;

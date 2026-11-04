@@ -120,6 +120,8 @@
   "sessionsDevices": "الجلسات والأجهزة",
   "addDeviceTooltip": "إضافة جهاز",
   "noDevicesAvailable": "لا توجد أجهزة متاحة.",
+  "noDevicesChip": "لا توجد أجهزة",
+  "devicesLoading": "جارٍ تحميل الأجهزة…",
   "deviceSettings": "إعدادات {device}",
   "overview": "نظرة عامة",
   "mcpServers": "خوادم MCP",

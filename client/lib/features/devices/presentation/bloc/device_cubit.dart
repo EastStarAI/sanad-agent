@@ -22,6 +22,7 @@ class DeviceCubit extends Cubit<DeviceState> {
   StreamSubscription? _authSubscription;
   int _backendFetchesInFlight = 0;
   int _inventoryEpoch = 0;
+  int _inventoryFetchRetries = 0;
 
   /// True while the active device is a fallback for a remembered device that
   /// cannot appear. The remembered preference is kept, so it is restored when
@@ -34,6 +35,15 @@ class DeviceCubit extends Cubit<DeviceState> {
     required this.agentClientRegistry,
     this.conversationClientRegistry,
   }) : super(AgentInitial());
+
+  /// Maximum automatic re-attempts after a failed inventory fetch.
+  ///
+  /// The first request after sign-in can be lost while the gateway connection
+  /// settles (the socket accepts it and drops immediately), and the server then
+  /// answers the next request in well under a second. One automatic retry hides
+  /// Up to [_maxInventoryFetchRetries] automatic re-attempts hide that
+  /// transport flap; the next failure stays a typed error with Retry.
+  static const int _maxInventoryFetchRetries = 2;
 
   Stream<List<DeviceConfig>> get onAgentsUpdate => agentRepository.onAgentsUpdate;
 
@@ -68,7 +78,7 @@ class DeviceCubit extends Cubit<DeviceState> {
         emit(
           DeviceNoActive(
             agents: agentRepository.agents,
-            isLoadingFromBackend: _hasBackendFetchInFlight,
+            isLoadingFromBackend: _isInventoryPending,
           ),
         );
       }
@@ -77,20 +87,72 @@ class DeviceCubit extends Cubit<DeviceState> {
     }
   }
 
+  /// Marks the inventory as awaiting a fresh result.
+  ///
+  /// Signing in completes authentication before the cloud gateway is ready, so
+  /// between the two the inventory holds no data. Publishing that window as an
+  /// authoritative empty surface is what made a successful sign-in look like
+  /// lost devices, so the surface keeps a loading phase until the fetch lands.
+  void markInventoryPending() {
+    if (isClosed) return;
+    final current = state;
+    if (current is DeviceActive) return;
+    final cached = current is DeviceNoActive ? current.agents : agentRepository.agents;
+    if (current is DeviceNoActive && current.isLoadingFromBackend && current.agents.length == cached.length) {
+      return;
+    }
+    _logger.info(
+      'device.inventory.pending reason=sign-in cached=${cached.length} '
+      'authoritative=${agentRepository.hasAuthoritativeInventory} '
+      'gatewayPending=${agentRepository.isCloudInventoryPending}',
+    );
+    emit(DeviceNoActive(agents: cached, isLoadingFromBackend: true));
+  }
+
   Future<List<DeviceConfig>> _fetchAgentsWithLoading() async {
     final fetchEpoch = _inventoryEpoch;
+    _logger.info(
+      'device.inventory.fetch.start ready=${agentRepository.isInventoryReady} '
+      'authoritative=${agentRepository.hasAuthoritativeInventory} '
+      'gatewayPending=${agentRepository.isCloudInventoryPending} inflight=$_backendFetchesInFlight',
+    );
+    if (!agentRepository.isInventoryReady) {
+      // The gateway cannot answer yet, so a fetch would only echo the cached
+      // snapshot (usually empty). Keep the pending phase: the socket's auth
+      // event and the resume reconnect re-enter this fetch once it is ready.
+      _logger.info('device.inventory.fetch.skipped reason=gateway-not-ready');
+      markInventoryPending();
+      return agentRepository.agents;
+    }
     _backendFetchesInFlight++;
     _publishBackendLoading();
 
     try {
-      return await agentRepository.fetchAgents();
+      final agents = await agentRepository.fetchAgents();
+      _inventoryFetchRetries = 0;
+      return agents;
     } catch (error) {
       // A failed fetch (including a timeout) must never wipe valid cached data
       // nor trigger a logout. We surface a typed error while retaining agents.
       // A stale fetch (superseded by logout/reset, epoch changed) must not
       // surface its error on the reset surface: only the current epoch's error
       // is shown, keeping event ordering causal (Plan 97g).
-      if (fetchEpoch == _inventoryEpoch) {
+      if (fetchEpoch != _inventoryEpoch) return agentRepository.agents;
+      if (_shouldRetryInventoryFetch(error)) {
+        _inventoryFetchRetries++;
+        _logger.info(
+          'device.inventory.fetch.retry reason=${error.runtimeType} '
+          'attempt=$_inventoryFetchRetries',
+        );
+        unawaited(
+          Future<void>.delayed(const Duration(milliseconds: 800), () {
+            if (!isClosed && fetchEpoch == _inventoryEpoch) {
+              unawaited(_fetchAgentsWithLoading());
+            }
+          }),
+        );
+      } else {
+        _logger.info('device.inventory.fetch.failed reason=${error.runtimeType}');
         _recordInventoryError(error);
       }
       return agentRepository.agents;
@@ -100,6 +162,18 @@ class DeviceCubit extends Cubit<DeviceState> {
         _publishBackendLoading();
       }
     }
+  }
+
+  /// Retry a failed inventory fetch while no authoritative answer exists.
+  ///
+  /// The first request after sign-in can be emitted onto a connection that drops
+  /// immediately; the same request then answers in about 100ms. By the time the
+  /// 5s timeout fires the socket can already report `error`, so "is the gateway
+  /// still pending" is the wrong test: what matters is that no inventory answer
+  /// has landed for this session yet.
+  bool _shouldRetryInventoryFetch(Object error) {
+    if (_inventoryFetchRetries >= _maxInventoryFetchRetries) return false;
+    return !agentRepository.hasAuthoritativeInventory;
   }
 
   /// Surfaces an inventory fetch failure without clearing [agentRepository]
@@ -129,14 +203,29 @@ class DeviceCubit extends Cubit<DeviceState> {
 
   bool get _hasBackendFetchInFlight => _backendFetchesInFlight > 0;
 
+  /// True while the inventory still has no authoritative answer for the account.
+  ///
+  /// An empty list is only a real answer once a `get_devices` response has
+  /// landed for this session. Every other empty moment (connecting, a reconnect,
+  /// a transport error, or a fetch in flight) is pending data, so the surfaces
+  /// keep their loading phase instead of claiming the account has no devices.
+  bool get _isInventoryPending =>
+      _hasBackendFetchInFlight || !agentRepository.hasAuthoritativeInventory;
+
   void _publishBackendLoading() {
     if (isClosed) return;
     final current = state;
     if (current is! DeviceNoActive) return;
 
-    final isLoading = _hasBackendFetchInFlight;
+    // A failed fetch owns the surface until the next attempt: a retry-able
+    // error must not be hidden behind an endless loading phase.
+    final isLoading = current.errorMessage == null && _isInventoryPending;
     if (current.isLoadingFromBackend != isLoading || (isLoading && current.errorMessage != null)) {
       // Starting a new fetch clears the previous transient error.
+      _logger.info(
+        'device.inventory.phase phase=${isLoading ? 'loading' : current.phase.name} '
+        'count=${current.agents.length} gatewayPending=${agentRepository.isCloudInventoryPending}',
+      );
       emit(
         current.copyWith(
           isLoadingFromBackend: isLoading,
@@ -147,6 +236,11 @@ class DeviceCubit extends Cubit<DeviceState> {
   }
 
   void _handleAgentsUpdated(List<DeviceConfig> agents) {
+    _logger.info(
+      'device.inventory.update count=${agents.length} state=${state.runtimeType} '
+      'authoritative=${agentRepository.hasAuthoritativeInventory} '
+      'gatewayPending=${agentRepository.isCloudInventoryPending} inflight=$_backendFetchesInFlight',
+    );
     final current = state;
     final stableAgents =
         current is DeviceActive &&
@@ -183,7 +277,7 @@ class DeviceCubit extends Cubit<DeviceState> {
           emit(
             DeviceNoActive(
               agents: agents,
-              isLoadingFromBackend: _hasBackendFetchInFlight,
+              isLoadingFromBackend: _isInventoryPending,
             ),
           );
         }
@@ -195,13 +289,17 @@ class DeviceCubit extends Cubit<DeviceState> {
       emit(s.copyWith(activeAgent: activeMatches.first, agents: stableAgents));
     } else {
       final active = _resolveInitialActiveAgent(agents);
+      _logger.info(
+        'device.inventory.resolve active=${active == null ? 'none' : shortId(active.id)} '
+        'persistedId=${shortId(agentRepository.getActiveAgentId())} count=${agents.length}',
+      );
       if (active != null) {
         unawaited(_activate(active));
       } else {
         emit(
           DeviceNoActive(
             agents: agents,
-            isLoadingFromBackend: _hasBackendFetchInFlight,
+            isLoadingFromBackend: _isInventoryPending,
           ),
         );
       }
@@ -258,6 +356,7 @@ class DeviceCubit extends Cubit<DeviceState> {
   }
 
   Future<void> _activate(DeviceConfig config) async {
+    _logger.info('device.activate.start id=${shortId(config.id)} name="${config.name}"');
     agentClientRegistry.getOrCreateClientForAgent(config);
     conversationClientRegistry?.getOrCreateConversationClientForAgent(config);
 
@@ -268,6 +367,7 @@ class DeviceCubit extends Cubit<DeviceState> {
         agents: currentAgents,
       ),
     );
+    _logger.info('device.activate.done id=${shortId(config.id)} agents=${currentAgents.length}');
   }
 
   DeviceConfig? _defaultActiveAgent(List<DeviceConfig> agents) {
@@ -309,6 +409,7 @@ class DeviceCubit extends Cubit<DeviceState> {
   Future<void> resetForLogout() async {
     _inventoryEpoch++;
     _backendFetchesInFlight = 0;
+    _inventoryFetchRetries = 0;
     _isFallbackSelection = false;
     await agentRepository.clearAgents();
     agentClientRegistry.retainClientsFor(agentRepository.agents);

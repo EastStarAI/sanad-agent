@@ -44,6 +44,7 @@ class ConversationHeaderActions extends StatelessWidget {
                 onEnter: (_) => onMenuHoverEnter?.call(),
                 onExit: (_) => onMenuHoverExit?.call(),
                 child: IconButton(
+                  key: const Key('nav_menu_btn'),
                   icon: Icon(
                     AppPlatform.isDesktop ? Symbols.dock_to_right : Icons.menu,
                     size: AppPlatform.isDesktop ? 16 : null,

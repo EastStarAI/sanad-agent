@@ -1,6 +1,8 @@
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart'
+    show DevicesPhase;
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
@@ -13,12 +15,21 @@ class ConversationInputAgentSlice {
   final DeviceConfig? activeAgent;
   final List<DeviceConfig> agents;
 
+  /// Typed inventory status, so an empty list is never rendered as an
+  /// authoritative "no devices" while the inventory is still loading.
+  final DevicesPhase phase;
+
   const ConversationInputAgentSlice({
     required this.activeAgent,
     required this.agents,
+    this.phase = DevicesPhase.readyEmpty,
   });
 
   bool get hasActiveAgent => activeAgent != null;
+
+  /// True while no authoritative inventory result exists yet: the first load
+  /// after sign-in, or a retained cache while a refresh is in flight.
+  bool get isLoadingInventory => phase == DevicesPhase.loading || phase == DevicesPhase.stale;
   bool get isOnline => activeAgent?.isOnline ?? false;
   String? get capabilityAgentId => activeAgent?.id;
 
@@ -27,12 +38,14 @@ class ConversationInputAgentSlice {
     if (identical(this, other)) return true;
     return other is ConversationInputAgentSlice &&
         other.activeAgent == activeAgent &&
+        other.phase == phase &&
         _sameAgents(other.agents, agents);
   }
 
   @override
   int get hashCode => Object.hash(
     activeAgent,
+    phase,
     Object.hashAll(agents.map((agent) => Object.hash(agent.id, agent.name, agent.isOnline))),
   );
 

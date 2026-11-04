@@ -122,6 +122,33 @@ class _AppAuthListenerState extends State<AppAuthListener> {
     localSocket.emit('authentication_exchange', const {});
   }
 
+  /// Connects the cloud gateway after sign-in and refreshes the inventory.
+  ///
+  /// The gateway can drop once right after authentication, and the inventory
+  /// then has no data while the connection retries. The pending phase is set
+  /// before connecting so the surface never reports an authoritative empty,
+  /// and one retry covers the transient drop instead of waiting for the next
+  /// resume-driven reconnect.
+  Future<void> _connectAndRefreshInventory(BuildContext context) async {
+    if (!context.mounted) return;
+    final deviceCubit = context.read<DeviceCubit>();
+    deviceCubit.markInventoryPending();
+    for (var attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        if (!widget.socketService.isConnected) {
+          await widget.socketService.connect();
+        }
+        if (!context.mounted) return;
+        await deviceCubit.fetchAgents();
+        return;
+      } catch (_) {
+        if (attempt > 0 || !context.mounted) return;
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        if (!context.mounted) return;
+      }
+    }
+  }
+
   @override
   void dispose() {
     unawaited(_accessTokenSubscription?.cancel());
@@ -147,16 +174,7 @@ class _AppAuthListenerState extends State<AppAuthListener> {
             unawaited(context.read<ClientCliCubit>().reconcile());
           }
           widget.socketService.setAccessToken(state.accessToken);
-          unawaited(
-            widget.socketService
-                .connect()
-                .then((_) {
-                  if (context.mounted) {
-                    unawaited(context.read<DeviceCubit>().fetchAgents());
-                  }
-                })
-                .catchError((_) {}),
-          );
+          unawaited(_connectAndRefreshInventory(context));
         } else if (state is AuthUnauthenticated) {
           final localDeviceId = context.read<DeviceConnectionCoordinator>().currentDeviceId;
           final cloudDeviceIds = widget.conversationCacheRepository.snapshot.contexts.keys

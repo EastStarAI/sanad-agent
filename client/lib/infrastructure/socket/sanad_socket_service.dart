@@ -165,10 +165,13 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   @override
   Future<void> connect() => _connectionController.connect();
 
-  Future<void> reconnect() async {
-    if (_isDisposed) return;
-    disconnect();
-    await connect();
+  Future<void> reconnect() {
+    if (_isDisposed) return Future<void>.value();
+    // Delegate to the controller, which refuses to tear down a connection that is
+    // live or still authenticating. Doing the disconnect here bypassed that guard
+    // and killed the socket the post-sign-in connect had just established, which
+    // cost the first inventory request a full 10s timeout on the device.
+    return _connectionController.reconnect();
   }
 
   @override

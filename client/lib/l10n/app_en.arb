@@ -120,6 +120,8 @@
   "sessionsDevices": "Sessions & Devices",
   "addDeviceTooltip": "Add device",
   "noDevicesAvailable": "No devices available.",
+  "noDevicesChip": "No devices",
+  "devicesLoading": "Loading devices…",
   "deviceSettings": "{device} Settings",
   "overview": "Overview",
   "mcpServers": "MCP Servers",

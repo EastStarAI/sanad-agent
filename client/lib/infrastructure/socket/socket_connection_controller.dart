@@ -223,7 +223,7 @@ class SocketConnectionController {
 
   Future<void> _connectCloudSocketIo() async {
     if (_socket != null) {
-      _logger.info('[${hashCode}]: 🧹 Disposing stale socket before reconnect');
+      _logger.info('[${hashCode}]: 🧹 Disposing stale socket before reconnect id=${_socket!.id}');
       _socket!.disconnect();
       _socket!.dispose();
       _socket = null;
@@ -273,7 +273,7 @@ class SocketConnectionController {
     }
 
     _socket!.onConnect((_) {
-      _logger.info('[${hashCode}]: Connected');
+      _logger.info('[${hashCode}]: Connected id=${_socket?.id}');
       _setSocketConnected(true);
       _setLifecycleState(SocketLifecycleState.authenticating);
 
@@ -293,8 +293,8 @@ class SocketConnectionController {
       _socket?.emit('app_authenticate', authData);
     });
 
-    _socket!.onDisconnect((_) {
-      _logger.info('[${hashCode}]: Disconnected');
+    _socket!.onDisconnect((dynamic reason) {
+      _logger.info('[${hashCode}]: Disconnected id=${_socket?.id} reason=$reason');
       _setSocketConnected(false);
       if (_lifecycleState != SocketLifecycleState.authFailed && _lifecycleState != SocketLifecycleState.error) {
         _setLifecycleState(SocketLifecycleState.disconnected);
@@ -303,6 +303,7 @@ class SocketConnectionController {
 
     _socket!.on('auth_success', (data) {
       final payload = data is Map<String, dynamic> ? data : <String, dynamic>{};
+      _logger.info('[${hashCode}]: auth_success id=${_socket?.id}');
       _authSuccessController.add(payload);
       _setLifecycleState(SocketLifecycleState.ready);
       _completeReady();
@@ -479,11 +480,23 @@ class SocketConnectionController {
 
   Future<void> reconnect() async {
     if (_isDisposed) return;
+    // A resume-driven reconnect can race the post-authentication connect. Tearing
+    // down a connection that is still being established leaves the first caller
+    // waiting for a socket that no longer exists (a 10s timeout on the device),
+    // so a live or in-flight connection is reused instead.
+    if (_connectFuture != null || isReady || _lifecycleState == SocketLifecycleState.authenticating) {
+      _logger.info(
+        '[${hashCode}]: reconnect skipped state=${_lifecycleState.name} '
+        'inFlight=${_connectFuture != null}',
+      );
+      return _connectFuture ?? Future<void>.value();
+    }
     disconnect();
     await connect();
   }
 
   void disconnect() {
+    _logger.info('[${hashCode}]: disconnect called id=${_socket?.id}');
     _explicitDisconnect = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
