@@ -6,7 +6,7 @@ Add a dictation mic button to the conversation composer that sends microphone PC
 ## Scope and locked decisions
 - **Ownership:** transcription happens only in the daemon (`agent`). The client records microphone PCM, sends it, renders transcript events, and inserts them into the composer. The client never runs a model.
 - **Scope:** dictation only. No assistant reply, no auto-send, no TTS, no `supports_voice_call` change. The existing experimental Gemini realtime voice path stays untouched and hidden.
-- **Transport:** reuse the existing voice WebSocket contract shape on a new route `/ws?type=dictation&session_id=<session>&device_id=<device>`, authenticated with the same active-Home Local Gateway credential, plus the existing hosted relay event names for remote devices. Client microphone → daemon audio is 16 kHz mono PCM16 little-endian; the daemon converts to Float32 for the recognizer.
+- **Transport (v1):** reuse the existing voice WebSocket contract shape on a new local route `/ws?type=dictation&session_id=<session>&device_id=<device>`, authenticated with the same active-Home Local Gateway credential. Client microphone → daemon audio is 16 kHz mono PCM16 little-endian; the daemon converts to Float32 for the recognizer. A hosted transport is out of scope here and is tracked outside this public plan.
 - **One native engine:** `sherpa_onnx` is the only STT native dependency. No sidecar, subprocess, CLI, local HTTP server, or Python runtime may perform transcription.
 - **Pluggable engines, not one model:** a daemon-side `SttEngine` interface declares `streaming` / `batch_vad` / `interimResults` / languages / readiness. The v1 catalog has **two** `batch_vad` whisper entries (no streaming entry exists for Arabic yet). Adding a streaming model later is a catalog entry plus an adapter, never a transport or UI rewrite.
 - **Event contract is final for both modes:** `partial` (mutable, monotonic `seq`, replaces its own inserted range) and `final` (terminal, published once). A batch model emits finals at VAD segment ends; a future streaming model emits partials continuously into the same contract.
@@ -47,13 +47,12 @@ Add a dictation mic button to the conversation composer that sends microphone PC
 - [x] `stt_settings.dart`: `stt.enabled`, `model_id` (validated against the catalog), `model_path` (override wins), `language`, `threads` (1..16, default 4); wrong types fail with the offending key.
 - [x] `dictation_session.dart`: one session per socket, bounded queue (200 chunks ≈ 20 s) with counted drops, 5 minute cap with `session_limit`, `partial`/`final` sequencing, idempotent stop, cancel on disconnect.
 - [x] `local_daemon_server_platform.dart`: `type == 'dictation'` route beside `voice`, same Local Gateway credential gate, voice path untouched.
-- [ ] Cloud relay parity: deferred to a follow-up gate (v1 acceptance is a local macOS device; no relay envelope was invented).
 - [x] Client-facing events: `stt_status`, `stt_download_progress`, `dictation_ready`, `dictation_partial`, `dictation_final`, `dictation_done`, `dictation_error` (`stt_install`/`stt_select` accepted as commands).
 - [x] `capabilities.dart` + `capabilities_loader.dart`: `supports_dictation` plus `dictation_unavailable_reason`; `supports_voice_call` still absent.
 - [x] Focused tests (39 passing): catalog invariants, settings parsing/validation, checksum rejection, cancel, unhosted refusal, atomic activation, path override discovery, incomplete/detached-VAD errors, session readiness/final forwarding, session limit, cancel-without-finish, error passthrough, selection precedence, status payload.
 
 ### G2 — Client dictation surface
-- [ ] **One routing owner:** a single `DictationTransportResolver` (same pattern as `DeviceConnectionCoordinator`) decides local WebSocket vs hosted route; no other dictation code branches on connection scope. G4 later wires the hosted branch into that same resolver only.
+- [ ] **One routing owner:** a single `DictationTransportResolver` (same pattern as `DeviceConnectionCoordinator`) decides which transport a session uses; no other dictation code branches on connection scope. Any additional transport is added inside that resolver and nowhere else.
 - [ ] `client/lib/features/dictation/` with `DictationCubit` (lifecycle, resolved transport, model state, preview policy, error projection) and a service that reuses the existing 16 kHz capture primitive without changing the voice path's microphone settings.
 - [ ] Composer mic button (`dictation_mic_btn`) in the conversation input row, gated by `capabilities.supportsDictation`, with recording/processing/error states and localized tooltips.
 - [ ] Live insertion: `partial` replaces only the range it owns using a tracked start offset, `final` commits and advances the offset, stop keeps the text, cancel reverts the uncommitted range, and a manual edit during dictation resets the tracked offset so user text is never overwritten.
@@ -62,12 +61,6 @@ Add a dictation mic button to the conversation composer that sends microphone PC
 - [ ] Settings surface: dictation enable toggle, selected model, installed size, preview policy, and the daemon-reported unavailable reason.
 - [ ] Localized strings only (English + Arabic) — no new literals outside `AppLocalizations`.
 - [ ] Widget/unit tests: capability gating hides the button, partial-then-final insertion range, manual-edit divergence, preview-policy buffering, download sheet happy path and cancel, cancel-restores-draft, error surface.
-
-### G4 — Cloud relay (deferred until local acceptance)
-- [ ] Backend (`/Volumes/Storage/development/projects/desktop-agent/backend`): register dictation relay events under the existing auth boundary, with tests.
-- [ ] Daemon: a hosted `DictationChannel` implementation selected by the cloud platform; `DictationSession` unchanged.
-- [ ] Client: the hosted branch lives inside the single transport resolver from G2 and nowhere else.
-- [ ] Cross-scope parity: the same contract suite runs against the local and hosted adapters.
 
 ### G5 — Generic streaming engine (after v1)
 - [ ] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer` emitting `dictation_partial` + `dictation_final`; the worker isolate is reused.
@@ -134,7 +127,7 @@ observed), queue high-water 200 chunks (≈20 s) so the longest decode never dro
 audio.
 
 ## Current status
-- Current gate: `G2 — Client dictation surface` (G1 closed except cloud relay parity, now tracked as G4).
-- Remaining work: G2 then G3 (v1 local). After local acceptance: G4 cloud relay and G5 generic streaming. G0b (Nawah) is deprioritized pending a sherpa-packaged Arabic artifact.
+- Current gate: `G2 — Client dictation surface`; v1 closes locally at G3.
+- Remaining work: G2 then G3 (v1, local macOS). G5 (generic streaming engine) follows v1. G0b (Nawah) is deprioritized pending a sherpa-packaged Arabic artifact. Hosted delivery is not tracked in this public plan.
 - Uncommitted at handoff: G1 daemon runtime, catalog, store, settings, session, route, capability, 39 tests, probe tools.
 - Open owner decision: hosting URL for the Egyptian ONNX artifacts (see "Open decision"); the light public model unblocks the full download path meanwhile.
