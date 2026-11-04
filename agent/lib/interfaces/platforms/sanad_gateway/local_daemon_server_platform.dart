@@ -14,6 +14,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:sanad_agent/core/utils/logger.dart';
+import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
@@ -96,6 +97,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   }
 
   final _voiceEngines = <VoiceEngine>[];
+  DictationService? _dictationService;
 
   HttpServer? _server;
   StreamSubscription<void>? _authChangeSubscription;
@@ -306,6 +308,8 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
               request.uri.queryParameters['session_id'] ?? 'default';
           final deviceId = request.uri.queryParameters['device_id'] ?? '';
           _acceptVoiceClient(socket, sessionId, deviceId);
+        } else if (type == 'dictation') {
+          _acceptDictationClient(socket);
         } else if (type == 'logs') {
           agentLogWebSockets.add(socket);
           socket.done.then((_) => agentLogWebSockets.remove(socket));
@@ -820,6 +824,18 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
           '⬆️ [client] device scope ignored on local daemon server.',
         );
     }
+  }
+
+  void _acceptDictationClient(WebSocket socket) {
+    // Local dictation: microphone PCM in, transcript events out. Recognition
+    // runs in this daemon, on an isolate, never in the client.
+    _dictationService ??= DictationService(sanadHome: getSanadHome());
+    _logger.info('🎙️ [dictation] local dictation client connected');
+    unawaited(
+      _dictationService!.handleSocket(socket).catchError((Object error) {
+        _logger.warning('dictation socket failed: $error');
+      }),
+    );
   }
 
   void _acceptVoiceClient(WebSocket socket, String sessionId, String deviceId) {

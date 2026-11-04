@@ -12,12 +12,15 @@ Add a dictation mic button to the conversation composer that sends microphone PC
 - **Event contract is final for both modes:** `partial` (mutable, monotonic `seq`, replaces its own inserted range) and `final` (terminal, published once). A batch model emits finals at VAD segment ends; a future streaming model emits partials continuously into the same contract.
 - **Models are not bundled.** Nothing is shipped in the repo or installer. The daemon owns model files under `Sanad Home/models/stt/<model-id>/`, verified by pinned SHA-256 with atomic activation.
 - **Download is explicit and on demand.** No download at install or first launch. On the first mic press with no model installed, the client shows one sheet listing the catalog entries (label, size, recommended note) where the user picks and confirms the download (progress + cancel), then dictation starts.
-- **`config.yaml` overrides the catalog:** `stt.enabled`, `stt.model_id`, `stt.model_path` (wins over `model_id`, no download and no SHA check), `stt.language` (default `ar`), `stt.threads` (default 2). Any sherpa-compatible ONNX model directory can be used this way without code changes; its readiness is required-files presence plus a recognizer load probe.
+- **`config.yaml` overrides the catalog:** `stt.enabled`, `stt.model_id`, `stt.model_path` (wins over `model_id`, no download and no SHA check), `stt.language` (default `ar`), `stt.threads` (default 4). Any sherpa-compatible ONNX model directory can be used this way without code changes; its readiness is required-files presence plus a recognizer load probe.
 - **Two v1 catalog entries:** `egy-whisper-turbo-int8` (Whisper large-v3-turbo Egyptian fine-tune, default, best Arabic accuracy, large) and `whisper-base-int8` (light/fast, explicitly labeled lower Arabic accuracy). No RAM probing in v1; the picker labels the light entry as suitable for weak devices.
 - **Platform gate:** `supports_dictation` is advertised true only where the native library loads and a model is usable (macOS arm64 for v1). Windows/Linux report false with a reason until A2 measurements exist. Unsupported devices get a disabled mic button with a visible reason — never a silent cloud fallback.
 - **Failure behavior:** a missing, corrupt, or unloadable model produces a typed error, the mic button returns to idle, and the composer draft is preserved. Typed errors never fabricate text.
 - **Lifecycle bounds:** max dictation session 5 minutes, bounded audio queue with an explicit drop policy, recognizer loaded on first press and released after 5 minutes idle, cancellation on `dictation_cancel`, client disconnect, and daemon shutdown.
 - **Privacy:** no raw audio, transcript text, credential, or absolute model path in logs. Metrics only: model load, first-final latency, processing RTF, queue high-water/drops, cancel time, total duration.
+- **Client routing has one owner.** The client resolves local vs hosted transport in a single place, exactly like the existing voice path (`VoiceStreamCubit` + `DeviceConnectionCoordinator`). No other dictation code may branch on connection scope.
+- **Preview policy is a switch, not a protocol.** `dictation_preview: live | on_stop` — `live` inserts each final as it arrives (default), `on_stop` buffers finals and inserts them when the session stops. No transport or daemon change either way.
+- **Streaming is supported generically, not per model.** `SttModelMode.streaming` and `dictation_partial` already exist; a future streaming adapter (sherpa `OnlineRecognizer`) plus a catalog entry is the entire remaining work. Model-specific ONNX surgery for third-party exports is out of scope.
 - **Out of scope:** streaming-catalog model, Windows/Linux support, language auto-detection, multi-model simultaneous load, dictation into any field other than the composer, changes to the text protocol, changes to `AgentRunner`.
 
 ## Open decision (owner)
@@ -33,30 +36,48 @@ Add a dictation mic button to the conversation composer that sends microphone PC
 - [x] Light model resolved from the public `csukuangfj/sherpa-onnx-whisper-base` tree: `base-encoder.int8.onnx` 29,120,534 B `0b8fb130…0a1e11`, `base-decoder.int8.onnx` 130,672,026 B `9759d217…09dc02d`, `base-tokens.txt` 816,730 B `b34b360d…2fa126` (161 MB total).
 - [x] Arabic fixture: 25 s mono 16 kHz clip plus the whole 60 s clip, with the ggml (whisper.cpp) transcript kept as the reference. Measured: base-int8 load 1318 ms / RTF 0.056 / RSS 785 MB; Egyptian-int8 load 765 ms / RTF 0.530 / RSS 2373 MB (CPU-only, 2 threads).
 - [x] Egyptian ONNX transcript matches the ggml reference on the same audio (same content, same code-switch segments: `Cloud Code`, `Social Media`), so the export route is accepted.
-- [ ] Reuse audit: confirm the new route, capability, and event names against `docs/technical/voice_streaming.md`, `local_daemon_server_platform.dart:304`, `capabilities.dart`, and `client/lib/features/voice/AGENTS.md`, and list every file G1/G2 must touch.
-- [ ] Prove the VAD + `OfflineRecognizer` segment pipeline end-to-end on the 60 s fixture (segment lengths, first-final latency per segment), because sherpa's whisper decoder rejects anything over 30 s.
+- [x] Reuse audit: confirmed the route/event/capability shape against `docs/technical/voice_streaming.md`, `local_daemon_server_platform.dart:304`, `capabilities.dart`, and `client/lib/features/voice/AGENTS.md`; G1 touches only `infrastructure/stt/`, `capabilities*.dart`, and the dictation route branch.
+- [x] Prove the VAD + `OfflineRecognizer` segment pipeline end-to-end on the 60 s fixture (segment lengths, first-final latency per segment), because sherpa's whisper decoder rejects anything over 30 s.
 
 ### G1 — Daemon dictation runtime
-- [ ] `agent/lib/infrastructure/stt/`: `stt_engine.dart` interface (capabilities, readiness reason, `startStream`/`acceptAudio`/`finish`/`cancel`, `partial`/`final`/`error` events), no Flutter import.
-- [ ] `sherpa_stt_engine.dart`: sherpa `OfflineRecognizer` + `VoiceActivityDetector` adapter that emits `final` per VAD segment and maps failures to typed errors.
-- [ ] `stt_catalog.dart`: data-only catalog (id, label, mode, family, files with url/size/sha256, language defaults, notes) containing the two v1 entries.
-- [ ] Model lifecycle: download with progress, pinned SHA-256 verification, temporary files, atomic activation under `Sanad Home/models/stt/<model-id>/`, cancel, stale-temp cleanup, required-files check, load probe, and idle unload.
-- [ ] `stt.config`: `enabled`, `model_id`, `model_path`, `language`, `threads` with documented defaults and validation errors that name the offending key.
-- [ ] `dictation_session.dart`: owns one session per socket, bounded audio queue with explicit drop policy, 5 minute cap, `partial`/`final` sequencing, idempotent `finish`, cancel on disconnect/shutdown.
-- [ ] `local_daemon_server_platform.dart`: accept `type == 'dictation'` beside `voice`, reuse the Local Gateway credential check, and keep the voice path unchanged.
-- [ ] Cloud relay parity: forward dictation audio and events through the existing hosted relay event names without inventing a second envelope; a relayed remote device must keep the selected device/session identity.
-- [ ] Client-facing events: `dictation_ready`, `dictation_partial`, `dictation_final`, `dictation_error`, `stt_status` (models with installed/selected/size), `stt_download_progress`.
-- [ ] `capabilities.dart`: add `supports_dictation` plus a machine-readable unavailable reason; keep `supports_voice_call` absent.
-- [ ] Focused tests: catalog parsing, sha mismatch rejection, atomic activation, concurrent starts, cancel during download/load/decode, late frame and late final rejection, queue overflow, unloadable model, config path override, no text/audio in logs.
+- [x] `agent/lib/infrastructure/stt/`: `stt_types.dart` (catalog/event/error types), `stt_engine.dart` (`SttEngine` + `SherpaSttEngine` isolate handle), `stt_isolate.dart` (worker: recognizer + VAD + decode loop), no Flutter import anywhere.
+- [x] `sherpa_stt_engine.dart` equivalent delivered as `stt_isolate.dart`: sherpa `OfflineRecognizer` + `VoiceActivityDetector`, one `final` per VAD segment, forced cut every 4 s so continuous narration cannot produce 20 s segments, typed errors.
+- [x] `stt_catalog.dart`: data-only catalog (id, label, note, mode, family files with url/size/sha256, language, `isDefault`, `hosted`) with the two v1 entries plus the shared Silero VAD asset.
+- [x] Model lifecycle (`stt_model_store.dart`): streamed download with progress, pinned SHA-256 and size verification, `.partial` staging, atomic rename activation, cancel, hard-link-free single writer, plus `_shared/silero_vad.onnx`.
+- [x] `stt_settings.dart`: `stt.enabled`, `model_id` (validated against the catalog), `model_path` (override wins), `language`, `threads` (1..16, default 4); wrong types fail with the offending key.
+- [x] `dictation_session.dart`: one session per socket, bounded queue (200 chunks ≈ 20 s) with counted drops, 5 minute cap with `session_limit`, `partial`/`final` sequencing, idempotent stop, cancel on disconnect.
+- [x] `local_daemon_server_platform.dart`: `type == 'dictation'` route beside `voice`, same Local Gateway credential gate, voice path untouched.
+- [ ] Cloud relay parity: deferred to a follow-up gate (v1 acceptance is a local macOS device; no relay envelope was invented).
+- [x] Client-facing events: `stt_status`, `stt_download_progress`, `dictation_ready`, `dictation_partial`, `dictation_final`, `dictation_done`, `dictation_error` (`stt_install`/`stt_select` accepted as commands).
+- [x] `capabilities.dart` + `capabilities_loader.dart`: `supports_dictation` plus `dictation_unavailable_reason`; `supports_voice_call` still absent.
+- [x] Focused tests (39 passing): catalog invariants, settings parsing/validation, checksum rejection, cancel, unhosted refusal, atomic activation, path override discovery, incomplete/detached-VAD errors, session readiness/final forwarding, session limit, cancel-without-finish, error passthrough, selection precedence, status payload.
 
 ### G2 — Client dictation surface
-- [ ] `client/lib/features/dictation/` with `DictationCubit` (lifecycle, transport resolution through `DeviceConnectionCoordinator`, model state, error projection) and a service that reuses the existing 16 kHz capture primitive without touching microphone settings used by the voice path.
+- [ ] **One routing owner:** a single `DictationTransportResolver` (same pattern as `DeviceConnectionCoordinator`) decides local WebSocket vs hosted route; no other dictation code branches on connection scope. G4 later wires the hosted branch into that same resolver only.
+- [ ] `client/lib/features/dictation/` with `DictationCubit` (lifecycle, resolved transport, model state, preview policy, error projection) and a service that reuses the existing 16 kHz capture primitive without changing the voice path's microphone settings.
 - [ ] Composer mic button (`dictation_mic_btn`) in the conversation input row, gated by `capabilities.supportsDictation`, with recording/processing/error states and localized tooltips.
 - [ ] Live insertion: `partial` replaces only the range it owns using a tracked start offset, `final` commits and advances the offset, stop keeps the text, cancel reverts the uncommitted range, and a manual edit during dictation resets the tracked offset so user text is never overwritten.
-- [ ] First-use sheet: catalog entries with label/size/recommended note, download consent with progress and cancel, and a path to Settings when the daemon reports a `model_path`-provided model.
-- [ ] Settings surface: dictation enable toggle, selected model, installed size, and the daemon-reported unavailable reason.
+- [ ] `dictation_preview: live | on_stop` — `on_stop` buffers finals and inserts them on stop; default `live`.
+- [ ] First-use sheet reuses the existing `full_access_confirmation_dialog.dart` pattern (same shape, typography, RTL, and button treatment) for model choice + download consent with progress and cancel; no new visual language.
+- [ ] Settings surface: dictation enable toggle, selected model, installed size, preview policy, and the daemon-reported unavailable reason.
 - [ ] Localized strings only (English + Arabic) — no new literals outside `AppLocalizations`.
-- [ ] Widget/unit tests: capability gating hides the button, partial-then-final insertion range, manual-edit divergence, download sheet happy path and cancel, cancel-restores-draft, error surface.
+- [ ] Widget/unit tests: capability gating hides the button, partial-then-final insertion range, manual-edit divergence, preview-policy buffering, download sheet happy path and cancel, cancel-restores-draft, error surface.
+
+### G4 — Cloud relay (deferred until local acceptance)
+- [ ] Backend (`/Volumes/Storage/development/projects/desktop-agent/backend`): register dictation relay events under the existing auth boundary, with tests.
+- [ ] Daemon: a hosted `DictationChannel` implementation selected by the cloud platform; `DictationSession` unchanged.
+- [ ] Client: the hosted branch lives inside the single transport resolver from G2 and nowhere else.
+- [ ] Cross-scope parity: the same contract suite runs against the local and hosted adapters.
+
+### G5 — Generic streaming engine (after v1)
+- [ ] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer` emitting `dictation_partial` + `dictation_final`; the worker isolate is reused.
+- [ ] Catalog entry with `mode: streaming`, validated with a public English streaming model (no Arabic streaming model exists in sherpa today).
+- [ ] No transport, protocol, or UI change: the client already renders partials and honours `dictation_preview`.
+- [ ] Explicitly excluded: model-specific ONNX surgery for third-party exports (see G0b).
+
+### G0b — Nawah (NeMo TDT, Arabic) — deprioritized
+- [x] Probed `oddadmix/Nawah-ASR-60M-Max-Arabic-ONNX` (69 MB int8). Not sherpa-packaged: the encoder lacks the `vocab_size` metadata sherpa requires, the blank convention is inverted (`<blk>` is id 0 inside the vocab while sherpa expects `1024` as the last `tokens.txt` line), and the encoder consumes full-context features, so it is not streaming despite the transducer architecture.
+- [ ] Decision: **model-specific work is not worth it** (~80% quality). Revisit only if an Arabic *sherpa-packaged* streaming/light model appears, or a chunked-encoder export with sherpa metadata is published. This gate closes on such an artifact, never on hand-written ONNX surgery.
 
 ### G3 — Documentation, verification, delivery
 - [ ] New `docs/technical/local_dictation.md` (ownership, transport, event contract, model lifecycle, platform gate) and a pointer from `docs/technical/voice_streaming.md`.
@@ -95,8 +116,25 @@ Analyzer and focused tests pass in `agent` and `client`; the two-model catalog, 
 
 Artifacts exported outside the repo at `/Volumes/Storage/caches/stt-models/egy-turbo/`.
 
+## G1 evidence (2026-11-04, macOS arm64)
+
+Pipeline run through the real isolate engine with 100 ms chunks at wall-clock rate
+(`agent/tool/stt_stream_probe.dart`), shared `silero_vad.onnx`:
+
+| Model | Segments | Decode per segment | Drops | Notes |
+|---|---|---|---|---|
+| whisper-base int8, 60 s clip | 5 | ≈1.0 s | 0 | RTF ≈0.09 in the pipeline |
+| Egyptian turbo int8, 25 s clip, 2 threads, 6 s cut | 4 | ≈4.9 s | 0 | too slow for live typing |
+| Egyptian turbo int8, 25 s clip, 6 threads, 6 s cut | 4 | ≈3.1 s | 0 | better |
+| **Egyptian turbo int8, 4 threads, 4 s cut (default)** | 6 | ≈2.4–2.7 s | 0 | text cadence ≈2.5 s, first text ≈6 s after start |
+
+Tuning decisions taken from these runs: default `stt.threads = 4`, forced cut
+every 4 s (maxSpeechDuration alone was not honoured — 10 s and 20 s segments were
+observed), queue high-water 200 chunks (≈20 s) so the longest decode never drops
+audio.
+
 ## Current status
-- Current gate: `G1 — Daemon dictation runtime` (G0 closed except the reuse audit list and the VAD pipeline proof, which G1 owns).
-- Remaining work: G1 → G3. Estimated 3–5 focused sessions.
-- Budget note: the Egyptian model at RTF 0.53 and ~2.3 GB RSS sets the expectation for weak devices; the light model is the mandated fallback entry, not a nice-to-have.
+- Current gate: `G2 — Client dictation surface` (G1 closed except cloud relay parity, now tracked as G4).
+- Remaining work: G2 then G3 (v1 local). After local acceptance: G4 cloud relay and G5 generic streaming. G0b (Nawah) is deprioritized pending a sherpa-packaged Arabic artifact.
+- Uncommitted at handoff: G1 daemon runtime, catalog, store, settings, session, route, capability, 39 tests, probe tools.
 - Open owner decision: hosting URL for the Egyptian ONNX artifacts (see "Open decision"); the light public model unblocks the full download path meanwhile.
