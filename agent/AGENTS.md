@@ -92,6 +92,7 @@ This contract applies to `agent/`.
 
 ## Development and Testing Requirements
 - Analyze every code change with the FVM-managed Dart analyzer before completion.
+- Resolve `agent` dependencies with `fvm flutter pub get`, not `fvm dart pub get`: the local speech engine (`sherpa_onnx`) ships as a Flutter plugin package and is consumed through its FFI API only. The binary is still built with `fvm dart compile exe`, and no `package:flutter` import is allowed outside that dependency boundary.
 - Run focused unit tests for the changed owner and every directly affected contract boundary.
 - Run the full fast suite for broad engine, interface, provider-runtime, persistence, capability-registry, or shared-model changes.
 - Require daemon-backed E2E only when mocks cannot validate the boundary: local/cloud socket contracts, daemon bootstrap/lifecycle, persistent runtime state and restart recovery, provider readiness/model execution, worktree runtime isolation, or end-to-end session execution.
