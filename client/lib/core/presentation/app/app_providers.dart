@@ -21,6 +21,9 @@ import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
 import 'package:sanad_client/features/mcp/data/mcp_runtime_client.dart';
+import 'package:sanad_client/features/dictation/domain/dictation_audio_capture.dart';
+import 'package:sanad_client/features/dictation/domain/dictation_transport_resolver.dart';
+import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/features/voice/domain/services/voice_stream_service.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
@@ -114,6 +117,14 @@ class AppProviders extends StatelessWidget {
           create: (context) => VoiceStreamCubit(
             voiceStreamService: VoiceStreamService(),
             connectionCoordinator: getIt<DeviceConnectionCoordinator>(),
+          ),
+        ),
+        BlocProvider(
+          create: (_) => DictationCubit(
+            resolver: DictationTransportResolver(
+              connectionCoordinator: getIt<DeviceConnectionCoordinator>(),
+            ),
+            capture: DictationAudioCapture(),
           ),
         ),
         BlocProvider(

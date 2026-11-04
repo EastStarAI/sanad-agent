@@ -26,6 +26,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/conversations/presentation/widgets/multiline_submission_shortcuts.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_mic_button.dart';
 
 import '../sidebar/sidebar_composition.dart';
 import 'composer_attachment_rail.dart';
@@ -286,6 +287,18 @@ class ComposerContainer extends StatelessWidget {
       },
     );
 
+    final dictationMicButton = capabilities.supportsDictation &&
+            agentSlice.activeAgent != null
+        ? Padding(
+            padding: const EdgeInsetsDirectional.only(end: 6),
+            child: DictationMicButton(
+              chatController: chatController,
+              device: agentSlice.activeAgent,
+              dimTextColor: dimTextColor,
+            ),
+          )
+        : null;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
       decoration: BoxDecoration(
@@ -348,6 +361,7 @@ class ComposerContainer extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 4),
+                  if (dictationMicButton != null) dictationMicButton,
                   sendStopButton,
                 ],
               ),
@@ -362,6 +376,10 @@ class ComposerContainer extends StatelessWidget {
                 ],
                 if (thinkingModeChip != null) ...[
                   thinkingModeChip,
+                  const SizedBox(width: 8),
+                ],
+                if (dictationMicButton != null) ...[
+                  dictationMicButton,
                   const SizedBox(width: 8),
                 ],
                 sendStopButton,

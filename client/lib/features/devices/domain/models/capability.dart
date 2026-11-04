@@ -19,6 +19,13 @@ class Capability {
   final bool supportsThinkingModeChange;
   final bool supportsVoiceMessage;
   final bool supportsVoiceCall;
+
+  /// Local (daemon-side) dictation is available on this device. True even when
+  /// no model is installed yet: the first mic press installs one.
+  final bool supportsDictation;
+
+  /// Machine-readable reason when [supportsDictation] is false.
+  final String? dictationUnavailableReason;
   final bool supportsStop;
   final bool supportsWorkplace;
   final bool supportsAttachments;
@@ -55,6 +62,8 @@ class Capability {
     this.supportsThinkingModeChange = false,
     this.supportsVoiceMessage = false,
     this.supportsVoiceCall = false,
+    this.supportsDictation = false,
+    this.dictationUnavailableReason,
     this.supportsStop = false,
     this.supportsWorkplace = false,
     this.supportsAttachments = false,
@@ -116,6 +125,9 @@ class Capability {
       supportsThinkingModeChange: caps['supports_thinking_mode_change'] ?? false,
       supportsVoiceMessage: caps['supports_voice_message'] ?? false,
       supportsVoiceCall: caps['supports_voice_call'] ?? false,
+      supportsDictation: caps['supports_dictation'] ?? false,
+      dictationUnavailableReason:
+          caps['dictation_unavailable_reason'] as String?,
       supportsStop: caps['supports_stop'] ?? false,
       supportsWorkplace: caps['supports_workplace'] ?? false,
       supportsAttachments: supportsAttachmentMedia,
@@ -161,6 +173,8 @@ class Capability {
         other.supportsThinkingModeChange == supportsThinkingModeChange &&
         other.supportsVoiceMessage == supportsVoiceMessage &&
         other.supportsVoiceCall == supportsVoiceCall &&
+        other.supportsDictation == supportsDictation &&
+        other.dictationUnavailableReason == dictationUnavailableReason &&
         other.supportsStop == supportsStop &&
         other.supportsWorkplace == supportsWorkplace &&
         other.supportsAttachments == supportsAttachments &&
@@ -197,6 +211,8 @@ class Capability {
     supportsThinkingModeChange,
     supportsVoiceMessage,
     supportsVoiceCall,
+    supportsDictation,
+    dictationUnavailableReason,
     supportsStop,
     supportsWorkplace,
     supportsAttachments,

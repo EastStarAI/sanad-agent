@@ -52,15 +52,22 @@ Add a dictation mic button to the conversation composer that sends microphone PC
 - [x] Focused tests (39 passing): catalog invariants, settings parsing/validation, checksum rejection, cancel, unhosted refusal, atomic activation, path override discovery, incomplete/detached-VAD errors, session readiness/final forwarding, session limit, cancel-without-finish, error passthrough, selection precedence, status payload.
 
 ### G2 — Client dictation surface
-- [ ] **One routing owner:** a single `DictationTransportResolver` (same pattern as `DeviceConnectionCoordinator`) decides which transport a session uses; no other dictation code branches on connection scope. Any additional transport is added inside that resolver and nowhere else.
-- [ ] `client/lib/features/dictation/` with `DictationCubit` (lifecycle, resolved transport, model state, preview policy, error projection) and a service that reuses the existing 16 kHz capture primitive without changing the voice path's microphone settings.
-- [ ] Composer mic button (`dictation_mic_btn`) in the conversation input row, gated by `capabilities.supportsDictation`, with recording/processing/error states and localized tooltips.
-- [ ] Live insertion: `partial` replaces only the range it owns using a tracked start offset, `final` commits and advances the offset, stop keeps the text, cancel reverts the uncommitted range, and a manual edit during dictation resets the tracked offset so user text is never overwritten.
-- [ ] `dictation_preview: live | on_stop` — `on_stop` buffers finals and inserts them on stop; default `live`.
-- [ ] First-use sheet reuses the existing `full_access_confirmation_dialog.dart` pattern (same shape, typography, RTL, and button treatment) for model choice + download consent with progress and cancel; no new visual language.
-- [ ] Settings surface: dictation enable toggle, selected model, installed size, preview policy, and the daemon-reported unavailable reason.
-- [ ] Localized strings only (English + Arabic) — no new literals outside `AppLocalizations`.
-- [ ] Widget/unit tests: capability gating hides the button, partial-then-final insertion range, manual-edit divergence, preview-policy buffering, download sheet happy path and cancel, cancel-restores-draft, error surface.
+- [x] **One routing owner:** a single `DictationTransportResolver` (same pattern as `DeviceConnectionCoordinator`) decides which transport a session uses; no other dictation code branches on connection scope. Any additional transport is added inside that resolver and nowhere else.
+- [x] `client/lib/features/dictation/` with `DictationCubit` (lifecycle, resolved transport, model state, preview policy, error projection) and a capture class that reuses the 16 kHz PCM16 primitive without touching the voice path's recorder session.
+- [x] Composer mic button (`dictation_mic_btn`) in the conversation input row, gated by `capabilities.supportsDictation`, with recording/processing/error states and localized tooltips.
+- [x] Live insertion: `partial` replaces only the range it owns using a tracked start offset, `final` commits and advances the offset, stop keeps the text, cancel reverts the uncommitted range, and a manual edit during dictation resets the tracked offset so user text is never overwritten.
+- [x] `dictation_preview: live | on_stop` — `on_stop` suppresses partials and shows committed text only; default `live`.
+- [x] First-use sheet reuses the existing `full_access_confirmation_dialog.dart` pattern (same shape, typography, RTL, and button treatment) for model choice + download consent with progress; no new visual language.
+- [ ] Settings surface — **deferred to G6 by owner decision.** Model, installed size, preview policy, and the daemon-reported unavailable reason are already covered by the model sheet; the enable toggle and model selection move to the device settings page described in G6. `stt.enabled` in `config.yaml` is the only switch that exists until then, and the client already surfaces `dictation_disabled` when it is off.
+- [x] Localized strings only (English + Arabic) — no new literals outside `AppLocalizations`.
+- [x] Widget/unit tests (16 passing): capability-independent button render, press starts a session, inert with no device, finalized text lands in the composer, insertion range/manual-edit/cancel, preview-policy buffering, missing-model recovery, unavailable transport, cancel clearing, stop draining.
+
+### G6 — Device settings: Dictation section (deferred, owner-decided shape)
+- [ ] Add a **Dictation** section to the existing **device settings page** (not a new page, not the composer): selected model with installed size, an enable/disable toggle, and the daemon-reported unavailable reason.
+- [ ] The client **never edits agent configuration directly**. Every change is sent as a command over the existing connection layer — the same pattern as the current agent settings (`update_session_preferences`, `update_session_title`) and not a special case.
+- [ ] The daemon owns persistence of the new values, re-advertises `supports_dictation` / reason afterwards, and the client only reflects the capability.
+- [ ] Model switching uses the existing `stt_select` path; the enable toggle needs one new settings command plus daemon persistence and tests (nothing is wired to the file system from the client).
+- [ ] Out of scope: writing `config.yaml` from the client, a client-local toggle that hides the button without telling the daemon, and any settings surface outside the device settings page.
 
 ### G5 — Generic streaming engine (after v1)
 - [ ] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer` emitting `dictation_partial` + `dictation_final`; the worker isolate is reused.
@@ -127,7 +134,7 @@ observed), queue high-water 200 chunks (≈20 s) so the longest decode never dro
 audio.
 
 ## Current status
-- Current gate: `G2 — Client dictation surface`; v1 closes locally at G3.
+- Current gate: `G2 — Client dictation surface` closed (settings surface deferred to G6 by owner decision); v1 closes locally at G3.
 - Remaining work: G2 then G3 (v1, local macOS). G5 (generic streaming engine) follows v1. G0b (Nawah) is deprioritized pending a sherpa-packaged Arabic artifact. Hosted delivery is not tracked in this public plan.
 - Uncommitted at handoff: G1 daemon runtime, catalog, store, settings, session, route, capability, 39 tests, probe tools.
 - Open owner decision: hosting URL for the Egyptian ONNX artifacts (see "Open decision"); the light public model unblocks the full download path meanwhile.
