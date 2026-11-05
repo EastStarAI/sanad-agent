@@ -10,9 +10,9 @@ description: "Technical contract for Linux service selection, ownership, install
 This document defines the Agent-owned Linux service registration implemented by
 `agent/lib/core/setup/`. Installer transaction and cloud-health behavior remain
 owned by Task 81 G4; this page states only the parts of that transaction this
-contract constrains — the Home a root install selects, the service account's
-access preflight, the credential-aware health window, and what a failed attempt
-leaves behind.
+contract constrains — the Home and account a root install selects, the explicit
+account override, the service account's access preflight, the credential-aware
+health window, and what a failed attempt leaves behind.
 
 ## Typed service contract
 
@@ -36,9 +36,10 @@ Default selection is capability-based and ordered:
    explicit `HOME`, `XDG_RUNTIME_DIR`, and bus address.
 2. A system systemd unit is selected when systemd is present but the user
    manager is not durable. A non-root invocation uses sudo only for system
-   registration while the unit runs as the invoking user. Root invoked through
-   sudo resolves the validated original account. Direct root invocation creates
-   the fixed unprivileged `sanad-agent` account and state home.
+   registration while the unit runs as the invoking user. Every root invocation
+   — direct, or entered through `sudo` — registers the fixed unprivileged
+   `sanad-agent` account and its state home; `SUDO_USER` never selects the unit
+   account. `--run-as-user <account>` is the one explicit override.
 3. OpenRC is selected only when systemd is absent and native OpenRC commands are
    available. Unsupported init systems return `ManagerUnavailable` before a
    service definition is installed.
@@ -53,9 +54,17 @@ whose `ExecStart` names a path under it fails activation with `203/EXEC` after
 the caller has already paid for the download and the device pairing. The
 installer selects that Home itself, exports it so the verified binary, its
 `login`, and its `service install` all resolve the same Home, and leaves an
-existing populated root Home untouched instead of migrating it — an operator who
-already installed under `/root/.sanad` keeps that installation. An explicit
-`SANAD_HOME` always wins.
+existing populated root Home untouched instead of migrating it — that Home is
+root's own passwd home, not the process `HOME`, which `sudo` may leave pointing
+at the invoking account. An explicit `SANAD_HOME` always wins.
+
+`SUDO_USER` is deliberately absent from that decision. The installer keys the
+Home on the effective uid, so a root install entered through sudo and a direct
+root install produce the same account and the same Home; a rule that consulted
+`SUDO_USER` made the installer place the artifact for `sanad-agent` while the
+unit named `ubuntu`, and the mismatch surfaced only after the device
+authorization was spent. `agent/lib/core/setup/service_account_policy.dart` owns
+that predicate for the Agent, and the installer suite asserts the two agree.
 
 The rule is not a location allowlist. Before `sanad service install` writes a
 definition it proves the account named in the unit can reach the paths that unit
@@ -68,6 +77,31 @@ no rollback behind, and its message names the account, the unreachable path, and
 the remedy. A host that lacks the probing tool (`runuser` as root, `sudo`
 otherwise) keeps installing: the probe is a guard, and the activation health
 transaction still has to prove the service is running.
+
+### Explicit account override (`--run-as-user`)
+
+An operator who needs the system unit to run as an existing account names it:
+`install.sh --run-as-user <account>`, or `sanad service install --run-as-user
+<account>` together with the Home that account can reach. The account must exist
+(`getent passwd`), the install must run as root, and the choice is never silent —
+the installer prints the account and Home it will use. The installer places the
+Home at that account's own `~/.sanad`, gives that account ownership of the tree
+so the daemon can read the credentials pairing wrote, and passes the same account
+to `service install`; the preflight above then still has to pass. A non-root
+invocation may not name an account. `--run-as-user root` is accepted only when
+asked for by name and prints a warning, because every Agent tool, MCP server, and
+terminal task then inherits root's privileges.
+
+### A surviving definition for another Home
+
+A definition left behind for a different Home cannot be upgraded in place: the
+Agent refuses it as a conflicting service, and that refusal used to arrive after
+the download and the device authorization. `install.sh` therefore reads the
+existing systemd or OpenRC definition before downloading anything and, when its
+`SANAD_HOME` differs from the Home this run would use, stops with exit `71` and
+prints the definition path, the Home it names, and the exact command that removes
+it — the owned `service uninstall`, or the `systemctl disable --now` and `rm`
+pair when the binary that owns it is gone.
 
 ### Explicit user scope (`--user-scope`)
 
@@ -153,9 +187,10 @@ Sanad Home, manifest trust, artifact size, SHA-256, and macOS publisher before
 replacing a binary or preparing pairing. HTTP candidate URLs are accepted only
 when the explicit `SANAD_INSTALL_ALLOW_TEST_URL=1` harness flag is set; the
 production path remains HTTPS-only and repository-pinned. The Sanad Home it
-validates is the one it also selects: an explicit `SANAD_HOME` wins, a root Linux
-installation without one uses `/var/lib/sanad-agent`, and only a root Home that
-already carries an installed binary keeps `$HOME/.sanad`.
+validates is the one it also selects: an explicit `SANAD_HOME` wins, an explicit
+`--run-as-user <account>` picks that account's `~/.sanad`, a root Linux
+installation without either uses `/var/lib/sanad-agent`, and only root's own Home
+that already carries an installed binary keeps `~root/.sanad`.
 
 For Linux, `service install --expected-version ...` keeps its unit backup open
 until authenticated Local Gateway health reports the expected binary version.

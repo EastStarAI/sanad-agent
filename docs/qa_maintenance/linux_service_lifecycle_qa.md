@@ -30,6 +30,10 @@ The focused Agent suite must prove:
 - `agent/bin/service.dart` option parsing and guards accepting `--user-scope` while rejecting unknown options and invalid combinations without host mutation;
 - automatic system-scope fallback under the non-root invoking account for default durable installs;
 - direct-root dedicated account and state-home behavior;
+- a root install entered through sudo producing the identical account and Home as a direct root install, and the installer never consulting `SUDO_USER`;
+- the installer's default dedicated Home equal to the Agent's shared policy constant (drift guard across the shell and Dart implementations);
+- `--run-as-user <account>` registering that existing account with its own Home and ownership, refusing an unknown account before any download, refusing a non-root install, and accepting `root` only by name with a warning;
+- the installer stopping before download and pairing (exit `71`) when a surviving definition names another Home, with the exact removal command;
 - a service-account access preflight that refuses an `ExecStart` or working directory the unit's account cannot reach, before the definition is written or activated, and that keeps installing when the probing tool is absent;
 - a health window that polls the Home's Local Gateway credential until it appears and that fails with the credential message and the real attempt count when it never does;
 - native OpenRC install/start/stop/restart/status/uninstall;
@@ -76,6 +80,13 @@ on real clean hosts under G6 and G7:
    belongs to the dedicated account, and the account can execute the unit's
    `ExecStart` and enter its `WorkingDirectory` (the artifact and the daemon's
    Home are the same Home, `/var/lib/sanad-agent`);
+3b. The same installation invoked through `sudo` (`sudo -i`, `sudo bash install.sh`,
+   `curl … | sudo bash`, with `SUDO_USER` set to the invoking cloud-image
+   account) producing the identical unit, the identical Home, and no failure
+   after the device authorization;
+3c. `install.sh --run-as-user <account>` on a clean host: the printed account and
+   Home, the transferred ownership, a unit whose `User=` is that account, and a
+   refusal (before download) for an unknown account or a non-root invocation;
 4. OpenRC installation on a clean supported distribution.
 5. SSH logout and reboot, followed by bounded polling for `Running` and Online.
 6. Stop/start/restart/uninstall/reinstall and injected activation failure.

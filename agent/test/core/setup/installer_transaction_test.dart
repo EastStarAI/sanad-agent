@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/core/setup/service_account_policy.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -13,6 +14,7 @@ void main() {
   late File commandLog;
   late HttpServer server;
   late String artifact;
+  var manifestRequests = 0;
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('sanad-installer-test-');
@@ -29,8 +31,28 @@ if [ "\${1:-}" = "-s" ]; then echo Darwin; else echo x86_64; fi
 case "\${1:-}" in
   -u) echo "\${FAKE_UID:-0}" ;;
   -un) echo "\${FAKE_USERNAME:-root}" ;;
+  -gn) echo "\${FAKE_ACCOUNT:-sanad-agent}" ;;
   *) echo '' ;;
 esac
+''',
+    );
+    _writeExecutable(
+      p.join(mockBin.path, 'getent'),
+      '''#!/bin/sh
+[ "\${1:-}" = "passwd" ] || exit 2
+case "\${2:-}" in
+  root) echo "root:x:0:0::\${FAKE_ROOT_HOME:-/root}:/bin/sh" ;;
+  "\${FAKE_ACCOUNT:-ubuntu}")
+    echo "\${2}:x:1000:1000::\${FAKE_USER_HOME:-/home/\${2}}:/bin/bash"
+    ;;
+  *) exit 2 ;;
+esac
+''',
+    );
+    _writeExecutable(
+      p.join(mockBin.path, 'chown'),
+      '''#!/bin/sh
+echo "chown \$*" >> "\$FAKE_COMMAND_LOG"
 ''',
     );
     for (final command in ['systemctl', 'rc-service', 'rc-update']) {
@@ -60,8 +82,10 @@ case "\${1:-} \${2:-}" in
 esac
 exit 0
 ''';
+    manifestRequests = 0;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
+      if (request.uri.path.startsWith('/manifest')) manifestRequests++;
       if (request.uri.path == '/missing') {
         request.response.statusCode = HttpStatus.notFound;
       } else if (request.uri.path == '/artifact') {
@@ -236,6 +260,7 @@ exit 0
     () async {
       _useLinuxHost(mockBin);
       final systemHome = p.join(root.path, 'var-lib-sanad-agent');
+      final rootHome = p.join(root.path, 'root-home');
 
       final result = await _runInstaller(
         home: home,
@@ -245,6 +270,7 @@ exit 0
         explicitHome: false,
         extraEnvironment: {
           'FAKE_UID': '0',
+          'FAKE_ROOT_HOME': rootHome,
           'SANAD_INSTALL_SYSTEM_HOME': systemHome,
         },
       );
@@ -278,6 +304,9 @@ exit 0
         explicitHome: false,
         extraEnvironment: {
           'FAKE_UID': '0',
+          // Root's own Home, not the process `HOME`: plain sudo can leave that
+          // pointing at the invoking account.
+          'FAKE_ROOT_HOME': home.path,
           'SANAD_INSTALL_SYSTEM_HOME': systemHome,
         },
       );
@@ -308,6 +337,175 @@ exit 0
     expect(result.exitCode, 0, reason: result.stderr.toString());
     expect(File(p.join(home.path, '.sanad/bin/sanad')).existsSync(), isTrue);
     expect(Directory(systemHome).existsSync(), isFalse);
+  });
+
+  test('root Linux install keeps the dedicated Home under sudo', () async {
+    _useLinuxHost(mockBin);
+    final systemHome = p.join(root.path, 'var-lib-sanad-agent');
+
+    final result = await _runInstaller(
+      home: home,
+      mockBin: mockBin,
+      commandLog: commandLog,
+      manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+      explicitHome: false,
+      extraEnvironment: {
+        'FAKE_UID': '0',
+        'FAKE_USERNAME': 'root',
+        'FAKE_ROOT_HOME': p.join(root.path, 'root-home'),
+        'SUDO_USER': 'ubuntu',
+        'SUDO_UID': '1000',
+        'SANAD_INSTALL_SYSTEM_HOME': systemHome,
+      },
+    );
+
+    expect(result.exitCode, 0, reason: result.stderr.toString());
+    // A root install entered through sudo must behave exactly like a direct
+    // root install: same account, same Home, no SUDO_USER participation.
+    expect(
+      result.stdout.toString(),
+      contains('Root install: using $systemHome'),
+    );
+    expect(File(p.join(systemHome, 'bin/sanad')).existsSync(), isTrue);
+    expect(commandLog.readAsStringSync(), contains('SANAD_HOME=$systemHome'));
+  });
+
+  test('run-as-user gives the named account its own Home and ownership', () async {
+    _useLinuxHost(mockBin);
+    final accountHome = p.join(root.path, 'home', 'ubuntu');
+
+    final result = await _runInstaller(
+      home: home,
+      mockBin: mockBin,
+      commandLog: commandLog,
+      manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+      explicitHome: false,
+      runAsUser: 'ubuntu',
+      extraEnvironment: {
+        'FAKE_UID': '0',
+        'FAKE_ROOT_HOME': p.join(root.path, 'root-home'),
+        'FAKE_ACCOUNT': 'ubuntu',
+        'FAKE_USER_HOME': accountHome,
+      },
+    );
+
+    expect(result.exitCode, 0, reason: result.stderr.toString());
+    final serviceHome = p.join(accountHome, '.sanad');
+    expect(File(p.join(serviceHome, 'bin/sanad')).existsSync(), isTrue);
+    expect(
+      result.stdout.toString(),
+      contains('The Sanad Agent service will run as ubuntu with $serviceHome'),
+    );
+    final log = commandLog.readAsStringSync();
+    expect(log, contains('chown -R ubuntu $serviceHome'));
+    expect(log, contains('--run-as-user ubuntu'));
+  });
+
+  test('run-as-user root is explicit and warns loudly', () async {
+    _useLinuxHost(mockBin);
+    final rootHome = p.join(root.path, 'root-home');
+
+    final result = await _runInstaller(
+      home: home,
+      mockBin: mockBin,
+      commandLog: commandLog,
+      manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+      explicitHome: false,
+      runAsUser: 'root',
+      extraEnvironment: {'FAKE_UID': '0', 'FAKE_ROOT_HOME': rootHome},
+    );
+
+    expect(result.exitCode, 0, reason: result.stderr.toString());
+    expect(
+      result.stderr.toString(),
+      contains('Warning: the Agent daemon will run as root'),
+    );
+    expect(File(p.join(rootHome, '.sanad/bin/sanad')).existsSync(), isTrue);
+    expect(commandLog.readAsStringSync(), contains('--run-as-user root'));
+  });
+
+  test('run-as-user refuses an account that does not exist', () async {
+    _useLinuxHost(mockBin);
+
+    final result = await _runInstaller(
+      home: home,
+      mockBin: mockBin,
+      commandLog: commandLog,
+      manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+      explicitHome: false,
+      runAsUser: 'nobody-here',
+      extraEnvironment: {'FAKE_UID': '0', 'FAKE_ACCOUNT': 'ubuntu'},
+    );
+
+    expect(result.exitCode, 64);
+    expect(result.stderr.toString(), contains('does not exist'));
+    // Nothing was downloaded or paired for an account that cannot run it.
+    expect(manifestRequests, 0);
+  });
+
+  test('refuses before download when a definition names another Home', () async {
+    _useLinuxHost(mockBin);
+    final configRoot = p.join(root.path, 'config-root');
+    final definition = File(
+      p.join(configRoot, 'etc/systemd/system/sanad-agent.service'),
+    )..createSync(recursive: true);
+    definition.writeAsStringSync('''[Service]
+User=ubuntu
+Environment="SANAD_HOME=/home/ubuntu/.sanad"
+''');
+
+    final result = await _runInstaller(
+      home: home,
+      mockBin: mockBin,
+      commandLog: commandLog,
+      manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+      explicitHome: false,
+      extraEnvironment: {
+        'FAKE_UID': '0',
+        'FAKE_ROOT_HOME': p.join(root.path, 'root-home'),
+        'SANAD_INSTALL_SYSTEM_HOME': p.join(root.path, 'var-lib-sanad-agent'),
+        'SANAD_INSTALL_CONFIG_ROOT': configRoot,
+      },
+    );
+
+    expect(result.exitCode, 71);
+    expect(
+      result.stderr.toString(),
+      contains('registered for another Sanad Home'),
+    );
+    expect(result.stderr.toString(), contains('/home/ubuntu/.sanad'));
+    expect(
+      result.stderr.toString(),
+      contains('systemctl disable --now sanad-agent.service'),
+    );
+    // No download, no device authorization spent on a doomed install.
+    expect(manifestRequests, 0);
+    expect(definition.existsSync(), isTrue);
+  });
+
+  test('installer and Agent share one account and Home rule', () {
+    final script = File('../scripts/install.sh').readAsStringSync();
+    expect(
+      script,
+      contains(
+        'SYSTEM_SANAD_HOME="\${SANAD_INSTALL_SYSTEM_HOME:-'
+        '${SystemServiceAccount.dedicatedHome}}"',
+      ),
+    );
+    // The live sudo failure: the installer keys the Home on `id -u`, so it must
+    // never consult SUDO_USER, and the Agent's policy must agree.
+    final code = script
+        .split('\n')
+        .where((line) => !line.trimLeft().startsWith('#'))
+        .join('\n');
+    expect(code, isNot(contains('SUDO_USER')));
+    expect(
+      SystemServiceAccount.usesDedicatedAccount(
+        isRoot: true,
+        runAsUser: null,
+      ),
+      isTrue,
+    );
   });
 
   test(
@@ -345,6 +543,7 @@ Future<ProcessResult> _runInstaller({
   required File commandLog,
   required String manifestUrl,
   String? pairingToken,
+  String? runAsUser,
   Map<String, String> extraEnvironment = const {},
   bool explicitHome = true,
 }) {
@@ -362,10 +561,14 @@ Future<ProcessResult> _runInstaller({
   environment['SANAD_HOME'] = explicitHome
       ? p.join(home.path, '.sanad')
       : '';
+  final installerArguments = <String>[
+    if (pairingToken == null) '--no-login' else '--pairing-token-stdin',
+    if (runAsUser != null) ...['--run-as-user', runAsUser],
+  ];
   if (pairingToken == null) {
     return Process.run('sh', [
       '../scripts/install.sh',
-      '--no-login',
+      ...installerArguments,
     ], environment: environment);
   }
   // The shell builtin writes pairing authority to stdin; it is never an Agent
@@ -373,7 +576,8 @@ Future<ProcessResult> _runInstaller({
   final quoted = pairingToken.replaceAll("'", "'\\''");
   return Process.run('sh', [
     '-c',
-    "printf '%s\\n' '$quoted' | sh ../scripts/install.sh --pairing-token-stdin",
+    "printf '%s\\n' '$quoted' | sh ../scripts/install.sh "
+        '${installerArguments.join(' ')}',
   ], environment: environment);
 }
 

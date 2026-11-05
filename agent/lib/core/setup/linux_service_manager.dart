@@ -3,41 +3,13 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'linux_service_identity.dart';
 import 'service_account_access.dart';
+import 'service_account_policy.dart';
 import 'service_models.dart';
 import 'service_unit_builder.dart';
 
-class LinuxServiceIdentity {
-  const LinuxServiceIdentity({
-    required this.userName,
-    required this.groupName,
-    required this.uid,
-    required this.home,
-    required this.isRoot,
-    this.dedicated = false,
-  });
-
-  final String userName;
-  final String groupName;
-  final int uid;
-  final String home;
-  final bool isRoot;
-  final bool dedicated;
-}
-
-class LinuxServicePaths {
-  const LinuxServicePaths({
-    this.systemUnitDirectory = '/etc/systemd/system',
-    this.openRcInitDirectory = '/etc/init.d',
-    this.systemdRuntimeDirectory = '/run/systemd/system',
-    this.userRuntimeDirectory = '/run/user',
-  });
-
-  final String systemUnitDirectory;
-  final String openRcInitDirectory;
-  final String systemdRuntimeDirectory;
-  final String userRuntimeDirectory;
-}
+export 'linux_service_identity.dart';
 
 class LinuxServiceManager {
   LinuxServiceManager({
@@ -50,14 +22,15 @@ class LinuxServiceManager {
     required this.runner,
     LinuxServicePaths paths = const LinuxServicePaths(),
     LinuxServiceIdentity? identity,
-    this.dedicatedHomePath = dedicatedHome,
+    this.dedicatedHomePath = SystemServiceAccount.dedicatedHome,
+    this.runAsUser,
     this.postActivationVerification,
     this.userScope = false,
   }) : _paths = paths,
        _identityOverride = identity;
 
-  static const String dedicatedUser = 'sanad-agent';
-  static const String dedicatedHome = '/var/lib/sanad-agent';
+  static const String dedicatedUser = SystemServiceAccount.dedicatedUser;
+  static const String dedicatedHome = SystemServiceAccount.dedicatedHome;
 
   final String serviceName;
   final String executable;
@@ -67,6 +40,10 @@ class LinuxServiceManager {
   final Map<String, String> environment;
   final ServiceProcessRunner runner;
   final String dedicatedHomePath;
+
+  /// The account an operator named for a system unit; null means the policy
+  /// chooses.
+  final String? runAsUser;
   final Future<String?> Function()? postActivationVerification;
   final bool userScope;
   final LinuxServicePaths _paths;
@@ -83,6 +60,13 @@ class LinuxServiceManager {
   Future<ServiceOperationResult> install() async {
     try {
       final current = await _currentIdentity();
+      if ((runAsUser?.trim() ?? '').isNotEmpty && !current.isRoot) {
+        return _failure(
+          await status(),
+          'The --run-as-user option requires a root installation. Run the '
+          'install as root, or omit it to keep the invoking account.',
+        );
+      }
       final selection = await _selectBackend(current);
       if (selection == null) {
         final error = userScope
@@ -510,19 +494,29 @@ class LinuxServiceManager {
     LinuxServiceIdentity current,
   ) async {
     if (!current.isRoot) return current;
-    final sudoUser = environment['SUDO_USER']?.trim() ?? '';
-    if (sudoUser.isNotEmpty && sudoUser != 'root') {
-      return _lookupIdentity(sudoUser);
+    final requested = runAsUser?.trim() ?? '';
+    // An explicit account is the only way a root install runs the unit as
+    // anything other than the dedicated one. `SUDO_USER` is deliberately not
+    // consulted: the installer places the artifact for the account this policy
+    // chooses, and a root install entered through sudo must behave exactly like
+    // a direct root install.
+    if (SystemServiceAccount.usesDedicatedAccount(
+      isRoot: current.isRoot,
+      runAsUser: requested,
+    )) {
+      return _dedicatedIdentity();
     }
-    return LinuxServiceIdentity(
-      userName: dedicatedUser,
-      groupName: dedicatedUser,
-      uid: -1,
-      home: dedicatedHomePath,
-      isRoot: false,
-      dedicated: true,
-    );
+    return _lookupIdentity(requested);
   }
+
+  LinuxServiceIdentity _dedicatedIdentity() => LinuxServiceIdentity(
+    userName: SystemServiceAccount.dedicatedUser,
+    groupName: SystemServiceAccount.dedicatedUser,
+    uid: -1,
+    home: dedicatedHomePath,
+    isRoot: false,
+    dedicated: true,
+  );
 
   Future<LinuxServiceIdentity> _currentIdentity() async {
     if (_identityOverride case final identity?) {

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/setup/linux_service_manager.dart';
+import 'package:sanad_agent/core/setup/service_account_policy.dart';
 import 'package:sanad_agent/core/setup/service_models.dart';
 import 'package:sanad_agent/core/setup/service_unit_builder.dart';
 import 'package:test/test.dart';
@@ -312,6 +313,180 @@ void main() {
     expect(result.success, isTrue, reason: result.error);
   });
 
+  test(
+    'root install keeps the dedicated account when SUDO_USER is present',
+    () async {
+      Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+      final dedicatedHome = p.join(root.path, 'dedicated-home');
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: '/root',
+        sanadHome: sanadHome.path,
+        dedicatedHome: dedicatedHome,
+        environment: const {'SUDO_USER': 'ubuntu'},
+        identity: const LinuxServiceIdentity(
+          userName: 'root',
+          groupName: 'root',
+          uid: 0,
+          home: '/root',
+          isRoot: true,
+        ),
+      );
+
+      final result = await manager.install();
+
+      expect(result.success, isTrue, reason: result.error);
+      final unit = File(
+        p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+      ).readAsStringSync();
+      // A root install entered through sudo is a root install: the live failure
+      // was the unit running as `ubuntu` while the installer placed the artifact
+      // for `sanad-agent`.
+      expect(unit, contains('User=sanad-agent'));
+      expect(unit, contains('Group=sanad-agent'));
+      expect(unit, contains('ExecStart="/opt/sanad/bin/sanad" "daemon"'));
+      expect(unit, contains('WorkingDirectory=$dedicatedHome'));
+      expect(unit, contains('Environment="HOME=$dedicatedHome"'));
+      expect(unit, contains('Environment="SANAD_HOME=$dedicatedHome"'));
+      expect(unit, isNot(contains('ubuntu')));
+    },
+  );
+
+  test('run-as-user registers the explicitly named account', () async {
+    Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+    final manager = _manager(
+      host: host,
+      paths: paths,
+      loginHome: '/root',
+      sanadHome: sanadHome.path,
+      runAsUser: 'ubuntu',
+      identity: const LinuxServiceIdentity(
+        userName: 'root',
+        groupName: 'root',
+        uid: 0,
+        home: '/root',
+        isRoot: true,
+      ),
+    );
+
+    final result = await manager.install();
+
+    expect(result.success, isTrue, reason: result.error);
+    final unit = File(
+      p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+    ).readAsStringSync();
+    expect(unit, contains('User=ubuntu'));
+    expect(unit, contains('Group=ubuntu'));
+    expect(unit, contains('Environment="HOME=/home/ubuntu"'));
+    // The Home is the caller's, and the preflight still proves the named account
+    // can execute the artifact and enter that Home.
+    expect(unit, contains('Environment="SANAD_HOME=${sanadHome.path}"'));
+    expect(
+      host.commands,
+      contains(startsWith('runuser -u ubuntu -- test -x')),
+    );
+  });
+
+  test('run-as-user root is honored only when named explicitly', () async {
+    Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+    final manager = _manager(
+      host: host,
+      paths: paths,
+      loginHome: '/root',
+      sanadHome: sanadHome.path,
+      runAsUser: 'root',
+      identity: const LinuxServiceIdentity(
+        userName: 'root',
+        groupName: 'root',
+        uid: 0,
+        home: '/root',
+        isRoot: true,
+      ),
+    );
+
+    final result = await manager.install();
+
+    expect(result.success, isTrue, reason: result.error);
+    final unit = File(
+      p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+    ).readAsStringSync();
+    expect(unit, contains('User=root'));
+    expect(unit, contains('Environment="HOME=/root"'));
+  });
+
+  test('run-as-user refuses an account that does not exist', () async {
+    Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+    host.accountExists = false;
+    final manager = _manager(
+      host: host,
+      paths: paths,
+      loginHome: '/root',
+      sanadHome: sanadHome.path,
+      runAsUser: 'nobody-here',
+      identity: const LinuxServiceIdentity(
+        userName: 'root',
+        groupName: 'root',
+        uid: 0,
+        home: '/root',
+        isRoot: true,
+      ),
+    );
+
+    final result = await manager.install();
+
+    expect(result.success, isFalse);
+    expect(result.error, contains('does not exist'));
+    expect(
+      File(
+        p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+      ).existsSync(),
+      isFalse,
+    );
+  });
+
+  test('run-as-user is refused for a non-root install', () async {
+    Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+    final manager = _manager(
+      host: host,
+      paths: paths,
+      loginHome: loginHome.path,
+      sanadHome: sanadHome.path,
+      runAsUser: 'ubuntu',
+      identity: _user(loginHome.path),
+    );
+
+    final result = await manager.install();
+
+    expect(result.success, isFalse);
+    expect(result.error, contains('requires a root installation'));
+  });
+
+  test('one policy decides the system account', () {
+    expect(
+      SystemServiceAccount.usesDedicatedAccount(isRoot: true),
+      isTrue,
+    );
+    expect(
+      SystemServiceAccount.usesDedicatedAccount(
+        isRoot: true,
+        runAsUser: 'ubuntu',
+      ),
+      isFalse,
+    );
+    expect(
+      SystemServiceAccount.usesDedicatedAccount(isRoot: false),
+      isFalse,
+    );
+    expect(
+      SystemServiceAccount.usesDedicatedAccount(
+        isRoot: true,
+        runAsUser: SystemServiceAccount.dedicatedUser,
+      ),
+      isTrue,
+    );
+  });
+
   test('uses native OpenRC lifecycle when systemd is unavailable', () async {
     host.openRcAvailable = true;
     Directory(paths.openRcInitDirectory).createSync(recursive: true);
@@ -568,6 +743,8 @@ LinuxServiceManager _manager({
   required String sanadHome,
   required LinuxServiceIdentity identity,
   String? dedicatedHome,
+  String? runAsUser,
+  Map<String, String> environment = const {},
   bool userScope = false,
 }) => LinuxServiceManager(
   serviceName: 'sanad-agent.service',
@@ -575,11 +752,12 @@ LinuxServiceManager _manager({
   arguments: const ['daemon'],
   sanadHome: sanadHome,
   loginHome: loginHome,
-  environment: const {},
+  environment: environment,
   runner: host.run,
   paths: paths,
   identity: identity,
   dedicatedHomePath: dedicatedHome ?? '/var/lib/sanad-agent',
+  runAsUser: runAsUser,
   userScope: userScope,
 );
 
@@ -652,12 +830,25 @@ class _FakeServiceHost {
       return _result(true);
     }
     if (executable == 'getent') {
+      if (!accountExists) return _result(false);
+      final name = arguments.length > 1 ? arguments[1] : 'sanad-agent';
+      final home = switch (name) {
+        'root' => '/root',
+        'sanad-agent' => '/var/lib/sanad-agent',
+        _ => '/home/$name',
+      };
+      final uid = switch (name) {
+        'root' => 0,
+        'sanad-agent' => 997,
+        _ => 1000,
+      };
       return _result(
-        accountExists,
-        stdout: accountExists
-            ? 'sanad-agent:x:995:995::/var/lib/sanad-agent:/usr/sbin/nologin'
-            : '',
+        true,
+        stdout: '$name:x:$uid:$uid::$home:/usr/sbin/nologin',
       );
+    }
+    if (executable == 'id' && arguments.first == '-gn') {
+      return _result(true, stdout: '${arguments[1]}\n');
     }
     if (executable == 'useradd') {
       accountExists = true;

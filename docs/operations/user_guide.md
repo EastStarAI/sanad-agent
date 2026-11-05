@@ -154,6 +154,11 @@ and its Home in `/var/lib/sanad-agent`, a path that account can reach, and uses
 the same Home for the binary, the daemon, and its health check. Root's own
 `$HOME/.sanad` cannot be used for that service because `/root` is owner-only.
 
+This is the same whether you become root directly or through `sudo`, including
+`curl … | sudo bash` and `sudo ./install.sh`: the installer does not switch the
+service account to your login account, so a cloud image's `ubuntu` or `ec2-user`
+gets the identical installation as a direct root login.
+
 If an earlier root installation already exists under `/root/.sanad`, the
 installer keeps using it rather than moving your state. Set `SANAD_HOME` before
 running the installer whenever you want to choose the Home yourself:
@@ -162,9 +167,22 @@ running the installer whenever you want to choose the Home yourself:
 curl -fsSL https://sanad.eaststarai.com/install.sh | SANAD_HOME=/var/lib/sanad-agent bash
 ```
 
+If you need the background service to run as an existing account instead, name it
+explicitly. The account must exist, the install must run as root, and the
+installer places that account's Home under `~/.sanad` and gives it ownership:
+
+```bash
+sudo bash install.sh --run-as-user my-service-account
+```
+
+`--run-as-user root` is accepted only when you ask for it by name and prints a
+warning, because every Agent tool then runs with root privileges.
+
 The Agent refuses to register a service whose binary or working directory the
 service account cannot reach, and it reports the unreachable path instead of
-leaving you with a service that fails to start.
+leaving you with a service that fails to start. When a Sanad service is already
+registered for a different Sanad Home, the installer stops before downloading
+anything and prints the command that removes it.
 
 ## Install the standalone agent manually
 
@@ -221,7 +239,19 @@ scheduled work can continue on the device while the service is running.
 On Linux, the same command automatically selects a durable user systemd service
 only when its bus and linger capability are healthy. Otherwise it registers a
 system systemd unit that still runs the Agent as an unprivileged account, or a
-native OpenRC service when OpenRC is the host init manager.
+native OpenRC service when OpenRC is the host init manager. A root install always
+registers the dedicated `sanad-agent` account and its `/var/lib/sanad-agent`
+Home, whether root was entered directly or through `sudo`. Name an existing
+account explicitly when the unit must run as someone else:
+
+```bash
+sudo sanad service install --run-as-user my-service-account
+```
+
+`--run-as-user` requires a root install, the account must exist, and the Home the
+service uses must be one that account can reach — the command refuses before
+writing a definition otherwise. `--run-as-user root` is accepted only when named
+and prints a warning.
 
 To install a systemd user service without elevation or linger modifications
 (used automatically by the Linux desktop Client during bootstrap), pass the

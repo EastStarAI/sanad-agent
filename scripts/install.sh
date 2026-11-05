@@ -7,6 +7,11 @@ REPOSITORY="EastStarAI/sanad-agent"
 MANIFEST_URL="${SANAD_RELEASE_MANIFEST_URL:-https://github.com/$REPOSITORY/releases/latest/download/release-manifest.json}"
 REQUESTED_SANAD_HOME="${SANAD_HOME:-}"
 SYSTEM_SANAD_HOME="${SANAD_INSTALL_SYSTEM_HOME:-/var/lib/sanad-agent}"
+SERVICE_NAME="sanad-agent.service"
+SERVICE_BASE="sanad-agent"
+CONFIG_ROOT="${SANAD_INSTALL_CONFIG_ROOT:-}"
+RUN_AS_USER=""
+RUN_AS_ARGS=""
 PAIRING_TOKEN=""
 PAIRING_TOKEN_STDIN=0
 AUTH_MODE="prompt"
@@ -24,6 +29,14 @@ while [ "$#" -gt 0 ]; do
     --pairing-token-stdin)
       PAIRING_TOKEN_STDIN=1
       shift
+      ;;
+    --run-as-user)
+      [ "$#" -ge 2 ] || {
+        echo "Missing value for --run-as-user." >&2
+        exit 64
+      }
+      RUN_AS_USER="$2"
+      shift 2
       ;;
     --login)
       if [ "$AUTH_MODE" = "skip" ]; then
@@ -85,15 +98,41 @@ case "$OS_NAME" in
     ;;
 esac
 
-# A root install on Linux registers a system unit that runs as the dedicated
-# unprivileged `sanad-agent` account, so the artifact must live in a Home that
-# account can reach. Root's own `$HOME/.sanad` is not: `/root` is 0700 and
-# systemd then fails the unit with 203/EXEC after pairing already succeeded. An
-# existing populated root Home is kept as it is instead of being migrated.
+# The account and Home a Linux system unit uses, mirroring the Agent's
+# `SystemServiceAccount` policy: a root install (direct or entered through sudo)
+# runs the unit as the dedicated unprivileged `sanad-agent` account and keeps the
+# artifact in that account's Home, because `/root` is 0700 and systemd otherwise
+# fails the unit with 203/EXEC after pairing already succeeded. `SUDO_USER`
+# never selects the account; `--run-as-user` is the one explicit override.
+account_home() {
+  getent passwd "$1" 2>/dev/null | cut -d: -f6
+}
+
+if [ -n "$RUN_AS_USER" ]; then
+  if [ "$PLATFORM" != "linux" ]; then
+    echo "--run-as-user is only supported for Linux services." >&2
+    exit 69
+  fi
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "--run-as-user requires a root installation; run it with sudo." >&2
+    exit 77
+  fi
+  RUN_AS_HOME="$(account_home "$RUN_AS_USER")"
+  if [ -z "$RUN_AS_HOME" ]; then
+    echo "Account \"$RUN_AS_USER\" does not exist." >&2
+    exit 64
+  fi
+fi
+
+# An explicit retrieval of root's own Home: plain `sudo` may leave `HOME`
+# pointing at the invoking account, and that account's Home is not where the
+# dedicated service account can run the Agent.
 if [ -n "$REQUESTED_SANAD_HOME" ]; then
   SANAD_USER_HOME="$REQUESTED_SANAD_HOME"
+elif [ -n "$RUN_AS_USER" ]; then
+  SANAD_USER_HOME="$RUN_AS_HOME/.sanad"
 elif [ "$PLATFORM" = "linux" ] && [ "$(id -u)" -eq 0 ] &&
-  [ ! -x "$HOME/.sanad/bin/sanad" ]; then
+  [ ! -x "$(account_home root)/.sanad/bin/sanad" ]; then
   SANAD_USER_HOME="$SYSTEM_SANAD_HOME"
   echo "Root install: using $SANAD_USER_HOME as the Sanad Home so the dedicated service account can run the Agent."
 else
@@ -106,6 +145,69 @@ export SANAD_HOME
 BIN_DIR="$SANAD_USER_HOME/bin"
 TARGET="$BIN_DIR/sanad"
 BACKUP="$TARGET.rollback"
+
+if [ -n "$RUN_AS_USER" ]; then
+  echo "The Sanad Agent service will run as $RUN_AS_USER with $SANAD_USER_HOME."
+  # The account is a validated passwd name, so it is appended as one option.
+  RUN_AS_ARGS="--run-as-user $RUN_AS_USER"
+  if [ "$RUN_AS_USER" = "root" ]; then
+    echo "Warning: the Agent daemon will run as root, so every Agent tool, MCP server, and terminal task inherits root privileges." >&2
+  fi
+fi
+
+existing_definition() {
+  for candidate in \
+    "$CONFIG_ROOT/etc/systemd/system/$SERVICE_NAME" \
+    "$CONFIG_ROOT/etc/init.d/$SERVICE_BASE"; do
+    if [ -f "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+definition_home() {
+  sed -n 's/^Environment="SANAD_HOME=\(.*\)"$/\1/p' "$1"
+  sed -n "s/^export SANAD_HOME='\(.*\)'$/\1/p" "$1"
+}
+
+# A definition registered for another Home cannot be upgraded in place: the
+# Agent would refuse it as a conflicting service after the download and the
+# device authorization. Refuse first, with the exact command that removes it.
+DEFINITION="$(existing_definition || true)"
+if [ -n "$DEFINITION" ]; then
+  DEFINITION_HOME="$(definition_home "$DEFINITION" |
+    head -n 1 |
+    sed -e 's/\\x20/ /g' -e 's/%%/%/g')"
+  if [ -n "$DEFINITION_HOME" ] && [ "$DEFINITION_HOME" != "$SANAD_USER_HOME" ]; then
+    echo "An existing Sanad service is registered for another Sanad Home:" >&2
+    echo "  definition: $DEFINITION" >&2
+    echo "  home:       $DEFINITION_HOME" >&2
+    echo "This install would use $SANAD_USER_HOME. Remove the existing service first:" >&2
+    if [ -x "$DEFINITION_HOME/bin/sanad" ]; then
+      echo "  SANAD_HOME='$DEFINITION_HOME' '$DEFINITION_HOME/bin/sanad' service uninstall" >&2
+    fi
+    case "$DEFINITION" in
+      /etc/init.d/*)
+        echo "  rc-update del $SERVICE_BASE default && rm -f '$DEFINITION'" >&2
+        ;;
+      *)
+        echo "  systemctl disable --now $SERVICE_NAME && rm -f '$DEFINITION'" >&2
+        ;;
+    esac
+    exit 71
+  fi
+fi
+
+# The definition this installer writes, with the one explicit account override.
+
+# The Agent runs the unit as an account that did not create the Home, so that
+# account must own the artifact and the credentials pairing wrote under it.
+ensure_run_as_ownership() {
+  [ -n "$RUN_AS_USER" ] && [ "$RUN_AS_USER" != "root" ] || return 0
+  chown -R "$RUN_AS_USER" "$SANAD_USER_HOME"
+}
 
 if [ "$PLATFORM" = "linux" ]; then
   [ ! -L "$SANAD_USER_HOME" ] || {
@@ -368,10 +470,16 @@ if [ "$PORTAL_LOGIN" -eq 1 ]; then
   fi
 fi
 
+if ! ensure_run_as_ownership; then
+  restore_previous_installation
+  echo "Unable to give $RUN_AS_USER ownership of $SANAD_USER_HOME; rollback completed." >&2
+  exit 74
+fi
+
 if [ -n "$PAIRING_TOKEN" ] || [ "$PORTAL_LOGIN" -eq 1 ] ||
   [ "$PREVIOUS_AUTHENTICATED" -eq 1 ]; then
   if ! "$TARGET" service install --expected-version "$EXPECTED_VERSION" \
-    --require-cloud --health-timeout 90; then
+    --require-cloud --health-timeout 90 $RUN_AS_ARGS; then
     restore_previous_installation
     echo "Service or cloud health verification failed; rollback completed." >&2
     if [ -n "$PAIRING_TOKEN" ] || [ "$PORTAL_LOGIN" -eq 1 ]; then
@@ -381,7 +489,7 @@ if [ -n "$PAIRING_TOKEN" ] || [ "$PORTAL_LOGIN" -eq 1 ] ||
   fi
 else
   if ! "$TARGET" service install --expected-version "$EXPECTED_VERSION" \
-    --health-timeout 60; then
+    --health-timeout 60 $RUN_AS_ARGS; then
     restore_previous_installation
     echo "Service health verification failed; rollback completed." >&2
     exit 70
