@@ -7,7 +7,7 @@ runs:
       with:
         flutter-version-file: .fvmrc
         cache: true
-    - uses: actions/cache@v4
+    - uses: actions/cache@v6
       with:
         path: ~/.pub-cache
         key: pub-${{ runner.os }}-${{ hashFiles('.fvmrc', '**/pubspec.lock') }}
