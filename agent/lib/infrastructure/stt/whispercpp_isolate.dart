@@ -1,0 +1,222 @@
+/// Background isolate that owns a whisper.cpp context.
+///
+/// Same protocol as the sherpa worker (`stt_isolate.dart`), so the daemon-side
+/// engine, session and events are unchanged: only the decode call differs.
+/// Recognition is CPU bound and must never run on the daemon's event loop.
+library;
+
+import 'dart:ffi';
+import 'dart:isolate';
+import 'dart:typed_data';
+
+import 'stt_types.dart';
+import 'whispercpp_bindings.dart';
+
+/// Mandatory entry point for the whisper.cpp worker isolate.
+void whisperCppWorkerEntry(SendPort out) {
+  final inbox = ReceivePort();
+  out.send({'evt': 'port', 'port': inbox.sendPort});
+  final worker = _WhisperCppWorker(out);
+  inbox.listen((message) {
+    if (message is! Map) return;
+    try {
+      worker.handle(message);
+    } on SttException catch (error) {
+      out.send({'evt': 'error', 'code': error.code, 'message': error.message});
+    } on Object catch (error) {
+      out.send({'evt': 'error', 'code': 'decode_failed', 'message': '$error'});
+    }
+  });
+}
+
+class _WhisperCppWorker {
+  _WhisperCppWorker(this._out);
+
+  final SendPort _out;
+  Pointer<Void> _context = nullptr;
+  WhisperCppLibrary? _library;
+  String _modelId = '';
+  int _seq = 0;
+  bool _disposed = false;
+
+  /// The whole utterance is held and decoded once on stop, exactly like the
+  /// sherpa path: a decode per chunk is what cut words in half.
+  final List<Float32List> _speech = <Float32List>[];
+  int _bufferedSamples = 0;
+
+  /// whisper.cpp decodes in 30 s windows; keep groups well under that.
+  static const int _maxGroupSamples = 24 * 16000;
+
+  /// Hard ceiling: 5 minutes of 16 kHz mono PCM16.
+  static const int _maxBufferedSamples = 5 * 60 * 16000;
+
+  /// Trailing silence so the last phoneme is not dropped by the decoder.
+  static const int _tailPadSamples = 8000;
+
+  void handle(Map message) {
+    switch (message['cmd']) {
+      case 'init':
+        _init(message);
+      case 'audio':
+        _audio(message['pcm'] as Uint8List);
+      case 'finish':
+        _finish(message['threads'] as int? ?? 0);
+      case 'cancel':
+        _speech.clear();
+        _bufferedSamples = 0;
+        _out.send({'evt': 'idle'});
+      case 'dispose':
+        _dispose();
+      default:
+        _out.send({
+          'evt': 'error',
+          'code': 'protocol',
+          'message': 'unknown command ${message['cmd']}',
+        });
+    }
+  }
+
+  void _init(Map message) {
+    final stopwatch = Stopwatch()..start();
+    _modelId = message['modelId'] as String? ?? '';
+    final library = WhisperCppLibrary.open(message['library'] as String?);
+    _library = library;
+    _context = library.loadModel(message['model'] as String);
+    stopwatch.stop();
+    _out.send({
+      'evt': 'ready',
+      'modelId': _modelId,
+      'loadMs': stopwatch.elapsedMilliseconds,
+    });
+    _out.send({'evt': 'idle'});
+  }
+
+  void _audio(Uint8List pcm16) {
+    if (_context == nullptr) {
+      throw const SttException('not_ready', 'whisper context is not loaded');
+    }
+    if (_bufferedSamples >= _maxBufferedSamples) {
+      _out.send({'evt': 'idle'});
+      return;
+    }
+    final samples = _pcm16ToFloat32(pcm16);
+    _speech.add(samples);
+    _bufferedSamples += samples.length;
+    _out.send({'evt': 'idle'});
+  }
+
+  void _finish(int threads) {
+    final library = _library;
+    if (library == null || _context == nullptr) {
+      _out.send({'evt': 'done', 'segments': 0});
+      return;
+    }
+    final audioSamples = _bufferedSamples;
+    if (!_hasSpeech()) {
+      // whisper invents text on silence ("شكراً للمشاهدة" and friends), which
+      // would insert junk into the composer. A silent session has no transcript.
+      _speech.clear();
+      _bufferedSamples = 0;
+      _out.send({'evt': 'done', 'segments': 0});
+      return;
+    }
+    final decode = Stopwatch()..start();
+    final text = _transcribeAll(library, threads);
+    decode.stop();
+    _speech.clear();
+    _bufferedSamples = 0;
+    if (text.isNotEmpty) {
+      _out.send({
+        'evt': 'final',
+        'seq': _seq++,
+        'text': text,
+        'audioMs': audioSamples * 1000 ~/ 16000,
+        'decodeMs': decode.elapsedMilliseconds,
+      });
+    }
+    _out.send({'evt': 'done', 'segments': text.isEmpty ? 0 : 1});
+    _out.send({'evt': 'idle'});
+  }
+
+  /// Cheap energy gate: a session that never rose above the noise floor is not
+  /// worth a decode, and decoding it would hallucinate text.
+  bool _hasSpeech() {
+    if (_speech.isEmpty) return false;
+    var sum = 0.0;
+    var count = 0;
+    for (final chunk in _speech) {
+      // Sampling every 8th frame is plenty for an energy decision.
+      for (var i = 0; i < chunk.length; i += 8) {
+        sum += chunk[i].abs();
+        count++;
+      }
+    }
+    if (count == 0) return false;
+    return (sum / count) > _speechFloor;
+  }
+
+  /// Mean absolute amplitude below which a session counts as silence.
+  /// Speech sits far above this; a quiet room's noise floor sits below it.
+  static const double _speechFloor = 0.004;
+
+  /// Decodes the buffered utterance in groups and joins the results into the
+  /// single transcript the user sees.
+  String _transcribeAll(WhisperCppLibrary library, int threads) {
+    if (_speech.isEmpty) return '';
+    final parts = <String>[];
+    var group = <Float32List>[];
+    var groupSamples = 0;
+
+    void decodeGroup() {
+      if (group.isEmpty) return;
+      final total = groupSamples + _tailPadSamples;
+      final samples = Float32List(total);
+      var offset = 0;
+      for (final chunk in group) {
+        samples.setRange(offset, offset + chunk.length, chunk);
+        offset += chunk.length;
+      }
+      group = <Float32List>[];
+      groupSamples = 0;
+      final result = library.run(
+        _context,
+        samples,
+        language: 'ar',
+        threads: threads,
+      );
+      if (result.text.isNotEmpty) parts.add(result.text);
+    }
+
+    for (final segment in _speech) {
+      if (groupSamples > 0 && groupSamples + segment.length > _maxGroupSamples) {
+        decodeGroup();
+      }
+      group.add(segment);
+      groupSamples += segment.length;
+    }
+    decodeGroup();
+    return parts.join(' ').trim();
+  }
+
+  void _dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    final library = _library;
+    if (_context != nullptr && library != null) {
+      library.freeModel(_context);
+    }
+    _context = nullptr;
+    _out.send({'evt': 'closed'});
+    Isolate.exit();
+  }
+
+  static Float32List _pcm16ToFloat32(Uint8List pcm16) {
+    final count = pcm16.lengthInBytes ~/ 2;
+    final samples = Float32List(count);
+    final view = ByteData.sublistView(pcm16, 0, count * 2);
+    for (var i = 0; i < count; i++) {
+      samples[i] = view.getInt16(i * 2, Endian.little) / 32768.0;
+    }
+    return samples;
+  }
+}

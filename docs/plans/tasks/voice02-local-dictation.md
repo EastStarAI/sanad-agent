@@ -211,6 +211,36 @@ every 4 s (maxSpeechDuration alone was not honoured — 10 s and 20 s segments w
 observed), queue high-water 200 chunks (≈20 s) so the longest decode never drops
 audio.
 
+## G7 evidence (2026-11-05, macOS arm64)
+
+Same 25 s Egyptian fixture, same machine, clean process (`tool/stt_probe.dart`
+vs `tool/stt_whispercpp_probe.dart`):
+
+| Metric | sherpa (int8 ONNX) | whisper.cpp (ggml q5_0) |
+|---|---|---|
+| Model load | 1414 ms | **195–335 ms** |
+| Decode (25 s audio) | 13347 ms (RTF 0.534) | **3389 ms (RTF 0.136)** |
+| Peak RSS during decode | 1688 MB | **904–960 MB** |
+| RSS after free | — | 258 MB |
+| Transcript | `الـSocial Media`, `cloud code`, truncated tail | `السوشيال ميديا`, `كلود كود`, full tail |
+
+In the daemon (model loaded per session, threads 6): idle 46 MB, listening
+1216 MB with the ggml model (vs 2.4–3.0 GB with sherpa), back to ~580–670 MB
+after the session (allocator retention, flat across sessions — no leak: a second
+session starts from the same floor instead of doubling).
+
+Findings that shaped the implementation:
+- whisper hallucinates text on silence; the worker now gates on mean amplitude
+  (`_speechFloor = 0.004`) and a silent session ends with `segments=0`.
+- whisper.cpp prints model-load lines to stderr; the shim silences its log
+  callback so the daemon never logs audio or transcript content.
+- The ggml artifacts are the official multilingual turbo, not the Egyptian
+  fine-tune, and the transcript came out equal or better on the same sample.
+
+Artifacts: `agent/native/macos/` (2.2 MB: shim + whisper + ggml), rebuilt by
+`agent/tool/build_whispercpp.sh <whisper.cpp-src>`. Trial without a catalog
+download: `stt.model_path` pointing at a directory that holds one `.bin`.
+
 ## Current status
 - Current gate: **G7** (whisper.cpp engine behind the catalog) — G2d is
   committed as `d8497896` after live acceptance (full transcript, meter, send

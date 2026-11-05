@@ -54,6 +54,25 @@ const List<SttCatalogEntry> kSttCatalog = [
     ],
   ),
   SttCatalogEntry(
+    id: 'whisper-turbo-ggml-q5',
+    label: 'Whisper Turbo (ggml q5_0)',
+    note: 'نفس الجودة بذاكرة أقل — محرك whisper.cpp',
+    mode: SttModelMode.batchVad,
+    language: 'ar',
+    isDefault: false,
+    engine: SttEngineKind.whisperCpp,
+    files: [
+      SttModelFile(
+        name: 'ggml-large-v3-turbo-q5_0.bin',
+        url:
+            'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
+        sizeBytes: 574122867,
+        sha256:
+            '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2',
+      ),
+    ],
+  ),
+  SttCatalogEntry(
     id: 'whisper-base-int8',
     label: 'Whisper Base (int8)',
     note: 'أسرع وأخف للأجهزة الضعيفة — دقة عربية أقل',

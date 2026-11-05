@@ -210,6 +210,46 @@ void main() {
       expect(store.resolve(settings), isNull);
     });
 
+    test('resolve returns the ggml file for a whisper.cpp entry', () {
+      final entry = kSttCatalog.firstWhere(
+        (e) => e.engine == SttEngineKind.whisperCpp,
+      );
+      Directory(store.modelDir(entry.id)).createSync(recursive: true);
+      for (final file in entry.files) {
+        final handle = File(
+          '${store.modelDir(entry.id)}/${file.name}',
+        ).openSync(mode: FileMode.write);
+        handle.truncateSync(file.sizeBytes);
+        handle.closeSync();
+      }
+
+      final files = store.resolve(
+        const SttSettings(),
+        selectedModelId: entry.id,
+      );
+
+      expect(files, isNotNull);
+      expect(files!.engine, SttEngineKind.whisperCpp);
+      expect(files.model, endsWith(entry.files.single.name));
+      expect(File(files.model).existsSync(), isTrue);
+      // The sherpa artifacts are not part of a whisper.cpp entry.
+      expect(files.encoder, isEmpty);
+      expect(files.vad, isEmpty);
+    });
+
+    test('a model_path holding one ggml file resolves to whisper.cpp', () {
+      final dir = Directory('${home.path}/ggml-model')..createSync();
+      File('${dir.path}/ggml-large-v3-turbo-q5_0.bin').writeAsBytesSync(
+        const [1],
+      );
+
+      final files = store.resolve(SttSettings(modelPath: dir.path));
+
+      expect(files, isNotNull);
+      expect(files!.engine, SttEngineKind.whisperCpp);
+      expect(files.model, endsWith('ggml-large-v3-turbo-q5_0.bin'));
+    });
+
     test('model_path override discovers files by name and skips checksums', () {
       writeVadAsset();
       final dir = Directory('${home.path}/manual-model')..createSync();

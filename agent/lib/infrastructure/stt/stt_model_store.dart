@@ -25,6 +25,8 @@ class SttModelFiles {
     required this.tokens,
     required this.vad,
     required this.language,
+    this.engine = SttEngineKind.sherpa,
+    this.model = '',
   });
 
   final String modelId;
@@ -33,6 +35,12 @@ class SttModelFiles {
   final String tokens;
   final String vad;
   final String language;
+
+  /// Which runtime decodes this model.
+  final SttEngineKind engine;
+
+  /// The single ggml file, used only by [SttEngineKind.whisperCpp].
+  final String model;
 }
 
 /// Installation state of one catalog entry.
@@ -78,7 +86,10 @@ class SttModelStore {
       }
       bytes += file.sizeBytes;
     }
-    if (!File(vadPath).existsSync()) installed = false;
+    // Only the sherpa runtime needs the shared silero VAD asset.
+    if (entry.engine == SttEngineKind.sherpa && !File(vadPath).existsSync()) {
+      installed = false;
+    }
     return SttModelStatus(entry: entry, installed: installed, bytesOnDisk: bytes);
   }
 
@@ -104,7 +115,8 @@ class SttModelStore {
     await Directory(sharedDir).create(recursive: true);
     // Progress is cumulative across every artifact of the install, so the
     // client bar never drops back to zero between encoder/decoder/tokens.
-    final needsVad = !File(vadPath).existsSync();
+    final needsVad =
+        entry.engine == SttEngineKind.sherpa && !File(vadPath).existsSync();
     var total = entry.files.fold<int>(0, (sum, file) => sum + file.sizeBytes);
     if (needsVad) total += kSileroVadFile.sizeBytes;
     var offset = 0;
@@ -252,6 +264,19 @@ class SttModelStore {
     }
     final dir = modelDir(entry.id);
     if (!statusOf(entry).installed) return null;
+    if (entry.engine == SttEngineKind.whisperCpp) {
+      final ggml = entry.files.first;
+      return SttModelFiles(
+        modelId: entry.id,
+        encoder: '',
+        decoder: '',
+        tokens: '',
+        vad: '',
+        language: settings.language,
+        engine: SttEngineKind.whisperCpp,
+        model: '$dir/${ggml.name}',
+      );
+    }
     return SttModelFiles(
       modelId: entry.id,
       encoder: '$dir/${_byKind(entry.files, 'encoder').name}',
@@ -284,6 +309,22 @@ class SttModelStore {
     final decoder = find('decoder', '.onnx');
     final tokens = find('tokens', '.txt');
     if (encoder == null || decoder == null || tokens == null) {
+      // A directory holding one ggml file is a whisper.cpp trial, not an
+      // incomplete sherpa model: `stt.model_path` then needs no extra config.
+      for (final name in files) {
+        if (name.endsWith('.bin')) {
+          return SttModelFiles(
+            modelId: modelId,
+            encoder: '',
+            decoder: '',
+            tokens: '',
+            vad: '',
+            language: language,
+            engine: SttEngineKind.whisperCpp,
+            model: '${dir.path}/$name',
+          );
+        }
+      }
       throw const SttException(
         'model_incomplete',
         'stt.model_path must contain *encoder*.onnx, *decoder*.onnx and *tokens*.txt',

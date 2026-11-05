@@ -13,6 +13,7 @@ import 'dart:typed_data';
 import 'stt_isolate.dart';
 import 'stt_model_store.dart';
 import 'stt_types.dart';
+import 'whispercpp_isolate.dart';
 
 abstract class SttEngine {
   /// Typed events for this session. Completes when the worker closes.
@@ -44,7 +45,14 @@ abstract class SttEngine {
 }
 
 class SherpaSttEngine implements SttEngine {
-  SherpaSttEngine({this.maxQueuedChunks = 200});
+  SherpaSttEngine({
+    this.maxQueuedChunks = 200,
+    this.entryPoint = sttWorkerEntry,
+  });
+
+  /// The isolate body: `sttWorkerEntry` for sherpa, `whisperCppWorkerEntry` for
+  /// the whisper.cpp engine. Everything above this line is engine-agnostic.
+  final void Function(SendPort) entryPoint;
 
   /// High-water mark of queued audio chunks (~100 ms each, so 20 s). Audio
   /// beyond it is dropped and counted instead of growing without bound. The
@@ -64,6 +72,7 @@ class SherpaSttEngine implements SttEngine {
   bool _cancelled = false;
   int _droppedChunks = 0;
   Completer<void>? _finished;
+  int _threads = 0;
 
   @override
   Stream<SttEvent> get events => _events.stream;
@@ -156,13 +165,14 @@ class SherpaSttEngine implements SttEngine {
     });
 
     _isolate = await Isolate.spawn(
-      sttWorkerEntry,
+      entryPoint,
       outbox.sendPort,
       debugName: 'sanad-stt-worker',
       onExit: controlPort.sendPort,
       onError: controlPort.sendPort,
     );
 
+    _threads = threads;
     _inbox = await portCompleter.future;
     _inbox!.send({
       'cmd': 'init',
@@ -171,6 +181,7 @@ class SherpaSttEngine implements SttEngine {
       'decoder': files.decoder,
       'tokens': files.tokens,
       'vad': files.vad,
+      'model': files.model,
       'language': files.language,
       'threads': threads,
     });
@@ -217,7 +228,7 @@ class SherpaSttEngine implements SttEngine {
     if (_closed || _inbox == null) return;
     final finished = Completer<void>();
     _finished = finished;
-    _inbox!.send({'cmd': 'finish'});
+    _inbox!.send({'cmd': 'finish', 'threads': _threads});
     await finished.future.timeout(
       const Duration(seconds: 300),
       onTimeout: () {},
@@ -252,4 +263,10 @@ class SherpaSttEngine implements SttEngine {
   Future<void> _closeEvents() async {
     if (!_events.isClosed) await _events.close();
   }
+}
+
+/// whisper.cpp engine: one ggml file, mmap'd by the C shim, decoded in a worker
+/// isolate. Same event vocabulary as the sherpa engine.
+class WhisperCppSttEngine extends SherpaSttEngine {
+  WhisperCppSttEngine() : super(entryPoint: whisperCppWorkerEntry);
 }

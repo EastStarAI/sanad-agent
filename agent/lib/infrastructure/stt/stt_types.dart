@@ -29,6 +29,20 @@ class SttModelFile {
 }
 
 /// A pinned, data-only model entry. Adding a model never requires new code.
+/// Which in-process runtime decodes a catalog entry.
+///
+/// Both run inside the daemon (no sidecar, no CLI, no local HTTP): the sherpa
+/// path copies ONNX weights into RAM and keeps one arena per thread, while the
+/// whisper.cpp path mmaps ggml weights and peaks far lower — the difference
+/// matters on low-resource machines.
+enum SttEngineKind {
+  /// sherpa-onnx: ONNX encoder/decoder pair plus the silero VAD.
+  sherpa,
+
+  /// whisper.cpp through dart:ffi: one ggml file, mmap'd.
+  whisperCpp,
+}
+
 class SttCatalogEntry {
   const SttCatalogEntry({
     required this.id,
@@ -39,6 +53,7 @@ class SttCatalogEntry {
     this.language = 'ar',
     this.isDefault = false,
     this.hosted = true,
+    this.engine = SttEngineKind.sherpa,
   });
 
   final String id;
@@ -52,6 +67,12 @@ class SttCatalogEntry {
   /// False while the artifacts have no pinned public URL yet; such an entry is
   /// usable only through the `stt.model_path` override.
   final bool hosted;
+
+  /// Which in-process runtime decodes this entry.
+  ///
+  /// The daemon keeps both behind one [SttEngine] contract, so switching an
+  /// entry between engines is a catalog change, never a transport or UI one.
+  final SttEngineKind engine;
 
   int get totalBytes => files.fold(0, (sum, file) => sum + file.sizeBytes);
 }

@@ -185,6 +185,13 @@ class DictationService {
 
   SttEngine createEngine() => _engineFactory();
 
+  /// Picks the runtime the resolved model asks for. A path override that points
+  /// at a ggml file is treated as whisper.cpp, so a local trial needs no config.
+  SttEngine createEngineFor(SttModelFiles files) {
+    if (files.engine == SttEngineKind.whisperCpp) return WhisperCppSttEngine();
+    return _engineFactory();
+  }
+
   void _applySettingsFromDisk() => reloadSettings();
 }
 
@@ -356,7 +363,7 @@ class _DictationConnection {
       });
       return;
     }
-    final engine = service.createEngine();
+    final engine = service.createEngineFor(files);
     try {
       await engine.start(
         files,
