@@ -4,6 +4,7 @@ import 'package:meta/meta.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../../evolution/db/agent_state_database.dart';
+import '../../evolution/db/sqlite_transaction.dart';
 import 'provider_instance.dart';
 
 /// Persistent storage for provider instances, their model cache, and recent
@@ -167,8 +168,7 @@ class ProviderInstanceRepository {
   /// DB level even if a writer bypasses this method.
   /// Throws [StateError] if [id] does not exist.
   void setDefault(String id) {
-    _db.execute('BEGIN TRANSACTION');
-    try {
+    SqliteTransaction.runVoid(_db, () {
       final exists = _db.select(
         'SELECT 1 FROM provider_instances WHERE id = ? LIMIT 1',
         [id],
@@ -181,11 +181,7 @@ class ProviderInstanceRepository {
         'UPDATE provider_instances SET is_default = 1, updated_at = ? WHERE id = ?',
         [DateTime.now().toIso8601String(), id],
       );
-      _db.execute('COMMIT');
-    } catch (e) {
-      _db.execute('ROLLBACK');
-      rethrow;
-    }
+    });
   }
 
   /// Clears the default flag for every instance (used when the default is

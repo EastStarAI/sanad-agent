@@ -40,6 +40,7 @@ import 'package:sanad_agent/evolution/db/session_history_revision_repository.dar
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/engine/context/context.dart';
 import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
+import 'package:sanad_agent/engine/request_dump_retention.dart';
 import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:sanad_agent/evolution/db/session_projection_revision_repository.dart';
 import 'package:sanad_agent/evolution/db/user_secret_metadata_repository.dart';
@@ -150,6 +151,13 @@ void setupDI() {
   );
   getIt.registerLazySingleton<AgentStateMaintenanceService>(
     () => AgentStateMaintenanceService(getIt<AgentStateDatabase>()),
+  );
+  // Diagnostic request dumps are mutable diagnostic state, not user data; the
+  // daemon bounds them with the owner-configured retention window.
+  getIt.registerLazySingleton<RequestDumpRetentionService>(
+    () => RequestDumpRetentionService(
+      policy: getIt<Config>().requestDumpRetention,
+    ),
   );
   getIt.registerLazySingleton<SessionRouteTransitionRepository>(
     () => SessionRouteTransitionRepository(getIt<AgentStateDatabase>()),

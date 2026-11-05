@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
 
 import '../schema/schema_migration_support.dart';
+import '../sqlite_transaction.dart';
 
 /// Legacy workspace identity: replaces path-valued workspace references with
 /// immutable UUIDs and keeps every session/runtime reference consistent.
@@ -129,7 +130,7 @@ class WorkspaceIdentityMigration {
       db.execute('DROP TABLE workspaces_legacy');
       db.execute('COMMIT');
     } catch (_) {
-      db.execute('ROLLBACK');
+      SqliteTransaction.rollbackQuietly(db);
       rethrow;
     }
   }
@@ -233,7 +234,7 @@ class WorkspaceIdentityMigration {
       );
       db.execute('COMMIT');
     } catch (_) {
-      db.execute('ROLLBACK');
+      SqliteTransaction.rollbackQuietly(db);
       rethrow;
     }
   }

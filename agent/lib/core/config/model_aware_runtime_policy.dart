@@ -9,6 +9,7 @@ import 'package:crypto/crypto.dart';
 import 'package:yaml/yaml.dart';
 
 import 'compaction_policy.dart';
+import 'request_dump_retention_policy.dart';
 import 'thinking_control_override.dart';
 
 class ModelCapabilityOverride {
@@ -44,10 +45,14 @@ class ModelAwareRuntimePolicy {
   final ModelAwareCompactionPolicy compaction;
   final Map<String, ModelCapabilityOverride> modelCapabilities;
 
+  /// Diagnostic request-dump retention (`diagnostics` in `config.yaml`).
+  final RequestDumpRetentionPolicy requestDumpRetention;
+
   const ModelAwareRuntimePolicy({
     required this.contextModelLimits,
     required this.compaction,
     this.modelCapabilities = const {},
+    this.requestDumpRetention = const RequestDumpRetentionPolicy(),
   });
 
   ModelCapabilityOverride? capabilityOverrideFor(String modelId) {
@@ -236,7 +241,30 @@ class ModelAwareRuntimePolicy {
         ),
       ),
       modelCapabilities: Map.unmodifiable(capabilities),
+      requestDumpRetention: _requestDumpRetention(root),
     );
+  }
+
+  /// Parses the diagnostic-retention block.
+  ///
+  /// `diagnostics.requestDumpRetentionDays` is a positive whole number of days;
+  /// an invalid value fails the strict loader instead of silently falling back,
+  /// so an owner-edited policy is never half-applied.
+  static RequestDumpRetentionPolicy _requestDumpRetention(
+    Map<String, dynamic> root,
+  ) {
+    final diagnostics = _optionalMap(root['diagnostics'], 'diagnostics');
+    rejectUnknownKeys(diagnostics, const {
+      'requestDumpRetentionDays',
+    }, 'diagnostics');
+    final days = diagnostics['requestDumpRetentionDays'];
+    if (days == null) return const RequestDumpRetentionPolicy();
+    if (days is! num || days <= 0 || days != days.toInt()) {
+      throw const FormatException(
+        'diagnostics.requestDumpRetentionDays must be a positive integer',
+      );
+    }
+    return RequestDumpRetentionPolicy(retention: Duration(days: days.toInt()));
   }
 
   static Map<String, dynamic> _stringMap(dynamic value, String path) {

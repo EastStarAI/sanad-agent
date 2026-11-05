@@ -16,6 +16,7 @@ import '../../core/provider_runtime/runtime_recovery_service.dart';
 import '../../core/provider_thinking/thinking_route_session_sync.dart';
 import '../../core/provider_thinking/thinking_wire_vocabulary.dart';
 import '../../core/secrets_redactor.dart';
+import '../../core/storage/storage_full_failure.dart';
 import '../../evolution/compaction/model_projection_builder.dart';
 import '../../evolution/db/persisted_runtime_state_repository.dart';
 import '../../evolution/db/runtime/session_route_mutation_coordinator.dart';
@@ -131,6 +132,7 @@ class RunnerRecoveryCoordinator {
       case RuntimeFailureReason.contextOverflow:
       case RuntimeFailureReason.payloadTooLarge:
       case RuntimeFailureReason.invalidRequest:
+      case RuntimeFailureReason.storageFull:
       case RuntimeFailureReason.unknown:
         return 0;
     }
@@ -235,6 +237,9 @@ class RunnerRecoveryCoordinator {
         return 'A tool execution error occurred. Retry when ready.';
       case RuntimeFailureReason.localRuntimeError:
         return 'A local runtime error occurred. Retry when ready.';
+      case RuntimeFailureReason.storageFull:
+        return 'The local disk is full, so this request could not be saved. '
+            'Free disk space, then retry.';
       case RuntimeFailureReason.unknown:
         return 'An unexpected error occurred while contacting $p.';
     }
@@ -374,6 +379,28 @@ class RunnerRecoveryCoordinator {
         reason: reason,
         title: 'Thinking option not supported',
         message: error.message,
+        providerInstanceId: providerInstanceId,
+        providerDisplayName: displayName,
+        requestId: host.turnRoute.turnRequestId,
+        retryAfter: null,
+        forceBlocked: true,
+        runId: host.authoritativeRunId,
+      );
+      throw RuntimeRecoveryRequired(host.sessionId, reason);
+    }
+    // A local full disk is the operator's machine, not the provider. It is
+    // presented with its own title and never carries a provider response body,
+    // so a failed write cannot be read as "the provider errored".
+    if (StorageFullFailure.matches(error)) {
+      const reason = RuntimeFailureReason.storageFull;
+      final displayName = recovery.providerDisplayName(providerInstanceId);
+      recovery.reportFailure(
+        sessionId: host.sessionId,
+        reason: reason,
+        title: 'Storage full',
+        message:
+            'The local disk is full, so this turn could not be saved. '
+            'Free disk space, then retry.',
         providerInstanceId: providerInstanceId,
         providerDisplayName: displayName,
         requestId: host.turnRoute.turnRequestId,
