@@ -290,6 +290,18 @@ the model. Both runs sent 100 ms frames paced like a live microphone.
 - The streaming entry is visible and labelled تجريبي so it is never mistaken for
   the Arabic default; if the owner prefers a three-model sheet it flips to
   `hidden: true` without touching code paths.
+- Accuracy note from the owner's test: the 20M model renders "Hello, this is …"
+  as "o this is …" — a model limitation, not a code one. Two better English
+  streaming exports (`sherpa-onnx-streaming-zipformer-en-2023-06-26`, left-64 and
+  left-128, 72 MB) were tried and rejected: both fail to load in sherpa 1.13.8
+  with `'attention_dims' does not exist in the metadata`, and patching ONNX
+  metadata is explicitly out of scope (G5/G0b). The 20M model stays as the proof
+  entry.
+- Owner-test fixes after the first streaming session: streaming text is
+  normalized to sentence case (zipformer emits upper case), the client appends
+  finals instead of replacing the transcript (each silence-closed segment used to
+  wipe the previous words), the no-speech notice is a toast instead of a SnackBar,
+  and the sheet shows a «بث مباشر / Live» badge on streaming entries.
 
 ## Decisions taken in the 2026-11-05 session (all owner-approved)
 
