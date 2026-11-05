@@ -31,7 +31,7 @@ Automated tools may help prepare a contribution, but authorship is attributed to
 
 ## Pull Requests and Protected Changes
 
-Direct and force pushes to `main` are prohibited. Human pull requests use squash merge only. The pull-request title must follow Conventional Commits and becomes the squash commit message. Required CI must pass and review conversations must be resolved.
+Direct and force pushes to `main` are prohibited. Human pull requests use squash merge only. The pull-request title must follow Conventional Commits and becomes the squash commit message. Required CI must pass and review conversations must be resolved. When the merge queue is enabled, merges enter through it with `gh pr merge <number> --squash --match-head-commit <sha>`, so the queued entry is rebuilt against current `main` before it lands.
 
 During the single-maintainer phase, GitHub does not impose a general approval count. Sensitive changes instead require a protected positive-review label from a user with triage or write access:
 
