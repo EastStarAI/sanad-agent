@@ -148,6 +148,21 @@ jobs:
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze
+      - name: Test CWD-sensitive suites in isolation
+        working-directory: agent
+        run: |
+          set -o pipefail
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(../scripts/ci/list_test_shard.sh . --isolated)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No suite assigns the process working directory."
+            exit 0
+          fi
+          fvm dart test --concurrency 1 "${files[@]}" \
+            --file-reporter "json:$RUNNER_TEMP/agent-isolated.jsonl"
+          echo "CWD-sensitive suites ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/agent-isolated.jsonl")."
 
   agent-tests:
     name: Test agent (${{ matrix.shard }}/4)
@@ -468,6 +483,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.event.after }}
+          DISPATCH_SHA: ${{ github.sha }}
         run: |
           archive="$RUNNER_TEMP/gitleaks.tar.gz"
           curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
@@ -496,6 +512,12 @@ jobs:
                 # the pushed commit without the other refs the checkout fetched.
                 log_opts="$PUSH_AFTER"
               fi
+              ;;
+            workflow_dispatch)
+              # A dispatched run has no comparison base, so it scans the ancestry
+              # of the dispatched commit, exactly like a new-branch push, instead
+              # of every ref the checkout fetched.
+              log_opts="$DISPATCH_SHA"
               ;;
             *)
               log_opts=""

@@ -54,6 +54,13 @@ a file. Each shard job prints the number of files it runs and the number of
 tests it executed, so the sum over shards can be compared with the unsharded
 total in the same run.
 
+A suite that assigns the process working directory cannot share a runner: all
+suites in a `dart test` process share that directory, so a child process
+started by another suite fails while the directory is held or deleted. The
+listing keeps those suites out of every shard, `--isolated` prints them, and
+the agent lane runs them alone with `--concurrency 1`. They still run exactly
+once per CI run.
+
 Shard count is chosen from the measured critical path, not from the number of
 test files: setup cost dominates when shards are too small, and the slowest
 shard dominates when they are too large. Four shards keep the slowest client
@@ -68,10 +75,11 @@ with `subosito/flutter-action`, and points FVM at that same SDK through
 of downloading a second copy, and the job still fails if FVM resolves a version
 that `.fvmrc` does not declare.
 
-`PUB_CACHE` is pinned to the default `~/.pub-cache` (not a runner-temporary
-directory) and restored with `actions/cache`, keyed on the OS, `.fvmrc`, and
-every `pubspec.lock` in the repository. Lockfile changes produce a new key, so
-a stale cache can never resolve different dependency versions.
+`PUB_CACHE` keeps its platform default and is restored with `actions/cache`,
+keyed on the OS, `.fvmrc`, and every `pubspec.lock` in the repository: the
+runner images already put the cache's bin directory on PATH, so no path is
+overridden. Lockfile changes produce a new key, so a stale cache can never
+resolve different dependency versions.
 
 The client test shards and the Web guard install `libgtk-3-dev` and
 `libasound2-dev` because the `nativeapi` build hook compiles against GTK 3, X11,

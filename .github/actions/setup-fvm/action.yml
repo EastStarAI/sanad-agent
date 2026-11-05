@@ -8,8 +8,16 @@ runs:
         flutter-version-file: .fvmrc
         cache: true
     - uses: actions/cache@v6
+      if: runner.os != 'Windows'
       with:
         path: ~/.pub-cache
+        key: pub-${{ runner.os }}-${{ hashFiles('.fvmrc', '**/pubspec.lock') }}
+        restore-keys: |
+          pub-${{ runner.os }}-
+    - uses: actions/cache@v6
+      if: runner.os == 'Windows'
+      with:
+        path: ~\AppData\Local\Pub\Cache
         key: pub-${{ runner.os }}-${{ hashFiles('.fvmrc', '**/pubspec.lock') }}
         restore-keys: |
           pub-${{ runner.os }}-
@@ -22,7 +30,16 @@ runs:
           exit 1
         fi
         sdk_root="${FLUTTER_ROOT:-$(dirname "$(dirname "$(command -v flutter)")")}"
+        # The pub cache stays at its platform default: the runner images already
+        # put its bin directory on PATH, and only FVM needs a native path.
         cache="$HOME/.fvm-cache"
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          cache="$(cygpath -u "$cache")"
+          fvm_cache="$(cygpath -w "$cache")"
+        else
+          fvm_cache="$cache"
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+        fi
         mkdir -p "$cache/versions"
         link="$cache/versions/$version"
         rm -rf "$link"
@@ -32,11 +49,8 @@ runs:
         else
           ln -s "$sdk_root" "$link"
         fi
-        echo "PUB_CACHE=$HOME/.pub-cache" >> "$GITHUB_ENV"
-        echo "FVM_CACHE_PATH=$cache" >> "$GITHUB_ENV"
-        echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
-        export PUB_CACHE="$HOME/.pub-cache"
-        export FVM_CACHE_PATH="$cache"
+        echo "FVM_CACHE_PATH=$fvm_cache" >> "$GITHUB_ENV"
+        export FVM_CACHE_PATH="$fvm_cache"
         dart pub global activate fvm
         # The SDK above is already cached by flutter-action, so this install only
         # registers the pinned version with FVM instead of downloading it again.
