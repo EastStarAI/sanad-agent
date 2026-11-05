@@ -89,6 +89,30 @@ class ProviderDiscoveryError {
       kind == ProviderFailureCategory.invalidCredential ||
       kind == ProviderFailureCategory.forbidden;
 
+  /// Whether this failure proves the credential or the endpoint is wrong.
+  ///
+  /// Only a definitive failure may block setup or move an instance to
+  /// `needs_auth`/`error`. Transient conditions (`408`, `429`, `5xx`), transport
+  /// failures, unusable model lists, and unclassified errors never do: they
+  /// describe the moment, not the configuration.
+  bool get isDefinitive {
+    switch (kind) {
+      case ProviderFailureCategory.invalidCredential:
+      case ProviderFailureCategory.forbidden:
+      case ProviderFailureCategory.endpointNotFound:
+        return true;
+      case ProviderFailureCategory.http:
+        final status = statusCode;
+        if (status == null) return false;
+        if (status >= 400 && status <= 499) {
+          return status != 408 && status != 429;
+        }
+        return false;
+      default:
+        return false;
+    }
+  }
+
   /// One-line form used by the CLI, the readiness reason, and every legacy
   /// string consumer of `provider_model_cache.last_error`.
   String get summary => endpoint == null ? message : '$message from $endpoint';
@@ -303,6 +327,7 @@ class ProviderDiscoveryError {
     if (statusCode != null) 'status_code': statusCode,
     'message': message,
     if (endpoint != null) 'endpoint': endpoint,
+    'definitive': isDefinitive,
   };
 
   /// Encodes this failure into the `provider_model_cache.last_error_detail`

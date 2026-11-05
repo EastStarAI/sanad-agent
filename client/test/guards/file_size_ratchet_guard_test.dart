@@ -24,7 +24,7 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/features/conversations/presentation/screens/brain_activity_view.dart':
       1687,
   'lib/features/provider_setup/presentation/bloc/provider_setup_cubit.dart':
-      1115,
+      1113,
 };
 
 void main() {

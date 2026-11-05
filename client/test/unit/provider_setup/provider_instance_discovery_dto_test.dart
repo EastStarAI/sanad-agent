@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_instance_test_result_dto.dart';
 
 void main() {
   Map<String, dynamic> baseJson() => {
@@ -73,5 +74,98 @@ void main() {
 
     expect((json['discovery_error'] as Map)['status_code'], 429);
     expect((json['model_cache'] as Map)['verified'], isTrue);
+  });
+
+  group('provider.instance.test_result', () {
+    test('a passed probe reports models, model, and latency', () {
+      final dto = ProviderInstanceTestResultDto.fromJson({
+        'success': true,
+        'models_count': 12,
+        'probe_state': 'passed',
+        'model': 'gpt-4o',
+        'latency_ms': 840,
+      });
+
+      expect(dto.success, isTrue);
+      expect(dto.probePassed, isTrue);
+      expect(dto.probeSkipped, isFalse);
+      expect(dto.probeWarned, isFalse);
+      expect(dto.latencySeconds, '0.8');
+      expect(dto.failure, isNull);
+      expect(dto.warning, isNull);
+    });
+
+    test('a skipped probe is a partial success without a failure', () {
+      final dto = ProviderInstanceTestResultDto.fromJson({
+        'success': true,
+        'models_count': 3,
+        'probe_state': 'skipped',
+      });
+
+      expect(dto.success, isTrue);
+      expect(dto.probeSkipped, isTrue);
+      expect(dto.model, isNull);
+      expect(dto.failure, isNull);
+    });
+
+    test('a warning carries a non-blocking cause with its model', () {
+      final dto = ProviderInstanceTestResultDto.fromJson({
+        'success': true,
+        'models_count': 12,
+        'probe_state': 'warning',
+        'model': 'gpt-4o',
+        'warning': {
+          'kind': 'model_rejected',
+          'model': 'gpt-4o',
+          'cause': {
+            'kind': 'http',
+            'status_code': 400,
+            'message': 'Provider rejected the request (HTTP 400)',
+            'definitive': false,
+          },
+        },
+      });
+
+      expect(dto.success, isTrue);
+      expect(dto.probeWarned, isTrue);
+      expect(dto.failure, isNull);
+      expect(dto.warning!.kind, 'model_rejected');
+      expect(dto.warning!.isModelRejected, isTrue);
+      expect(dto.warning!.model, 'gpt-4o');
+      expect(dto.warning!.cause!.statusCode, 400);
+      expect(dto.warning!.cause!.definitive, isFalse);
+    });
+
+    test('a failed probe carries a definitive failure', () {
+      final dto = ProviderInstanceTestResultDto.fromJson({
+        'success': false,
+        'models_count': 12,
+        'probe_state': 'failed',
+        'model': 'gpt-4o',
+        'failure': {
+          'kind': 'invalid_credential',
+          'status_code': 401,
+          'message': 'Invalid credential (HTTP 401)',
+          'definitive': true,
+        },
+      });
+
+      expect(dto.success, isFalse);
+      expect(dto.failure!.definitive, isTrue);
+      expect(dto.warning, isNull);
+    });
+
+    test('an older daemon payload defaults to a discovery-only outcome', () {
+      final dto = ProviderInstanceTestResultDto.fromJson({
+        'success': true,
+        'models_count': 2,
+      });
+
+      expect(dto.probeState, 'not_run');
+      expect(dto.probePassed, isFalse);
+      expect(dto.probeSkipped, isFalse);
+      expect(dto.probeWarned, isFalse);
+      expect(dto.failure, isNull);
+    });
   });
 }

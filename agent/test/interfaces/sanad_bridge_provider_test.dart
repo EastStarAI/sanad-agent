@@ -698,6 +698,7 @@ OPENROUTER_API_KEY=sk-or-test
           displayName: 'Test Success',
           protocol: ProviderProtocol.openaiCompatible,
           authMethod: ProviderAuthMethod.apiKey,
+          defaultModel: 'gpt-4o',
           configRevision: 1,
           credentialRevision: 1,
           createdAt: DateTime.now(),
@@ -722,6 +723,134 @@ OPENROUTER_API_KEY=sk-or-test
       expect(payload['models_count'], 1);
       expect(payload['model'], 'gpt-4o');
       expect(payload['latency_ms'], isA<int>());
+    },
+  );
+
+  test(
+    'provider.instance.test with probe: false verifies discovery only',
+    () async {
+      final repo = getIt<ProviderInstanceRepository>();
+
+      await getIt.unregister<AgentRuntimeService>();
+      await getIt.unregister<ProviderModelCacheService>();
+
+      final mockAdapter = _MockTestAdapter(
+        getIt<Config>(),
+        ProviderRegistry.findByNameOrAlias('openai')!,
+        () async => [ModelOption(value: 'gpt-4o', label: 'GPT-4o')],
+      );
+      mockAdapter.setAvailableModelsSource('live');
+
+      final runtimeService = _TestRuntimeService(
+        getIt<Config>(),
+        repo,
+        (sig) => mockAdapter,
+        credentialResolver: getIt<ProviderCredentialResolver>(),
+        credService: getIt<ProviderCredentialService>(),
+      );
+      getIt.registerSingleton<AgentRuntimeService>(runtimeService);
+      getIt.registerSingleton<ProviderModelCacheService>(
+        ProviderModelCacheService(
+          repo,
+          runtimeService,
+          buildDefaultThinkingCapabilityAssembler(),
+        ),
+      );
+
+      repo.createInstance(
+        ProviderInstance(
+          id: 'test-gate-inst',
+          templateId: 'openai',
+          displayName: 'Test Gate',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          defaultModel: 'gpt-4o',
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      final envelope = await sendCommand(
+        'provider.instance.test',
+        payload: {
+          'request_id': 'req-test-gate',
+          'provider_instance_id': 'test-gate-inst',
+          'probe': false,
+        },
+      );
+
+      final payload = envelope['payload'] as Map<String, dynamic>;
+      expect(payload['success'], isTrue);
+      expect(payload['probe_state'], 'not_run');
+      expect(payload['models_count'], 1);
+      expect(mockAdapter.generationCalls, 0);
+    },
+  );
+
+  test(
+    'provider.instance.test without a selected model reports the partial state',
+    () async {
+      final repo = getIt<ProviderInstanceRepository>();
+
+      await getIt.unregister<AgentRuntimeService>();
+      await getIt.unregister<ProviderModelCacheService>();
+
+      final mockAdapter = _MockTestAdapter(
+        getIt<Config>(),
+        ProviderRegistry.findByNameOrAlias('openai')!,
+        () async => [
+          ModelOption(value: 'text-embedding-3-large', label: 'Embedding'),
+        ],
+      );
+      mockAdapter.setAvailableModelsSource('live');
+
+      final runtimeService = _TestRuntimeService(
+        getIt<Config>(),
+        repo,
+        (sig) => mockAdapter,
+        credentialResolver: getIt<ProviderCredentialResolver>(),
+        credService: getIt<ProviderCredentialService>(),
+      );
+      getIt.registerSingleton<AgentRuntimeService>(runtimeService);
+      getIt.registerSingleton<ProviderModelCacheService>(
+        ProviderModelCacheService(
+          repo,
+          runtimeService,
+          buildDefaultThinkingCapabilityAssembler(),
+        ),
+      );
+
+      repo.createInstance(
+        ProviderInstance(
+          id: 'test-partial-inst',
+          templateId: 'openai',
+          displayName: 'Test Partial',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      final envelope = await sendCommand(
+        'provider.instance.test',
+        payload: {
+          'request_id': 'req-test-partial',
+          'provider_instance_id': 'test-partial-inst',
+        },
+      );
+
+      final payload = envelope['payload'] as Map<String, dynamic>;
+      expect(payload['success'], isTrue);
+      expect(payload['probe_state'], 'skipped');
+      expect(payload['models_count'], 1);
+      expect(payload.containsKey('model'), isFalse);
+      // A non-chat first entry is never guessed into a generation check.
+      expect(mockAdapter.generationCalls, 0);
     },
   );
 
@@ -2841,6 +2970,7 @@ class _RetryThenHangAdapter implements LLMAdapter {
 class _MockTestAdapter extends BaseOpenAIAdapter {
   final Future<List<ModelOption>> Function() getModelsHandler;
   final Object? generationFailure;
+  int generationCalls = 0;
 
   _MockTestAdapter(
     super.config,
@@ -2861,6 +2991,7 @@ class _MockTestAdapter extends BaseOpenAIAdapter {
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
+    generationCalls++;
     if (generationFailure != null) throw generationFailure!;
     return AgentResponse(
       message: Message(role: MessageRole.assistant, content: 'OK'),

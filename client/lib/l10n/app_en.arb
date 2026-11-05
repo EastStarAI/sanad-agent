@@ -1029,5 +1029,62 @@
         "type": "String"
       }
     }
+  },
+  "providerKeyAcceptedNoModel": "Key accepted: {models} models. Choose a model to run a generation check.",
+  "@providerKeyAcceptedNoModel": {
+    "description": "Partial success for a connection test: the credential listed models but no model is selected, so no generation check ran",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerProbeModelRejected": "Key accepted, but {model} rejected the check request. The credential and the model list are fine; pick another model or retry with this one.",
+  "@providerProbeModelRejected": {
+    "description": "Non-blocking warning when the selected model refuses the tiny generation probe",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      },
+      "model": {
+        "type": "String"
+      }
+    }
+  },
+  "providerProbeTimedOut": "Key accepted: {models} models. The generation check timed out, which is normal for a local model that is still loading.",
+  "@providerProbeTimedOut": {
+    "description": "Non-blocking warning when the generation probe exceeded its time budget",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerProbeNetworkFailed": "Key accepted: {models} models. The generation check could not reach the endpoint.",
+  "@providerProbeNetworkFailed": {
+    "description": "Non-blocking warning when the generation probe could not reach the endpoint",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerProbeRateLimited": "Key accepted: {models} models. The provider rate limited the generation check; try again later.",
+  "@providerProbeRateLimited": {
+    "description": "Non-blocking warning when the provider rate limited the generation probe",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerProbeUnknownWarning": "Key accepted: {models} models. The generation check did not complete.",
+  "@providerProbeUnknownWarning": {
+    "description": "Non-blocking warning when the generation probe failed without a classified cause",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
   }
 }

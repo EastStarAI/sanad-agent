@@ -47,6 +47,7 @@ class _FakeProviderSetupClient extends ProviderSetupClient {
   final List<Map<String, dynamic>> updateInstanceCalls = [];
   final List<Map<String, dynamic>> updateCredentialCalls = [];
   final List<String> testConnectionCalls = [];
+  final List<bool> testConnectionProbeFlags = [];
   final List<String> removeInstanceCalls = [];
 
   /// Deterministic concurrency proof for the parallel provider-load path.
@@ -330,8 +331,10 @@ class _FakeProviderSetupClient extends ProviderSetupClient {
   Future<Map<String, dynamic>> testInstanceConnection({
     required String providerInstanceId,
     DeviceConfig? agent,
+    bool probe = true,
   }) async {
     testConnectionCalls.add(providerInstanceId);
+    testConnectionProbeFlags.add(probe);
     return testConnectionResult;
   }
 
@@ -1695,10 +1698,77 @@ void main() {
       await cubit.saveApiKey(apiKey: 'sk-rejected-key-000123456789');
 
       expect(cubit.state.status, ProviderSetupStatus.apiKey);
+      // The setup gate never runs a generation probe.
+      expect(fake.testConnectionProbeFlags, [false]);
       expect(cubit.state.verificationFailure, isNotNull);
       expect(cubit.state.verificationFailure!.kind, 'invalid_credential');
       expect(cubit.state.verificationFailure!.statusCode, 401);
       expect(fake.testConnectionCalls, isNotEmpty);
+      await cubit.close();
+    });
+
+    test('a non-definitive discovery failure still advances to model selection',
+        () async {
+      // A rate limit or a provider outage says nothing about the credential, so
+      // the setup gate must not reject a possibly valid key (issue 339 review).
+      final fake = _FakeProviderSetupClient(
+        providers: [_apiKeyProvider(id: 'opencode-go')],
+      )..testConnectionResult = const {
+          'success': false,
+          'models_count': 0,
+          'probe_state': 'not_run',
+          'failure': {
+            'kind': 'rate_limited',
+            'status_code': 429,
+            'message': 'Rate limited (HTTP 429)',
+            'definitive': false,
+          },
+        };
+      final cubit = ProviderSetupCubit(client: fake);
+      await cubit.load(forcePicker: true);
+      final template = cubit.state.templates.firstWhere(
+        (t) => t.name == 'opencode-go',
+        orElse: () => cubit.state.templates.first,
+      );
+      cubit.selectTemplate(template);
+
+      await cubit.saveApiKey(apiKey: 'sk-valid-key-000123456789');
+
+      expect(cubit.state.status, isNot(ProviderSetupStatus.apiKey));
+      expect(cubit.state.verificationFailure, isNotNull);
+      expect(cubit.state.instanceTests.values.single.failure!.definitive, isFalse);
+      expect(fake.testConnectionProbeFlags, [false]);
+      await cubit.close();
+    });
+
+    test('a probe 401 from the setup gate blocks with needs-auth copy', () async {
+      final fake = _FakeProviderSetupClient(
+        providers: [_apiKeyProvider(id: 'opencode-go')],
+      )..testConnectionResult = const {
+          'success': false,
+          'models_count': 0,
+          'probe_state': 'failed',
+          'failure': {
+            'kind': 'invalid_credential',
+            'status_code': 401,
+            'message': 'Invalid credential (HTTP 401)',
+            'endpoint': 'https://opencode.ai/zen/go/v1/chat/completions',
+            'definitive': true,
+          },
+        };
+      final cubit = ProviderSetupCubit(client: fake);
+      await cubit.load(forcePicker: true);
+      final template = cubit.state.templates.firstWhere(
+        (t) => t.name == 'opencode-go',
+        orElse: () => cubit.state.templates.first,
+      );
+      cubit.selectTemplate(template);
+
+      await cubit.saveApiKey(apiKey: 'sk-rejected-key-000123456789');
+
+      expect(cubit.state.status, ProviderSetupStatus.apiKey);
+      expect(cubit.state.verificationFailure!.kind, 'invalid_credential');
+      expect(cubit.state.verificationFailure!.definitive, isTrue);
       await cubit.close();
     });
 

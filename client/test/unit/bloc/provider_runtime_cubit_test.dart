@@ -150,6 +150,7 @@ class _FakeProviderRuntimeClient extends ProviderSetupClient {
   Future<Map<String, dynamic>> testInstanceConnection({
     required String providerInstanceId,
     DeviceConfig? agent,
+    bool probe = true,
   }) => throw UnimplementedError();
 
   @override

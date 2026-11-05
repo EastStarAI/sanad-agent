@@ -407,13 +407,26 @@ class CliProviderSetup {
         final result = await _s.verifier.verify(fresh.id);
         if (result.success) {
           final latency = result.probeLatency;
-          final probe = result.model == null
-              ? ''
-              : latency == null
-              ? ' (${result.model} replied)'
-              : ' (${result.model} replied in '
-                    '${(latency.inMilliseconds / 1000).toStringAsFixed(1)} s)';
-          print('\n✓ Works: ${result.modelsCount} models$probe');
+          if (result.probeState == ProbeState.passed) {
+            final probe = latency == null
+                ? ' (${result.model} replied)'
+                : ' (${result.model} replied in '
+                      '${(latency.inMilliseconds / 1000).toStringAsFixed(1)} s)';
+            print('\n✓ Works: ${result.modelsCount} models$probe');
+          } else if (result.probeState == ProbeState.skipped) {
+            print(
+              '\n✓ Key accepted: ${result.modelsCount} models. '
+              'Choose a model to run a generation check.',
+            );
+          } else {
+            final warning = result.warning;
+            print(
+              '\n⚠ Key accepted: ${result.modelsCount} models, but the '
+              'generation check did not prove '
+              '${warning?.model ?? result.model}: '
+              '${warning?.cause.summary ?? 'unknown cause'}',
+            );
+          }
         } else {
           print(
             '\n❌ Connection test failed: '

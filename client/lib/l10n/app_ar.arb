@@ -686,5 +686,11 @@
   "providerDiscoveryEndpoint": "نقطة النهاية: {endpoint}",
   "providerModelCacheUnverified": "قائمة احتياطية غير مُتحقَّق منها: هذه النماذج من قوالب مدمجة وليست من المزوّد.",
   "providerTestWorks": "يعمل: تم سرد {models} نموذجًا.",
-  "providerTestWorksWithProbe": "يعمل: {models} نموذجًا، وردّ {model} في {seconds} ثانية."
+  "providerTestWorksWithProbe": "يعمل: {models} نموذجًا، وردّ {model} في {seconds} ثانية.",
+  "providerKeyAcceptedNoModel": "تم قبول المفتاح: {models} نموذجًا. اختر نموذجًا لتشغيل فحص التوليد.",
+  "providerProbeModelRejected": "تم قبول المفتاح، لكن {model} رفض طلب الفحص. بيانات الاعتماد وقائمة النماذج سليمة؛ اختر نموذجًا آخر أو أعد المحاولة بهذا النموذج.",
+  "providerProbeTimedOut": "تم قبول المفتاح: {models} نموذجًا. انتهت مهلة فحص التوليد، وهذا طبيعي لنموذج محلي ما زال قيد التحميل.",
+  "providerProbeNetworkFailed": "تم قبول المفتاح: {models} نموذجًا. تعذّر على فحص التوليد الوصول إلى نقطة النهاية.",
+  "providerProbeRateLimited": "تم قبول المفتاح: {models} نموذجًا. حدّ المزوّد من معدل فحص التوليد؛ أعد المحاولة لاحقًا.",
+  "providerProbeUnknownWarning": "تم قبول المفتاح: {models} نموذجًا. لم يكتمل فحص التوليد."
 }

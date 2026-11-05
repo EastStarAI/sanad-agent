@@ -555,21 +555,19 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     );
   }
 
-  /// Runs the canonical connection verification for [instance], records its
-  /// typed outcome, and reports whether it failed.
-  ///
-  /// Verification lives in the daemon (`provider.instance.test`): a verified
-  /// live model list plus one minimal generation probe. The Client never
-  /// presents a preset/fallback list as if the credential worked.
+  /// Setup-gate verification: discovery only, blocking exclusively on a
+  /// definitive failure. A probe cannot prove a credential, so it never runs
+  /// here and can never reject a valid key (issue 339 review).
   Future<bool> _verifyConnection(ProviderInstanceDto instance) async {
     final result = ProviderInstanceTestResultDto.fromJson(
       await _client.testInstanceConnection(
         providerInstanceId: instance.id,
         agent: agent,
+        probe: false,
       ),
     );
     _recordInstanceTest(instance.id, result);
-    return !result.success;
+    return result.failure?.definitive ?? false;
   }
 
   void _recordInstanceTest(

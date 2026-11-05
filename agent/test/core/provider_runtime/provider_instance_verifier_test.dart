@@ -1,8 +1,12 @@
-// Issue 339: `provider.instance.test` must prove the credential, not merely
-// that `/models` answered. These suites exercise the two-stage verification
-// (live discovery + one minimal generation probe) against fakes only.
+// Issue 339: `provider.instance.test` proves the credential with a live
+// discovery. The optional generation probe adds route proof for the *selected*
+// model and must never reject a valid credential, so its failures are warnings
+// unless they are an outright credential rejection.
+//
+// Fakes only: no test reaches a real provider endpoint.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:sanad_agent/core/agent_runtime_service.dart';
@@ -35,14 +39,18 @@ class _ScriptedAdapter implements LLMAdapter {
     this.models = const ['gpt-4o'],
     this.generationError,
     this.discoveryError,
+    this.generationDelay,
     this.hang = false,
   });
 
   final List<String> models;
   final Object? generationError;
   final Object? discoveryError;
+  final Duration? generationDelay;
   final bool hang;
   int generationCalls = 0;
+  String? lastGenerationModel;
+  LLMRequestOptions? lastGenerationOptions;
 
   @override
   Future<List<ModelOption>> getAvailableModels() async {
@@ -58,7 +66,10 @@ class _ScriptedAdapter implements LLMAdapter {
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
     generationCalls++;
+    lastGenerationModel = modelOverride;
+    lastGenerationOptions = options;
     if (hang) await Completer<AgentResponse>().future;
+    if (generationDelay != null) await Future<void>.delayed(generationDelay!);
     if (generationError != null) throw generationError!;
     return AgentResponse(
       message: Message(role: MessageRole.assistant, content: 'OK'),
@@ -87,6 +98,20 @@ class _FakeRuntime extends AgentRuntimeService {
   LLMAdapter adapterFor(RouteSignature signature) => adapter;
 }
 
+/// Builds an HTTP response carrying the provider's rejection body and the
+/// credential-bearing header the transport keeps.
+http.Response _response(int status, String body) => http.Response(
+  body,
+  status,
+  headers: {'x-api-key': _secret},
+);
+
+LlmHttpException _http(int status, [String body = '']) =>
+    LlmHttpException.fromResponse(
+      _response(status, body),
+      operation: 'chat',
+    );
+
 void main() {
   late AgentStateDatabase state;
   late ProviderInstanceRepository repo;
@@ -95,8 +120,6 @@ void main() {
   late MemoryProviderSecretStore secrets;
   late _ScriptedAdapter adapter;
   late Config config;
-  late ProviderModelCacheService cache;
-  late ProviderInstanceVerifier verifier;
 
   setUp(() {
     state = AgentStateDatabase.inMemory();
@@ -106,29 +129,39 @@ void main() {
     credentials = ProviderCredentialService(repo, secrets);
     adapter = _ScriptedAdapter();
     config = Config(environment: {'OPENAI_API_KEY': _secret});
-    cache = ProviderModelCacheService(
-      repo,
-      _FakeRuntime(config, repo, adapter),
-      buildDefaultThinkingCapabilityAssembler(),
-    );
-    verifier = ProviderInstanceVerifier(
-      cache: cache,
-      repository: repo,
-      instances: instances,
-      credentials: credentials,
-      runtime: _FakeRuntime(config, repo, adapter),
-      probeTimeout: const Duration(milliseconds: 200),
-    );
   });
 
   tearDown(() {
     state.dispose();
   });
 
+  ProviderInstanceVerifier buildVerifier({
+    Duration probeTimeout = const Duration(milliseconds: 200),
+    Duration localProbeTimeout = const Duration(seconds: 1),
+    bool probeEnabled = true,
+    bool withRuntime = true,
+  }) {
+    final runtime = _FakeRuntime(config, repo, adapter);
+    return ProviderInstanceVerifier(
+      cache: ProviderModelCacheService(
+        repo,
+        runtime,
+        buildDefaultThinkingCapabilityAssembler(),
+      ),
+      repository: repo,
+      instances: instances,
+      credentials: credentials,
+      runtime: withRuntime ? runtime : null,
+      probeEnabled: probeEnabled,
+      probeTimeout: probeTimeout,
+      localProbeTimeout: localProbeTimeout,
+    );
+  }
+
   ProviderInstance createInstance({
+    String templateId = 'custom',
     String? baseUrl = 'https://gateway.example/v1',
     String? defaultModel = 'gpt-4o',
-    String templateId = 'custom',
   }) {
     final instance = ProviderInstance(
       id: 'inst-verify',
@@ -145,206 +178,331 @@ void main() {
     return instance;
   }
 
-  Future<void> storeCredential() => credentials.applyApiKeyEdit(
-    'inst-verify',
-    action: 'replace',
-    newApiKey: _secret,
-  );
+  Future<void> storeCredential() =>
+      credentials.applyApiKeyEdit('inst-verify', action: 'replace', newApiKey: _secret);
 
-  Future<void> expectStatus(String status) async {
-    expect(repo.findById('inst-verify')!.status, status);
-  }
+  String status() => repo.findById('inst-verify')!.status;
 
-  group('two-stage verification', () {
+  group('setup gate is discovery-only', () {
+    test('a valid key whose first model is not a chat model passes setup', () async {
+      // OpenAI-style catalogs list embeddings, audio and TTS entries first.
+      adapter = _ScriptedAdapter(
+        models: const [
+          'text-embedding-3-large',
+          'whisper-1',
+          'gpt-4o',
+        ],
+      );
+      createInstance(defaultModel: null);
+      await storeCredential();
+
+      final result = await buildVerifier().verify('inst-verify', probe: false);
+
+      expect(result.success, isTrue);
+      expect(result.modelsCount, 3);
+      expect(result.probeState, ProbeState.notRun);
+      expect(result.failure, isNull);
+      expect(result.warning, isNull);
+      // No generation request was ever made.
+      expect(adapter.generationCalls, 0);
+      // A confirmed credential without a model is not usable yet.
+      expect(status(), InstanceStatus.draft);
+    });
+
+    test('setup never probes even when a model is selected', () async {
+      createInstance();
+      await storeCredential();
+
+      final result = await buildVerifier().verify('inst-verify', probe: false);
+
+      expect(result.success, isTrue);
+      expect(result.probeState, ProbeState.notRun);
+      expect(adapter.generationCalls, 0);
+      expect(result.toMap()['probe_state'], ProbeState.notRun);
+    });
+
+    test('a definitive discovery failure blocks setup', () async {
+      adapter = _ScriptedAdapter(
+        discoveryError: _http(401, '{"error":{"message":"bad key $_secret"}}'),
+      );
+      createInstance();
+      await storeCredential();
+
+      final result = await buildVerifier().verify('inst-verify', probe: false);
+
+      expect(result.success, isFalse);
+      expect(result.failure!.kind, ProviderFailureCategory.invalidCredential);
+      expect(result.failure!.isDefinitive, isTrue);
+      expect(result.toMap()['failure'], containsPair('definitive', true));
+      expect(adapter.generationCalls, 0);
+      expect(status(), InstanceStatus.needsAuth);
+    });
+
+    test('a transient discovery failure does not block setup', () async {
+      adapter = _ScriptedAdapter(discoveryError: _http(503));
+      createInstance();
+      await storeCredential();
+
+      final result = await buildVerifier().verify('inst-verify', probe: false);
+
+      // The setup gate sees a failure, but it is not definitive: the client
+      // keeps going instead of rejecting a possibly valid credential.
+      expect(result.success, isFalse);
+      expect(result.failure!.isDefinitive, isFalse);
+      expect(status(), InstanceStatus.error);
+    });
+  });
+
+  group('generation probe', () {
     test('a working credential passes discovery and the probe', () async {
       createInstance();
       await storeCredential();
 
-      final result = await verifier.verify('inst-verify');
+      final result = await buildVerifier().verify('inst-verify');
 
       expect(result.success, isTrue);
       expect(result.modelsCount, 1);
       expect(result.model, 'gpt-4o');
+      expect(result.probeState, ProbeState.passed);
       expect(result.failure, isNull);
+      expect(result.warning, isNull);
       expect(result.probeLatency, isNotNull);
       expect(adapter.generationCalls, 1);
-      await expectStatus(InstanceStatus.ready);
+      expect(adapter.lastGenerationModel, 'gpt-4o');
+      expect(status(), InstanceStatus.ready);
 
       final payload = result.toMap();
       expect(payload['success'], isTrue);
       expect(payload['models_count'], 1);
+      expect(payload['probe_state'], ProbeState.passed);
       expect(payload['latency_ms'], isA<int>());
       expect(payload.containsKey('failure'), isFalse);
+      expect(payload.containsKey('warning'), isFalse);
     });
 
-    test('a rejected key fails discovery, never probes, and marks needs_auth', () async {
-      createInstance();
+    test('no selected model skips the probe and reports the partial state', () async {
+      createInstance(defaultModel: null);
       await storeCredential();
-      adapter = _ScriptedAdapter(
-        discoveryError: LlmHttpException.fromResponse(
-          _response(
-            401,
-            '{"error":{"message":"Invalid credential for $_secret"}}',
-          ),
-          operation: 'getAvailableModels',
-        ),
-      );
-      verifier = ProviderInstanceVerifier(
-        cache: ProviderModelCacheService(
-          repo,
-          _FakeRuntime(config, repo, adapter),
-          buildDefaultThinkingCapabilityAssembler(),
-        ),
-        repository: repo,
-        instances: instances,
-        credentials: credentials,
-        runtime: _FakeRuntime(config, repo, adapter),
-      );
 
-      final result = await verifier.verify('inst-verify');
+      final result = await buildVerifier().verify('inst-verify');
 
-      expect(result.success, isFalse);
-      expect(result.failure!.kind, ProviderFailureCategory.invalidCredential);
-      expect(result.failure!.statusCode, 401);
-      expect(result.failure!.endpoint, 'https://gateway.example/v1/models');
-      expect(result.failure!.summary.contains(_secret), isFalse);
+      expect(result.success, isTrue);
+      expect(result.modelsCount, 1);
+      expect(result.probeState, ProbeState.skipped);
+      expect(result.model, isNull);
+      expect(result.probeLatency, isNull);
+      expect(result.failure, isNull);
+      expect(result.warning, isNull);
       expect(adapter.generationCalls, 0);
-      await expectStatus(InstanceStatus.needsAuth);
+      // A confirmed credential without a model is not usable yet.
+      expect(status(), InstanceStatus.draft);
+      expect(result.toMap()['probe_state'], ProbeState.skipped);
     });
 
-    test('a key that lists models but cannot generate is rejected by the probe', () async {
+    test('the probe uses only the selected model, never a list entry', () async {
+      adapter = _ScriptedAdapter(
+        models: const ['text-embedding-3-large', 'gpt-4o', 'gpt-4o-mini'],
+      );
+      createInstance(defaultModel: 'gpt-4o-mini');
+      await storeCredential();
+
+      final result = await buildVerifier().verify('inst-verify');
+
+      expect(result.probeState, ProbeState.passed);
+      expect(adapter.lastGenerationModel, 'gpt-4o-mini');
+    });
+
+    test('a probe 401 is definitive and marks needs_auth', () async {
+      adapter = _ScriptedAdapter(
+        generationError: _http(401, '{"error":{"message":"bad key $_secret"}}'),
+      );
       createInstance();
       await storeCredential();
-      adapter = _ScriptedAdapter(
-        generationError: LlmHttpException.fromResponse(
-          _response(401, '{"error":{"message":"bad key $_secret"}}'),
-          operation: 'chat',
-        ),
-      );
-      verifier = ProviderInstanceVerifier(
-        cache: ProviderModelCacheService(
-          repo,
-          _FakeRuntime(config, repo, adapter),
-          buildDefaultThinkingCapabilityAssembler(),
-        ),
-        repository: repo,
-        instances: instances,
-        credentials: credentials,
-        runtime: _FakeRuntime(config, repo, adapter),
-      );
 
-      final result = await verifier.verify('inst-verify');
+      final result = await buildVerifier().verify('inst-verify');
 
       expect(result.success, isFalse);
       expect(result.modelsCount, 1);
       expect(result.model, 'gpt-4o');
+      expect(result.probeState, ProbeState.failed);
       expect(result.failure!.kind, ProviderFailureCategory.invalidCredential);
       expect(
         result.failure!.endpoint,
         'https://gateway.example/v1/chat/completions',
       );
       expect(adapter.generationCalls, 1);
-      await expectStatus(InstanceStatus.needsAuth);
+      expect(status(), InstanceStatus.needsAuth);
     });
 
-    test('a probe timeout is reported as a timeout and keeps draft', () async {
+    test('a probe 400 is a warning and leaves the status alone', () async {
+      adapter = _ScriptedAdapter(generationError: _http(400));
       createInstance();
       await storeCredential();
+      // The credential already proved itself: the instance is ready.
+      instances.markReady('inst-verify');
+
+      final result = await buildVerifier().verify('inst-verify');
+
+      expect(result.success, isTrue);
+      expect(result.probeState, ProbeState.warning);
+      expect(result.failure, isNull);
+      expect(result.warning!.kind, ProbeWarning.modelRejected);
+      expect(result.warning!.model, 'gpt-4o');
+      expect(result.warning!.cause.statusCode, 400);
+      expect(status(), InstanceStatus.ready);
+      expect(result.toMap()['warning'], containsPair('kind', 'model_rejected'));
+    });
+
+    test('a probe 404 keeps the instance ready', () async {
+      adapter = _ScriptedAdapter(generationError: _http(404));
+      createInstance();
+      await storeCredential();
+      instances.markReady('inst-verify');
+
+      final result = await buildVerifier().verify('inst-verify');
+
+      expect(result.probeState, ProbeState.warning);
+      expect(result.warning!.kind, ProbeWarning.modelRejected);
+      expect(status(), InstanceStatus.ready);
+    });
+
+    test('a probe 429 is a rate-limit warning', () async {
+      adapter = _ScriptedAdapter(generationError: _http(429));
+      createInstance();
+      await storeCredential();
+      instances.markReady('inst-verify');
+
+      final result = await buildVerifier().verify('inst-verify');
+
+      expect(result.probeState, ProbeState.warning);
+      expect(result.warning!.kind, ProbeWarning.rateLimited);
+      expect(status(), InstanceStatus.ready);
+    });
+
+    test('a probe 5xx is a warning, never needs_auth', () async {
+      adapter = _ScriptedAdapter(generationError: _http(503));
+      createInstance();
+      await storeCredential();
+      instances.markReady('inst-verify');
+
+      final result = await buildVerifier().verify('inst-verify');
+
+      expect(result.probeState, ProbeState.warning);
+      expect(result.warning!.kind, ProbeWarning.unknown);
+      expect(status(), InstanceStatus.ready);
+    });
+
+    test('a probe timeout is a warning and keeps readiness', () async {
       adapter = _ScriptedAdapter(hang: true);
-      verifier = ProviderInstanceVerifier(
-        cache: ProviderModelCacheService(
-          repo,
-          _FakeRuntime(config, repo, adapter),
-          buildDefaultThinkingCapabilityAssembler(),
-        ),
-        repository: repo,
-        instances: instances,
-        credentials: credentials,
-        runtime: _FakeRuntime(config, repo, adapter),
-        probeTimeout: const Duration(milliseconds: 30),
-      );
-
-      final result = await verifier.verify('inst-verify');
-
-      expect(result.success, isFalse);
-      expect(result.failure!.kind, ProviderFailureCategory.timeout);
-      await expectStatus(InstanceStatus.draft);
-    });
-
-    test('a server-side probe failure marks error', () async {
       createInstance();
       await storeCredential();
+      instances.markReady('inst-verify');
+
+      final result = await buildVerifier(
+        probeTimeout: const Duration(milliseconds: 30),
+      ).verify('inst-verify');
+
+      expect(result.success, isTrue);
+      expect(result.probeState, ProbeState.warning);
+      expect(result.warning!.kind, ProbeWarning.timeout);
+      expect(status(), InstanceStatus.ready);
+    });
+
+    test('a probe network failure is a warning', () async {
       adapter = _ScriptedAdapter(
-        generationError: LlmHttpException.fromResponse(
-          _response(503, ''),
-          operation: 'chat',
-        ),
+        generationError: const SocketException('Network unreachable'),
       );
-      verifier = ProviderInstanceVerifier(
-        cache: ProviderModelCacheService(
-          repo,
-          _FakeRuntime(config, repo, adapter),
-          buildDefaultThinkingCapabilityAssembler(),
-        ),
-        repository: repo,
-        instances: instances,
-        credentials: credentials,
-        runtime: _FakeRuntime(config, repo, adapter),
+      createInstance();
+      await storeCredential();
+
+      final result = await buildVerifier().verify('inst-verify');
+
+      expect(result.probeState, ProbeState.warning);
+      expect(result.warning!.kind, ProbeWarning.network);
+    });
+
+    test('the probe passes its output bound through the adapter options', () async {
+      createInstance(templateId: 'openai');
+      await storeCredential();
+
+      await buildVerifier().verify('inst-verify');
+
+      // Adapters translate the bound onto their own wire field; the verifier
+      // never writes a wire parameter itself.
+      expect(adapter.lastGenerationOptions?.maxOutputTokens, 1);
+      expect(
+        adapter.lastGenerationOptions?.timeout,
+        const Duration(milliseconds: 200),
       );
-
-      final result = await verifier.verify('inst-verify');
-
-      expect(result.failure!.kind, ProviderFailureCategory.serverError);
-      await expectStatus(InstanceStatus.error);
     });
 
     test('an unavailable runtime verifies discovery only', () async {
       createInstance();
       await storeCredential();
-      final discoveryOnly = ProviderInstanceVerifier(
-        cache: cache,
-        repository: repo,
-        instances: instances,
-        credentials: credentials,
-        probeEnabled: false,
-      );
 
-      final result = await discoveryOnly.verify('inst-verify');
+      final result = await buildVerifier(withRuntime: false).verify('inst-verify');
 
       expect(result.success, isTrue);
-      expect(result.modelsCount, 1);
+      expect(result.probeState, ProbeState.notRun);
       expect(result.probeLatency, isNull);
       expect(adapter.generationCalls, 0);
-      await expectStatus(InstanceStatus.ready);
+      expect(status(), InstanceStatus.ready);
     });
 
     test('an empty model list fails without probing', () async {
-      createInstance();
       adapter = _ScriptedAdapter(models: const []);
-      final emptyList = ProviderInstanceVerifier(
-        cache: ProviderModelCacheService(
-          repo,
-          _FakeRuntime(config, repo, adapter),
-          buildDefaultThinkingCapabilityAssembler(),
-        ),
-        repository: repo,
-        instances: instances,
-        credentials: credentials,
-        runtime: _FakeRuntime(config, repo, adapter),
-      );
+      createInstance(defaultModel: null);
 
-      final result = await emptyList.verify('inst-verify');
+      final result = await buildVerifier().verify('inst-verify');
 
       expect(result.success, isFalse);
       expect(result.failure!.kind, ProviderFailureCategory.noModels);
       expect(adapter.generationCalls, 0);
     });
+  });
 
+  group('local engine probe budget', () {
+    test('a slow local model passes inside the local budget', () async {
+      adapter = _ScriptedAdapter(generationDelay: const Duration(milliseconds: 80));
+      // `ollama` is a local template (optional API key) that may cold-load.
+      createInstance(templateId: 'ollama', baseUrl: 'http://localhost:11434/v1');
+      await storeCredential();
+
+      final result = await buildVerifier(
+        probeTimeout: const Duration(milliseconds: 20),
+        localProbeTimeout: const Duration(seconds: 2),
+      ).verify('inst-verify');
+
+      expect(result.probeState, ProbeState.passed);
+      expect(adapter.lastGenerationOptions?.timeout, const Duration(seconds: 2));
+    });
+
+    test('the same delay on a hosted provider times out as a warning', () async {
+      adapter = _ScriptedAdapter(generationDelay: const Duration(milliseconds: 80));
+      createInstance(templateId: 'openai');
+      await storeCredential();
+
+      final result = await buildVerifier(
+        probeTimeout: const Duration(milliseconds: 20),
+        localProbeTimeout: const Duration(seconds: 2),
+      ).verify('inst-verify');
+
+      expect(result.probeState, ProbeState.warning);
+      expect(result.warning!.kind, ProbeWarning.timeout);
+      expect(
+        adapter.lastGenerationOptions?.timeout,
+        const Duration(milliseconds: 20),
+      );
+    });
+  });
+
+  group('instance identity and status', () {
     test('an unknown instance is a contained failure', () async {
-      final result = await verifier.verify('missing-id');
+      final result = await buildVerifier().verify('missing-id');
 
       expect(result.success, isFalse);
       expect(result.modelsCount, 0);
+      expect(result.probeState, ProbeState.notRun);
       expect(result.failure!.kind, ProviderFailureCategory.unknown);
       expect(result.failure!.message, 'Provider instance not found');
       expect(result.toMap()['message'], 'Provider instance not found');
@@ -362,59 +520,35 @@ void main() {
         ),
         credentialConfigured: true,
       );
-      await expectStatus(InstanceStatus.needsAuth);
+      expect(status(), InstanceStatus.needsAuth);
 
-      final result = await verifier.verify('inst-verify');
-
-      expect(result.success, isTrue);
-      await expectStatus(InstanceStatus.ready);
-    });
-
-    test('the probe prefers the instance default model', () async {
-      createInstance(defaultModel: 'gpt-4o-mini');
-      adapter = _ScriptedAdapter(models: const ['gpt-4o', 'gpt-4o-mini']);
-      final preferred = ProviderInstanceVerifier(
-        cache: ProviderModelCacheService(
-          repo,
-          _FakeRuntime(config, repo, adapter),
-          buildDefaultThinkingCapabilityAssembler(),
-        ),
-        repository: repo,
-        instances: instances,
-        credentials: credentials,
-        runtime: _FakeRuntime(config, repo, adapter),
-      );
-
-      final result = await preferred.verify('inst-verify');
+      final result = await buildVerifier().verify('inst-verify');
 
       expect(result.success, isTrue);
-      expect(result.model, 'gpt-4o-mini');
+      expect(status(), InstanceStatus.ready);
     });
 
     test('discovery noise never depends on the credential value', () async {
       createInstance();
       await storeCredential();
-      await verifier.verify('inst-verify');
+      await buildVerifier().verify('inst-verify');
 
-      // The stored secret is never part of the instance projection.
       expect(
         repo.readModelCache('inst-verify', 'models').toString().contains(_secret),
         isFalse,
       );
     });
-  });
 
-  group('status mapping', () {
-    String statusFor(String kind, {int? statusCode}) =>
-        ProviderInstanceService.statusForFailure(
-          ProviderDiscoveryError(
-            kind: kind,
-            statusCode: statusCode,
-            message: 'x',
-          ),
-        );
+    test('status mapping follows the failure category', () {
+      String statusFor(String kind, {int? statusCode}) =>
+          ProviderInstanceService.statusForFailure(
+            ProviderDiscoveryError(
+              kind: kind,
+              statusCode: statusCode,
+              message: 'x',
+            ),
+          );
 
-    test('a rejected credential is needs_auth', () {
       expect(
         statusFor(ProviderFailureCategory.invalidCredential, statusCode: 401),
         InstanceStatus.needsAuth,
@@ -423,9 +557,6 @@ void main() {
         statusFor(ProviderFailureCategory.forbidden, statusCode: 403),
         InstanceStatus.needsAuth,
       );
-    });
-
-    test('definitive endpoint failures are error', () {
       for (final kind in [
         ProviderFailureCategory.endpointNotFound,
         ProviderFailureCategory.rateLimited,
@@ -434,9 +565,6 @@ void main() {
       ]) {
         expect(statusFor(kind), InstanceStatus.error, reason: kind);
       }
-    });
-
-    test('unproven failures keep draft', () {
       for (final kind in [
         ProviderFailureCategory.network,
         ProviderFailureCategory.timeout,
@@ -446,13 +574,47 @@ void main() {
         expect(statusFor(kind), InstanceStatus.draft, reason: kind);
       }
     });
+
+    test('definitiveness is narrower than the status mapping', () {
+      expect(
+        const ProviderDiscoveryError(
+          kind: ProviderFailureCategory.invalidCredential,
+          statusCode: 401,
+          message: 'x',
+        ).isDefinitive,
+        isTrue,
+      );
+      expect(
+        const ProviderDiscoveryError(
+          kind: ProviderFailureCategory.endpointNotFound,
+          statusCode: 404,
+          message: 'x',
+        ).isDefinitive,
+        isTrue,
+      );
+      expect(
+        const ProviderDiscoveryError(
+          kind: ProviderFailureCategory.rateLimited,
+          statusCode: 429,
+          message: 'x',
+        ).isDefinitive,
+        isFalse,
+      );
+      expect(
+        const ProviderDiscoveryError(
+          kind: ProviderFailureCategory.serverError,
+          statusCode: 503,
+          message: 'x',
+        ).isDefinitive,
+        isFalse,
+      );
+      expect(
+        const ProviderDiscoveryError(
+          kind: ProviderFailureCategory.timeout,
+          message: 'x',
+        ).isDefinitive,
+        isFalse,
+      );
+    });
   });
 }
-
-/// Builds an HTTP response carrying the provider's rejection body and the
-/// credential-bearing header the transport keeps.
-http.Response _response(int status, String body) => http.Response(
-  body,
-  status,
-  headers: {'x-api-key': _secret},
-);

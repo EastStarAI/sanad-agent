@@ -5,9 +5,14 @@ import 'package:sanad_client/l10n/app_localizations.dart';
 
 /// Renders one connection-test outcome on the instance card (issue 339).
 ///
-/// A pass names what was proven — the verified model count and the generation
-/// probe's model and round-trip time. A failure renders the same localized
-/// category message every other provider surface uses.
+/// Four distinct shapes, because they mean different things:
+/// - the probe ran and answered: what was proven, with the round-trip time;
+/// - the credential listed models but no model is selected yet: a partial
+///   success that asks for a model;
+/// - the probe could not prove the selected model: a warning that never implies
+///   a rejected credential;
+/// - a definitive failure: the same localized category message every other
+///   provider surface uses.
 class ProviderInstanceTestNotice extends StatelessWidget {
   final String instanceId;
   final ProviderInstanceTestResultDto result;
@@ -22,23 +27,16 @@ class ProviderInstanceTestNotice extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     if (result.success) {
-      final l10n = AppLocalizations.of(context)!;
-      final seconds = result.latencySeconds;
-      final summary = seconds == null
-          ? l10n.providerTestWorks(result.modelsCount)
-          : l10n.providerTestWorksWithProbe(
-              result.modelsCount,
-              result.model ?? '',
-              seconds,
-            );
       return Padding(
         key: Key('provider_test_result_$instanceId'),
         padding: const EdgeInsets.only(top: 8),
         child: Text(
-          summary,
-          style: const TextStyle(
+          _successSummary(AppLocalizations.of(context)!),
+          style: TextStyle(
             fontSize: 12,
-            color: Colors.green,
+            color: result.probeWarned
+                ? theme.colorScheme.onSurfaceVariant
+                : Colors.green,
             height: 1.35,
           ),
         ),
@@ -56,9 +54,42 @@ class ProviderInstanceTestNotice extends StatelessWidget {
         ),
       );
     }
-    return ProviderDiscoveryNotice(
-      instanceId: instanceId,
-      error: failure,
-    );
+    return ProviderDiscoveryNotice(instanceId: instanceId, error: failure);
+  }
+
+  String _successSummary(AppLocalizations l10n) {
+    if (result.probePassed) {
+      final seconds = result.latencySeconds;
+      return seconds == null
+          ? l10n.providerTestWorks(result.modelsCount)
+          : l10n.providerTestWorksWithProbe(
+              result.modelsCount,
+              result.model ?? '',
+              seconds,
+            );
+    }
+    if (result.probeWarned) {
+      final warning = result.warning;
+      if (warning == null) {
+        return l10n.providerProbeUnknownWarning(result.modelsCount);
+      }
+      switch (warning.kind) {
+        case 'model_rejected':
+          return l10n.providerProbeModelRejected(
+            result.modelsCount,
+            warning.model ?? result.model ?? '',
+          );
+        case 'timeout':
+          return l10n.providerProbeTimedOut(result.modelsCount);
+        case 'network':
+          return l10n.providerProbeNetworkFailed(result.modelsCount);
+        case 'rate_limited':
+          return l10n.providerProbeRateLimited(result.modelsCount);
+        default:
+          return l10n.providerProbeUnknownWarning(result.modelsCount);
+      }
+    }
+    // `skipped`: the key listed models but no model is selected to probe.
+    return l10n.providerKeyAcceptedNoModel(result.modelsCount);
   }
 }

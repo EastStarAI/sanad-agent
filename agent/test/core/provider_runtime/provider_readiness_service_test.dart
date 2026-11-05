@@ -205,6 +205,7 @@ void main() {
       'status_code': 401,
       'message': 'Invalid credential (HTTP 401)',
       'endpoint': 'https://opencode.ai/zen/go/v1/models',
+      'definitive': true,
     });
     expect(result.reason!.contains(secret), isFalse);
   });

@@ -24,13 +24,39 @@ Future<AppLocalizations> _l10nFor(String locale) =>
 const _pass = ProviderInstanceTestResultDto(
   success: true,
   modelsCount: 12,
+  probeState: 'passed',
   model: 'gpt-4o',
   latencyMs: 840,
+);
+
+const _partial = ProviderInstanceTestResultDto(
+  success: true,
+  modelsCount: 12,
+  probeState: 'skipped',
+);
+
+const _warning = ProviderInstanceTestResultDto(
+  success: true,
+  modelsCount: 12,
+  probeState: 'warning',
+  model: 'gpt-4o',
+  warning: ProviderProbeWarningDto(
+    kind: 'model_rejected',
+    model: 'gpt-4o',
+    cause: ProviderDiscoveryErrorDto(
+      kind: 'http',
+      statusCode: 400,
+      message: 'Provider rejected the request (HTTP 400)',
+      endpoint: 'https://opencode.ai/zen/go/v1/chat/completions',
+    ),
+  ),
 );
 
 const _rejected = ProviderInstanceTestResultDto(
   success: false,
   modelsCount: 0,
+  probeState: 'failed',
+  model: 'gpt-4o',
   failure: ProviderDiscoveryErrorDto(
     kind: 'invalid_credential',
     statusCode: 401,
@@ -65,6 +91,48 @@ void main() {
     expect(
       find.text(ar.providerTestWorksWithProbe(12, 'gpt-4o', '0.8')),
       isNot(find.text(en.providerTestWorksWithProbe(12, 'gpt-4o', '0.8'))),
+    );
+  });
+
+  testWidgets('a key with no selected model reports the partial state', (
+    tester,
+  ) async {
+    final l10n = await _l10nFor('en');
+    await tester.pumpWidget(_host(_partial));
+
+    expect(find.text(l10n.providerKeyAcceptedNoModel(12)), findsOneWidget);
+    // Nothing claims a generation check ran.
+    expect(find.text(l10n.providerTestWorks(12)), findsNothing);
+  });
+
+  testWidgets('the partial state is localized in Arabic', (tester) async {
+    final ar = await _l10nFor('ar');
+    await tester.pumpWidget(_host(_partial, locale: 'ar'));
+
+    expect(find.text(ar.providerKeyAcceptedNoModel(12)), findsOneWidget);
+  });
+
+  testWidgets('a model that rejects the probe is a warning, not a failure', (
+    tester,
+  ) async {
+    final l10n = await _l10nFor('en');
+    await tester.pumpWidget(_host(_warning));
+
+    expect(
+      find.text(l10n.providerProbeModelRejected(12, 'gpt-4o')),
+      findsOneWidget,
+    );
+    // No credential-rejection copy anywhere.
+    expect(find.text(l10n.providerDiscoveryInvalidCredential), findsNothing);
+  });
+
+  testWidgets('the probe warning is localized in Arabic', (tester) async {
+    final ar = await _l10nFor('ar');
+    await tester.pumpWidget(_host(_warning, locale: 'ar'));
+
+    expect(
+      find.text(ar.providerProbeModelRejected(12, 'gpt-4o')),
+      findsOneWidget,
     );
   });
 

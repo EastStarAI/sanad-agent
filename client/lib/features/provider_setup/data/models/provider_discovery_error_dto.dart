@@ -1,4 +1,4 @@
-/// Sanitized cause of a provider's last failed model discovery.
+/// Sanitized cause of a provider's last failed model discovery or connection.
 ///
 /// The daemon owns classification and sanitization (issue 339): the Client only
 /// renders [kind], [statusCode], and [endpoint], and never expects a provider
@@ -15,11 +15,16 @@ class ProviderDiscoveryErrorDto {
   /// `scheme://host[:port]/path` of the probed models endpoint.
   final String? endpoint;
 
+  /// Whether the daemon considers this failure proof that the credential or the
+  /// endpoint is wrong. Only a definitive failure may block setup.
+  final bool definitive;
+
   const ProviderDiscoveryErrorDto({
     required this.kind,
     this.statusCode,
     this.message,
     this.endpoint,
+    this.definitive = true,
   });
 
   bool get isAuthFailure => kind == 'auth';
@@ -34,6 +39,7 @@ class ProviderDiscoveryErrorDto {
       statusCode: (json['status_code'] as num?)?.toInt(),
       message: json['message']?.toString(),
       endpoint: json['endpoint']?.toString(),
+      definitive: json['definitive'] as bool? ?? true,
     );
   }
 
@@ -42,6 +48,7 @@ class ProviderDiscoveryErrorDto {
     if (statusCode != null) 'status_code': statusCode,
     if (message != null) 'message': message,
     if (endpoint != null) 'endpoint': endpoint,
+    'definitive': definitive,
   };
 
   @override
@@ -50,10 +57,12 @@ class ProviderDiscoveryErrorDto {
       other.kind == kind &&
       other.statusCode == statusCode &&
       other.message == message &&
-      other.endpoint == endpoint;
+      other.endpoint == endpoint &&
+      other.definitive == definitive;
 
   @override
-  int get hashCode => Object.hash(kind, statusCode, message, endpoint);
+  int get hashCode =>
+      Object.hash(kind, statusCode, message, endpoint, definitive);
 }
 
 /// Where an instance's cached model list came from.

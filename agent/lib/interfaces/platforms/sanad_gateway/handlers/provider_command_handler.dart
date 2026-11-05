@@ -314,8 +314,9 @@ class ProviderCommandHandler {
   ) async {
     final requestId = event.payload['request_id'] as String?;
     final instanceId = event.payload['provider_instance_id'] as String? ?? '';
-
-    final verification = await _verifier.verify(instanceId);
+    // Setup gates pass `probe: false`: discovery alone decides, no probe runs.
+    final probe = (event.payload['probe'] as bool?) ?? true;
+    final verification = await _verifier.verify(instanceId, probe: probe);
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
         type: CanonicalEventTypes.providerInstanceTestResult,
@@ -955,11 +956,8 @@ class ProviderCommandHandler {
     );
   }
 
-  /// Instance map every client surface receives.
-  ///
-  /// Credential status and the sanitized model-discovery projection (issue 339)
-  /// travel with the instance so a rejected credential is visible without a
-  /// second round trip.
+  /// Instance map every client surface receives, including the sanitized
+  /// credential and connection projection (issue 339).
   Map<String, dynamic> _projectInstance(
     ProviderInstance instance, {
     bool withCredential = true,

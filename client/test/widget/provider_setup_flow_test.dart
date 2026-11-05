@@ -252,6 +252,7 @@ class _FakeClient extends ProviderSetupClient {
   Future<Map<String, dynamic>> testInstanceConnection({
     required String providerInstanceId,
     DeviceConfig? agent,
+    bool probe = true,
   }) async => const {
     'success': true,
     'models_count': 1,
