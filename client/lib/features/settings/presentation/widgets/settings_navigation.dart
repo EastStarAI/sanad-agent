@@ -77,18 +77,21 @@ class SettingsNavigation extends StatelessWidget {
           NavigationTile(
             icon: Icons.person_outline,
             label: AppLocalizations.of(context)!.profile,
+            navKey: 'profile',
             selected: selectedDestination == SettingsDestination.profile,
             onTap: () => onSelectPersonal(SettingsDestination.profile),
           ),
           NavigationTile(
             icon: Icons.tune,
             label: AppLocalizations.of(context)!.general,
+            navKey: 'general',
             selected: selectedDestination == SettingsDestination.general,
             onTap: () => onSelectPersonal(SettingsDestination.general),
           ),
           NavigationTile(
             icon: Icons.devices_other_outlined,
             label: AppLocalizations.of(context)!.sessionsDevices,
+            navKey: 'sessions_devices',
             selected: selectedDestination == SettingsDestination.sessionsDevices,
             onTap: () => onSelectPersonal(SettingsDestination.sessionsDevices),
           ),
@@ -152,6 +155,7 @@ class SettingsNavigation extends StatelessWidget {
                   key: Key('nav_workspace_${workspace.name}'),
                   icon: Icons.folder_outlined,
                   label: workspace.name,
+                  navKey: 'workspace_${workspace.id}',
                   selected: selectedDestination == SettingsDestination.workspace && workspace.id == selectedWorkspaceId,
                   onTap: () => onSelectWorkspace(workspace),
                 ),
@@ -205,7 +209,7 @@ class NavigationTile extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
-    this.navKey,
+    required this.navKey,
   });
 
   final IconData icon;
@@ -213,12 +217,13 @@ class NavigationTile extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  /// Stable locale-independent identifier for driver/UI automation.
-  final String? navKey;
+  /// Stable locale-independent identifier for driver/UI automation. Required:
+  /// a key must never be derived from a localized label (issue 339 review 2).
+  final String navKey;
 
   @override
   Widget build(BuildContext context) => ListTile(
-    key: Key('nav_tile_${navKey ?? label.toLowerCase().replaceAll(' ', '_')}'),
+    key: Key('nav_tile_$navKey'),
     dense: true,
     selected: selected,
     selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15),

@@ -97,9 +97,16 @@ abstract class ProviderSetupClient {
     DeviceConfig? agent,
   });
 
+  /// Verifies a provider instance's connection.
+  ///
+  /// [probe] runs the optional generation check against the instance's selected
+  /// model. Setup gates pass `false`: discovery alone decides whether the
+  /// credential or endpoint is wrong, so a rejected probe can never block a
+  /// valid setup (issue 339 review).
   Future<Map<String, dynamic>> testInstanceConnection({
     required String providerInstanceId,
     DeviceConfig? agent,
+    bool probe = true,
   });
 
   Future<CredentialSummaryDto> updateCredential({

@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:logging/logging.dart';
 
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_error.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_endpoint_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
@@ -51,6 +54,8 @@ class ProviderModelCacheService {
   final ModelsDevService? _modelsDevService;
   final ConcurrencyLimiter _limiter;
   final Duration _cooldown;
+  final ProviderInstanceService? _instances;
+  final bool Function(String instanceId)? _credentialConfigured;
 
   // Active refreshes map for coalescing
   final Map<String, Future<List<ModelOption>>> _activeRefreshes = {};
@@ -64,10 +69,14 @@ class ProviderModelCacheService {
     this._thinkingAssembler, {
     Config? config,
     ModelsDevService? modelsDevService,
+    ProviderInstanceService? instances,
+    bool Function(String instanceId)? credentialConfigured,
     int maxConcurrency = 3,
     Duration cooldown = const Duration(minutes: 5),
   }) : _config = config,
        _modelsDevService = modelsDevService,
+       _instances = instances,
+       _credentialConfigured = credentialConfigured,
        _limiter = ConcurrencyLimiter(maxConcurrency),
        _cooldown = cooldown;
 
@@ -204,14 +213,25 @@ class ProviderModelCacheService {
       }
 
       String? lastError;
+      ProviderDiscoveryError? discoveryError;
       if (source == 'fallback') {
+        Object? failure;
         if (adapter is BaseOpenAIAdapter) {
-          lastError = adapter.lastModelsException?.toString();
+          failure = adapter.lastModelsException;
         } else if (adapter is BaseAnthropicAdapter) {
-          lastError = adapter.lastModelsException?.toString();
+          failure = adapter.lastModelsException;
         }
-        lastError ??=
-            'Failed to fetch standard models (fell back to local presets).';
+        discoveryError =
+            ProviderDiscoveryError.capture(
+              failure,
+              endpoint: _modelsEndpoint(instance),
+            );
+        if (failure == null) {
+          discoveryError = ProviderDiscoveryError.fallbackPresets(
+            endpoint: _modelsEndpoint(instance),
+          );
+        }
+        lastError = discoveryError.summary;
       }
 
       // Atomic update
@@ -224,15 +244,21 @@ class ProviderModelCacheService {
         configRevision: configRev,
         credentialRevision: credRev,
         lastError: lastError,
+        lastErrorDetail: discoveryError?.toJson(),
       );
 
       _logger.info(
         'Live model cache refresh succeeded for instance $instanceId',
       );
+      _applyDiscoveryOutcome(instanceId, discoveryError);
       _eventController.add(instanceId);
       return enrichedModels;
     } catch (e) {
       _logger.warning('Failed to refresh models for instance $instanceId: $e');
+      final discoveryError = ProviderDiscoveryError.capture(
+        e,
+        endpoint: _modelsEndpoint(instance),
+      );
 
       // Keep previous model ids but mark thinking controls unknown until a live
       // probe succeeds again (Task 43 Gate B).
@@ -259,9 +285,11 @@ class ProviderModelCacheService {
           source: 'cache_stale',
           configRevision: cached['config_revision'] as int? ?? configRev,
           credentialRevision: cached['credential_revision'] as int? ?? credRev,
-          lastError: e.toString(),
+          lastError: discoveryError.summary,
+          lastErrorDetail: discoveryError.toJson(),
         );
 
+        _applyDiscoveryOutcome(instanceId, discoveryError);
         return probeFailedModels;
       }
 
@@ -273,10 +301,62 @@ class ProviderModelCacheService {
         source: 'failed',
         configRevision: configRev,
         credentialRevision: credRev,
-        lastError: e.toString(),
+        lastError: discoveryError.summary,
+        lastErrorDetail: discoveryError.toJson(),
       );
+      _applyDiscoveryOutcome(instanceId, discoveryError);
       rethrow;
     }
+  }
+
+  /// The models endpoint this instance's discovery probes, sanitized later by
+  /// [ProviderDiscoveryError]. An unparseable base URL is not fatal here; the
+  /// discovery failure itself already carries that cause.
+  Uri? _modelsEndpoint(ProviderInstance instance) {
+    final baseUrl = instance.effectiveBaseUrl;
+    if (baseUrl == null || baseUrl.trim().isEmpty) return null;
+    try {
+      return ProviderEndpointResolver.resolveModelsEndpoint(
+        baseUrl,
+        instance.protocol,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Persists the cause of one connection check (discovery or probe) on the
+  /// stored row, so a demotion or a warning is explainable after a restart.
+  ///
+  /// Passing null clears it, which is what a passing probe does. The cached
+  /// models and their verification state are never touched here.
+  void recordVerificationCause(
+    String instanceId,
+    ProviderDiscoveryError? failure,
+  ) {
+    _repo.recordVerificationCause(
+      instanceId: instanceId,
+      cacheKey: 'models',
+      lastError: failure?.summary,
+      lastErrorDetail: failure?.toJson(),
+    );
+  }
+
+  /// Applies the discovery result to the instance lifecycle when the
+  /// composition root wired the owning service (issue 339): a rejected
+  /// credential becomes `needs_auth`, and a verified list returns the instance
+  /// to `ready` even when discovery ran in the background.
+  void _applyDiscoveryOutcome(
+    String instanceId,
+    ProviderDiscoveryError? failure,
+  ) {
+    final instances = _instances;
+    if (instances == null) return;
+    instances.applyConnectionOutcome(
+      instanceId,
+      failure,
+      credentialConfigured: _credentialConfigured?.call(instanceId) ?? true,
+    );
   }
 
   void dispose() {

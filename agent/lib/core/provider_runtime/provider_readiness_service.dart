@@ -1,3 +1,5 @@
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_error.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_projection.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/secret_store.dart';
@@ -20,20 +22,30 @@ class ProviderReadiness {
   /// Why the runtime is not ready, when [runtimeReady] is false.
   final String? reason;
 
+  /// Sanitized cause of the last failed model discovery for the instance this
+  /// readiness verdict is about, when it is the reason the instance is not
+  /// ready (issue 339).
+  final ProviderDiscoveryError? discoveryError;
+
   ProviderReadiness({
     required this.hasProvider,
     required this.runtimeReady,
     this.activeProvider,
     this.activeModel,
     this.reason,
+    this.discoveryError,
   });
 
+  /// Stable wire shape: every additive nullable field is present as null when
+  /// it has no value, so a JSON consumer never guards a missing key
+  /// (issue 339 review 2).
   Map<String, dynamic> toMap() => {
     'has_provider': hasProvider,
     'runtime_ready': runtimeReady,
-    if (activeProvider != null) 'active_provider': activeProvider,
-    if (activeModel != null) 'active_model': activeModel,
-    if (reason != null) 'reason': reason,
+    'active_provider': activeProvider,
+    'active_model': activeModel,
+    'reason': reason,
+    'discovery_error': discoveryError?.toMap(),
   };
 }
 
@@ -76,7 +88,12 @@ class ProviderReadinessService {
       );
     }
     final summary = _secretStore.summary(defaultInst.id);
-    if (defaultInst.status == InstanceStatus.needsAuth ||
+    // The typed projection repairs a legacy row and owns the effective status
+    // for this read, so readiness never reports `runtime_ready` beside a
+    // definitive cause (issue 339 review 3).
+    final discovery = ProviderDiscoveryProjection.of(_repo, defaultInst);
+    final status = discovery.statusOf(defaultInst);
+    if (status == InstanceStatus.needsAuth ||
         summary.status == 'relogin_required') {
       return ProviderReadiness(
         hasProvider: true,
@@ -90,14 +107,26 @@ class ProviderReadinessService {
     }
     return ProviderReadiness(
       hasProvider: true,
-      runtimeReady: defaultInst.status == InstanceStatus.ready,
+      runtimeReady: status == InstanceStatus.ready,
       activeProvider: defaultInst.id,
       activeModel: model,
-      reason: defaultInst.status != InstanceStatus.ready
-          ? 'Instance status: ${defaultInst.status}'
+      reason: status != InstanceStatus.ready
+          ? _incompleteReason(defaultInst)
           : null,
+      discoveryError: status != InstanceStatus.ready ? discovery.error : null,
     );
   }
+
+  /// Why a stored-but-not-ready instance is not ready. A failed model discovery
+  /// names its own sanitized cause instead of exposing the bare status name
+  /// (issue 339), so a rejected credential is distinguishable from an instance
+  /// that was never configured.
+  String _incompleteReason(ProviderInstance instance) =>
+      _discoveryErrorOf(instance)?.summary ??
+      'Instance status: ${instance.status}';
+
+  ProviderDiscoveryError? _discoveryErrorOf(ProviderInstance instance) =>
+      ProviderDiscoveryProjection.of(_repo, instance).error;
 
   /// Deeper runtime check that resolves credentials via SecretStore.
   ProviderReadiness runtimeCheck() {
@@ -139,7 +168,8 @@ class ProviderReadinessService {
         runtimeReady: false,
         activeProvider: inst.id,
         activeModel: setup.activeModel,
-        reason: 'Instance is not ready (status: ${inst.status}).',
+        reason: _incompleteReason(inst),
+        discoveryError: _discoveryErrorOf(inst),
       );
     }
     return ProviderReadiness(

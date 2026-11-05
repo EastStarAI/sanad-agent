@@ -437,6 +437,9 @@ void setupDI() {
       getIt<AgentRuntimeService>(),
       getIt<ThinkingCapabilityAssembler>(),
       config: getIt<Config>(),
+      instances: getIt<ProviderInstanceService>(),
+      credentialConfigured: (instanceId) =>
+          getIt<ProviderCredentialService>().summary(instanceId).configured,
       modelsDevService: getIt.isRegistered<ModelsDevService>()
           ? getIt<ModelsDevService>()
           : null,

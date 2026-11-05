@@ -8,14 +8,13 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_dto.da
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_template_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_instance_test_result_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
+import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_mappers.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
 
 /// Controls the provider setup flow for multi-instance support and cache management.
 class ProviderSetupCubit extends Cubit<ProviderSetupState> {
-  static const _unverifiedApiKeyMessage =
-      'The API key was saved, but its connection could not be verified. Check the key and try again.';
-
   ProviderSetupCubit({
     required ProviderSetupClient client,
     this.agent,
@@ -57,13 +56,8 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     _draftAllowAutoFailover = allowAutoFailover;
   }
 
-  void _clearDraft() {
-    _draftDisplayName = null;
-    _draftBaseUrl = null;
-    _draftApiKey = null;
-    _draftProtocol = null;
-    _draftAllowAutoFailover = null;
-  }
+  void _clearDraft() => _draftDisplayName = _draftBaseUrl = _draftApiKey =
+      _draftProtocol = _draftAllowAutoFailover = null;
 
   void clearError() {
     if (state.error != null) {
@@ -87,10 +81,11 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
       // (Windows provider-list path, plan 97g). Readiness ordering is
       // preserved: the snapshot is emitted only after all three succeed.
       final snapshot = await _loadProviderSnapshot();
-      final targetStatus = _targetStatusFor(
+      final targetStatus = providerSetupStatusFor(
         instances: snapshot.instances,
         readiness: snapshot.readiness,
         forcePicker: forcePicker,
+        showReadyState: showReadyState,
       );
       _emitSnapshot(
         templates: snapshot.templates,
@@ -156,15 +151,32 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     );
   }
 
+  /// Cancels a pending auth session, if any. One owner for the three flows that
+  /// leave an authenticated step.
+  Future<void> _cancelAuthSessionIfAny() async {
+    final sessionId = state.authSession?.sessionId;
+    if (sessionId == null) return;
+    try {
+      await _client.authCancel(sessionId: sessionId, agent: agent);
+    } catch (_) {}
+  }
+
+  /// Leaves the setup flow without deleting the instance it persisted.
+  ///
+  /// A rejected credential keeps the instance in `needs_auth`, so the list — not
+  /// a destructive Discard — must be a valid exit (issue 339 review 2).
+  Future<void> finishSetupKeepingInstance() async {
+    await _cancelAuthSessionIfAny();
+    _clearDraft();
+    emit(state.copyWith(provisionalInstanceId: null, verificationFailure: null));
+    backToInstances();
+    await load();
+  }
+
   Future<void> backToProviderDetails() async {
     _stopPolling();
     _modelDiscoveryGeneration++;
-    final sessionId = state.authSession?.sessionId;
-    if (sessionId != null) {
-      try {
-        await _client.authCancel(sessionId: sessionId, agent: agent);
-      } catch (_) {}
-    }
+    await _cancelAuthSessionIfAny();
     emit(
       state.copyWith(
         status: ProviderSetupStatus.instanceForm,
@@ -180,12 +192,7 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
   Future<void> discardProvisionalSetup() async {
     _stopPolling();
     _modelDiscoveryGeneration++;
-    final sessionId = state.authSession?.sessionId;
-    if (sessionId != null) {
-      try {
-        await _client.authCancel(sessionId: sessionId, agent: agent);
-      } catch (_) {}
-    }
+    await _cancelAuthSessionIfAny();
     final provisionalId = state.provisionalInstanceId;
     if (provisionalId == null) {
       if (state.instances.isEmpty) {
@@ -305,6 +312,14 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
           apiKey: apiKey,
           agent: agent,
         );
+        // A rejected key may never reach model selection with a preset list
+        // presented as if it worked (issue 339).
+        if (await _verifyConnection(inst)) {
+          return _stayOnFormForVerification(
+            inst,
+            status: ProviderSetupStatus.apiKey,
+          );
+        }
       }
       emit(state.copyWith(selectedInstance: inst));
       await _enterModelSelection(inst);
@@ -437,6 +452,12 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
           apiKey: newApiKey!.trim(),
           agent: agent,
         );
+        // A new instance may not reach model selection with a rejected key
+        // (issue 339): the canonical verification runs first, and a failure
+        // keeps the key form visible with its sanitized cause.
+        if (await _verifyConnection(instance)) {
+          return _stayOnFormForVerification(instance);
+        }
       }
 
       // Existing credentials change only after an explicit edit action.
@@ -450,28 +471,25 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
         // Replacing a credential invalidates the model verification associated
         // with the previous credential revision. Complete the canonical
         // connection test before reporting a successful edit so a valid new
-        // key does not leave the provider stranded in draft.
+        // key does not leave the provider stranded in draft, and a rejected one
+        // reports its sanitized cause instead of a generic sentence.
         if (credentialAction == 'replace') {
           emit(state.copyWith(loadingMessage: 'Verifying API key...'));
-          final result = await _client.testInstanceConnection(
-            providerInstanceId: instance.id,
-            agent: agent,
-          );
-          if (result['success'] != true) {
-            throw ArgumentError(_unverifiedApiKeyMessage);
+          if (await _verifyConnection(instance)) {
+            return _stayOnFormForVerification(instance);
           }
         }
 
         // Reload the authoritative lifecycle after the credential mutation and
-        // its optional verification. A transport-level successful test is not
-        // enough if the daemon still reports an incomplete revision.
+        // its verification. A successful test is not enough if the daemon still
+        // reports an incomplete revision.
         instance = await _client.updateInstance(
           providerInstanceId: instance.id,
           agent: agent,
         );
         emit(state.copyWith(selectedInstance: instance));
         if (credentialAction == 'replace' && instance.status != 'ready') {
-          throw ArgumentError(_unverifiedApiKeyMessage);
+          return _stayOnFormForVerification(instance);
         }
       }
 
@@ -516,15 +534,15 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     if (state.instanceOperations.containsKey(instanceId)) return;
     _setInstanceOperation(instanceId, 'Testing...');
     try {
-      final result = await _client.testInstanceConnection(
-        providerInstanceId: instanceId,
-        agent: agent,
+      final result = ProviderInstanceTestResultDto.fromJson(
+        await _client.testInstanceConnection(
+          providerInstanceId: instanceId,
+          agent: agent,
+        ),
       );
-      final success = result['success'] == true;
-      _finishInstanceOperation(
-        instanceId,
-        success ? 'Connection test passed.' : (result['message']?.toString() ?? 'Connection test failed.'),
-      );
+      _recordInstanceTest(instanceId, result);
+      // The verification updated the daemon-owned lifecycle status.
+      await _refreshInstances(feedback: const {});
     } catch (error) {
       _finishInstanceOperation(
         instanceId,
@@ -532,6 +550,48 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
       );
     }
   }
+
+  /// Keeps the credential form visible after a failed verification, carrying
+  /// its localized cause instead of an opaque transport sentence.
+  void _stayOnFormForVerification(
+    ProviderInstanceDto instance, {
+    ProviderSetupStatus status = ProviderSetupStatus.instanceForm,
+  }) {
+    emit(
+      state.copyWith(
+        status: status,
+        operation: null,
+        loadingMessage: null,
+        selectedInstance: instance,
+        error: state.verificationFailure == null ? unverifiedApiKeyMessage : null,
+      ),
+    );
+  }
+
+  /// Setup-gate verification: discovery only, blocking exclusively on a
+  /// definitive failure. A probe cannot prove a credential, so it never runs
+  /// here and can never reject a valid key (issue 339 review).
+  Future<bool> _verifyConnection(ProviderInstanceDto instance) async {
+    final result = ProviderInstanceTestResultDto.fromJson(
+      await _client.testInstanceConnection(
+        providerInstanceId: instance.id,
+        agent: agent,
+        probe: false,
+      ),
+    );
+    _recordInstanceTest(instance.id, result);
+    return result.failure?.definitive ?? false;
+  }
+
+  void _recordInstanceTest(
+    String instanceId,
+    ProviderInstanceTestResultDto result,
+  ) => emit(
+    state.copyWith(
+      instanceTests: {...state.instanceTests, instanceId: result},
+      verificationFailure: result.success ? null : result.failure,
+    ),
+  );
 
   Future<void> removeInstance(String instanceId) async {
     if (state.instanceOperations.containsKey(instanceId)) return;
@@ -1008,67 +1068,14 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     );
   }
 
-  ProviderSetupStatus _targetStatusFor({
-    required List<ProviderInstanceDto> instances,
-    required ProviderReadinessDto readiness,
-    required bool forcePicker,
-  }) {
-    if (instances.isEmpty || forcePicker) {
-      return ProviderSetupStatus.picker;
-    }
-    if (readiness.runtimeReady && showReadyState) {
-      return ProviderSetupStatus.ready;
-    }
-    return ProviderSetupStatus.instancesList;
-  }
 
   List<ProviderDto> _mapProviders(
     List<ProviderTemplateDto> templates,
     List<ProviderInstanceDto> instances,
-  ) {
-    return templates.map((template) {
-      final configuredInstance = instances.where((instance) => instance.templateId == template.name).firstOrNull;
-      return ProviderDto(
-        id: template.name,
-        name: template.name,
-        displayName: template.displayName,
-        description: template.description,
-        defaultBaseUrl: template.defaultBaseUrl,
-        keyEnv: template.keyEnv,
-        envModelName: template.envModelName,
-        envBaseUrlName: template.envBaseUrlName,
-        authType: template.authType,
-        authFlow: template.authFlow,
-        apiMode: template.apiMode,
-        docsUrl: template.docsUrl,
-        supportsModelFetch: template.supportsModelFetch,
-        disconnectable: template.disconnectable,
-        fallbackModels: template.fallbackModels,
-        aliases: template.aliases,
-        configured: configuredInstance != null,
-        authenticated: configuredInstance?.status == 'ready',
-        isCurrent: configuredInstance?.isDefault ?? false,
-        models: configuredInstance?.defaultModel != null ? [configuredInstance!.defaultModel!] : const [],
-        selectedModel: configuredInstance?.defaultModel,
-        authStatus: configuredInstance?.status ?? 'missing',
-      );
-    }).toList();
-  }
+  ) => mapProvidersToCatalog(templates, instances);
 
-  String _friendlyError(Object error, String fallback) {
-    Object candidate = error;
-    // The parallel record wait aggregates failures into [ParallelWaitError];
-    // surface the first underlying failure so diagnostics stay specific.
-    if (candidate is ParallelWaitError) {
-      final errors = candidate.errors as (AsyncError?, AsyncError?, AsyncError?);
-      final first = errors.$1 ?? errors.$2 ?? errors.$3;
-      if (first != null) candidate = first.error;
-    }
-    if (candidate is ArgumentError) {
-      return candidate.message?.toString() ?? fallback;
-    }
-    return fallback;
-  }
+  String _friendlyError(Object error, String fallback) =>
+      friendlySetupError(error, fallback);
 
   void _emitSnapshot({
     required List<ProviderTemplateDto> templates,
@@ -1103,17 +1110,4 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
       ),
     );
   }
-}
-
-/// Immutable result of the three independent read-only provider queries.
-class ProviderSnapshot {
-  const ProviderSnapshot({
-    required this.templates,
-    required this.instances,
-    required this.readiness,
-  });
-
-  final List<ProviderTemplateDto> templates;
-  final List<ProviderInstanceDto> instances;
-  final ProviderReadinessDto readiness;
 }

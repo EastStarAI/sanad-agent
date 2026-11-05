@@ -454,7 +454,8 @@ erDiagram
         text endpoint_fingerprint
         integer config_revision
         integer credential_revision
-        text last_error
+        text last_error "Sanitized one-line summary"
+        text last_error_detail "Sanitized structured discovery failure"
     }
     recent_model_selections {
         text instance_id PK_FK
@@ -498,7 +499,8 @@ Last successful model list per instance (stale-while-revalidate, Plan 29 §10.3)
 | `endpoint_fingerprint` | `TEXT` | Nullable | Normalized endpoint fingerprint; mismatch invalidates the cache |
 | `config_revision` | `INTEGER` | Non-null | Instance `config_revision` at fetch time |
 | `credential_revision` | `INTEGER` | Non-null | Instance `credential_revision` at fetch time |
-| `last_error` | `TEXT` | Nullable | Last refresh warning (non-blocking) |
+| `last_error` | `TEXT` | Nullable | Sanitized one-line summary of the last failed discovery (`<reason> from <endpoint>`), consumed by every string surface: readiness reason, `model.snapshot.warning`, `provider.instance.test`, and the CLI. Never a provider response body, a header, or a credential. |
+| `last_error_detail` | `TEXT` | Nullable | JSON form of the same failure (`kind`, `status_code`, `message`, `endpoint`) written by `ProviderDiscoveryError.toJson` and read back with `tryRestore`. Rows written by older daemons leave it `NULL`; their `LlmHttpException(<status> ...)` prefix is re-derived without replaying the body. A successful re-discovery sets both columns to `NULL` in the same upsert. |
 
 ### 4.4. `recent_model_selections`
 Last 5 model picks across the runtime (Plan 29 §10.4). Joined with `provider_instances` so a rename is reflected immediately. Cascade-deleted when the instance is removed.

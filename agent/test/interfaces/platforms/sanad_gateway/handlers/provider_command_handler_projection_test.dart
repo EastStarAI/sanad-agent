@@ -10,9 +10,12 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:http/http.dart' as http;
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_error.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
+import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
@@ -40,6 +43,8 @@ void main() {
         'fetched_at',
         'warning',
         'models',
+        'discovery_error',
+        'model_cache',
       });
       expect(snapshot.containsKey('template_id'), isFalse);
       expect(snapshot.containsKey('credential'), isFalse);
@@ -180,12 +185,16 @@ void main() {
               as Map;
 
       expect(failingEntry['cache_status'], 'error');
-      expect(failingEntry['warning'], 'Connection refused');
+      // Legacy free text is never replayed; the cause is re-derived into the
+      // canonical sanitized form (issue 339 review 2).
+      expect(failingEntry['warning'], 'Could not reach the provider endpoint');
       expect(failingEntry['models'], isEmpty);
-      // The warning survives a successful partial fetch without downgrading
-      // the cache status.
+      // A stored error keeps a partial list unverified without downgrading the
+      // revision-match cache status.
       expect(partialEntry['cache_status'], 'ready');
-      expect(partialEntry['warning'], 'Refresh timed out');
+      expect(partialEntry['warning'], 'The provider endpoint timed out');
+      expect((partialEntry['model_cache'] as Map)['verified'], isFalse);
+      expect((partialEntry['model_cache'] as Map)['source'], 'cache_stale');
     });
 
     test(
@@ -264,6 +273,370 @@ void main() {
         ).getRecentSelections().single['model_id'],
         'gpt-4o',
       );
+    });
+  });
+
+  group('provider instance discovery projection', () {
+    test('an instance without a cache row projects no error and no cache', () async {
+      h.createInstance();
+
+      final instance =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      expect(instance.containsKey('discovery_error'), isTrue);
+      expect(instance['discovery_error'], isNull);
+      expect(instance['model_cache'], isNull);
+    });
+
+    test('a rejected credential reaches the instance list sanitized', () async {
+      final instance = h.createInstance();
+      final error = ProviderDiscoveryError.capture(
+        LlmHttpException.fromResponse(
+          http.Response(
+            '{"error":{"message":"Invalid credential for $harnessApiKey"}}',
+            401,
+            headers: {'x-api-key': harnessApiKey},
+          ),
+          operation: 'getAvailableModels',
+        ),
+        endpoint: Uri.parse('https://gateway.example/zen/go/v1/models'),
+      );
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+
+      final envelope = await h.instancesList();
+      final payload =
+          (h.payloadOf(envelope)['instances'] as List).single as Map;
+
+      expect(payload['status'], InstanceStatus.draft);
+      expect(payload['model_cache'], {
+        'source': 'fallback',
+        'verified': false,
+      });
+      final discovery = Map<String, dynamic>.from(
+        payload['discovery_error'] as Map,
+      );
+      expect(discovery['kind'], ProviderFailureCategory.invalidCredential);
+      expect(discovery['status_code'], 401);
+      expect(discovery['message'], 'Invalid credential (HTTP 401)');
+      expect(
+        discovery['endpoint'],
+        'https://gateway.example/zen/go/v1/models',
+      );
+
+      // No credential, header, or provider body anywhere in the envelope.
+      final encoded = jsonEncode(envelope);
+      expect(encoded, isNot(contains(harnessApiKey)));
+      expect(encoded, isNot(contains('x-api-key')));
+      expect(encoded, isNot(contains('Invalid credential for')));
+    });
+
+    test('a stale row projects its cache but not its error', () async {
+      final instance = h.createInstance();
+      final error = ProviderDiscoveryError.capture(
+        LlmHttpException.fromResponse(
+          http.Response('', 401),
+          operation: 'getAvailableModels',
+        ),
+      );
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision + 1,
+        credentialRevision: instance.credentialRevision,
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      // The row describes an older configuration: its 401 is not the reason the
+      // instance is currently not ready.
+      expect(payload['discovery_error'], isNull);
+      expect(payload['model_cache'], {
+        'source': 'fallback',
+        'verified': false,
+      });
+    });
+
+    test('a verified row is projected as verified live cache', () async {
+      h.seedVerifiedCache(h.createInstance().id);
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      expect(payload['status'], InstanceStatus.ready);
+      expect(payload['discovery_error'], isNull);
+      expect(payload['model_cache'], {'source': 'live', 'verified': true});
+    });
+
+    test('a legacy row is re-derived and rewritten to the sanitized form', () async {
+      final instance = h.createInstance();
+      // The two shapes found in a live Home: a bare HTTP status and a raw
+      // ClientException/SocketException string with a local port.
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: 'HTTP 401',
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      final discovery = Map<String, dynamic>.from(
+        payload['discovery_error'] as Map,
+      );
+      expect(discovery['kind'], ProviderFailureCategory.invalidCredential);
+      expect(discovery['status_code'], 401);
+      expect(discovery['definitive'], isTrue);
+
+      // Read-repair: the stored row keeps only the sanitized form.
+      final row = h.repo.readModelCache(instance.id, 'models')!;
+      expect(row['last_error'], 'Invalid credential (HTTP 401)');
+      expect(row['last_error_detail'], isNotNull);
+      expect(row['last_error_detail'], contains('invalid_credential'));
+
+      // A raw network row is re-derived as a non-definitive warning.
+      final network = h.createInstance(displayName: 'Local');
+      h.repo.upsertModelCache(
+        instanceId: network.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: network.configRevision,
+        credentialRevision: network.credentialRevision,
+        lastError:
+            'ClientException with SocketException: Connection refused '
+            '(OS Error: Connection refused, errno = 61), address = localhost, '
+            'port = 51790, uri=http://localhost:9000/v1/models',
+      );
+      final instances = h.payloadOf(await h.instancesList())['instances'] as List;
+      final networkPayload =
+          instances.firstWhere((entry) => (entry as Map)['id'] == network.id)
+              as Map;
+      final networkError = Map<String, dynamic>.from(
+        networkPayload['discovery_error'] as Map,
+      );
+      expect(networkError['kind'], ProviderFailureCategory.network);
+      expect(networkError['definitive'], isFalse);
+      expect(jsonEncode(networkError), isNot(contains('51790')));
+      expect(
+        h.repo.readModelCache(network.id, 'models')!['last_error'],
+        'Could not reach the provider endpoint',
+      );
+    });
+
+    test('a legacy definitive cause demotes a ready row on the same read', () async {
+      final instance = h.createInstance();
+      h.seedVerifiedCache(instance.id);
+      final ready = h.repo.findById(instance.id)!;
+      expect(ready.status, InstanceStatus.ready);
+
+      // The live shape a daemon before issue 339 left behind: raw `HTTP 401`,
+      // no structured detail, current revisions, and a card that still claimed
+      // `ready`.
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: ready.configRevision,
+        credentialRevision: ready.credentialRevision,
+        lastError: 'HTTP 401',
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      // Badge, cause, and stored row agree on the same read.
+      expect(payload['status'], InstanceStatus.needsAuth);
+      final discovery = Map<String, dynamic>.from(
+        payload['discovery_error'] as Map,
+      );
+      expect(discovery['kind'], ProviderFailureCategory.invalidCredential);
+      expect(discovery['definitive'], isTrue);
+      expect(discovery['message'], 'Invalid credential (HTTP 401)');
+
+      final demoted = h.repo.findById(instance.id)!;
+      expect(demoted.status, InstanceStatus.needsAuth);
+      expect(
+        h.repo.readModelCache(instance.id, 'models')!['last_error'],
+        'Invalid credential (HTTP 401)',
+      );
+
+      // One-shot: the demoted status is the marker, so a second read reconciles
+      // nothing and touches nothing.
+      final demotedAt = demoted.updatedAt;
+      final second =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(second['status'], InstanceStatus.needsAuth);
+      expect(second['discovery_error'], isNotNull);
+      expect(h.repo.findById(instance.id)!.updatedAt, demotedAt);
+
+      // A row the owner has since fixed is never re-demoted: a clean discovery
+      // clears the cause and the next read restores `ready`.
+      h.seedVerifiedCache(instance.id);
+      final fixed =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(fixed['status'], InstanceStatus.ready);
+      expect(fixed['discovery_error'], isNull);
+    });
+
+    test('a sanitized definitive cause still demotes a ready row', () async {
+      // The round-2 aftermath: an earlier build already rewrote the legacy row
+      // into the structured form, so only the status still contradicted it.
+      final instance = h.createInstance();
+      h.seedVerifiedCache(instance.id);
+      final ready = h.repo.findById(instance.id)!;
+      final error = ProviderDiscoveryError(
+        kind: ProviderFailureCategory.invalidCredential,
+        statusCode: 401,
+        message: 'Invalid credential (HTTP 401)',
+        definitive: true,
+      );
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: ready.configRevision,
+        credentialRevision: ready.credentialRevision,
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+
+      final first =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(first['status'], InstanceStatus.needsAuth);
+      expect((first['discovery_error'] as Map)['definitive'], isTrue);
+      final demoted = h.repo.findById(instance.id)!;
+      expect(demoted.status, InstanceStatus.needsAuth);
+
+      // Idempotent: a demoted row is no longer ready, so nothing is rewritten.
+      final demotedAt = demoted.updatedAt;
+      final second =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(second['status'], InstanceStatus.needsAuth);
+      expect(h.repo.findById(instance.id)!.updatedAt, demotedAt);
+
+      // A successful re-verification clears the cause and restores `ready`; a
+      // fixed instance is never demoted again.
+      h.seedVerifiedCache(instance.id);
+      final third =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(third['status'], InstanceStatus.ready);
+      expect(third['discovery_error'], isNull);
+    });
+
+    test('a legacy non-definitive cause keeps a ready row ready', () async {
+      final instance = h.createInstance();
+      h.seedVerifiedCache(instance.id);
+      final ready = h.repo.findById(instance.id)!;
+
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'live',
+        configRevision: ready.configRevision,
+        credentialRevision: ready.credentialRevision,
+        lastError:
+            'ClientException with SocketException: Connection refused '
+            '(OS Error: Connection refused, errno = 61), address = localhost, '
+            'port = 51790, uri=http://localhost:9000/v1/models',
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      // A transport failure describes the moment, not the configuration.
+      expect(payload['status'], InstanceStatus.ready);
+      final discovery = Map<String, dynamic>.from(
+        payload['discovery_error'] as Map,
+      );
+      expect(discovery['kind'], ProviderFailureCategory.network);
+      expect(discovery['definitive'], isFalse);
+      expect(h.repo.findById(instance.id)!.status, InstanceStatus.ready);
+    });
+
+    test('the instances-changed broadcast carries the same projection', () async {
+      final instance = h.createInstance();
+      final error = ProviderDiscoveryError.capture(
+        LlmHttpException.fromResponse(
+          http.Response('', 403),
+          operation: 'getAvailableModels',
+        ),
+        endpoint: Uri.parse('https://gateway.example/v1/models'),
+      );
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesChanged())['instances'] as List).single
+              as Map;
+
+      expect(
+        (payload['discovery_error'] as Map)['kind'],
+        ProviderFailureCategory.forbidden,
+      );
+      expect((payload['model_cache'] as Map)['source'], 'fallback');
     });
   });
 
