@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
 import '../../../domain/models/device_suspended_request.dart';
@@ -127,7 +127,7 @@ class _SecretRequestCardState extends State<SecretRequestCard> {
             Flexible(
               child: Text(
                 l10n.secretRequestTitle,
-                style: GoogleFonts.inter(
+                style: AppTypography.text(context,
                   color: colorScheme.onSurface,
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
@@ -163,7 +163,7 @@ class _SecretRequestCardState extends State<SecretRequestCard> {
             Expanded(
               child: Text(
                 l10n.secretRequestVaultNotice,
-                style: GoogleFonts.inter(
+                style: AppTypography.text(context,
                   fontSize: 11,
                   color: colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
                 ),
@@ -182,7 +182,7 @@ class _SecretRequestCardState extends State<SecretRequestCard> {
             child: Text(
               l10n.secretRequestRequiredField(_missingLabel!),
               key: const Key('secret_request_error'),
-              style: GoogleFonts.inter(
+              style: AppTypography.text(context,
                 color: colorScheme.error,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
@@ -227,7 +227,7 @@ class _SecretRequestCardState extends State<SecretRequestCard> {
             Flexible(
               child: Text(
                 field.label,
-                style: GoogleFonts.inter(
+                style: AppTypography.text(context,
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                   color: colorScheme.onSurface,
@@ -242,7 +242,7 @@ class _SecretRequestCardState extends State<SecretRequestCard> {
             const SizedBox(width: 8),
             Text(
               field.name,
-              style: GoogleFonts.firaCode(
+              style: AppTypography.mono(
                 fontSize: 11,
                 color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
               ),
@@ -254,7 +254,7 @@ class _SecretRequestCardState extends State<SecretRequestCard> {
           Text(
             field.description,
             textDirection: TextUtils.getTextDirection(field.description),
-            style: GoogleFonts.inter(
+            style: AppTypography.text(context,
               fontSize: 11,
               color: colorScheme.onSurfaceVariant.withValues(alpha: 0.75),
             ),
@@ -265,7 +265,7 @@ class _SecretRequestCardState extends State<SecretRequestCard> {
           Text(
             l10n.secretRequestReplacesNotice,
             key: Key('secret_replaces_${field.name}'),
-            style: GoogleFonts.inter(fontSize: 11, color: colorScheme.tertiary),
+            style: AppTypography.text(context, fontSize: 11, color: colorScheme.tertiary),
           ),
         ],
         const SizedBox(height: 6),
@@ -278,7 +278,7 @@ class _SecretRequestCardState extends State<SecretRequestCard> {
           enableIMEPersonalizedLearning: false,
           keyboardType: field.masked ? TextInputType.visiblePassword : TextInputType.text,
           textDirection: TextDirection.ltr,
-          style: GoogleFonts.inter(fontSize: 13),
+          style: AppTypography.text(context, fontSize: 13),
           onSubmitted: (_) => _save(),
           decoration: InputDecoration(
             isDense: true,

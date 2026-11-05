@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class VoiceStreamPanel extends StatefulWidget {
   final VoiceStreamState voiceState;
@@ -105,7 +105,7 @@ class _VoiceStreamPanelState extends State<VoiceStreamPanel> with SingleTickerPr
                   backgroundColor: colorScheme.surfaceContainerHighest,
                   child: Text(
                     widget.agent.name.isNotEmpty ? widget.agent.name[0].toUpperCase() : 'A',
-                    style: GoogleFonts.outfit(
+                    style: AppTypography.text(context,
                       color: colorScheme.primary,
                       fontWeight: FontWeight.bold,
                     ),
@@ -119,7 +119,7 @@ class _VoiceStreamPanelState extends State<VoiceStreamPanel> with SingleTickerPr
                   children: [
                     Text(
                       widget.agent.name,
-                      style: GoogleFonts.inter(
+                      style: AppTypography.text(context,
                         color: colorScheme.onSurface,
                         fontWeight: FontWeight.w600,
                         fontSize: 14,
@@ -128,7 +128,7 @@ class _VoiceStreamPanelState extends State<VoiceStreamPanel> with SingleTickerPr
                     const SizedBox(height: 2),
                     Text(
                       statusText,
-                      style: GoogleFonts.inter(
+                      style: AppTypography.text(context,
                         color: isConnecting
                             ? Colors.orangeAccent
                             : isSpeaking

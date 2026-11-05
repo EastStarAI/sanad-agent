@@ -24,6 +24,14 @@ A workspace opens one detail page with Overview, MCP Servers, and Skills tabs. I
 
 Compact layouts move the same navigation into a drawer. Destinations and capabilities remain identical to the wide layout.
 
+## Appearance
+
+General holds the appearance controls: theme style, primary color, font family, font size scale, and background. The appearance state is device-scoped and client-owned; no appearance change emits an agent command.
+
+The font family choice offers System Default, Cairo, Inter, and Roboto. **Cairo is the default**: a profile with no saved preference renders in Cairo, which ships with the Client and therefore works offline on the first launch on every platform. A profile that already carries a stored choice keeps it, including an explicit System Default, because a stored value is never migrated to the new default; a user who wants Cairo selects it in General.
+
+The selected font applies to every text surface in the Client: conversation content, tool cards, composer chips, dialogs, overlays, settings pages, and empty states. Code blocks, diffs, terminals, paths, shell commands, and raw JSON stay monospace by design and do not follow the selection. Cairo covers Arabic and Latin, so the same default serves the English and Arabic interfaces.
+
 ## Privacy & Security
 
 Selecting a device reveals Overview, Providers, MCP Servers, Skills, **Privacy & Security**, and its Workspaces. Privacy & Security currently contains **Secrets** (Task 140).

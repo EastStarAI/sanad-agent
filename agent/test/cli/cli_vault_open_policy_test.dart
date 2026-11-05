@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sanad_agent/cli/oneshot/oneshot_runner.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
+import 'package:sanad_agent/core/auth/secret_vault.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:test/test.dart';
 
@@ -13,6 +16,17 @@ import '../../tool/fake_local_gateway.dart';
 /// repeat into a failed expectation instead of a hung suite.
 const Duration _aotCommandTimeout = Duration(seconds: 90);
 const String _aotBinaryVariable = 'SANAD_AOT_CLI_BINARY';
+
+/// Every `secret_vault*` artifact in [home].
+///
+/// The vault writes its lock, generation and event files the first time a
+/// process opens it, so their absence is positive proof that no process opened
+/// it for this Home.
+List<String> _vaultArtifacts(Directory home) => home
+    .listSync()
+    .map((entry) => entry.path.split(Platform.pathSeparator).last)
+    .where((name) => name.startsWith('secret_vault'))
+    .toList();
 
 void main() {
   group('Agent vault open policy', () {
@@ -71,6 +85,26 @@ void main() {
       }
     });
 
+    test('a run command defers the vault to the runtime it selects', () {
+      // `run` picks its runtime first: a gateway run reads no Agent secret, and
+      // the in-process runtime opens the vault itself. Opening it here would
+      // make every gateway run read owner indexes it discards, and wait on an
+      // OS authorization dialog whenever its caller happens to hold a terminal.
+      for (final arguments in <List<String>>[
+        ['run', 'hello'],
+        ['run', '--standalone', 'hello'],
+        ['run', '--prompt', 'hello'],
+        ['run', '--json', '--execution-root', '/tmp/root', 'hello'],
+        ['run', '--events', 'hello'],
+      ]) {
+        expect(
+          SanadCommandRunner.requiresSecretVault(arguments),
+          isFalse,
+          reason: '${arguments.join(' ')} selects its own runtime',
+        );
+      }
+    });
+
     test('a daemon dispatch is never classified from the daemon stdio', () {
       for (final arguments in <List<String>>[
         ['daemon'],
@@ -109,7 +143,6 @@ void main() {
         ['logout'],
         ['mcp', 'list'],
         ['doctor'],
-        ['run', '--standalone', 'hello'],
         ['chat'],
         const <String>[],
         // An unparseable command line falls back to opening the vault instead
@@ -123,6 +156,82 @@ void main() {
         );
       }
     });
+  });
+
+  group('Gateway run', () {
+    late Directory root;
+    late Directory home;
+    late Directory stateHome;
+    late FakeLocalGateway gateway;
+
+    setUp(() async {
+      root = await Directory.systemTemp.createTemp('sanad-gateway-run-');
+      home = Directory('${root.path}/home')..createSync(recursive: true);
+      stateHome = Directory('${root.path}/state')..createSync(recursive: true);
+      selectSanadHome(home.path);
+      setSanadStateHomeOverride(stateHome.path);
+      // The CLI refuses a token any other user can read.
+      final tokenFile = File('${home.path}/.local_token');
+      await tokenFile.writeAsString('gateway-run-token', flush: true);
+      if (!Platform.isWindows) {
+        final chmod = await Process.run('chmod', ['600', tokenFile.path]);
+        expect(chmod.exitCode, 0, reason: 'chmod 600 ${tokenFile.path}');
+      }
+      gateway = await FakeLocalGateway.start(
+        homeId: sanadHomeIdentity(home.path),
+      );
+    });
+
+    tearDown(() async {
+      await gateway.close();
+      await SecretVaults.closeAll();
+      setSanadHomeOverride(null);
+      setSanadStateHomeOverride(null);
+      SecretVaultPolicy.reset();
+      if (await root.exists()) await root.delete(recursive: true);
+    });
+
+    test(
+      'a run that attaches to the daemon completes without opening the vault',
+      () async {
+        final out = StringBuffer();
+        final err = StringBuffer();
+        final runner = OneshotRunner(
+          // The in-process runtime is the only path that opens the vault. A
+          // gateway run must never reach it.
+          standaloneClientFactory: ({String? sanadHomeOverride}) async => fail(
+            'a gateway run must not start the in-process runtime.',
+          ),
+        );
+
+        final exitCode = await runner.run(
+          prompt: 'gateway run regression guard',
+          executionRoot: root.path,
+          sanadHome: home.path,
+          gatewayUrl: gateway.gatewayUrl.toString(),
+          json: true,
+          timeout: const Duration(seconds: 30),
+          stdoutSink: out,
+          stderrSink: err,
+          signalStream: const Stream<ProcessSignal>.empty(),
+          readStdin: false,
+        );
+
+        expect(exitCode, 0, reason: 'stdout=$out stderr=$err');
+        expect(gateway.commands, contains('think'));
+        final result = jsonDecode(out.toString().trim());
+        expect(result, isA<Map<String, dynamic>>());
+        expect((result as Map<String, dynamic>)['exit_code'], 0);
+        expect(
+          _vaultArtifacts(home),
+          isEmpty,
+          reason:
+              'a gateway run read the Agent vault; it reads no secret at all, '
+              'so it must never expose its caller to an OS credential prompt.',
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
   });
 
   group('Compiled CLI gateway commands', () {
@@ -184,12 +293,7 @@ void main() {
           // The vault writes its lock and generation markers the first time any
           // process opens it, so their absence proves the gateway command never
           // touched the OS credential vault.
-          final vaultArtifacts = home
-              .listSync()
-              .map((entry) => entry.path.split(Platform.pathSeparator).last)
-              .where((name) => name.startsWith('secret_vault'))
-              .toList();
-          expect(vaultArtifacts, isEmpty);
+          expect(_vaultArtifacts(home), isEmpty);
         } finally {
           await gateway.close();
           await home.delete(recursive: true);

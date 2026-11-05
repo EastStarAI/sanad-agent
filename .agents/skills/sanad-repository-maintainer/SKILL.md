@@ -32,7 +32,7 @@ If the authenticated role cannot perform an operation, stop. Do not seek a bypas
 
 1. Require a Conventional Commits title, common ancestry with current `main`, resolved conversations, and the latest successful `All required checks pass` result.
 2. Map changed paths to `maintainer-reviewed`, `security-reviewed`, and `release-reviewed` using `.github/GOVERNANCE.md` and `.github/workflows/ci.yml`.
-3. Apply a protected review label only after an authorized maintainer confirms the corresponding review. A label is review evidence, not a mechanism for hiding a failure.
+3. Apply a protected review label only after an authorized maintainer confirms the corresponding review. A label is review evidence, not a mechanism for hiding a failure. Label changes start no run of their own, so after applying or removing one, dispatch `protected-labels.yml` with the pull request number and confirm the re-verification run and the resulting aggregate check.
 4. Preserve read-only, secret-free execution for fork pull requests.
 5. Merge only through the repository's enabled squash flow and only after the responsible maintainer authorizes the merge. When the merge queue is enabled, enqueue instead of merging directly: update the branch, resolve conflicts, verify the head commit, then run `gh pr merge <number> --squash --match-head-commit <sha>`. The merge agent owns branch freshness and conflicts; a coordinator only reviews and dispatches. A merge group that cannot be attributed to exactly one pull request fails the protected-label check, so keep one pull request per queued build.
 6. Verify the resulting default-branch commit, CI result, branch cleanup, and any bounded downstream notification.

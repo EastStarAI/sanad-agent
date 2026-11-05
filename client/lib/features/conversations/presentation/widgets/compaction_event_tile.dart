@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/compaction_failure_formatter.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
@@ -83,7 +83,7 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
                                 maxLines: 2,
                                 textAlign: TextAlign.center,
                                 overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.inter(
+                                style: AppTypography.text(context,
                                   fontSize: 12,
                                   color: colorScheme.onSurfaceVariant,
                                   fontWeight: FontWeight.w500,

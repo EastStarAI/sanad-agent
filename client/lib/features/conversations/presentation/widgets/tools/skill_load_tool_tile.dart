@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
 import 'package:sanad_client/utils/link_utils.dart';
@@ -56,7 +56,7 @@ class SkillLoadToolTile extends StatelessWidget {
         ],
         Text(
           'Loading skill...',
-          style: GoogleFonts.roboto(
+          style: AppTypography.text(context,
             fontSize: 12,
             color: Theme.of(
               context,
@@ -81,7 +81,7 @@ class SkillLoadToolTile extends StatelessWidget {
       ),
       child: Text(
         event.text.isNotEmpty ? event.text : (event.toolOutput?.toString() ?? 'Failed to load skill.'),
-        style: GoogleFonts.firaCode(fontSize: 11, color: errorColor),
+        style: AppTypography.mono(fontSize: 11, color: errorColor),
       ),
     );
   }
@@ -104,7 +104,7 @@ class SkillLoadToolTile extends StatelessWidget {
   Widget _buildInfoRow(BuildContext context, String label, String value) {
     return SelectableText.rich(
       TextSpan(
-        style: GoogleFonts.roboto(
+        style: AppTypography.text(context,
           fontSize: 13,
           color: Theme.of(context).colorScheme.onSurface,
         ),
@@ -115,7 +115,7 @@ class SkillLoadToolTile extends StatelessWidget {
           ),
           TextSpan(
             text: value,
-            style: GoogleFonts.firaCode(
+            style: AppTypography.mono(
               fontSize: 12,
               color: Theme.of(context).colorScheme.primary,
             ),

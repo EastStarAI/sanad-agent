@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/media/image_lightbox.dart';
@@ -126,7 +126,7 @@ class _ViewImageToolCardState extends State<ViewImageToolCard> {
           const SizedBox(width: 12),
           Text(
             'Executing tool...',
-            style: GoogleFonts.roboto(
+            style: AppTypography.text(context,
               fontSize: 12,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
             ),
@@ -159,7 +159,7 @@ class _ViewImageToolCardState extends State<ViewImageToolCard> {
               Expanded(
                 child: Text(
                   'Image Inspection Failed',
-                  style: GoogleFonts.outfit(
+                  style: AppTypography.text(context,
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                     color: errorColor,
@@ -173,7 +173,7 @@ class _ViewImageToolCardState extends State<ViewImageToolCard> {
           Text(
             message,
             key: const Key('view_image_error_message'),
-            style: GoogleFonts.firaCode(
+            style: AppTypography.mono(
               fontSize: 11,
               color: errorColor,
             ),

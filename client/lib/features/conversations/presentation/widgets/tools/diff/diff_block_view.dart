@@ -1,6 +1,6 @@
 import 'package:diff_match_patch/diff_match_patch.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/code_highlighting.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/diff/unified_diff_parser.dart';
 
@@ -70,7 +70,7 @@ class DiffBlockView extends StatelessWidget {
                 const SizedBox(width: 8),
                 Text(
                   line.content,
-                  style: GoogleFonts.firaCode(
+                  style: AppTypography.mono(
                     fontSize: 11,
                     color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
                     fontWeight: FontWeight.bold,
@@ -101,7 +101,7 @@ class DiffBlockView extends StatelessWidget {
       TextSpan codeSpan;
       if (isAddition && line.pairedContent != null) {
         // Paired addition: do word-level diffing
-        final defaultStyle = GoogleFonts.firaCode(
+        final defaultStyle = AppTypography.mono(
           fontSize: 11,
           color: Theme.of(context).colorScheme.onSurface,
           height: 1.5,
@@ -117,7 +117,7 @@ class DiffBlockView extends StatelessWidget {
         );
       } else if (isDeletion && line.pairedContent != null) {
         // Paired deletion: do word-level diffing
-        final defaultStyle = GoogleFonts.firaCode(
+        final defaultStyle = AppTypography.mono(
           fontSize: 11,
           color: Theme.of(context).colorScheme.onSurface,
           height: 1.5,
@@ -136,7 +136,7 @@ class DiffBlockView extends StatelessWidget {
         final highlightedSpans = highlightCache.highlightToLines(
           line.content,
           filePath,
-          baseStyle: GoogleFonts.firaCode(
+          baseStyle: AppTypography.mono(
             fontSize: 11,
             color: Theme.of(context).colorScheme.onSurface,
             height: 1.5,
@@ -213,13 +213,13 @@ Widget _buildDiffLine(
   required Color prefixColor,
   bool showLineNumbers = true,
 }) {
-  final lineNumbersStyle = GoogleFonts.firaCode(
+  final lineNumbersStyle = AppTypography.mono(
     fontSize: 11,
     color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
     height: 1.5,
   );
 
-  final defaultStyle = GoogleFonts.firaCode(
+  final defaultStyle = AppTypography.mono(
     fontSize: 11,
     color: Theme.of(context).colorScheme.onSurface,
     height: 1.5,
@@ -251,7 +251,7 @@ Widget _buildDiffLine(
             width: 10,
             child: Text(
               prefix,
-              style: GoogleFonts.firaCode(
+              style: AppTypography.mono(
                 fontSize: 11,
                 color: prefixColor,
                 fontWeight: FontWeight.bold,

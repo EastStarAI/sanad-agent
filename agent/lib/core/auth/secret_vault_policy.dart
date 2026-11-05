@@ -137,9 +137,13 @@ abstract final class SecretVaultPolicy {
   /// Why this process will not prompt, or `interactive_terminal` when it will.
   static String get interactionCode => secretVaultEvidenceCode(_evidence);
 
-  /// True when this process classified its command as secret-free and therefore
-  /// never opened the vault. Writing a provider secret in such a process would
+  /// True when this process classified its command as secret-free and has not
+  /// opened the vault since. Writing a provider secret in such a process would
   /// fall back to a plaintext file, so it fails closed instead.
+  ///
+  /// The state is true only while no vault is open: opening one clears it
+  /// through [markVaultOpened], because the runtime that opened the vault does
+  /// have credential access even when the entry point did not open it.
   static bool get vaultSkipped => _vaultSkipped;
 
   /// Refuses a plaintext secret mutation in a [vaultSkipped] process.
@@ -157,6 +161,21 @@ abstract final class SecretVaultPolicy {
       'that owns that secret (for example `sanad providers`) instead.',
       reasonCode: AgentSecretStoreUnavailableReason.plaintextFallbackBlocked,
     );
+  }
+
+  /// Records that this process opened the Agent vault, so it is no longer a
+  /// [vaultSkipped] process.
+  ///
+  /// [apply] classifies a command line *before* dispatch. One command family,
+  /// `run`, deliberately defers the open to the runtime it selects, and the
+  /// in-process runtime then opens the vault it needs. A process that really
+  /// opened the vault has real credential access, so a secure-store write must
+  /// not be refused by a decision that was taken before that open.
+  ///
+  /// `SecretVaults` calls this on every open, so the invariant is
+  /// `vaultSkipped == true` only while this process has no open vault.
+  static void markVaultOpened() {
+    _vaultSkipped = false;
   }
 
   /// Applies [decision] and records whether the caller skipped the vault.
