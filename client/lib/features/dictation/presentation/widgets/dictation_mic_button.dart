@@ -56,7 +56,6 @@ class _DictationMicButtonState extends State<DictationMicButton> {
   final DictationInsertion _insertion = DictationInsertion();
   String _appliedText = '';
   String? _announcedCode;
-  double _lastLoggedLevel = -1;
 
   @override
   void initState() {
@@ -132,10 +131,10 @@ class _DictationMicButtonState extends State<DictationMicButton> {
         _resetLocalState();
         // One press starts recording when a model is ready; the sheet only
         // appears when there is nothing to record with (or on long press).
-        if (cubit.state.model.models.isEmpty) {
-          // The composer has not talked to the daemon yet this run: ask for the
-          // catalog once, so an already-installed model starts immediately
-          // instead of showing the sheet on the first press.
+        if (cubit.state.model.models.isEmpty || !cubit.state.model.isReady) {
+          // Re-read the catalog whenever this press could not start: the daemon
+          // may have installed a model, gained a `stt.model_path` override, or
+          // restarted since the composer last asked.
           await cubit.refreshStatus(device);
           if (!mounted) return;
         }
@@ -224,14 +223,6 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       },
       builder: (context, state) {
         final isActive = state.isActive;
-        // TEMP diagnostics: proves the widget receives level changes at all.
-        if (state.status == DictationStatus.listening &&
-            (state.level - _lastLoggedLevel).abs() > 0.2) {
-          _lastLoggedLevel = state.level;
-          _logger.info(
-            'dictation meter render level=${state.level.toStringAsFixed(2)}',
-          );
-        }
         final isBusy =
             state.status == DictationStatus.preparing ||
             state.status == DictationStatus.finalizing;

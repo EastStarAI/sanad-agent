@@ -27,7 +27,7 @@ const List<SttCatalogEntry> kSttCatalog = [
     note: 'أعلى دقة للعربية والمصري — يحتاج جهازًا قادرًا',
     mode: SttModelMode.batchVad,
     language: 'ar',
-    isDefault: true,
+    isDefault: false,
     hosted: true,
     files: [
       SttModelFile(
@@ -50,6 +50,44 @@ const List<SttCatalogEntry> kSttCatalog = [
             'https://huggingface.co/AhmedAttia3/sanad-egy-whisper-turbo-int8/resolve/main/egy-whisper-turbo-tokens.txt',
         sizeBytes: 816730,
         sha256: 'b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126',
+      ),
+    ],
+  ),
+  SttCatalogEntry(
+    id: 'egy-whisper-turbo-ggml-q8',
+    label: 'Egyptian Whisper Turbo (ggml q8)',
+    note: 'أعلى دقة للمصري مع ذاكرة أقل بكثير — الموصى به',
+    mode: SttModelMode.batchVad,
+    language: 'ar',
+    isDefault: true,
+    engine: SttEngineKind.whisperCpp,
+    files: [
+      SttModelFile(
+        name: 'ggml-egy-turbo-q8_0.bin',
+        url:
+            'https://huggingface.co/AhmedAttia3/sanad-egy-whisper-turbo-ggml/resolve/main/ggml-egy-turbo-q8_0.bin',
+        sizeBytes: 874208239,
+        sha256:
+            'a79de98911bbbbb933d5553824cf4507a8ead299f02cdffbf9fe05a80915299a',
+      ),
+    ],
+  ),
+  SttCatalogEntry(
+    id: 'egy-whisper-turbo-ggml-q5',
+    label: 'Egyptian Whisper Turbo (ggml q5)',
+    note: 'الأخف والأسرع — للأجهزة الضعيفة',
+    mode: SttModelMode.batchVad,
+    language: 'ar',
+    isDefault: false,
+    engine: SttEngineKind.whisperCpp,
+    files: [
+      SttModelFile(
+        name: 'ggml-egy-turbo-q5_0.bin',
+        url:
+            'https://huggingface.co/AhmedAttia3/sanad-egy-whisper-turbo-ggml/resolve/main/ggml-egy-turbo-q5_0.bin',
+        sizeBytes: 574061359,
+        sha256:
+            '6da4b0e2542f758c96b0594afd1b805839bb7600d38e8fa0a4c415ef953fbbc2',
       ),
     ],
   ),

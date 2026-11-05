@@ -142,6 +142,20 @@ class DictationService {
           ? null
           : installedOverrides,
       'models': [
+        // An explicit `stt.model_path` is a ready model even though it is not a
+        // catalog entry; without this row the UI offers the setup sheet.
+        if (installedOverrides != null && installedOverrides.isNotEmpty)
+          {
+            'id': 'path-override',
+            'label': 'نموذج محلي (stt.model_path)',
+            'note': installedOverrides,
+            'mode': SttModelMode.batchVad.name,
+            'language': _settings.language,
+            'total_bytes': 0,
+            'hosted': false,
+            'installed': true,
+            'engine': SttEngineKind.whisperCpp.name,
+          },
         for (final entry in kSttCatalog)
           {
             'id': entry.id,
@@ -152,6 +166,7 @@ class DictationService {
             'total_bytes': entry.totalBytes,
             'hosted': entry.hosted,
             'installed': _store.statusOf(entry).installed,
+            'engine': entry.engine.name,
           },
       ],
     };

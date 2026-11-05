@@ -53,12 +53,15 @@ void main() {
     });
 
     test('the egyptian default and the light fallback are both present', () {
-      expect(sttEntryById('egy-whisper-turbo-int8'), isNotNull);
+      expect(sttEntryById('egy-whisper-turbo-ggml-q8'), isNotNull);
       expect(sttEntryById('whisper-base-int8'), isNotNull);
-      expect(defaultSttEntry.id, 'egy-whisper-turbo-int8');
-      final light = sttEntryById('whisper-base-int8')!;
-      expect(light.isDefault, isFalse);
-      expect(light.hosted, isTrue);
+      // The default is the hosted Egyptian ggml build: whisper.cpp keeps the
+      // memory peak under 1.2 GB, which the ONNX int8 entry could not.
+      expect(defaultSttEntry.id, 'egy-whisper-turbo-ggml-q8');
+      expect(defaultSttEntry.engine, SttEngineKind.whisperCpp);
+      expect(defaultSttEntry.hosted, isTrue);
+      final light = sttEntryById('egy-whisper-turbo-ggml-q5')!;
+      expect(light.engine, SttEngineKind.whisperCpp);
       expect(light.totalBytes, lessThan(defaultSttEntry.totalBytes));
     });
   });

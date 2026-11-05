@@ -47,13 +47,11 @@ class DictationCubit extends Cubit<DictationState> {
   bool _capturing = false;
   int _lastLevelMs = 0;
   double _lastLevel = 0;
+
+  /// Completes when the recorder's own stream is done, so stop() can wait for
+  /// the last frames to reach the daemon before asking it to decode.
   Completer<void>? _captureDrained;
-  // Temporary diagnostics for the loudness meter: counts and levels only.
-  double _diagMin = 1;
-  double _diagMax = 0;
-  int _diagChunks = 0;
-  int _diagBytes = 0;
-  int _diagWindowStart = 0;
+
   Completer<void>? _statusCompleter;
   Completer<void>? _idle;
 
@@ -161,24 +159,6 @@ class DictationCubit extends Cubit<DictationState> {
         ? instant
         : (_lastLevel * 0.55) + (instant * 0.45);
     _lastLevel = level;
-    // TEMP diagnostics (owner-requested): one line per second with levels and
-    // byte counts only, never audio content.
-    _diagChunks++;
-    _diagBytes += chunk.length;
-    if (level < _diagMin) _diagMin = level;
-    if (level > _diagMax) _diagMax = level;
-    if (now - _diagWindowStart >= 1000) {
-      _logger.info(
-        'dictation level window: chunks=$_diagChunks bytes=$_diagBytes '
-        'min=${_diagMin.toStringAsFixed(2)} max=${_diagMax.toStringAsFixed(2)} '
-        'level=${level.toStringAsFixed(2)} rms=${rms.toStringAsFixed(4)}',
-      );
-      _diagChunks = 0;
-      _diagBytes = 0;
-      _diagMin = 1;
-      _diagMax = 0;
-      _diagWindowStart = now;
-    }
     if (!isClosed) emit(state.copyWith(level: level.toDouble()));
   }
 

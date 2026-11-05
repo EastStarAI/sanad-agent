@@ -140,24 +140,30 @@ class _WhisperCppWorker {
 
   /// Cheap energy gate: a session that never rose above the noise floor is not
   /// worth a decode, and decoding it would hallucinate text.
+  ///
+  /// A plain average is not enough: steady room noise (music, a fan, traffic)
+  /// lifts the mean while containing no speech. So this counts the share of
+  /// loud frames instead — speech always has peaks, noise does not.
   bool _hasSpeech() {
     if (_speech.isEmpty) return false;
-    var sum = 0.0;
-    var count = 0;
+    var loud = 0;
+    var total = 0;
     for (final chunk in _speech) {
       // Sampling every 8th frame is plenty for an energy decision.
       for (var i = 0; i < chunk.length; i += 8) {
-        sum += chunk[i].abs();
-        count++;
+        if (chunk[i].abs() > _peakFloor) loud++;
+        total++;
       }
     }
-    if (count == 0) return false;
-    return (sum / count) > _speechFloor;
+    if (total == 0) return false;
+    return (loud / total) > _minLoudShare;
   }
 
-  /// Mean absolute amplitude below which a session counts as silence.
-  /// Speech sits far above this; a quiet room's noise floor sits below it.
-  static const double _speechFloor = 0.004;
+  /// Amplitude a frame must exceed to count as speech-like.
+  static const double _peakFloor = 0.02;
+
+  /// Share of loud frames a session needs before it is worth decoding.
+  static const double _minLoudShare = 0.06;
 
   /// Decodes the buffered utterance in groups and joins the results into the
   /// single transcript the user sees.
