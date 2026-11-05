@@ -241,6 +241,22 @@ Artifacts: `agent/native/macos/` (2.2 MB: shim + whisper + ggml), rebuilt by
 `agent/tool/build_whispercpp.sh <whisper.cpp-src>`. Trial without a catalog
 download: `stt.model_path` pointing at a directory that holds one `.bin`.
 
+## G7 hosting and default (2026-11-05, later the same day)
+
+`AhmedAttia3/sanad-egy-whisper-turbo-ggml` now hosts the Egyptian model in ggml
+form, built from the f16 checkpoint Handy runs:
+
+| Artifact | Size | Peak RSS | RTF | Diff vs f16 |
+|---|---|---|---|---|
+| `ggml-egy-turbo-q8_0.bin` | 874 MB | 1.19 GB | 0.154 | 1 word |
+| `ggml-egy-turbo-q5_0.bin` | 574 MB | 0.95 GB | 0.136 | 4 words (diacritics, Latin casing, one trailing word) |
+
+`egy-whisper-turbo-ggml-q8` is the catalog default (engine `whispercpp`), with
+`q5` as the low-memory option and the ONNX int8 entry kept as the sherpa
+fallback until G5 decides whether streaming needs sherpa at all. The in-app
+install path was verified against the real host: 874 MB at 3.5 MB/s, sha
+checked, activated, next session on the new model.
+
 ## Current status
 - Current gate: **G7** (whisper.cpp engine behind the catalog) — G2d is
   committed as `d8497896` after live acceptance (full transcript, meter, send
