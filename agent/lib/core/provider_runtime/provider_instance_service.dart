@@ -2,6 +2,8 @@ import 'package:uuid/uuid.dart';
 
 import '../../engine/adapters/provider_profile.dart';
 import '../../engine/adapters/provider_registry.dart';
+import 'provider_discovery_error.dart';
+import 'provider_discovery_projection.dart';
 import 'provider_endpoint_resolver.dart';
 import 'provider_instance.dart';
 import 'provider_model_id.dart';
@@ -281,10 +283,65 @@ class ProviderInstanceService {
       return;
     }
 
-    if (existing.status != InstanceStatus.draft) {
-      _setStatus(id, InstanceStatus.draft);
+    // A current-revision discovery failure is the reason this instance is not
+    // ready, so the status keeps reporting it (issue 339) instead of collapsing
+    // every incomplete state into `draft`.
+    final failure = _discoveryFailure(existing);
+    final target = failure == null
+        ? InstanceStatus.draft
+        : statusForFailure(failure);
+    if (existing.status != target) {
+      _setStatus(id, target);
     }
   }
+
+  /// Applies the outcome of one connection verification (discovery, optionally
+  /// followed by a generation probe).
+  ///
+  /// A verified outcome re-runs [markReadyIfComplete]; a failure promotes the
+  /// instance to the status its category proves — a rejected credential is
+  /// `needs_auth`, a definitive endpoint failure is `error`, and an unproven
+  /// transport/parse failure keeps `draft`.
+  void applyConnectionOutcome(
+    String id,
+    ProviderDiscoveryError? failure, {
+    bool credentialConfigured = true,
+  }) {
+    final existing = _repo.findById(id);
+    if (existing == null) return;
+    if (failure == null) {
+      markReadyIfComplete(id, credentialConfigured: credentialConfigured);
+      return;
+    }
+    final target = statusForFailure(failure);
+    if (existing.status != target) {
+      _setStatus(id, target);
+    }
+  }
+
+  /// Status a verified connection failure proves.
+  ///
+  /// `needs_auth` is reserved for a rejected credential (`401`/`403`); a
+  /// definitive endpoint/account failure is `error`; a failure that proves
+  /// nothing about the credential (transport, timeout, empty list, unknown)
+  /// leaves the instance in `draft` with the sanitized cause attached.
+  static String statusForFailure(ProviderDiscoveryError failure) {
+    switch (failure.kind) {
+      case ProviderFailureCategory.invalidCredential:
+      case ProviderFailureCategory.forbidden:
+        return InstanceStatus.needsAuth;
+      case ProviderFailureCategory.endpointNotFound:
+      case ProviderFailureCategory.rateLimited:
+      case ProviderFailureCategory.serverError:
+      case ProviderFailureCategory.http:
+        return InstanceStatus.error;
+      default:
+        return InstanceStatus.draft;
+    }
+  }
+
+  ProviderDiscoveryError? _discoveryFailure(ProviderInstance instance) =>
+      ProviderDiscoveryProjection.of(_repo, instance).error;
 
   void markNeedsAuth(String id, {DateTime? now}) =>
       _setStatus(id, InstanceStatus.needsAuth, now: now);

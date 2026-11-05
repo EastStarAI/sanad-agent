@@ -8,6 +8,7 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_dto.da
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_template_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
+import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_mappers.dart';
 import 'package:sanad_client/features/provider_setup/data/models/credential_summary_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
@@ -1348,10 +1349,7 @@ void main() {
 
         expect(fake.testConnectionCalls, ['inst-openai']);
         expect(cubit.state.status, ProviderSetupStatus.instanceForm);
-        expect(
-          cubit.state.error,
-          'The API key was saved, but its connection could not be verified. Check the key and try again.',
-        );
+        expect(cubit.state.error, unverifiedApiKeyMessage);
         await cubit.close();
       },
     );
@@ -1610,16 +1608,97 @@ void main() {
           ),
         ],
         instances: [instance],
-      )..testConnectionResult = const {'success': true, 'models_count': 4};
+      )..testConnectionResult = const {
+          'success': true,
+          'models_count': 4,
+          'model': 'gpt-4o',
+          'latency_ms': 420,
+        };
       final cubit = ProviderSetupCubit(client: fake);
       await cubit.load();
       await cubit.testInstance(instance.id);
 
       expect(cubit.state.status, ProviderSetupStatus.instancesList);
-      expect(
-        cubit.state.instanceFeedback[instance.id],
-        'Connection test passed.',
+      final outcome = cubit.state.instanceTests[instance.id]!;
+      expect(outcome.success, isTrue);
+      expect(outcome.modelsCount, 4);
+      expect(outcome.model, 'gpt-4o');
+      expect(outcome.latencySeconds, '0.4');
+      await cubit.close();
+    });
+
+    test('a rejected Test reports the categorized cause instead of '
+        'a generic sentence', () async {
+      final instance = ProviderInstanceDto(
+        id: 'inst-rejected',
+        templateId: 'opencode-go',
+        displayName: 'OpenCode Go',
+        protocol: 'openai_compatible',
+        authMethod: 'api_key',
+        status: 'draft',
+        isDefault: true,
+        configRevision: 1,
+        credentialRevision: 1,
       );
+      final fake = _FakeProviderSetupClient(
+        providers: [_apiKeyProvider(id: 'opencode-go')],
+        instances: [instance],
+      )..testConnectionResult = const {
+          'success': false,
+          'models_count': 0,
+          'failure': {
+            'kind': 'invalid_credential',
+            'status_code': 401,
+            'message': 'Invalid credential (HTTP 401)',
+            'endpoint': 'https://opencode.ai/zen/go/v1/models',
+          },
+          'error': 'Invalid credential (HTTP 401) from '
+              'https://opencode.ai/zen/go/v1/models',
+        };
+      final cubit = ProviderSetupCubit(client: fake);
+      await cubit.load();
+      await cubit.testInstance(instance.id);
+
+      final outcome = cubit.state.instanceTests[instance.id]!;
+      expect(outcome.success, isFalse);
+      expect(outcome.failure!.kind, 'invalid_credential');
+      expect(outcome.failure!.statusCode, 401);
+      expect(
+        outcome.failure!.endpoint,
+        'https://opencode.ai/zen/go/v1/models',
+      );
+      await cubit.close();
+    });
+
+    test('a new instance cannot reach model selection with a rejected key',
+        () async {
+      final fake = _FakeProviderSetupClient(
+        providers: [_apiKeyProvider(id: 'opencode-go')],
+      )..testConnectionResult = const {
+          'success': false,
+          'models_count': 0,
+          'failure': {
+            'kind': 'invalid_credential',
+            'status_code': 401,
+            'message': 'Invalid credential (HTTP 401)',
+            'endpoint': 'https://opencode.ai/zen/go/v1/models',
+          },
+        };
+      final cubit = ProviderSetupCubit(client: fake);
+      await cubit.load(forcePicker: true);
+      final template = cubit.state.templates.firstWhere(
+        (t) => t.name == 'opencode-go',
+        orElse: () => cubit.state.templates.first,
+      );
+      cubit.selectTemplate(template);
+
+      await cubit.saveApiKey(apiKey: 'sk-rejected-key-000123456789');
+
+      expect(cubit.state.status, ProviderSetupStatus.apiKey);
+      expect(cubit.state.verificationFailure, isNotNull);
+      expect(cubit.state.verificationFailure!.kind, 'invalid_credential');
+      expect(cubit.state.verificationFailure!.statusCode, 401);
+      expect(fake.testConnectionCalls, isNotEmpty);
       await cubit.close();
     });
 

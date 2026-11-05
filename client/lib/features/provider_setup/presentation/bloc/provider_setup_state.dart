@@ -3,6 +3,8 @@ import 'package:sanad_client/features/provider_setup/data/models/auth_session_dt
 import 'package:sanad_client/features/provider_setup/data/models/model_options_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_discovery_error_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_instance_test_result_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_template_dto.dart';
 
@@ -61,6 +63,13 @@ class ProviderSetupState extends Equatable {
   final ProviderSetupOperation? operation;
   final Map<String, String> instanceOperations;
   final Map<String, String> instanceFeedback;
+
+  /// Latest connection-test outcome per instance id, rendered locally.
+  final Map<String, ProviderInstanceTestResultDto> instanceTests;
+
+  /// Typed, sanitized cause of a failed setup verification. Kept beside
+  /// [error] because only a typed value can be localized with its cause.
+  final ProviderDiscoveryErrorDto? verificationFailure;
   final bool verificationLaunchAttempted;
   final bool verificationPageOpened;
   final String? verificationLaunchError;
@@ -91,6 +100,8 @@ class ProviderSetupState extends Equatable {
     this.operation,
     this.instanceOperations = const {},
     this.instanceFeedback = const {},
+    this.instanceTests = const {},
+    this.verificationFailure,
     this.verificationLaunchAttempted = false,
     this.verificationPageOpened = false,
     this.verificationLaunchError,
@@ -126,6 +137,8 @@ class ProviderSetupState extends Equatable {
     Object? operation = _unset,
     Map<String, String>? instanceOperations,
     Map<String, String>? instanceFeedback,
+    Map<String, ProviderInstanceTestResultDto>? instanceTests,
+    Object? verificationFailure = _unset,
     bool? verificationLaunchAttempted,
     bool? verificationPageOpened,
     Object? verificationLaunchError = _unset,
@@ -158,6 +171,10 @@ class ProviderSetupState extends Equatable {
       operation: operation == _unset ? this.operation : operation as ProviderSetupOperation?,
       instanceOperations: instanceOperations ?? this.instanceOperations,
       instanceFeedback: instanceFeedback ?? this.instanceFeedback,
+      instanceTests: instanceTests ?? this.instanceTests,
+      verificationFailure: verificationFailure == _unset
+          ? this.verificationFailure
+          : verificationFailure as ProviderDiscoveryErrorDto?,
       verificationLaunchAttempted: verificationLaunchAttempted ?? this.verificationLaunchAttempted,
       verificationPageOpened: verificationPageOpened ?? this.verificationPageOpened,
       verificationLaunchError: verificationLaunchError == _unset
@@ -193,9 +210,24 @@ class ProviderSetupState extends Equatable {
     operation,
     instanceOperations,
     instanceFeedback,
+    instanceTests,
+    verificationFailure,
     verificationLaunchAttempted,
     verificationPageOpened,
     verificationLaunchError,
     snapshotGeneration,
   ];
+}
+
+/// Immutable result of the three independent read-only provider queries.
+class ProviderSnapshot {
+  const ProviderSnapshot({
+    required this.templates,
+    required this.instances,
+    required this.readiness,
+  });
+
+  final List<ProviderTemplateDto> templates;
+  final List<ProviderInstanceDto> instances;
+  final ProviderReadinessDto readiness;
 }

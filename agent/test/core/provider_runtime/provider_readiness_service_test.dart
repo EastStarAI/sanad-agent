@@ -1,6 +1,8 @@
 import 'dart:io';
 
+import 'package:http/http.dart' as http;
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_error.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
@@ -8,6 +10,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_readiness_service.dar
 import 'package:sanad_agent/core/provider_runtime/secret_record.dart';
 import 'package:sanad_agent/core/provider_runtime/secret_store.dart';
 import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
+import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -144,9 +147,70 @@ void main() {
     },
   );
 
+  test('a rejected credential reports its sanitized cause, not the status name', () {
+    const secret = 'sk-readiness-secret-000123456789';
+    repo.createInstance(
+      ProviderInstance(
+        id: 'inst-rejected',
+        templateId: 'custom',
+        displayName: 'OpenCode Go',
+        protocol: ProviderProtocol.openaiCompatible,
+        authMethod: ProviderAuthMethod.apiKey,
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+        defaultModel: 'gpt-4o',
+        status: InstanceStatus.draft,
+        isDefault: true,
+        configRevision: 1,
+        credentialRevision: 1,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+    );
+    final error = ProviderDiscoveryError.capture(
+      LlmHttpException.fromResponse(
+        http.Response(
+          '{"error":{"message":"Invalid credential for $secret"}}',
+          401,
+          headers: {'x-api-key': secret},
+        ),
+        operation: 'getAvailableModels',
+      ),
+      endpoint: Uri.parse('https://opencode.ai/zen/go/v1/models'),
+    );
+    repo.upsertModelCache(
+      instanceId: 'inst-rejected',
+      cacheKey: 'models',
+      models: const [
+        {'value': 'gpt-4o'},
+      ],
+      fetchedAt: DateTime.utc(2026, 1, 2),
+      source: 'fallback',
+      configRevision: 1,
+      credentialRevision: 1,
+      lastError: error.summary,
+      lastErrorDetail: error.toJson(),
+    );
+
+    final result = service.setupStatus();
+
+    expect(result.runtimeReady, isFalse);
+    expect(
+      result.reason,
+      'Invalid credential (HTTP 401) from https://opencode.ai/zen/go/v1/models',
+    );
+    expect(result.reason, isNot(contains('Instance status')));
+    expect(result.discoveryError?.kind, ProviderFailureCategory.invalidCredential);
+    expect(result.toMap()['discovery_error'], {
+      'kind': ProviderFailureCategory.invalidCredential,
+      'status_code': 401,
+      'message': 'Invalid credential (HTTP 401)',
+      'endpoint': 'https://opencode.ai/zen/go/v1/models',
+    });
+    expect(result.reason!.contains(secret), isFalse);
+  });
+
   test(
-    'non-default instance is never silently selected (fail-closed)',
-    () async {
+    'non-default instance is never silently selected (fail-closed)',    () async {
       // A ready instance that is NOT the default must not be picked up by
       // implicit routing/readiness (Plan 29 §3.10, criterion 13/24).
       repo.createInstance(

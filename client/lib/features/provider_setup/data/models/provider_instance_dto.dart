@@ -1,4 +1,5 @@
 import 'credential_summary_dto.dart';
+import 'provider_discovery_error_dto.dart';
 
 class ProviderInstanceDto {
   final String id;
@@ -20,6 +21,12 @@ class ProviderInstanceDto {
   final bool allowAutoFailover;
   final CredentialSummaryDto? credential;
 
+  /// Sanitized cause of the last failed model discovery (issue 339).
+  final ProviderDiscoveryErrorDto? discoveryError;
+
+  /// Where this instance's cached model list came from.
+  final ProviderModelCacheDto? modelCache;
+
   const ProviderInstanceDto({
     required this.id,
     required this.templateId,
@@ -35,6 +42,8 @@ class ProviderInstanceDto {
     this.requestsPerMinute = 0,
     this.allowAutoFailover = true,
     this.credential,
+    this.discoveryError,
+    this.modelCache,
   });
 
   factory ProviderInstanceDto.fromJson(Map<String, dynamic> json) {
@@ -55,6 +64,8 @@ class ProviderInstanceDto {
       credential: json['credential'] != null
           ? CredentialSummaryDto.fromJson(json['credential'] as Map<String, dynamic>)
           : null,
+      discoveryError: ProviderDiscoveryErrorDto.fromJson(json['discovery_error']),
+      modelCache: ProviderModelCacheDto.fromJson(json['model_cache']),
     );
   }
 
@@ -73,5 +84,7 @@ class ProviderInstanceDto {
     'requests_per_minute': requestsPerMinute,
     'allow_auto_failover': allowAutoFailover,
     if (credential != null) 'credential': credential!.toJson(),
+    if (discoveryError != null) 'discovery_error': discoveryError!.toJson(),
+    if (modelCache != null) 'model_cache': modelCache!.toJson(),
   };
 }

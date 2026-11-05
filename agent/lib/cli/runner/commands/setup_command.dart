@@ -69,7 +69,7 @@ class SetupListCommand extends SanadCommand {
       return await onSetup!(['list']);
     }
     final cli = CliProviderSetup(CliProviderServices());
-    cli.listProviders();
+    cli.listProviders(out: stdoutSink, json: json);
     return 0;
   }
 }
@@ -91,7 +91,7 @@ class SetupStatusCommand extends SanadCommand {
       return await onSetup!(['status']);
     }
     final cli = CliProviderSetup(CliProviderServices());
-    cli.status();
+    cli.status(out: stdoutSink, json: json);
     return 0;
   }
 }

@@ -1,4 +1,5 @@
 // ignore_for_file: invalid_use_of_visible_for_testing_member
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/core/agent_runtime_service.dart';
@@ -18,6 +19,8 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_projection.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_instance_verifier.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
 import 'package:sanad_agent/core/provider_runtime/secret_store.dart';
 import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
@@ -51,6 +54,7 @@ class CliProviderServices {
   final ProviderModelCacheService modelCache;
   final RecentModelSelectionService recentSelection;
   final SecretStore secretStore;
+  final ProviderInstanceVerifier verifier;
 
   /// Builds the bundle sharing a single `EnvFileService` and
   /// `ProviderCredentialStore` across all derived services.
@@ -75,11 +79,87 @@ class CliProviderServices {
       modelCache: getIt<ProviderModelCacheService>(),
       recentSelection: getIt<RecentModelSelectionService>(),
       secretStore: getIt<SecretStore>(),
+      verifier: getIt.isRegistered<ProviderInstanceVerifier>()
+          ? getIt<ProviderInstanceVerifier>()
+          : null,
     );
   }
 
   /// Build the bundle from explicitly-provided instances (used by tests).
-  CliProviderServices.from({
+  ///
+  /// Only [env], [credStore], [catalog], [state], [resolver], [auth], [config],
+  /// [readiness], [modelOptions] and [modelSelection] are required; every other
+  /// collaborator derives from one shared repository, instance service and
+  /// credential service so the CLI can never observe two different stores.
+  factory CliProviderServices.from({
+    required EnvFileService env,
+    required ProviderCredentialStore credStore,
+    required ProviderCatalogService catalog,
+    required ProviderStateService state,
+    required ProviderCredentialResolver resolver,
+    required ProviderAuthSessionService auth,
+    required ProviderConfigService config,
+    required ProviderReadinessService readiness,
+    required ModelOptionsService modelOptions,
+    required ModelSelectionService modelSelection,
+    ProviderInstanceRepository? instanceRepo,
+    ProviderInstanceService? instanceService,
+    ProviderCredentialService? credentialService,
+    ProviderModelCacheService? modelCache,
+    RecentModelSelectionService? recentSelection,
+    SecretStore? secretStore,
+    ProviderInstanceVerifier? verifier,
+  }) {
+    final repo = instanceRepo ?? ProviderInstanceRepository.inMemory();
+    final instances = instanceService ?? ProviderInstanceService(repo);
+    final secrets = secretStore ?? SecureFileSecretStore();
+    final credentials =
+        credentialService ?? ProviderCredentialService(repo, secrets);
+    final cache =
+        modelCache ??
+        ProviderModelCacheService(
+          repo,
+          getIt<AgentRuntimeService>(),
+          getIt.isRegistered<ThinkingCapabilityAssembler>()
+              ? getIt<ThinkingCapabilityAssembler>()
+              : buildDefaultThinkingCapabilityAssembler(
+                  modelsDevLookup: getIt.isRegistered<ModelsDevService>()
+                      ? getIt<ModelsDevService>().modelEntrySync
+                      : null,
+                ),
+          instances: instances,
+          credentialConfigured: (instanceId) =>
+              credentials.summary(instanceId).configured,
+        );
+    return CliProviderServices._(
+      env: env,
+      credStore: credStore,
+      catalog: catalog,
+      state: state,
+      resolver: resolver,
+      auth: auth,
+      config: config,
+      readiness: readiness,
+      modelOptions: modelOptions,
+      modelSelection: modelSelection,
+      instanceRepo: repo,
+      instanceService: instances,
+      credentialService: credentials,
+      modelCache: cache,
+      recentSelection: recentSelection ?? RecentModelSelectionService(repo),
+      secretStore: secrets,
+      verifier:
+          verifier ??
+          ProviderInstanceVerifier(
+            cache: cache,
+            repository: repo,
+            instances: instances,
+            credentials: credentials,
+          ),
+    );
+  }
+
+  CliProviderServices._({
     required this.env,
     required this.credStore,
     required this.catalog,
@@ -90,43 +170,14 @@ class CliProviderServices {
     required this.readiness,
     required this.modelOptions,
     required this.modelSelection,
-    ProviderInstanceRepository? instanceRepo,
-    ProviderInstanceService? instanceService,
-    ProviderCredentialService? credentialService,
-    ProviderModelCacheService? modelCache,
-    RecentModelSelectionService? recentSelection,
-    SecretStore? secretStore,
-  }) : instanceRepo = instanceRepo ?? ProviderInstanceRepository.inMemory(),
-       instanceService =
-           instanceService ??
-           ProviderInstanceService(
-             instanceRepo ?? ProviderInstanceRepository.inMemory(),
-           ),
-       credentialService =
-           credentialService ??
-           ProviderCredentialService(
-             instanceRepo ?? ProviderInstanceRepository.inMemory(),
-             secretStore ?? SecureFileSecretStore(),
-           ),
-       modelCache =
-           modelCache ??
-           ProviderModelCacheService(
-             instanceRepo ?? ProviderInstanceRepository.inMemory(),
-             getIt<AgentRuntimeService>(),
-             getIt.isRegistered<ThinkingCapabilityAssembler>()
-                 ? getIt<ThinkingCapabilityAssembler>()
-                 : buildDefaultThinkingCapabilityAssembler(
-                     modelsDevLookup: getIt.isRegistered<ModelsDevService>()
-                         ? getIt<ModelsDevService>().modelEntrySync
-                         : null,
-                   ),
-           ),
-       recentSelection =
-           recentSelection ??
-           RecentModelSelectionService(
-             instanceRepo ?? ProviderInstanceRepository.inMemory(),
-           ),
-       secretStore = secretStore ?? SecureFileSecretStore();
+    required this.instanceRepo,
+    required this.instanceService,
+    required this.credentialService,
+    required this.modelCache,
+    required this.recentSelection,
+    required this.secretStore,
+    required this.verifier,
+  });
 }
 
 /// Interactive CLI wizard built on top of the Plan 19 provider runtime
@@ -353,19 +404,21 @@ class CliProviderSetup {
         _s.instanceService.setDefault(fresh.id);
         print('\n✓ "${fresh.displayName}" is now the default provider.');
       } else if (action == 'Test Connection') {
-        try {
-          final models = await _s.modelCache.refresh(fresh.id, manual: true);
-          final configured = _s.credentialService.summary(fresh.id).configured;
-          _s.instanceService.markReadyIfComplete(
-            fresh.id,
-            credentialConfigured: configured,
-          );
+        final result = await _s.verifier.verify(fresh.id);
+        if (result.success) {
+          final latency = result.probeLatency;
+          final probe = result.model == null
+              ? ''
+              : latency == null
+              ? ' (${result.model} replied)'
+              : ' (${result.model} replied in '
+                    '${(latency.inMilliseconds / 1000).toStringAsFixed(1)} s)';
+          print('\n✓ Works: ${result.modelsCount} models$probe');
+        } else {
           print(
-            '\n✓ Connection test succeeded (${models.length} models found).',
+            '\n❌ Connection test failed: '
+            '${result.failure?.summary ?? 'the provider endpoint could not be verified'}',
           );
-        } catch (e) {
-          _s.instanceService.markError(fresh.id);
-          print('\n❌ Connection test failed: $e');
         }
       } else if (action == 'Rename Display Name') {
         stdout.write('Enter new display name: ');
@@ -609,6 +662,12 @@ class CliProviderSetup {
       print('  Active model:     ${defaultInst.defaultModel ?? "(none)"}');
     } else {
       print('⚠️ No default provider instance is ready yet.');
+      final failure = defaultInst == null
+          ? null
+          : ProviderDiscoveryProjection.of(_s.instanceRepo, defaultInst).error;
+      if (failure != null) {
+        print('  Cause: ${failure.summary}');
+      }
     }
     print('\nDatabase: state.db');
     print('Secrets:  provider_secrets.json');
@@ -617,51 +676,117 @@ class CliProviderSetup {
   // ── Subcommands ────────────────────────────────────────────────────────
 
   /// `sanad setup list` — shows every supported provider and its state.
-  void listProviders() {
+  ///
+  /// A provider whose model discovery failed reports the sanitized cause and,
+  /// when the stored list is a preset fallback, that it is unverified (issue
+  /// 339). [out] and [json] exist so the command can honor `--json` and so
+  /// tests read the exact rendered output.
+  void listProviders({StringSink? out, bool json = false}) {
+    final sink = out ?? stdout;
     final instances = _s.instanceService.findAll();
     final defaultInst = _s.instanceService.findDefault();
-    if (instances.isEmpty) {
-      print('\nNo provider instances configured yet.');
+    final projections = {
+      for (final inst in instances)
+        inst.id: ProviderDiscoveryProjection.of(_s.instanceRepo, inst),
+    };
+
+    if (json) {
+      sink.writeln(
+        jsonEncode({
+          'providers': instances
+              .map(
+                (inst) => {
+                  'id': inst.id,
+                  'template_id': inst.templateId,
+                  'display_name': inst.displayName,
+                  'protocol': inst.protocol,
+                  'auth_method': inst.authMethod,
+                  if (inst.baseUrl != null) 'base_url': inst.baseUrl,
+                  if (inst.defaultModel != null)
+                    'default_model': inst.defaultModel,
+                  'status': inst.status,
+                  'is_default': inst.isDefault,
+                  ...?projections[inst.id]?.toMap(),
+                },
+              )
+              .toList(),
+          'default_provider_id': defaultInst?.id,
+        }),
+      );
       return;
     }
 
-    print(
+    if (instances.isEmpty) {
+      sink.writeln('\nNo provider instances configured yet.');
+      return;
+    }
+
+    sink.writeln(
       '\nConfigured provider instances (default: ${defaultInst?.displayName ?? "(none)"}):\n',
     );
     for (final inst in instances) {
       final marker = inst.isDefault ? ' *' : '  ';
-      print(
+      sink.writeln(
         '$marker${inst.displayName.padRight(20)} ${inst.templateId.padRight(16)} ${inst.status.toUpperCase()}',
       );
+      final discovery = projections[inst.id];
+      final error = discovery?.error;
+      if (error != null) {
+        sink.writeln('      Discovery error: ${error.summary}');
+      }
+      if (discovery?.source == 'fallback') {
+        sink.writeln('      Models: unverified fallback list');
+      }
     }
-    print('\n  * = default instance');
+    sink.writeln('\n  * = default instance');
 
     final recent = _s.recentSelection.getRecentSelections();
     if (recent.isNotEmpty) {
-      print('\nRecently selected models:');
+      sink.writeln('\nRecently selected models:');
       for (final r in recent) {
         final name = r['instance_display_name'] ?? r['instance_id'];
-        print('  $name / ${r['model_id']}');
+        sink.writeln('  $name / ${r['model_id']}');
       }
     }
   }
 
   /// `sanad setup status` — shows readiness and current provider/model.
-  void status() {
+  void status({StringSink? out, bool json = false}) {
+    final sink = out ?? stdout;
     final defaultInst = _s.instanceService.findDefault();
     final runtime = _s.readiness.runtimeCheck();
-    print('\nProvider Setup Status:');
-    print('  has_provider:    ${runtime.hasProvider}');
-    print(
+
+    if (json) {
+      sink.writeln(
+        jsonEncode({
+          ...runtime.toMap(),
+          if (defaultInst != null) ...{
+            'active_provider_name': defaultInst.displayName,
+            'active_provider_status': defaultInst.status,
+          },
+        }),
+      );
+      return;
+    }
+
+    sink.writeln('\nProvider Setup Status:');
+    sink.writeln('  has_provider:    ${runtime.hasProvider}');
+    sink.writeln(
       '  active_provider: ${defaultInst?.displayName ?? runtime.activeProvider ?? "(none)"}',
     );
-    print(
+    sink.writeln(
       '  active_model:    ${defaultInst?.defaultModel ?? runtime.activeModel ?? "(none)"}',
     );
-    print('\nRuntime Check:');
-    print('  runtime_ready:   ${runtime.runtimeReady}');
-    if (runtime.reason != null) print('  reason:          ${runtime.reason}');
-    print('');
+    sink.writeln('\nRuntime Check:');
+    sink.writeln('  runtime_ready:   ${runtime.runtimeReady}');
+    if (runtime.reason != null) {
+      sink.writeln('  reason:          ${runtime.reason}');
+    }
+    final error = runtime.discoveryError;
+    if (error != null) {
+      sink.writeln('  discovery_error: ${error.summary}');
+    }
+    sink.writeln('');
   }
 
   /// `sanad setup remove <provider>` — removes a single provider's settings.

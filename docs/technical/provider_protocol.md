@@ -85,7 +85,45 @@ Model fetch contract details:
 - The OpenAI-compatible adapter delegates its pure discovery rules to two owners: `agent/lib/engine/adapters/openai_compatible/model_discovery.dart` (identity normalization, fallback catalog, endpoint candidates, labels, agentic/reasoning/context heuristics) and `agent/lib/engine/adapters/openai_compatible/thinking_control_discovery.dart` (Kimi, native LM Studio, and OpenRouter declared controls). The adapter keeps the discovery transport, its outcome state, and the `models.dev` service, and passes transport, headers, and logging into the control rules as typed callbacks so no rule reaches for adapter state.
 - Model metadata returned by discovery is runtime input, not presentation-only data. `context_window` is persisted with each `ModelOption`; `AgentRuntimeService` supplies adapters with an instance-scoped lookup that accepts only cache rows matching the route's config and credential revisions and the exact normalized model id. Context-limit precedence is explicit `config.yaml` override, matching instance catalog, adapter/provider metadata (including `models.dev` for Codex Responses), known static metadata, then the adapter fallback. Codex forward-compatible GPT-6 aliases may inherit a positive window only from the live GPT-6 template that caused the alias to be offered; absent or invalid template metadata remains unresolved so the later sources decide it. Unknown OpenAI-compatible and Ollama models retain the conservative `4000` fallback because inflating an unverified local/small model window can suppress required compaction and cause provider overflow. A model discovered after the Sanad release therefore does not require a hardcoded model-name condition to receive its advertised context window.
 - `provider.instance.create` must never crash the daemon on validation failures such as duplicate display names. The response must come back on `provider.instance.created` with an `error` payload so the client can render an inline validation message.
-- **Connection Test Verification**: To ensure that the connection test command (`provider.instance.test`) fails properly when endpoints are offline or misconfigured, it queries the resulting model cache metadata directly after performing the manual refresh. If `last_error` is populated, or if the cache `source` is set to `'fallback'` or `'cache_stale'` (indicating that live fetch failed and the adapter fell back to local/cached presets), the test fails with `success: false` and returns the actual connection error details to the UI/CLI.
+- **Two-stage Connection Verification** (issue 339): `provider.instance.test` proves the credential twice, because a `/models` listing alone does not — some providers serve the catalog unauthenticated. Stage one is a manual live discovery: a row with a `last_error`, or a `source` of `fallback`, `cache_stale`, or `failed`, fails the test. Stage two is one minimal generation request against the instance's own default (or first advertised) model: a short prompt, `maxOutputTokens: 1`, a short timeout, no tools, no retries, never persisted as conversation history, and never streamed. Only both stages passing yields `success: true`. `ProviderInstanceVerifier` (`agent/lib/core/provider_runtime/provider_instance_verifier.dart`) is the single owner; the Test action, setup verification, and the CLI share it.
+- **Sanitized failure projection** (issue 339): every provider failure leaves the daemon as one typed, user-safe value — `ProviderDiscoveryError` (`agent/lib/core/provider_runtime/provider_discovery_error.dart`). It carries a category, the HTTP status, a short canonical reason, and the endpoint reduced to `scheme://host[:port]/path`. It never carries a credential, a header, the request payload, or the provider's raw response body; query strings, fragments, and user info are stripped because they can carry a secret. Categories: `invalid_credential` (`401`), `forbidden` (`403`), `endpoint_not_found` (`404`), `rate_limited` (`429`), `timeout` (`408` or a client-side timeout), `network` (socket/TLS/DNS), `server_error` (`5xx`), `no_models` (empty or unusable list), `http` (any other non-2xx), and `unknown`. Clients localize the category; `message`/`error` stay English for the CLI, logs, and older clients.
+
+### Provider Instance Projection (issue 339)
+
+Every envelope that carries a provider instance (`provider.instances_result`, the
+`provider_instances_changed` broadcast, and the created/updated/renamed replies)
+adds two additive, nullable keys beside `status` and `credential`:
+
+| Key | Shape | Meaning |
+|---|---|---|
+| `discovery_error` | `{kind, status_code?, message, endpoint?}` or `null` | Sanitized cause of the last failed discovery for the instance's **current** config/credential revisions. A row written for older revisions projects `null`: that failure is not the reason the instance is currently not ready. |
+| `model_cache` | `{source, verified}` or `null` | `source` is `live`, `fallback`, `cache_stale`, or `failed`; `verified` is true only for a live answer to the current revisions. A `fallback` list is an unverified preset list and every surface must label it as such. |
+
+`model.snapshot_result` keeps its flat `cache_status`, `fetched_at`, and
+`warning` fields for older clients and adds the same two keys. `warning` is now
+the sanitized one-line summary (`<reason> from <endpoint>`), never the provider's
+response body.
+
+### Instance lifecycle and discovery failures (issue 339)
+
+`markReadyIfComplete` still requires a matching-revision cache row with
+`last_error == null` and a non-empty model list, so a stored failure keeps the
+instance out of `ready`. On top of that, a definitive failure now changes the
+status instead of collapsing into `draft`:
+
+| Failure category | Resulting status |
+|---|---|
+| `invalid_credential`, `forbidden` | `needs_auth` |
+| `endpoint_not_found`, `rate_limited`, `server_error`, `http` | `error` |
+| `network`, `timeout`, `no_models`, `unknown` | unchanged (`draft` while unverified) |
+
+`ProviderInstanceService.applyConnectionOutcome` applies this mapping after every
+verification, and the cache service applies it after every discovery when the
+composition root wires the instance service. `reconcileStatus` re-derives the
+same classification from the current-revision cache row, so a metadata-only edit
+cannot silently reset a rejected credential back to `draft`. A successful
+re-discovery nulls both `last_error` and `last_error_detail` in the same upsert,
+which returns the instance to `ready` through `markReadyIfComplete`.
 
 ## Socket Commands
 
@@ -95,7 +133,7 @@ All commands are transport-agnostic (work over local daemon WebSocket and cloud 
 
 | Command | Response event | Description |
 |---|---|---|
-| `provider.setup_status` | `provider_readiness_result` | Storage-only check: is there a configured provider + model? |
+| `provider.setup_status` | `provider_readiness_result` | Storage-only check: is there a configured provider + model? A default instance that is not ready names its sanitized discovery cause as `reason` and carries it as `discovery_error` instead of reporting only `Instance status: draft`. |
 | `provider.runtime_check` | `provider_readiness_result` | Deeper check: can the runtime resolve credentials + model? |
 
 ### OAuth Sessions
@@ -129,7 +167,7 @@ All responses carry `request_id`. Instance mutations broadcast
 | `provider.instance.rename` | `provider.instance.renamed` | Renames an instance (UUID stable). |
 | `provider.instance.remove` | `provider.instance.removed` | Deletes an instance + cascades cache/recent/secret. |
 | `provider.instance.set_default` | `provider.instance.default_changed` | Promotes one instance to default. |
-| `provider.instance.test` | `provider.instance.test_result` | Tests endpoint/model connectivity without making it default. The result carries canonical Boolean `success`; clients must not infer success from an absent `status` string. |
+| `provider.instance.test` | `provider.instance.test_result` | Two-stage connection verification without making the instance default: a verified live discovery plus one minimal generation probe. Payload: canonical Boolean `success`, `models_count`, the probed `model`, `latency_ms` when the probe ran, and — on failure — `failure` (typed sanitized cause: `kind`, `status_code`, `message`, `endpoint`) beside the legacy `error`/`message` summary. Clients must not infer success from an absent `status` string. The outcome also updates the instance lifecycle: `invalid_credential`/`forbidden` → `needs_auth`, other definitive HTTP failures → `error`, unproven transport/parse failures keep `draft`. |
 | `provider.credential.update` | `provider.credential.updated` | `keep` \| `replace` \| `remove` for API-key instances. |
 | `provider.auth.reconnect` | `provider_auth_started` | Re-runs OAuth for an existing instance. |
 | `provider.auth.disconnect` | `provider.credential.updated` | Deletes OAuth tokens; instance metadata stays. |
@@ -513,7 +551,8 @@ This keeps non-composer callers safe at the runtime boundary. In the Flutter com
 |---|---|
 | `sanad setup` | Interactive wizard: catalog → authenticate (API key / custom endpoint / device-code OAuth) → model selection → readiness check. |
 | `sanad setup list` | Lists every supported provider with its auth flow and state; marks the active provider. |
-| `sanad setup status` | Prints `setup_status` and `runtime_check` results. |
+| `sanad setup status` | Prints `setup_status` and `runtime_check` results, including the sanitized discovery cause as `reason` and `discovery_error` when the default instance is not ready. `--json` emits the readiness map with `active_provider_name`, `active_provider_status`, and `discovery_error`. |
+| `sanad providers` | Prints one line per instance (`name`, `template`, `STATUS`) plus an indented `Discovery error: <reason> from <endpoint>` line and `Models: unverified fallback list` when the stored list is a preset fallback. `--json` emits `{providers: [{id, template_id, display_name, protocol, auth_method, base_url?, default_model?, status, is_default, discovery_error, model_cache}], default_provider_id}`. |
 | `sanad setup remove <id>` | Removes a single provider's settings and credentials. |
 
 The legacy `runCodexDeviceCodeFlow` and `fetchModelsFromApi` helpers remain for backward compatibility, but the wizard now uses `ProviderAuthSessionService` and `ModelOptionsService`.

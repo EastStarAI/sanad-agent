@@ -5,6 +5,7 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_instan
 import 'package:sanad_client/features/provider_setup/data/models/provider_template_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
+import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_discovery_notice.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_step_scaffold.dart';
 
 const _supportedProviderProtocols = [
@@ -282,6 +283,13 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
                         foregroundColor: Theme.of(context).colorScheme.error,
                       ),
                     ),
+                  ),
+                ],
+                if (state.verificationFailure != null) ...[
+                  const SizedBox(height: 12),
+                  ProviderDiscoveryNotice(
+                    instanceId: state.selectedInstance?.id ?? 'setup',
+                    error: state.verificationFailure,
                   ),
                 ],
                 if (state.error != null) ...[

@@ -426,8 +426,11 @@ void main() {
           CanonicalEventTypes.providerInstanceTestResult,
         );
         expect(payload['success'], isFalse);
-        expect(payload['error'], contains('Instance not found'));
-        expect(payload.containsKey('models_count'), isFalse);
+        expect(payload['models_count'], 0);
+        expect(
+          (payload['failure'] as Map)['message'],
+          'Provider instance not found',
+        );
       },
     );
   });

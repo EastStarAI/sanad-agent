@@ -10,9 +10,12 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:http/http.dart' as http;
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_error.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
+import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
@@ -40,6 +43,8 @@ void main() {
         'fetched_at',
         'warning',
         'models',
+        'discovery_error',
+        'model_cache',
       });
       expect(snapshot.containsKey('template_id'), isFalse);
       expect(snapshot.containsKey('credential'), isFalse);
@@ -180,12 +185,16 @@ void main() {
               as Map;
 
       expect(failingEntry['cache_status'], 'error');
-      expect(failingEntry['warning'], 'Connection refused');
+      // Legacy free text is never replayed; the cause degrades to the canonical
+      // sanitized form (issue 339).
+      expect(failingEntry['warning'], 'Model discovery failed');
       expect(failingEntry['models'], isEmpty);
-      // The warning survives a successful partial fetch without downgrading
-      // the cache status.
+      // A stored error keeps a partial list unverified without downgrading the
+      // revision-match cache status.
       expect(partialEntry['cache_status'], 'ready');
-      expect(partialEntry['warning'], 'Refresh timed out');
+      expect(partialEntry['warning'], 'Model discovery failed');
+      expect((partialEntry['model_cache'] as Map)['verified'], isFalse);
+      expect((partialEntry['model_cache'] as Map)['source'], 'cache_stale');
     });
 
     test(
@@ -264,6 +273,155 @@ void main() {
         ).getRecentSelections().single['model_id'],
         'gpt-4o',
       );
+    });
+  });
+
+  group('provider instance discovery projection', () {
+    test('an instance without a cache row projects no error and no cache', () async {
+      h.createInstance();
+
+      final instance =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      expect(instance.containsKey('discovery_error'), isTrue);
+      expect(instance['discovery_error'], isNull);
+      expect(instance['model_cache'], isNull);
+    });
+
+    test('a rejected credential reaches the instance list sanitized', () async {
+      final instance = h.createInstance();
+      final error = ProviderDiscoveryError.capture(
+        LlmHttpException.fromResponse(
+          http.Response(
+            '{"error":{"message":"Invalid credential for $harnessApiKey"}}',
+            401,
+            headers: {'x-api-key': harnessApiKey},
+          ),
+          operation: 'getAvailableModels',
+        ),
+        endpoint: Uri.parse('https://gateway.example/zen/go/v1/models'),
+      );
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+
+      final envelope = await h.instancesList();
+      final payload =
+          (h.payloadOf(envelope)['instances'] as List).single as Map;
+
+      expect(payload['status'], InstanceStatus.draft);
+      expect(payload['model_cache'], {
+        'source': 'fallback',
+        'verified': false,
+      });
+      final discovery = Map<String, dynamic>.from(
+        payload['discovery_error'] as Map,
+      );
+      expect(discovery['kind'], ProviderFailureCategory.invalidCredential);
+      expect(discovery['status_code'], 401);
+      expect(discovery['message'], 'Invalid credential (HTTP 401)');
+      expect(
+        discovery['endpoint'],
+        'https://gateway.example/zen/go/v1/models',
+      );
+
+      // No credential, header, or provider body anywhere in the envelope.
+      final encoded = jsonEncode(envelope);
+      expect(encoded, isNot(contains(harnessApiKey)));
+      expect(encoded, isNot(contains('x-api-key')));
+      expect(encoded, isNot(contains('Invalid credential for')));
+    });
+
+    test('a stale row projects its cache but not its error', () async {
+      final instance = h.createInstance();
+      final error = ProviderDiscoveryError.capture(
+        LlmHttpException.fromResponse(
+          http.Response('', 401),
+          operation: 'getAvailableModels',
+        ),
+      );
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision + 1,
+        credentialRevision: instance.credentialRevision,
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      // The row describes an older configuration: its 401 is not the reason the
+      // instance is currently not ready.
+      expect(payload['discovery_error'], isNull);
+      expect(payload['model_cache'], {
+        'source': 'fallback',
+        'verified': false,
+      });
+    });
+
+    test('a verified row is projected as verified live cache', () async {
+      h.seedVerifiedCache(h.createInstance().id);
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      expect(payload['status'], InstanceStatus.ready);
+      expect(payload['discovery_error'], isNull);
+      expect(payload['model_cache'], {'source': 'live', 'verified': true});
+    });
+
+    test('the instances-changed broadcast carries the same projection', () async {
+      final instance = h.createInstance();
+      final error = ProviderDiscoveryError.capture(
+        LlmHttpException.fromResponse(
+          http.Response('', 403),
+          operation: 'getAvailableModels',
+        ),
+        endpoint: Uri.parse('https://gateway.example/v1/models'),
+      );
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesChanged())['instances'] as List).single
+              as Map;
+
+      expect(
+        (payload['discovery_error'] as Map)['kind'],
+        ProviderFailureCategory.forbidden,
+      );
+      expect((payload['model_cache'] as Map)['source'], 'fallback');
     });
   });
 

@@ -222,6 +222,7 @@ class ProviderInstanceRepository {
       'config_revision': row['config_revision'],
       'credential_revision': row['credential_revision'],
       'last_error': row['last_error'],
+      'last_error_detail': row['last_error_detail'],
     };
   }
 
@@ -235,12 +236,14 @@ class ProviderInstanceRepository {
     required int configRevision,
     required int credentialRevision,
     String? lastError,
+    String? lastErrorDetail,
   }) {
     final stmt = _db.prepare('''
       INSERT INTO provider_model_cache (
         instance_id, cache_key, models_json, fetched_at, source,
-        endpoint_fingerprint, config_revision, credential_revision, last_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        endpoint_fingerprint, config_revision, credential_revision, last_error,
+        last_error_detail
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(instance_id, cache_key) DO UPDATE SET
         models_json = excluded.models_json,
         fetched_at = excluded.fetched_at,
@@ -248,7 +251,8 @@ class ProviderInstanceRepository {
         endpoint_fingerprint = excluded.endpoint_fingerprint,
         config_revision = excluded.config_revision,
         credential_revision = excluded.credential_revision,
-        last_error = excluded.last_error
+        last_error = excluded.last_error,
+        last_error_detail = excluded.last_error_detail
     ''');
     try {
       stmt.execute([
@@ -261,6 +265,7 @@ class ProviderInstanceRepository {
         configRevision,
         credentialRevision,
         lastError,
+        lastErrorDetail,
       ]);
     } finally {
       stmt.dispose();

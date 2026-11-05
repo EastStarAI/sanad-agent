@@ -672,5 +672,19 @@
   "scheduleRunTrigger": "المُشغِّل",
   "scheduleDerivedLabel": "جدول {id}",
   "providerPickerSearchHint": "ابحث في المزودين",
-  "providerPickerEmptyResults": "لا يوجد مزوّد يطابق بحثك."
+  "providerPickerEmptyResults": "لا يوجد مزوّد يطابق بحثك.",
+  "providerDiscoveryInvalidCredential": "رفض المزوّد بيانات الاعتماد هذه. حدِّث مفتاح API ثم اختبر الاتصال مرة أخرى.",
+  "providerDiscoveryForbidden": "بيانات الاعتماد هذه غير مسموح لها باستخدام هذا المزوّد. تحقّق من أذونات الحساب أو خطته.",
+  "providerDiscoveryEndpointNotFound": "المزوّد لا يوفّر نقطة نهاية النماذج. تحقّق من عنوان URL الأساسي.",
+  "providerDiscoveryRateLimited": "المزوّد يحدّ من معدل هذا الحساب أو أن الحصة استُهلكت. أعد المحاولة لاحقًا.",
+  "providerDiscoveryTimeout": "لم تستجب نقطة نهاية المزوّد في الوقت المحدد.",
+  "providerDiscoveryNetwork": "تعذّر الوصول إلى نقطة نهاية المزوّد. تحقّق من عنوان URL الأساسي ومن اتصالك.",
+  "providerDiscoveryServerError": "أبلغ المزوّد عن خطأ في الخادم. أعد المحاولة لاحقًا.",
+  "providerDiscoveryNoModels": "لم يُعِد المزوّد قائمة نماذج قابلة للاستخدام.",
+  "providerDiscoveryHttp": "رفض المزوّد الطلب (HTTP {status}).",
+  "providerDiscoveryUnknown": "فشل طلب المزوّد.",
+  "providerDiscoveryEndpoint": "نقطة النهاية: {endpoint}",
+  "providerModelCacheUnverified": "قائمة احتياطية غير مُتحقَّق منها: هذه النماذج من قوالب مدمجة وليست من المزوّد.",
+  "providerTestWorks": "يعمل: تم سرد {models} نموذجًا.",
+  "providerTestWorksWithProbe": "يعمل: {models} نموذجًا، وردّ {model} في {seconds} ثانية."
 }

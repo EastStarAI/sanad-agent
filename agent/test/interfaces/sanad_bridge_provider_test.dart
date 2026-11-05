@@ -649,7 +649,12 @@ OPENROUTER_API_KEY=sk-or-test
       );
       final payload = envelope['payload'] as Map<String, dynamic>;
       expect(payload['success'], isFalse);
-      expect(payload['error'], contains('Connection refused'));
+      // The raw transport text never reaches the client; the sanitized cause
+      // does (issue 339).
+      expect(payload['error'], isNot(contains('Connection refused')));
+      expect(payload['error'], contains('Could not reach the provider endpoint'));
+      expect((payload['failure'] as Map)['kind'], 'network');
+      expect(payload['message'], payload['error']);
     },
   );
 
@@ -714,6 +719,82 @@ OPENROUTER_API_KEY=sk-or-test
       );
       final payload = envelope['payload'] as Map<String, dynamic>;
       expect(payload['success'], isTrue);
+      expect(payload['models_count'], 1);
+      expect(payload['model'], 'gpt-4o');
+      expect(payload['latency_ms'], isA<int>());
+    },
+  );
+
+  test(
+    'provider.instance.test reports a categorized probe rejection',
+    () async {
+      final repo = getIt<ProviderInstanceRepository>();
+
+      await getIt.unregister<AgentRuntimeService>();
+      await getIt.unregister<ProviderModelCacheService>();
+
+      final mockAdapter = _MockTestAdapter(
+        getIt<Config>(),
+        ProviderRegistry.findByNameOrAlias('openai')!,
+        () async => [ModelOption(value: 'gpt-4o', label: 'GPT-4o')],
+        generationFailure: const LlmHttpException(
+          statusCode: 403,
+          body: 'forbidden',
+          headers: {},
+          operation: 'chat',
+        ),
+      );
+      mockAdapter.setAvailableModelsSource('live');
+
+      final runtimeService = _TestRuntimeService(
+        getIt<Config>(),
+        repo,
+        (sig) => mockAdapter,
+        credentialResolver: getIt<ProviderCredentialResolver>(),
+        credService: getIt<ProviderCredentialService>(),
+      );
+      getIt.registerSingleton<AgentRuntimeService>(runtimeService);
+      getIt.registerSingleton<ProviderModelCacheService>(
+        ProviderModelCacheService(
+          repo,
+          runtimeService,
+          buildDefaultThinkingCapabilityAssembler(),
+        ),
+      );
+
+      repo.createInstance(
+        ProviderInstance(
+          id: 'test-probe-inst',
+          templateId: 'openai',
+          displayName: 'Test Probe',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          defaultModel: 'gpt-4o',
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      final envelope = await sendCommand(
+        'provider.instance.test',
+        payload: {
+          'request_id': 'req-test-probe',
+          'provider_instance_id': 'test-probe-inst',
+        },
+      );
+
+      final payload = envelope['payload'] as Map<String, dynamic>;
+      expect(payload['success'], isFalse);
+      expect(payload['models_count'], 1);
+      expect((payload['failure'] as Map)['kind'], 'forbidden');
+      expect((payload['failure'] as Map)['status_code'], 403);
+      expect(payload['error'], contains('Access denied (HTTP 403)'));
+      expect(
+        repo.findById('test-probe-inst')!.status,
+        InstanceStatus.needsAuth,
+      );
     },
   );
 
@@ -2759,11 +2840,33 @@ class _RetryThenHangAdapter implements LLMAdapter {
 
 class _MockTestAdapter extends BaseOpenAIAdapter {
   final Future<List<ModelOption>> Function() getModelsHandler;
+  final Object? generationFailure;
 
-  _MockTestAdapter(super.config, super.profile, this.getModelsHandler);
+  _MockTestAdapter(
+    super.config,
+    super.profile,
+    this.getModelsHandler, {
+    this.generationFailure,
+  });
 
   @override
   Future<List<ModelOption>> getAvailableModels() => getModelsHandler();
+
+  /// Scripted generation: the connection test's probe must never reach the
+  /// network in a test (issue 339).
+  @override
+  Future<AgentResponse> generateResponse(
+    List<dynamic> history, {
+    List<dynamic>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    if (generationFailure != null) throw generationFailure!;
+    return AgentResponse(
+      message: Message(role: MessageRole.assistant, content: 'OK'),
+      model: modelOverride,
+    );
+  }
 }
 
 class _TestRuntimeService extends AgentRuntimeService {

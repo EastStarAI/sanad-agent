@@ -977,5 +977,57 @@
   "providerPickerEmptyResults": "No providers match your search.",
   "@providerPickerEmptyResults": {
     "description": "Empty state shown when provider search filters out every provider"
+  },
+  "providerDiscoveryInvalidCredential": "The provider rejected this credential. Update the API key, then test the connection again.",
+  "providerDiscoveryForbidden": "The credential is not allowed to use this provider. Check the account permissions or plan.",
+  "providerDiscoveryEndpointNotFound": "The provider does not serve the models endpoint. Check the base URL.",
+  "providerDiscoveryRateLimited": "The provider is rate limiting this account or it is out of quota. Try again later.",
+  "providerDiscoveryTimeout": "The provider endpoint did not answer in time.",
+  "providerDiscoveryNetwork": "The provider endpoint could not be reached. Check the base URL and your connection.",
+  "providerDiscoveryServerError": "The provider reported a server error. Try again later.",
+  "providerDiscoveryNoModels": "The provider returned no usable model list.",
+  "providerDiscoveryHttp": "The provider rejected the request (HTTP {status}).",
+  "@providerDiscoveryHttp": {
+    "description": "Fallback provider failure message for an HTTP status the daemon could not classify further",
+    "placeholders": {
+      "status": {
+        "type": "int"
+      }
+    }
+  },
+  "providerDiscoveryUnknown": "The provider request failed.",
+  "providerDiscoveryEndpoint": "Endpoint: {endpoint}",
+  "@providerDiscoveryEndpoint": {
+    "description": "Sanitized endpoint that the daemon probed",
+    "placeholders": {
+      "endpoint": {
+        "type": "String"
+      }
+    }
+  },
+  "providerModelCacheUnverified": "Unverified fallback list: these models come from built-in presets, not from the provider.",
+  "providerTestWorks": "Works: {models} models listed.",
+  "@providerTestWorks": {
+    "description": "Connection test passed and the generation probe was not measured",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerTestWorksWithProbe": "Works: {models} models, {model} replied in {seconds} s.",
+  "@providerTestWorksWithProbe": {
+    "description": "Connection test passed: verified model count, the probed model, and its round-trip seconds",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      },
+      "model": {
+        "type": "String"
+      },
+      "seconds": {
+        "type": "String"
+      }
+    }
   }
 }

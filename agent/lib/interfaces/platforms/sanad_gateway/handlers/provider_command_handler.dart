@@ -9,8 +9,10 @@ import 'package:sanad_agent/core/provider_runtime/provider_catalog_service.dart'
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_instance_verifier.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_projection.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
-import 'package:sanad_agent/core/provider_runtime/provider_model_id.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_readiness_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_state_service.dart';
@@ -21,6 +23,7 @@ import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 
 import '../sanad_protocol_bridge.dart';
+import 'provider_model_projection.dart';
 
 /// Handles provider setup, model selection, credentials, auth, and instance
 /// lifecycle commands for the Sanad protocol.
@@ -43,6 +46,20 @@ class ProviderCommandHandler {
   final AgentRuntimeService? _agentRuntime;
   final ProviderUsageService? _usageService;
 
+  /// "Does this instance actually work?" owner shared by the Test action and
+  /// setup verification (issue 339). Built from the handler's own collaborators
+  /// when the composition root does not provide one.
+  late final ProviderInstanceVerifier _verifier =
+      _verifierOverride ??
+      ProviderInstanceVerifier(
+        cache: _cacheService,
+        repository: _repository,
+        instances: _instanceService,
+        credentials: _credentialService,
+        runtime: _agentRuntime,
+      );
+  final ProviderInstanceVerifier? _verifierOverride;
+
   ProviderCommandHandler({
     required ProviderCatalogService catalog,
     required ProviderInstanceService instanceService,
@@ -59,6 +76,7 @@ class ProviderCommandHandler {
     Config? config,
     AgentRuntimeService? agentRuntime,
     ProviderUsageService? usageService,
+    ProviderInstanceVerifier? verifier,
   }) : _catalog = catalog,
        _instanceService = instanceService,
        _credentialService = credentialService,
@@ -73,7 +91,8 @@ class ProviderCommandHandler {
        _bridge = bridge,
        _config = config,
        _agentRuntime = agentRuntime,
-       _usageService = usageService;
+       _usageService = usageService,
+       _verifierOverride = verifier;
 
   Map<String, dynamic> buildProviderReadinessEnvelope(
     CanonicalEvent event, {
@@ -110,10 +129,7 @@ class ProviderCommandHandler {
     final requestId = event.payload['request_id'] as String?;
 
     final instances = _instanceService.findAll();
-    final list = instances.map((instance) {
-      final sum = _credentialService.summary(instance.id);
-      return {...instance.toMap(), 'credential': sum.toMap()};
-    }).toList();
+    final list = instances.map(_projectInstance).toList();
 
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
@@ -155,7 +171,10 @@ class ProviderCommandHandler {
       return _bridge.buildAgentEventEnvelope(
         CanonicalEvent(
           type: CanonicalEventTypes.providerInstanceCreated,
-          payload: {'request_id': requestId, 'instance': created.toMap()},
+          payload: {
+            'request_id': requestId,
+            'instance': _projectInstance(created, withCredential: false),
+          },
         ),
       );
     } catch (e) {
@@ -217,7 +236,10 @@ class ProviderCommandHandler {
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
         type: CanonicalEventTypes.providerInstanceUpdated,
-        payload: {'request_id': requestId, 'instance': current!.toMap()},
+        payload: {
+          'request_id': requestId,
+          'instance': _projectInstance(current!, withCredential: false),
+        },
       ),
     );
   }
@@ -234,7 +256,10 @@ class ProviderCommandHandler {
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
         type: CanonicalEventTypes.providerInstanceRenamed,
-        payload: {'request_id': requestId, 'instance': updated.toMap()},
+        payload: {
+          'request_id': requestId,
+          'instance': _projectInstance(updated, withCredential: false),
+        },
       ),
     );
   }
@@ -290,51 +315,17 @@ class ProviderCommandHandler {
     final requestId = event.payload['request_id'] as String?;
     final instanceId = event.payload['provider_instance_id'] as String? ?? '';
 
-    try {
-      final models = await _cacheService.refresh(instanceId, manual: true);
-
-      // Check database cache state immediately after manual refresh
-      final cache = _repository.readModelCache(instanceId, 'models');
-      if (cache != null) {
-        if (cache['last_error'] != null) {
-          throw StateError(cache['last_error'].toString());
-        }
-        if (cache['source'] == 'fallback' || cache['source'] == 'cache_stale') {
-          throw StateError(
-            'Connection failed: fell back to cached or preset models.',
-          );
-        }
-      }
-
-      final configured = _credentialService.summary(instanceId).configured;
-      _instanceService.markReadyIfComplete(
-        instanceId,
-        credentialConfigured: configured,
-      );
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: CanonicalEventTypes.providerInstanceTestResult,
-          payload: {
-            'request_id': requestId,
-            'provider_instance_id': instanceId,
-            'success': true,
-            'models_count': models.length,
-          },
-        ),
-      );
-    } catch (e) {
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: CanonicalEventTypes.providerInstanceTestResult,
-          payload: {
-            'request_id': requestId,
-            'provider_instance_id': instanceId,
-            'success': false,
-            'error': e.toString(),
-          },
-        ),
-      );
-    }
+    final verification = await _verifier.verify(instanceId);
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.providerInstanceTestResult,
+        payload: {
+          'request_id': requestId,
+          'provider_instance_id': instanceId,
+          ...verification.toMap(),
+        },
+      ),
+    );
   }
 
   Future<Map<String, dynamic>> buildCredentialUpdateEnvelope(
@@ -449,9 +440,9 @@ class ProviderCommandHandler {
 
     final list = instances.map((instance) {
       final row = _repository.readModelCache(instance.id, 'models');
+      final discovery = ProviderDiscoveryProjection.of(_repository, instance);
       String cacheStatus = 'empty';
       String? fetchedAtStr;
-      String? warning;
       List<dynamic> cachedModels = [];
 
       if (row != null) {
@@ -475,7 +466,6 @@ class ProviderCommandHandler {
         }
 
         if (row['last_error'] != null) {
-          warning = row['last_error'].toString();
           final models = row['models'] as List?;
           if (models == null || models.isEmpty) {
             cacheStatus = 'error';
@@ -491,7 +481,7 @@ class ProviderCommandHandler {
       return {
         'id': instance.id,
         'display_name': instance.displayName,
-        'default_model': _normalizeModelIdForInstance(
+        'default_model': ProviderModelProjection.normalizeModelId(
           instance.templateId,
           instance.protocol,
           instance.defaultModel,
@@ -500,12 +490,15 @@ class ProviderCommandHandler {
         'is_default': instance.isDefault,
         'cache_status': cacheStatus,
         'fetched_at': fetchedAtStr,
-        'warning': warning,
-        'models': _normalizeCachedModels(
+        // Sanitized summary; the raw provider body never leaves the daemon
+        // (issue 339).
+        'warning': discovery.error?.summary,
+        'models': ProviderModelProjection.normalizeCachedModels(
           cachedModels,
           templateId: instance.templateId,
           protocol: instance.protocol,
         ),
+        ...discovery.toMap(),
       };
     }).toList();
 
@@ -517,7 +510,7 @@ class ProviderCommandHandler {
       }
       return {
         ...entry,
-        'model_id': _normalizeModelIdForInstance(
+        'model_id': ProviderModelProjection.normalizeModelId(
           instance.templateId,
           instance.protocol,
           entry['model_id']?.toString(),
@@ -632,7 +625,7 @@ class ProviderCommandHandler {
       }
       return {
         ...entry,
-        'model_id': _normalizeModelIdForInstance(
+        'model_id': ProviderModelProjection.normalizeModelId(
           instance.templateId,
           instance.protocol,
           entry['model_id']?.toString(),
@@ -949,10 +942,7 @@ class ProviderCommandHandler {
 
   Future<Map<String, dynamic>> buildInstancesChangedBroadcastEnvelope() async {
     final instances = _instanceService.findAll();
-    final list = instances.map((instance) {
-      final sum = _credentialService.summary(instance.id);
-      return {...instance.toMap(), 'credential': sum.toMap()};
-    }).toList();
+    final list = instances.map(_projectInstance).toList();
 
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
@@ -965,57 +955,23 @@ class ProviderCommandHandler {
     );
   }
 
+  /// Instance map every client surface receives.
+  ///
+  /// Credential status and the sanitized model-discovery projection (issue 339)
+  /// travel with the instance so a rejected credential is visible without a
+  /// second round trip.
+  Map<String, dynamic> _projectInstance(
+    ProviderInstance instance, {
+    bool withCredential = true,
+  }) => {
+    ...instance.toMap(),
+    if (withCredential)
+      'credential': _credentialService.summary(instance.id).toMap(),
+    ...ProviderDiscoveryProjection.of(_repository, instance).toMap(),
+  };
+
   void _invalidateRuntimeCache() {
     _agentRuntime?.invalidate();
-  }
-
-  List<dynamic> _normalizeCachedModels(
-    List<dynamic> cachedModels, {
-    required String templateId,
-    required String protocol,
-  }) {
-    return cachedModels
-        .map((entry) {
-          if (entry is! Map) {
-            return entry;
-          }
-          final map = Map<String, dynamic>.from(entry);
-          final rawValue = map['value']?.toString();
-          if (rawValue == null || rawValue.isEmpty) {
-            return _normalizeModelEntry(map);
-          }
-          return _normalizeModelEntry({
-            ...map,
-            'value': ProviderModelId.normalize(
-              templateId: templateId,
-              protocol: protocol,
-              rawModelId: rawValue,
-            ),
-          });
-        })
-        .toList(growable: false);
-  }
-
-  /// Projects one cached model onto the `model.snapshot_result` contract.
-  /// The cache keeps the provider's raw `/models` record (`model_metadata`)
-  /// for Agent-side capability derivation; it is not part of the snapshot
-  /// contract and dominated the payload (about 1.2 MB of a 1.5 MB aggregator
-  /// catalog), which stalled every later reply on the relayed cloud path.
-  Map<String, dynamic> _normalizeModelEntry(Map<String, dynamic> map) {
-    final normalized = Map<String, dynamic>.from(map)..remove('model_metadata');
-    final value = normalized['value']?.toString();
-    if (value != null && value.isNotEmpty) {
-      normalized['id'] ??= value;
-    }
-    final label = normalized['label']?.toString();
-    if (label != null && label.isNotEmpty) {
-      normalized['name'] ??= label;
-    }
-    if (normalized.containsKey('supports_reasoning')) {
-      normalized['supports_reasoning_output'] ??=
-          normalized['supports_reasoning'];
-    }
-    return normalized;
   }
 
   // ── Task 55: Provider account usage limits ─────────────────────────────
@@ -1102,21 +1058,6 @@ class ProviderCommandHandler {
         type: CanonicalEventTypes.providerUsageSupportResult,
         payload: {'request_id': requestId, 'support': support},
       ),
-    );
-  }
-
-  String? _normalizeModelIdForInstance(
-    String templateId,
-    String protocol,
-    String? rawModelId,
-  ) {
-    if (rawModelId == null || rawModelId.isEmpty) {
-      return rawModelId;
-    }
-    return ProviderModelId.normalize(
-      templateId: templateId,
-      protocol: protocol,
-      rawModelId: rawModelId,
     );
   }
 }
