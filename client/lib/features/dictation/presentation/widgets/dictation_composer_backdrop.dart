@@ -95,8 +95,11 @@ class _DictationComposerBackdropState extends State<DictationComposerBackdrop>
         if (!visible) return const SizedBox.shrink();
         return IgnorePointer(
           child: CustomPaint(
-            key: const Key('dictation_level'),
-            painter: _WavePainter(samples: _samples, color: colors.primary),
+            key: const Key('dictation_composer_meter'),
+            painter: DictationMeterPainter(
+              samples: List<double>.of(_samples),
+              color: colors.primary,
+            ),
           ),
         );
       },
@@ -104,8 +107,10 @@ class _DictationComposerBackdropState extends State<DictationComposerBackdrop>
   }
 }
 
-class _WavePainter extends CustomPainter {
-  _WavePainter({required this.samples, required this.color});
+/// Paints the rolling meter. Public so a unit test can draw it into an offscreen
+/// canvas and assert pixels without booting a whole composer.
+class DictationMeterPainter extends CustomPainter {
+  DictationMeterPainter({required this.samples, required this.color});
 
   final List<double> samples;
   final Color color;
@@ -129,7 +134,7 @@ class _WavePainter extends CustomPainter {
     // Silence: a quiet baseline so the card does not look broken, no fake bars.
     if (loudest < 0.02) {
       paint
-        ..color = color.withValues(alpha: 0.18)
+        ..color = color.withValues(alpha: 0.22)
         ..strokeWidth = 2;
       canvas.drawLine(
         Offset(0, centerY),
@@ -142,11 +147,11 @@ class _WavePainter extends CustomPainter {
     for (var i = 0; i < count; i++) {
       // sqrt gives quiet speech visible movement without a loud word clipping.
       final amplitude = math.sqrt(samples[i].clamp(0.0, 1.0));
-      final halfHeight = math.max(1.5, amplitude * size.height / 2);
+      final halfHeight = math.max(2.0, amplitude * size.height * 0.45);
       final x = i * slot + slot / 2;
       final freshness = 0.35 + 0.65 * (i / (count - 1));
       // Low alpha keeps the text above the bars readable at any level.
-      paint.color = color.withValues(alpha: 0.14 + 0.22 * freshness);
+      paint.color = color.withValues(alpha: 0.20 + 0.26 * freshness);
       canvas.drawLine(
         Offset(x, centerY - halfHeight),
         Offset(x, centerY + halfHeight),
@@ -156,7 +161,7 @@ class _WavePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_WavePainter oldDelegate) =>
+  bool shouldRepaint(DictationMeterPainter oldDelegate) =>
       oldDelegate.color != color || !_sameSamples(oldDelegate.samples, samples);
 
   bool _sameSamples(List<double> a, List<double> b) {

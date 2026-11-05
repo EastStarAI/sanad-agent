@@ -68,5 +68,15 @@ void main() {
       expect(light.engine, SttEngineKind.whisperCpp);
       expect(light.totalBytes, lessThan(defaultSttEntry.totalBytes));
     });
+
+    test('the f16 precision entry is offered once its artifact is hosted', () {
+      final precise = sttEntryById('egy-whisper-turbo-ggml-f16');
+      expect(precise, isNotNull);
+      // Hidden entries would never reach the sheet, so a regression here means
+      // the 1.62 GB build becomes unreachable again.
+      expect(precise!.hidden, isFalse);
+      expect(precise.hosted, isTrue);
+      expect(precise.totalBytes, greaterThan(defaultSttEntry.totalBytes));
+    });
   });
 }
