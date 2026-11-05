@@ -72,6 +72,7 @@ This contract applies to `agent/`.
 
 ### Provider and Capability Authority
 - The provider runtime is the sole authority for templates, instances, credentials status, model discovery, readiness, defaults, rate limits, and failover policy.
+- `ProviderRegistry.profiles` declaration order is the setup presentation order for every surface: the CLI wizard, Client onboarding, and Client Settings render `ProviderCatalogService` output as-is. `opencode-go` is declared first on purpose; no surface may re-sort or re-group the catalog.
 - Provider setup is instance-first. Only a successfully verified current revision may be ready or default; metadata/credential changes that invalidate verification demote readiness.
 - `ToolsRegistry` and `LocalRuntimeCatalog` are the canonical execution/search and per-turn capability owners. `AgentRunner` executes their output but does not construct workspace, MCP, skill, web, or platform catalogs.
 - `PermissionManager` alone enforces sensitive approvals and persists suspension before waiting. UI/platform responses cannot bypass policy or grant ownership.

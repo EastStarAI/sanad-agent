@@ -474,6 +474,45 @@ void main() {
   );
 
   testWidgets(
+    'provider picker renders the daemon catalog order with OpenCode Go first',
+    (tester) async {
+      final fake = _FakeClient(
+        providers: [
+          _provider(
+            id: 'opencode-go',
+            displayName: 'OpenCode Go',
+            models: const ['kimi-k2.7-code'],
+          ),
+          _provider(),
+          _provider(
+            id: 'anthropic',
+            displayName: 'Anthropic',
+            models: const ['claude-3'],
+          ),
+        ],
+        runtimeReady: false,
+      );
+      await tester.pumpWidget(_wrap(ProviderSetupFlow(client: fake)));
+      await tester.pumpAndSettle();
+
+      // The client must not re-sort or regroup templates: the first provider
+      // the daemon catalog sends is the first card the user can pick.
+      final opencodeTop = tester.getTopLeft(
+        find.byKey(const Key('provider_card_item_opencode-go')),
+      );
+      final openaiTop = tester.getTopLeft(
+        find.byKey(const Key('provider_card_item_openai')),
+      );
+      final anthropicTop = tester.getTopLeft(
+        find.byKey(const Key('provider_card_item_anthropic')),
+      );
+      expect(opencodeTop.dy, lessThan(openaiTop.dy));
+      expect(openaiTop.dy, lessThan(anthropicTop.dy));
+      expect(find.text('OpenCode Go'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
     'selected device without configured providers shows the provider picker',
     (tester) async {
       final fake = _FakeClient(
