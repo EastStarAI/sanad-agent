@@ -15,7 +15,7 @@ description: "Static and live verification matrix for labels, templates, contrib
 | Discussions | Categories and templates distinguish Ideas & RFCs, Q&A, Show and Tell, and maintainer-only announcements |
 | PR template | Linked Issue, bounded verification, platforms, security/privacy, docs, screenshots, rollback, duplicates, and optional AI disclosure are covered |
 | Skills | Three contribution skills and `sanad-repository-maintainer` have valid frontmatter, repository paths resolve, no active skill mentions the retired project manager, and every sensitive mutation requires explicit authorization |
-| CI | Path classifier, common-ancestor check, protected labels, label-event reruns, fork-safe permissions, stable aggregate job, and checksum-verified secret scanning without organization-license secrets are present; only exact reviewed synthetic credential-test paths are allowlisted |
+| CI | Path classifier, common-ancestor check, protected labels, on-demand protected-label re-verification, fork-safe permissions, stable aggregate job, and checksum-verified secret scanning without organization-license secrets are present; only exact reviewed synthetic credential-test paths are allowlisted |
 | VS Code | The three tracked JSON files parse, remain allowlisted, contain no machine paths, and expose no shortcuts for ownership-sensitive runtime mutations |
 | Governance text | No CLA/DCO/sign-off requirement remains in active public guidance; single-maintainer and independent-maintainer protection modes are explicit |
 | Brand assets | README has no unapproved interface screenshot; unconsumed legacy logos are absent; build-required icons stay present until an approved canonical source can replace them atomically |
@@ -41,7 +41,7 @@ A vulnerability diverges at step 1 to Private Vulnerability Reporting and must n
 - Verify Private Vulnerability Reporting and every contact link.
 - Open documentation-only, agent-only, client-only, release-sensitive, and security-sensitive test pull requests.
 - Verify unaffected lanes are skipped safely while the aggregate succeeds only when every affected lane succeeds.
-- Add each protected review label from an authorized account and verify the failed gate reruns.
+- Add each protected review label from an authorized account, dispatch `protected-labels.yml` with that pull request number, and verify the failed gate reruns; remove the label, dispatch again, and verify the gate fails. Confirm that a label change without a dispatch starts no run.
 - Open a fork pull request and verify no signing, deployment, or environment secret is exposed.
 - Apply branch protection and confirm direct push, force push, deletion, merge commit, rebase merge, and unresolved-conversation merge are blocked.
 - Confirm the repository-maintainer skill describes public/read, triage, write/maintain, and administrative boundaries without embedding a current account identity or token permission, and requires explicit human authorization before an agent performs any mutation.
