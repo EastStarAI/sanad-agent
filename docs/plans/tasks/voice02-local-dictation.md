@@ -257,14 +257,61 @@ fallback until G5 decides whether streaming needs sherpa at all. The in-app
 install path was verified against the real host: 874 MB at 3.5 MB/s, sha
 checked, activated, next session on the new model.
 
+## Decisions taken in the 2026-11-05 session (all owner-approved)
+
+1. **Engine**: whisper.cpp replaces sherpa as the default runtime. sherpa stays
+   behind the `engine` field as a fallback until G5 decides whether real
+   streaming needs it; if G5 lands with whisper windows, sherpa is deleted.
+2. **Model set shown to users**: three entries, each note stating the memory it
+   costs — `egy-whisper-turbo-ggml-q8` (default, ~1.2 GB), `egy-whisper-turbo-ggml-q5`
+   (~0.95 GB), `whisper-base-int8` (~0.76 GB, lowest accuracy).
+   `egy-whisper-turbo-ggml-f16` (~1.9 GB, unquantized) is catalogued but
+   **hidden until its 1.6 GB artifact is uploaded**; the ONNX int8 and the
+   multilingual turbo entries are hidden fallbacks reachable through
+   `stt.model_id`.
+3. **No persistent model load**: the model loads on session start and is freed
+   on stop. Reloading per session is the accepted cost (1.1–1.5 s sherpa,
+   0.2–0.3 s whisper.cpp) instead of holding ~1–2 GB all day.
+4. **Noise gate**: a session whose loud-frame share is under 6 % is not decoded
+   (whisper hallucinates on silence).
+5. **Composer meter (experiment)**: the dictation level is painted across the
+   whole composer card while listening; owner verdict pending, revert is one
+   line (drop the `ClipRRect`/`Stack` wrapper in `composer_container.dart`).
+
+## Open items and follow-ups (state at 2026-11-05)
+
+- [ ] Upload `ggml-egy-turbo-f16.bin` (1.6 GB) to the ggml repo, verify the sha,
+      then flip `hidden: false` on `egy-whisper-turbo-ggml-f16`.
+- [ ] Decide whether the prebuilt dylibs stay in git (`agent/native/macos`, 2.2 MB,
+      requires the `release-reviewed` label on every PR) or are built in CI from
+      whisper.cpp source (~2 min per build, clean repo).
+- [ ] Owner verdict on the composer-wide meter; keep or revert to the in-button
+      bars.
+- [ ] Optional CI speed-up: shard `Test client` into two parallel jobs
+      (~5 min wall instead of ~9).
+- [ ] Optional: default to `q5` instead of `q8` on devices with little free RAM.
+
+## Verification facts recorded this session
+
+- Client CI job has been 7m27s–9m24s across all runs of this branch
+  (`cd139789` 7m27s → `b6826f25` 9m24s); the `Test client` step alone is
+  239–337 s. The suite grew to 2402 tests; the spread is runner variance, not a
+  code slowdown. Local full client suite: 2402 passed, 3 skipped, 4m11s.
+- Two client regressions were introduced and fixed within the session: the send
+  path read `DictationCubit` unconditionally (ProviderNotFound in every composer
+  test, message never dispatched) and the backdrop ticker repeated forever
+  (`pumpAndSettle` never settled, 60 fps repaint while idle).
+- PR #337 is green on all platforms (agent, client, CLI automation and
+  sanad-dev bootstrap on ubuntu/macos/windows) with `maintainer-reviewed` and
+  `release-reviewed` applied.
+
 ## Current status
-- Current gate: **G7** (whisper.cpp engine behind the catalog) — G2d is
-  committed as `d8497896` after live acceptance (full transcript, meter, send
-  waits for the transcript). G5 (English streaming proof) and G3 close v1.
-- Memory baseline to beat (macOS arm64, Egyptian turbo int8): daemon idle 46 MB,
-  listening 448 MB, one model in a clean process 1.5–1.8 GB, peak with 6
-  threads + daemon ≈2.4–3.0 GB. Handy/whisper.cpp reference: ~1.5 GB.
-- Remaining work: G7 then G5 then G3 (v1, local macOS). G0b (Nawah) is
-  deprioritized pending a sherpa-packaged Arabic artifact.
-- TEMP diagnostics still enabled (`dictation level window`, `dictation audio
-  window`, `dictation final: audio_ms`) — removed in G3 after G7 acceptance.
+- Current gate: **G7 complete and default** — whisper.cpp engine, hosted Egyptian
+  ggml models, three-model sheet, in-app install verified. Next: **G5** (English
+  streaming proof) then **G3** (docs, verification, delivery); G6 stays deferred.
+- Memory facts (macOS arm64): daemon idle 46 MB; listening ~1.2 GB with the
+  Egyptian q8 (vs 2.4–3.0 GB on the sherpa int8 path); back to ~0.6 GB after a
+  session, flat across sessions (no leak). Egyptian q5 peaks ~0.95 GB, base
+  ~0.76 GB, f16 ~1.9 GB.
+- Diagnostic logs are removed; only metadata lines remain (`session started`,
+  `drained`, `final: audio_ms/decode_ms`).
