@@ -670,5 +670,7 @@
   "scheduleNotSet": "غير محدد",
   "scheduleOwner": "المالك",
   "scheduleRunTrigger": "المُشغِّل",
-  "scheduleDerivedLabel": "جدول {id}"
+  "scheduleDerivedLabel": "جدول {id}",
+  "providerPickerSearchHint": "ابحث في المزودين",
+  "providerPickerEmptyResults": "لا يوجد مزوّد يطابق بحثك."
 }
