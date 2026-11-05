@@ -159,6 +159,22 @@ flutter:
     - assets/brand/
     - assets/tray/
     - assets/wallpapers/
+
+  # Bundled font families. Cairo is the default app font and must render
+  # offline from the first frame, so it ships with the application instead of
+  # being fetched at runtime. The OFL license text is bundled with it through
+  # the `assets/` directory above.
+  fonts:
+    - family: Cairo
+      fonts:
+        - asset: assets/fonts/Cairo-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Cairo-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Cairo-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Cairo-Bold.ttf
+          weight: 700
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
 

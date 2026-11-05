@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
 import '../../data/client_cli_approval_coordinator.dart';
@@ -140,7 +140,7 @@ class _ApprovalDialogState extends State<_ApprovalDialog> {
                       Expanded(
                         child: Text(
                           l10n.clientCliApprovalTitle,
-                          style: GoogleFonts.inter(
+                          style: AppTypography.text(context,
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: colorScheme.onSurface,
@@ -186,7 +186,7 @@ class _ApprovalDialogState extends State<_ApprovalDialog> {
                               ),
                               TextSpan(
                                 text: widget.request.commandPreview,
-                                style: const TextStyle(fontFamily: 'monospace'),
+                                style: AppTypography.mono(),
                               ),
                             ],
                           ),

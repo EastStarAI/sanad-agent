@@ -116,6 +116,29 @@ class LLMRequestDumper {
     return false;
   }
 
+  /// Absolute paths of dumps an in-flight request still owns.
+  ///
+  /// Retention must never delete one of these: a request that is still
+  /// streaming keeps appending to its own dump file.
+  static Set<String> inFlightDumpPaths() => {
+    ?_activeUnkeyedNormalDumpPath,
+    ..._activeNormalDumps.values,
+    ..._activeCompactionDumps.values,
+  };
+
+  /// Whether [fileName] is one of this owner's dump file names.
+  ///
+  /// The naming contract is `request_dump_<key>_<timestamp>.json` and
+  /// `compaction_dump_<key>_<timestamp>.json`, optionally suffixed with the
+  /// collision-breaking microsecond stamp. Retention deletes nothing else from
+  /// the dump directory.
+  static bool isDumpFileName(String fileName) =>
+      _dumpFileNamePattern.hasMatch(fileName);
+
+  static final RegExp _dumpFileNamePattern = RegExp(
+    r'^(?:request_dump|compaction_dump)_.+\.json$',
+  );
+
   /// Returns whether the given parameters identify a compaction request.
   static bool isCompactionRequest({String? compactionId, String? requestId}) {
     if (compactionId != null && compactionId.isNotEmpty) return true;

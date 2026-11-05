@@ -134,6 +134,11 @@ longer agree with the file. Reading a name no parser declares stays safe: the
 Agent rejects an unknown option before it acts, so a misread there can never
 approve a session the command goes on to use.
 
+The fixture is Agent-owned but Client-consumed, so Public CI treats it as a
+Client path: a change to it runs the Client lanes even when no `client/` file
+changed. `docs/operations/continuous_integration.md` owns that classification
+rule, and any new Agent-to-Client contract artifact belongs in the same list.
+
 ---
 
 ## 3. Remote Execution Seam

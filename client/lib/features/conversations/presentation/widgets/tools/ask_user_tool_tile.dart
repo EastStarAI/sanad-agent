@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 
 import '../../utils/text_utils.dart';
@@ -78,7 +78,7 @@ class AskUserToolTile extends StatelessWidget {
                         question,
                         textDirection: questionDirection,
                         textAlign: questionDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
-                        style: GoogleFonts.roboto(
+                        style: AppTypography.text(context,
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
                           color: Theme.of(context).colorScheme.onSurface,
@@ -103,7 +103,7 @@ class AskUserToolTile extends StatelessWidget {
                         answer,
                         textDirection: answerDirection,
                         textAlign: answerDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
-                        style: GoogleFonts.roboto(
+                        style: AppTypography.text(context,
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
                           color: Theme.of(context).colorScheme.primary,
@@ -128,7 +128,7 @@ class AskUserToolTile extends StatelessWidget {
         if (fallbackQuestion != null) ...[
           Text(
             'Question:',
-            style: GoogleFonts.outfit(
+            style: AppTypography.text(context,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -141,13 +141,13 @@ class AskUserToolTile extends StatelessWidget {
             textAlign: TextUtils.getTextDirection(fallbackQuestion) == TextDirection.rtl
                 ? TextAlign.right
                 : TextAlign.left,
-            style: GoogleFonts.roboto(fontSize: 13),
+            style: AppTypography.text(context, fontSize: 13),
           ),
           const SizedBox(height: 8),
         ],
         Text(
           'User Answer:',
-          style: GoogleFonts.outfit(
+          style: AppTypography.text(context,
             color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
             fontSize: 11,
             fontWeight: FontWeight.bold,
@@ -158,7 +158,7 @@ class AskUserToolTile extends StatelessWidget {
           fallbackAnswer,
           textDirection: TextUtils.getTextDirection(fallbackAnswer),
           textAlign: TextUtils.getTextDirection(fallbackAnswer) == TextDirection.rtl ? TextAlign.right : TextAlign.left,
-          style: GoogleFonts.roboto(
+          style: AppTypography.text(context,
             fontSize: 13,
             fontWeight: FontWeight.bold,
             color: Theme.of(context).colorScheme.primary,
@@ -198,7 +198,7 @@ class AskUserToolTile extends StatelessWidget {
       ),
       child: Text(
         event.text.isNotEmpty ? event.text : (event.toolOutput?.toString() ?? 'Clarifying question failed.'),
-        style: GoogleFonts.firaCode(fontSize: 11, color: errorColor),
+        style: AppTypography.mono(fontSize: 11, color: errorColor),
       ),
     );
   }

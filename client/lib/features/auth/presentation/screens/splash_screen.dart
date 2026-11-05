@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/gateway_connection_cubit.dart';
@@ -167,7 +168,10 @@ class _SplashScreenState extends State<SplashScreen> {
                             backgroundColor: theme.colorScheme.onSurface,
                             foregroundColor: theme.colorScheme.surface,
                             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                            textStyle: AppTypography.text(context,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ),
                         if (_error != null) ...[

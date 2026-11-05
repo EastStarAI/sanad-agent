@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 
 /// Reminder that the first message needs a selected workspace.
 class ComposerWorkspaceWarning extends StatelessWidget {
@@ -28,7 +28,7 @@ class ComposerWorkspaceWarning extends StatelessWidget {
             Expanded(
               child: Text(
                 'Select a workspace before your first Sanad Agent message.',
-                style: GoogleFonts.inter(
+                style: AppTypography.text(context,
                   color: colorScheme.onSurface,
                   fontSize: 12,
                   fontWeight: FontWeight.w500,

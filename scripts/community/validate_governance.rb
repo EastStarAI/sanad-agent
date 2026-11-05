@@ -136,11 +136,15 @@ fail_validation('aggregate check name is unstable') unless workflow.include?('na
 fail_validation('Public CI must not restart on label events') if workflow.include?('labeled')
 fail_validation('protected-label job must read current labels at run time') unless workflow.include?('pulls/$PR_NUMBER') && !workflow.include?('github.event.pull_request.labels')
 protected_labels_workflow = File.read(File.join(ROOT, '.github/workflows/protected-labels.yml'))
-fail_validation('protected-label changes must re-run the protected review job') unless protected_labels_workflow.include?('types: [labeled, unlabeled]') && protected_labels_workflow.include?('REVIEW_JOB: Verify protected review labels') && protected_labels_workflow.include?('/rerun"')
+fail_validation('protected-label re-verification must be dispatched on demand') unless protected_labels_workflow.include?('workflow_dispatch:') && protected_labels_workflow.include?('pr_number:') && protected_labels_workflow.include?('required: true')
+fail_validation('protected-label re-verification must not run on label events') if protected_labels_workflow.include?('labeled') || protected_labels_workflow.include?('pull_request:')
+fail_validation('protected-label dispatch must validate an open pull request') unless protected_labels_workflow.include?('pulls/$PR_NUMBER') && protected_labels_workflow.include?('.state')
+fail_validation('protected-label dispatch must re-run the protected review job') unless protected_labels_workflow.include?('REVIEW_JOB: Verify protected review labels') && protected_labels_workflow.include?('/rerun"')
 fail_validation('only Public CI may emit the required aggregate check') if protected_labels_workflow.match?(/^\s*name: All required checks pass/)
 %w[maintainer-reviewed security-reviewed release-reviewed].each do |label|
-  fail_validation("protected label #{label} is not wired to both workflows") unless workflow.include?(label) && protected_labels_workflow.scan(%("#{label}")).length == 2
+  fail_validation("protected label #{label} is not verified by Public CI") unless workflow.include?(label)
 end
+fail_validation('protected-label dispatch must not gate on label names') if protected_labels_workflow.match?(/maintainer-reviewed|security-reviewed|release-reviewed/)
 fail_validation('fork PRs must not use pull_request_target') if workflow.include?('pull_request_target')
 fail_validation('CI must not require the organization-licensed Gitleaks Action') if workflow.include?('gitleaks/gitleaks-action') || workflow.include?('GITLEAKS_LICENSE')
 fail_validation('Gitleaks archive must be checksum verified before execution') unless workflow.include?('sha256sum --check')

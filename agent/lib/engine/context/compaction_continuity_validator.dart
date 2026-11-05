@@ -32,6 +32,31 @@ class CompactionAntiThrashingHints {
 
 /// Validates summary coverage and anti-degradation rules (Plan 53c Gate C4).
 class CompactionContinuityValidator {
+  /// Longest label value that may stay a critical anchor.
+  ///
+  /// A label whose value runs longer than this is prose (a brief line, a pasted
+  /// paragraph), not a continuity anchor: no summary can be required to
+  /// reproduce it verbatim. The anchor is still reported, so extraction stays
+  /// observable, but it never blocks a boundary.
+  static const int maxCriticalAnchorChars = 160;
+
+  /// The line grammar for one labelled anchor.
+  ///
+  /// The label owns its line: optional indentation, markdown list or quote
+  /// markers, an optional ATX heading prefix, optional emphasis markers, the
+  /// label, a colon, and a non-empty value. Anchoring at the line start is what
+  /// keeps `Task:` and `mask:` from arming an `ask` anchor, and requiring the
+  /// colon directly after the label is what keeps `asked about:` from arming it.
+  /// A label used mid-paragraph is prose rather than an anchor: that is the
+  /// price of a grammar that cannot match inside another word.
+  static RegExp labelPattern(String label) => RegExp(
+    r'^[ \t]*(?:[-*+>][ \t]*)*(?:#{1,6}[ \t]*)?(?:\*\*|__)?' +
+        RegExp.escape(label) +
+        r'(?:\*\*|__)?[ \t]*:[ \t]*(\S.*)$',
+    multiLine: true,
+    caseSensitive: false,
+  );
+
   final SecretsRedactor _redactor;
 
   CompactionContinuityValidator({SecretsRedactor? redactor})
@@ -41,20 +66,23 @@ class CompactionContinuityValidator {
     List<IndexedConversationMessage> sourceMessages,
   ) {
     final anchors = <CompactionContinuityAnchor>[];
+    // One anchor per label key: a restated goal or a second blocker must not
+    // multiply the verbatim coverage a summary owes, and the first occurrence
+    // is the stable one across successive summarized ranges.
+    final labeledKeys = <String>{};
     for (final entry in sourceMessages) {
       final content = entry.message.content ?? '';
       void addLabeled(String label, {bool critical = true}) {
-        final pattern = RegExp('$label:\\s*(.+)', caseSensitive: false);
-        final match = pattern.firstMatch(content);
-        if (match != null) {
-          anchors.add(
-            CompactionContinuityAnchor(
-              key: label,
-              value: match.group(1)!.trim(),
-              critical: critical,
-            ),
-          );
-        }
+        final match = labelPattern(label).firstMatch(content);
+        if (match == null || !labeledKeys.add(label)) return;
+        final value = match.group(1)!.trim();
+        anchors.add(
+          CompactionContinuityAnchor(
+            key: label,
+            value: value,
+            critical: critical && value.length <= maxCriticalAnchorChars,
+          ),
+        );
       }
 
       // Only user-authored text may establish semantic continuity anchors.

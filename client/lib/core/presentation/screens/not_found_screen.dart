@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 
 class NotFoundScreen extends StatelessWidget {
   final String? errorMessage;
@@ -58,9 +59,9 @@ class NotFoundScreen extends StatelessWidget {
                   ),
                   child: Text(
                     errorMessage!,
-                    style: theme.textTheme.bodySmall?.copyWith(
+                    style: AppTypography.mono(
+                      textStyle: theme.textTheme.bodySmall,
                       color: colorScheme.error,
-                      fontFamily: 'monospace',
                     ),
                     textAlign: TextAlign.center,
                   ),

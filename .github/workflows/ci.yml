@@ -2,11 +2,14 @@ name: Public CI
 
 on:
   pull_request:
-    # Label events are handled by protected-labels.yml, which re-runs only the
-    # protected-label job of this run; ordinary labels never restart full CI.
+    # Protected review labels are re-verified on demand through
+    # protected-labels.yml, so label changes never restart full CI.
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  # The merge queue re-runs this workflow on the queued merge commit, so the
+  # aggregate check below gates the queue exactly as it gates a pull request.
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -37,31 +40,42 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           classification_failed=false
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if ! git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null ||
-              ! git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed"; then
-              classification_failed=true
-              : > "$RUNNER_TEMP/changed"
-            fi
-          elif ! git ls-files > "$RUNNER_TEMP/changed"; then
-            classification_failed=true
-            : > "$RUNNER_TEMP/changed"
-          fi
+          case "$EVENT_NAME" in
+            pull_request|merge_group)
+              if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]] ||
+                ! git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null ||
+                ! git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed"; then
+                classification_failed=true
+                : > "$RUNNER_TEMP/changed"
+              fi
+              ;;
+            *)
+              if ! git ls-files > "$RUNNER_TEMP/changed"; then
+                classification_failed=true
+                : > "$RUNNER_TEMP/changed"
+              fi
+              ;;
+          esac
           cat "$RUNNER_TEMP/changed"
           agent=false; client=false; docs=false; release=false; security=false
+          # `agent/test/fixtures/cli_relay_grammar.json` is Agent-owned but the
+          # Client reads it as a cross-component contract, so a change to it
+          # must run the Client lanes too. Add every Agent-to-Client contract
+          # fixture here; docs/operations/continuous_integration.md owns the rule.
           while IFS= read -r path; do
             case "$path" in agent/*|.agents/skills/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) agent=true ;; esac
-            case "$path" in client/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) client=true ;; esac
+            case "$path" in client/*|shared/auth_lock/*|release/contract/*|release/release-contract.json|agent/test/fixtures/cli_relay_grammar.json) client=true ;; esac
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
             case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_*.dart|scripts/release/*|scripts/install.sh|scripts/install.ps1) release=true ;; esac
             case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|shared/auth_lock/*|shared/auth_lock/**/*|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac
           done < "$RUNNER_TEMP/changed"
-          if [[ "$EVENT_NAME" != "pull_request" || "$classification_failed" == true ]] ||
+          if [[ "$EVENT_NAME" != "pull_request" && "$EVENT_NAME" != "merge_group" ]] ||
+            [[ "$classification_failed" == true ]] ||
             [[ "$agent$client$docs$release$security" == falsefalsefalsefalsefalse ]]; then
             echo "Classifier fallback: running every validation lane."
             agent=true; client=true; docs=true; release=true; security=true
@@ -87,11 +101,12 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null
 
-  agent:
+  agent-checks:
+    name: Agent contract checks and analyze
     needs: classify
     if: needs.classify.outputs.agent == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
@@ -137,9 +152,53 @@ jobs:
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze
-      - name: Test agent
+      - name: Test CWD-sensitive suites in isolation
         working-directory: agent
-        run: fvm dart test
+        run: |
+          set -o pipefail
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(../scripts/ci/list_test_shard.sh . --isolated)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No suite assigns the process working directory."
+            exit 0
+          fi
+          fvm dart test --concurrency 1 "${files[@]}" \
+            --file-reporter "json:$RUNNER_TEMP/agent-isolated.jsonl"
+          echo "CWD-sensitive suites ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/agent-isolated.jsonl")."
+
+  agent-tests:
+    name: Test agent (${{ matrix.shard }}/4)
+    needs: classify
+    if: needs.classify.outputs.agent == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      SHARD: ${{ matrix.shard }}
+      TOTAL_SHARDS: 4
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Test agent shard ${{ matrix.shard }}/4
+        working-directory: agent
+        run: |
+          set -o pipefail
+          fvm dart pub get
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(../scripts/ci/list_test_shard.sh . "$((SHARD - 1))" "$TOTAL_SHARDS")
+          echo "Shard $SHARD/$TOTAL_SHARDS runs ${#files[@]} test files."
+          status=0
+          fvm dart test "${files[@]}" \
+            --file-reporter "json:$RUNNER_TEMP/agent-tests.jsonl" || status=$?
+          echo "Agent shard $SHARD/$TOTAL_SHARDS ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/agent-tests.jsonl")."
+          exit "$status"
 
   cli-automation:
     name: CLI automation (${{ matrix.os }})
@@ -192,30 +251,77 @@ jobs:
             throw 'AOT smoke did not complete successfully.'
           }
 
-  client:
+  client-analyze:
+    name: Analyze client
     needs: classify
     if: needs.classify.outputs.client == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
-      - name: Install Linux test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libasound2-dev
       - name: Analyze client
         working-directory: client
         run: |
           fvm flutter pub get
           fvm flutter analyze
-      - name: Test client
+
+  client-tests:
+    name: Test client (${{ matrix.shard }}/4)
+    needs: classify
+    if: needs.classify.outputs.client == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      SHARD: ${{ matrix.shard }}
+      TOTAL_SHARDS: 4
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Install native-asset build dependencies
+        run: |
+          # The nativeapi build hook needs the GTK 3, X11, and Xi development
+          # packages; the image only ships their runtime libraries.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libgtk-3-dev libasound2-dev
+      - name: Test client shard ${{ matrix.shard }}/4
         working-directory: client
-        run: fvm flutter test
+        run: |
+          set -o pipefail
+          fvm flutter pub get
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(../scripts/ci/list_test_shard.sh . "$((SHARD - 1))" "$TOTAL_SHARDS")
+          echo "Shard $SHARD/$TOTAL_SHARDS runs ${#files[@]} test files."
+          status=0
+          fvm flutter test "${files[@]}" \
+            --file-reporter "json:$RUNNER_TEMP/client-tests.jsonl" || status=$?
+          echo "Client shard $SHARD/$TOTAL_SHARDS ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/client-tests.jsonl")."
+          exit "$status"
+
+  client-web:
+    name: Web startup composition
+    needs: classify
+    if: needs.classify.outputs.client == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Install native-asset build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libgtk-3-dev libasound2-dev
       - name: Web startup composition
         working-directory: client
         run: |
           set -o pipefail
+          fvm flutter pub get
           fvm flutter test --platform chrome test/web/web_startup_platform_guard_test.dart 2>&1 | tail -5
 
   sanad-dev-platforms:
@@ -377,10 +483,11 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.event.after }}
+          DISPATCH_SHA: ${{ github.sha }}
         run: |
           archive="$RUNNER_TEMP/gitleaks.tar.gz"
           curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
@@ -394,7 +501,7 @@ jobs:
           # itself unchanged.
           zero_sha="0000000000000000000000000000000000000000"
           case "$EVENT_NAME" in
-            pull_request)
+            pull_request|merge_group)
               if [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
                 log_opts="$BASE_SHA..$HEAD_SHA"
               else
@@ -409,6 +516,12 @@ jobs:
                 # the pushed commit without the other refs the checkout fetched.
                 log_opts="$PUSH_AFTER"
               fi
+              ;;
+            workflow_dispatch)
+              # A dispatched run has no comparison base, so it scans the ancestry
+              # of the dispatched commit, exactly like a new-branch push, instead
+              # of every ref the checkout fetched.
+              log_opts="$DISPATCH_SHA"
               ;;
             *)
               log_opts=""
@@ -433,15 +546,29 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - if: github.event_name == 'pull_request'
+      - if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_GROUP_REF: ${{ github.event.merge_group.head_ref }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # A queued merge group carries no pull-request payload. Its head ref
+          # names the queued pull request, so the label check stays evidence
+          # based instead of passing without review. A group that cannot be
+          # attributed to exactly one pull request fails closed.
+          if [[ "$EVENT_NAME" == "merge_group" ]]; then
+            mapfile -t queued < <(grep -oE '/pr-[0-9]+-' <<< "$MERGE_GROUP_REF" | grep -oE '[0-9]+' | sort -u)
+            if (( ${#queued[@]} != 1 )); then
+              echo "::error::Cannot resolve exactly one pull request from merge group ref '$MERGE_GROUP_REF'; protected review labels are unverified."
+              exit 1
+            fi
+            PR_NUMBER="${queued[0]}"
+          fi
           # Read labels at run time: a re-run keeps the original event payload,
           # so payload labels would be stale after a protected-label change.
           LABELS_JSON="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '[.labels[].name]')"
@@ -469,14 +596,18 @@ jobs:
   all-required:
     name: All required checks pass
     if: always()
-    needs: [classify, history, agent, client, sanad-dev-platforms, docs-governance, release-security, sensitive-review]
+    needs: [classify, history, agent-checks, agent-tests, cli-automation, client-analyze, client-tests, client-web, sanad-dev-platforms, docs-governance, release-security, sensitive-review]
     runs-on: ubuntu-24.04
     steps:
       - env:
           CLASSIFY: ${{ needs.classify.result }}
           HISTORY: ${{ needs.history.result }}
-          AGENT: ${{ needs.agent.result }}
-          CLIENT: ${{ needs.client.result }}
+          AGENT_CHECKS: ${{ needs.agent-checks.result }}
+          AGENT_TESTS: ${{ needs.agent-tests.result }}
+          CLI_AUTOMATION: ${{ needs.cli-automation.result }}
+          CLIENT_ANALYZE: ${{ needs.client-analyze.result }}
+          CLIENT_TESTS: ${{ needs.client-tests.result }}
+          CLIENT_WEB: ${{ needs.client-web.result }}
           SANAD_DEV_PLATFORMS: ${{ needs.sanad-dev-platforms.result }}
           DOCS: ${{ needs.docs-governance.result }}
           RELEASE_SECURITY: ${{ needs.release-security.result }}
@@ -485,7 +616,9 @@ jobs:
           set -euo pipefail
           test "$CLASSIFY" = success
           test "$HISTORY" = success
-          for result in "$AGENT" "$CLIENT" "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY"; do
+          for result in "$AGENT_CHECKS" "$AGENT_TESTS" "$CLI_AUTOMATION" \
+            "$CLIENT_ANALYZE" "$CLIENT_TESTS" "$CLIENT_WEB" \
+            "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY"; do
             [[ "$result" == success || "$result" == skipped ]]
           done
           test "$SENSITIVE_REVIEW" = success

@@ -106,6 +106,7 @@ Future<void> main() async {
 /// gateway and a throwaway Home.
 ///
 /// This is the regression guard for the released AOT binary: a gateway command
+/// — including `run` without `--standalone`, which dispatches a whole turn —
 /// must reach the gateway without opening the Agent vault. The vault is the OS
 /// credential vault, and an item that belongs to another code identity makes
 /// macOS raise an authorization prompt that a CLI can never answer, so opening
@@ -194,6 +195,33 @@ Future<void> _verifyGatewayCommands({
       _requireAotSuccess(
         'AOT ${command.join(' ')} against a fake gateway',
         result,
+      );
+    }
+
+    // `run` without `--standalone` is the other half of the guard: it attaches
+    // to the running daemon, so the turn executes there and the CLI never needs
+    // a provider credential. Every credential the daemon holds stays in the
+    // daemon's vault, and the request carries provider identities only.
+    final gatewayRun = await _runAotProcess(
+      executable,
+      ['run', '--execution-root', root.path, ...common, 'AOT gateway run'],
+      environment: baseEnvironment,
+      operation: 'AOT run against a fake gateway',
+    );
+    _requireAotSuccess('AOT run against a fake gateway', gatewayRun);
+    final runResult = jsonDecode(gatewayRun.stdout.trim());
+    if (runResult is! Map ||
+        runResult['exit_code'] != 0 ||
+        runResult['text'] != fakeFinalAnswer) {
+      throw StateError(
+        'AOT run did not finish against the fake gateway: '
+        '${gatewayRun.stdout}',
+      );
+    }
+    if (!gateway.commands.contains('think')) {
+      throw StateError(
+        'AOT run never dispatched a turn to the gateway: '
+        'commands=${gateway.commands}',
       );
     }
 

@@ -10,6 +10,7 @@ import 'session_fork_copy.dart';
 import 'session_history_revision_repository.dart';
 import 'session_message_repository.dart';
 import 'session_repository.dart';
+import 'sqlite_transaction.dart';
 
 /// Result of an atomic soft-rewind plus replacement-user commit.
 class SoftRewindAdmissionCommit {
@@ -166,20 +167,17 @@ class SessionForkCommitRepository {
     required String targetRequestId,
     required Message replacement,
   }) {
-    _db.execute('BEGIN IMMEDIATE TRANSACTION');
-    try {
+    return SqliteTransaction.run<SoftRewindAdmissionCommit?>(_db, () {
       final row = _db.select(
         'SELECT history_revision FROM sessions WHERE session_id = ? LIMIT 1',
         [sessionId],
       );
       if (row.isEmpty) {
-        _db.execute('ROLLBACK');
-        return null;
+        SqliteTransaction.abort(null);
       }
       final current = (row.first['history_revision'] as num?)?.toInt() ?? 0;
       if (current != expectedHistoryRevision) {
-        _db.execute('ROLLBACK');
-        return null;
+        SqliteTransaction.abort(null);
       }
       final active = _messages.getMessages(sessionId);
       final targetIndex = _latestReplayableRootIndex(
@@ -189,8 +187,7 @@ class SessionForkCommitRepository {
         targetRequestId: targetRequestId,
       );
       if (targetIndex < 0) {
-        _db.execute('ROLLBACK');
-        return null;
+        SqliteTransaction.abort(null);
       }
       final assignedReplacement = MessageHistoryIdentity.assignIdentities([
         replacement,
@@ -226,8 +223,7 @@ class SessionForkCommitRepository {
           ],
         );
         if (_db.updatedRows != 1) {
-          _db.execute('ROLLBACK');
-          return null;
+          SqliteTransaction.abort(null);
         }
       }
       final next = current + 1;
@@ -235,16 +231,12 @@ class SessionForkCommitRepository {
         'UPDATE sessions SET history_revision = ?, updated_at = ? WHERE session_id = ?',
         [next, _normalizeDateTime(DateTime.now()), sessionId],
       );
-      _db.execute('COMMIT');
       return SoftRewindAdmissionCommit(
         historyRevision: next,
         replacementMessageId: replacementIdentity.messageId,
         replacementTurnId: replacementIdentity.turnId,
       );
-    } catch (e) {
-      _db.execute('ROLLBACK');
-      rethrow;
-    }
+    }, immediate: true);
   }
 
   static int _latestReplayableRootIndex(
@@ -288,168 +280,176 @@ class SessionForkCommitRepository {
     const maxAttempts = 8;
     Object? lastError;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
-      _db.execute('BEGIN IMMEDIATE TRANSACTION');
       try {
-        final existing = _db.select(
-          '''
-          SELECT session_id, parent_session_id,
-                 forked_from_message_id, forked_from_turn_id
-          FROM sessions
-          WHERE fork_request_id = ?
-          LIMIT 1
-          ''',
-          [requestId],
-        );
-        if (existing.isNotEmpty) {
-          final row = existing.first;
-          final matchesCommand =
-              row['parent_session_id'] == sourceSessionId &&
-              row['forked_from_message_id'] == targetMessageId &&
-              row['forked_from_turn_id'] == targetTurnId;
-          if (!matchesCommand) {
-            _db.execute('ROLLBACK');
-            return const SessionForkCommit(
-              outcome: SessionForkOutcome.invalidRequest,
+        return SqliteTransaction.run(_db, () {
+          final existing = _db.select(
+            '''
+            SELECT session_id, parent_session_id,
+                   forked_from_message_id, forked_from_turn_id
+            FROM sessions
+            WHERE fork_request_id = ?
+            LIMIT 1
+            ''',
+            [requestId],
+          );
+          if (existing.isNotEmpty) {
+            final row = existing.first;
+            final matchesCommand =
+                row['parent_session_id'] == sourceSessionId &&
+                row['forked_from_message_id'] == targetMessageId &&
+                row['forked_from_turn_id'] == targetTurnId;
+            if (!matchesCommand) {
+              SqliteTransaction.abort(
+                const SessionForkCommit(
+                  outcome: SessionForkOutcome.invalidRequest,
+                ),
+              );
+            }
+            final childId = row['session_id'] as String;
+            return SessionForkCommit(
+              outcome: SessionForkOutcome.alreadyExists,
+              child: _sessions.getSession(childId),
             );
           }
-          final childId = row['session_id'] as String;
-          _db.execute('COMMIT');
-          return SessionForkCommit(
-            outcome: SessionForkOutcome.alreadyExists,
-            child: _sessions.getSession(childId),
-          );
-        }
 
-        final parent = _sessions.getSession(sourceSessionId);
-        if (parent == null) {
-          _db.execute('ROLLBACK');
-          return const SessionForkCommit(
-            outcome: SessionForkOutcome.sessionNotFound,
-          );
-        }
+          final parent = _sessions.getSession(sourceSessionId);
+          if (parent == null) {
+            SqliteTransaction.abort(
+              const SessionForkCommit(
+                outcome: SessionForkOutcome.sessionNotFound,
+              ),
+            );
+          }
 
-        final activePersisted = _messages.getPersistedMessages(sourceSessionId);
-        final active = activePersisted
-            .map((entry) => entry.message)
-            .toList(growable: false);
-        final target = _findActive(
-          active,
-          messageId: targetMessageId,
-          turnId: targetTurnId,
-        );
-        if (target == null) {
-          final stored = _messages.getMessages(
+          final activePersisted = _messages.getPersistedMessages(
             sourceSessionId,
-            includeSuperseded: true,
           );
-          final found = _findActive(
-            stored,
+          final active = activePersisted
+              .map((entry) => entry.message)
+              .toList(growable: false);
+          final target = _findActive(
+            active,
             messageId: targetMessageId,
             turnId: targetTurnId,
-            ignoreStatus: true,
           );
-          _db.execute('ROLLBACK');
+          if (target == null) {
+            final stored = _messages.getMessages(
+              sourceSessionId,
+              includeSuperseded: true,
+            );
+            final found = _findActive(
+              stored,
+              messageId: targetMessageId,
+              turnId: targetTurnId,
+              ignoreStatus: true,
+            );
+            SqliteTransaction.abort(
+              SessionForkCommit(
+                outcome: found == null
+                    ? SessionForkOutcome.targetNotFound
+                    : SessionForkOutcome.targetNotForkable,
+              ),
+            );
+          }
+          if (!SessionForkCopy.isForkableFinalAnswer(target)) {
+            SqliteTransaction.abort(
+              const SessionForkCommit(
+                outcome: SessionForkOutcome.targetNotForkable,
+              ),
+            );
+          }
+
+          final prefix = SessionForkCopy.activePrefixThroughTurn(
+            activeMessages: active,
+            targetMessageId: targetMessageId,
+            targetTurnId: targetTurnId,
+          );
+          if (prefix.isEmpty) {
+            SqliteTransaction.abort(
+              const SessionForkCommit(
+                outcome: SessionForkOutcome.targetNotFound,
+              ),
+            );
+          }
+          final sourcePrefix = activePersisted
+              .take(prefix.length)
+              .toList(growable: false);
+
+          final lineageId = parent.lineageId;
+          final sequence = _nextForkSequence(lineageId);
+          final baseTitle = SessionForkCopy.baseTitleOf(
+            parent.lineageBaseTitle,
+            parent.title,
+          );
+          final now = DateTime.now().toUtc();
+          final child = SessionState(
+            sessionId: const Uuid().v4(),
+            model: parent.model,
+            providerId: parent.providerId,
+            thinkingMode: parent.thinkingMode,
+            title: SessionForkCopy.forkTitle(sequence, baseTitle),
+            titleStatus: SessionTitleStatus.finalized,
+            workspaceId: parent.workspaceId,
+            createdAt: now,
+            updatedAt: now,
+            // Fork creation is new sidebar activity even though the
+            // materialized user rows preserve their historical timestamps.
+            lastUserMessageAt: now,
+            routeRevision: parent.routeRevision,
+            routeUpdatedAt: parent.routeUpdatedAt,
+            historyRevision: 0,
+            lineageId: lineageId,
+            parentSessionId: parent.sessionId,
+            forkedFromMessageId: targetMessageId,
+            forkedFromTurnId: targetTurnId,
+            forkSequence: sequence,
+            lineageBaseTitle: baseTitle,
+            forkRequestId: requestId,
+          );
+          _sessions.saveSession(child);
+          if (parent.lineageBaseTitle == null ||
+              parent.lineageBaseTitle!.trim().isEmpty) {
+            _db.execute(
+              '''
+              UPDATE sessions
+              SET lineage_base_title = ?
+              WHERE session_id = ?
+                AND (lineage_base_title IS NULL OR TRIM(lineage_base_title) = '')
+              ''',
+              [baseTitle, parent.sessionId],
+            );
+          }
+          final rewrittenPrefix = SessionForkCopy.rewritePrefix(prefix);
+          final childRowIdBySourceRowId = <int, int>{};
+          for (var index = 0; index < rewrittenPrefix.length; index++) {
+            MessageHistoryIdentity.persist(
+              _db,
+              child.sessionId,
+              rewrittenPrefix[index],
+            );
+            childRowIdBySourceRowId[sourcePrefix[index].rowId] =
+                _db.lastInsertRowId;
+          }
+          _compactionBoundaries.cloneTerminalOperationsForFork(
+            sourceSessionId: sourceSessionId,
+            childSessionId: child.sessionId,
+            childRowIdBySourceRowId: childRowIdBySourceRowId,
+            sourcePrefixEndRowId: sourcePrefix.last.rowId,
+            childHistoryRevision: child.historyRevision,
+          );
           return SessionForkCommit(
-            outcome: found == null
-                ? SessionForkOutcome.targetNotFound
-                : SessionForkOutcome.targetNotForkable,
+            outcome: SessionForkOutcome.accepted,
+            child: _sessions.getSession(child.sessionId),
           );
-        }
-        if (!SessionForkCopy.isForkableFinalAnswer(target)) {
-          _db.execute('ROLLBACK');
-          return const SessionForkCommit(
-            outcome: SessionForkOutcome.targetNotForkable,
-          );
-        }
-
-        final prefix = SessionForkCopy.activePrefixThroughTurn(
-          activeMessages: active,
-          targetMessageId: targetMessageId,
-          targetTurnId: targetTurnId,
-        );
-        if (prefix.isEmpty) {
-          _db.execute('ROLLBACK');
-          return const SessionForkCommit(
-            outcome: SessionForkOutcome.targetNotFound,
-          );
-        }
-        final sourcePrefix = activePersisted
-            .take(prefix.length)
-            .toList(growable: false);
-
-        final lineageId = parent.lineageId;
-        final sequence = _nextForkSequence(lineageId);
-        final baseTitle = SessionForkCopy.baseTitleOf(
-          parent.lineageBaseTitle,
-          parent.title,
-        );
-        final now = DateTime.now().toUtc();
-        final child = SessionState(
-          sessionId: const Uuid().v4(),
-          model: parent.model,
-          providerId: parent.providerId,
-          thinkingMode: parent.thinkingMode,
-          title: SessionForkCopy.forkTitle(sequence, baseTitle),
-          titleStatus: SessionTitleStatus.finalized,
-          workspaceId: parent.workspaceId,
-          createdAt: now,
-          updatedAt: now,
-          // Fork creation is new sidebar activity even though the materialized
-          // user rows preserve their historical timestamps.
-          lastUserMessageAt: now,
-          routeRevision: parent.routeRevision,
-          routeUpdatedAt: parent.routeUpdatedAt,
-          historyRevision: 0,
-          lineageId: lineageId,
-          parentSessionId: parent.sessionId,
-          forkedFromMessageId: targetMessageId,
-          forkedFromTurnId: targetTurnId,
-          forkSequence: sequence,
-          lineageBaseTitle: baseTitle,
-          forkRequestId: requestId,
-        );
-        _sessions.saveSession(child);
-        if (parent.lineageBaseTitle == null ||
-            parent.lineageBaseTitle!.trim().isEmpty) {
-          _db.execute(
-            '''
-            UPDATE sessions
-            SET lineage_base_title = ?
-            WHERE session_id = ?
-              AND (lineage_base_title IS NULL OR TRIM(lineage_base_title) = '')
-            ''',
-            [baseTitle, parent.sessionId],
-          );
-        }
-        final rewrittenPrefix = SessionForkCopy.rewritePrefix(prefix);
-        final childRowIdBySourceRowId = <int, int>{};
-        for (var index = 0; index < rewrittenPrefix.length; index++) {
-          MessageHistoryIdentity.persist(
-            _db,
-            child.sessionId,
-            rewrittenPrefix[index],
-          );
-          childRowIdBySourceRowId[sourcePrefix[index].rowId] =
-              _db.lastInsertRowId;
-        }
-        _compactionBoundaries.cloneTerminalOperationsForFork(
-          sourceSessionId: sourceSessionId,
-          childSessionId: child.sessionId,
-          childRowIdBySourceRowId: childRowIdBySourceRowId,
-          sourcePrefixEndRowId: sourcePrefix.last.rowId,
-          childHistoryRevision: child.historyRevision,
-        );
-        _db.execute('COMMIT');
-        return SessionForkCommit(
-          outcome: SessionForkOutcome.accepted,
-          child: _sessions.getSession(child.sessionId),
-        );
-      } catch (error) {
-        _db.execute('ROLLBACK');
+        }, immediate: true);
+      } on SqliteException catch (error) {
         lastError = error;
-        if (error is SqliteException && _isLineageSequenceConflict(error)) {
+        if (_isLineageSequenceConflict(error)) {
           continue;
         }
+        return const SessionForkCommit(outcome: SessionForkOutcome.failed);
+      } catch (error) {
+        lastError = error;
         return const SessionForkCommit(outcome: SessionForkOutcome.failed);
       }
     }

@@ -552,5 +552,29 @@ void main() {
         expect(capturedArgs, ['install', '--user-scope']);
       },
     );
+
+    test(
+      'service install forwards the explicit --run-as-user account',
+      () async {
+        List<String>? capturedArgs;
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          onService: (args) {
+            capturedArgs = args;
+            return 0;
+          },
+        );
+
+        final result = await runner.run([
+          'service',
+          'install',
+          '--run-as-user',
+          'ubuntu',
+        ]);
+        expect(result, 0);
+        expect(capturedArgs, ['install', '--run-as-user', 'ubuntu']);
+      },
+    );
   });
 }

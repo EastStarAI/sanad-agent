@@ -29,6 +29,43 @@ abstract final class CompactionSummaryPrompt {
     'remainingWork',
   };
 
+  /// Continuity anchor keys mapped onto the schema fields that carry them.
+  ///
+  /// A repair instruction may name a field only from [allowedKeys]: naming an
+  /// anchor key such as `ask` or `blocker` invites the provider to add a
+  /// top-level key of that name, and the strict parser then rejects the whole
+  /// response as an unknown key. Anchor names are therefore translated into
+  /// their schema owners and never reach the provider.
+  static const Map<String, List<String>> anchorRepairFields = {
+    'ask': ['pendingAsks', 'latestUserRequest'],
+    'pending ask': ['pendingAsks'],
+    'pending_ask': ['pendingAsks'],
+    'goal': ['currentGoal'],
+    'constraints': ['constraints'],
+    'blocker': ['blockers'],
+    'path': ['filesAndPaths'],
+    'decision': ['decisions'],
+  };
+
+  /// The schema fields a repair may ask for, translated from [requested] anchor
+  /// or section names and filtered to [allowedKeys].
+  ///
+  /// Unknown names contribute nothing: a name the schema does not own can only
+  /// corrupt the response.
+  static List<String> repairFieldsFor(Iterable<String> requested) {
+    final fields = <String>{};
+    for (final raw in requested) {
+      final name = raw.trim();
+      final mapped = anchorRepairFields[name.toLowerCase()];
+      if (mapped != null) {
+        fields.addAll(mapped);
+        continue;
+      }
+      if (allowedKeys.contains(name)) fields.add(name);
+    }
+    return fields.toList(growable: false);
+  }
+
   /// The only semantic input appended to the ordinary provider projection.
   static String buildJsonInstruction({
     List<String> missingFields = const [],
@@ -37,11 +74,12 @@ abstract final class CompactionSummaryPrompt {
   }) {
     // A type mismatch names only allowlisted keys and JSON type names, never
     // provider text (Task 118b D3).
+    final repairFields = repairFieldsFor(missingFields);
     final repair = typeMismatches.isNotEmpty
         ? ' Your previous attempt was invalid: ${[for (final m in typeMismatches) 'the value of ${m.field} must be a JSON string, not a JSON ${m.actualType}'].join('; ')}. Put that whole content into one string (for example, list items separated by commas) without dropping any of it, and keep every other key unchanged.'
-        : missingFields.isEmpty
+        : repairFields.isEmpty
         ? ''
-        : ' Your previous attempt was invalid. Ensure these fields are present and non-empty: ${missingFields.join(', ')}.';
+        : ' Your previous attempt was invalid. Ensure these fields are present and non-empty: ${repairFields.join(', ')}.';
     final scope = partial
         ? 'Summarize only the supplied contiguous conversation span as a partial checkpoint.'
         : 'Summarize the entire conversation visible before this message as one rolling internal checkpoint.';
@@ -176,8 +214,9 @@ abstract final class CompactionSummaryParser {
 
   static CompactionInternalSummary parse(String response) {
     final cleaned = stripProviderOnlyMarkup(response);
-    _rejectDuplicateKeys(cleaned);
-    final decoded = jsonDecode(cleaned);
+    final document = _firstObjectOrSelf(cleaned);
+    _rejectDuplicateKeys(document);
+    final decoded = jsonDecode(document);
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('compaction summary must be a JSON object');
     }
@@ -226,6 +265,50 @@ abstract final class CompactionSummaryParser {
     bool() => 'boolean',
     _ => 'value',
   };
+
+  /// Returns the leading balanced JSON object of [text] when the payload
+  /// continues after it, and [text] unchanged otherwise.
+  ///
+  /// A provider occasionally emits the same summary object twice back to back
+  /// on a very large prompt; `jsonDecode` then reports "Extra data" and a
+  /// perfectly valid summary is lost. Only a payload whose leading object
+  /// starts the document is recovered: leading prose, a truncated object, and
+  /// every schema rule (unknown, duplicated, wrongly typed keys) stay strict.
+  static String _firstObjectOrSelf(String text) {
+    final start = text.indexOf('{');
+    if (start < 0 || text.substring(0, start).trim().isNotEmpty) return text;
+    var depth = 0;
+    var inString = false;
+    var escaped = false;
+    for (var index = start; index < text.length; index++) {
+      final char = text[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char == r'\') {
+          escaped = true;
+        } else if (char == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      switch (char) {
+        case '"':
+          inString = true;
+        case '{':
+          depth++;
+        case '}':
+          depth--;
+          if (depth == 0) {
+            final end = index + 1;
+            return text.substring(end).trim().isEmpty
+                ? text
+                : text.substring(0, end);
+          }
+      }
+    }
+    return text;
+  }
 
   /// Compatibility parser used only by the deterministic test summarizer.
   static CompactionInternalSummary parseLegacy(String response) {

@@ -138,6 +138,23 @@ opening SQLite, then validates and tightens `state.db`, WAL, SHM, and journal
 sidecars after opening and schema initialization. SQLite remains the only
 writer of its transactional files.
 
+Every write transaction is bracketed by one shared boundary
+(`agent/lib/evolution/db/sqlite_transaction.dart`). SQLite aborts a transaction
+itself for fatal errors — `SQLITE_FULL`, `SQLITE_IOERR`, `SQLITE_NOMEM`,
+`SQLITE_BUSY`, `SQLITE_INTERRUPT` — so the boundary rolls back only while the
+connection still holds a transaction and then rethrows the original failure. A
+second bare `ROLLBACK` is never issued; it would replace the real cause with
+`cannot rollback - no transaction is active`, which is how a full disk was once
+reported as a provider error.
+
+A full local disk is a typed local failure, not a provider failure.
+`StorageFullFailure` (`agent/lib/core/storage/storage_full_failure.dart`)
+recognizes `SQLITE_FULL`, an `SQLITE_IOERR` that reports a full disk, and an OS
+`ENOSPC`, and the runtime publishes `storage_full` with its own title and
+message, no provider response body, no automatic retry, and no provider
+failover. The operator frees space and retries the turn.
+
+
 ## Startup Preparation
 
 Bootstrap runs before dependency composition, authentication reads, provider

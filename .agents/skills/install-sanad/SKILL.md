@@ -60,6 +60,12 @@ Collect read-only evidence:
 2. Check whether `sanad` and `sanad-dev` resolve on `PATH`.
 3. Check the installer-owned executable when relevant:
    - macOS/Linux: `${SANAD_HOME:-$HOME/.sanad}/bin/sanad`
+   - Linux root or `sudo` install: `/var/lib/sanad-agent/bin/sanad`, the Home
+     the dedicated `sanad-agent` account owns by default
+   - any Linux system install whose Home differs (an explicit `SANAD_HOME` or
+     `--run-as-user`): the `SANAD_HOME` recorded in the service definition —
+     read it read-only with `systemctl cat sanad-agent.service` or
+     `/etc/systemd/system/sanad-agent.service`, never by rewriting the unit
    - Windows: `$env:SANAD_HOME\bin\sanad.exe`, or
      `$HOME\.sanad\bin\sanad.exe` when `SANAD_HOME` is unset.
 4. If the current or supplied directory is a Git checkout, inspect:
@@ -125,13 +131,48 @@ Offer two equal choices:
 2. **Install the Agent directly:** choose Portal sign-in or local-only mode and
    run the matching official installer after approval.
 
-For an agent-operated macOS/Linux terminal, avoid an ambiguous prompt:
+For an agent-operated macOS/Linux terminal, avoid an ambiguous prompt. A
+user's own desktop takes the plain installer:
 
 ```bash
 curl -fsSL https://sanad.eaststarai.com/install.sh | bash -s -- --login
 ```
 
 Use `--no-login` instead when the user explicitly chooses local-only mode.
+
+On a Linux **server**, run the same installer with `sudo` so the service runs as
+the dedicated unprivileged `sanad-agent` account from `/var/lib/sanad-agent`:
+
+```bash
+curl -fsSL https://sanad.eaststarai.com/install.sh | sudo bash -s -- --login
+```
+
+Prefer that every time on a server: a cloud SSH account is usually a
+passwordless sudoer, so a remotely controlled Agent running as that account is
+effectively root and can read `~/.ssh` and the cloud credentials stored for it.
+A root install — direct or entered through `sudo` — always registers the
+dedicated account; `SUDO_USER` never changes it, so `sudo ./install.sh`,
+`sudo bash -c "$(curl … install.sh)"`, and `curl … | sudo bash` all produce the
+same service. A complete **Add device** command needs the same treatment on a
+server: prefix its stdin with `sudo bash -s --` and leave its own arguments
+untouched.
+
+Three deliberate alternatives:
+
+- `--run-as-user <existing-account>` makes the unit run as that account, with
+  its Home under `~account/.sanad`; the install must be root, the account must
+  exist, and the Agent refuses before writing a definition when that account
+  cannot reach the binary or the Home.
+- `--run-as-user root` is accepted only when named explicitly and prints a
+  warning that every Agent tool, MCP server, and terminal task then runs with
+  root privileges. Do not propose it.
+- An explicit `SANAD_HOME` chooses where the state lives; the installer still
+  refuses a Home the service account cannot reach.
+
+The installer also stops before downloading anything, with the removal command,
+when `/etc/systemd/system/sanad-agent.service` (or an OpenRC definition) already
+registers a Sanad service for a *different* Sanad Home. Removing that definition
+is a user decision: report the printed command instead of running it silently.
 
 For an agent-operated Windows PowerShell terminal:
 

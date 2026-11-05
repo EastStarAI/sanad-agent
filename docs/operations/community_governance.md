@@ -17,11 +17,21 @@ Every new Issue starts with `needs-triage` and one `type/*` label supplied by it
 
 `.github/labels.yml` is the versioned label source. The sync helper validates that names are unique, colors are six-digit hexadecimal values, descriptions are non-empty, and required groups are complete. Its default mode is non-mutating. SANAD-11 applies it after reviewing the target public repository. Labels are not deleted automatically.
 
-Protected positive-review labels are restricted to users with triage/write permission. Governance and `.github/` changes require `maintainer-reviewed`; auth/security boundaries require `security-reviewed`; release, signing, installer, and updater changes require `release-reviewed`. Public CI runs on code events only (`opened`, `synchronize`, `reopened`, `ready_for_review`), so ordinary labels never restart or cancel it. Adding or removing a protected label triggers the small `Protected label review` workflow, which waits for the latest Public CI run of the current head SHA and re-runs only its `Verify protected review labels` job; GitHub re-runs the dependent `All required checks pass` job, which keeps every other job's result from that same run. The protected-label job reads the pull request's labels at run time, never from the event payload. Fork pull requests receive a read-only token, so a maintainer re-runs that job manually after changing a protected label.
+Protected positive-review labels are restricted to users with triage/write permission. Governance and `.github/` changes require `maintainer-reviewed`; auth/security boundaries require `security-reviewed`; release, signing, installer, and updater changes require `release-reviewed`. Public CI runs on code events only (`opened`, `synchronize`, `reopened`, `ready_for_review`), so label changes never restart or cancel it.
+
+A protected label is honoured only after `Verify protected review labels` re-reads it, and that re-verification is dispatched on demand rather than on every label event, because GitHub created one run per label event even when several labels changed in a single call. The maintainer or coordinator who applies or removes a protected label dispatches the small `Protected label review` workflow immediately afterwards:
+
+```bash
+gh workflow run protected-labels.yml -f pr_number=<N>
+```
+
+Then watch it with `gh run list --workflow protected-labels.yml --limit 1` followed by `gh run watch <run-id> --exit-status`. The workflow requires a positive pull request number, verifies that the pull request exists and is open in this repository, waits for the latest Public CI run of the current head SHA, and re-runs only its `Verify protected review labels` job; GitHub re-runs the dependent `All required checks pass` job, which keeps every other job's result from that same run. The protected-label job reads the pull request's labels at run time, never from an event payload, so a removed label turns the gate red on the same dispatch. Dispatching requires write access, which is the authorization boundary, and a dispatch run uses this repository's own token, so fork pull requests are re-verified the same way. A protected label that was never followed by a dispatch leaves the previous aggregate result stale.
 
 ## Pull Request and Branch Model
 
-Human pull requests use Conventional Commits titles and squash merge. Direct pushes, force pushes, branch deletion, and unresolved conversations are blocked on `main`. One stable aggregate check, `All required checks pass`, is the branch-protection context. Path classification runs only affected agent, client, documentation, release, and security lanes; classification failure does not silently skip validation. Pushes to `main` run all lanes.
+Human pull requests use Conventional Commits titles and squash merge. Direct pushes, force pushes, branch deletion, and unresolved conversations are blocked on `main`. One stable aggregate check, `All required checks pass`, is the branch-protection context. Path classification runs only affected agent, client, documentation, release, and security lanes; classification failure does not silently skip validation. Pushes to `main` run all lanes. Test lanes are sharded matrices and the aggregate depends on every shard; [Public CI Pipeline and Merge Queue](continuous_integration.md) owns the job layout, the shard and cache design, and the queue runbook.
+
+Once the owner enables the merge queue, a queued entry is built by the same workflow through its `merge_group` trigger: classification and every lane run against the merge-group diff, the queued pull request's protected labels are re-checked from the queue head ref, and the same aggregate gates the queue. A merge group that cannot be attributed to exactly one pull request fails closed, so the queue keeps one pull request per build. The merge agent updates the branch, resolves conflicts, verifies the head, and enqueues with `gh pr merge <number> --squash --match-head-commit <sha>`; the coordinator only reviews and dispatches.
 
 Fork pull requests use `pull_request`, read-only repository contents, and no signing or deployment secrets. Publication workflows are manually or tag triggered and protected separately.
 
@@ -37,7 +47,7 @@ SANAD-11 consumes these local artifacts:
 - Issue Forms, pull-request template, and CODEOWNERS;
 - the stable CI aggregate check and protected-path gates.
 
-The live application sequence is: create the repository, enable Private Vulnerability Reporting and Discussions, create categories, dry-run then apply labels, verify form destinations, apply repository merge settings and branch protection, open a no-secrets fork test, and confirm a protected-label change re-runs the protected review job while ordinary labels start no Public CI run. Live category IDs and repository rule identifiers are not stored in the source manifest.
+The live application sequence is: create the repository, enable Private Vulnerability Reporting and Discussions, create categories, dry-run then apply labels, verify form destinations, apply repository merge settings and branch protection, open a no-secrets fork test, and confirm that a dispatched protected-label re-verification reruns the protected review job while any other label change starts no run at all. Live category IDs and repository rule identifiers are not stored in the source manifest.
 
 ## Discord Handoff
 

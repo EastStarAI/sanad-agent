@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_command_failure.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
@@ -385,7 +385,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.start,
-                    style: GoogleFonts.inter(
+                    style: AppTypography.text(context,
                       color: colorScheme.onSurfaceVariant,
                       fontSize: 12,
                     ),
@@ -398,7 +398,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                 child: Text(
                   l10n.workspaceBrowserChangePathNotice,
                   key: const Key('workspace_browser_change_path_notice'),
-                  style: GoogleFonts.inter(
+                  style: AppTypography.text(context,
                     color: colorScheme.onSurfaceVariant,
                     fontSize: 12,
                   ),
@@ -410,7 +410,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                 child: Text(
                   l10n.workspaceBrowserRootHint,
                   key: const Key('workspace_browser_root_hint'),
-                  style: GoogleFonts.inter(
+                  style: AppTypography.text(context,
                     color: colorScheme.onSurfaceVariant,
                     fontSize: 12,
                   ),
@@ -422,7 +422,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                 child: Text(
                   _describeError(l10n, _mutationError!, load: false),
                   key: const ValueKey('workspace-folder-mutation-error'),
-                  style: GoogleFonts.inter(
+                  style: AppTypography.text(context,
                     color: colorScheme.error,
                     fontSize: 12,
                   ),
@@ -439,7 +439,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                     _describeError(l10n, _loadError!, load: true),
                     key: const Key('workspace_browser_load_error'),
                     textAlign: TextAlign.center,
-                    style: GoogleFonts.inter(
+                    style: AppTypography.text(context,
                       color: colorScheme.error,
                       fontSize: 13,
                     ),
@@ -468,7 +468,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                           ? Center(
                               child: Text(
                                 l10n.workspaceBrowserEmpty,
-                                style: GoogleFonts.inter(
+                                style: AppTypography.text(context,
                                   color: colorScheme.onSurfaceVariant,
                                   fontSize: 13,
                                 ),
@@ -492,7 +492,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                                     entry.name,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: GoogleFonts.inter(fontSize: 13),
+                                    style: AppTypography.text(context, fontSize: 13),
                                   ),
                                   subtitle: entry.relativePath.isEmpty
                                       ? null
@@ -500,7 +500,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                                           entry.relativePath,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: GoogleFonts.inter(
+                                          style: AppTypography.text(context,
                                             color: colorScheme.onSurfaceVariant,
                                             fontSize: 11,
                                           ),
@@ -559,7 +559,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
                           l10n.workspaceBrowserTruncated,
-                          style: GoogleFonts.inter(
+                          style: AppTypography.text(context,
                             color: colorScheme.onSurfaceVariant,
                             fontSize: 11,
                           ),

@@ -31,5 +31,12 @@ void main() {
       maintenanceCall,
       greaterThan(source.indexOf('Daemon is running. Press Ctrl+C')),
     );
+    // Diagnostic request-dump retention also waits for the ready signal, so a
+    // startup sweep can never compete with bootstrap or durable restore.
+    expect(source.contains('startRequestDumpRetentionSafely()'), isTrue);
+    expect(
+      source.indexOf('startRequestDumpRetentionSafely()'),
+      greaterThan(source.indexOf('Daemon is running. Press Ctrl+C')),
+    );
   });
 }

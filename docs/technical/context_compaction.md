@@ -757,6 +757,104 @@ A settings value (`maxOutputTokens`) is not capped: it is sent on the wire with 
 
 The reservation is a planning value only. Compaction still sends no output cap of its own, because a hard cap truncates summaries and reasoning models spend it on reasoning.
 
+### 8.11.4 Continuity anchors, repair fields, and failure visibility
+
+**Label grammar.** `CompactionContinuityValidator.extractAnchors`
+(`agent/lib/engine/context/compaction_continuity_validator.dart`) reads
+semantic anchors only from user-authored text, and a label owns its line:
+
+```
+^[ \t]*(?:[-*+>][ \t]*)*(?:#{1,6}[ \t]*)?(?:\*\*|__)?<label>(?:\*\*|__)?[ \t]*:[ \t]*(\S.*)$
+```
+
+The pattern is multiline and case-insensitive. Optional indentation, markdown
+list/quote markers, an ATX heading prefix and emphasis markers may precede the
+label; a colon and a non-empty value must follow it. Labels are `goal`,
+`constraints`, `pending ask`, `pending_ask`, `ask`, `path`, `blocker` and
+`decision` (`goal`, the pending-ask labels and `blocker` are critical; the rest
+are reported only).
+
+Two consequences are the contract, not an accident:
+
+- **A label never matches inside another word.** `Task: …` and `mask: …` do not
+  arm an `ask` anchor, and `asked about: …` does not either, because the label
+  must start the line and the colon must follow it directly. Before this
+  grammar, `ask:` matched inside `Task:` and captured the rest of the line, so a
+  oneshot brief (whose first line is `Task: …`) made every automatic compaction
+  of that session demand a 240–340-character verbatim quotation and fail
+  `continuity_validation_failed`.
+- **A mid-paragraph label is prose.** `we agreed that goal: …` inside a sentence
+  is no longer an anchor. The label contract is line-oriented; a caller that
+  wants an anchor writes it on its own line.
+
+An anchor value longer than `maxCriticalAnchorChars` (160) is still extracted
+and reported but is never critical: no summary can be required to reproduce a
+brief line or a pasted paragraph verbatim. Repeated labels keep exactly one
+anchor per key, and the first occurrence is the one kept, so a restated goal or
+a second blocker cannot multiply the coverage a summary owes and the anchor set
+stays stable across successive summarized ranges.
+
+**Repair fields.** A repair instruction may name only fields from
+`CompactionSummaryPrompt.allowedKeys`. `buildJsonInstruction(missingFields: …)`
+therefore translates continuity labels into their schema owners through
+`CompactionSummaryPrompt.anchorRepairFields` and drops anything else:
+
+| Anchor label | Schema field(s) named in the repair |
+|---|---|
+| `ask`, `pending ask`, `pending_ask` | `pendingAsks` (+ `latestUserRequest` for `ask`) |
+| `goal` | `currentGoal` |
+| `blocker` | `blockers` |
+| `path` | `filesAndPaths` |
+| `constraints` | `constraints` |
+| `decision` | `decisions` |
+| a required section key (`currentGoal`, `latestUserRequest`, `activeState`, `criticalContext`, `remainingWork`) | itself |
+
+A name that maps to nothing contributes no repair sentence at all, and the
+instruction keeps its fixed "Use exactly these keys" schema sentence. Naming a
+non-schema key used to invite the provider to add a literal `ask`/`blocker`
+top-level key, which the strict parser then rejected as an unknown key, turning
+a continuity failure into `summarization_failed / invalid_response`. Both the
+ordinary provider path and the bounded recovery path go through this mapping,
+and the recovery path's invalid-response repair names the required section keys
+instead of prose.
+
+**Duplicated summary object.** When a response carries the summary object and
+then continues (a provider occasionally emits the same object twice back to
+back on a very large prompt), the parser decodes its leading balanced object
+and validates that one. Every schema rule still applies to it: unknown keys,
+duplicated keys, wrong JSON types and a wrong `schemaVersion` are rejected, and
+leading prose before the object is still invalid.
+
+**Failure visibility.** A failed automatic compaction left the session running
+uncompacted with no observable record beyond the `context_compaction.failed`
+lifecycle row, which a non-interactive session never shows and `session show`
+does not project. `CompactionFailureNotice`
+(`agent/lib/engine/runtime/compaction_failure_notice.dart`) is the only writer
+of a durable, non-recovery warning notice for that state, and the runner's
+automatic-compaction path is its only caller:
+
+- it upserts one `session_runtime_notices` row with `status: warning`,
+  `severity: warning`, `reason` = the failure reason's wire value
+  (`continuity_validation_failed`, `summarization_failed`, …), the fixed title
+  `Automatic compaction failed`, and an empty action list;
+- the message is one allowlisted cause sentence plus the run-scoped effect
+  ("Automatic compaction is paused until this run ends"). No provider text, no
+  summary content, no conversation content, no path and no secret enters it: an
+  unrecognized cause falls back to a reason-level sentence;
+- the row is never placed in `RuntimeRecoveryService` memory, so it cannot gate
+  admission, retry classification or turn recovery, and no client recovery
+  action is offered for it. It is projected by `session.query` when no live
+  recovery notice exists, so `session show --json` and a reconnecting Client see
+  the reason the session is over its window; the Client renders it as an
+  informational notice (no countdown, no actions) from the notice's own
+  title/message;
+- a later successful automatic compaction clears the row, and only while the
+  stored row is still a compaction warning, so a real recovery notice is never
+  deleted;
+- recovery-housekeeping rules still apply: a `warning` row is not restored into
+  live memory on daemon start and is removed by the orphan-notice cleanup once
+  no active work item exists for the session.
+
 ### 8.12 Bounded recovery summarizer (Task 117, 0P-F2)
 
 `ContextCompactionEngine._generateRecoverySummary` runs when the ordinary
@@ -910,6 +1008,20 @@ For compaction exchanges, the dump captures the exact route and safe options use
 - **Timing and Status:** Dispatches and responses record `status_code`, `duration_ms`, and provider `finish_reason`.
 - **Capture Completeness:** Dumper tracks `capture_state` through `initialized` → `request_sent` → `completed` (or `error`). Responses marked incomplete or truncated due to length limits (`length`, `incomplete`, Anthropic `max_tokens`, or `partial_message`) explicitly set `capture_state: 'truncated'` and `truncated: true`. Responses terminating with `failed` or `cancelled` finish reasons or non-200 status codes are explicitly marked `capture_state: 'error'`.
 - **Durable Link:** Completed compaction dumps cache their repository-relative path (e.g., `request_dumps/compaction_dump_<key>_<timestamp>.json`), which is persisted directly into the compaction operation record via `diagnostics_json` (`relative_dump_path`). Captures are discoverable by operation and request ID without reading payload bodies.
+
+### 10.5 Retention Applies to Compaction Dumps
+
+Compaction dumps share the dump directory and the owner retention window
+(`SANAD_HOME/config.yaml` `diagnostics.requestDumpRetentionDays`, default 3
+days); see [agent_runtime.md](agent_runtime.md), section "Diagnostic Request
+Dumps". `RequestDumpRetentionService` is the only deleter and skips every path
+`LLMRequestDumper.inFlightDumpPaths()` reports, so a capture that an executing
+compaction pass still owns is never removed. Startup recovery reconciles
+orphaned `started` operations at daemon start, so no operation survives as
+in-progress without either an active dump reference or a fresh capture attempt.
+A completed or failed operation whose dump has since expired keeps its
+`relative_dump_path` as a historical pointer to a file retention removed;
+diagnostics read payload bodies only from captures that still exist.
 
 ## 11. Minimal Durable Compaction Diagnostics & Post-Boundary Binding
 

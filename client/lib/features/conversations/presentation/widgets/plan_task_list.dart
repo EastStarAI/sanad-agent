@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 
 class PlanTaskList extends StatelessWidget {
   final Map<String, dynamic>? plan;
@@ -37,7 +37,7 @@ class PlanTaskList extends StatelessWidget {
           Expanded(
             child: Text(
               title,
-              style: GoogleFonts.roboto(
+              style: AppTypography.text(context,
                 color: isDone
                     ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)
                     : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.38),

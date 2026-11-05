@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'package:sanad_client/core/presentation/state/app_log_store.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 
 class DebugConsole extends StatefulWidget {
   final VoidCallback onClose;
@@ -109,7 +109,7 @@ class _DebugConsoleState extends State<DebugConsole> {
 
                     return Text(
                       log,
-                      style: GoogleFonts.firaCode(
+                      style: AppTypography.mono(
                         color: Theme.of(context).colorScheme.primary,
                         fontSize: 11,
                       ),

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 
 /// Workspace selector chip: the active workspace label, its loading or locked
@@ -230,7 +230,7 @@ class ComposerWorkspaceChip extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             label,
-            style: GoogleFonts.inter(
+            style: AppTypography.text(context,
               color: color ?? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.8),
               fontSize: 12,
               fontWeight: FontWeight.w400,

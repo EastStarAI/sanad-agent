@@ -729,7 +729,7 @@ or act as durable truth.
 
 Task 31 adds two independent revision streams. `session_execution_snapshots.revision` orders execution-state changes, while `sessions.route_revision` orders provider/model route changes. The values are local to one session and must never be compared with one another.
 
-`AgentStateDatabase.transaction` is the shared synchronous write boundary for aggregate mutations. It passes an `AgentStateTransaction` context to repositories using the one `state.db` connection. Nested composition uses SQLite savepoints; asynchronous callbacks are rejected so the connection cannot commit before a callback finishes. A repository may open its own transaction when used alone or accept the caller's context when several owners must commit atomically.
+`AgentStateDatabase.transaction` is the shared synchronous write boundary for aggregate mutations. It passes an `AgentStateTransaction` context to repositories using the one `state.db` connection. Nested composition uses SQLite savepoints; asynchronous callbacks are rejected so the connection cannot commit before a callback finishes. A repository may open its own transaction when used alone or accept the caller's context when several owners must commit atomically. A repository that owns a raw connection boundary uses the same rule through `agent/lib/evolution/db/sqlite_transaction.dart`: it rolls back only while SQLite still holds a transaction and always rethrows the original failure, because a fatal error such as `SQLITE_FULL` has already aborted the transaction. A local full disk reaches the runtime as the typed `storage_full` failure rather than as a provider error.
 
 ### 6.1. `session_execution_snapshots`
 
