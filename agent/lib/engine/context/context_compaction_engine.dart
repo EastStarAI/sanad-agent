@@ -1598,7 +1598,7 @@ class ContextCompactionEngine {
           ),
         ));
         instruction = CompactionSummaryPrompt.buildJsonInstruction(
-          missingFields: ['valid JSON only; ${error.reason}'],
+          missingFields: CompactionInternalSummary.requiredSectionKeys,
           partial: anchors.isEmpty,
         );
       } on TimeoutException {
