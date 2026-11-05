@@ -58,21 +58,31 @@ runs:
         # registers the pinned version with FVM instead of downloading it again.
         dart pub global run fvm:main install
     # PATH entries only apply to later steps, so the FVM version assertion runs
-    # in its own step. On Windows the FVM shim is a batch file, which only the
-    # command interpreter resolves, so it is invoked through cmd there.
+    # in its own step. Output is captured whole: a pipe that closes early makes
+    # the Flutter tool abort while it writes its build log on Windows.
     - shell: bash
       run: |
         set -euo pipefail
         version="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)"
         if [ "${RUNNER_OS:-}" = "Windows" ]; then
-          resolved="$(cmd //c fvm flutter --version | head -n1)"
+          # FVM's shim is a batch file that only the command interpreter
+          # resolves, and no Windows lane runs `fvm flutter`, so the check
+          # proves the FVM cache resolves the pinned SDK's Dart instead.
+          resolved="$(cmd //c fvm dart --version 2>&1)"
+          case "$resolved" in
+            "Dart SDK version: "*) echo "FVM resolves the Dart SDK of Flutter $version" ;;
+            *)
+              echo "::error::FVM did not resolve a Dart SDK: '$resolved'"
+              exit 1
+              ;;
+          esac
         else
-          resolved="$(fvm flutter --version | head -n1)"
+          resolved="$(fvm flutter --version 2>&1 | head -n1)"
+          case "$resolved" in
+            *" $version "*) echo "FVM resolves Flutter $version" ;;
+            *)
+              echo "::error::FVM resolved '$resolved' instead of Flutter $version"
+              exit 1
+              ;;
+          esac
         fi
-        case "$resolved" in
-          *" $version "*) echo "FVM resolves Flutter $version" ;;
-          *)
-            echo "::error::FVM resolved '$resolved' instead of Flutter $version"
-            exit 1
-            ;;
-        esac
