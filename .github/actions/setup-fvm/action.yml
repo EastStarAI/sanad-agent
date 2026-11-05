@@ -70,7 +70,7 @@ runs:
           # proves the FVM cache resolves the pinned SDK's Dart instead.
           resolved="$(cmd //c fvm dart --version 2>&1)"
           case "$resolved" in
-            "Dart SDK version: "*) echo "FVM resolves the Dart SDK of Flutter $version" ;;
+            *"Dart SDK version: "*) echo "FVM resolves the Dart SDK of Flutter $version" ;;
             *)
               echo "::error::FVM did not resolve a Dart SDK: '$resolved'"
               exit 1
