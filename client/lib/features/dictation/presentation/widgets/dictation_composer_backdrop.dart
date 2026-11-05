@@ -106,8 +106,8 @@ class _ComposerBarsPainter extends CustomPainter {
     if (count <= 0) return;
 
     // A hair of activity even in silence so the surface reads as "listening".
-    final amplitude = (0.06 + level * 0.94).clamp(0.0, 1.0);
-    final paint = Paint()..color = color.withValues(alpha: 0.10 + level * 0.10);
+    final amplitude = (0.10 + level * 0.90).clamp(0.0, 1.0);
+    final paint = Paint()..color = color.withValues(alpha: 0.16 + level * 0.24);
 
     for (var i = 0; i < count; i++) {
       final wave = 0.55 + 0.45 * math.sin(phase * 2 * math.pi + i * 0.55);
