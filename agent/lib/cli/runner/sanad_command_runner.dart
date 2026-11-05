@@ -424,6 +424,27 @@ class SanadCommandRunner extends CommandRunner<int> {
     'skills': {'list'},
   };
 
+  /// Commands that select their own runtime, where each runtime decides for
+  /// itself whether it needs the vault.
+  ///
+  /// `run` executes in exactly one of two places:
+  /// * a gateway run attaches to the running daemon and reads no Agent secret
+  ///   at all — the daemon owns every credential, and the turn request carries
+  ///   provider identities only;
+  /// * a run that starts the in-process runtime (`--standalone`, or no healthy
+  ///   daemon for the selected Home) opens the vault itself in
+  ///   `StandaloneCliTurnClient.start`, at the moment it needs a provider key.
+  ///
+  /// Opening the vault here instead would make every gateway run read the
+  /// owner indexes it then discards, and — whenever the caller happens to hold
+  /// a terminal — wait on an OS authorization dialog before the turn is even
+  /// dispatched.
+  ///
+  /// No `run` path may read a secret before dispatch. A future `run` option
+  /// that needs one must open the vault itself, exactly as the standalone
+  /// runtime does, or stop belonging to this set.
+  static const Set<String> runtimeSelectedCommandFamilies = {'run'};
+
   /// Whether [arguments] must open the Agent vault before the command runs.
   ///
   /// The Agent vault is the OS credential vault (macOS Keychain, Windows DPAPI,
@@ -453,6 +474,9 @@ class SanadCommandRunner extends CommandRunner<int> {
     final name = command.name;
     if (name == 'version' || name == 'help') return false;
     if (secretFreeCommandFamilies.contains(name)) return false;
+    // `run` picks its runtime first and each runtime opens the vault it needs,
+    // so the entry point must not open one on its behalf.
+    if (runtimeSelectedCommandFamilies.contains(name)) return false;
     final freeSubcommands = secretFreeSubcommands[name];
     if (freeSubcommands == null) return true;
     final subcommand = command.command?.name;
