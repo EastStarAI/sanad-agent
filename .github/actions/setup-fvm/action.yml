@@ -30,15 +30,17 @@ runs:
           exit 1
         fi
         sdk_root="${FLUTTER_ROOT:-$(dirname "$(dirname "$(command -v flutter)")")}"
-        # The pub cache stays at its platform default: the runner images already
-        # put its bin directory on PATH, and only FVM needs a native path.
+        # The pub cache keeps its platform default; only its bin directory has
+        # to be published to later steps, in the platform's own path form.
         cache="$HOME/.fvm-cache"
         if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          pub_cache="${PUB_CACHE:-${LOCALAPPDATA}\\Pub\\Cache}"
+          echo "${pub_cache}\\bin" >> "$GITHUB_PATH"
           cache="$(cygpath -u "$cache")"
           fvm_cache="$(cygpath -w "$cache")"
         else
+          echo "${PUB_CACHE:-$HOME/.pub-cache}/bin" >> "$GITHUB_PATH"
           fvm_cache="$cache"
-          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
         fi
         mkdir -p "$cache/versions"
         link="$cache/versions/$version"
