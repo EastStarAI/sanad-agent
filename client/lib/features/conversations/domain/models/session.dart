@@ -136,6 +136,55 @@ class Session {
     );
   }
 
+  /// Applies only the fields the Client owns from an Agent session update.
+  ///
+  /// A `session_updated` event may be a partial projection (a title refresh) or
+  /// a complete one (the Agent repairing a session's own targeting and
+  /// permission mode). Workspace identity and the permission keys are applied
+  /// key by key from [payload], so a partial event never clears them and an
+  /// Agent projection never replaces the rest of [metadata] wholesale.
+  Session withOwnedSessionUpdate(Map<String, dynamic> payload) {
+    String? ownedText(String key) {
+      final value = payload[key];
+      if (value is! String) return null;
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? null : trimmed;
+    }
+
+    final incomingMetadata = payload['metadata'];
+    final incoming = incomingMetadata is Map
+        ? Map<String, dynamic>.from(incomingMetadata)
+        : const <String, dynamic>{};
+    final ownedMetadata = <String, dynamic>{
+      for (final key in _ownedMetadataKeys)
+        if (incoming.containsKey(key)) key: incoming[key],
+    };
+    if (!ownedMetadata.containsKey('permission_mode')) {
+      final permissionMode = ownedText('permission_mode');
+      if (permissionMode != null) {
+        ownedMetadata['permission_mode'] = permissionMode;
+      }
+    }
+
+    return copyWith(
+      workspaceId: ownedText('workspace_id'),
+      workspaceName: ownedText('workspace_name'),
+      workspacePath: ownedText('workspace_path'),
+      workspaceTrustState: ownedText('workspace_trust_state'),
+      metadata: ownedMetadata.isEmpty
+          ? null
+          : <String, dynamic>{...?metadata, ...ownedMetadata},
+    );
+  }
+
+  /// Session metadata keys whose value the Client trusts an Agent update to
+  /// carry; every other key stays Client-owned.
+  static const Set<String> _ownedMetadataKeys = <String>{
+    'execution_root',
+    'allow_all_tools',
+    'permission_mode',
+  };
+
   static ThinkingControlDescriptorDto? _thinkingControlFromJson(Object? raw) {
     if (raw is Map<String, dynamic>) {
       return ThinkingControlDescriptorDto.fromJson(raw);

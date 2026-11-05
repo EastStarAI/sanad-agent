@@ -55,8 +55,6 @@ class SessionWorkspaceCoordinator {
   final Map<String, WorkspacePermissionMode> _permissionModesByWorkspaceId = {};
   final Map<String, int> _policyRevisionsByWorkspaceId = {};
 
-  /// Sessions whose full-access metadata the user explicitly downgraded.
-  final Set<String> _downgradedSessionIds = {};
   final Set<String> _loadingPermissionModeWorkspaceIds = {};
   final Map<String, int> _workspacePolicyLoadIds = {};
   StreamSubscription<WorkspacePolicy>? _workspacePolicySubscription;
@@ -314,13 +312,6 @@ class SessionWorkspaceCoordinator {
     _workspacePolicyLoadIds[workspace.id] =
         (_workspacePolicyLoadIds[workspace.id] ?? 0) + 1;
     final selectedSessionId = getSelectedSessionId();
-    if (selectedSessionId != null) {
-      if (permissionMode == WorkspacePermissionMode.defaultMode) {
-        _downgradedSessionIds.add(selectedSessionId);
-      } else if (permissionMode == WorkspacePermissionMode.fullAccess) {
-        _downgradedSessionIds.remove(selectedSessionId);
-      }
-    }
     emit(getState().copyWith(isLoadingPermissionMode: true));
 
     Future<WorkspacePolicy> send(int? expectedRevision) {
@@ -331,12 +322,14 @@ class SessionWorkspaceCoordinator {
               workspace.id,
               expectedRevision: expectedRevision,
               permissionMode: permissionMode,
+              sessionId: selectedSessionId,
             )
           : conversationRepository.setWorkspacePermissionMode(
               agent!,
               workspaceId: workspace.id,
               workspacePath: workspace.path,
               mode: permissionMode,
+              sessionId: selectedSessionId,
             );
     }
 
@@ -464,9 +457,10 @@ class SessionWorkspaceCoordinator {
       return WorkspacePermissionMode.defaultMode;
     }
     final selectedSession = sessionCubit.state.selectedSession;
-    final isExplicitlyDowngraded = selectedSession != null && _downgradedSessionIds.contains(selectedSession.id);
-    if (!isExplicitlyDowngraded &&
-        selectedSession != null &&
+    // A session's own override is the authority the Agent enforces, so it is
+    // the mode the picker must show; the workspace policy decides only when the
+    // session carries none.
+    if (selectedSession != null &&
         (selectedSession.metadata?['allow_all_tools'] == true ||
             selectedSession.metadata?['permission_mode'] == 'full_access')) {
       return WorkspacePermissionMode.fullAccess;

@@ -95,6 +95,10 @@ Map<String, dynamic> buildSessionPayload({
       'workspace_path': workspacePath,
     if (workspaceTrustState != null && workspaceTrustState.isNotEmpty)
       'workspace_trust_state': workspaceTrustState,
+    // The permission mode a session owns is projected beside its workspace so a
+    // client can read both from one place, even when it ignores `metadata`.
+    if (mergedMetadata['permission_mode'] != null)
+      'permission_mode': mergedMetadata['permission_mode'],
     if (mergedMetadata.isNotEmpty) 'metadata': mergedMetadata,
   };
 }

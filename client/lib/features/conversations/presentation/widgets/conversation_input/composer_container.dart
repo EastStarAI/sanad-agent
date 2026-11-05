@@ -313,9 +313,11 @@ class ComposerContainer extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              if (!hasPendingRequest &&
-                  capabilities.supportsToolPermissions &&
-                  inputSlice.selectedWorkspace != null) ...[
+              if (ComposerPermissionGate.shouldShow(
+                hasPendingRequest: hasPendingRequest,
+                capabilities: capabilities,
+                inputSlice: inputSlice,
+              )) ...[
                 ComposerPermissionModeChip(
                   permissionMode: inputSlice.permissionMode,
                   isLoadingPermissionMode: inputSlice.isLoadingPermissionMode,

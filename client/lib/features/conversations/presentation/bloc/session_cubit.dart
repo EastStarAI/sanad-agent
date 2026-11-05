@@ -915,7 +915,7 @@ class SessionCubit extends Cubit<SessionState> {
           : (hasCorrection ? null : existing.thinkingControl),
       clearThinkingControl: hasCorrection && thinkingControlRaw == null,
       updatedAt: DateTime.now(),
-    );
+    ).withOwnedSessionUpdate(payload);
     if (conversationCacheRepository != null) {
       conversationCacheRepository!.applySessionUpdated(deviceId, updated);
       if (state.selectedSession?.id == sessionId) {

@@ -1488,6 +1488,116 @@ void main() {
     await cubit.close();
   });
 
+  test('session_updated applies the workspace and permission keys the Agent owns', () async {
+    final clientOwnedSession = session.copyWith(
+      metadata: const {'client_owned_key': 'keep-me'},
+    );
+    final scopedClient = _FakeDeviceClient(
+      config: agent,
+      controller: socket,
+      initialSessions: [clientOwnedSession],
+    );
+    agentCubit.registerClient(agent.id, scopedClient);
+    socket.setConnected(true);
+    localSocket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final resolver = DeviceConnectionCoordinator(
+      cloudSocketService: socket,
+      localSocketService: localSocket,
+      currentDeviceId: 'test-device-id',
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      connectionCoordinator: resolver,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    localSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'session_updated',
+      'device_id': agent.id,
+      'payload': {
+        'session_id': session.id,
+        'workspace_id': 'exec_root:/worktree',
+        'workspace_name': 'worktree',
+        'workspace_path': '/worktree',
+        'workspace_trust_state': 'untrusted',
+        'permission_mode': 'full_access',
+        'metadata': {
+          'execution_root': '/worktree',
+          'allow_all_tools': true,
+          'permission_mode': 'full_access',
+        },
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    final updated = cubit.state.agentSessions[agent.id]?.single;
+    expect(updated?.workspaceId, 'exec_root:/worktree');
+    expect(updated?.workspacePath, '/worktree');
+    expect(updated?.workspaceName, 'worktree');
+    expect(updated?.workspaceTrustState, 'untrusted');
+    expect(updated?.metadata?['execution_root'], '/worktree');
+    expect(updated?.metadata?['allow_all_tools'], isTrue);
+    // Agent metadata never replaces the rest of the Client's own metadata.
+    expect(updated?.metadata?['client_owned_key'], 'keep-me');
+
+    resolver.dispose();
+    await cubit.close();
+  });
+
+  test('a partial session_updated keeps the owned workspace and permission keys', () async {
+    final runSession = session.copyWith(
+      workspaceId: 'exec_root:/worktree',
+      workspacePath: '/worktree',
+      metadata: const {
+        'execution_root': '/worktree',
+        'allow_all_tools': true,
+        'permission_mode': 'full_access',
+      },
+    );
+    final scopedClient = _FakeDeviceClient(
+      config: agent,
+      controller: socket,
+      initialSessions: [runSession],
+    );
+    agentCubit.registerClient(agent.id, scopedClient);
+    socket.setConnected(true);
+    localSocket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final resolver = DeviceConnectionCoordinator(
+      cloudSocketService: socket,
+      localSocketService: localSocket,
+      currentDeviceId: 'test-device-id',
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      connectionCoordinator: resolver,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    localSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'session_updated',
+      'device_id': agent.id,
+      'payload': {'session_id': session.id, 'title': 'Ran a task'},
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    final updated = cubit.state.agentSessions[agent.id]?.single;
+    expect(updated?.title, 'Ran a task');
+    expect(updated?.workspaceId, 'exec_root:/worktree');
+    expect(updated?.workspacePath, '/worktree');
+    expect(updated?.metadata?['allow_all_tools'], isTrue);
+
+    resolver.dispose();
+    await cubit.close();
+  });
+
   test('session_updated from the local socket updates the visible session title', () async {
     socket.setConnected(true);
     localSocket.setConnected(true);
@@ -3192,6 +3302,7 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+    String? sessionId,
   }) async {
     return const WorkspacePolicy();
   }

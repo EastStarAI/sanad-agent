@@ -451,6 +451,13 @@ class SanadProtocolBridge {
           await emitEnvelope(envelope);
         }
         return;
+      case CanonicalEventTypes.setSessionPermissionMode:
+        final envelope =
+            _sessionQueryHandler.buildSetSessionPermissionModeEnvelope(event);
+        if (envelope != null) {
+          await emitEnvelope(envelope);
+        }
+        return;
       case CanonicalEventTypes.deleteSession:
         final envelope = _sessionQueryHandler.buildDeleteSessionEnvelope(event);
         if (envelope != null) {

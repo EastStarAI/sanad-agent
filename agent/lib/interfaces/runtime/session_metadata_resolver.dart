@@ -1,6 +1,39 @@
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
+
+/// The part of a session's metadata that its own turn targeting contributes.
+///
+/// A turn can target an unregistered execution root (`sanad run
+/// --execution-root`) and carry its tool authority (`--allow-all-tools`). Both
+/// live in the request rather than in a registered workspace, so the session
+/// projection created by that turn must seed them: the Client derives the
+/// session's workspace from `workspace_id` / `execution_root` and its
+/// permission mode from `allow_all_tools`, and a projection without them hides
+/// the session's real targeting until an authoritative `sessions_list` refresh.
+///
+/// A registered workspace always keeps ownership of the session, so the
+/// `exec_root:` identity is only written when the turn has no such workspace.
+Map<String, dynamic> buildTurnTargetingMetadata(
+  AgentTurnRequest request, {
+  required bool hasRegisteredWorkspace,
+}) {
+  final metadata = <String, dynamic>{};
+  final executionRoot = request.executionRoot?.trim();
+  if (executionRoot != null && executionRoot.isNotEmpty) {
+    metadata['execution_root'] = executionRoot;
+    if (!hasRegisteredWorkspace) {
+      metadata['workspace_id'] = 'exec_root:$executionRoot';
+    }
+  }
+  if (request.metadata.containsKey('allow_all_tools')) {
+    final allowAllTools = request.metadata['allow_all_tools'];
+    metadata['allow_all_tools'] =
+        allowAllTools == true || allowAllTools == 'true';
+  }
+  return metadata;
+}
 
 /// Resolves session title, workspace association, and related metadata
 /// from inbound gateway events and stored session configurations.
@@ -67,6 +100,24 @@ class SessionMetadataResolver {
       return null;
     }
     return normalizedFallback;
+  }
+
+  /// The metadata a new session is created with: the registered workspace it
+  /// belongs to, if any, plus the targeting and authority its first turn
+  /// carries.
+  Future<Map<String, dynamic>> buildCreatedSessionMetadata({
+    required String? workspaceId,
+    required AgentTurnRequest turnRequest,
+  }) async {
+    final workspaceMetadata = await buildWorkspaceSessionMetadata(workspaceId);
+    return <String, dynamic>{
+      ...workspaceMetadata,
+      ...buildTurnTargetingMetadata(
+        turnRequest,
+        hasRegisteredWorkspace:
+            workspaceIdFromMetadata(workspaceMetadata)?.isNotEmpty == true,
+      ),
+    };
   }
 
   /// Builds a workspace metadata map from the workspace runtime service.

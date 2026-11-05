@@ -138,6 +138,39 @@ void main() {
     );
   }
 
+  testWidgets('permission mode picker exposes the execution root as its tooltip', (tester) async {
+    await pumpComposer(
+      tester,
+      capabilities: const Capability(supportsToolPermissions: true),
+      inputSlice: idleSlice(
+        selectedWorkspace: const DeviceWorkspace(
+          id: 'exec_root:/worktrees/lt-339',
+          name: 'lt-339',
+          path: '/worktrees/lt-339',
+        ),
+      ),
+      agentSlice: onlineAgentSlice,
+    );
+    await tester.pump();
+
+    final chip = tester.widget<PopupMenuButton<WorkspacePermissionMode>>(
+      find.byKey(const Key('permission_mode_selector_button')),
+    );
+    expect(chip.tooltip, contains('/worktrees/lt-339'));
+  });
+
+  testWidgets('permission mode picker stays hidden for a session with no path', (tester) async {
+    await pumpComposer(
+      tester,
+      capabilities: const Capability(supportsToolPermissions: true),
+      inputSlice: idleSlice(),
+      agentSlice: onlineAgentSlice,
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('permission_mode_selector_button')), findsNothing);
+  });
+
   testWidgets('permission mode menu items carry driver keys', (tester) async {
     await pumpComposer(
       tester,

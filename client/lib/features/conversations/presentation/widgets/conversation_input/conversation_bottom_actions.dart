@@ -104,7 +104,11 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
     final inputSlice = widget.inputSlice;
     return Row(
       children: [
-        if (capabilities.supportsToolPermissions && inputSlice.selectedWorkspace != null)
+        if (ComposerPermissionGate.shouldShow(
+          hasPendingRequest: inputSlice.pendingSuspendedRequest != null,
+          capabilities: capabilities,
+          inputSlice: inputSlice,
+        ))
           _buildPermissionModeSelector(context),
         const SizedBox(width: 16),
         if (capabilities.supportsAttachments) ...[

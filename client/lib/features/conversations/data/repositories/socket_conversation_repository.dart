@@ -601,11 +601,13 @@ class SocketConversationRepository
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+    String? sessionId,
   }) {
     return _clientFor(agent).setWorkspacePermissionMode(
       workspaceId: workspaceId,
       workspacePath: workspacePath,
       mode: mode,
+      sessionId: sessionId,
     );
   }
 

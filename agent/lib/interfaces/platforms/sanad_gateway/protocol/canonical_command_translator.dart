@@ -104,6 +104,7 @@ class CanonicalCommandTranslator {
     CanonicalEventTypes.deleteSession,
     CanonicalEventTypes.updateSessionTitle,
     CanonicalEventTypes.updateSessionPreferences,
+    CanonicalEventTypes.setSessionPermissionMode,
     CanonicalEventTypes.sessionPendingSteerCancel,
     CanonicalEventTypes.sessionQueuedMessageDelete,
     CanonicalEventTypes.sessionStopRecoveryAck,

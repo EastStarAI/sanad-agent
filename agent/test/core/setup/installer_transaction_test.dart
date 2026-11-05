@@ -5,6 +5,8 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
+import '../../support/host_home_guard.dart';
+
 void main() {
   group('installer transaction', () {
     late Directory root;
@@ -13,9 +15,13 @@ void main() {
   late File commandLog;
   late HttpServer server;
   late String artifact;
+  RealSanadHomeWatch? realHomeWatch;
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('sanad-installer-test-');
+    // A leak into the owner's real Home must fail this test, never replace the
+    // installed binary.
+    realHomeWatch = RealSanadHomeWatch.start();
     home = Directory(p.join(root.path, 'home'))..createSync(recursive: true);
     mockBin = Directory(p.join(root.path, 'mock-bin'))..createSync();
     commandLog = File(p.join(root.path, 'commands.log'));
@@ -83,6 +89,7 @@ exit 0
 
   tearDown(() async {
     await server.close(force: true);
+    realHomeWatch?.verifyUnchanged();
     await root.delete(recursive: true);
   });
 
@@ -239,12 +246,19 @@ Future<ProcessResult> _runInstaller({
     ...Platform.environment,
     'HOME': home.path,
     'SANAD_HOME': p.join(home.path, '.sanad'),
+    'SANAD_INSTALL_SYSTEM_HOME': p.join(home.parent.path, 'system-home'),
     'SANAD_RELEASE_MANIFEST_URL': manifestUrl,
     'SANAD_INSTALL_ALLOW_TEST_URL': '1',
     'FAKE_COMMAND_LOG': commandLog.path,
     'PATH': '${mockBin.path}:${Platform.environment['PATH']}',
     ...extraEnvironment,
   };
+  // The installer must never resolve a Home outside this test's temp tree: a
+  // value that escapes it would install into the owner's real Sanad Home.
+  HostHomeGuard.assertHomeEnvironmentRedirected(
+    environment,
+    allowedRoot: home.parent.path,
+  );
   if (pairingToken == null) {
     return Process.run('sh', [
       '../scripts/install.sh',

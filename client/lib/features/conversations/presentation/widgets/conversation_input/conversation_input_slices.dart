@@ -7,8 +7,30 @@ import 'package:sanad_client/features/conversations/domain/models/device_suspend
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
+import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:flutter/foundation.dart';
+
+/// The single gate that decides whether the composer offers a permission-mode
+/// picker.
+///
+/// The picker needs the Agent's tool-permission capability, no pending approval
+/// (that prompt owns the controls while it waits), and a bound workspace: a
+/// session whose targeting resolves to no path has no scope whose mode the
+/// picker could read or change, so it stays hidden rather than borrowing
+/// another workspace's policy.
+class ComposerPermissionGate {
+  const ComposerPermissionGate._();
+
+  static bool shouldShow({
+    required bool hasPendingRequest,
+    required Capability capabilities,
+    required ConversationInputSlice inputSlice,
+  }) =>
+      !hasPendingRequest &&
+      capabilities.supportsToolPermissions &&
+      inputSlice.selectedWorkspace != null;
+}
 
 @immutable
 class ConversationInputAgentSlice {

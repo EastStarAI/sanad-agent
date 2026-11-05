@@ -1,4 +1,6 @@
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/capabilities/permissions/command_authority.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/session_route_thinking_control.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
@@ -480,6 +482,68 @@ class SessionQueryHandler {
           'request_id': requestId,
           'session_id': sessionId,
           'title': title,
+        },
+      ),
+    );
+  }
+
+  /// Applies an explicit session-level permission choice.
+  ///
+  /// A session started with `sanad run --allow-all-tools` carries its authority
+  /// in its own metadata, so a workspace policy change alone can never switch it
+  /// off. This command writes the session's own override and republishes the
+  /// complete projection, so every Client renders the mode the Agent will
+  /// actually enforce instead of a display-only downgrade.
+  Map<String, dynamic>? buildSetSessionPermissionModeEnvelope(
+    CanonicalEvent event,
+  ) {
+    final sessionId = event.sessionId;
+    final requestId = event.payload['request_id'] as String?;
+    final requestedMode = (event.payload['permission_mode'] as String?)?.trim();
+    final permissionMode = WorkspacePermissionMode.tryParse(requestedMode);
+    if (sessionId == null || permissionMode == null) {
+      return null;
+    }
+    final session = _sessionManager.getSession(sessionId);
+    if (session == null) {
+      return null;
+    }
+    final fullAccess = permissionMode == WorkspacePermissionMode.fullAccess;
+    final authority = CommandAuthority.fromStamped(
+      event.payload[CommandAuthority.payloadKey],
+    );
+    if (fullAccess && !authority.isOwner) {
+      // Granting full access is owner-only; a downgrade is always allowed.
+      return _bridge.buildAgentEventEnvelope(
+        CanonicalEvent(
+          type: 'error',
+          sessionId: sessionId,
+          payload: {
+            'request_id': requestId,
+            'code': 'permission_denied',
+            'message': 'Only the device owner may grant full access.',
+          },
+        ),
+      );
+    }
+
+    final metadata = Map<String, dynamic>.from(
+      _sessionManager.getSessionMetadata(sessionId) ?? const <String, dynamic>{},
+    );
+    metadata['allow_all_tools'] = fullAccess;
+    metadata['permission_mode'] = fullAccess ? 'full_access' : 'default_mode';
+    _sessionManager.saveSessionMetadata(sessionId, metadata);
+
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionUpdated,
+        sessionId: sessionId,
+        payload: {
+          'request_id': requestId,
+          ...buildSessionPayload(
+            session: session,
+            sessionMetadata: metadata,
+          ),
         },
       ),
     );

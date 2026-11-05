@@ -903,6 +903,7 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+    String? sessionId,
   }) async {
     final gateway = _gateway;
     if (gateway == null) {
@@ -919,6 +920,23 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
       },
       requestId: requestId,
     );
+    final normalizedSessionId = sessionId?.trim();
+    if (normalizedSessionId != null && normalizedSessionId.isNotEmpty) {
+      // The session-level override is written first: a session started with
+      // `sanad run --allow-all-tools` keeps its own authority until the Agent
+      // clears it, and the picker must never read "Default" while the Agent
+      // still auto-approves that session.
+      final sessionRequestId = generateConversationRequestId();
+      await gateway.request(
+        command: 'set_session_permission_mode',
+        payload: {
+          'request_id': sessionRequestId,
+          'session_id': normalizedSessionId,
+          'permission_mode': mode.value,
+        },
+        requestId: sessionRequestId,
+      );
+    }
     if (result != null) {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       return WorkspacePolicy.fromJson(payload);

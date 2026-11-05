@@ -47,7 +47,8 @@ Every command and turn carries a daemon-derived `CommandAuthority`. User decisio
 
 ### Mutation rules
 
-- `workspace.set_permission_mode` is the only mutation command. It accepts any of `permission_mode`, `execution_mode`, `host_discovery_policy` and an optional `expected_revision`.
+- `workspace.set_permission_mode` is the only workspace-policy mutation command. It accepts any of `permission_mode`, `execution_mode`, `host_discovery_policy` and an optional `expected_revision`.
+- `set_session_permission_mode` is the only session-authority mutation command. It takes `session_id` and `permission_mode` (`default` or `full_access`), writes the session's own `allow_all_tools` and `permission_mode` metadata, and republishes the complete session payload as `session_updated` (workspace identity plus `permission_mode` and `metadata`). It never rewrites the session's targeting, and `full_access` requires `owner`; a downgrade is always accepted. Owner decision 2026-11-05: a session started with `sanad run --allow-all-tools` therefore loses or regains its authority for real, instead of the Client rendering a display-only downgrade while the Agent keeps auto-approving.
 - Widening any axis (`default -> full_access`, `protected -> direct`, `disabled -> owner_only`) requires `owner`, which every authenticated client transport has, local or cloud. Narrowing is always accepted.
 - Unknown values, a malformed revision, or an empty mutation fail with `invalid_request` and write nothing.
 - Typed error codes: `invalid_request`, `permission_denied`, `stale_revision` (with `current_revision`), `workspace_not_found`, `workspace_unavailable`, `policy_update_failed`. Error messages never echo exception text.
@@ -57,7 +58,8 @@ Every command and turn carries a daemon-derived `CommandAuthority`. User decisio
 ### Approval bypass
 
 - Workspace `full_access` skips prompts; explicit workspace `deny` entries still win.
-- Turn-level `allow_all_tools` is honoured only on an `owner` turn. Only the CLI sends it (`sanad run --yes`, locally or through the remote CLI relay); no Sanad Client, local or cloud, has an `allow_all_tools` control. Session metadata `permission_mode` never grants anything.
+- Turn-level `allow_all_tools` is honoured only on an `owner` turn. Only the CLI sends it as a turn (`sanad run --yes`, locally or through the remote CLI relay); a Sanad Client changes the same durable session authority through `set_session_permission_mode` instead of stamping its own turns. Session metadata `permission_mode` never grants anything on its own.
+- `allow_all_tools` is durable session authority, not a per-turn flag. A turn that omits it inherits the value stored on the session, so a Client message into a `sanad run --allow-all-tools` session keeps the session's terminal and workspace permissions at the same execution root and prompts for nothing. A turn that states the key is authoritative, and the stored `permission_mode` always matches it (`full_access` or `default_mode`).
 
 ## 3. Child-process environment
 
@@ -104,6 +106,7 @@ So it normally appears only in a Protected owner session. There is no prompt tex
 ## 7. Client
 
 - Full Access shows `FullAccessConfirmationDialog` once on `default -> full_access`; turning it off never prompts and no banner persists. All copy is localized (en, ar).
+- The permission-mode picker renders the mode the Agent enforces. A session's own `allow_all_tools`/`permission_mode` metadata outranks the workspace policy, and a mode change sends `workspace.set_permission_mode` plus `set_session_permission_mode` for the selected session, so a session started with `sanad run --allow-all-tools` really gains or loses its authority. The picker appears only for a session with a bound workspace (including `exec_root:<root>`); a session whose targeting resolves to no path keeps it hidden rather than borrowing another workspace's mode, and its tooltip names the session's execution path.
 - The conversation Full Access toggle sends `workspace.set_permission_mode` through `WorkspaceSecurityClient` (`DeviceCommandClient`, explicit device) with the policy revision last read or broadcast; a rejection keeps the Agent's state and shows its reason.
 - Every stored policy change, including a recorded workspace grant, is announced once by `WorkspacePolicyStore` through `WorkspacePolicyAnnouncer` (`workspace.policy_changed` with the new revision), so clients never keep a stale revision. If a toggle still hits `stale_revision`, the client re-reads the policy and retries once; a remaining failure shows a localized message. Device command rejections log their typed code, never content.
 - Every authenticated client (local or cloud) receives `canWiden: true`, so owner-only widening is available everywhere.
