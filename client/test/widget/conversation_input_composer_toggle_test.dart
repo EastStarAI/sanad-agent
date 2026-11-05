@@ -73,6 +73,7 @@ void main() {
     SessionExecutionSnapshot? executionSnapshot,
     bool isAwaitingMessageAcceptance = false,
     DeviceWorkspace? selectedWorkspace,
+    WorkspacePermissionMode permissionMode = WorkspacePermissionMode.defaultMode,
   }) => ConversationInputSlice(
     isProcessing: false,
     nextMessageModel: null,
@@ -82,7 +83,7 @@ void main() {
     selectedWorkspace: selectedWorkspace,
     isLoadingWorkspaces: false,
     requiresWorkspace: false,
-    permissionMode: WorkspacePermissionMode.defaultMode,
+    permissionMode: permissionMode,
     isLoadingPermissionMode: false,
     pendingSuspendedRequest: null,
     runtimeNotice: null,
@@ -157,6 +158,32 @@ void main() {
       find.byKey(const Key('permission_mode_selector_button')),
     );
     expect(chip.tooltip, contains('/worktrees/lt-339'));
+  });
+
+  testWidgets('a restored run session shows Full access with its path', (
+    tester,
+  ) async {
+    await pumpComposer(
+      tester,
+      capabilities: const Capability(supportsToolPermissions: true),
+      inputSlice: idleSlice(
+        selectedWorkspace: const DeviceWorkspace(
+          id: 'exec_root:/private/tmp/sanad-351-root',
+          name: 'sanad-351-root',
+          path: '/private/tmp/sanad-351-root',
+        ),
+        permissionMode: WorkspacePermissionMode.fullAccess,
+      ),
+      agentSlice: onlineAgentSlice,
+    );
+    await tester.pump();
+
+    expect(find.text('Full Access'), findsOneWidget);
+    final chip = tester.widget<PopupMenuButton<WorkspacePermissionMode>>(
+      find.byKey(const Key('permission_mode_selector_button')),
+    );
+    expect(chip.tooltip, contains('Full Access'));
+    expect(chip.tooltip, contains('/private/tmp/sanad-351-root'));
   });
 
   testWidgets('permission mode picker stays hidden for a session with no path', (tester) async {

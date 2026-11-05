@@ -14,6 +14,7 @@ import 'package:sanad_client/features/conversations/domain/models/thinking_contr
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/domain/stores/processing_store.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_route_projection.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_route_snapshot.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
@@ -399,6 +400,24 @@ class SessionCubit extends Cubit<SessionState> {
     }
   }
 
+  /// Replaces an identity-placeholder selection with the authoritative [session]
+  /// of the same id, without navigating or re-activating it.
+  ///
+  /// A route restore, or a list that has not loaded yet, can leave the selected
+  /// session as nothing but an id: no workspace and no metadata. Adopting the
+  /// authoritative copy is what makes the composer show that session's real
+  /// workspace and permission mode instead of a placeholder.
+  bool adoptSelectedSession(Session session) {
+    final current = state.selectedSession;
+    if (current == null || current.id != session.id) return false;
+    if (!current.isIdentityPlaceholder || session.isIdentityPlaceholder) {
+      return false;
+    }
+    _clearNewConversationPresentation();
+    emit(state.copyWith(selectedSession: session));
+    return true;
+  }
+
   /// Synchronously marks [session] as the selected session in this cubit's
   /// state, without switching agents or re-activating the session in the
   /// repository. Used by [SessionMessagesCubit] right after it locally creates
@@ -413,10 +432,7 @@ class SessionCubit extends Cubit<SessionState> {
       // session id before it was created locally. Adopting the authoritative
       // projection keeps the header off "Loading..." without re-emitting a
       // selection the presenter already committed.
-      if (_isIdentityPlaceholder(current) && !_isIdentityPlaceholder(session)) {
-        _clearNewConversationPresentation();
-        emit(state.copyWith(selectedSession: session));
-      }
+      adoptSelectedSession(session);
       return;
     }
     _clearNewConversationPresentation();
@@ -430,11 +446,6 @@ class SessionCubit extends Cubit<SessionState> {
       );
     }
     emit(state.copyWith(selectedSession: session));
-  }
-
-  static bool _isIdentityPlaceholder(Session? session) {
-    final title = session?.title.trim();
-    return title == 'Loading...' || title == 'Loading…';
   }
 
   void applyHistoryRevision(String sessionId, int historyRevision) {
@@ -962,34 +973,12 @@ class SessionCubit extends Cubit<SessionState> {
     final routes = conversationRepository.currentRouteSnapshots(agent);
     return sessions
         .map(
-          (session) => _applyRouteToSession(
+          (session) => applySessionRouteSnapshot(
             _normalizeSessionForAgent(agent, session),
             routes[session.id],
           ),
         )
         .toList();
-  }
-
-  Session _applyRouteToSession(
-    Session session,
-    SessionRouteSnapshot? route,
-  ) {
-    if (route == null || (session.routeRevision != null && session.routeRevision! > route.routeRevision)) {
-      return session;
-    }
-    return session.copyWith(
-      model: route.model,
-      modelProvider: route.providerInstanceId,
-      routeRevision: route.routeRevision,
-      clearThinkingControl: true,
-      metadata: {
-        ...?session.metadata,
-        'model': route.model,
-        'model_provider': route.providerInstanceId,
-        'route_revision': route.routeRevision,
-        if (route.providerDisplayName != null) 'provider_display_name': route.providerDisplayName,
-      },
-    );
   }
 
   Session _normalizeSessionForAgent(DeviceConfig agent, Session session) {
@@ -1086,7 +1075,7 @@ class SessionCubit extends Cubit<SessionState> {
     final sourceSessions =
         conversationCacheRepository?.sessionsForDevice(deviceId) ?? state.agentSessions[deviceId] ?? const <Session>[];
     final updatedSessions = sourceSessions
-        .map((session) => _applyRouteToSession(session, routes[session.id]))
+        .map((session) => applySessionRouteSnapshot(session, routes[session.id]))
         .toList(growable: false);
     final nextSessions = Map<String, List<Session>>.from(state.agentSessions);
     if (updatedSessions.isNotEmpty || nextSessions.containsKey(deviceId)) {
@@ -1094,7 +1083,7 @@ class SessionCubit extends Cubit<SessionState> {
     }
     final selected = state.selectedSession;
     final updatedSelected = selected?.deviceId == deviceId
-        ? _applyRouteToSession(selected!, routes[selected.id])
+        ? applySessionRouteSnapshot(selected!, routes[selected.id])
         : selected;
     emit(
       state.copyWith(
@@ -1136,7 +1125,7 @@ class SessionCubit extends Cubit<SessionState> {
         deviceId: conversationCacheRepository!
             .sessionsForDevice(deviceId)
             .map(
-              (session) => _applyRouteToSession(
+              (session) => applySessionRouteSnapshot(
                 session,
                 state.routeSnapshots[deviceId]?[session.id],
               ),

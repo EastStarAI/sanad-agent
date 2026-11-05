@@ -6,6 +6,7 @@ import 'package:sanad_client/features/conversations/domain/models/device_convers
 import 'package:sanad_client/features/conversations/domain/models/device_sidebar_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/request_generation.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_workspace_scope.dart';
 import 'package:sanad_client/features/conversations/domain/models/sidebar_conversation_group.dart';
 import 'package:sanad_client/features/conversations/domain/stores/cache_generation_guard.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_draft_cache.dart';
@@ -70,13 +71,55 @@ class SessionSectionCache {
   }) {
     _contexts
       ..clear()
-      ..addAll(contexts);
+      ..addAll({
+        for (final entry in contexts.entries)
+          entry.key: _foldExecRootPagesIntoUnscoped(entry.value),
+      });
     _sessionViewportAnchors
       ..clear()
       ..addAll(viewportAnchors);
     _loadingMoreSections.clear();
     _sectionRequestsInFlight.clear();
     _pendingSectionMutations.clear();
+  }
+
+  /// Moves any cached execution-root page back into the unscoped section.
+  ///
+  /// A run session is stored under its `exec_root:` identity, which no sidebar
+  /// group renders, so a cache written before that rule was enforced would keep
+  /// the session out of every visible group until its own refresh replaced it.
+  DeviceConversationContext _foldExecRootPagesIntoUnscoped(
+    DeviceConversationContext context,
+  ) {
+    final execRootPages = context.workspaceConversationPages.entries
+        .where((entry) => isExecRootWorkspaceId(entry.key))
+        .toList();
+    if (execRootPages.isEmpty) return context;
+    final pages = Map<String, ConversationSectionPage>.from(
+      context.workspaceConversationPages,
+    );
+    var unscoped = context.unscopedConversations;
+    for (final entry in execRootPages) {
+      pages.remove(entry.key);
+      final folded = entry.value;
+      if (folded.sessions.isEmpty) continue;
+      unscoped = unscoped.copyWith(
+        sessions: _sorted([
+          ...unscoped.sessions.where(
+            (session) => !folded.sessions.any((s) => s.id == session.id),
+          ),
+          ...folded.sessions,
+        ]),
+        state: unscoped.state.hasUsableSnapshot
+            ? unscoped.state
+            : folded.state,
+        hasMore: unscoped.hasMore || folded.hasMore,
+      );
+    }
+    return context.copyWith(
+      unscopedConversations: unscoped,
+      workspaceConversationPages: pages,
+    );
   }
 
   void clearDevice(String deviceId) {
@@ -212,13 +255,13 @@ class SessionSectionCache {
   }
 
   void applySessionCreated(String deviceId, Session session) {
+    final workspaceId = session.groupWorkspaceId;
     _recordSectionMutation(
-      _sectionKey(deviceId, session.workspaceId),
+      _sectionKey(deviceId, workspaceId),
       _SectionMutation.upsert(session),
     );
     ensureDeviceContext(deviceId);
     final ctx = contextFor(deviceId);
-    final workspaceId = session.workspaceId;
     final page = _pageFor(deviceId, workspaceId);
     if (page.sessions.any((s) => s.id == session.id)) {
       final updated = page.sessions.map((s) => s.id == session.id ? session : s).toList();
@@ -237,24 +280,34 @@ class SessionSectionCache {
     }
     _notify();
   }
-
   void applySessionUpdated(String deviceId, Session updated) {
+    final workspaceId = updated.groupWorkspaceId;
     _recordMutationForInFlightDeviceSections(
       deviceId,
       _SectionMutation.delete(updated.id),
     );
     _recordSectionMutation(
-      _sectionKey(deviceId, updated.workspaceId),
+      _sectionKey(deviceId, workspaceId),
       _SectionMutation.upsert(updated),
     );
     ensureDeviceContext(deviceId);
     var ctx = contextFor(deviceId);
+    // A section that was never loaded has no row to update, but a section that
+    // already holds this session (a freshly created one, or a cached page) must
+    // never lose it just because its own refresh has not landed yet.
+    final targetBefore = workspaceId == null
+        ? ctx.unscopedConversations
+        : (ctx.workspaceConversationPages[workspaceId] ??
+              ConversationSectionPage.notLoaded());
+    final knownInTarget = targetBefore.sessions.any(
+      (session) => session.id == updated.id,
+    );
     ctx = _removeSessionFromAllSections(ctx, updated.id);
-    final workspaceId = updated.workspaceId;
     final page = workspaceId == null
         ? ctx.unscopedConversations
-        : (ctx.workspaceConversationPages[workspaceId] ?? ConversationSectionPage.notLoaded());
-    if (page.state == ConversationResourceState.notLoaded) {
+        : (ctx.workspaceConversationPages[workspaceId] ??
+              ConversationSectionPage.notLoaded());
+    if (page.state == ConversationResourceState.notLoaded && !knownInTarget) {
       _contexts[deviceId] = ctx;
     } else {
       final sessions = [updated, ...page.sessions.where((s) => s.id != updated.id)];

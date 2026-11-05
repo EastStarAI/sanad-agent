@@ -8,6 +8,7 @@ import 'package:sanad_client/features/conversations/domain/models/conversation_r
 import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_workspace_scope.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
@@ -418,7 +419,7 @@ class SessionWorkspaceCoordinator {
       if (execRoot != null && execRoot.isNotEmpty) {
         final folderName = p.basename(execRoot);
         return DeviceWorkspace(
-          id: 'exec_root:$execRoot',
+          id: execRootWorkspaceId(execRoot),
           name: folderName.isNotEmpty ? folderName : 'Workspace',
           path: execRoot,
           trustState: 'untrusted',

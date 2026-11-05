@@ -1,5 +1,13 @@
 import 'package:sanad_agent/evolution/models/session_state.dart';
+import 'package:sanad_agent/evolution/models/session_workspace_scope.dart';
 
+/// Builds the canonical projection of one session.
+///
+/// [sessionMetadata] is the session's durable metadata, read at projection time.
+/// Every projection states the permission pair the Agent actually enforces —
+/// `metadata.allow_all_tools` (bool) and `metadata.permission_mode` — so a
+/// client never has to infer a mode from a partial map, and a payload can never
+/// describe an older authority than the stored one.
 Map<String, dynamic> buildSessionPayload({
   required SessionState session,
   Map<String, dynamic>? sessionMetadata,
@@ -11,7 +19,15 @@ Map<String, dynamic> buildSessionPayload({
       ? <String, dynamic>{}
       : Map<String, dynamic>.from(sessionMetadata);
   final mergedMetadata = {...persistedMetadata, ...?metadataOverrides};
-  if (mergedMetadata['allow_all_tools'] == true) {
+  if (persistedMetadata.containsKey('allow_all_tools')) {
+    final allowAllTools =
+        persistedMetadata['allow_all_tools'] == true ||
+        persistedMetadata['allow_all_tools'] == 'true';
+    mergedMetadata['allow_all_tools'] = allowAllTools;
+    mergedMetadata['permission_mode'] = allowAllTools
+        ? 'full_access'
+        : 'default_mode';
+  } else if (mergedMetadata['allow_all_tools'] == true) {
     mergedMetadata['permission_mode'] ??= 'full_access';
   } else if (mergedMetadata['permission_mode'] == 'full_access') {
     mergedMetadata['permission_mode'] = 'default_mode';
@@ -25,7 +41,7 @@ Map<String, dynamic> buildSessionPayload({
       ? session.workspaceId!.trim()
       : (persistedMetadata['workspace_id']?.toString() ??
             (executionRoot?.isNotEmpty == true
-                ? 'exec_root:$executionRoot'
+                ? execRootWorkspaceId(executionRoot!)
                 : null));
   final workspaceName =
       workspaceMap?['name']?.toString() ??

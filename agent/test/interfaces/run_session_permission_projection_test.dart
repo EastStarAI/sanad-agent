@@ -37,11 +37,13 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart'
@@ -54,7 +56,9 @@ import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.d
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/session_metadata_resolver.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
+import 'package:sanad_agent/interfaces/runtime/session_title_refresher.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
+import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 import 'package:test/test.dart';
 
 import '../support/memory_agent_secret_store.dart';
@@ -641,4 +645,187 @@ void main() {
           isFalse);
     });
   });
+
+  /// A stale session copy is worse than a missing one: the Client shows a mode
+  /// the Agent does not enforce, so the very choice the owner makes looks like a
+  /// no-op. Every `session_updated` therefore states the durable permission pair,
+  /// not just the field the command changed.
+  group('session update carries the durable permission state', () {
+    late Directory tempDir;
+    late SessionManager sessions;
+    late SessionQueryHandler handler;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('session-perm-update-');
+      setSanadHomeOverride(tempDir.path);
+      await getIt.reset();
+      SessionManager.resetForTesting();
+      getIt.allowReassignment = true;
+      sessions = SessionManager();
+      getIt.registerSingleton<SessionManager>(sessions);
+      getIt.registerSingleton<AuthManager>(
+        AuthManager(secretStore: MemoryAgentSecretStore()),
+      );
+      handler = SessionQueryHandler(
+        sessionManager: sessions,
+        bridge: SanadProtocolBridge(),
+      );
+      final now = DateTime.now();
+      sessions.db.saveSession(
+        SessionState(
+          sessionId: 'run-session',
+          model: 'run-model',
+          title: 'Run session',
+          titleStatus: SessionTitleStatus.pending,
+          workspaceId: 'exec_root:/work/root',
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      sessions.saveSessionMetadata('run-session', {
+        'execution_root': '/work/root',
+        'workspace_id': 'exec_root:/work/root',
+        'allow_all_tools': true,
+        'permission_mode': 'full_access',
+      });
+    });
+
+    tearDown(() async {
+      await getIt.reset();
+      SessionManager.resetForTesting();
+      setSanadHomeOverride(null);
+      if (tempDir.existsSync()) {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    Map<String, dynamic> payloadOf(Map<String, dynamic> envelope) =>
+        Map<String, dynamic>.from(envelope['payload'] as Map);
+
+    void downgrade() {
+      handler.buildSetSessionPermissionModeEnvelope(
+        CanonicalEvent(
+          type: CanonicalEventTypes.setSessionPermissionMode,
+          sessionId: 'run-session',
+          payload: {
+            'request_id': 'req-downgrade',
+            'session_id': 'run-session',
+            'permission_mode': 'default',
+            CommandAuthority.payloadKey: CommandAuthority.owner.value,
+          },
+        ),
+      );
+    }
+
+    test('a title refresh after a downgrade republishes default mode', () {
+      downgrade();
+
+      final payload = payloadOf(
+        handler.buildUpdateSessionTitleEnvelope(
+          CanonicalEvent(
+            type: CanonicalEventTypes.updateSessionTitle,
+            sessionId: 'run-session',
+            payload: const {
+              'request_id': 'req-title',
+              'session_id': 'run-session',
+              'title': 'Renamed run session',
+            },
+          ),
+        )!,
+      );
+
+      expect(payload['title'], 'Renamed run session');
+      final metadata = Map<String, dynamic>.from(payload['metadata'] as Map);
+      expect(metadata['allow_all_tools'], isFalse);
+      expect(payload['permission_mode'], 'default_mode');
+      expect(payload['workspace_id'], 'exec_root:/work/root');
+    });
+
+    test('a route preference change after a downgrade keeps default mode', () {
+      downgrade();
+
+      final payload = payloadOf(
+        handler.buildSessionPreferencesEnvelope(
+          CanonicalEvent(
+            type: CanonicalEventTypes.updateSessionPreferences,
+            sessionId: 'run-session',
+            payload: const {
+              'request_id': 'req-route',
+              'session_id': 'run-session',
+              'model': 'next-model',
+            },
+          ),
+        )!,
+      );
+
+      expect(payload['model'], 'next-model');
+      final metadata = Map<String, dynamic>.from(payload['metadata'] as Map);
+      expect(metadata['allow_all_tools'], isFalse);
+      expect(payload['permission_mode'], 'default_mode');
+    });
+
+    test('a projection cannot describe an older authority than the stored one',
+        () {
+      downgrade();
+      final stored = sessions.getSessionMetadata('run-session')!;
+
+      final payload = buildSessionPayload(
+        session: sessions.getSession('run-session')!,
+        sessionMetadata: stored,
+        // A caller-held snapshot from before the downgrade must never win.
+        metadataOverrides: const {
+          'allow_all_tools': true,
+          'permission_mode': 'full_access',
+        },
+      );
+
+      final metadata = Map<String, dynamic>.from(payload['metadata'] as Map);
+      expect(metadata['allow_all_tools'], isFalse);
+      expect(metadata['permission_mode'], 'default_mode');
+      expect(payload['permission_mode'], 'default_mode');
+    });
+
+    test('the title refresher projects the durable mode after a downgrade', () async {
+      downgrade();
+
+      final emitted = <GatewayResponse>[];
+      final refresher = SessionTitleRefresher(emitResponse: emitted.add);
+      getIt.registerSingleton<TitleService>(_FixedTitleService('Fresh title'));
+
+      await refresher.generateAndEmitIntelligentTitle(
+        sessionId: 'run-session',
+        platformId: 'local',
+        expectedTitle: 'Run session',
+        userMessage: 'list the files',
+        assistantResponse: 'done',
+        route: null,
+      );
+
+      expect(emitted, hasLength(1));
+      final payload = emitted.single.sessionPayload!;
+      final metadata = Map<String, dynamic>.from(payload['metadata'] as Map);
+      expect(metadata['allow_all_tools'], isFalse);
+      expect(payload['permission_mode'], 'default_mode');
+    });
+  });
+}
+
+/// A title service that returns a fixed title, so a refresh completes without
+/// a provider call.
+class _FixedTitleService implements TitleService {
+  _FixedTitleService(this.title);
+
+  final String title;
+
+  @override
+  Future<String> generateTitle({
+    required String sessionId,
+    required String userMessage,
+    required String assistantResponse,
+    String? modelOverride,
+    LLMRouteSnapshot? route,
+  }) async => title;
+
+  @override
+  Future<int> recoverPendingTitles() async => 0;
 }

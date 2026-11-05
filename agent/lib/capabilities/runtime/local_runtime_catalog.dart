@@ -11,6 +11,7 @@ import 'package:sanad_agent/capabilities/tools/system/host_capability_discovery_
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/runtime/spec_backed_tool.dart';
+import 'package:sanad_agent/evolution/models/session_workspace_scope.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
@@ -229,9 +230,9 @@ class LocalRuntimeCatalog {
     }
 
     final effectiveId = request.effectiveWorkspaceId;
-    if (effectiveId != null && effectiveId.startsWith('exec_root:')) {
-      final path = effectiveId.substring('exec_root:'.length);
-      return _pathResolver.validateAndNormalizeExecutionRoot(path);
+    final execRootPath = executionRootOfWorkspaceId(effectiveId);
+    if (execRootPath != null) {
+      return _pathResolver.validateAndNormalizeExecutionRoot(execRootPath);
     }
 
     if (effectiveId != null && effectiveId.isNotEmpty) {

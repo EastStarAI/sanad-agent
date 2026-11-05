@@ -1,3 +1,4 @@
+import 'package:sanad_client/features/conversations/domain/models/session_workspace_scope.dart';
 import 'package:sanad_client/features/conversations/domain/models/thinking_control.dart';
 
 class Session {
@@ -44,6 +45,26 @@ class Session {
     this.workspaceTrustState,
     this.metadata,
   });
+
+  /// The registered workspace whose conversation group owns this session.
+  ///
+  /// An `exec_root:` id names the folder a run session executes in, not a
+  /// registered workspace, so such a session belongs to the ordinary unscoped
+  /// group; its execution path stays visible through the permission picker's
+  /// tooltip instead of becoming a group of its own.
+  String? get groupWorkspaceId =>
+      isExecRootWorkspaceId(workspaceId) ? null : workspaceId;
+
+  /// Whether this session is only an identity placeholder.
+  ///
+  /// Startup restores a route's session id before its authoritative summary
+  /// arrives, so a selected session can briefly be an id with no workspace and
+  /// no metadata. It must be replaced by the authoritative copy as soon as one
+  /// is available.
+  bool get isIdentityPlaceholder {
+    final normalized = title.trim();
+    return normalized == 'Loading...' || normalized == 'Loading…';
+  }
 
   factory Session.fromJson(Map<String, dynamic> json) {
     return Session(

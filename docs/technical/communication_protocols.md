@@ -533,6 +533,7 @@ projection when one is persisted. The client displays `cached_tokens` as
 
 - `get_sessions` accepts optional `workspace_id`, `unscoped_only`, `limit`, and `cursor`.
 - `workspace_id` and `unscoped_only=true` are mutually exclusive; invalid combinations must return a structured query error instead of silently falling back.
+- `unscoped_only=true` selects sessions that no registered workspace owns: `workspace_id IS NULL` **plus** every `exec_root:<root>` session. An execution root is not a registered workspace, so the alternative is a session that no list returns; the root itself stays visible to clients through the session payload's `execution_root`/`workspace_path` and the permission picker's tooltip. A `workspace_id=exec_root:<root>` query still selects that root's sessions on its own.
 - `limit` is server-owned: missing uses the daemon default, invalid/non-positive values are rejected, and oversized values are capped centrally.
 - Ordering is authoritative: `last_user_message_at DESC`, then `session_id DESC`.
 - After session creation, only canonical user acceptance updates `last_user_message_at`. Fork creation initializes the child at its commit time so it appears first; assistant/tool/system events must not reorder the session list.

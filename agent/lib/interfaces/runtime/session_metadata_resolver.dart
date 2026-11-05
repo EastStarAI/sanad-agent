@@ -1,4 +1,5 @@
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/evolution/models/session_workspace_scope.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
@@ -24,7 +25,7 @@ Map<String, dynamic> buildTurnTargetingMetadata(
   if (executionRoot != null && executionRoot.isNotEmpty) {
     metadata['execution_root'] = executionRoot;
     if (!hasRegisteredWorkspace) {
-      metadata['workspace_id'] = 'exec_root:$executionRoot';
+      metadata['workspace_id'] = execRootWorkspaceId(executionRoot);
     }
   }
   if (request.metadata.containsKey('allow_all_tools')) {

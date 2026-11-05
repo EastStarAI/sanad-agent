@@ -72,7 +72,11 @@ class ComposerPermissionModeChip extends StatelessWidget {
           )
           .toList(),
       onSelected: (mode) async {
-        if (mode == permissionMode) return;
+        // The local copy of the mode can be stale (a session event may describe
+        // an older authority than the Agent enforces), so a selection always
+        // sends the command: the Agent applies it idempotently and answers with
+        // the durable mode. Skipping the send on a stale "already selected" is
+        // what turned "Full access" into a silent no-op.
         if (mode == WorkspacePermissionMode.fullAccess) {
           final confirmed = await onConfirmFullAccess();
           if (!context.mounted || !confirmed) return;

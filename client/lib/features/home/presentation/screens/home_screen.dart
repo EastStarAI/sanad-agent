@@ -12,6 +12,7 @@ import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_workspace_scope.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
@@ -778,7 +779,7 @@ class _MainContent extends StatelessWidget {
       if (execRoot != null && execRoot.isNotEmpty) {
         final folderName = execRoot.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty).lastOrNull ?? 'Workspace';
         return DeviceWorkspace(
-          id: 'exec_root:$execRoot',
+          id: execRootWorkspaceId(execRoot),
           name: folderName,
           path: execRoot,
           trustState: 'untrusted',

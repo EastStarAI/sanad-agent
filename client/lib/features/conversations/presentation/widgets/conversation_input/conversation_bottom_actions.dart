@@ -347,10 +347,8 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
           )
           .toList(),
       onSelected: (mode) async {
-        if (mode == widget.inputSlice.permissionMode) {
-          return;
-        }
-
+        // A stale local copy must never turn a choice into a no-op: always send,
+        // and let the Agent's durable reply settle the shown mode.
         if (mode == WorkspacePermissionMode.fullAccess) {
           final confirmed = await widget.onConfirmFullAccess();
           if (!context.mounted || !confirmed) {

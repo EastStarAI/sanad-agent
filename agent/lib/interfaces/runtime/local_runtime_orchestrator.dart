@@ -10,6 +10,7 @@ import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
+import 'package:sanad_agent/evolution/models/session_workspace_scope.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 
@@ -48,10 +49,12 @@ class LocalRuntimeOrchestrator {
       if (normalized != null) {
         metadata['execution_root'] = normalized;
       }
-    } else if (workspaceId != null && workspaceId.startsWith('exec_root:')) {
-      final path = workspaceId.substring('exec_root:'.length);
-      final normalized = _runtimeContextBuilder.pathResolver
-          .validateAndNormalizeExecutionRoot(path);
+    } else if (isExecRootWorkspaceId(workspaceId)) {
+      final path = executionRootOfWorkspaceId(workspaceId);
+      final normalized = path == null
+          ? null
+          : _runtimeContextBuilder.pathResolver
+                .validateAndNormalizeExecutionRoot(path);
       if (normalized != null) {
         metadata['execution_root'] = normalized;
       }
@@ -103,7 +106,7 @@ class LocalRuntimeOrchestrator {
       request.metadata[CommandAuthority.payloadKey],
     ).value;
 
-    if (workspaceId != null && workspaceId.startsWith('exec_root:')) {
+    if (isExecRootWorkspaceId(workspaceId)) {
       return metadata;
     }
 

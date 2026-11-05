@@ -18,7 +18,7 @@ const int productionLineLimit = 1000;
 /// the same pull request, and a file that drops under [productionLineLimit]
 /// loses its entry.
 const Map<String, int> allowlistedFiles = <String, int>{
-  'lib/features/conversations/presentation/bloc/session_cubit.dart': 1227,
+  'lib/features/conversations/presentation/bloc/session_cubit.dart': 1216,
   'lib/features/conversations/presentation/bloc/session_messages_cubit.dart':
       1571,
   'lib/features/conversations/presentation/screens/brain_activity_view.dart':

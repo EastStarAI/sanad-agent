@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
 import 'package:sanad_client/features/conversations/domain/models/conversation_draft.dart';
 import 'package:sanad_client/features/conversations/domain/models/conversation_resource_state.dart';
+import 'package:sanad_client/features/conversations/domain/models/conversation_section_page.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/stores/cache_generation_guard.dart';
@@ -196,6 +197,95 @@ void main() {
 
       final flat = sectionCache.sessionsForDevice('dev-1');
       expect(flat.map((s) => s.id), ['s2', 's1']);
+    });
+
+    test('a run session is grouped with the unscoped conversations', () {
+      final ctx = sectionCache.contextFor('dev-1');
+      sectionCache.updateContext(
+        'dev-1',
+        ctx.copyWith(
+          workspaces: ctx.workspaces.copyWith(
+            workspaces: const [
+              DeviceWorkspace(id: 'ws-1', name: 'Ws 1', path: '/path/1'),
+            ],
+            state: ConversationResourceState.ready,
+          ),
+        ),
+      );
+
+      sectionCache.applySessionCreated(
+        'dev-1',
+        makeSession(id: 'run', workspaceId: 'exec_root:/work/root'),
+      );
+      sectionCache.applySessionCreated(
+        'dev-1',
+        makeSession(id: 'scoped', workspaceId: 'ws-1'),
+      );
+
+      final snapshot = sectionCache.sidebarSnapshotFor('dev-1')!;
+      final unscoped = snapshot.conversationGroups.singleWhere(
+        (group) => group.isUnscoped,
+      );
+      final workspaceGroup = snapshot.conversationGroups.singleWhere(
+        (group) => group.workspaceId == 'ws-1',
+      );
+      // A run session has no registered workspace, so it must appear in the
+      // ordinary unscoped group; an `exec_root:` page would render nowhere.
+      expect(unscoped.sessions.map((s) => s.id), ['run']);
+      expect(workspaceGroup.sessions.map((s) => s.id), ['scoped']);
+      expect(
+        sectionCache.contextFor('dev-1').workspaceConversationPages.keys,
+        ['ws-1'],
+      );
+
+      // An update that restates the run identity keeps it in the same group.
+      sectionCache.applySessionUpdated(
+        'dev-1',
+        makeSession(
+          id: 'run',
+          workspaceId: 'exec_root:/work/root',
+        ).copyWith(title: 'Renamed run'),
+      );
+      final afterUpdate = sectionCache
+          .sidebarSnapshotFor('dev-1')!
+          .conversationGroups
+          .singleWhere((group) => group.isUnscoped);
+      expect(afterUpdate.sessions.single.title, 'Renamed run');
+    });
+
+    test('a restored execution-root page is folded into the unscoped group', () {
+      final run = makeSession(id: 'run', workspaceId: 'exec_root:/work/root');
+      sectionCache.restoreFrom(
+        contexts: {
+          'dev-1': sectionCache.contextFor('dev-1').copyWith(
+            workspaceConversationPages: {
+              'exec_root:/work/root': ConversationSectionPage(
+                sessions: [run],
+                nextCursor: null,
+                hasMore: false,
+                state: ConversationResourceState.ready,
+                lastRefreshedAt: DateTime.utc(2026, 1, 1),
+                lastErrorAt: null,
+                lastError: null,
+              ),
+            },
+          ),
+        },
+        viewportAnchors: const {},
+      );
+
+      final ctx = sectionCache.contextFor('dev-1');
+      expect(ctx.workspaceConversationPages, isEmpty);
+      expect(ctx.unscopedConversations.sessions.map((s) => s.id), ['run']);
+      expect(
+        sectionCache
+            .sidebarSnapshotFor('dev-1')!
+            .conversationGroups
+            .single
+            .sessions
+            .map((s) => s.id),
+        ['run'],
+      );
     });
   });
 }

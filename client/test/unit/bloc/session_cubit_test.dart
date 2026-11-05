@@ -1598,6 +1598,132 @@ void main() {
     await cubit.close();
   });
 
+  test('a downgrade followed by a title refresh keeps the durable default mode', () async {
+    final runSession = session.copyWith(
+      workspaceId: 'exec_root:/worktree',
+      workspacePath: '/worktree',
+      metadata: const {
+        'execution_root': '/worktree',
+        'allow_all_tools': true,
+        'permission_mode': 'full_access',
+      },
+    );
+    final scopedClient = _FakeDeviceClient(
+      config: agent,
+      controller: socket,
+      initialSessions: [runSession],
+    );
+    agentCubit.registerClient(agent.id, scopedClient);
+    socket.setConnected(true);
+    localSocket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final resolver = DeviceConnectionCoordinator(
+      cloudSocketService: socket,
+      localSocketService: localSocket,
+      currentDeviceId: 'test-device-id',
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      connectionCoordinator: resolver,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    localSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'session_updated',
+      'device_id': agent.id,
+      'payload': {
+        'session_id': session.id,
+        'permission_mode': 'default_mode',
+        'metadata': {
+          'execution_root': '/worktree',
+          'allow_all_tools': false,
+          'permission_mode': 'default_mode',
+        },
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    // A concurrent title/turn projection must not resurrect the older mode.
+    localSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'session_updated',
+      'device_id': agent.id,
+      'payload': {'session_id': session.id, 'title': 'Renamed after the turn'},
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    final updated = cubit.state.agentSessions[agent.id]?.single;
+    expect(updated?.title, 'Renamed after the turn');
+    expect(updated?.metadata?['allow_all_tools'], isFalse);
+    expect(updated?.metadata?['permission_mode'], 'default_mode');
+    expect(updated?.workspaceId, 'exec_root:/worktree');
+
+    resolver.dispose();
+    await cubit.close();
+  });
+
+  test('a selected identity placeholder adopts the authoritative run session', () async {
+    final placeholder = Session(
+      id: session.id,
+      title: 'Loading...',
+      deviceId: agent.id,
+      createdAt: DateTime(2026, 1, 1),
+      updatedAt: DateTime(2026, 1, 1),
+    );
+    final authoritative = session.copyWith(
+      title: 'Run session',
+      workspaceId: 'exec_root:/worktree',
+      workspacePath: '/worktree',
+      workspaceName: 'worktree',
+      metadata: const {
+        'execution_root': '/worktree',
+        'allow_all_tools': true,
+        'permission_mode': 'full_access',
+      },
+    );
+    final scopedClient = _FakeDeviceClient(
+      config: agent,
+      controller: socket,
+      initialSessions: [session],
+    );
+    agentCubit.registerClient(agent.id, scopedClient);
+    socket.setConnected(true);
+    localSocket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final resolver = DeviceConnectionCoordinator(
+      cloudSocketService: socket,
+      localSocketService: localSocket,
+      currentDeviceId: 'test-device-id',
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      connectionCoordinator: resolver,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    // A route restore can select nothing but the id before its summary loads.
+    cubit.markSessionSelectedSync(placeholder);
+    expect(cubit.state.selectedSession?.isIdentityPlaceholder, isTrue);
+
+    expect(cubit.adoptSelectedSession(authoritative), isTrue);
+    final selected = cubit.state.selectedSession!;
+    expect(selected.isIdentityPlaceholder, isFalse);
+    expect(selected.workspaceId, 'exec_root:/worktree');
+    expect(selected.workspacePath, '/worktree');
+    expect(selected.metadata?['allow_all_tools'], isTrue);
+
+    // An authoritative selection is never replaced by another copy.
+    expect(cubit.adoptSelectedSession(authoritative.copyWith(title: 'Other')), isFalse);
+
+    resolver.dispose();
+    await cubit.close();
+  });
+
   test('session_updated from the local socket updates the visible session title', () async {
     socket.setConnected(true);
     localSocket.setConnected(true);

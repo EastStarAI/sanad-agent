@@ -464,6 +464,54 @@ class SessionQueryHandler {
     );
   }
 
+  /// Projection keys a `session_updated` always restates from the stored row:
+  /// the session's targeting and the permission pair the Agent enforces.
+  static const List<String> _sessionUpdateAuthorityKeys = <String>[
+    'workspace_id',
+    'workspace_name',
+    'workspace_path',
+    'workspace_trust_state',
+    'permission_mode',
+    'metadata',
+  ];
+
+  /// Builds a `session_updated` projection: what the command changed, plus the
+  /// authority the Agent enforces.
+  ///
+  /// [partial] carries only the fields the command itself changed (a title, a
+  /// route, a permission choice). The targeting and the permission pair
+  /// (`metadata.allow_all_tools` and `metadata.permission_mode`) are read from the
+  /// stored row and metadata at build time, so no `session_updated` can describe
+  /// an older authority than the durable one. A client that applies any session
+  /// event therefore converges on the stored mode instead of keeping a stale copy
+  /// that makes the next picker choice look like a no-op.
+  Map<String, dynamic>? _sessionUpdatedEnvelope(
+    String sessionId, {
+    required String? requestId,
+    Map<String, dynamic> partial = const <String, dynamic>{},
+  }) {
+    final session = _sessionManager.getSession(sessionId);
+    if (session == null) return null;
+    final projection = _sessionPayloadFor(
+      session: session,
+      sessionMetadata: _sessionManager.getSessionMetadata(sessionId),
+    );
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionUpdated,
+        sessionId: sessionId,
+        payload: {
+          'request_id': requestId,
+          'session_id': sessionId,
+          ...partial,
+          // Last, so a command can never restate an authority it did not read.
+          for (final key in _sessionUpdateAuthorityKeys)
+            if (projection.containsKey(key)) key: projection[key],
+        },
+      ),
+    );
+  }
+
   Map<String, dynamic>? buildUpdateSessionTitleEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId;
     final title = event.payload['title'] as String?;
@@ -475,16 +523,10 @@ class SessionQueryHandler {
 
     _sessionManager.updateSessionTitle(sessionId, title);
 
-    return _bridge.buildAgentEventEnvelope(
-      CanonicalEvent(
-        type: CanonicalEventTypes.sessionUpdated,
-        sessionId: sessionId,
-        payload: {
-          'request_id': requestId,
-          'session_id': sessionId,
-          'title': title,
-        },
-      ),
+    return _sessionUpdatedEnvelope(
+      sessionId,
+      requestId: requestId,
+      partial: {'title': title},
     );
   }
 
@@ -535,19 +577,7 @@ class SessionQueryHandler {
     metadata['permission_mode'] = fullAccess ? 'full_access' : 'default_mode';
     _sessionManager.saveSessionMetadata(sessionId, metadata);
 
-    return _bridge.buildAgentEventEnvelope(
-      CanonicalEvent(
-        type: CanonicalEventTypes.sessionUpdated,
-        sessionId: sessionId,
-        payload: {
-          'request_id': requestId,
-          ...buildSessionPayload(
-            session: session,
-            sessionMetadata: metadata,
-          ),
-        },
-      ),
-    );
+    return _sessionUpdatedEnvelope(sessionId, requestId: requestId);
   }
 
   Map<String, dynamic>? buildDeleteSessionEnvelope(CanonicalEvent event) {
@@ -694,19 +724,15 @@ class SessionQueryHandler {
       }
     }
 
-    return _bridge.buildAgentEventEnvelope(
-      CanonicalEvent(
-        type: CanonicalEventTypes.sessionUpdated,
-        sessionId: sessionId,
-        payload: {
-          'request_id': requestId,
-          'session_id': sessionId,
-          'model': ?model,
-          'provider_id': ?requestedProvider,
-          'provider_instance_id': ?requestedProvider,
-          if (hasThinkingModeKey) 'thinking_mode': effectiveThinkingMode,
-        },
-      ),
+    return _sessionUpdatedEnvelope(
+      sessionId,
+      requestId: requestId,
+      partial: {
+        'model': ?model,
+        'provider_id': ?requestedProvider,
+        'provider_instance_id': ?requestedProvider,
+        if (hasThinkingModeKey) 'thinking_mode': effectiveThinkingMode,
+      },
     );
   }
 
