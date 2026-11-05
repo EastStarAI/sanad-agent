@@ -111,15 +111,24 @@ stt:
   });
 
   group('dictation status payload', () {
-    test('lists every catalog entry with install state', () {
+    test('lists every visible catalog entry with install state', () {
       final payload = service().statusPayload();
       expect(payload['supported'], isTrue);
       final models = payload['models'] as List<Object?>;
-      expect(models, hasLength(kSttCatalog.length));
+      final visible = kSttCatalog.where((entry) => !entry.hidden).toList();
+      expect(models, hasLength(visible.length));
       for (final model in models.cast<Map<String, Object?>>()) {
         expect(model['installed'], isFalse);
         expect(model['id'], isNotNull);
         expect(model['total_bytes'], greaterThan(0));
+      }
+      // Hidden entries stay usable through stt.model_id but never reach the UI.
+      final ids = models
+          .cast<Map<String, Object?>>()
+          .map((model) => model['id'])
+          .toSet();
+      for (final entry in kSttCatalog.where((entry) => entry.hidden)) {
+        expect(ids, isNot(contains(entry.id)));
       }
       expect(payload['selected'], defaultSttEntry.id);
     });

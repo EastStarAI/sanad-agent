@@ -157,17 +157,18 @@ class DictationService {
             'engine': SttEngineKind.whisperCpp.name,
           },
         for (final entry in kSttCatalog)
-          {
-            'id': entry.id,
-            'label': entry.label,
-            'note': entry.note,
-            'mode': entry.mode.name,
-            'language': entry.language,
-            'total_bytes': entry.totalBytes,
-            'hosted': entry.hosted,
-            'installed': _store.statusOf(entry).installed,
-            'engine': entry.engine.name,
-          },
+          if (!entry.hidden)
+            {
+              'id': entry.id,
+              'label': entry.label,
+              'note': entry.note,
+              'mode': entry.mode.name,
+              'language': entry.language,
+              'total_bytes': entry.totalBytes,
+              'hosted': entry.hosted,
+              'installed': _store.statusOf(entry).installed,
+              'engine': entry.engine.name,
+            },
       ],
     };
   }

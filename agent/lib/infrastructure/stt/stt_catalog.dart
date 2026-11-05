@@ -24,11 +24,12 @@ const List<SttCatalogEntry> kSttCatalog = [
   SttCatalogEntry(
     id: 'egy-whisper-turbo-int8',
     label: 'Egyptian Whisper Turbo (int8)',
-    note: 'أعلى دقة للعربية والمصري — يحتاج جهازًا قادرًا',
+    note: 'احتياطي sherpa — يستهلك ٢.٤–٣ جيجابايت من الذاكرة',
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
     hosted: true,
+    hidden: true,
     files: [
       SttModelFile(
         name: 'egy-whisper-turbo-encoder.int8.onnx',
@@ -55,8 +56,8 @@ const List<SttCatalogEntry> kSttCatalog = [
   ),
   SttCatalogEntry(
     id: 'egy-whisper-turbo-ggml-q8',
-    label: 'Egyptian Whisper Turbo (ggml q8)',
-    note: 'أعلى دقة للمصري مع ذاكرة أقل بكثير — الموصى به',
+    label: 'المصري — دقة عالية',
+    note: 'يستهلك ≈١.٢ جيجابايت من الذاكرة — التوصية الافتراضية',
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: true,
@@ -73,9 +74,31 @@ const List<SttCatalogEntry> kSttCatalog = [
     ],
   ),
   SttCatalogEntry(
+    id: 'egy-whisper-turbo-ggml-f16',
+    label: 'المصري — أقصى دقة',
+    note: 'يستهلك ≈١.٩ جيجابايت من الذاكرة — الأصل بلا تكميم',
+    mode: SttModelMode.batchVad,
+    language: 'ar',
+    isDefault: false,
+    // Visible once the f16 artifact is uploaded (1.6 GB takes a while); the
+    // entry stays hidden so the sheet never offers a link that 404s.
+    hidden: true,
+    engine: SttEngineKind.whisperCpp,
+    files: [
+      SttModelFile(
+        name: 'ggml-egy-turbo-f16.bin',
+        url:
+            'https://huggingface.co/AhmedAttia3/sanad-egy-whisper-turbo-ggml/resolve/main/ggml-egy-turbo-f16.bin',
+        sizeBytes: 1624575439,
+        sha256:
+            '818ff73a511be27233f35f95d0166c494b699500ec4cc2bcba7198a5fc230a8c',
+      ),
+    ],
+  ),
+  SttCatalogEntry(
     id: 'egy-whisper-turbo-ggml-q5',
-    label: 'Egyptian Whisper Turbo (ggml q5)',
-    note: 'الأخف والأسرع — للأجهزة الضعيفة',
+    label: 'المصري — خفيف',
+    note: 'يستهلك ≈٠.٩٥ جيجابايت من الذاكرة — فروق طفيفة في التشكيل',
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
@@ -94,10 +117,11 @@ const List<SttCatalogEntry> kSttCatalog = [
   SttCatalogEntry(
     id: 'whisper-turbo-ggml-q5',
     label: 'Whisper Turbo (ggml q5_0)',
-    note: 'نفس الجودة بذاكرة أقل — محرك whisper.cpp',
+    note: 'النسخة العالمية متعددة اللغات — للاختبار',
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
+    hidden: true,
     engine: SttEngineKind.whisperCpp,
     files: [
       SttModelFile(
@@ -112,8 +136,8 @@ const List<SttCatalogEntry> kSttCatalog = [
   ),
   SttCatalogEntry(
     id: 'whisper-base-int8',
-    label: 'Whisper Base (int8)',
-    note: 'أسرع وأخف للأجهزة الضعيفة — دقة عربية أقل',
+    label: 'سريع جدًا — دقة أقل',
+    note: 'يستهلك ≈٠.٧٦ جيجابايت من الذاكرة — للأجهزة الضعيفة جدًا',
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,

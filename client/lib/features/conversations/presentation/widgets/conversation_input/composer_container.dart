@@ -35,6 +35,7 @@ import 'composer_model_chip.dart';
 import 'composer_permission_mode_chip.dart';
 import 'composer_send_stop_button.dart';
 import 'composer_workspace_warning.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_composer_backdrop.dart';
 
 /// The composer card: input field, attachment rail, and the bottom action row.
 class ComposerContainer extends StatelessWidget {
@@ -200,7 +201,18 @@ class ComposerContainer extends StatelessWidget {
       key: const Key('composer_focus_surface'),
       behavior: HitTestBehavior.opaque,
       onTap: chatFocusNode.requestFocus,
-      child: composerCard,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        // Dictation paints its meter across the whole card while listening, so
+        // the level is visible without watching the mic button.
+        child: Stack(
+          children: [
+            if (capabilities.supportsDictation)
+              const Positioned.fill(child: DictationComposerBackdrop()),
+            composerCard,
+          ],
+        ),
+      ),
     );
     return focusSurface;
   }

@@ -54,6 +54,7 @@ class SttCatalogEntry {
     this.isDefault = false,
     this.hosted = true,
     this.engine = SttEngineKind.sherpa,
+    this.hidden = false,
   });
 
   final String id;
@@ -73,6 +74,10 @@ class SttCatalogEntry {
   /// The daemon keeps both behind one [SttEngine] contract, so switching an
   /// entry between engines is a catalog change, never a transport or UI one.
   final SttEngineKind engine;
+
+  /// Hidden entries stay usable through `stt.model_id` but never appear in the
+  /// model sheet, so the user only sees the models we actually recommend.
+  final bool hidden;
 
   int get totalBytes => files.fold(0, (sum, file) => sum + file.sizeBytes);
 }
