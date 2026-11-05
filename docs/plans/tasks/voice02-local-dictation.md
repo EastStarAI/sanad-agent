@@ -287,6 +287,12 @@ the model. Both runs sent 100 ms frames paced like a live microphone.
 - Batch transcript of the Arabic sample: "هذا اختبار للأملاء الصوتي المحلي، النص
   يجب أن يظهر كاملا بعد التوقف، وليس أثناء الكلام." (TTS audio; the voice
   mispronounces إملاء as للأملاء).
+- f16 Arabic artifact: rebuilt from the source h5 (h5 → ggml → f16), uploaded to
+  `AhmedAttia3/sanad-egy-whisper-turbo-ggml` as `ggml-egy-turbo-f16.bin`, and
+  verified against the hosted LFS digest: 1 624 555 275 bytes, sha
+  `917a13f15b240a1948f2cddc226e2a197b28efdca67b3b1c53cd1f9a960690a8`. Local
+  load 415 ms, RTF 0.280, RSS 1959 MB, correct Arabic transcript. The catalog
+  entry «المصري — أقصى دقة» is visible (`hidden: false`).
 - The streaming entry is visible and labelled تجريبي so it is never mistaken for
   the Arabic default; if the owner prefers a three-model sheet it flips to
   `hidden: true` without touching code paths.

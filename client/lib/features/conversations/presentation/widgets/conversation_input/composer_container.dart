@@ -207,9 +207,11 @@ class ComposerContainer extends StatelessWidget {
         // the level is visible without watching the mic button.
         child: Stack(
           children: [
+            composerCard,
+            // The meter is translucent, so it sits on top of the card colour and
+            // still reads as the card's own background.
             if (capabilities.supportsDictation)
               const Positioned.fill(child: DictationComposerBackdrop()),
-            composerCard,
           ],
         ),
       ),

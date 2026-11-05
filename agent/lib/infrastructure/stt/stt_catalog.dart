@@ -80,18 +80,17 @@ const List<SttCatalogEntry> kSttCatalog = [
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
-    // Visible once the f16 artifact is uploaded (1.6 GB takes a while); the
-    // entry stays hidden so the sheet never offers a link that 404s.
-    hidden: true,
+    // Uploaded and verified against the hosted LFS digest (1.62 GB, f16).
+    hidden: false,
     engine: SttEngineKind.whisperCpp,
     files: [
       SttModelFile(
         name: 'ggml-egy-turbo-f16.bin',
         url:
             'https://huggingface.co/AhmedAttia3/sanad-egy-whisper-turbo-ggml/resolve/main/ggml-egy-turbo-f16.bin',
-        sizeBytes: 1624575439,
+        sizeBytes: 1624555275,
         sha256:
-            '818ff73a511be27233f35f95d0166c494b699500ec4cc2bcba7198a5fc230a8c',
+            '917a13f15b240a1948f2cddc226e2a197b28efdca67b3b1c53cd1f9a960690a8',
       ),
     ],
   ),
