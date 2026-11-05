@@ -1,5 +1,5 @@
 name: Set up project Flutter and FVM
-description: Installs the exact Flutter SDK declared by the repository and FVM.
+description: Installs the exact Flutter SDK declared by the repository, reuses it for FVM, and restores the pub cache.
 runs:
   using: composite
   steps:
@@ -7,10 +7,45 @@ runs:
       with:
         flutter-version-file: .fvmrc
         cache: true
+    - uses: actions/cache@v4
+      with:
+        path: ~/.pub-cache
+        key: pub-${{ runner.os }}-${{ hashFiles('.fvmrc', '**/pubspec.lock') }}
+        restore-keys: |
+          pub-${{ runner.os }}-
     - shell: bash
       run: |
-        export PUB_CACHE="$RUNNER_TEMP/pub-cache"
-        echo "PUB_CACHE=$PUB_CACHE" >> "$GITHUB_ENV"
+        set -euo pipefail
+        version="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)"
+        if [ -z "$version" ]; then
+          echo "::error::.fvmrc does not declare a Flutter version"
+          exit 1
+        fi
+        sdk_root="${FLUTTER_ROOT:-$(dirname "$(dirname "$(command -v flutter)")")}"
+        cache="$HOME/.fvm-cache"
+        mkdir -p "$cache/versions"
+        link="$cache/versions/$version"
+        rm -rf "$link"
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          powershell -NoProfile -Command \
+            "New-Item -ItemType Junction -Path '$(cygpath -w "$link")' -Target '$(cygpath -w "$sdk_root")' | Out-Null"
+        else
+          ln -s "$sdk_root" "$link"
+        fi
+        echo "PUB_CACHE=$HOME/.pub-cache" >> "$GITHUB_ENV"
+        echo "FVM_CACHE_PATH=$cache" >> "$GITHUB_ENV"
+        echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+        export PUB_CACHE="$HOME/.pub-cache"
+        export FVM_CACHE_PATH="$cache"
         dart pub global activate fvm
-        echo "$PUB_CACHE/bin" >> "$GITHUB_PATH"
+        # The SDK above is already cached by flutter-action, so this install only
+        # registers the pinned version with FVM instead of downloading it again.
         dart pub global run fvm:main install
+        resolved="$(fvm flutter --version | head -n1)"
+        case "$resolved" in
+          *" $version "*) echo "FVM resolves Flutter $version" ;;
+          *)
+            echo "::error::FVM resolved '$resolved' instead of Flutter $version"
+            exit 1
+            ;;
+        esac

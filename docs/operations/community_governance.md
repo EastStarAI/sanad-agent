@@ -21,7 +21,9 @@ Protected positive-review labels are restricted to users with triage/write permi
 
 ## Pull Request and Branch Model
 
-Human pull requests use Conventional Commits titles and squash merge. Direct pushes, force pushes, branch deletion, and unresolved conversations are blocked on `main`. One stable aggregate check, `All required checks pass`, is the branch-protection context. Path classification runs only affected agent, client, documentation, release, and security lanes; classification failure does not silently skip validation. Pushes to `main` run all lanes.
+Human pull requests use Conventional Commits titles and squash merge. Direct pushes, force pushes, branch deletion, and unresolved conversations are blocked on `main`. One stable aggregate check, `All required checks pass`, is the branch-protection context. Path classification runs only affected agent, client, documentation, release, and security lanes; classification failure does not silently skip validation. Pushes to `main` run all lanes. Test lanes are sharded matrices and the aggregate depends on every shard; [Public CI Pipeline and Merge Queue](continuous_integration.md) owns the job layout, the shard and cache design, and the queue runbook.
+
+Once the owner enables the merge queue, a queued entry is built by the same workflow through its `merge_group` trigger: classification and every lane run against the merge-group diff, the queued pull request's protected labels are re-checked from the queue head ref, and the same aggregate gates the queue. A merge group that cannot be attributed to exactly one pull request fails closed, so the queue keeps one pull request per build. The merge agent updates the branch, resolves conflicts, verifies the head, and enqueues with `gh pr merge <number> --squash --match-head-commit <sha>`; the coordinator only reviews and dispatches.
 
 Fork pull requests use `pull_request`, read-only repository contents, and no signing or deployment secrets. Publication workflows are manually or tag triggered and protected separately.
 
