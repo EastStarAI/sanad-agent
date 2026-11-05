@@ -46,19 +46,28 @@ class ServiceHealthVerifier {
   Future<ServiceHealthResult> verify(
     ServiceHealthExpectation expectation,
   ) async {
-    final credential = LocalGatewayCredentials.tryRead();
-    if (credential == null) {
-      return const ServiceHealthResult(
-        success: false,
-        attempts: 0,
-        error: 'Local Gateway credential is unavailable.',
-      );
-    }
     final deadline = DateTime.now().add(expectation.timeout);
     var attempts = 0;
     String? lastError;
     do {
       attempts++;
+      // The daemon writes its Local Gateway credential during its own start,
+      // which is still in progress when `systemctl enable --now` returns, so a
+      // single read before the loop would turn that startup race into a
+      // permanent install failure and discard a completed device
+      // authorization. Poll it exactly like the HTTP health answer.
+      final credential = LocalGatewayCredentials.tryRead();
+      if (credential == null) {
+        lastError =
+            'The Local Gateway credential is unavailable after '
+            '${expectation.timeout.inSeconds}s. The Agent daemon did not '
+            'start for this Sanad Home; run `sanad service restart`, then '
+            'retry the installation.';
+        if (DateTime.now().isBefore(deadline)) {
+          await _delay(expectation.pollInterval);
+        }
+        continue;
+      }
       final client = _clientFactory();
       client.connectionTimeout = const Duration(seconds: 3);
       try {

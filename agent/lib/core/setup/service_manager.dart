@@ -74,6 +74,7 @@ class ServiceManager {
   static Future<ServiceOperationResult> install({
     ServiceHealthExpectation? healthExpectation,
     bool userScope = false,
+    String? runAsUser,
   }) async {
     final sanadHome = getSanadHome();
     await SanadHomeBootstrap.identity().ensureDirectoryPath('logs');
@@ -83,9 +84,16 @@ class ServiceManager {
         invocation,
         healthExpectation: healthExpectation,
         userScope: userScope,
+        runAsUser: runAsUser,
       ).install();
       if (result.success) await CliPathManager.ensureOnPath();
       return result;
+    }
+    if (runAsUser != null) {
+      return _failure(
+        await getStatus(),
+        'The --run-as-user option is only supported for Linux services.',
+      );
     }
     if (Platform.isMacOS) {
       final configPath = getServiceConfigPath();
@@ -417,6 +425,7 @@ class ServiceManager {
     _DaemonInvocation invocation, {
     ServiceHealthExpectation? healthExpectation,
     bool userScope = false,
+    String? runAsUser,
   }) => LinuxServiceManager(
     serviceName: serviceName,
     executable: invocation.executable,
@@ -425,6 +434,7 @@ class ServiceManager {
     loginHome: getHomeDirectory(),
     environment: Platform.environment,
     userScope: userScope,
+    runAsUser: runAsUser,
     runner: (executable, arguments, environment) async {
       final result = await Process.run(
         executable,
