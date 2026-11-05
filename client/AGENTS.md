@@ -60,6 +60,13 @@ Do not introduce convenience code that weakens these boundaries.
 - The app locale is owned by `LocaleCubit` (`core/presentation/bloc/locale/locale_cubit.dart`) with SharedPreferences key `app_locale`. It silently falls back to `en` when the stored code is unsupported; no client page may crash on an unknown locale token.
 - RTL mirroring is content-driven; layouts must use `Directionality`/start-and-end semantics, not absolute left-only assumptions when a surface must mirror.
 
+### Typography Ownership
+- The font the user selects in Settings applies to every text surface. Widget code never names a font family: text inherits it from `Theme.of(context).textTheme` (or the ambient `DefaultTextStyle`), or resolves it through `AppTypography.text(context, ...)` in `client/lib/core/theme/app_typography.dart` when the style is built by hand — including `RichText` root spans, `ButtonStyle.textStyle`, `InputDecoration` styles, and dialog/overlay text.
+- Monospace is one constant: `AppTypography.mono(...)` for code, diffs, terminals, paths, shell commands, and raw JSON. Machine-readable text is deliberately fixed and never follows the user's app font.
+- Cairo is the default font for a profile with no saved preference and ships as a bundled Flutter asset family (`client/assets/fonts/Cairo-{Regular,Medium,SemiBold,Bold}.ttf`), so the default renders offline on every platform from the first frame. Inter and Roboto stay runtime-fetched Google Fonts; Cairo is never fetched at runtime.
+- A stored `system` value is an explicit user choice and is never migrated to the default. Only a missing preference resolves to Cairo.
+- `client/test/guards/no_hardcoded_font_guard_test.dart` fails on any `fontFamily:` literal or direct `GoogleFonts.<family>(` call outside `core/theme/app_themes.dart` and `core/theme/app_typography.dart`.
+
 ### Provider and Configuration Ownership
 - Provider templates, instances, credentials status, model options, readiness, defaults, limits, and failover settings come from the agent provider runtime.
 - Provider setup remains instance-first; the client must not hardcode providers, synthesize instances, or treat cached models as readiness.

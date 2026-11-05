@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'app_color_scheme.dart';
+import 'app_typography.dart';
 
 class AppThemes {
   static ThemeData get light => themeForStyle(AppThemeStyle.light);
@@ -65,7 +66,11 @@ class AppThemes {
 
   static TextTheme _applyFontFamily(TextTheme base, AppFontFamily fontFamily) {
     return switch (fontFamily) {
-      AppFontFamily.cairo => GoogleFonts.cairoTextTheme(base),
+      // Cairo is bundled as a Flutter asset family, so the default font renders
+      // offline on every platform from the first frame.
+      AppFontFamily.cairo => base.apply(
+        fontFamily: AppTypography.bundledCairoFamily,
+      ),
       AppFontFamily.inter => GoogleFonts.interTextTheme(base),
       AppFontFamily.roboto => GoogleFonts.robotoTextTheme(base),
       AppFontFamily.system => base,

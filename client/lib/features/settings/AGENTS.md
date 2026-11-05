@@ -82,4 +82,5 @@ This contract applies to `client/lib/features/settings/`.
 
 ## Client-Owned Preferences
 - General application preferences such as theme remain client-owned and must not emit agent commands.
+- The font family choice (`AppearanceCubit.updateFontFamily`) is client-owned and device-scoped like the rest of the appearance state. A profile with no saved preference resolves to Cairo (`AppFontFamily.defaultFamily`), and an explicitly saved `system` choice is preserved instead of being migrated. The General page renders the `AppFontFamily` list as-is and never hardcodes a family for preview or sample text.
 - Settings-local UI state must not become a source of truth for runtime readiness, device connection, or conversation recovery.

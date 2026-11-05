@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 
 /// History-only fork marker styled like the context-compaction timeline event.
@@ -71,7 +71,7 @@ class _ConversationForkEventTileState extends State<ConversationForkEventTile> {
                                 maxLines: 2,
                                 textAlign: TextAlign.center,
                                 overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.inter(
+                                style: AppTypography.text(context,
                                   fontSize: 12,
                                   color: colorScheme.onSurfaceVariant,
                                   fontWeight: FontWeight.w500,

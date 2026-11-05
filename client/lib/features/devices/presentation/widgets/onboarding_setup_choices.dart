@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 
 class OnboardingSetupChoices extends StatelessWidget {
   const OnboardingSetupChoices({
@@ -325,7 +326,7 @@ class _DesktopChoices extends StatelessWidget {
             onPressed: onRemoteAction,
             style: TextButton.styleFrom(
               foregroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.72),
-              textStyle: const TextStyle(
+              textStyle: AppTypography.text(context,
                 fontSize: 14,
                 decoration: TextDecoration.underline,
               ),

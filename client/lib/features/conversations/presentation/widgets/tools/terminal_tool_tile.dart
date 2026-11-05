@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 
 class TerminalToolTile extends StatelessWidget {
@@ -75,7 +75,7 @@ class TerminalToolTile extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 6.0),
             child: Text(
               'Directory: $cwd',
-              style: GoogleFonts.outfit(
+              style: AppTypography.text(context,
                 color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
                 fontSize: 11,
               ),
@@ -102,7 +102,7 @@ class TerminalToolTile extends StatelessWidget {
                   children: [
                     Text(
                       r'$ ',
-                      style: GoogleFonts.firaCode(
+                      style: AppTypography.mono(
                         fontSize: 11,
                         color: Colors.green.shade500,
                         fontWeight: FontWeight.bold,
@@ -111,7 +111,7 @@ class TerminalToolTile extends StatelessWidget {
                     Expanded(
                       child: Text(
                         cmd.toString(),
-                        style: GoogleFonts.firaCode(
+                        style: AppTypography.mono(
                           fontSize: 11,
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -127,7 +127,7 @@ class TerminalToolTile extends StatelessWidget {
               if (stdoutText.isNotEmpty)
                 Text(
                   stdoutText,
-                  style: GoogleFonts.firaCode(
+                  style: AppTypography.mono(
                     fontSize: 11,
                     color: Colors.green.shade400,
                   ),
@@ -136,7 +136,7 @@ class TerminalToolTile extends StatelessWidget {
                 if (stdoutText.isNotEmpty) const SizedBox(height: 8),
                 Text(
                   'STDERR:',
-                  style: GoogleFonts.outfit(
+                  style: AppTypography.text(context,
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
                     color: Colors.red.shade400,
@@ -145,7 +145,7 @@ class TerminalToolTile extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   stderrText,
-                  style: GoogleFonts.firaCode(
+                  style: AppTypography.mono(
                     fontSize: 11,
                     color: Colors.red.shade300,
                   ),
@@ -154,7 +154,7 @@ class TerminalToolTile extends StatelessWidget {
               if (stdoutText.isEmpty && stderrText.isEmpty)
                 Text(
                   'No output returned.',
-                  style: GoogleFonts.firaCode(
+                  style: AppTypography.mono(
                     fontSize: 11,
                     color: Colors.grey.shade500,
                     fontStyle: FontStyle.italic,
@@ -192,7 +192,7 @@ class TerminalToolTile extends StatelessWidget {
           if (cwd.toString().isNotEmpty) ...[
             Text(
               'Directory: $cwd',
-              style: GoogleFonts.outfit(
+              style: AppTypography.text(context,
                 color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
                 fontSize: 11,
               ),
@@ -216,7 +216,7 @@ class TerminalToolTile extends StatelessWidget {
                 children: [
                   Text(
                     r'$ ',
-                    style: GoogleFonts.firaCode(
+                    style: AppTypography.mono(
                       fontSize: 11,
                       color: Colors.green.shade500,
                       fontWeight: FontWeight.bold,
@@ -225,7 +225,7 @@ class TerminalToolTile extends StatelessWidget {
                   Expanded(
                     child: Text(
                       cmd.toString(),
-                      style: GoogleFonts.firaCode(
+                      style: AppTypography.mono(
                         fontSize: 11,
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -248,7 +248,7 @@ class TerminalToolTile extends StatelessWidget {
               Expanded(
                 child: Text(
                   'Executing terminal command...',
-                  style: GoogleFonts.roboto(
+                  style: AppTypography.text(context,
                     fontSize: 12,
                     color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                   ),

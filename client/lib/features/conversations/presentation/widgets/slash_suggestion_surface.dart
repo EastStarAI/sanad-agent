@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/skill_composer_utils.dart';
 
@@ -78,7 +78,7 @@ class SlashSuggestionSurface extends StatelessWidget {
                                     item.value.description!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: GoogleFonts.inter(
+                                    style: AppTypography.text(context,
                                       color: colorScheme.onSurfaceVariant,
                                       fontSize: 12,
                                     ),
@@ -104,7 +104,7 @@ class SlashSuggestionSurface extends StatelessWidget {
     required String query,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
-    final baseStyle = GoogleFonts.inter(
+    final baseStyle = AppTypography.text(context,
       color: colorScheme.onSurfaceVariant,
       fontSize: 14,
       fontWeight: FontWeight.normal,

@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/llm_usage_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/provider_route_label.dart';
@@ -311,7 +311,7 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
                       children: [
                         Text(
                           model,
-                          style: GoogleFonts.inter(
+                          style: AppTypography.text(context,
                             color: widget.dimTextColor,
                             fontSize: 11,
                             fontWeight: FontWeight.w500,
@@ -321,7 +321,7 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
                         ),
                         Text(
                           provider,
-                          style: GoogleFonts.inter(
+                          style: AppTypography.text(context,
                             color: widget.dimTextColor.withValues(alpha: 0.7),
                             fontSize: 9,
                           ),
@@ -333,7 +333,7 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
                   else
                     Text(
                       text,
-                      style: GoogleFonts.inter(color: widget.dimTextColor, fontSize: 11),
+                      style: AppTypography.text(context, color: widget.dimTextColor, fontSize: 11),
                     ),
                   const SizedBox(width: 4),
                   Icon(Icons.keyboard_arrow_down, size: 12, color: widget.dimTextColor),

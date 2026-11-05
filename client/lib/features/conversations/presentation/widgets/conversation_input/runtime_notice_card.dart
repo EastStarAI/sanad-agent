@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 
 class RuntimeNoticeCard extends StatefulWidget {
@@ -103,12 +103,12 @@ class _RuntimeNoticeCardState extends State<RuntimeNoticeCard> {
     final colorScheme = theme.colorScheme;
     final isError = widget.notice.isBlocked || widget.notice.isFatal;
     final accent = isError ? colorScheme.error : colorScheme.tertiary;
-    final titleStyle = GoogleFonts.inter(
+    final titleStyle = AppTypography.text(context,
       color: colorScheme.onSurface,
       fontSize: 13,
       fontWeight: FontWeight.w600,
     );
-    final bodyStyle = GoogleFonts.inter(
+    final bodyStyle = AppTypography.text(context,
       color: widget.dimTextColor,
       fontSize: 12,
       height: 1.4,

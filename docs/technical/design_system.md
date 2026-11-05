@@ -32,11 +32,11 @@ description: "توثيق شامل للألوان، الخطوط، الهيكل �
   منخفض الشدة مشتق من Primary. الألوان الدلالية، مثل أخضر النجاح، تبقى داخل
   عناصر الحالة ولا تستخدم كتدرج لخلفية الصفحة.
 
-### ب. خطوط وتنسيقات النصوص (Typography)
-* يعتمد النظام على خطوط **Sans-Serif** الحديثة (مثل Inter أو Roboto) للنصوص والواجهات العامة لضمان الوضوح التام.
-* **العناوين الترويجية والترحيبية الكبيرة:** عناوين ضخمة بوزن عريض في الصفحات الرئيسية وصفحات الهبوط.
-* **اللمسة الكلاسيكية / العناوين الفكرية:** يتم دمج خط السيريف (serif) المتمثل في `Georgia` في عناوين المهام الرئيسية والمقالات لإعطاء طابع تحريري هادئ وراقي.
-* **نصوص القوائم والأزرار الصغيرة:** حجم خط يتراوح بين `11` إلى `13` بوزن متوسط `w500` أو `w600` لسهولة القراءة السريعة.
+### ب. الخطوط (Typography)
+* The Client interface uses the font the user selects in Settings, and Cairo is the default for a profile with no saved choice. Widget code never names a font family: the selected family is resolved once from the theme, or through `AppTypography` in `client/lib/core/theme/app_typography.dart` for styles built by hand.
+* Code, diffs, terminals, paths, commands, and raw JSON stay monospace through the single `AppTypography.mono` constant; machine-readable text never follows the user's app font.
+* Headline, body, and small control text keep their Material sizes and weights (11 to 13 px with `w500` or `w600` for list and button text); only the family follows the selection.
+* The former Georgia serif accent on New Task headlines is retired: those headlines are interface text and follow the selected font.
 
 ### ج. الاستجابة ونقاط التحول (Responsive Breakpoints)
 * **نقاط التحول للأجهزة الذكية:**

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_workspace_coordinator.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
@@ -127,7 +127,7 @@ class ComposerPermissionModeChip extends StatelessWidget {
           const SizedBox(width: 4),
           Text(
             text,
-            style: GoogleFonts.inter(color: color, fontSize: 11),
+            style: AppTypography.text(context, color: color, fontSize: 11),
           ),
           const SizedBox(width: 4),
           Icon(

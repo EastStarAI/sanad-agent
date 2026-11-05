@@ -28,15 +28,22 @@ enum AppFontFamily {
   inter('Inter'),
   roboto('Roboto');
 
+  /// Font used when the user has no saved preference.
+  ///
+  /// A stored `system` value is an explicit choice and is never migrated to
+  /// this default; only a missing preference resolves here.
+  static const AppFontFamily defaultFamily = AppFontFamily.cairo;
+
   final String displayName;
   const AppFontFamily(this.displayName);
 
   String get id => name;
 
   static AppFontFamily fromId(String? id) {
+    if (id == null) return defaultFamily;
     return AppFontFamily.values.firstWhere(
       (e) => e.name == id,
-      orElse: () => AppFontFamily.system,
+      orElse: () => defaultFamily,
     );
   }
 }
@@ -123,7 +130,7 @@ class AppearanceState extends Equatable {
   const AppearanceState({
     this.themeStyle = AppThemeStyle.dark,
     this.primaryColor = AppPrimaryColor.blue,
-    this.fontFamily = AppFontFamily.system,
+    this.fontFamily = AppFontFamily.defaultFamily,
     this.fontSizeScale = AppFontSizeScale.normal,
     this.backgroundOption = AppBackgroundOption.defaultTheme,
   });

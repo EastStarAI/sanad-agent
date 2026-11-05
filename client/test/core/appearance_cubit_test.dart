@@ -30,7 +30,8 @@ void main() {
       final cubit = AppearanceCubit(const AppearanceState());
       expect(cubit.state.themeStyle, AppThemeStyle.dark);
       expect(cubit.state.primaryColor, AppPrimaryColor.blue);
-      expect(cubit.state.fontFamily, AppFontFamily.system);
+      expect(cubit.state.fontFamily, AppFontFamily.defaultFamily);
+      expect(cubit.state.fontFamily, AppFontFamily.cairo);
       expect(cubit.state.fontSizeScale, AppFontSizeScale.normal);
       expect(cubit.state.backgroundOption, AppBackgroundOption.defaultTheme);
     });
@@ -118,7 +119,8 @@ void main() {
       final loaded = await AppearanceCubit.getSavedAppearance();
       expect(loaded.themeStyle, AppThemeStyle.dark);
       expect(loaded.primaryColor, AppPrimaryColor.blue);
-      expect(loaded.fontFamily, AppFontFamily.system);
+      expect(loaded.fontFamily, AppFontFamily.defaultFamily);
+      expect(loaded.fontFamily, AppFontFamily.cairo);
     });
 
     test('multi-agent switching maintains independent visual identities per device', () async {
@@ -161,7 +163,8 @@ void main() {
       await cubit.setActiveAgent(legacyAgent);
       expect(cubit.state.themeStyle, AppThemeStyle.dark);
       expect(cubit.state.primaryColor, AppPrimaryColor.blue);
-      expect(cubit.state.fontFamily, AppFontFamily.system);
+      expect(cubit.state.fontFamily, AppFontFamily.defaultFamily);
+      expect(cubit.state.fontFamily, AppFontFamily.cairo);
       expect(cubit.state.fontSizeScale, AppFontSizeScale.normal);
       expect(cubit.state.backgroundOption, AppBackgroundOption.defaultTheme);
 
@@ -265,6 +268,40 @@ void main() {
       expect(cubit.state.fontFamily, AppFontFamily.cairo);
       expect(cubit.state.fontSizeScale, AppFontSizeScale.large);
       expect(cubit.state.backgroundOption, AppBackgroundOption.natureForest);
+    });
+
+    test('no saved font preference resolves to the Cairo default', () async {
+      expect(AppFontFamily.fromId(null), AppFontFamily.cairo);
+      expect(const AppearanceState().fontFamily, AppFontFamily.cairo);
+      expect(AppearanceState.fromJson(const {}).fontFamily, AppFontFamily.cairo);
+
+      SharedPreferences.setMockInitialValues({});
+      final loaded = await AppearanceCubit.getSavedAppearance(deviceId: 'device-1');
+      expect(loaded.fontFamily, AppFontFamily.cairo);
+    });
+
+    test('an explicitly saved System Default choice is preserved', () async {
+      // The Cairo default never rewrites a stored choice, so a profile that
+      // already carries `system` keeps the platform font.
+      expect(AppFontFamily.fromId('system'), AppFontFamily.system);
+      expect(
+        AppearanceState.fromJson(const {'font_family': 'system'}).fontFamily,
+        AppFontFamily.system,
+      );
+
+      SharedPreferences.setMockInitialValues({
+        'appearance_font_family_device-1': 'system',
+      });
+      final loaded = await AppearanceCubit.getSavedAppearance(deviceId: 'device-1');
+      expect(loaded.fontFamily, AppFontFamily.system);
+    });
+
+    test('an explicitly saved non-default font choice is preserved', () async {
+      SharedPreferences.setMockInitialValues({
+        'appearance_font_family_device-1': 'inter',
+      });
+      final loaded = await AppearanceCubit.getSavedAppearance(deviceId: 'device-1');
+      expect(loaded.fontFamily, AppFontFamily.inter);
     });
 
     test('updating theme style dispatches update_appearance via sendDeviceCommand', () async {

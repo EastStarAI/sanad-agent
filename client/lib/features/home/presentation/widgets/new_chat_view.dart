@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
@@ -92,8 +93,7 @@ class _NewChatViewState extends State<NewChatView> {
                   return Text(
                     titleText,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontFamily: 'Georgia',
+                    style: AppTypography.text(context,
                       color: theme.colorScheme.onSurface.withValues(alpha: 0.9),
                       fontSize: 28,
                       fontWeight: FontWeight.w400,

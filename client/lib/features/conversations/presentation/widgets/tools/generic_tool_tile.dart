@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
@@ -32,7 +32,7 @@ class GenericToolTile extends StatelessWidget {
         if (input != null) ...[
           Text(
             'Input Parameters',
-            style: GoogleFonts.outfit(
+            style: AppTypography.text(context,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -51,7 +51,7 @@ class GenericToolTile extends StatelessWidget {
             ),
             child: Text(
               _formatValue(input),
-              style: GoogleFonts.firaCode(
+              style: AppTypography.mono(
                 fontSize: 11,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -62,7 +62,7 @@ class GenericToolTile extends StatelessWidget {
         if (output != null) ...[
           Text(
             'Output Result',
-            style: GoogleFonts.outfit(
+            style: AppTypography.text(context,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -81,7 +81,7 @@ class GenericToolTile extends StatelessWidget {
             ),
             child: Text(
               _formatValue(output),
-              style: GoogleFonts.firaCode(
+              style: AppTypography.mono(
                 fontSize: 11,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -103,7 +103,7 @@ class GenericToolTile extends StatelessWidget {
           if (input != null) ...[
             Text(
               'Input Parameters',
-              style: GoogleFonts.outfit(
+              style: AppTypography.text(context,
                 color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
@@ -122,7 +122,7 @@ class GenericToolTile extends StatelessWidget {
               ),
               child: Text(
                 _formatValue(input),
-                style: GoogleFonts.firaCode(
+                style: AppTypography.mono(
                   fontSize: 11,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -140,7 +140,7 @@ class GenericToolTile extends StatelessWidget {
               const SizedBox(width: 12),
               Text(
                 AppLocalizations.of(context)?.toolExecuting ?? 'Executing tool...',
-                style: GoogleFonts.roboto(
+                style: AppTypography.text(context,
                   fontSize: 12,
                   color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
@@ -164,7 +164,7 @@ class GenericToolTile extends StatelessWidget {
       ),
       child: Text(
         event.text.isNotEmpty ? event.text : (event.toolOutput?.toString() ?? 'Tool execution failed.'),
-        style: GoogleFonts.firaCode(fontSize: 11, color: errorColor),
+        style: AppTypography.mono(fontSize: 11, color: errorColor),
       ),
     );
   }

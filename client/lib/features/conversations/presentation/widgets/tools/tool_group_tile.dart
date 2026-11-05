@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
@@ -255,7 +255,7 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
     required double letterSpacing,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final baseStyle = GoogleFonts.outfit(
+    final baseStyle = AppTypography.text(context,
       color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
       fontSize: fontSize,
       fontWeight: FontWeight.normal,

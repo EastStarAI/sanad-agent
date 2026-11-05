@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
@@ -12,7 +13,6 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class ConversationContextChips extends StatelessWidget {
   final GlobalKey<PopupMenuButtonState<String>> agentSelectorKey;
@@ -116,7 +116,7 @@ class ConversationContextChips extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             AppLocalizations.of(context)!.devicesLoading,
-            style: GoogleFonts.inter(color: dimTextColor, fontSize: 12, fontWeight: FontWeight.w400),
+            style: AppTypography.text(context, color: dimTextColor, fontSize: 12, fontWeight: FontWeight.w400),
           ),
         ],
       ),
@@ -142,7 +142,7 @@ class ConversationContextChips extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               AppLocalizations.of(context)!.noDevicesChip,
-              style: GoogleFonts.inter(
+              style: AppTypography.text(context,
                 color: Theme.of(context).colorScheme.error.withValues(alpha: 0.8),
                 fontSize: 12,
                 fontWeight: FontWeight.w400,
@@ -192,7 +192,7 @@ class ConversationContextChips extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               activeAgent?.name ?? 'Select Device',
-              style: GoogleFonts.inter(
+              style: AppTypography.text(context,
                 color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.8),
                 fontSize: 12,
                 fontWeight: FontWeight.w400,
@@ -219,7 +219,7 @@ class ConversationContextChips extends StatelessWidget {
                 ),
                 child: Text(
                   'local',
-                  style: GoogleFonts.inter(
+                  style: AppTypography.text(context,
                     color: Theme.of(context).colorScheme.secondary,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
@@ -277,7 +277,7 @@ class ConversationContextChips extends StatelessWidget {
                       ),
                       child: Text(
                         'local',
-                        style: GoogleFonts.inter(
+                        style: AppTypography.text(context,
                           color: Theme.of(context).colorScheme.secondary,
                           fontSize: 9,
                           fontWeight: FontWeight.w600,

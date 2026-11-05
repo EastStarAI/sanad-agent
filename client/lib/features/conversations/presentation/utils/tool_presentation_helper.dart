@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
@@ -138,7 +138,7 @@ class ToolPresentationHelper {
         title,
         textDirection: resolvedDirection,
         textAlign: resolvedDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
-        style: GoogleFonts.outfit(
+        style: AppTypography.text(context,
           color: titleColor,
           fontSize: 13,
           fontWeight: FontWeight.w600,
@@ -370,7 +370,7 @@ class ToolPresentationHelper {
       overflow: TextOverflow.ellipsis,
       textDirection: resolvedDirection,
       text: TextSpan(
-        style: GoogleFonts.outfit(
+        style: AppTypography.text(context,
           fontSize: 13,
           letterSpacing: 0.5,
         ),
