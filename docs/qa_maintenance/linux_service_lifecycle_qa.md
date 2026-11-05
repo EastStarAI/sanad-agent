@@ -30,6 +30,8 @@ The focused Agent suite must prove:
 - `agent/bin/service.dart` option parsing and guards accepting `--user-scope` while rejecting unknown options and invalid combinations without host mutation;
 - automatic system-scope fallback under the non-root invoking account for default durable installs;
 - direct-root dedicated account and state-home behavior;
+- a service-account access preflight that refuses an `ExecStart` or working directory the unit's account cannot reach, before the definition is written or activated, and that keeps installing when the probing tool is absent;
+- a health window that polls the Home's Local Gateway credential until it appears and that fails with the credential message and the real attempt count when it never does;
 - native OpenRC install/start/stop/restart/status/uninstall;
 - legacy user-unit migration without concurrent definitions;
 - transactional restoration after activation failure;
@@ -39,6 +41,9 @@ The focused Agent suite must prove:
 - bounded authenticated health retries for expected version and cloud registration;
 - manifest 404, auth failure, service/health failure, binary restoration, pending
   pairing cancellation, and successful transaction commit;
+- a root Linux install without `SANAD_HOME` using the dedicated account Home, an
+  existing populated root Home left in place, a non-root install keeping the
+  invoking account Home, and the retry message a failed pairing attempt prints;
 - pairing authority absent from Agent process arguments and fake command logs;
 - daemon/service help and unknown daemon arguments exit without daemon startup.
 
@@ -67,8 +72,10 @@ on real clean hosts under G6 and G7:
 
 1. Desktop user systemd with a live user bus and durable linger.
 2. Headless systemd where no usable user bus exists.
-3. Direct-root installation proving the daemon uid is not zero and the state
-   tree belongs to the dedicated account.
+3. Direct-root installation proving the daemon uid is not zero, the state tree
+   belongs to the dedicated account, and the account can execute the unit's
+   `ExecStart` and enter its `WorkingDirectory` (the artifact and the daemon's
+   Home are the same Home, `/var/lib/sanad-agent`);
 4. OpenRC installation on a clean supported distribution.
 5. SSH logout and reboot, followed by bounded polling for `Running` and Online.
 6. Stop/start/restart/uninstall/reinstall and injected activation failure.
@@ -86,6 +93,9 @@ on real clean hosts under G6 and G7:
     `sanad service status` reports `InstalledStopped`, and the Agent is not
     restarted; a unit installed before `SuccessExitStatus=130 143` shows the
     `failed` state until `sanad service install` refreshes it.
+13. A clean direct-root install succeeds on its first attempt: the health window
+    observes the daemon's Local Gateway credential appear after activation
+    instead of requiring a second run against an already-started daemon.
 
 OpenRC support must not be advertised as release-verified until its clean-host
 integration gate succeeds.

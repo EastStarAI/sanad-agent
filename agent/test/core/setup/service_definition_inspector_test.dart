@@ -1,6 +1,6 @@
-import 'package:sanad_agent/core/setup/linux_service_manager.dart';
 import 'package:sanad_agent/core/setup/service_definition_inspector.dart';
 import 'package:sanad_agent/core/setup/service_manager.dart';
+import 'package:sanad_agent/core/setup/service_unit_builder.dart';
 import 'package:test/test.dart';
 
 /// Task 107 Q4 — the installed service definition is compared with the one
@@ -22,7 +22,7 @@ void main() {
       );
 
   String unit(ServiceDefinition definition) =>
-      LinuxServiceManager.buildSystemdUnit(
+      ServiceUnitBuilder.systemdUnit(
         executable: definition.executable,
         arguments: definition.arguments,
         sanadHome: definition.sanadHome,

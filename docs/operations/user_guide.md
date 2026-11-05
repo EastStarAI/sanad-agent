@@ -145,6 +145,27 @@ restored; they do not describe that installation as local-only.
 If you sign in later after choosing local-only mode, follow `sanad login` with
 `sanad service restart` so the running daemon loads the stored authentication.
 
+### Where a Linux installation keeps its files
+
+An install started as a normal user keeps its Sanad Home in `$HOME/.sanad`. A
+root installation on Linux is different: the background service runs as the
+dedicated unprivileged `sanad-agent` account, so the installer places the Agent
+and its Home in `/var/lib/sanad-agent`, a path that account can reach, and uses
+the same Home for the binary, the daemon, and its health check. Root's own
+`$HOME/.sanad` cannot be used for that service because `/root` is owner-only.
+
+If an earlier root installation already exists under `/root/.sanad`, the
+installer keeps using it rather than moving your state. Set `SANAD_HOME` before
+running the installer whenever you want to choose the Home yourself:
+
+```bash
+curl -fsSL https://sanad.eaststarai.com/install.sh | SANAD_HOME=/var/lib/sanad-agent bash
+```
+
+The Agent refuses to register a service whose binary or working directory the
+service account cannot reach, and it reports the unreachable path instead of
+leaving you with a service that fails to start.
+
 ## Install the standalone agent manually
 
 Manual installation is useful when reviewing each step or when an environment

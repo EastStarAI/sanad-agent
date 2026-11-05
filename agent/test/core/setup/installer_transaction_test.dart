@@ -23,6 +23,19 @@ void main() {
 if [ "\${1:-}" = "-s" ]; then echo Darwin; else echo x86_64; fi
 ''');
     _writeExecutable(p.join(mockBin.path, 'codesign'), '#!/bin/sh\nexit 0\n');
+    _writeExecutable(
+      p.join(mockBin.path, 'id'),
+      '''#!/bin/sh
+case "\${1:-}" in
+  -u) echo "\${FAKE_UID:-0}" ;;
+  -un) echo "\${FAKE_USERNAME:-root}" ;;
+  *) echo '' ;;
+esac
+''',
+    );
+    for (final command in ['systemctl', 'rc-service', 'rc-update']) {
+      _writeExecutable(p.join(mockBin.path, command), '#!/bin/sh\nexit 0\n');
+    }
     artifact = '''#!/bin/sh
 printf '%s\\n' "\$*" >> "\$FAKE_COMMAND_LOG"
 case "\${1:-} \${2:-}" in
@@ -33,7 +46,10 @@ case "\${1:-} \${2:-}" in
     ;;
   "login --cancel-pairing") exit 0 ;;
   "login --portal") [ "\${FAKE_AUTH_FAIL:-0}" = "1" ] && exit 12 || exit 0 ;;
-  "service install") [ "\${FAKE_SERVICE_FAIL:-0}" = "1" ] && exit 13 || exit 0 ;;
+  "service install")
+    printf 'SANAD_HOME=%s\\n' "\${SANAD_HOME:-}" >> "\$FAKE_COMMAND_LOG"
+    [ "\${FAKE_SERVICE_FAIL:-0}" = "1" ] && exit 13 || exit 0
+    ;;
   "service status")
     echo 'Sanad Agent Service Status:'
     echo '  Installed:  No'
@@ -69,6 +85,17 @@ exit 0
                 'public': true,
                 'signature_type': 'developer-id',
                 'filename': 'sanad-agent-1.2.3-macos-x64',
+                'url': 'http://127.0.0.1:${server.port}$artifactPath',
+                'sha256': sha256.convert(bytes).toString(),
+                'size': bytes.length,
+              },
+              {
+                'component': 'agent',
+                'platform': 'linux',
+                'architecture': 'x64',
+                'public': true,
+                'signature_type': 'sha256',
+                'filename': 'sanad-agent-1.2.3-linux-x64',
                 'url': 'http://127.0.0.1:${server.port}$artifactPath',
                 'sha256': sha256.convert(bytes).toString(),
                 'size': bytes.length,
@@ -195,8 +222,93 @@ exit 0
       expect(log, contains('login --cancel-pairing'));
       expect(log, contains('service start'));
       expect(log, isNot(contains('second-one-time-token')));
+      // The completed authorization is discarded with the binary, so the
+      // operator has to know the retry cannot reuse it.
+      expect(
+        result.stderr.toString(),
+        contains('a retry needs a fresh pairing code or a new Portal approval'),
+      );
     },
   );
+
+  test(
+    'root Linux install uses the dedicated account Home by default',
+    () async {
+      _useLinuxHost(mockBin);
+      final systemHome = p.join(root.path, 'var-lib-sanad-agent');
+
+      final result = await _runInstaller(
+        home: home,
+        mockBin: mockBin,
+        commandLog: commandLog,
+        manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+        explicitHome: false,
+        extraEnvironment: {
+          'FAKE_UID': '0',
+          'SANAD_INSTALL_SYSTEM_HOME': systemHome,
+        },
+      );
+
+      expect(result.exitCode, 0, reason: result.stderr.toString());
+      // The artifact, the Sanad Home the Agent resolves, and the unit's
+      // SANAD_HOME are one Home the dedicated account owns, so systemd can
+      // execute it and the health check reads the daemon's own credential.
+      expect(File(p.join(systemHome, 'bin/sanad')).existsSync(), isTrue);
+      expect(File(p.join(home.path, '.sanad/bin/sanad')).existsSync(), isFalse);
+      expect(
+        result.stdout.toString(),
+        contains('Root install: using $systemHome'),
+      );
+      expect(commandLog.readAsStringSync(), contains('SANAD_HOME=$systemHome'));
+    },
+  );
+
+  test(
+    'root Linux install keeps an existing root Home instead of migrating it',
+    () async {
+      _useLinuxHost(mockBin);
+      final target = _installOldBinary(home, commandLog);
+      final systemHome = p.join(root.path, 'var-lib-sanad-agent');
+
+      final result = await _runInstaller(
+        home: home,
+        mockBin: mockBin,
+        commandLog: commandLog,
+        manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+        explicitHome: false,
+        extraEnvironment: {
+          'FAKE_UID': '0',
+          'SANAD_INSTALL_SYSTEM_HOME': systemHome,
+        },
+      );
+
+      expect(result.exitCode, 0, reason: result.stderr.toString());
+      expect(target.readAsStringSync(), isNot(contains('old-agent')));
+      expect(Directory(systemHome).existsSync(), isFalse);
+    },
+  );
+
+  test('non-root Linux install keeps the invoking account Home', () async {
+    _useLinuxHost(mockBin);
+    final systemHome = p.join(root.path, 'var-lib-sanad-agent');
+
+    final result = await _runInstaller(
+      home: home,
+      mockBin: mockBin,
+      commandLog: commandLog,
+      manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+      explicitHome: false,
+      extraEnvironment: {
+        'FAKE_UID': '1000',
+        'FAKE_USERNAME': 'developer',
+        'SANAD_INSTALL_SYSTEM_HOME': systemHome,
+      },
+    );
+
+    expect(result.exitCode, 0, reason: result.stderr.toString());
+    expect(File(p.join(home.path, '.sanad/bin/sanad')).existsSync(), isTrue);
+    expect(Directory(systemHome).existsSync(), isFalse);
+  });
 
   test(
     'verified pairing install commits only after cloud health options pass',
@@ -234,17 +346,22 @@ Future<ProcessResult> _runInstaller({
   required String manifestUrl,
   String? pairingToken,
   Map<String, String> extraEnvironment = const {},
+  bool explicitHome = true,
 }) {
-  final environment = {
+  final environment = <String, String>{
     ...Platform.environment,
     'HOME': home.path,
-    'SANAD_HOME': p.join(home.path, '.sanad'),
     'SANAD_RELEASE_MANIFEST_URL': manifestUrl,
     'SANAD_INSTALL_ALLOW_TEST_URL': '1',
     'FAKE_COMMAND_LOG': commandLog.path,
     'PATH': '${mockBin.path}:${Platform.environment['PATH']}',
     ...extraEnvironment,
   };
+  // An unset Home is what makes the installer decide one, and a blank value is
+  // how a child process clears a variable it would otherwise inherit.
+  environment['SANAD_HOME'] = explicitHome
+      ? p.join(home.path, '.sanad')
+      : '';
   if (pairingToken == null) {
     return Process.run('sh', [
       '../scripts/install.sh',
@@ -284,4 +401,14 @@ exit 0
 void _writeExecutable(String path, String content) {
   final file = File(path)..writeAsStringSync(content);
   Process.runSync('chmod', ['700', file.path]);
+}
+
+/// Reports Linux so the installer takes its Linux path under a faked account.
+void _useLinuxHost(Directory mockBin) {
+  _writeExecutable(
+    p.join(mockBin.path, 'uname'),
+    '''#!/bin/sh
+if [ "\${1:-}" = "-s" ]; then echo Linux; else echo x86_64; fi
+''',
+  );
 }

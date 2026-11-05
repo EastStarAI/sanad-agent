@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/setup/linux_service_manager.dart';
 import 'package:sanad_agent/core/setup/service_models.dart';
+import 'package:sanad_agent/core/setup/service_unit_builder.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -34,7 +35,7 @@ void main() {
   });
 
   test('systemd unit carries durable service safety contract', () {
-    final unit = LinuxServiceManager.buildSystemdUnit(
+    final unit = ServiceUnitBuilder.systemdUnit(
       executable: '/opt/Sanad Agent/sanad',
       arguments: const ['daemon'],
       sanadHome: '/var/lib/Sanad Agent',
@@ -58,7 +59,7 @@ void main() {
   });
 
   test('systemd unit accepts the daemon signal exit statuses as success', () {
-    final unit = LinuxServiceManager.buildSystemdUnit(
+    final unit = ServiceUnitBuilder.systemdUnit(
       executable: '/opt/sanad',
       arguments: const ['daemon'],
       sanadHome: '/home/sanad/.sanad',
@@ -215,6 +216,101 @@ void main() {
       expect(Directory(dedicatedHome).existsSync(), isTrue);
     },
   );
+
+  test(
+    'refuses a service account that cannot execute the installed artifact',
+    () async {
+      Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+      host.inaccessiblePaths.add('/opt/sanad/bin/sanad');
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: '/root',
+        sanadHome: sanadHome.path,
+        dedicatedHome: p.join(root.path, 'dedicated-home'),
+        identity: const LinuxServiceIdentity(
+          userName: 'root',
+          groupName: 'root',
+          uid: 0,
+          home: '/root',
+          isRoot: true,
+        ),
+      );
+
+      final result = await manager.install();
+
+      expect(result.success, isFalse);
+      expect(result.error, contains('cannot execute'));
+      expect(result.error, contains('/opt/sanad/bin/sanad'));
+      expect(result.error, contains('SANAD_HOME=/var/lib/sanad-agent'));
+      // Nothing is written, enabled, or started for a unit that cannot run.
+      expect(
+        File(
+          p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+        ).existsSync(),
+        isFalse,
+      );
+      expect(host.commands, isNot(contains(contains('enable --now'))));
+    },
+  );
+
+  test(
+    'refuses a working directory the service account cannot enter',
+    () async {
+      Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+      final dedicatedHome = p.join(root.path, 'dedicated-home');
+      host.inaccessiblePaths.add(dedicatedHome);
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: '/root',
+        sanadHome: sanadHome.path,
+        dedicatedHome: dedicatedHome,
+        identity: const LinuxServiceIdentity(
+          userName: 'root',
+          groupName: 'root',
+          uid: 0,
+          home: '/root',
+          isRoot: true,
+        ),
+      );
+
+      final result = await manager.install();
+
+      expect(result.success, isFalse);
+      expect(result.error, contains('cannot enter'));
+      expect(result.error, contains(dedicatedHome));
+      expect(
+        File(
+          p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+        ).existsSync(),
+        isFalse,
+      );
+    },
+  );
+
+  test('installs when the service account probe tool is unavailable', () async {
+    Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+    host.probeUnavailable = true;
+    final manager = _manager(
+      host: host,
+      paths: paths,
+      loginHome: '/root',
+      sanadHome: sanadHome.path,
+      dedicatedHome: p.join(root.path, 'dedicated-home'),
+      identity: const LinuxServiceIdentity(
+        userName: 'root',
+        groupName: 'root',
+        uid: 0,
+        home: '/root',
+        isRoot: true,
+      ),
+    );
+
+    final result = await manager.install();
+
+    expect(result.success, isTrue, reason: result.error);
+  });
 
   test('uses native OpenRC lifecycle when systemd is unavailable', () async {
     host.openRcAvailable = true;
@@ -503,6 +599,10 @@ class _FakeServiceHost {
   bool activationFails = false;
   bool managerUnavailable = false;
   bool accountExists = true;
+  bool probeUnavailable = false;
+
+  /// Paths the probed service account cannot reach.
+  final Set<String> inaccessiblePaths = {};
   final List<String> commands = [];
 
   Future<ServiceProcessResult> run(
@@ -511,9 +611,18 @@ class _FakeServiceHost {
     Map<String, String>? environment,
   ) async {
     commands.add([executable, ...arguments].join(' '));
-    if (executable == 'sudo') {
+    if (executable == 'runuser' || executable == 'sudo') {
+      if (probeUnavailable) {
+        return const ServiceProcessResult(
+          exitCode: 127,
+          stderr: 'runuser: command not found',
+        );
+      }
       final nested = arguments.sublist(arguments.indexOf('--') + 1);
       return run(nested.first, nested.sublist(1), environment);
+    }
+    if (executable == 'test') {
+      return _result(!inaccessiblePaths.contains(arguments.last));
     }
     if (executable == 'loginctl') {
       if (arguments.first == 'enable-linger') {

@@ -5,10 +5,8 @@ set -eu
 
 REPOSITORY="EastStarAI/sanad-agent"
 MANIFEST_URL="${SANAD_RELEASE_MANIFEST_URL:-https://github.com/$REPOSITORY/releases/latest/download/release-manifest.json}"
-SANAD_USER_HOME="${SANAD_HOME:-$HOME/.sanad}"
-BIN_DIR="$SANAD_USER_HOME/bin"
-TARGET="$BIN_DIR/sanad"
-BACKUP="$TARGET.rollback"
+REQUESTED_SANAD_HOME="${SANAD_HOME:-}"
+SYSTEM_SANAD_HOME="${SANAD_INSTALL_SYSTEM_HOME:-/var/lib/sanad-agent}"
 PAIRING_TOKEN=""
 PAIRING_TOKEN_STDIN=0
 AUTH_MODE="prompt"
@@ -86,6 +84,28 @@ case "$OS_NAME" in
     exit 69
     ;;
 esac
+
+# A root install on Linux registers a system unit that runs as the dedicated
+# unprivileged `sanad-agent` account, so the artifact must live in a Home that
+# account can reach. Root's own `$HOME/.sanad` is not: `/root` is 0700 and
+# systemd then fails the unit with 203/EXEC after pairing already succeeded. An
+# existing populated root Home is kept as it is instead of being migrated.
+if [ -n "$REQUESTED_SANAD_HOME" ]; then
+  SANAD_USER_HOME="$REQUESTED_SANAD_HOME"
+elif [ "$PLATFORM" = "linux" ] && [ "$(id -u)" -eq 0 ] &&
+  [ ! -x "$HOME/.sanad/bin/sanad" ]; then
+  SANAD_USER_HOME="$SYSTEM_SANAD_HOME"
+  echo "Root install: using $SANAD_USER_HOME as the Sanad Home so the dedicated service account can run the Agent."
+else
+  SANAD_USER_HOME="$HOME/.sanad"
+fi
+# The Agent resolves its Home from this variable, so the installed binary, the
+# daemon the unit starts, and this installer must all select the same one.
+SANAD_HOME="$SANAD_USER_HOME"
+export SANAD_HOME
+BIN_DIR="$SANAD_USER_HOME/bin"
+TARGET="$BIN_DIR/sanad"
+BACKUP="$TARGET.rollback"
 
 if [ "$PLATFORM" = "linux" ]; then
   [ ! -L "$SANAD_USER_HOME" ] || {
@@ -354,6 +374,9 @@ if [ -n "$PAIRING_TOKEN" ] || [ "$PORTAL_LOGIN" -eq 1 ] ||
     --require-cloud --health-timeout 90; then
     restore_previous_installation
     echo "Service or cloud health verification failed; rollback completed." >&2
+    if [ -n "$PAIRING_TOKEN" ] || [ "$PORTAL_LOGIN" -eq 1 ]; then
+      echo "This attempt already authorized the device; a retry needs a fresh pairing code or a new Portal approval." >&2
+    fi
     exit 70
   fi
 else

@@ -9,7 +9,10 @@ description: "Technical contract for Linux service selection, ownership, install
 
 This document defines the Agent-owned Linux service registration implemented by
 `agent/lib/core/setup/`. Installer transaction and cloud-health behavior remain
-owned by Task 81 G4 and are not claimed here.
+owned by Task 81 G4; this page states only the parts of that transaction this
+contract constrains — the Home a root install selects, the service account's
+access preflight, the credential-aware health window, and what a failed attempt
+leaves behind.
 
 ## Typed service contract
 
@@ -40,6 +43,32 @@ Default selection is capability-based and ordered:
    available. Unsupported init systems return `ManagerUnavailable` before a
    service definition is installed.
 
+### One Home the service account can reach
+
+A system unit runs as an account that is usually not the account that installed
+it, so the artifact the unit executes must live where that account can reach it.
+A root Linux installation therefore uses `/var/lib/sanad-agent` as its Sanad
+Home instead of root's own `$HOME/.sanad`: `/root` is owner-only, and a unit
+whose `ExecStart` names a path under it fails activation with `203/EXEC` after
+the caller has already paid for the download and the device pairing. The
+installer selects that Home itself, exports it so the verified binary, its
+`login`, and its `service install` all resolve the same Home, and leaves an
+existing populated root Home untouched instead of migrating it — an operator who
+already installed under `/root/.sanad` keeps that installation. An explicit
+`SANAD_HOME` always wins.
+
+The rule is not a location allowlist. Before `sanad service install` writes a
+definition it proves the account named in the unit can reach the paths that unit
+names: it asks the kernel the same question systemd will ask, with `test -x` on
+`ExecStart` and on `WorkingDirectory` executed as that account. `test -x` needs
+search permission on every parent directory, so it fails exactly where activation
+would. The preflight runs after the dedicated home's ownership is fixed and
+before the definition is staged, so a refusal leaves no unit, no activation, and
+no rollback behind, and its message names the account, the unreachable path, and
+the remedy. A host that lacks the probing tool (`runuser` as root, `sudo`
+otherwise) keeps installing: the probe is a guard, and the activation health
+transaction still has to prove the service is running.
+
 ### Explicit user scope (`--user-scope`)
 
 When invoked with `--user-scope` (used by Client-initiated bootstrap), the
@@ -59,9 +88,10 @@ selector explicitly targets a systemd user unit without privilege escalation:
 
 The systemd unit fixes `HOME`, `SANAD_HOME`, working directory, user/group for
 system scope, `UMask=0077`, cgroup kill behavior, a 90-second stop timeout,
-bounded restart policy, journal output, and boot enablement. The OpenRC service
-uses `supervise-daemon`, owner-home logs, the same umask and state variables,
-boot registration, and restart behavior.
+bounded restart policy, journal output, and boot enablement. For system scope the
+state paths are the service account's own Home, never the caller's. The OpenRC
+service uses `supervise-daemon`, owner-home logs, the same umask and state
+variables, boot registration, and restart behavior.
 
 ### Stop exit statuses and upgrading an installed unit
 
@@ -122,7 +152,10 @@ The installer validates platform, architecture, init support, privilege path,
 Sanad Home, manifest trust, artifact size, SHA-256, and macOS publisher before
 replacing a binary or preparing pairing. HTTP candidate URLs are accepted only
 when the explicit `SANAD_INSTALL_ALLOW_TEST_URL=1` harness flag is set; the
-production path remains HTTPS-only and repository-pinned.
+production path remains HTTPS-only and repository-pinned. The Sanad Home it
+validates is the one it also selects: an explicit `SANAD_HOME` wins, a root Linux
+installation without one uses `/var/lib/sanad-agent`, and only a root Home that
+already carries an installed binary keeps `$HOME/.sanad`.
 
 For Linux, `service install --expected-version ...` keeps its unit backup open
 until authenticated Local Gateway health reports the expected binary version.
@@ -130,6 +163,18 @@ Pairing and Portal installs additionally require `cloud_registered=true`, which
 is emitted only after the cloud socket receives authoritative
 `register_success`. Verification is bounded and keeps the Local Gateway token
 inside the verifier process.
+
+The daemon writes that credential during its own startup, which is still in
+progress when activation returns, so the bounded window polls the Home's
+credential exactly as it polls the HTTP answer: a missing token is a transient
+state to wait out, not a final verdict. A window that expires without a token
+fails with a message that names the missing credential and the restart that
+issues one, instead of reporting a zero-attempt failure that hides how long the
+installer waited. Installing afterwards needs a fresh authorization: the failure
+path keeps its established credential handling — a token-pairing attempt cancels
+the authorization it prepared, and Portal installs keep the credential but leave
+no runnable binary — and the installer states that a retry needs a fresh pairing
+code or a new Portal approval.
 
 Failure before cloud registration cancels pending pairing and atomically
 restores any prior Device Credential. Unit activation/health failure restores
