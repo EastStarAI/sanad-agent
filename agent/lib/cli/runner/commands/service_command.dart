@@ -88,6 +88,11 @@ class ServiceInstallCommand extends SanadCommand {
       ..addOption(
         'health-timeout',
         help: 'Health verification timeout in seconds (1-300)',
+      )
+      ..addOption(
+        'run-as-user',
+        help:
+            'Linux only: run the system service as this existing account',
       );
   }
 
@@ -109,6 +114,7 @@ class ServiceInstallCommand extends SanadCommand {
     }
     final result = await ServiceManager.install(
       userScope: argResults?['user-scope'] as bool? ?? false,
+      runAsUser: argResults?['run-as-user'] as String?,
     );
     return result.success ? 0 : 1;
   }

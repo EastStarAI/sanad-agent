@@ -31,8 +31,6 @@ import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.da
 import 'package:sanad_agent/core/provider_runtime/provider_readiness_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_state_service.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
-import 'package:sanad_agent/core/provider_runtime/secret_record.dart';
-import 'package:sanad_agent/core/provider_runtime/secret_store.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/provider_command_handler.dart';
@@ -42,6 +40,7 @@ import 'package:test/test.dart';
 
 import '../../../../../support/isolated_sanad_test_home.dart';
 import '../../../../../support/memory_agent_secret_store.dart';
+import '../../../../../support/memory_provider_secret_store.dart';
 
 /// Hardware identity stamped on every envelope by the test [AuthManager].
 const harnessHardwareId = 'device-characterization';
@@ -398,37 +397,6 @@ class ProviderHandlerHarness {
         body,
         handler.buildUsageSupportEnvelope,
       );
-}
-
-/// [SecretStore] that keeps records in memory and masks summaries through the
-/// real `SecretSummary.fromRecord` projection.
-class MemoryProviderSecretStore implements SecretStore {
-  final Map<String, SecretRecord> _records = {};
-
-  @override
-  SecretRecord? read(String instanceId) => _records[instanceId];
-
-  @override
-  Future<void> write(String instanceId, SecretRecord record) async {
-    _records[instanceId] = record;
-  }
-
-  @override
-  SecretSummary summary(String instanceId) =>
-      SecretSummary.fromRecord(_records[instanceId], instanceId);
-
-  @override
-  Future<void> remove(String instanceId) async {
-    _records.remove(instanceId);
-  }
-
-  @override
-  List<String> listIds() => _records.keys.toList(growable: false);
-
-  @override
-  Future<void> pruneOrphans(Set<String> validInstanceIds) async {
-    _records.removeWhere((id, _) => !validInstanceIds.contains(id));
-  }
 }
 
 /// Counts adapter-cache invalidations so the mutation contract stays pinned.

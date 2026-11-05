@@ -4,6 +4,7 @@ import 'package:meta/meta.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../../evolution/db/agent_state_database.dart';
+import '../../evolution/db/sqlite_transaction.dart';
 import 'provider_instance.dart';
 
 /// Persistent storage for provider instances, their model cache, and recent
@@ -167,8 +168,7 @@ class ProviderInstanceRepository {
   /// DB level even if a writer bypasses this method.
   /// Throws [StateError] if [id] does not exist.
   void setDefault(String id) {
-    _db.execute('BEGIN TRANSACTION');
-    try {
+    SqliteTransaction.runVoid(_db, () {
       final exists = _db.select(
         'SELECT 1 FROM provider_instances WHERE id = ? LIMIT 1',
         [id],
@@ -181,11 +181,7 @@ class ProviderInstanceRepository {
         'UPDATE provider_instances SET is_default = 1, updated_at = ? WHERE id = ?',
         [DateTime.now().toIso8601String(), id],
       );
-      _db.execute('COMMIT');
-    } catch (e) {
-      _db.execute('ROLLBACK');
-      rethrow;
-    }
+    });
   }
 
   /// Clears the default flag for every instance (used when the default is
@@ -222,6 +218,7 @@ class ProviderInstanceRepository {
       'config_revision': row['config_revision'],
       'credential_revision': row['credential_revision'],
       'last_error': row['last_error'],
+      'last_error_detail': row['last_error_detail'],
     };
   }
 
@@ -235,12 +232,14 @@ class ProviderInstanceRepository {
     required int configRevision,
     required int credentialRevision,
     String? lastError,
+    String? lastErrorDetail,
   }) {
     final stmt = _db.prepare('''
       INSERT INTO provider_model_cache (
         instance_id, cache_key, models_json, fetched_at, source,
-        endpoint_fingerprint, config_revision, credential_revision, last_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        endpoint_fingerprint, config_revision, credential_revision, last_error,
+        last_error_detail
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(instance_id, cache_key) DO UPDATE SET
         models_json = excluded.models_json,
         fetched_at = excluded.fetched_at,
@@ -248,7 +247,8 @@ class ProviderInstanceRepository {
         endpoint_fingerprint = excluded.endpoint_fingerprint,
         config_revision = excluded.config_revision,
         credential_revision = excluded.credential_revision,
-        last_error = excluded.last_error
+        last_error = excluded.last_error,
+        last_error_detail = excluded.last_error_detail
     ''');
     try {
       stmt.execute([
@@ -261,10 +261,30 @@ class ProviderInstanceRepository {
         configRevision,
         credentialRevision,
         lastError,
+        lastErrorDetail,
       ]);
     } finally {
       stmt.dispose();
     }
+  }
+
+  /// Records the cause of the last failed connection check on an existing cache
+  /// row without touching the cached models, source, or revisions.
+  ///
+  /// A failure that demotes an instance must stay explainable after a restart
+  /// (issue 339 review 2), and a non-blocking warning must survive it too. This
+  /// is the narrow write for both: it never invalidates a proven model list.
+  void recordVerificationCause({
+    required String instanceId,
+    required String cacheKey,
+    required String? lastError,
+    required String? lastErrorDetail,
+  }) {
+    _db.execute(
+      'UPDATE provider_model_cache SET last_error = ?, last_error_detail = ? '
+      'WHERE instance_id = ? AND cache_key = ?',
+      [lastError, lastErrorDetail, instanceId, cacheKey],
+    );
   }
 
   void deleteModelCache(String instanceId) {

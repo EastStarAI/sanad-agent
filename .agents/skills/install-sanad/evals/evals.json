@@ -38,6 +38,18 @@
         "Checks auto-delete boot disk cleanup and does not delete preexisting resources.",
         "Distinguishes rehearsal evidence from a real installation and delayed billing totals."
       ]
+    },
+    {
+      "id": 4,
+      "prompt": "Install Sanad on a fresh Ubuntu cloud server where I only have SSH access as the default sudo user. There is no Sanad Client on that server, and the Agent has to keep running after I close the SSH session.",
+      "expected_output": "Runs the official installer through sudo so the service runs as the dedicated unprivileged sanad-agent account from /var/lib/sanad-agent, explains that a passwordless-sudo SSH account would make a remotely controlled Agent effectively root, keeps a user's own desktop on the plain installer, and offers --run-as-user only as a deliberate alternative.",
+      "files": [],
+      "assertions": [
+        "Runs the official installer with sudo, for example curl -fsSL https://sanad.eaststarai.com/install.sh | sudo bash -s -- --login, instead of the plain pipeline for the SSH user.",
+        "States that the service runs as the dedicated unprivileged sanad-agent account with its Home at /var/lib/sanad-agent.",
+        "Explains that a cloud SSH account is usually a passwordless sudoer, so an Agent running as that account would be effectively root and could read ~/.ssh and the cloud credentials stored for it.",
+        "Does not require a desktop Client on the server, a model provider, or routine reboot and logout-durability tests before reporting the installer's built-in success."
+      ]
     }
   ]
 }

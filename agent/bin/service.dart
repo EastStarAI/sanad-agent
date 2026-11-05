@@ -19,11 +19,13 @@ Future<int> main(List<String> args) async {
 
   ServiceHealthExpectation? healthExpectation;
   var userScope = false;
+  String? runAsUser;
   if (command == 'install') {
     try {
       final options = _parseInstallOptions(args.sublist(1));
       healthExpectation = options.healthExpectation;
       userScope = options.userScope;
+      runAsUser = options.runAsUser;
     } on FormatException catch (error) {
       stderr.writeln(error.message);
       _printUsage();
@@ -37,10 +39,15 @@ Future<int> main(List<String> args) async {
     return 1;
   }
 
+  if (installRunAsUserWarning(command, runAsUser) case final warning?) {
+    stderr.writeln(warning);
+  }
+
   final operation = switch (command) {
     'install' => () => ServiceManager.install(
       healthExpectation: healthExpectation,
       userScope: userScope,
+      runAsUser: runAsUser,
     ),
     'uninstall' => ServiceManager.uninstall,
     'start' => ServiceManager.start,
@@ -73,15 +80,21 @@ Future<int> main(List<String> args) async {
 }
 
 class _InstallOptions {
-  const _InstallOptions({this.healthExpectation, this.userScope = false});
+  const _InstallOptions({
+    this.healthExpectation,
+    this.userScope = false,
+    this.runAsUser,
+  });
 
   final ServiceHealthExpectation? healthExpectation;
   final bool userScope;
+  final String? runAsUser;
 }
 
 _InstallOptions _parseInstallOptions(List<String> args) {
   if (args.isEmpty) return const _InstallOptions();
   String? expectedVersion;
+  String? runAsUser;
   var requireCloud = false;
   var hasHealthOptions = false;
   var userScope = false;
@@ -90,6 +103,11 @@ _InstallOptions _parseInstallOptions(List<String> args) {
     switch (args[index]) {
       case '--user-scope':
         userScope = true;
+      case '--run-as-user':
+        if (++index >= args.length || args[index].trim().isEmpty) {
+          throw const FormatException('--run-as-user requires an account.');
+        }
+        runAsUser = args[index].trim();
       case '--expected-version':
         if (++index >= args.length || args[index].trim().isEmpty) {
           throw const FormatException('--expected-version requires a value.');
@@ -129,11 +147,22 @@ _InstallOptions _parseInstallOptions(List<String> args) {
             timeout: timeout,
           ),
     userScope: userScope,
+    runAsUser: runAsUser,
   );
 }
 
 bool _isHelp(List<String> args) =>
     args.length == 1 && const {'help', '-h', '--help'}.contains(args.single);
+
+/// The operator warning an explicit root target prints before installing.
+///
+/// Running the daemon as root is allowed only when it is asked for by name, and
+/// it is never silent: every Agent tool inherits that account.
+String? installRunAsUserWarning(String command, String? runAsUser) {
+  if (command != 'install' || runAsUser != 'root') return null;
+  return 'Warning: --run-as-user root makes the Agent daemon run as root. Every '
+      'Agent tool, MCP server, and terminal task will inherit root privileges.';
+}
 
 String _operationVerb(String command) => switch (command) {
   'install' => 'Installing',
@@ -180,9 +209,9 @@ void _printUsage() {
   stdout.writeln('Actions:');
   stdout.writeln('  install      Register and start the agent daemon');
   stdout.writeln(
-    '               [--user-scope] [--expected-version VERSION] [--require-cloud]',
+    '               [--user-scope] [--run-as-user ACCOUNT] [--expected-version VERSION]',
   );
-  stdout.writeln('               [--health-timeout SECONDS]');
+  stdout.writeln('               [--require-cloud] [--health-timeout SECONDS]');
   stdout.writeln('  uninstall    Stop and unregister the owned service');
   stdout.writeln('  start        Start the registered service');
   stdout.writeln('  stop         Stop the running service');

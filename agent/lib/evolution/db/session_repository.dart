@@ -10,6 +10,7 @@ import '../models/session_search.dart';
 import '../models/session_state.dart';
 import 'agent_state_database.dart';
 import 'session_message_repository.dart';
+import 'sqlite_transaction.dart';
 import 'terminal_assistant_classifier.dart';
 
 /// Persistent storage for workspaces and sessions (lifecycle, metadata, titles).
@@ -614,8 +615,10 @@ class SessionRepository {
       _db.execute('DELETE FROM sessions WHERE session_id = ?', [sessionId]);
       _db.execute('RELEASE SAVEPOINT $savepoint');
     } catch (_) {
-      _db.execute('ROLLBACK TO SAVEPOINT $savepoint');
-      _db.execute('RELEASE SAVEPOINT $savepoint');
+      // SQLite may already have rolled the whole transaction back (for example
+      // SQLITE_FULL), which drops this savepoint too; rolling back a savepoint
+      // that no longer exists would replace the real failure.
+      SqliteTransaction.rollbackSavepointQuietly(_db, savepoint);
       rethrow;
     }
     // Foreign key with ON DELETE CASCADE handles this session's owned rows

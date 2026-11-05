@@ -454,7 +454,8 @@ erDiagram
         text endpoint_fingerprint
         integer config_revision
         integer credential_revision
-        text last_error
+        text last_error "Sanitized one-line summary"
+        text last_error_detail "Sanitized structured discovery failure"
     }
     recent_model_selections {
         text instance_id PK_FK
@@ -498,7 +499,8 @@ Last successful model list per instance (stale-while-revalidate, Plan 29 §10.3)
 | `endpoint_fingerprint` | `TEXT` | Nullable | Normalized endpoint fingerprint; mismatch invalidates the cache |
 | `config_revision` | `INTEGER` | Non-null | Instance `config_revision` at fetch time |
 | `credential_revision` | `INTEGER` | Non-null | Instance `credential_revision` at fetch time |
-| `last_error` | `TEXT` | Nullable | Last refresh warning (non-blocking) |
+| `last_error` | `TEXT` | Nullable | Sanitized one-line summary of the last failed discovery (`<reason> from <endpoint>`), consumed by every string surface: readiness reason, `model.snapshot.warning`, `provider.instance.test`, and the CLI. Never a provider response body, a header, or a credential. |
+| `last_error_detail` | `TEXT` | Nullable | JSON form of the same failure (`kind`, `status_code`, `message`, `endpoint`) written by `ProviderDiscoveryError.toJson` and read back with `tryRestore`. Rows written by older daemons leave it `NULL`; their `LlmHttpException(<status> ...)` prefix is re-derived without replaying the body. A successful re-discovery sets both columns to `NULL` in the same upsert. |
 
 ### 4.4. `recent_model_selections`
 Last 5 model picks across the runtime (Plan 29 §10.4). Joined with `provider_instances` so a rename is reflected immediately. Cascade-deleted when the instance is removed.
@@ -727,7 +729,7 @@ or act as durable truth.
 
 Task 31 adds two independent revision streams. `session_execution_snapshots.revision` orders execution-state changes, while `sessions.route_revision` orders provider/model route changes. The values are local to one session and must never be compared with one another.
 
-`AgentStateDatabase.transaction` is the shared synchronous write boundary for aggregate mutations. It passes an `AgentStateTransaction` context to repositories using the one `state.db` connection. Nested composition uses SQLite savepoints; asynchronous callbacks are rejected so the connection cannot commit before a callback finishes. A repository may open its own transaction when used alone or accept the caller's context when several owners must commit atomically.
+`AgentStateDatabase.transaction` is the shared synchronous write boundary for aggregate mutations. It passes an `AgentStateTransaction` context to repositories using the one `state.db` connection. Nested composition uses SQLite savepoints; asynchronous callbacks are rejected so the connection cannot commit before a callback finishes. A repository may open its own transaction when used alone or accept the caller's context when several owners must commit atomically. A repository that owns a raw connection boundary uses the same rule through `agent/lib/evolution/db/sqlite_transaction.dart`: it rolls back only while SQLite still holds a transaction and always rethrows the original failure, because a fatal error such as `SQLITE_FULL` has already aborted the transaction. A local full disk reaches the runtime as the typed `storage_full` failure rather than as a provider error.
 
 ### 6.1. `session_execution_snapshots`
 

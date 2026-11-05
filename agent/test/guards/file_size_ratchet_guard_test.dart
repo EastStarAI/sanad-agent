@@ -20,7 +20,6 @@ const int productionLineLimit = 1000;
 const Map<String, int> allowlistedFiles = <String, int>{
   'lib/cli/client/local_gateway_cli_client.dart': 1247,
   'lib/cli/oneshot/oneshot_runner.dart': 1496,
-  'lib/core/setup/linux_service_manager.dart': 1079,
   'lib/engine/adapters/base_anthropic_adapter.dart': 1260,
   'lib/engine/adapters/base_openai_adapter.dart': 1515,
   'lib/engine/agent_runner.dart': 2025,
@@ -30,7 +29,7 @@ const Map<String, int> allowlistedFiles = <String, int>{
   'lib/evolution/db/runtime/session_execution_state_coordinator.dart': 1227,
   'lib/evolution/scheduling/schedule_model.dart': 1143,
   'lib/interfaces/platforms/sanad_gateway/handlers/provider_command_handler.dart':
-      1122,
+      1061,
   'lib/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart':
       1010,
   'lib/interfaces/runtime/session_run_orchestrator.dart': 1557,

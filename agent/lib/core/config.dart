@@ -6,10 +6,12 @@ import '../engine/adapters/provider_profile.dart';
 import '../engine/adapters/provider_registry.dart';
 import 'config/compaction_policy.dart';
 import 'config/model_aware_runtime_policy.dart';
+import 'config/request_dump_retention_policy.dart';
 import 'constants.dart';
 
 export 'config/compaction_policy.dart';
 export 'config/model_aware_runtime_policy.dart';
+export 'config/request_dump_retention_policy.dart';
 export 'config/thinking_control_override.dart';
 
 class Config {
@@ -295,6 +297,11 @@ class Config {
       );
 
   ModelAwareRuntimePolicy get modelAwarePolicy => _modelAwarePolicy;
+
+  /// Retention window for diagnostic request dumps
+  /// (`diagnostics.requestDumpRetentionDays`, default 3 days).
+  RequestDumpRetentionPolicy get requestDumpRetention =>
+      _modelAwarePolicy.requestDumpRetention;
 
   ModelAwareRuntimePolicy reloadModelAwarePolicy() {
     final candidate = ModelAwareRuntimePolicy.load(

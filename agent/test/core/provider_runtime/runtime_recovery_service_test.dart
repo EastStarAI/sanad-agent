@@ -102,6 +102,46 @@ void main() {
       expect(emitted.single['status'], equals('fatal'));
     });
 
+    test('a full local disk names storage, never the provider', () {
+      final instanceId = readyInstance(
+        templateId: 'opencode-go',
+        name: 'OpenCodeGo',
+      );
+
+      recovery.reportFailure(
+        sessionId: 's1',
+        reason: RuntimeFailureReason.storageFull,
+        providerInstanceId: instanceId,
+        forceBlocked: true,
+      );
+
+      final payload = emitted.single;
+      expect(payload['reason'], equals('storage_full'));
+      expect(payload['status'], equals('blocked'));
+      expect(payload['title'], equals('Storage full'));
+      expect(
+        payload['title'],
+        isNot(contains('OpenCodeGo')),
+        reason: 'a local disk failure is not a provider error',
+      );
+      expect(
+        payload['message'],
+        contains('disk is full'),
+        reason: 'the message must state the real cause',
+      );
+      expect(
+        payload['message'],
+        isNot(contains('OpenCodeGo')),
+        reason: 'the message must not blame the provider',
+      );
+      expect(payload['actions'], contains('retry'));
+      expect(
+        payload['actions'],
+        isNot(contains('change_provider')),
+        reason: 'switching providers cannot free disk space',
+      );
+    });
+
     test(
       'a scheduled automatic retry is a waiting notice, never blocked',
       () {

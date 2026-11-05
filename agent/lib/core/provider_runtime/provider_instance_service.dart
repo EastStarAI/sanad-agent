@@ -2,7 +2,10 @@ import 'package:uuid/uuid.dart';
 
 import '../../engine/adapters/provider_profile.dart';
 import '../../engine/adapters/provider_registry.dart';
+import 'provider_discovery_error.dart';
+import 'provider_discovery_projection.dart';
 import 'provider_endpoint_resolver.dart';
+import 'provider_failure_status.dart';
 import 'provider_instance.dart';
 import 'provider_model_id.dart';
 import 'provider_instance_repository.dart';
@@ -281,10 +284,60 @@ class ProviderInstanceService {
       return;
     }
 
+    // A stored failure is the reason this instance is not ready. A definitive
+    // one names its status; a warning-grade one proves nothing about the
+    // configuration, so it must not move an already-ready instance (issue 339
+    // review 2).
+    final failure = _discoveryFailure(existing);
+    if (failure != null) {
+      final target = statusForFailure(failure);
+      if (target == null) return;
+      if (existing.status != target) _setStatus(id, target);
+      return;
+    }
     if (existing.status != InstanceStatus.draft) {
       _setStatus(id, InstanceStatus.draft);
     }
   }
+
+  /// Applies the outcome of one connection verification (discovery, optionally
+  /// followed by a generation probe).
+  ///
+  /// A verified outcome re-runs [markReadyIfComplete]. A definitive failure
+  /// promotes the instance to the status its category proves — a rejected
+  /// credential is `needs_auth`, a definitive endpoint failure is `error` — and
+  /// an unproven or warning-grade failure leaves the status untouched with its
+  /// cause attached.
+  void applyConnectionOutcome(
+    String id,
+    ProviderDiscoveryError? failure, {
+    bool credentialConfigured = true,
+  }) {
+    final existing = _repo.findById(id);
+    if (existing == null) return;
+    if (failure == null) {
+      markReadyIfComplete(id, credentialConfigured: credentialConfigured);
+      return;
+    }
+    final target = statusForFailure(failure);
+    // A warning-grade cause never changes the lifecycle status.
+    if (target == null) return;
+    if (existing.status != target) {
+      _setStatus(id, target);
+    }
+  }
+
+  /// Status a verified connection failure proves, or null when it proves
+  /// nothing about the configuration and must leave the status untouched.
+  ///
+  /// The mapping itself lives in [statusForDiscoveryFailure] so the legacy
+  /// read-repair applies exactly the same rule as a fresh verification (issue
+  /// 339 review 3).
+  static String? statusForFailure(ProviderDiscoveryError failure) =>
+      statusForDiscoveryFailure(failure);
+
+  ProviderDiscoveryError? _discoveryFailure(ProviderInstance instance) =>
+      ProviderDiscoveryProjection.of(_repo, instance).error;
 
   void markNeedsAuth(String id, {DateTime? now}) =>
       _setStatus(id, InstanceStatus.needsAuth, now: now);

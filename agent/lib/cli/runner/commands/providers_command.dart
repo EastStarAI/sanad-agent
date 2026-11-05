@@ -19,7 +19,7 @@ class ProvidersCommand extends SanadCommand {
   Future<int> execute() async {
     final services = CliProviderServices();
     final cli = CliProviderSetup(services);
-    cli.listProviders();
+    cli.listProviders(out: stdoutSink, json: json);
     return 0;
   }
 }

@@ -179,6 +179,46 @@ compaction:
     });
   });
 
+  group('diagnostic request dump retention YAML', () {
+    test('defaults to three days when no policy is configured', () {
+      final config = Config(environment: const {});
+
+      expect(
+        config.requestDumpRetention.retention,
+        equals(const Duration(days: 3)),
+      );
+    });
+
+    test('reads diagnostics.requestDumpRetentionDays', () {
+      File('${tempSanadHome.path}/config.yaml').writeAsStringSync(
+        'diagnostics:\n  requestDumpRetentionDays: 5\n',
+      );
+
+      expect(
+        Config(environment: const {}).requestDumpRetention.retention,
+        equals(const Duration(days: 5)),
+      );
+    });
+
+    test('rejects a non-positive, fractional, or unknown retention key', () {
+      for (final yaml in [
+        'diagnostics:\n  requestDumpRetentionDays: 0\n',
+        'diagnostics:\n  requestDumpRetentionDays: -1\n',
+        'diagnostics:\n  requestDumpRetentionDays: 2.5\n',
+        'diagnostics:\n  requestDumpRetentionDays: forever\n',
+        'diagnostics:\n  requestDumpRetention: 3\n',
+        'diagnostics:\n  retentionDays: 3\n',
+      ]) {
+        File('${tempSanadHome.path}/config.yaml').writeAsStringSync(yaml);
+        expect(
+          () => Config(environment: const {}),
+          throwsA(isA<FormatException>()),
+          reason: 'must reject: $yaml',
+        );
+      }
+    });
+  });
+
   test('reads logging configuration from environment', () async {
     final envFile = File('${tempSanadHome.path}/.env');
     await envFile.writeAsString('''

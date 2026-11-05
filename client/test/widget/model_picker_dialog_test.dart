@@ -125,6 +125,7 @@ class _FakeProviderSetupClient extends ProviderSetupClient {
   Future<Map<String, dynamic>> testInstanceConnection({
     required String providerInstanceId,
     DeviceConfig? agent,
+    bool probe = true,
   }) async => {};
   @override
   Future<CredentialSummaryDto> updateCredential({

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
@@ -71,6 +72,95 @@ void main() {
   );
 
   test(
+    'polls until the daemon writes its credential after start',
+    () async {
+      // A freshly activated unit has not written `.local_token` yet: the daemon
+      // issues it during its own startup, moments after `systemctl enable --now`
+      // returns. The verifier must wait for it instead of failing at once.
+      _removeCredential(home);
+      var requests = 0;
+      server.listen((request) async {
+        requests++;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'status': 'ok',
+            'version': '1.2.3',
+            'cloud_registered': true,
+          }),
+        );
+        await request.response.close();
+      });
+      var waits = 0;
+      final verifier = ServiceHealthVerifier(
+        config: Config(
+          environment: {
+            'LOCAL_GATEWAY_PORT': '${server.port}',
+            'LOCAL_GATEWAY_HOST': '127.0.0.1',
+          },
+        ),
+        delay: (_) async {
+          waits++;
+          if (waits == 2) {
+            await LocalGatewayCredentials.loadOrCreateForDaemonStart();
+          }
+        },
+      );
+
+      final result = await verifier.verify(
+        const ServiceHealthExpectation(
+          expectedVersion: '1.2.3',
+          requireCloudRegistration: true,
+          timeout: Duration(seconds: 5),
+          pollInterval: Duration(milliseconds: 1),
+        ),
+      );
+
+      expect(result.success, isTrue, reason: result.error);
+      // Two credential-less polls, then the poll that sees the token.
+      expect(result.attempts, 3);
+      expect(waits, 2);
+      expect(requests, 1);
+    },
+  );
+
+  test(
+    'fails after the timeout when the credential never appears',
+    () async {
+      _removeCredential(home);
+      var requests = 0;
+      server.listen((request) async {
+        requests++;
+        await request.response.close();
+      });
+      final verifier = ServiceHealthVerifier(
+        config: Config(
+          environment: {
+            'LOCAL_GATEWAY_PORT': '${server.port}',
+            'LOCAL_GATEWAY_HOST': '127.0.0.1',
+          },
+        ),
+        delay: (_) async {},
+      );
+
+      final result = await verifier.verify(
+        const ServiceHealthExpectation(
+          expectedVersion: '1.2.3',
+          requireCloudRegistration: true,
+          timeout: Duration(seconds: 1),
+          pollInterval: Duration(milliseconds: 1),
+        ),
+      );
+
+      expect(result.success, isFalse);
+      expect(result.attempts, greaterThan(1));
+      expect(result.error, contains('Local Gateway credential'));
+      expect(result.error, contains('sanad service restart'));
+      expect(requests, 0);
+    },
+  );
+
+  test(
     'fails bounded verification when the running version is stale',
     () async {
       server.listen((request) async {
@@ -108,4 +198,16 @@ void main() {
       expect(result.attempts, greaterThan(0));
     },
   );
+}
+
+/// Removes the Local Gateway credential of [home] so a test can observe the
+/// daemon writing it later, as it does during a real service activation.
+void _removeCredential(Directory home) {
+  for (final name in <String>[
+    LocalGatewayCredentials.relativePath,
+    LocalGatewayCredentials.bindingRelativePath,
+  ]) {
+    final file = File(p.join(home.path, name));
+    if (file.existsSync()) file.deleteSync();
+  }
 }

@@ -9,6 +9,7 @@ import '../models/session_history_page.dart';
 import 'agent_state_database.dart';
 import 'message_history_identity.dart';
 import 'session_history_revision_repository.dart';
+import 'sqlite_transaction.dart';
 import 'terminal_assistant_classifier.dart';
 
 /// Originating tool-call context resolved from persisted session history.
@@ -33,14 +34,9 @@ class SessionMessageRepository {
   Database get _db => _state.db;
 
   void replaceMessages(String sessionId, List<Message> messages) {
-    _db.execute('BEGIN TRANSACTION');
-    try {
+    SqliteTransaction.runVoid(_db, () {
       _replaceMessagesInDatabase(_db, sessionId, messages);
-      _db.execute('COMMIT');
-    } catch (e) {
-      _db.execute('ROLLBACK');
-      rethrow;
-    }
+    });
   }
 
   /// Persists history inside an aggregate transaction owned by the caller.

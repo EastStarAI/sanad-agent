@@ -55,8 +55,9 @@ class _NoopClient implements ProviderSetupClient {
   noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
-Widget _wrap(ProviderUsageCubit cubit, Widget child) {
+Widget _wrap(ProviderUsageCubit cubit, Widget child, {String locale = 'en'}) {
   return MaterialApp(
+            locale: Locale(locale),
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: const [Locale('en'), Locale('ar')],
     home: Scaffold(
@@ -83,7 +84,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           cubit,
-          const ProviderUsageSection(agent: null, instanceId: 'a'),
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
         ),
       );
       await tester.pump();
@@ -119,11 +120,14 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           cubit,
-          const ProviderUsageSection(agent: null, instanceId: 'a'),
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
         ),
       );
       await tester.pump();
       expect(find.text('Usage & limits'), findsOneWidget);
+      // The section is addressable by key the moment it renders (issue 339
+      // review 3).
+      expect(find.byKey(const Key('provider_usage_section_a')), findsOneWidget);
       await tester.tap(find.text('Usage & limits'));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Loading usage…'), findsOneWidget);
@@ -148,6 +152,7 @@ void main() {
                 providerInstanceId: 'a',
                 providerTemplateId: 'openai-codex',
                 source: 'chatgpt',
+                planName: 'Pro',
                 fetchedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
                 windows: const [
                   ProviderUsageWindowDto(
@@ -169,7 +174,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           cubit,
-          const ProviderUsageSection(agent: null, instanceId: 'a'),
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
         ),
       );
       await tester.pump();
@@ -192,6 +197,18 @@ void main() {
         find.textContaining('Updated'),
         findsOneWidget,
         reason: 'footer Updated label must be present',
+      );
+
+      // Every body line is reachable through a stable, locale-independent key.
+      expect(find.byKey(const Key('provider_usage_section_a')), findsOneWidget);
+      expect(find.byKey(const Key('provider_usage_plan_a')), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_usage_window_a_weekly')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_usage_window_a_monthly')),
+        findsOneWidget,
       );
     },
   );
@@ -217,7 +234,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           cubit,
-          const ProviderUsageSection(agent: null, instanceId: 'a'),
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
         ),
       );
       await tester.pump();
@@ -227,14 +244,29 @@ void main() {
 
       expect(find.text('Retry'), findsOneWidget);
       expect(find.byIcon(Icons.error_outline), findsOneWidget);
-      // Typed failure message must be concise and never include raw payload.
-      expect(find.text('service busy'), findsOneWidget, reason: 'daemon-safe unavailable message should be shown');
+      // The action and the message are keyed, not text-addressed.
+      expect(find.byKey(const Key('provider_usage_retry_a')), findsOneWidget);
+      expect(find.byKey(const Key('provider_usage_reconnect_a')), findsNothing);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('provider_usage_message_a')))
+            .data,
+        'Usage information is temporarily unavailable. Please retry.',
+      );
+      // The daemon's English text is never echoed; the status owns localized
+      // copy so an RTL interface is fully translated (issue 339 review 2).
+      expect(find.text('service busy'), findsNothing);
+      expect(
+        find.text('Usage information is temporarily unavailable. Please retry.'),
+        findsOneWidget,
+      );
     },
   );
 
   testWidgets(
-    'auth_required shows the Reconnect affordance, not generic retry',
+    'auth_required runs the shared account re-authentication, not a refresh',
     (tester) async {
+      var reconnects = 0;
       cubit.emit(
         cubit.state.upsertEntry(
           _localDeviceId,
@@ -251,7 +283,11 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           cubit,
-          const ProviderUsageSection(agent: null, instanceId: 'a'),
+          ProviderUsageSection(
+            agent: null,
+            instanceId: 'a',
+            onReconnect: () => reconnects++,
+          ),
         ),
       );
       await tester.pump();
@@ -260,8 +296,55 @@ void main() {
 
       expect(find.text('Reconnect'), findsOneWidget);
       expect(find.textContaining('Account sign-in is required'), findsOneWidget);
+      expect(find.byIcon(Icons.login), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('provider_usage_reconnect_a')));
+      await tester.pumpAndSettle();
+
+      expect(reconnects, 1, reason: 'Reconnect must run the shared action');
+      // A usage refresh would have replaced the affordance with a spinner.
+      expect(find.text('Reconnect'), findsOneWidget);
     },
   );
+
+  testWidgets('the usage messages and labels are localized in Arabic', (
+    tester,
+  ) async {
+    cubit.emit(
+      cubit.state.upsertEntry(
+        _localDeviceId,
+        'a',
+        const ProviderUsageEntry(
+          phase: ProviderUsagePhase.needsAttention,
+          result: ProviderUsageResultDto(
+            status: 'auth_required',
+            providerInstanceId: 'a',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      _wrap(
+        cubit,
+        ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        locale: 'ar',
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('الاستخدام والحدود'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('إعادة الربط'), findsOneWidget);
+    expect(
+      find.text('يلزم تسجيل الدخول إلى الحساب لعرض حدود الاستخدام.'),
+      findsOneWidget,
+    );
+    // The keys do not translate with the interface: the same instance id is the
+    // counter under `en` and `ar` (issue 339 review 3).
+    expect(find.byKey(const Key('provider_usage_section_a')), findsOneWidget);
+    expect(find.byKey(const Key('provider_usage_reconnect_a')), findsOneWidget);
+    expect(find.byKey(const Key('provider_usage_message_a')), findsOneWidget);
+  });
 
   testWidgets(
     'Refresh is disabled while a request is in flight (double-submit '
@@ -298,7 +381,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           cubit,
-          const ProviderUsageSection(agent: null, instanceId: 'a'),
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
         ),
       );
       await tester.pump();
@@ -359,7 +442,7 @@ void main() {
     await tester.pumpWidget(
       _wrap(
         cubit,
-        const ProviderUsageSection(agent: null, instanceId: 'a'),
+        ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
       ),
     );
     await tester.tap(find.text('Usage & limits'));

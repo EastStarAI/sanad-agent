@@ -85,7 +85,136 @@ Model fetch contract details:
 - The OpenAI-compatible adapter delegates its pure discovery rules to two owners: `agent/lib/engine/adapters/openai_compatible/model_discovery.dart` (identity normalization, fallback catalog, endpoint candidates, labels, agentic/reasoning/context heuristics) and `agent/lib/engine/adapters/openai_compatible/thinking_control_discovery.dart` (Kimi, native LM Studio, and OpenRouter declared controls). The adapter keeps the discovery transport, its outcome state, and the `models.dev` service, and passes transport, headers, and logging into the control rules as typed callbacks so no rule reaches for adapter state.
 - Model metadata returned by discovery is runtime input, not presentation-only data. `context_window` is persisted with each `ModelOption`; `AgentRuntimeService` supplies adapters with an instance-scoped lookup that accepts only cache rows matching the route's config and credential revisions and the exact normalized model id. Context-limit precedence is explicit `config.yaml` override, matching instance catalog, adapter/provider metadata (including `models.dev` for Codex Responses), known static metadata, then the adapter fallback. Codex forward-compatible GPT-6 aliases may inherit a positive window only from the live GPT-6 template that caused the alias to be offered; absent or invalid template metadata remains unresolved so the later sources decide it. Unknown OpenAI-compatible and Ollama models retain the conservative `4000` fallback because inflating an unverified local/small model window can suppress required compaction and cause provider overflow. A model discovered after the Sanad release therefore does not require a hardcoded model-name condition to receive its advertised context window.
 - `provider.instance.create` must never crash the daemon on validation failures such as duplicate display names. The response must come back on `provider.instance.created` with an `error` payload so the client can render an inline validation message.
-- **Connection Test Verification**: To ensure that the connection test command (`provider.instance.test`) fails properly when endpoints are offline or misconfigured, it queries the resulting model cache metadata directly after performing the manual refresh. If `last_error` is populated, or if the cache `source` is set to `'fallback'` or `'cache_stale'` (indicating that live fetch failed and the adapter fell back to local/cached presets), the test fails with `success: false` and returns the actual connection error details to the UI/CLI.
+- **Connection Verification** (issue 339): `provider.instance.test` has two independent stages, and only the first decides whether the configuration is wrong. **Discovery** (always): a manual live listing; a row with a `last_error`, or a `source` of `fallback`, `cache_stale`, or `failed`, is a discovery failure. **Generation probe** (opt-in via `probe: true`, default true): one minimal request against the instance's **selected** model only — a short prompt, `maxOutputTokens: 1` (adapters translate it onto their own wire field), a bounded timeout, no tools, no retries, never persisted, never streamed. `ProviderInstanceVerifier` (`agent/lib/core/provider_runtime/provider_instance_verifier.dart`) is the single owner; the Test action, the Client setup gate, and the CLI share it.
+- **The probe never blocks setup** (issue 339 review): setup gates send `probe: false`, so an unselected model, a non-chat entry in a `/models` catalog (embeddings, audio, moderation, TTS), a model that rejects the output bound, or a cold-loading local engine can never reject a valid credential. Only a *definitive* discovery failure blocks: `invalid_credential`, `forbidden`, `endpoint_not_found`, and other 4xx answers except `408`/`429` (the projection exposes this as `definitive`).
+- **Probe outcomes**: no selected model → `probe_state: skipped` (partial success: the key listed models, and the user is asked to choose a model). Only a probe `401` is definitive (`probe_state: failed`, the single probe result that may move the instance to `needs_auth`) and it persists its cause. A probe `403` is a **warning**, never a rejection: discovery already accepted the key, so the account may list models while a plan, a policy, or a parameter restriction refuses this one. Any other probe failure — model or parameter rejection (`400`/`404`/`422`), timeout, network, rate limit, `5xx`, or unclassified — is also `probe_state: warning` with a `warning` object (`kind`, `model`, nested sanitized `cause`, and `definitive: false`) and leaves the instance status exactly as discovery decided. Probe budgets are `12 s` for hosted providers and `90 s` for local templates (optional API key: Ollama, LM Studio, llama.cpp, custom endpoints), and the Client's request timeout is `120 s` to outlive the local budget.
+- **Sanitized failure projection** (issue 339): every provider failure leaves the daemon as one typed, user-safe value — `ProviderDiscoveryError` (`agent/lib/core/provider_runtime/provider_discovery_error.dart`). It carries a category, the HTTP status, a short canonical reason, and the endpoint reduced to `scheme://host[:port]/path`. It never carries a credential, a header, the request payload, or the provider's raw response body; query strings, fragments, and user info are stripped because they can carry a secret. Categories: `invalid_credential` (`401`), `forbidden` (`403`), `endpoint_not_found` (`404`), `rate_limited` (`429`), `timeout` (`408` or a client-side timeout), `network` (socket/TLS/DNS), `server_error` (`5xx`), `no_models` (empty or unusable list), `http` (any other non-2xx), and `unknown`. Clients localize the category; `message`/`error` stay English for the CLI, logs, and older clients.
+
+### Provider Instance Projection (issue 339)
+
+Every envelope that carries a provider instance (`provider.instances_result`, the
+`provider_instances_changed` broadcast, and the created/updated/renamed replies)
+adds two additive, nullable keys beside `status` and `credential`:
+
+| Key | Shape | Meaning |
+|---|---|---|
+| `discovery_error` | `{kind, status_code?, message, endpoint?, definitive}` or `null` | Sanitized cause of the last failed check for the instance's **current** config/credential revisions. `definitive` is the daemon's weight for that cause: only a definitive one may change the status or block setup. A row written for older revisions projects `null`: that failure is not the reason the instance is currently not ready. A legacy row (raw `last_error`, no `last_error_detail`) is re-derived from its text shape and rewritten in sanitized form on read; any current-revision definitive cause found beside a `ready` status demotes it once on that read (see "Rows written by older daemons"). |
+| `model_cache` | `{source, verified}` or `null` | `source` is `live`, `fallback`, `cache_stale`, or `failed`; `verified` is true only for a live answer to the current revisions. A `fallback` list is an unverified preset list and every surface must label it as such. |
+
+`model.snapshot_result` keeps its flat `cache_status`, `fetched_at`, and
+`warning` fields for older clients and adds the same two keys. `warning` is now
+the sanitized one-line summary (`<reason> from <endpoint>`), never the provider's
+response body.
+
+### Instance lifecycle and discovery failures (issue 339)
+
+`markReadyIfComplete` still requires a matching-revision cache row with
+`last_error == null` and a non-empty model list, so a stored failure keeps the
+instance out of `ready`. On top of that, only a **definitive** failure changes the
+status; a non-definitive one attaches its cause and never moves it:
+
+| Failure category | Resulting status |
+|---|---|
+| `invalid_credential` (`401`) | `needs_auth` |
+| `forbidden` (`403`) when discovery itself was refused | `needs_auth` |
+| `endpoint_not_found`, other 4xx except `408`/`429` | `error` |
+| `rate_limited`, `server_error`, `network`, `timeout`, `no_models`, `unknown`, any warning-grade copy | unchanged |
+
+`ProviderInstanceService.applyConnectionOutcome` applies this mapping after every
+verification, and the cache service applies it after every discovery when the
+composition root wires the instance service. A generation-probe warning never
+reaches it: only a definitive discovery failure or a probe `401` changes the
+status. `reconcileStatus` re-derives the same classification from the
+current-revision cache row, so a metadata-only edit cannot silently reset a
+rejected credential back to `draft`. A successful re-discovery nulls both
+`last_error` and `last_error_detail` in the same upsert, which returns the
+instance to `ready` through `markReadyIfComplete`.
+
+Every status change and every warning is persisted on the cache row through
+`ProviderModelCacheService.recordVerificationCause`, which writes only
+`last_error` and `last_error_detail` and never invalidates a proven model list.
+A demotion therefore keeps its reason across a restart, and a `READY` card can
+explain a failed check instead of contradicting it (see
+`provider_error_ready_warning_contract` below).
+
+Rows written by older daemons carry a raw `last_error` and a `NULL`
+`last_error_detail`. They are re-derived from the text shapes that actually
+exist in a live Home — `LlmHttpException(<status> ...)`, a bare
+`HTTP <status>`, and `ClientException … SocketException: Connection refused …`
+(→ `network`), plus a timeout shape — and the same read rewrites the row to the
+sanitized summary plus its structured detail, so no local port, host, URL, or
+response body survives in storage.
+
+The same read also finishes the migration for a **definitive** cause: when the
+current revisions still carry one while the row still claims `ready`, the reading
+path applies the category → status mapping above (`statusForDiscoveryFailure`,
+the mapping `reconcileStatus` uses) and persists the demotion durably. That
+covers both shapes a live Home produces — a cause re-derived from raw legacy text
+and a row an earlier build already rewrote into the structured form. A legacy
+`HTTP 401` therefore leaves the read as `needs_auth` with its cause, and every
+surface receives that effective status in the same payload, so the badge, the CLI
+row, and the stored row never disagree about the same instance.
+
+The reconciliation is one-shot by construction and is not a second lifecycle
+authority:
+
+- only a **current-revision** cause counts; a stale one describes a configuration
+  the owner already changed, so it is sanitized but never demoted;
+- only a **definitive** cause names a status, so a non-definitive cause keeps the
+  row `ready`;
+- only a row that still claims `ready` is touched — the demoted status is itself
+  the one-shot marker, so a second read reconciles nothing and the pass cannot
+  loop;
+- a successful re-verification clears the cause, and a re-verified instance is
+  never demoted again;
+- the structured rewrite of the stored row stays legacy-only: a row that already
+  has a usable `last_error_detail` is not rewritten.
+
+`discovery_error` and the effective `status` travel together in the instance
+projection (`ProviderDiscoveryProjection.toMap`) and in `model.snapshot`; the
+readiness gate (`provider.setup_status`, `provider.runtime_check`) and both CLI
+forms (`sanad providers`, `sanad setup status`) read the status from that same
+projection instead of the pre-repair instance row.
+
+### Warning beside READY (`provider_error_ready_warning_contract`)
+
+An instance whose last check failed with a **non-definitive** cause and that
+still serves a usable cached list stays `READY`. The owner decision
+(2026-11-05, issue 339 review 2) is explicit: the card must not show an error
+style beside a ready badge, and it must not hide the cause either.
+
+| Card state | Notice style | Copy |
+|---|---|---|
+| definitive cause | error | the localized category sentence, plus the sanitized endpoint |
+| non-definitive cause (warning) | warning (`colorScheme.tertiary`), never the error color | `providerLastCheckFailed(<cause>)` — "Last check failed (<cause>); using the saved model list." |
+| no cause, unverified fallback list | secondary | the "unverified fallback list" label |
+
+The Client never echoes the daemon's English `message`/`summary` through a
+`default:` branch: every category owns a localized sentence and `unknown` is the
+catch-all, so an Arabic card carries no English remainder. A payload from a
+daemon that predates `definitive` derives its weight from the category
+(`invalid_credential`, `forbidden`, `endpoint_not_found`, and other 4xx except
+`408`/`429` are definitive; everything else warns), so an older row cannot
+reintroduce the contradiction.
+
+### Usage status never mutates the instance lifecycle
+
+The owner decision for issue 339 review 2 keeps the two authorities separate:
+
+- The instance `status` is derived only from model discovery and the generation
+  probe (see above). Nothing else may change it.
+- `provider.usage.result` returns its own `auth_required` when the account has no
+  usable token for the provider's usage endpoint, or when that endpoint answers
+  `401`/`403`. That verdict is scoped to the `Usage & limits` section; it never
+  demotes an instance, never writes `discovery_error`, and never blocks setup.
+  An expired account token therefore surfaces where it is observed, with a
+  working reconnect action, instead of silently rewriting the lifecycle from a
+  provider-specific usage endpoint.
+- The usage section's `Reconnect` affordance for `auth_required` runs the **same**
+  account re-authentication as the instance form's `Reconnect account`
+  (`ProviderSetupCubit.reconnectInstance` → `provider.auth.reconnect`). No second
+  reconnect implementation exists; for any other usage failure the affordance
+  stays a usage refresh labelled `Retry`.
 
 ## Socket Commands
 
@@ -95,7 +224,7 @@ All commands are transport-agnostic (work over local daemon WebSocket and cloud 
 
 | Command | Response event | Description |
 |---|---|---|
-| `provider.setup_status` | `provider_readiness_result` | Storage-only check: is there a configured provider + model? |
+| `provider.setup_status` | `provider_readiness_result` | Storage-only check: is there a configured provider + model? A default instance that is not ready names its sanitized discovery cause as `reason` and carries it as `discovery_error` instead of reporting only `Instance status: draft`. |
 | `provider.runtime_check` | `provider_readiness_result` | Deeper check: can the runtime resolve credentials + model? |
 
 ### OAuth Sessions
@@ -129,7 +258,7 @@ All responses carry `request_id`. Instance mutations broadcast
 | `provider.instance.rename` | `provider.instance.renamed` | Renames an instance (UUID stable). |
 | `provider.instance.remove` | `provider.instance.removed` | Deletes an instance + cascades cache/recent/secret. |
 | `provider.instance.set_default` | `provider.instance.default_changed` | Promotes one instance to default. |
-| `provider.instance.test` | `provider.instance.test_result` | Tests endpoint/model connectivity without making it default. The result carries canonical Boolean `success`; clients must not infer success from an absent `status` string. |
+| `provider.instance.test` | `provider.instance.test_result` | Connection verification without making the instance default. Request accepts `probe` (default `true`); setup gates send `false`. Payload: canonical Boolean `success`, `models_count`, `probe_state` (`passed` \| `skipped` \| `warning` \| `failed` \| `not_run`), the selected `model`, `latency_ms` when the probe answered, `warning` (`kind`, `model`, nested sanitized `cause`) for a non-blocking probe result, and — on a definitive failure — `failure` (typed sanitized cause: `kind`, `status_code`, `message`, `endpoint`, `definitive`) beside the legacy `error`/`message` summary. Clients must not infer success from an absent `status` string. Only discovery failures and a probe `401`/`403` update the lifecycle: `invalid_credential`/`forbidden` → `needs_auth`, other definitive HTTP failures → `error`, unproven transport/parse failures keep `draft`; warnings never move an instance out of `ready`. |
 | `provider.credential.update` | `provider.credential.updated` | `keep` \| `replace` \| `remove` for API-key instances. |
 | `provider.auth.reconnect` | `provider_auth_started` | Re-runs OAuth for an existing instance. |
 | `provider.auth.disconnect` | `provider.credential.updated` | Deletes OAuth tokens; instance metadata stays. |
@@ -187,8 +316,11 @@ are fresh for one minute; after that the existing snapshot remains visible
 while a single background refresh runs. There is no polling. Manual Refresh
 targets one instance, and device changes, deletion, disposal, superseding
 requests, or mismatched instance responses cannot restore stale data. A failed
-background refresh preserves the prior snapshot and adds an inline Retry or
-sign-in message.
+background refresh preserves the prior snapshot and adds an inline `Retry` or
+sign-in message. `auth_required` renders a `Reconnect` action that runs the same
+account re-authentication as the instance form (see "Usage status never mutates
+the instance lifecycle"); every other failure renders `Retry` as a usage
+refresh. Both labels and every usage sentence are localized in `en` and `ar`.
 
 The `Usage & limits` disclosure is absent for unsupported instances. It renders
 only returned windows, with remaining percentage first, used percentage second,
@@ -513,7 +645,8 @@ This keeps non-composer callers safe at the runtime boundary. In the Flutter com
 |---|---|
 | `sanad setup` | Interactive wizard: catalog → authenticate (API key / custom endpoint / device-code OAuth) → model selection → readiness check. |
 | `sanad setup list` | Lists every supported provider with its auth flow and state; marks the active provider. |
-| `sanad setup status` | Prints `setup_status` and `runtime_check` results. |
+| `sanad setup status` | Prints `setup_status` and `runtime_check` results, including the sanitized discovery cause as `reason` and `discovery_error` when the default instance is not ready. `--json` emits the readiness map with `active_provider_name`, `active_provider_status`, and `discovery_error`. The subcommand reaches `SetupStatusCommand` and `CliProviderSetup` directly: only the bare `sanad setup` wizard is delegated to the injected interactive entry point, so `--json` can never fall back to the wizard banner. |
+| `sanad providers` | Prints one line per instance (`name`, `template`, `STATUS`) plus an indented `Discovery error: <reason> from <endpoint>` line and `Models: unverified fallback list` when the stored list is a preset fallback. `--json` emits `{providers: [{id, template_id, display_name, protocol, auth_method, base_url, default_model, status, is_default, discovery_error, model_cache}], default_provider_id}`. Every additive nullable field is always present — `base_url: null`, `default_model: null`, `discovery_error: null`, `model_cache: null` — so a JSON consumer never guards a missing key, and the readiness map follows the same rule for `active_provider`, `active_model`, `reason`, and `discovery_error`. |
 | `sanad setup remove <id>` | Removes a single provider's settings and credentials. |
 
 The legacy `runCodexDeviceCodeFlow` and `fetchModelsFromApi` helpers remain for backward compatibility, but the wizard now uses `ProviderAuthSessionService` and `ModelOptionsService`.
@@ -691,6 +824,12 @@ Key distinctions (Plan 30 §7.2):
   event, then blocked with manual retry. `timeout` keeps its smaller bounded
   retry budget before becoming blocked.
 - `context_overflow` / `content_policy_blocked`: fatal.
+- `storage_full`: blocked, not retried automatically, no auto failover, manual
+  retry only. A full local disk is classified before provider failure text, so
+  the text of the failure SQLite or the OS reports (`SQLITE_FULL`,
+  `database or disk is full`, `ENOSPC`, `no space left on device`) can never be
+  presented under a provider title, and its notice carries no provider response
+  body.
 
 ### Auto failover
 

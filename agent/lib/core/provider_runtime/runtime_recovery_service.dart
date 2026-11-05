@@ -780,6 +780,8 @@ class RuntimeRecoveryService {
         return 'Tool execution failed';
       case RuntimeFailureReason.localRuntimeError:
         return 'Runtime error';
+      case RuntimeFailureReason.storageFull:
+        return 'Storage full';
       case RuntimeFailureReason.unknown:
         return '${p}Error';
     }
@@ -816,6 +818,9 @@ class RuntimeRecoveryService {
         return 'A tool execution error occurred. Retry when ready.';
       case RuntimeFailureReason.localRuntimeError:
         return 'A local runtime error occurred. Retry when ready.';
+      case RuntimeFailureReason.storageFull:
+        return 'The local disk is full, so this turn could not be saved. '
+            'Free disk space, then retry.';
       case RuntimeFailureReason.unknown:
         return 'An unexpected error occurred.';
     }

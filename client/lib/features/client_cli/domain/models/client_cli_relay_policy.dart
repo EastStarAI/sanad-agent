@@ -81,6 +81,7 @@ const Set<String> clientCliRelayLongValueOptions = {
   'reconnect-timeout',
   'ref',
   'request-id',
+  'run-as-user',
   'scope',
   'session',
   'skill',
