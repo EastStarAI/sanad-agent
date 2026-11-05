@@ -32,7 +32,9 @@ This contract applies to `client/lib/features/provider_setup/`.
 - API-key edits default to a non-mutating keep action.
 - Metadata-only edits must succeed without a stored or newly entered secret.
 - Send credential replacement only after explicit user choice with a non-empty key.
-- Adding or replacing an API key on an existing instance must complete canonical connection verification before the edit reports success; failed verification keeps the instance non-ready with accurate recovery feedback.
+- Adding or replacing an API key must complete canonical connection verification before the edit reports success, and a new instance may never advance to model selection with a rejected key; failed verification keeps the credential form visible with its typed, localized cause instead of a generic sentence.
+- Connection verification and Test consume one daemon verdict (`provider.instance.test`): a verified live model list plus one minimal generation probe. The Client never presents a `fallback`/preset list as verified, and a passing Test reports the verified model count with the probe round-trip.
+- Instance cards render the daemon's typed connection projection (`discovery_error`, `model_cache`): the localized category message, the sanitized endpoint, and the "unverified fallback list" label. The Client never invents a status from cache presence and never echoes the daemon's English summary for a classified category.
 - OAuth account identity is an optional daemon summary projection: render `account_label` and a distinct `account_name` when supplied, never decode tokens or infer identity in the client, and preserve a safe Connected fallback when claims are unavailable.
 - Custom providers must collect the canonical protocol before save.
 - Keep the legacy request-limit DTO/protocol field for compatibility, but do not expose or send it from provider forms while local rate limiting is dormant; continue forwarding auto-failover settings without provider-wide fallbacks.
